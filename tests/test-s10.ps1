@@ -49,7 +49,7 @@ Check 'light after 4 failures -> heavy' ((Resolve-AgentClass $cfg 'work' 'light'
 Check 'medium after 2 failures -> heavy, heavy stays' (((Resolve-AgentClass $cfg 'work' 'medium' 2) -eq 'heavy') -and ((Resolve-AgentClass $cfg 'work' 'heavy' 9) -eq 'heavy'))
 Check 'unknown class = medium' ((Resolve-AgentClass $cfg 'work' 'bogus' 0) -eq 'medium')
 $cl = Get-ClassModel $cfg 'claude' 'light'; $cm = Get-ClassModel $cfg 'claude' 'medium'; $ch = Get-ClassModel $cfg 'claude' 'heavy'
-Check 'Claude classes: haiku / sonnet / opus' (($cl.Model -eq 'haiku') -and ($cm.Model -eq 'sonnet') -and ($ch.Model -eq 'opus')) "$($cl.Model)/$($cm.Model)/$($ch.Model)"
+Check 'Claude classes: haiku / sonnet / opus' (($cl.Model -eq 'claude-haiku-5-5') -and ($cm.Model -eq 'claude-sonnet-5-5') -and ($ch.Model -eq 'claude-opus-5-5')) "$($cl.Model)/$($cm.Model)/$($ch.Model)"
 Check 'medium equals the default model and effort of config' (($cm.Model -eq $cfg.claudeModel) -and ($cm.Effort -eq $cfg.effort) -and ((Get-ClassModel $cfg 'codex' 'medium').Model -eq $cfg.codexModel))
 $cxl = Get-ClassModel $cfg 'codex' 'light'
 $cache = Get-Content (Join-Path $env:USERPROFILE '.codex\models_cache.json') -Raw -ErrorAction SilentlyContinue

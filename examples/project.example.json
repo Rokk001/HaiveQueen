@@ -11,8 +11,8 @@
   "roundMinutes": 5,
   "minFreeRamGB": 2,
   "pilotMinFreeRamGB": 2,
-  "claudeModel": "sonnet",
-  "codexModel": "gpt-6.1-sol",
+  "claudeModel": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-terra",
   "effort": "medium",
   "brainModel": "sonnet",
   "brainEffort": "medium",
@@ -24,22 +24,22 @@
   "codexArgs": ["exec", "--json", "--skip-git-repo-check", "-m", "{model}", "-c", "model_reasoning_effort={effort}", "--dangerously-bypass-approvals-and-sandbox", "--ignore-user-config", "-C", "{cwd}"],
   "classes": {
     "claude": {
-      "light": { "model": "haiku", "effort": "medium" },
-      "medium": { "model": "sonnet", "effort": "medium" },
-      "heavy": { "model": "opus", "effort": "medium" }
+      "light": { "model": "claude-haiku-5-5", "effort": "medium" },
+      "medium": { "model": "claude-sonnet-5-5", "effort": "medium" },
+      "heavy": { "model": "claude-opus-5-5", "effort": "medium" }
     },
     "codex": {
       "light": { "model": "gpt-6-luna", "effort": "medium" },
-      "medium": { "model": "gpt-6.1-sol", "effort": "medium" },
-      "heavy": { "model": "gpt-6-astra", "effort": "medium" }
+      "medium": { "model": "gpt-6.1-terra", "effort": "medium" },
+      "heavy": { "model": "gpt-6.1-sol", "effort": "medium" }
     }
   },
   "minClass": { "verify": "medium", "integrate": "medium" },
   "escalateAfter": 2,
   "bundle": { "maxPackages": 3, "startContextTokens": 26000, "smallestTaskTotalInput": 669766 },
   "claudeTools": "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop",
-  "claudeCommandTemplate": "claude -p \"<prompt>\" --output-format stream-json --verbose --model sonnet --permission-mode auto --effort medium --add-dir <repo> --add-dir <tools> --disable-slash-commands --strict-mcp-config",
-  "codexCommandTemplate": "codex exec --json --skip-git-repo-check -m gpt-6.1-sol -c model_reasoning_effort=medium --dangerously-bypass-approvals-and-sandbox -C <cwd> \"<prompt>\"",
+  "claudeCommandTemplate": "claude -p \"<prompt>\" --output-format stream-json --verbose --model claude-sonnet-5-5 --permission-mode auto --effort medium --add-dir <repo> --add-dir <tools> --disable-slash-commands --strict-mcp-config",
+  "codexCommandTemplate": "codex exec --json --skip-git-repo-check -m gpt-6.1-terra -c model_reasoning_effort=medium --dangerously-bypass-approvals-and-sandbox -C <cwd> \"<prompt>\"",
   "brainArgs": ["--output-format", "stream-json", "--verbose", "--model", "{brainModel}", "--permission-mode", "auto", "--effort", "{brainEffort}", "--tools", "Read,Glob,Grep", "--add-dir", "{repo}", "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config"],
   "pythonExe": "C:\\Python314\\python.exe",
   "integrationBranch": "main",
