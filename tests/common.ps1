@@ -3,6 +3,23 @@
 $script:ToolsRoot = Split-Path $PSScriptRoot -Parent
 $ToolsRoot = $script:ToolsRoot
 
+# Time limit of the test itself: when the test is still running after ORCH_TEST_LIMIT_SEC (default 600) it ends with an error instead of waiting
+# (the timer runs on its own thread, so it also fires while the test is blocked in a wait; tests\run-test.ps1 adds a limit from outside that ends the whole process tree).
+$limitSec = if ($env:ORCH_TEST_LIMIT_SEC) { [int]$env:ORCH_TEST_LIMIT_SEC } else { 600 }
+# (a plain .NET class: a script block cannot run on a timer thread because that thread has no PowerShell runspace)
+if (-not ('OrchTestWatchdog' -as [type])) {
+    Add-Type -TypeDefinition @'
+public static class OrchTestWatchdog {
+    private static System.Threading.Timer timer;
+    // Starts the timer; when it fires the process writes the reason to stderr and exits with 124.
+    public static void Start(int seconds) {
+        timer = new System.Threading.Timer(delegate(object s) { System.Console.Error.WriteLine("TEST TIME LIMIT HIT: the test was still running, ending it with an error"); System.Environment.Exit(124); }, null, seconds * 1000, System.Threading.Timeout.Infinite);
+    }
+}
+'@
+}
+[OrchTestWatchdog]::Start($limitSec)
+
 # Builds the test project below $Base and points $env:ORCH_PROJECT to its project file. Returns the path of the project file.
 # The rule fixtures give the phases different rule sets: "Coding style" only for work, "Process rules" for every phase.
 function New-TestProject([string]$Base, [string]$Repo = '', [string]$Runtime = '') {

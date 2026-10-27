@@ -62,10 +62,14 @@ function Get-QuestionsPath($Cfg) { if ($env:ORCH_QUESTIONS_FILE) { return $env:O
 function Get-AnswersPath($Cfg) { if ($env:ORCH_ANSWERS_FILE) { return $env:ORCH_ANSWERS_FILE }; return (Join-Path ([string]$Cfg.repo) ([string]$Cfg.answersFile)) }
 
 # Runs a script block while holding the AGENTS.json mutex (the mutex name starts with the project's mutexPrefix).
+# The wait is limited (ORCH_LOCK_TIMEOUT_SEC, default 120 s) and throws instead of waiting forever; a lock abandoned by an exited process counts as free.
 function Invoke-Locked([scriptblock]$Block) {
     $mutexName = 'Global\' + [string](Get-ProjCfg).mutexPrefix + 'AgentsJson'
+    $limit = if ($env:ORCH_LOCK_TIMEOUT_SEC) { [int]$env:ORCH_LOCK_TIMEOUT_SEC } else { 120 }
     $m = New-Object System.Threading.Mutex($false, $mutexName)
-    [void]$m.WaitOne()
+    $got = $false
+    try { $got = $m.WaitOne($limit * 1000) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+    if (-not $got) { throw "agents lock '$mutexName' not free within $limit s" }
     try { & $Block } finally { $m.ReleaseMutex() }
 }
 # Reads AGENTS.json as a flat array of agent rows (rows without a name, empty arrays and old nested wrappers are dropped).
