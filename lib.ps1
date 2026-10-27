@@ -61,10 +61,21 @@ function Get-QuestionsPath($Cfg) { if ($env:ORCH_QUESTIONS_FILE) { return $env:O
 # Absolute path of the answers file (ORCH_ANSWERS_FILE only in tests).
 function Get-AnswersPath($Cfg) { if ($env:ORCH_ANSWERS_FILE) { return $env:ORCH_ANSWERS_FILE }; return (Join-Path ([string]$Cfg.repo) ([string]$Cfg.answersFile)) }
 
+# Name of a global mutex: 'Global\' + the project's mutexPrefix + the lock name. A run with a test runtime (ORCH_RUNTIME_OVERRIDE) adds a short hash of that runtime
+# path, so a test never holds or waits for a lock of the live system (the live name stays exactly as before).
+function Get-MutexName([string]$Prefix, [string]$Lock) {
+    $tag = ''
+    if ($env:ORCH_RUNTIME_OVERRIDE) {
+        $sha = [System.Security.Cryptography.SHA1]::Create()
+        $tag = 'T' + ([BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($env:ORCH_RUNTIME_OVERRIDE.ToLowerInvariant()))).Replace('-', '').Substring(0, 8))
+    }
+    return 'Global\' + $Prefix + $tag + $Lock
+}
+
 # Runs a script block while holding the AGENTS.json mutex (the mutex name starts with the project's mutexPrefix).
 # The wait is limited (ORCH_LOCK_TIMEOUT_SEC, default 120 s) and throws instead of waiting forever; a lock abandoned by an exited process counts as free.
 function Invoke-Locked([scriptblock]$Block) {
-    $mutexName = 'Global\' + [string](Get-ProjCfg).mutexPrefix + 'AgentsJson'
+    $mutexName = Get-MutexName ([string](Get-ProjCfg).mutexPrefix) 'AgentsJson'
     $limit = if ($env:ORCH_LOCK_TIMEOUT_SEC) { [int]$env:ORCH_LOCK_TIMEOUT_SEC } else { 120 }
     $m = New-Object System.Threading.Mutex($false, $mutexName)
     $got = $false
@@ -221,7 +232,7 @@ function Get-PlanStateFiles([string]$PlanPath) {
 
 # Runs a block while holding the one global lock for all commands that create or close panes in the orchestrator window (wt.exe commands and pane exits never overlap; a lock abandoned by an exiting pane process counts as released), then waits a short settle time.
 function Invoke-WtLocked([scriptblock]$Block, [int]$TimeoutSec = 180) {
-    $mutexName = 'Global\' + [string](Get-ProjCfg).mutexPrefix + 'WtPaneCommands'
+    $mutexName = Get-MutexName ([string](Get-ProjCfg).mutexPrefix) 'WtPaneCommands'
     $m = New-Object System.Threading.Mutex($false, $mutexName)
     $got = $false
     try { $got = $m.WaitOne($TimeoutSec * 1000) } catch [System.Threading.AbandonedMutexException] { $got = $true }

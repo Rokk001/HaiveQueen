@@ -17,7 +17,7 @@ finally {
     Start-Sleep -Seconds $cfg.paneCloseDelaySeconds
     try {
         # The pane always closes after the delay. When no other agent pane runs and no idle pane exists, an idle pane takes its place first (Windows Terminal can only split an existing pane, and the agent area must not collapse). Everything happens under the one pane-command lock and is confirmed (the idle pane writes idle.pid) before this pane exits; the lock is held until this process has exited.
-        $mutexName = 'Global\' + [string]$cfg.mutexPrefix + 'WtPaneCommands'
+        $mutexName = Get-MutexName ([string]$cfg.mutexPrefix) 'WtPaneCommands'
         $global:wtPaneMutex = New-Object System.Threading.Mutex($false, $mutexName)
         $got = $false
         try { $got = $global:wtPaneMutex.WaitOne(180000) } catch [System.Threading.AbandonedMutexException] { $got = $true }

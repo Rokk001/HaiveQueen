@@ -10,7 +10,7 @@ $env:ORCH_RUNTIME_OVERRIDE = "$root\rt"
 
 # --- 1. the agents lock gives up: a second process holds the mutex, Invoke-Locked must throw after the limit ----
 . (Join-Path $ToolsRoot 'lib.ps1')
-$mutexName = 'Global\' + [string](Get-ProjCfg).mutexPrefix + 'AgentsJson'
+$mutexName = Get-MutexName ([string](Get-ProjCfg).mutexPrefix) 'AgentsJson'   # with the test runtime active this is the test's own lock name
 $holder = Start-Process pwsh -ArgumentList @('-NoProfile', '-Command', "`$m = New-Object System.Threading.Mutex(`$false, '$mutexName'); [void]`$m.WaitOne(); Start-Sleep 20") -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 3   # the holder owns the lock now
 $env:ORCH_LOCK_TIMEOUT_SEC = '2'
@@ -44,6 +44,19 @@ $left = @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" | Where-Object
 Check 'run-test.ps1 exits 124 on timeout' ($r.ExitCode -eq 124) "exit=$($r.ExitCode)"
 Check 'run-test.ps1 left no grandchild behind' ($left.Count -eq 0) "left=$($left.Count)"
 foreach ($l in $left) { & taskkill.exe /PID $l.ProcessId /T /F | Out-Null }   # clean up only the processes carrying this test's marker
+
+# --- 4. a held lock of the live system (same project, no test runtime) never blocks a test run ----
+$saved = $env:ORCH_RUNTIME_OVERRIDE; $env:ORCH_RUNTIME_OVERRIDE = $null
+$liveName = Get-MutexName ([string](Get-ProjCfg).mutexPrefix) 'AgentsJson'   # the name the live system uses
+$env:ORCH_RUNTIME_OVERRIDE = $saved
+$liveHolder = Start-Process pwsh -ArgumentList @('-NoProfile', '-Command', "`$m = New-Object System.Threading.Mutex(`$false, '$liveName'); [void]`$m.WaitOne(); Start-Sleep 20") -PassThru -WindowStyle Hidden
+Start-Sleep -Seconds 3   # the holder owns the live-named lock now
+$t0 = Get-Date; $ran = $false; $err = ''
+try { Invoke-Locked { $script:ran = $true } } catch { $err = $_.Exception.Message }   # default limit (120 s): it must not wait at all
+$sec = ((Get-Date) - $t0).TotalSeconds
+Check 'test name differs from the live name' ($mutexName -ne $liveName) "test=$mutexName live=$liveName"
+Check 'live lock held: the test run still goes through without waiting' ($ran -and $sec -lt 5) ("after {0:N1} s {1}" -f $sec, $err)
+if (-not $liveHolder.HasExited) { & taskkill.exe /PID $liveHolder.Id /T /F | Out-Null }   # only the holder started above
 
 Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "failures: $fails"
