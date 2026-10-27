@@ -216,7 +216,7 @@ foreach ($a in $acts) {
             elseif ($busyPkgs -contains "$($a.plan)|$($a.package)" -or @(@($a.bundle) | Where-Object { $busyPkgs -contains "$($a.plan)|$_" }).Count -gt 0) { $why = 'an agent already works on this package' }
             elseif ($a.phase -eq 'work' -and (Test-PackageLocked $cfg ([string]$a.plan) ([string]$a.package))) { $why = 'package is locked: verifications reported open items too often (open question)' }
             elseif (Test-Frozen $cfg ([string]$a.plan) ([string]$a.package)) { $why = 'package is frozen (NOFOLLOW.json): no follow-up task' }
-            elseif ($a.phase -ne 'integrate' -and -not ($startablePlans | Where-Object { $_.path -eq ([string]$a.plan).Replace('\','/') -or $_.path -eq [string]$a.plan })) { $why = 'rule 11: plan is not READY or IN_PROGRESS' }
+            elseif ($a.phase -ne 'integrate' -and -not ($a.phase -eq 'work' -and [string]$a.package -like 'FIX-*' -and (Norm-Plan ([string]$a.plan)) -eq (Norm-Plan (Get-QueueRel $cfg))) -and -not ($startablePlans | Where-Object { $_.path -eq ([string]$a.plan).Replace('\','/') -or $_.path -eq [string]$a.plan })) { $why = 'rule 11: plan is not READY or IN_PROGRESS' }
             if (-not $why -and $pilotMode -and $a.phase -eq 'integrate') { $why = 'pilot mode: no integrator' }
             if (-not $why -and $pilotMode -and (([string]$a.plan).Replace('/','\') -notlike ('*' + $pilotPlan))) { $why = 'pilot mode: only packages of PILOT-PLAN.md' }
             if (-not $why -and $a.phase -eq 'integrate' -and $PlanFiles) { $why = 'pilot/test mode (-PlanFiles): no integrator' }

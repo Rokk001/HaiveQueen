@@ -948,13 +948,28 @@ function Complete-BuildMeasure($Cfg, [string]$Name, [int]$Jobs, [double]$StartFr
     return [pscustomobject]@{ MinFreeMB = $min; UseMB = $use; StoredMB = $stored }
 }
 
-# SYSTEM line of the dashboard (plan 16.4): the job count of the running build (else the count the next build would get now) and the measured use per job; $null without a buildJobs block.
-function Get-BuildJobsLine($Cfg, $Agents) {
+# SYSTEM line of the dashboard (plan 16.4): the job count of the running build (else the count the next build would get now) with the logical cores, the measured use per job and, while a build runs, the cores in use
+# (number of running cl.exe, $ClCount overrides the live count for tests); $null without a buildJobs block.
+function Get-BuildJobsLine($Cfg, $Agents, $ClCount = $null) {
     $bj = Get-BuildJobsCfg $Cfg
     if (-not $bj) { return $null }
     $per = Get-BuildPerJobMB $Cfg
+    $cores = [Environment]::ProcessorCount
     $run = @($Agents | Where-Object { $_.status -eq 'running' -and $_.buildJobs } | Select-Object -First 1)
-    if ($run.Count) { $txt = 'Build-Jobs ' + $run[0].buildJobs + ' (laufend)' }
-    else { $c = Get-BuildJobCount $bj ([Environment]::ProcessorCount) ((Get-FreeRamGB) * 1024) $per; $txt = 'Build-Jobs ' + $c.Jobs + ' (naechster Build)' }
-    return ($txt + ' | Verbrauch pro Job ' + $(if ($null -ne $per) { ('{0:0} MB' -f $per) } else { 'noch nicht gemessen' }))
+    if ($run.Count) { $txt = 'Build-Jobs ' + $run[0].buildJobs + ' von ' + $cores + ' Kernen (laufend)' }
+    else { $c = Get-BuildJobCount $bj $cores ((Get-FreeRamGB) * 1024) $per; $txt = 'Build-Jobs ' + $c.Jobs + ' von ' + $cores + ' Kernen (naechster Build)' }
+    $txt += ' | Verbrauch pro Job ' + $(if ($null -ne $per) { ('{0:0} MB' -f $per) } else { 'noch nicht gemessen' })
+    $cl = if ($null -ne $ClCount) { [int]$ClCount } else { @(Get-Process cl -ErrorAction SilentlyContinue).Count }
+    if ($run.Count -or $cl -gt 0) { $txt += ' | aktiv: ' + $cl + ' Kerne' }
+    return $txt
+}
+
+# Wraps a value in double quotes for Start-Process -ArgumentList, which joins the array unquoted (a name with a space or comma would be split into several arguments).
+function Quote-Arg([string]$Value) { return ('"' + $Value.Replace('"', '\"') + '"') }
+
+# Folder and branch name from a free text: only lower-case letters, digits and hyphens (everything else becomes one hyphen, no hyphen at the ends); "pkg" when nothing is left.
+function ConvertTo-Slug([string]$Text) {
+    $s = ([regex]::Replace($Text.ToLowerInvariant(), '[^a-z0-9]+', '-')).Trim('-')
+    if (-not $s) { return 'pkg' }
+    return $s
 }

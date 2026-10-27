@@ -19,6 +19,7 @@ function Set-Handled($Cfg, [string]$Key) {
 
 # Package table of a plan: rows (Id, Content, Depends = list of package ids). A table is recognized by a header cell "Package" or "Paket" in the first column.
 function Get-PlanPackages([string]$PlanPath) {
+    if (-not (Test-Path -LiteralPath $PlanPath)) { return @() }   # an agent row may name a file that is not a plan (the queue file of a fix without a plan) or is gone
     $res = @(); $hdr = $null; $depIdx = -1; $contIdx = -1; $clsIdx = -1
     $range = '([A-Za-z]+)(\d+)\s*[-–]\s*(?:[A-Za-z]+)?(\d+)'
     foreach ($l in (Get-Content $PlanPath -Encoding UTF8)) {
@@ -183,7 +184,19 @@ function Get-Routine($Ctx) {
     # a task counts as started once an agent row with its package id exists, so a rejected start is simply tried again next round.
     foreach ($r in @($Ctx.AllRows | Where-Object { [string]$_.status -match '^blockiert' })) {
         $rp = $Ctx.Plans | Where-Object { (Norm-Plan $_.path) -eq (Norm-Plan ([string]$r.plan)) -or (Norm-Plan ([string]$r.plan)).EndsWith((Norm-Plan $_.path)) } | Select-Object -First 1
-        if (-not $rp -or $workers -le 0) { continue }
+        $noPlan = (-not $rp) -and ([string]$r.plan -match '(?i)^\s*(keiner?|none|n/?a|-+|–)?\s*$')   # plan column "keiner": the row text itself is the task (plan 6.5)
+        if ((-not $rp -and -not $noPlan) -or $workers -le 0) { continue }
+        if ($noPlan) {
+            $tip = ([string]$r.tip); $tip = $tip.Substring(0, [Math]::Min(7, $tip.Length)); $pk = "FIX-$tip"; $relP = Get-QueueRel $cfg
+            if (@($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $relP) -and [string]$_.package -eq $pk -and $_.status -ne 'failed' }).Count -gt 0) { continue }
+            if (@($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $relP) -and $_.Package -eq $pk }).Count -gt 0) { continue }
+            $pv = Select-Provider $cfg 'medium' @() $free
+            if (-not $pv) { continue }
+            $type = $pv.Name
+            $nm = New-AgentName "$pk-work" $all $chosen; $chosen += $nm; $free[$type]--; $workers--
+            $acts += New-StartAction $nm $type 'work' $relP $pk ([string]$Ctx.Repo) (Get-PromptText $cfg 'fixBlockedNoPlan' @{ branch = [string]$r.branch; tip = [string]$r.tip; status = ([string]$r.status + ' ' + [string]$r.note).Trim(); cwd = [string]$Ctx.Repo; newWorktree = ((Split-Path $Ctx.Repo -Parent) + '\' + [string]$cfg.worktreePrefix + '-fix-' + (ConvertTo-Slug ([string]$r.branch))) }) $false
+            continue
+        }
         $relP = [string]$rp.path
         $h2 = @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $relP) -and $_.cwd } | Sort-Object { [string]$_.startedAt })
         if (-not $h2.Count) { continue }
@@ -345,8 +358,8 @@ function Get-Routine($Ctx) {
             $nm = New-AgentName ("$tag-$($k.Id)-work") $all $chosen; $chosen += $nm; $free[$type]--; $workers--
             $texts = @()
             foreach ($m in $members) {
-                $wtNote = if ([IO.Path]::GetFullPath($cwd).TrimEnd('') -ieq [IO.Path]::GetFullPath([string]$Ctx.Repo).TrimEnd('')) { Get-PromptText $cfg 'workInMainCheckout' @{ cwd = $cwd; newWorktree = ((Split-Path $Ctx.Repo -Parent) + '\' + [string]$cfg.worktreePrefix + '-' + $tag.ToLower() + '-' + $m.Id.ToLower()) } } else { Get-PromptText $cfg 'workInWorktree' @{ cwd = $cwd } }
-                $texts += "Plan: $rel, package $($m.Id). $wtNote Do the package exactly as the plan describes it."
+                $wtNote = if ([IO.Path]::GetFullPath($cwd).TrimEnd('') -ieq [IO.Path]::GetFullPath([string]$Ctx.Repo).TrimEnd('')) { Get-PromptText $cfg 'workInMainCheckout' @{ cwd = $cwd; newWorktree = ((Split-Path $Ctx.Repo -Parent) + '\' + [string]$cfg.worktreePrefix + '-' + (ConvertTo-Slug $tag) + '-' + (ConvertTo-Slug $m.Id)); subBranch = ((ConvertTo-Slug $tag) + '-' + (ConvertTo-Slug $m.Id)) } } else { Get-PromptText $cfg 'workInWorktree' @{ cwd = $cwd } }
+                $texts += "Plan: $rel, package $($m.Id). $wtNote Names of worktree folders and branches you create: only lower-case letters, digits and hyphens (for this package: $((ConvertTo-Slug $tag) + '-' + (ConvertTo-Slug $m.Id))). Do the package exactly as the plan describes it."
             }
             $tail = " Follow all rules in section 1 of ORCHESTRATOR.md, update the plan's state file, end when the package is finished."
             $prompt = if ($members.Count -gt 1) { "This agent works $($members.Count) small packages of plan $rel one after the other (bundled so that the start context is paid once). Finish each package and record it in the state file before you start the next. Packages in this order: $(($members | ForEach-Object { $_.Id }) -join ', ').`n`n" + ($texts -join "`n`n") + $tail } else { $texts[0] + $tail }

@@ -67,10 +67,15 @@ Check 'measure: lowest 5000, use per job 1000, stored 1000' ($m.MinFreeMB -eq 50
 $line = Get-Content "$root\rt\ROUNDS.log" | Where-Object { $_ -match 'build TEST-build: jobs=3' } | Select-Object -Last 1
 Check 'one ROUNDS.log line with jobs, duration, lowest free RAM, use per job' ($line -match 'jobs=3, duration=00:00:4\d, lowest free RAM=5000 MB, use per job=1000 MB') $line
 
-# 8. dashboard line.
+# 8. dashboard line (plan 16.4): jobs of the logical cores, use per job, cores in use while a build runs.
 $cfg | Add-Member -NotePropertyName buildJobs -NotePropertyValue ([pscustomobject]@{ envVar = 'BUILD_JOBS'; fixed = 4 }) -Force
-$txt = Get-BuildJobsLine $cfg @([pscustomobject]@{ status = 'running'; buildJobs = 4 })
-Check 'dashboard line: running jobs and use per job' ($txt -match '^Build-Jobs 4 \(laufend\) \| Verbrauch pro Job 1000 MB$') $txt
+$cores = [Environment]::ProcessorCount
+$txt = Get-BuildJobsLine $cfg @([pscustomobject]@{ status = 'running'; buildJobs = 4 }) 5
+Check 'dashboard line while a build runs: jobs, cores, use per job, active cores' ($txt -eq "Build-Jobs 4 von $cores Kernen (laufend) | Verbrauch pro Job 1000 MB | aktiv: 5 Kerne") $txt
+$txt = Get-BuildJobsLine $cfg @() 0
+Check 'dashboard line without a build: next build, no active cores' ($txt -eq "Build-Jobs 4 von $cores Kernen (naechster Build) | Verbrauch pro Job 1000 MB") $txt
+$txt = Get-BuildJobsLine $cfg @() 3
+Check 'dashboard line: cl.exe of a foreign build also shows the active cores' ($txt -match '\| aktiv: 3 Kerne$') $txt
 
 Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 if ($fails -gt 0) { Write-Host "$fails check(s) failed" -ForegroundColor Red; exit 1 }

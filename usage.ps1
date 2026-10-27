@@ -471,7 +471,7 @@ function Get-UsageTable {
         if (Test-Path -LiteralPath $zLock) { $zp = Get-Content -LiteralPath $zLock -ErrorAction SilentlyContinue; if ($zp -and (Get-Process -Id ([int]$zp) -ErrorAction SilentlyContinue)) { $zBusy = $true } }
         if (-not $zBusy) {
             $py = if ($PythonExe) { $PythonExe } else { [string](Get-Command python -ErrorAction SilentlyContinue).Source }
-            if ($py -and (Test-Path -LiteralPath $py)) { Start-Process -FilePath $py -ArgumentList @('-I', (Join-Path $PSScriptRoot 'zst-usage.py'), $CodexRoot, $zCache, $zLock) -WindowStyle Hidden }
+            if ($py -and (Test-Path -LiteralPath $py)) { Start-Process -FilePath $py -ArgumentList @('-I', (Quote-Arg (Join-Path $PSScriptRoot 'zst-usage.py')), (Quote-Arg $CodexRoot), (Quote-Arg $zCache), (Quote-Arg $zLock)) -WindowStyle Hidden }
         }
         if (Test-Path -LiteralPath $zCache) {
             try {

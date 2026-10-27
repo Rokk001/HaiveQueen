@@ -201,7 +201,7 @@ function Draw-Head { return 0 }
 function Maybe-Head { }
 $null = New-Item -ItemType File -Force (Join-Path $runDir 'milestones.txt')
 Set-Content -Path (Join-Path $runDir 'milestones.txt') -Value @() -Encoding UTF8
-[void](Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'head-ticker.ps1'), '-Project', $env:ORCH_PROJECT, '-Name', $Name, '-ParentPid', "$PID") -NoNewWindow -PassThru)
+[void](Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Quote-Arg (Join-Path $PSScriptRoot 'head-ticker.ps1')), '-Project', (Quote-Arg $env:ORCH_PROJECT), '-Name', (Quote-Arg $Name), '-ParentPid', "$PID") -NoNewWindow -PassThru)
 Start-Sleep -Seconds 2
 
 $prompt = "Read the file `"$PromptFile`" completely and carry out exactly the task described there. Do nothing else."
@@ -281,7 +281,7 @@ if ($bjCfg -and $bjCfg.EnvVar) {
     $bjJobs = $bjCalc.Jobs
     Set-Item -Path ('Env:' + $bjCfg.EnvVar) -Value ([string]$bjJobs)
     Remove-Item $bjSamples -ErrorAction SilentlyContinue
-    $bjSampler = Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'build-sampler.ps1'), '-ParentPid', "$PID", '-Out', $bjSamples) -WindowStyle Hidden -PassThru
+    $bjSampler = Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Quote-Arg (Join-Path $PSScriptRoot 'build-sampler.ps1')), '-ParentPid', "$PID", '-Out', (Quote-Arg $bjSamples)) -WindowStyle Hidden -PassThru
     Update-Agent $cfg $Name @{ buildJobs = $bjJobs }
     Write-RoundLog $cfg ('build {0}: starting with {1} jobs ({2}, free RAM {3} MB)' -f $Name, $bjJobs, $bjCalc.Why, $bjStartMB)
 }
