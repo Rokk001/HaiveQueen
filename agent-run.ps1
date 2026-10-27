@@ -192,7 +192,7 @@ function Push-State([bool]$Force) {
 
 $prev = @(Read-Agents $cfg | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
 if ($prev.Count -and $prev[0].pid -and [int]$prev[0].pid -ne $PID -and (Get-Process -Id ([int]$prev[0].pid) -ErrorAction SilentlyContinue)) { Write-Host "agent $Name already runs (pid $($prev[0].pid)), this second pane ends" -ForegroundColor Yellow; exit 0 }   # a relaunched pane must never start the task twice
-Update-Agent $cfg $Name @{ type = $Type; plan = $Plan; package = $Package; phase = $Phase; cwd = $Cwd; status = 'running'; startedAt = $started.ToString('o'); endedAt = $null; pid = $PID; tokensIn = $state.tin; tokensOut = $state.tout; lastLine = 'starting'; paneCols = (Get-Width); paneRows = $Host.UI.RawUI.WindowSize.Height }
+if (-not (Update-AgentRetry $cfg $Name @{ type = $Type; plan = $Plan; package = $Package; phase = $Phase; cwd = $Cwd; status = 'running'; startedAt = $started.ToString('o'); endedAt = $null; pid = $PID; tokensIn = $state.tin; tokensOut = $state.tout; lastLine = 'starting'; paneCols = (Get-Width); paneRows = $Host.UI.RawUI.WindowSize.Height })) { Write-Host "agent $Name not started: the agents lock stayed busy, row set to failed" -ForegroundColor Red; exit 0 }   # the row is on 'failed' now, the model is never called
 # The header is drawn by head-ticker.ps1 (own process in this pane, redraws every second from AGENTS.json, clears old header lines completely when the size changes); this script only prints milestones below it.
 function Draw-Head { return 0 }
 function Maybe-Head { }
@@ -300,7 +300,7 @@ $status = if ($state.ok) { 'done' } else { 'failed' }
 if ($state.ok -and $code -ne 0) { Say ("Hinweis: Exit-Code $code, obwohl der Agent fertig ist (siehe stderr.txt)") 'Yellow'; Write-RoundLog $cfg "warning $Name exit code $code after a finished task (hook/stderr), kept as done" }
 if (-not $state.ok) { $errTxt = if (Test-Path $errFile) { (Get-Content $errFile -Tail 3 -ErrorAction SilentlyContinue) -join ' ' } else { '' }; if ($state.last -notmatch '^(error|runner error)') { $state.last = ('no result event, exit ' + $code + ' ' + $errTxt) }; $state.last = Short $state.last }
 [System.IO.File]::WriteAllText($finalFile, [string]$state.final, (New-Object System.Text.UTF8Encoding($false)))
-Update-Agent $cfg $Name @{ status = $status; endedAt = (Get-Date).ToString('o'); exitCode = $code; tokensIn = $state.tin; tokensOut = $state.tout; lastLine = $state.last }
+[void](Update-AgentRetry $cfg $Name @{ status = $status; endedAt = (Get-Date).ToString('o'); exitCode = $code; tokensIn = $state.tin; tokensOut = $state.tout; lastLine = $state.last })
 $state.ended = Get-Date
 [void](Draw-Head)
 if ($state.final -and (Short $state.final 1500) -ne (Short $state.lastSaid 1500)) { Say ('Schlussmeldung: ' + $state.final) $(if ($status -eq 'done') { 'Green' } else { 'Red' }) }

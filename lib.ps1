@@ -153,6 +153,25 @@ function Update-Agent($Cfg, [string]$Name, [hashtable]$Props) {
     }
 }
 
+# Update-Agent with up to $Attempts tries (a lock timeout throws). When the last try fails, the row is written WITHOUT the lock (still atomic) as status 'failed' with the reason,
+# so a row never stays on 'starting'/'running' because of a lock problem. Returns $true when the requested properties were written, $false when the failure fallback was used.
+function Update-AgentRetry($Cfg, [string]$Name, [hashtable]$Props, [int]$Attempts = 3) {
+    $err = ''
+    for ($i = 1; $i -le $Attempts; $i++) {
+        try { Update-Agent $Cfg $Name $Props; return $true } catch { $err = $_.Exception.Message; if ($i -lt $Attempts) { Start-Sleep -Seconds 2 } }
+    }
+    try { Write-RoundLog $Cfg "warning $Name could not update its row after $Attempts tries, set to failed: $err" } catch {}
+    $list = @(Read-Agents $Cfg)
+    $row = $list | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+    if (-not $row) { $row = [pscustomobject]@{ name = $Name }; $list = @($list) + @($row) }
+    foreach ($k in $Props.Keys) { $row | Add-Member -NotePropertyName $k -NotePropertyValue $Props[$k] -Force }
+    $row | Add-Member -NotePropertyName status -NotePropertyValue 'failed' -Force
+    $row | Add-Member -NotePropertyName endedAt -NotePropertyValue (Get-Date).ToString('o') -Force
+    $row | Add-Member -NotePropertyName lastLine -NotePropertyValue ("agents lock error after $Attempts tries (wanted status '" + [string]$Props['status'] + "'): " + $err) -Force
+    Write-Agents $Cfg $list
+    return $false
+}
+
 # Appends one timestamped line to ROUNDS.log.
 function Write-RoundLog($Cfg, [string]$Text) {
     $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Text
