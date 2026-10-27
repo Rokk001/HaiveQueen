@@ -1,0 +1,88 @@
+{
+  "window": "Orchestrator",
+  "terminalProfile": { "name": "Orchestrator Agent", "fontSize": 10 },
+  "mutexPrefix": "Orch",
+  "owner": "Owner",
+  "openMarker": "Open for Owner",
+  "pilot": false,
+  "claudeSlots": 2,
+  "codexSlots": 2,
+  "integratorSlots": 1,
+  "roundMinutes": 5,
+  "minFreeRamGB": 2,
+  "pilotMinFreeRamGB": 2,
+  "claudeModel": "sonnet",
+  "codexModel": "gpt-6.1-sol",
+  "effort": "medium",
+  "brainModel": "sonnet",
+  "brainEffort": "medium",
+  "contextLimitTokens": 300000,
+  "repo": "C:\\work\\my-project",
+  "runtime": "C:\\work\\my-project\\docs\\orchestrator",
+  "paneCloseDelaySeconds": 30,
+  "claudeArgs": ["--output-format", "stream-json", "--verbose", "--model", "{model}", "--permission-mode", "auto", "--effort", "{effort}", "--add-dir", "{repo}", "--add-dir", "{tools}", "--disable-slash-commands", "--strict-mcp-config", "--tools", "{claudeTools}", "--setting-sources", "", "--append-system-prompt-file", "{rules}"],
+  "codexArgs": ["exec", "--json", "--skip-git-repo-check", "-m", "{model}", "-c", "model_reasoning_effort={effort}", "--dangerously-bypass-approvals-and-sandbox", "--ignore-user-config", "-C", "{cwd}"],
+  "classes": {
+    "claude": {
+      "light": { "model": "haiku", "effort": "medium" },
+      "medium": { "model": "sonnet", "effort": "medium" },
+      "heavy": { "model": "opus", "effort": "medium" }
+    },
+    "codex": {
+      "light": { "model": "gpt-6-luna", "effort": "medium" },
+      "medium": { "model": "gpt-6.1-sol", "effort": "medium" },
+      "heavy": { "model": "gpt-6-astra", "effort": "medium" }
+    }
+  },
+  "minClass": { "verify": "medium", "integrate": "medium" },
+  "escalateAfter": 2,
+  "bundle": { "maxPackages": 3, "startContextTokens": 26000, "smallestTaskTotalInput": 669766 },
+  "claudeTools": "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop",
+  "claudeCommandTemplate": "claude -p \"<prompt>\" --output-format stream-json --verbose --model sonnet --permission-mode auto --effort medium --add-dir <repo> --add-dir <tools> --disable-slash-commands --strict-mcp-config",
+  "codexCommandTemplate": "codex exec --json --skip-git-repo-check -m gpt-6.1-sol -c model_reasoning_effort=medium --dangerously-bypass-approvals-and-sandbox -C <cwd> \"<prompt>\"",
+  "brainArgs": ["--output-format", "stream-json", "--verbose", "--model", "{brainModel}", "--permission-mode", "auto", "--effort", "{brainEffort}", "--tools", "Read,Glob,Grep", "--add-dir", "{repo}", "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config"],
+  "pythonExe": "C:\\Python314\\python.exe",
+  "integrationBranch": "main",
+  "plansRoot": "docs\\plans",
+  "planFileRegexes": ["-PLAN\\.md$", "-TASK\\.md$"],
+  "planStemRegexes": ["PLAN\\.md$"],
+  "planStandaloneRegex": "",
+  "planSuffixRegex": "-?PLAN$",
+  "planExcludeNameRegex": "ANSWERS",
+  "planExcludeDirRegex": "\\\\(orchestrator|review)\\\\",
+  "stateToken": "STATE",
+  "pilotPlan": "docs\\orchestrator\\PILOT-PLAN.md",
+  "integrationStateFile": "queue\\QUEUE.md",
+  "questionsFile": "docs\\QUESTIONS.md",
+  "answersFile": "docs\\ANSWERS.md",
+  "integratorInstructions": "docs/integrator.md",
+  "compileCheck": "scripts/compile-check-changed.ps1",
+  "buildFlowDoc": "docs/BUILD-FLOW.md",
+  "worktreePrefix": "wt",
+  "ruleSources": {
+    "orch": "{tools}/ORCHESTRATOR.md",
+    "project": "{projectDir}\\project-rules.md"
+  },
+  "phaseRules": {
+    "work": { "orch": ["## 1. Hard rules"], "project": ["## 1. Hard rules (project)"] },
+    "verify": { "orch": ["## 1. Hard rules"], "project": ["## 1. Hard rules (project)"] },
+    "release": { "orch": ["## 1. Hard rules"], "project": ["## 1. Hard rules (project)"] },
+    "integrate": { "orch": ["## 1. Hard rules"], "project": ["## 1. Hard rules (project)"] }
+  },
+  "prompts": {
+    "fixBlocked": "Plan: {plan}. The integrator blocked branch {branch} (tip {tip}). Fix exactly what the queue row says ({queueFile}, row of {branch}): {status} Work in the worktree {cwd} on that branch, run {compileCheck} until exit 0 and the check scripts of the changed files, push normally and write a new ready row with the new tip. Follow all rules in section 1 of ORCHESTRATOR.md, update the plan's state file, end when the fix is finished.",
+    "answeredQuestion": "Plan: {plan}, item {item} (question {qid}). {owner} answered: {answer} Implement exactly this answer in the worktree {cwd} on the branch the plan names for this item (never invent one). Follow all rules in section 1 of ORCHESTRATOR.md, update the plan's state file, end when the item is finished.",
+    "verifyOpenWork": "Plan: {plan}, package {pkg}. The independent verification {verifier} answered that requirements are open (answer: {answerPath}, details in the plan's state file). Implement exactly the open requirements it lists, nothing else, and nothing the plan leaves to {owner}. Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of ORCHESTRATOR.md, update the plan's state file with evidence per requirement, end when all of them are done.",
+    "restartWork": "Plan: {plan}, package {pkg}. The previous work agent {previous} never got a pane (technical failure of the window); start the package again from the plan and its state file (what is already done stays done). Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of ORCHESTRATOR.md, update the plan's state file, end when the package is finished.",
+    "workInMainCheckout": "The main checkout ({cwd}) stays on {integrationBranch} and is never edited. Work in your own worktree next to it ({newWorktree}) on a sub-branch of the feature branch that the plan or its state file names (create the feature branch from origin/{integrationBranch} if it does not exist, merge your sub-branch back into it locally when the package is finished).",
+    "workInWorktree": "Work in the worktree {cwd} and the branch the plan names for this package (never invent them).",
+    "release": "Release of the branch of plan {plan} (worktree {cwd}): merge origin/{integrationBranch} (keep both sides of every conflict), run {compileCheck} until exit 0, run the check scripts for the changed files, push normally and write the ready row into {queueName} with 'Kompiliertest: Exit 0' ({buildFlowDoc} rules 3-5). Follow all rules in section 1 of ORCHESTRATOR.md, update the plan's state file, end when the release is finished.",
+    "integrator": "You are the integrator. Follow {integratorInstructions} and {buildFlowDoc}: read the ready rows of {queueFile}, merge them, one Release build, check scripts, load test, push {integrationBranch}, deploy, set the rows to integriert. Follow all rules in section 1 of ORCHESTRATOR.md.",
+    "lockQuestion": "{marker} - {tag}\n\nPaket {pkg} ist gesperrt: die Pruefungen meldeten wiederholt offene Punkte, auch nach dem Versuch mit hoeherer Klasse. Letzte Pruefung ({agent}): {text}\n\nFrage: Wie soll es mit dem Paket weitergehen (anderer Ansatz, Anforderung anpassen, im Spiel pruefen)? Empfehlung: {owner} entscheidet nach Sicht der offenen Punkte in der State-Datei."
+  },
+  "onEvent": {
+    "command": ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "{projectDir}\\sync.ps1"],
+    "workDir": "{projectDir}",
+    "timeoutSeconds": 180
+  }
+}

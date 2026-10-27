@@ -1,0 +1,63 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Orchestrator brain answer",
+  "type": "object",
+  "required": ["actions"],
+  "additionalProperties": false,
+  "properties": {
+    "actions": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["action", "name", "type", "phase", "plan", "package", "cwd", "prompt"],
+            "additionalProperties": false,
+            "properties": {
+              "action": { "const": "start_agent" },
+              "name": { "type": "string", "minLength": 1 },
+              "type": { "enum": ["claude", "codex"] },
+              "phase": { "enum": ["work", "verify", "release", "integrate"] },
+              "plan": { "type": "string" },
+              "package": { "type": "string" },
+              "cwd": { "type": "string", "minLength": 1 },
+              "prompt": { "type": "string", "minLength": 1 },
+              "graphics": { "type": "boolean" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["action", "plan", "item", "question", "recommendation"],
+            "additionalProperties": false,
+            "properties": {
+              "action": { "const": "ask_owner" },
+              "plan": { "type": "string" },
+              "item": { "type": "string" },
+              "question": { "type": "string", "minLength": 1 },
+              "recommendation": { "type": "string" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["action", "plan"],
+            "additionalProperties": false,
+            "properties": {
+              "action": { "const": "plan_done" },
+              "plan": { "type": "string" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["action", "text"],
+            "additionalProperties": false,
+            "properties": {
+              "action": { "const": "note" },
+              "text": { "type": "string" }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+

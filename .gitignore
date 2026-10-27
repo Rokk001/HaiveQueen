@@ -1,0 +1,23 @@
+# Runtime data of an orchestrator run (normally lives in the runtime folder of the project, not here; ignored in case a runtime folder is placed inside the clone)
+AGENTS*.json
+ROUNDS.log
+ORCH-*.json
+ORCH-*.log
+BRAIN-USAGE.jsonl
+NOFOLLOW.json
+panes.json
+usage-*.json
+usage-cache/
+runs/
+STOP
+DASH-STOP
+loop.lock
+idle.pid
+window.txt
+*.pid
+
+# Local project files and scratch
+*.local.json
+step*/
+*-scratch/
+tokentest.log
