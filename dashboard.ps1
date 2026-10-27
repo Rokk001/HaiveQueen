@@ -150,6 +150,7 @@ function Build-Lines([int]$level, $d, [int]$w, [int]$nFin) {
     }
     Add-Head ([string][char]0x25A3 + ' SYSTEM')
     $lines.Add(@((P ($(if (($d.totGB - $d.usedGB) -lt 2) { [string][char]0x25B2 + ' ' } else { '' }) + ('RAM {0}% {1:N1}/{2:N0} GB' -f $d.ramPct, $d.usedGB, $d.totGB)) (Level-Color $d.ramPct)), (P ('  CPU {0}%' -f [int]$d.cpu) (Level-Color $d.cpu)), (P ('  ' + [char]0x2318 + ' ' + $d.bld) 'Gray')))
+    if ($d.bj) { $lines.Add(@((P $d.bj 'Gray'))) }
     Add-Head ([string][char]0x2630 + ' PLAENE')
     $pl = @(); foreach ($b in $d.badges) { $pl += (P ('{0} {1}  ' -f $b[0], [int]$d.counts[$b[0]]) $b[1]) }
     if ($d.counts['DRAFT'] -gt 0) { $pl += (P ('(' + $cfg.owner + ': ' + ($d.draftNames -join ', ') + ')') 'DarkYellow') }
@@ -201,6 +202,7 @@ while ($true) {
             badges = @(@('DRAFT', 'Gray'), @('READY', 'Cyan'), @('IN_PROGRESS', 'Yellow'), @('DONE', 'Green'), @('PAUSED', 'DarkGray'))
             totGB = $totGB; usedGB = $usedGB; ramPct = [int][Math]::Round(100 * $usedGB / $totGB)
             cpu = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+            bj = $(Get-BuildJobsLine $cfg @($allAgents))
             bld = $(if ($bn.Count) { 'Build: ja (' + ($bn -join ', ') + ')' } else { 'Build: nein' })
             now = (Get-Date -Format 'HH:mm:ss'); lastRound = $(if (Test-Path $rl) { (Get-Item $rl).LastWriteTime.ToString('HH:mm:ss') } else { '-' })
         }

@@ -150,6 +150,7 @@ Everything project-specific lives in one JSON project file; `examples/project.ex
 | `providers` | The list of agent providers, see [Providers](#providers): command, arguments, classes, capabilities, slots, use and weekly limit of every provider |
 | `roundMinutes` | Interval of the orchestration rounds |
 | `minFreeRamGB` | Free RAM required before an agent is started, otherwise it waits for the next round |
+| `buildJobs` | Optional block: parallel build jobs per machine. `envVar` = environment variable the build script reads; `coreShare` (default 2/3 of the logical cores, rounded up); `reserveMB` (default 1024, kept free); `perJobMB` ("auto" = highest RAM use per job measured on this host, a number overrides); `firstJobs` (default 2, while nothing is measured); `fixed` (optional, overrides everything). Before an agent of phase integrate or release starts, jobs = min(cores x coreShare, (free RAM - reserveMB) / use per job), at least 1, and the value is set as `envVar` for that agent. While it runs, `build-sampler.ps1` logs free RAM and the cl.exe count every 10 s; the use per job is stored in the runtime (`BUILD-JOBS.json`, per host and project, highest value) and one line per build goes to ROUNDS.log |
 | `brainModel`, `brainEffort` | Model and effort of the CHIEF call |
 | `contextLimitTokens` | Context limit per agent; at the limit the agent writes a handoff and a fresh one continues (default 300000) |
 | `repo` | Repository of the project |

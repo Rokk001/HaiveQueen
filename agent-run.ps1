@@ -272,6 +272,19 @@ function Handle-Event($e) {
     Maybe-Head
 }
 
+# Build jobs (plan section 16): an agent that builds (integrate, release) gets the job count of this machine as environment variable and its RAM use is measured while it runs.
+$bjCfg = if ($Phase -in @('integrate', 'release')) { Get-BuildJobsCfg $cfg } else { $null }
+$bjJobs = 0; $bjStartMB = 0.0; $bjSamples = Join-Path $runDir 'build-samples.txt'; $bjSampler = $null
+if ($bjCfg -and $bjCfg.EnvVar) {
+    $bjStartMB = [math]::Round((Get-FreeRamGB) * 1024, 0)
+    $bjCalc = Get-BuildJobCount $bjCfg ([Environment]::ProcessorCount) $bjStartMB (Get-BuildPerJobMB $cfg)
+    $bjJobs = $bjCalc.Jobs
+    Set-Item -Path ('Env:' + $bjCfg.EnvVar) -Value ([string]$bjJobs)
+    Remove-Item $bjSamples -ErrorAction SilentlyContinue
+    $bjSampler = Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'build-sampler.ps1'), '-ParentPid', "$PID", '-Out', $bjSamples) -WindowStyle Hidden -PassThru
+    Update-Agent $cfg $Name @{ buildJobs = $bjJobs }
+    Write-RoundLog $cfg ('build {0}: starting with {1} jobs ({2}, free RAM {3} MB)' -f $Name, $bjJobs, $bjCalc.Why, $bjStartMB)
+}
 Push-Location $Cwd
 $ErrorActionPreference = 'Continue'
 try {
@@ -297,6 +310,11 @@ try {
 }
 catch { $code = 99; $state.last = 'runner error: ' + $_.Exception.Message; Say $state.last 'Red' }
 finally { Pop-Location }
+if ($bjJobs -gt 0) {
+    if ($bjSampler -and -not $bjSampler.HasExited) { Stop-Process -Id $bjSampler.Id -Force -ErrorAction SilentlyContinue }
+    $bjRes = Complete-BuildMeasure $cfg $Name $bjJobs $bjStartMB $bjSamples $started
+    Update-Agent $cfg $Name @{ buildUseMB = $bjRes.UseMB }
+}
 
 # Success is judged by the agent's own result event (claude: type result without error; codex: completed turn), not by the exit code: a failing plugin hook after the end must not fail the task.
 $status = if ($state.ok) { 'done' } else { 'failed' }

@@ -8,6 +8,13 @@
   "integratorSlots": 1,
   "roundMinutes": 5,
   "minFreeRamGB": 2,
+  "buildJobs": {
+    "envVar": "BUILD_JOBS",
+    "coreShare": "2/3",
+    "reserveMB": 1024,
+    "perJobMB": "auto",
+    "firstJobs": 2
+  },
   "pilotMinFreeRamGB": 2,
   "brainModel": "sonnet",
   "brainEffort": "medium",

@@ -876,3 +876,85 @@ function Get-StartClass($Cfg, [string]$Phase, [string]$Plan, [string]$Pkg, [stri
     }
     return (Resolve-AgentClass $Cfg $Phase @('light', 'medium', 'heavy')[$base] $failures)
 }
+
+
+# Build-job settings of the project file "buildJobs" block with the defaults filled in (plan section 16.1); $null when the project has no such block.
+function Get-BuildJobsCfg($Cfg) {
+    $b = $Cfg.buildJobs
+    if ($null -eq $b) { return $null }
+    $share = 2.0 / 3.0
+    if ($null -ne $b.coreShare) { $cs = [string]$b.coreShare; if ($cs -match '^\s*(\d+)\s*/\s*(\d+)\s*$') { $share = [double]$Matches[1] / [double]$Matches[2] } else { $share = [double]$cs } }
+    $per = $null
+    if ($null -ne $b.perJobMB -and [string]$b.perJobMB -ne 'auto') { $per = [double]$b.perJobMB }
+    return [pscustomobject]@{
+        EnvVar = [string]$b.envVar; CoreShare = $share
+        ReserveMB = $(if ($null -ne $b.reserveMB) { [double]$b.reserveMB } else { 1024.0 })
+        PerJobMB = $per
+        FirstJobs = $(if ($null -ne $b.firstJobs) { [int]$b.firstJobs } else { 2 })
+        Fixed = $(if ($null -ne $b.fixed) { [int]$b.fixed } else { $null })
+    }
+}
+
+# Number of parallel build jobs (plan 16.2): the smaller of (cores x coreShare, rounded up) and ((free RAM - reserve) / use per job, rounded down), at least 1.
+# Without any use value (neither configured nor measured) firstJobs applies, never more than the core limit; "fixed" overrides everything. $MeasuredMB is the stored value or $null.
+function Get-BuildJobCount($Bj, [int]$Cores, [double]$FreeMB, $MeasuredMB) {
+    $coreLimit = [math]::Max(1, [int][math]::Ceiling($Cores * $Bj.CoreShare))
+    if ($null -ne $Bj.Fixed) { return [pscustomobject]@{ Jobs = [math]::Max(1, $Bj.Fixed); Why = 'fixed'; PerJobMB = $null } }
+    $per = if ($null -ne $Bj.PerJobMB) { $Bj.PerJobMB } elseif ($null -ne $MeasuredMB -and [double]$MeasuredMB -gt 0) { [double]$MeasuredMB } else { $null }
+    if ($null -eq $per -or $per -le 0) { return [pscustomobject]@{ Jobs = [math]::Max(1, [math]::Min($Bj.FirstJobs, $coreLimit)); Why = 'first'; PerJobMB = $null } }
+    $ramLimit = [int][math]::Floor(($FreeMB - $Bj.ReserveMB) / $per)
+    $jobs = [math]::Max(1, [math]::Min($coreLimit, $ramLimit))
+    return [pscustomobject]@{ Jobs = $jobs; Why = $(if ($ramLimit -lt $coreLimit) { 'ram' } else { 'cores' }); PerJobMB = $per }
+}
+
+# RAM use per job in MB: (free RAM at the start - lowest free RAM seen) / jobs set; never negative (plan 16.3).
+function Get-BuildUseMB([double]$StartFreeMB, [double]$MinFreeMB, [int]$Jobs) {
+    return [math]::Round([math]::Max(0.0, $StartFreeMB - $MinFreeMB) / [math]::Max(1, $Jobs), 0)
+}
+
+# Key of this machine and project in the build-job store.
+function Get-BuildJobsKey($Cfg) { return ($env:COMPUTERNAME + '|' + [IO.Path]::GetFileNameWithoutExtension([string]$Cfg.projectFile)) }
+
+# Stored highest use per job (MB) of this host and project, or $null when never measured.
+function Get-BuildPerJobMB($Cfg) {
+    $f = Join-Path $Cfg.runtime 'BUILD-JOBS.json'
+    if (-not (Test-Path $f)) { return $null }
+    try { $o = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
+    $v = $o.(Get-BuildJobsKey $Cfg)
+    if ($null -eq $v) { return $null }
+    return [double]$v
+}
+
+# Stores the measured use per job for this host and project; only a higher value replaces the stored one. Returns the value that is stored afterwards.
+function Save-BuildPerJobMB($Cfg, [double]$UseMB) {
+    $f = Join-Path $Cfg.runtime 'BUILD-JOBS.json'
+    $h = [ordered]@{}
+    if (Test-Path $f) { try { $o = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json; foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = $p.Value } } catch {} }
+    $key = Get-BuildJobsKey $Cfg
+    if (-not $h.Contains($key) -or [double]$h[$key] -lt $UseMB) { $h[$key] = $UseMB }
+    [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $h), (New-Object System.Text.UTF8Encoding($false)))
+    return [double]$h[$key]
+}
+
+# Ends the measurement of one build (plan 16.3): reads the 10-second samples, takes the lowest free RAM, computes the use per job, stores the highest value per host and project
+# and writes one ROUNDS.log line (jobs, duration, lowest free RAM, use per job). Returns an object with MinFreeMB, UseMB and StoredMB.
+function Complete-BuildMeasure($Cfg, [string]$Name, [int]$Jobs, [double]$StartFreeMB, [string]$SampleFile, [datetime]$Started) {
+    $min = $StartFreeMB
+    if (Test-Path $SampleFile) { foreach ($l in (Get-Content $SampleFile -Encoding UTF8)) { $p = $l -split ';'; if ($p.Count -ge 2) { $v = [double]$p[1]; if ($v -lt $min) { $min = $v } } } }
+    $use = Get-BuildUseMB $StartFreeMB $min $Jobs
+    $stored = Save-BuildPerJobMB $Cfg $use
+    $dur = (Get-Date) - $Started
+    Write-RoundLog $Cfg ('build {0}: jobs={1}, duration={2}, lowest free RAM={3} MB, use per job={4} MB (stored maximum {5} MB)' -f $Name, $Jobs, $dur.ToString('hh\:mm\:ss'), $min, $use, $stored)
+    return [pscustomobject]@{ MinFreeMB = $min; UseMB = $use; StoredMB = $stored }
+}
+
+# SYSTEM line of the dashboard (plan 16.4): the job count of the running build (else the count the next build would get now) and the measured use per job; $null without a buildJobs block.
+function Get-BuildJobsLine($Cfg, $Agents) {
+    $bj = Get-BuildJobsCfg $Cfg
+    if (-not $bj) { return $null }
+    $per = Get-BuildPerJobMB $Cfg
+    $run = @($Agents | Where-Object { $_.status -eq 'running' -and $_.buildJobs } | Select-Object -First 1)
+    if ($run.Count) { $txt = 'Build-Jobs ' + $run[0].buildJobs + ' (laufend)' }
+    else { $c = Get-BuildJobCount $bj ([Environment]::ProcessorCount) ((Get-FreeRamGB) * 1024) $per; $txt = 'Build-Jobs ' + $c.Jobs + ' (naechster Build)' }
+    return ($txt + ' | Verbrauch pro Job ' + $(if ($null -ne $per) { ('{0:0} MB' -f $per) } else { 'noch nicht gemessen' }))
+}
