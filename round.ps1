@@ -69,8 +69,9 @@ Repair-StaleAgents $cfg
 if (-not $DryRun) { [void](Move-AgentsToArchive $cfg 12) }   # rows that ended more than 12 h ago go to AGENTS-ARCHIVE.json
 $agents = @(Read-Agents $cfg)
 $active = @($agents | Where-Object { $_.status -eq 'running' -or $_.status -eq 'starting' })
-$usedClaude = @($active | Where-Object { $_.type -eq 'claude' -and $_.phase -ne 'integrate' }).Count
-$usedCodex = @($active | Where-Object { $_.type -eq 'codex' -and $_.phase -ne 'integrate' }).Count
+$freeP = Get-ProviderFree $cfg $active   # free slots per provider name (plan section 15)
+$freeTotal = [int](($freeP.Values | Measure-Object -Sum).Sum)
+$slotTotal = [int]((Get-Providers $cfg | Measure-Object Slots -Sum).Sum)
 $usedInt = @($active | Where-Object { $_.phase -eq 'integrate' }).Count
 $freeRam = Get-FreeRamGB
 $build = Test-FullBuildRunning
@@ -84,7 +85,7 @@ $snapshot = [ordered]@{
     integration = [ordered]@{ rows = $queue; canStart = (-not $pilotMode -and -not $PlanFiles -and $anyReady -and -not $anyInRun -and $usedInt -lt $cfg.integratorSlots -and -not $build) }
     blockedTasks = @($blocked | ForEach-Object { [ordered]@{ plan = $_.Plan; package = $_.Package; phase = $_.Phase; error = $_.Error } })
     agents = $snapAgents
-    slots = [ordered]@{ claudeFree = [Math]::Max(0, $cfg.claudeSlots - $usedClaude); codexFree = [Math]::Max(0, $cfg.codexSlots - $usedCodex); integratorFree = [Math]::Max(0, $cfg.integratorSlots - $usedInt); workersMax = ($cfg.claudeSlots + $cfg.codexSlots) }
+    slots = [ordered]@{ freeByProvider = $freeP; integratorFree = [Math]::Max(0, $cfg.integratorSlots - $usedInt); workersMax = $slotTotal }
     freeRamGB = $freeRam; minFreeRamGB = $cfg.minFreeRamGB; fullBuildRunning = $build
     questions = [ordered]@{ open = @($qs | Where-Object { $_.status -eq 'OPEN' }); answered = @($qs | Where-Object { $_.status -eq 'ANSWERED' }) }
 }
@@ -108,10 +109,12 @@ if (-not $DryRun -and ($lowRam -or $buildBlock)) {
     Write-RoundLog $cfg ('round skipped (' + ($reasons -join '; ') + ')'); Invoke-RoundEvents; return
 }
 # ---- routine (no language model, plan section 11.1) -----------------------------------------
+$routineFree = @{ workers = $freeTotal; int = $snapshot.slots.integratorFree }   # the routine gets its own copy of the free slots per provider (it counts them down while it plans)
+foreach ($fk in @($freeP.Keys)) { $routineFree[[string]$fk] = $freeP[$fk] }
 $routineCtx = @{
     Cfg = $cfg; Repo = $repo; Proj = $(if ($cfg.projectsRoot) { $cfg.projectsRoot } else { $null }); Plans = $startablePlans; Queue = $queue; AllRows = $allRows; Questions = $qs
     CanStartIntegrator = ($snapshot.Contains('integration') -and $snapshot.integration.canStart)
-    Free = @{ claude = $snapshot.slots.claudeFree; codex = $snapshot.slots.codexFree; workers = [Math]::Max(0, $cfg.claudeSlots + $cfg.codexSlots - $usedClaude - $usedCodex); int = $snapshot.slots.integratorFree }
+    Free = $routineFree
 }
 $routine = Get-Routine $routineCtx
 if (-not $DryRun) {
@@ -176,8 +179,8 @@ if ($routine.Events.Count -gt 0) {
 $acts = @($routine.Actions) + $(if ($answer) { @($answer.actions) } else { @() })
 # ---- validate + enforce + execute -----------------------------------------------------------
 $report = @()
-$freeC = $snapshot.slots.claudeFree; $freeX = $snapshot.slots.codexFree; $freeI = $snapshot.slots.integratorFree
-$workersFree = [Math]::Max(0, $cfg.claudeSlots + $cfg.codexSlots - $usedClaude - $usedCodex)
+$freeI = $snapshot.slots.integratorFree
+$workersFree = $freeTotal
 $names = @($agents | ForEach-Object { [string]$_.name })
 $busyPkgs = @($active | ForEach-Object { "$($_.plan)|$($_.package)" })
 $started = 0
@@ -203,9 +206,9 @@ foreach ($a in $acts) {
             }
         }
         'start_agent' {
-            $why = $null
+            $why = $null; $pick = $null; $type = $null; $provName = $null
             if (-not $a.name -or -not $a.prompt -or -not $a.cwd -or -not $a.type -or -not $a.phase) { $why = 'missing field' }
-            elseif ($a.type -notin @('claude', 'codex')) { $why = "bad type $($a.type)" }
+            elseif (-not (Get-Provider $cfg ([string]$a.type))) { $why = "unknown provider $($a.type)" }
             elseif ($a.phase -notin @('work', 'verify', 'release', 'integrate')) { $why = "bad phase $($a.phase)" }
             elseif (-not (Test-Path $a.cwd -PathType Container)) { $why = "cwd missing: $($a.cwd)" }
             elseif ((Test-Path $stopFlag) -and -not $DryRun) { $why = 'STOP flag' }
@@ -220,18 +223,26 @@ foreach ($a in $acts) {
             if (-not $why -and $a.phase -eq 'integrate') {
                 if (-not $snapshot.integration.canStart) { $why = 'integrator.canStart is false' }
                 elseif ($freeI -le 0) { $why = 'no integrator slot' }
-                else { $type = 'claude' }
-            }
-            elseif (-not $why) {
-                if ($workersFree -le 0) { $why = 'no worker slot (max 4 workers)' }
                 else {
-                    $type = [string]$a.type
-                    # Rule 5 is enforced here for every start (brain or routine): the package table decides, not the "graphics" flag the brain happened to send.
-                    if ($a.graphics -eq $true -or ($a.phase -eq 'work' -and (Test-GfxPackage (Abs ([string]$a.plan)) ([string]$a.package)))) { $type = 'codex' }
-                    if ($type -eq 'codex' -and $freeX -le 0) { $why = 'no Codex slot' }
-                    elseif ($type -eq 'claude' -and $freeC -le 0) { if ($freeX -gt 0) { $type = 'codex' } else { $why = 'no free slot' } }
+                    $pick = @(Get-Providers $cfg | Where-Object { $_.Protocol -eq 'claude' -and $_.Slots -gt 0 -and $_.Classes.medium.model } | Select-Object -First 1)   # the integrator is a Claude Code agent and uses no worker slot
+                    if ($pick.Count) { $pick = $pick[0] } else { $pick = $null; $why = 'no free slot: no Claude Code provider is on (slots 0)' }
                 }
             }
+            elseif (-not $why) {
+                if ($workersFree -le 0) { $why = 'no worker slot' }
+                else {
+                    # The package table decides what a package needs (plan section 15), not the "graphics" flag the brain happened to send; the flag still counts as "images".
+                    $need = @(); if ($a.phase -eq 'work') { $need = @(Get-PackageNeedsFor $cfg (Abs ([string]$a.plan)) ([string]$a.package)) }
+                    if ($a.graphics -eq $true -and $need -notcontains 'images') { $need += 'images' }
+                    if ($need.Count -and -not (Test-CapabilityAvailable $cfg $need)) { $why = "no provider with the capability $($need -join ', ') has slots above 0" }
+                    else {
+                        $cls0 = Get-StartClass $cfg ([string]$a.phase) ([string]$a.plan) ([string]$a.package) ([string]$a.class)
+                        $pick = Select-Provider $cfg $cls0 $need $freeP -Prefer ([string]$a.type)   # a busy slot never waits: the next fitting provider with a free slot takes the task at once
+                        if (-not $pick) { $why = 'no free slot' + $(if ($need.Count) { " for the capability $($need -join ', ')" } else { " in a fitting provider (class $cls0)" }) }
+                    }
+                }
+            }
+            if (-not $why -and $pick) { $type = $pick.Protocol; $provName = $pick.Name }
             # Live check before EACH start (not from the round snapshot); in pilot mode minFreeRamGB (2 GB) and no cl/link/msbuild/cmake process.
             if (-not $why -and -not $DryRun -and (Get-FreeRamGB) -lt $minRam) { $why = ('free RAM ' + (Get-FreeRamGB) + ' GB is below ' + $minRam + ' GB') }
             if (-not $why -and -not $DryRun -and $pilotMode -and (Test-AnyBuildProcess)) { $why = ('a build process runs (pilot waits): ' + ((Get-BuildProcessNames) -join ', ')) }
@@ -244,10 +255,10 @@ foreach ($a in $acts) {
             $nm = [string]$a.name; $k = 1
             while ($names -contains $nm) { $k++; $nm = "$($a.name)-$k" }
             $names += $nm
-            if ($a.phase -eq 'integrate') { $freeI-- } else { $workersFree--; if ($type -eq 'claude') { $freeC-- } else { $freeX-- } }
+            if ($a.phase -eq 'integrate') { $freeI-- } else { $workersFree--; $freeP[$provName]-- }
             $busyPkgs += "$($a.plan)|$($a.package)"
             foreach ($bp in @($a.bundle)) { $busyPkgs += "$($a.plan)|$bp" }
-            $report += "START $nm [$type/$($a.phase)] plan=$($a.plan) package=$($a.package) cwd=$($a.cwd)"
+            $report += "START $nm [$provName/$($a.phase)] plan=$($a.plan) package=$($a.package) cwd=$($a.cwd)"
             if ($DryRun) { continue }
             $runDir = Join-Path $cfg.runtime "runs\$nm"
             New-Item -ItemType Directory -Force $runDir | Out-Null
@@ -259,12 +270,12 @@ foreach ($a in $acts) {
             [System.IO.File]::WriteAllText($pf, $hdr + [string]$a.prompt + "`n`n" + $handoffText, (New-Object System.Text.UTF8Encoding($true)))
             $idn = Get-AgentIdentity $cfg   # short first name and own color (unique among running and last-hour agents), stored in AGENTS.json
             $cls = Get-StartClass $cfg ([string]$a.phase) ([string]$a.plan) ([string]$a.package) ([string]$a.class)   # plan 12.4: verify and integrator never run below medium, for routine and brain starts alike
-            $cm = Get-ClassModel $cfg $type $cls
-            Update-Agent $cfg $nm @{ type = $type; plan = [string]$a.plan; package = [string]$a.package; phase = [string]$a.phase; cwd = [string]$a.cwd; status = 'starting'; startedAt = (Get-Date).ToString('o'); tokensIn = $null; tokensOut = $null; lastLine = 'queued'; person = $idn.Person; color = $idn.Color; modelShort = (Get-ModelShort $type $cm.Model $cm.Effort); class = $cls; bundle = @($a.bundle); task = (Get-AgentTask $cfg ([string]$a.plan) ([string]$a.package) ([string]$a.phase) $pf) }
+            $cm = Get-ClassModel $cfg $provName $cls
+            Update-Agent $cfg $nm @{ type = $type; provider = $provName; plan = [string]$a.plan; package = [string]$a.package; phase = [string]$a.phase; cwd = [string]$a.cwd; status = 'starting'; startedAt = (Get-Date).ToString('o'); tokensIn = $null; tokensOut = $null; lastLine = 'queued'; person = $idn.Person; color = $idn.Color; modelShort = (Get-ModelShort $type $cm.Model $cm.Effort); class = $cls; bundle = @($a.bundle); task = (Get-AgentTask $cfg ([string]$a.plan) ([string]$a.package) ([string]$a.phase) $pf) }
             if ($env:ORCH_TEST_NOSTART) { Update-Agent $cfg $nm @{ status = 'running'; pid = 4 } }   # tests only: no pane, the fake agent is marked running (pid 4 = System, always alive)
             else { Start-AgentPane $cfg @{ name = $nm; type = $type; plan = [string]$a.plan; package = [string]$a.package; phase = [string]$a.phase; cwd = [string]$a.cwd; promptFile = $pf } }
-            Write-RoundLog $cfg "start $nm ($type, $($a.phase))"
-            Write-OrchEvent $cfg ("$nm gestartet (" + $(if ($type -eq 'codex') { 'Codex' } else { 'Claude' }) + ')')
+            Write-RoundLog $cfg "start $nm ($provName, $($a.phase))"
+            Write-OrchEvent $cfg ("$nm gestartet (" + $(if ($provName -eq 'codex') { 'Codex' } elseif ($provName -eq 'claude') { 'Claude' } else { $provName }) + ')')
             if ($a.phase -ne 'integrate') {
                 $pp = Abs ([string]$a.plan)
                 if ((Test-Path $pp) -and (Get-PlanStatus $pp) -eq 'READY') { if (Set-PlanStatus $pp 'IN_PROGRESS') { Write-RoundLog $cfg "plan $($a.plan): READY -> IN_PROGRESS" } }

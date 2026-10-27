@@ -361,7 +361,7 @@ function Get-ClaudeUsage($Cfg) {
         $j = Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json
         $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         if ($j.fiveHour) { if ([int64]$j.fiveHour.resetsAt -gt $now) { $res.FiveHour = @{ Pct = [math]::Round(100 * [double]$j.fiveHour.utilization); Reset = (Format-ResetTime $j.fiveHour.resetsAt) } } else { $res.FiveHour = @{ Pct = $null; Reset = 'neues Fenster' } } }
-        if ($j.sevenDay) { if ([int64]$j.sevenDay.resetsAt -gt $now) { $res.SevenDay = @{ Pct = [math]::Round(100 * [double]$j.sevenDay.utilization); Reset = (Format-ResetTime $j.sevenDay.resetsAt) } } else { $res.SevenDay = @{ Pct = $null; Reset = 'neues Fenster' } } }
+        if ($j.sevenDay) { if ([int64]$j.sevenDay.resetsAt -gt $now) { $res.SevenDay = @{ Pct = [math]::Round(100 * [double]$j.sevenDay.utilization); Reset = (Format-ResetTime $j.sevenDay.resetsAt); At = [int64]$j.sevenDay.resetsAt } } else { $res.SevenDay = @{ Pct = $null; Reset = 'neues Fenster' } } }
     } catch {}
     return $res
 }
@@ -385,7 +385,7 @@ function Get-CodexUsage {
             $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
             foreach ($w in @($rl.primary, $rl.secondary)) {
                 if (-not $w -or [int64]$w.resets_at -le $now) { continue }
-                $v = @{ Pct = [math]::Round([double]$w.used_percent); Reset = (Format-ResetTime $w.resets_at) }
+                $v = @{ Pct = [math]::Round([double]$w.used_percent); Reset = (Format-ResetTime $w.resets_at); At = [int64]$w.resets_at }
                 if ([int]$w.window_minutes -le 400) { $res.FiveHour = $v } else { $res.SevenDay = $v }
             }
             break
@@ -709,11 +709,121 @@ function Resolve-AgentClass($Cfg, [string]$Phase, [string]$Requested, [int]$Fail
     return @('light', 'medium', 'heavy')[$i]
 }
 
-# Model and effort of an agent type for a class, from config "classes" (an unknown class counts as medium).
-function Get-ClassModel($Cfg, [string]$Type, [string]$Class) {
+# ---- Providers (plan section 15) ----
+# A provider is one entry of the project file list "providers": name, protocol (claude or codex: the event format of the CLI, default = name), command, args (template), classes (light/medium/heavy: model + effort),
+# capabilities (e.g. "images"), slots (how many tasks may run at once; 0 = off for everything), use (preferred | fallback | capability-only), limit.source (claude | codex | none: where the weekly usage comes from),
+# endpoint (optional OpenAI-compatible server: baseUrl, id, name; runs through the codex CLI with its own model_provider). A project file without "providers" gets the two classic entries from the old keys.
+function ConvertTo-StringArray($v) { $o = @(); if ($null -ne $v) { foreach ($x in @($v)) { $o += [string]$x } }; return $o }
+function Get-Providers($Cfg) {
+    $src = @()
+    if ($Cfg.providers) { $src = @($Cfg.providers) }
+    else {
+        $src += [pscustomobject]@{ name = 'claude'; command = 'claude'; args = $Cfg.claudeArgs; slots = $Cfg.claudeSlots; use = 'preferred'; capabilities = @(); classes = $Cfg.classes.claude; limit = [pscustomobject]@{ source = 'claude' } }
+        $src += [pscustomobject]@{ name = 'codex'; command = 'codex'; args = $Cfg.codexArgs; slots = $Cfg.codexSlots; use = 'preferred'; capabilities = @('images'); classes = $Cfg.classes.codex; limit = [pscustomobject]@{ source = 'codex' } }
+    }
+    $out = @()
+    foreach ($p in $src) {
+        $name = [string]$p.name
+        if (-not $name) { throw 'a provider entry has no name' }
+        $use = if ($p.use) { [string]$p.use } else { 'preferred' }
+        if ($use -notin @('preferred', 'fallback', 'capability-only')) { throw "provider ${name}: use must be preferred, fallback or capability-only, not '$use'" }
+        $proto = if ($p.protocol) { [string]$p.protocol } else { $name }
+        if ($proto -notin @('claude', 'codex')) { throw "provider ${name}: protocol must be claude or codex, not '$proto'" }
+        $out += [pscustomobject]@{
+            Name = $name; Protocol = $proto; Command = $(if ($p.command) { [string]$p.command } else { $proto }); Args = (ConvertTo-StringArray $p.args)
+            Slots = [int]$p.slots; Use = $use; Capabilities = (ConvertTo-StringArray $p.capabilities); Classes = $p.classes
+            Limit = $(if ($p.limit -and $p.limit.source) { [string]$p.limit.source } else { '' }); Endpoint = $p.endpoint
+        }
+    }
+    return $out
+}
+# One provider by name; $null when the project file has no such entry.
+function Get-Provider($Cfg, [string]$Name) { return (@(Get-Providers $Cfg | Where-Object { $_.Name -eq $Name }) | Select-Object -First 1) }
+# Provider name of an AGENTS.json row: the field "provider", for rows from before plan section 15 the old field "type".
+function Get-RowProvider($Row) { if ($Row.PSObject.Properties['provider'] -and $Row.provider) { return [string]$Row.provider }; return [string]$Row.type }
+# Free slots per provider name: its slots minus the running or starting worker agents of that provider (integrator agents use no slot); never below 0.
+function Get-ProviderFree($Cfg, $Rows) {
+    $free = @{}
+    foreach ($p in (Get-Providers $Cfg)) {
+        $used = @($Rows | Where-Object { ($_.status -eq 'running' -or $_.status -eq 'starting') -and $_.phase -ne 'integrate' -and (Get-RowProvider $_) -eq $p.Name }).Count
+        $free[$p.Name] = [Math]::Max(0, $p.Slots - $used)
+    }
+    return $free
+}
+# Weekly limit of a provider as @{ FreePct; Hours }: 100 minus the used percent, and the hours until the reset. No limit source, no reading or an unknown value counts as 100 % free with a reset in 168 h
+# (the 100 % for "no weekly limit" is the coordinator's value, not the owner's). Tests: ORCH_PROVIDER_LIMITS_FILE = {"<provider>":{"usedPercent":80,"resetHours":24}}; with a test runtime and no such file nothing is read from this PC.
+function Get-ProviderLimit($Cfg, $P) {
+    $used = $null; $hours = $null
+    $lf = $env:ORCH_PROVIDER_LIMITS_FILE
+    if ($lf -and (Test-Path -LiteralPath $lf)) {
+        $t = Get-Content -LiteralPath $lf -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($t.PSObject.Properties[$P.Name]) { $used = $t.($P.Name).usedPercent; $hours = $t.($P.Name).resetHours }
+    }
+    elseif (-not $env:ORCH_RUNTIME_OVERRIDE -and $P.Limit -in @('claude', 'codex')) {
+        $u = if ($P.Limit -eq 'claude') { (Get-ClaudeUsage $Cfg).SevenDay } else { (Get-CodexUsage).SevenDay }
+        if ($u -and $null -ne $u.Pct) { $used = $u.Pct; if ($u.At) { $hours = ([double]$u.At - [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) / 3600 } }
+    }
+    if ($null -eq $used) { return @{ FreePct = 100.0; Hours = 168.0 } }
+    return @{ FreePct = [Math]::Max(0.0, 100.0 - [double]$used); Hours = $(if ($null -ne $hours) { [double]$hours } else { 168.0 }) }
+}
+# Capabilities a package needs, from its content text, by the config list "capabilityRules" (each rule: capability + patterns that must ALL match). Without the list the graphics rule applies:
+# models, textures, materials, particles, icons, clips or sounds together with Blender, assets or graphics need "images".
+function Get-PackageNeeds($Cfg, [string]$Content) {
+    $rules = if ($Cfg.capabilityRules) { @($Cfg.capabilityRules) } else { @([pscustomobject]@{ capability = 'images'; patterns = @('(?i)\b(models?|textures?|materials?|particles?|icons?|clips?|sounds?)\b', '(?i)\b(Blender|assets?|graphics?)\b') }) }
+    $need = @()
+    foreach ($r in $rules) { $ok = $true; foreach ($pat in @($r.patterns)) { if ($Content -notmatch [string]$pat) { $ok = $false; break } }; if ($ok -and $need -notcontains [string]$r.capability) { $need += [string]$r.capability } }
+    return $need
+}
+# True when at least one provider with ALL the capabilities has slots above 0 (slots 0 = off for everything).
+function Test-CapabilityAvailable($Cfg, [string[]]$Needs) {
+    return (@(Get-Providers $Cfg | Where-Object { $p = $_; $p.Slots -gt 0 -and @($Needs | Where-Object { $p.Capabilities -notcontains $_ }).Count -eq 0 }).Count -gt 0)
+}
+# The provider that gets a task of this class, or $null. Candidates: slots above 0 and a free slot ($Free: name -> free slots), the class in its entry, all needed capabilities (a package that needs a capability goes only to providers
+# that have it, and the weekly limit does not matter then), and use "capability-only" only for packages that need a capability. Without a need, providers at their weekly limit drop out.
+# Order: "preferred" and "capability-only" first; "fallback" only when no such candidate has a free slot. Among them the highest (100 - used percent) / hours to reset wins, then list order.
+# -Prefer keeps a follow-up task with the provider of the earlier task when it is a candidate; -Avoid (verify) prefers another provider but accepts it when no other is left; -Protocol limits to claude or codex providers (release, integrator).
+function Select-Provider($Cfg, [string]$Class, [string[]]$Needs, $Free, [string]$Avoid = '', [string]$Prefer = '', [string]$Protocol = '') {
     $c = @('light', 'medium', 'heavy')[(Get-ClassIndex $Class)]
-    $m = $Cfg.classes.$Type.$c
-    return [pscustomobject]@{ Model = [string]$m.model; Effort = [string]$m.effort }
+    $Needs = @($Needs | Where-Object { $_ })   # a $null or empty need means "no need"
+    $cand = @()
+    $idx = 0
+    foreach ($p in (Get-Providers $Cfg)) {
+        $idx++
+        if ($p.Slots -le 0 -or [int]$Free[$p.Name] -le 0) { continue }
+        if ($Protocol -and $p.Protocol -ne $Protocol) { continue }
+        if (-not ($p.Classes -and $p.Classes.$c -and $p.Classes.$c.model)) { continue }
+        if (@($Needs | Where-Object { $p.Capabilities -notcontains $_ }).Count -gt 0) { continue }
+        if ($p.Use -eq 'capability-only' -and @($Needs).Count -eq 0) { continue }
+        $lim = Get-ProviderLimit $Cfg $p
+        if (@($Needs).Count -eq 0 -and $lim.FreePct -le 0) { continue }
+        $cand += [pscustomobject]@{ P = $p; Order = $idx; Score = ($lim.FreePct / [Math]::Max(0.1, $lim.Hours)) }
+    }
+    if ($cand.Count -eq 0) { return $null }
+    $pool = @($cand | Where-Object { $_.P.Use -ne 'fallback' })
+    if ($pool.Count -eq 0) { $pool = $cand }
+    if ($Prefer) { $hit = @($pool | Where-Object { $_.P.Name -eq $Prefer }); if ($hit.Count) { return $hit[0].P } }
+    if ($Avoid) { $other = @($pool | Where-Object { $_.P.Name -ne $Avoid }); if ($other.Count) { $pool = $other } }
+    return (@($pool | Sort-Object @{ Expression = 'Score'; Descending = $true }, @{ Expression = 'Order'; Descending = $false }) | Select-Object -First 1).P
+}
+# Extra arguments of a provider with an endpoint: a model_provider of the codex CLI with the base URL from the project file (-c key=value; Codex 0.163 supports only wire_api "responses").
+function Get-EndpointArgs($P) {
+    if (-not $P.Endpoint -or -not $P.Endpoint.baseUrl) { return @() }
+    $id = if ($P.Endpoint.id) { [string]$P.Endpoint.id } else { $P.Name }
+    $nm = if ($P.Endpoint.name) { [string]$P.Endpoint.name } else { $P.Name }
+    return @('-c', "model_provider=$id", '-c', "model_providers.$id.name=$nm", '-c', "model_providers.$id.base_url=$($P.Endpoint.baseUrl)", '-c', "model_providers.$id.wire_api=responses")
+}
+
+# Model and effort of a provider for a class, from its "classes" entry. A class the entry does not list falls back to the nearest lower class it has, else the nearest higher one.
+function Get-ClassModel($Cfg, [string]$Provider, [string]$Class) {
+    $p = Get-Provider $Cfg $Provider
+    $i = Get-ClassIndex $Class
+    $names = @('light', 'medium', 'heavy')
+    foreach ($k in (@($i..0) + @(($i + 1)..2))) {
+        if ($k -lt 0 -or $k -gt 2) { continue }
+        $m = if ($p -and $p.Classes) { $p.Classes.($names[$k]) } else { $null }
+        if ($m -and $m.model) { return [pscustomobject]@{ Model = [string]$m.model; Effort = [string]$m.effort } }
+    }
+    return [pscustomobject]@{ Model = ''; Effort = '' }
 }
 
 # True when the text is valid JSON (the check every write of config.json or a project config must pass first).

@@ -48,7 +48,7 @@ Answer per event type:
 - integration_blocked: start a work agent for the branch's plan; the row text is the task.
 - question_answered: start a work agent for that item with the owner's answer (the event text ends with "Answer: ..." taken from the answers file of the project).
 - open_for_owner: one ask_owner per new entry, plain words and a recommendation. A paused item gets no agent until its question is ANSWERED.
-Prompts are plain text without double quote characters and contain: plan path, package id, worktree and branch from the plan, the phase task, and "follow the plan and all rules in section 1 of ORCHESTRATOR.md, update the plan's state file, end when the package is finished". Graphics tasks: type "codex" and "graphics": true. Respect the answers file: an answered question is never asked again.
+Prompts are plain text without double quote characters and contain: plan path, package id, worktree and branch from the plan, the phase task, and "follow the plan and all rules in section 1 of ORCHESTRATOR.md, update the plan's state file, end when the package is finished". The "type" of a start_agent is the name of a provider of the project file (see the snapshot slots); the script picks the provider itself (free slot, class, needed capabilities, weekly limit), so a wish is only a hint. Graphics tasks: "graphics": true (they need the capability "images"). Respect the answers file: an answered question is never asked again.
 Be short: one note at most, only when it explains why nothing is started. No per-plan review, no summaries.
 
 ## Files you read
@@ -63,7 +63,7 @@ Only a `new_plan` event gives you the tools Read, Glob and Grep. For every other
 Answer with exactly one JSON object and nothing else (no code fence, no text before or after). Same schema as `action-schema.json`:
 
 {"actions":[
-  {"action":"start_agent","name":"<PLAN>-<package>-<phase>","type":"claude|codex","phase":"work|verify|release|integrate",
+  {"action":"start_agent","name":"<PLAN>-<package>-<phase>","type":"<provider name>","phase":"work|verify|release|integrate",
    "plan":"<plan path>","package":"<id>","cwd":"<existing directory>","prompt":"<text>","graphics":false},
   {"action":"ask_owner","plan":"<plan path>","item":"<item>","question":"<plain words>","recommendation":"<text>"},
   {"action":"plan_done","plan":"<plan path>"},

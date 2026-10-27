@@ -49,9 +49,9 @@ try { [void](Write-PhaseRules $bad 'verify' (Join-Path $rt 'rules-bad.md')) } ca
 Check $threw 'missing section throws'
 
 # 3. Argument templates carry the reduced start context options.
-$cl = ($cfg.claudeArgs -join ' ')
+$cl = ((Get-Provider $cfg 'claude').Args -join ' ')
 Check ($cl -match '--tools \{claudeTools\}' -and $cl -match '--append-system-prompt-file \{rules\}' -and $cl -match '--setting-sources') 'claudeArgs: tools, setting sources, rules file'
-Check (($cfg.codexArgs -join ' ') -match '--ignore-user-config') 'codexArgs: --ignore-user-config'
+Check (((Get-Provider $cfg 'codex').Args -join ' ') -match '--ignore-user-config') 'codexArgs: --ignore-user-config'
 
 if ($Live) {
     $prompt = Join-Path $rt 'prompt-ok.md'

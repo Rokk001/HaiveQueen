@@ -50,7 +50,10 @@ $typeLabel = if ($Type -eq 'claude') { 'Claude' } else { 'Codex' }
 $headColor = if ($Type -eq 'claude') { 'Magenta' } else { 'Blue' }
 # Model and effort come from the class stored in the agent's row by round.ps1 (plan 12.2); no class = medium.
 $myRow = @(Read-Agents $cfg | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
-$classModel = Get-ClassModel $cfg $Type $(if ($myRow.Count -and $myRow[0].class) { [string]$myRow[0].class } else { 'medium' })
+$provName = if ($myRow.Count -and $myRow[0].provider) { [string]$myRow[0].provider } else { $Type }   # the provider entry of the project file (plan section 15); rows from before it use the type as the name
+$prov = Get-Provider $cfg $provName
+if (-not $prov) { throw "provider '$provName' is not in the project file" }
+$classModel = Get-ClassModel $cfg $provName $(if ($myRow.Count -and $myRow[0].class) { [string]$myRow[0].class } else { 'medium' })
 $modelCfg = $classModel.Model
 $effortCfg = $classModel.Effort
 $state.model = Model-Label $modelCfg
@@ -204,7 +207,7 @@ Start-Sleep -Seconds 2
 $prompt = "Read the file `"$PromptFile`" completely and carry out exactly the task described there. Do nothing else."
 $prompt = $prompt.Replace('"', '')
 $model = $modelCfg
-$tmpl = if ($Type -eq 'claude') { $cfg.claudeArgs } else { $cfg.codexArgs }
+$tmpl = @($prov.Args) + @(Get-EndpointArgs $prov)   # argument template of the provider entry (plus the model_provider arguments of an endpoint)
 # S9 (plan 12.1): a Claude agent gets only the rule sections of its phase (file rules.md in its run folder, built from the sources named in config.json) instead of all CLAUDE.md files.
 $rulesFile = Join-Path $runDir 'rules.md'
 if ($Type -eq 'claude') { [void](Write-PhaseRules $cfg $Phase $rulesFile) }
@@ -277,14 +280,14 @@ try {
         $state.ok = $true; $state.final = 'Offene Anforderungen: 0'; $state.last = 'test finished'; $code = 0
     }
     elseif ($Type -eq 'claude') {
-        & claude -p $prompt @argList 2> $errFile | ForEach-Object {
+        & $prov.Command -p $prompt @argList 2> $errFile | ForEach-Object {
             Add-Content -Path $events -Value $_ -Encoding UTF8
             try { $e = $_ | ConvertFrom-Json } catch { return }
             Handle-Event $e
         }
     }
     else {
-        '' | & codex @argList $prompt 2> $errFile | ForEach-Object {
+        '' | & $prov.Command @argList $prompt 2> $errFile | ForEach-Object {
             Add-Content -Path $events -Value $_ -Encoding UTF8
             try { $e = $_ | ConvertFrom-Json } catch { return }
             Handle-Event $e

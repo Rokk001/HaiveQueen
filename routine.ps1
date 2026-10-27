@@ -84,12 +84,12 @@ function Get-StateDonePackages([string]$AbsPlan, [string[]]$PkgIds, $Rows) {
     return $res
 }
 
-# True when the package of the plan is a graphics package (models, textures, materials, particles, icons, clips, sounds / Blender, assets): rule 5, such work goes to Codex only.
-function Test-GfxPackage([string]$AbsPlan, [string]$Pkg) {
-    if (-not (Test-Path $AbsPlan)) { return $false }
+# Capabilities the package of the plan needs (plan section 15; graphics packages need "images", see Get-PackageNeeds): such work goes only to providers that have them.
+function Get-PackageNeedsFor($Cfg, [string]$AbsPlan, [string]$Pkg) {
+    if (-not (Test-Path $AbsPlan)) { return @() }
     $k = @(Get-PlanPackages $AbsPlan | Where-Object { $_.Id -eq $Pkg } | Select-Object -First 1)
-    if (-not $k.Count) { return $false }
-    return ($k[0].Content -match '(?i)\b(models?|textures?|materials?|particles?|icons?|clips?|sounds?)\b' -and $k[0].Content -match '(?i)\b(Blender|assets?|graphics?)\b')
+    if (-not $k.Count) { return @() }
+    return @(Get-PackageNeeds $Cfg ([string]$k[0].Content))
 }
 # Short id of a question item ("ALL-V5 Stimmungsverfall im Bad" -> "ALL-V5", "M1" -> "M1").
 function Get-ItemToken([string]$Item) { $m = [regex]::Match(([string]$Item).Trim(), '^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*'); return $m.Value.ToUpper() }
@@ -151,12 +151,6 @@ function New-AgentName([string]$Base, $Agents, $Chosen) {
     while (@($Agents | Where-Object { $_.name -eq $n }).Count -gt 0 -or $Chosen -contains $n) { $k++; $n = "$Base-$k" }
     return $n
 }
-# Opposite agent type when its slot is free, else the same type.
-function Pick-OtherType([string]$Type, $Free) {
-    $other = if ($Type -eq 'claude') { 'codex' } else { 'claude' }
-    if ($Free[$other] -gt 0) { return $other }
-    return $Type
-}
 # The verify question of plan 6.2 for one package (or the whole plan with package ALL).
 function Get-VerifyPrompt([string]$Plan, [string]$Pkg) {
     $what = if ($Pkg -eq 'ALL') { "(alle Pakete)" } else { "(Paket $Pkg)" }
@@ -174,19 +168,14 @@ function Get-FinalTail($Cfg, [string]$AgentName) {
     return $tx
 }
 
-# True when the content cell of a package row describes graphics work (models, textures, materials, particles, icons, clips, sounds with Blender, assets or graphics): such a package goes to Codex (rule 5).
-function Test-GfxText([string]$Content) {
-    return ($Content -match '(?i)\b(models?|textures?|materials?|particles?|icons?|clips?|sounds?)\b' -and $Content -match '(?i)\b(Blender|assets?|graphics?)\b')
-}
-
-# The routine decision of one round. $Ctx: Cfg, Repo, Plans (startable plan objects: path, status), Queue (integration rows), Questions, CanStartIntegrator, Free (claude, codex, workers, int).
+# The routine decision of one round. $Ctx: Cfg, Repo, Plans (startable plan objects: path, status), Queue (integration rows), Questions, CanStartIntegrator, Free (free slots per provider name, plus workers and int).
 # Returns @{ Actions = start_agent / plan_done actions; Events = events for the brain (type, key, plan, package, agent, text) }.
 function Get-Routine($Ctx) {
     $cfg = $Ctx.Cfg
     $all = @(Read-AllAgents $cfg)
     $handled = Get-Handled $cfg
     $acts = @(); $events = @(); $chosen = @()
-    $free = @{ claude = [int]$Ctx.Free.claude; codex = [int]$Ctx.Free.codex; int = [int]$Ctx.Free.int }
+    $free = @{}; foreach ($pk in @($Ctx.Free.Keys)) { if ($pk -ne 'workers') { $free[[string]$pk] = [int]$Ctx.Free[$pk] } }   # free slots per provider name (and int = integrator slots)
     $workers = [Math]::Max(0, [int]$Ctx.Free.workers)
     $blocked = @(Get-BlockedTasks @($all))
     $decided = Get-DecidedItems $cfg $Ctx.Questions
@@ -201,8 +190,9 @@ function Get-Routine($Ctx) {
         $tip = ([string]$r.tip); $tip = $tip.Substring(0, [Math]::Min(7, $tip.Length)); $pk = "FIX-$tip"
         if (@($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $relP) -and [string]$_.package -eq $pk -and $_.status -ne 'failed' }).Count -gt 0) { continue }   # a failed start is tried again (stops after two failures with the same error: blocked tasks)
         if (@($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $relP) -and $_.Package -eq $pk }).Count -gt 0) { continue }
-        $type = if ($free.claude -gt 0) { 'claude' } else { 'codex' }
-        if ($free[$type] -le 0) { continue }
+        $pv = Select-Provider $cfg 'medium' @() $free
+        if (-not $pv) { continue }
+        $type = $pv.Name
         $nm = New-AgentName ((Get-PlanTag $relP) + "-$pk-work") $all $chosen; $chosen += $nm; $free[$type]--; $workers--
         $acts += New-StartAction $nm $type 'work' $relP $pk ([string]$h2[-1].cwd) (Get-PromptText $cfg 'fixBlocked' @{ plan = $relP; branch = [string]$r.branch; tip = [string]$r.tip; status = [string]$r.status; cwd = [string]$h2[-1].cwd }) $false
     }
@@ -218,8 +208,9 @@ function Get-Routine($Ctx) {
         if (@($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $relP) -and [string]$_.package -eq $pk -and $_.status -ne 'failed' }).Count -gt 0) { continue }   # a failed start is tried again (stops after two failures with the same error: blocked tasks)
         $h2 = @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $relP) -and $_.cwd } | Sort-Object { [string]$_.startedAt })
         if (-not $h2.Count) { continue }
-        $type = if ($free.claude -gt 0) { 'claude' } else { 'codex' }
-        if ($free[$type] -le 0) { continue }
+        $pv = Select-Provider $cfg 'medium' @() $free
+        if (-not $pv) { continue }
+        $type = $pv.Name
         $nm = New-AgentName ((Get-PlanTag $relP) + "-$pk-work") $all $chosen; $chosen += $nm; $free[$type]--; $workers--
         $acts += New-StartAction $nm $type 'work' $relP $pk ([string]$h2[-1].cwd) (Get-PromptText $cfg 'answeredQuestion' @{ plan = $relP; item = [string]$q.item; qid = [string]$q.id; answer = (Get-AnswerText $cfg $tok); cwd = [string]$h2[-1].cwd }) $false
     }
@@ -268,8 +259,9 @@ function Get-Routine($Ctx) {
             $st = $stages[$k.Id]
             $retry = ($st.Stage -eq 'failed' -and $st.Verify -and $st.Verify.status -eq 'failed' -and $st.Work -and [string]$st.Work.startedAt -lt [string]$st.Verify.startedAt -and @($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $rel) -and $_.Package -eq $k.Id }).Count -eq 0)   # a verify that crashed is run again (stops after two crashes with the same error: blocked task)
             if (($st.Stage -ne 'needVerify' -and -not $retry) -or $workers -le 0) { continue }
-            $type = Pick-OtherType ([string]$st.Work.type) $free
-            if ($free[$type] -le 0) { continue }
+            $pv = Select-Provider $cfg 'medium' @() $free -Avoid (Get-RowProvider $st.Work)   # verify never below medium; another provider than the work agent when one is free
+            if (-not $pv) { continue }
+            $type = $pv.Name
             $nm = New-AgentName ("$tag-$($k.Id)-verify") $all $chosen; $chosen += $nm; $free[$type]--; $workers--
             $acts += New-StartAction $nm $type 'verify' $rel $k.Id ([string]$st.Work.cwd) (Get-VerifyPrompt $rel $k.Id) $false
         }
@@ -282,7 +274,7 @@ function Get-Routine($Ctx) {
             if ($isBlockedK -or $locked.ContainsKey($k) -or (Test-Frozen $cfg $rel $k)) { continue }
             $kmine = @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and [string]$_.package -eq $k })
             $wcwd = if ($st.Work -and $st.Work.cwd) { [string]$st.Work.cwd } else { $cwd }
-            $wtype = if ($st.Work -and $st.Work.type) { [string]$st.Work.type } else { 'claude' }
+            $wtype = if ($st.Work) { Get-RowProvider $st.Work } else { '' }
             $why = ''; $prompt = ''
             if ($st.Stage -eq 'open' -and $st.Verify -and (Get-VerifyOpenCount $cfg ([string]$st.Verify.name)) -gt 0 -and @($kmine | Where-Object { $_.phase -eq 'verify' -and $_.status -eq 'done' }).Count -lt 4) {
                 $ans = (Get-RuntimeRel $cfg) + '/runs/' + $st.Verify.name + '/final.txt'
@@ -292,11 +284,14 @@ function Get-Routine($Ctx) {
                 $prompt = Get-PromptText $cfg 'restartWork' @{ plan = $rel; pkg = $k; previous = [string]$st.Work.name; cwd = $wcwd }
             }
             if (-not $prompt) { continue }
-            $type = if ($free[$wtype] -gt 0) { $wtype } elseif ($free.claude -gt 0) { 'claude' } else { 'codex' }
-            if ($free[$type] -le 0) { continue }
-            $nm = New-AgentName ("$tag-$k-work") $all $chosen; $chosen += $nm; $free[$type]--; $workers--
             $kc = @($pkgs | Where-Object { $_.Id -eq $k } | Select-Object -First 1)
-            $acts += New-StartAction $nm $type 'work' $rel $k $wcwd $prompt $false (Resolve-AgentClass $cfg 'work' $(if ($kc.Count) { $kc[0].Class } else { 'medium' }) (Get-PackageFailures $cfg $all $rel $k))
+            $kcls = Resolve-AgentClass $cfg 'work' $(if ($kc.Count) { $kc[0].Class } else { 'medium' }) (Get-PackageFailures $cfg $all $rel $k)
+            $kneeds = @(if ($kc.Count) { Get-PackageNeeds $cfg ([string]$kc[0].Content) })
+            $pv = Select-Provider $cfg $kcls $kneeds $free -Prefer $wtype   # the follow-up stays with the provider of the earlier task when that one is a candidate
+            if (-not $pv) { continue }
+            $type = $pv.Name
+            $nm = New-AgentName ("$tag-$k-work") $all $chosen; $chosen += $nm; $free[$type]--; $workers--
+            $acts += New-StartAction $nm $type 'work' $rel $k $wcwd $prompt ($kneeds.Count -gt 0) $kcls
         }
         # Whole-plan verify, release, plan done.
         $allVerified = (@($pkgs | Where-Object { $stages[$_.Id].Stage -ne 'verified' -and $stages[$_.Id].Stage -ne 'stateDone' }).Count -eq 0)
@@ -304,17 +299,19 @@ function Get-Routine($Ctx) {
         $allRetry = ($allSt.Stage -eq 'failed' -and $allSt.Verify -and $allSt.Verify.status -eq 'failed' -and @($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $rel) -and $_.Package -eq 'ALL' }).Count -eq 0)   # a crashed whole-plan verify is run again (stops after two crashes with the same error; 'pane never started' never blocks)
         if ($allVerified -and ($allSt.Stage -eq 'new' -or $allSt.Stage -eq 'needVerify' -or $allRetry) -and $workers -gt 0) {
             $lastW = @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and $_.phase -eq 'work' } | Sort-Object { [string]$_.startedAt } | Select-Object -Last 1)
-            $type = Pick-OtherType $(if ($lastW.Count) { [string]$lastW[0].type } else { 'claude' }) $free
-            if ($free[$type] -gt 0) {
+            $pv = Select-Provider $cfg 'medium' @() $free -Avoid $(if ($lastW.Count) { Get-RowProvider $lastW[0] } else { '' })
+            if ($pv) {
+                $type = $pv.Name
                 $nm = New-AgentName ("$tag-ALL-verify") $all $chosen; $chosen += $nm; $free[$type]--; $workers--
                 $acts += New-StartAction $nm $type 'verify' $rel 'ALL' $cwd (Get-VerifyPrompt $rel 'ALL') $false
             }
         }
         if ($allSt.Stage -eq 'open' -and -not $locked.ContainsKey('ALL') -and -not $handled.ContainsKey('verify:' + $allSt.Verify.name)) { $events += [pscustomobject]@{ type = 'verify_open'; key = 'verify:' + $allSt.Verify.name; plan = $rel; package = 'ALL'; agent = [string]$allSt.Verify.name; text = (Get-FinalTail $cfg ([string]$allSt.Verify.name)) } }
         $rels = @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and $_.phase -eq 'release' })
-        if ($allSt.Stage -eq 'verified' -and $rels.Count -eq 0 -and $free.claude -gt 0 -and $workers -gt 0) {
-            $nm = New-AgentName ("$tag-release") $all $chosen; $chosen += $nm; $free.claude--; $workers--
-            $acts += New-StartAction $nm 'claude' 'release' $rel 'REL' $cwd (Get-PromptText $cfg 'release' @{ plan = $rel; cwd = $cwd }) $false
+        $relPv = if ($allSt.Stage -eq 'verified' -and $rels.Count -eq 0 -and $workers -gt 0) { Select-Provider $cfg 'medium' @() $free -Protocol 'claude' } else { $null }   # release and integrator agents are Claude Code agents
+        if ($relPv) {
+            $nm = New-AgentName ("$tag-release") $all $chosen; $chosen += $nm; $free[$relPv.Name]--; $workers--
+            $acts += New-StartAction $nm $relPv.Name 'release' $rel 'REL' $cwd (Get-PromptText $cfg 'release' @{ plan = $rel; cwd = $cwd }) $false
         }
         $openRows = @($Ctx.Queue | Where-Object { [string]$_.plan -like ('*' + $rel) })
         if ($allSt.Stage -eq 'verified' -and $pl.status -eq 'IN_PROGRESS' -and @($rels | Where-Object { $_.status -eq 'done' }).Count -gt 0 -and $openRows.Count -eq 0) { $acts += [pscustomobject]@{ action = 'plan_done'; plan = $rel } }
@@ -325,15 +322,22 @@ function Get-Routine($Ctx) {
             if ($stages[$k.Id].Stage -ne 'new' -or $workers -le 0 -or $bundled -contains $k.Id) { continue }
             if (@($k.Depends | Where-Object { -not $stages.ContainsKey($_) -or ($stages[$_].Stage -ne 'verified' -and $stages[$_].Stage -ne 'stateDone') }).Count -gt 0) { continue }
             if (@($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $rel) -and $_.Package -eq $k.Id }).Count -gt 0) { continue }
-            $gfx = (Test-GfxText $k.Content)
-            $type = if ($gfx) { 'codex' } elseif ($free.claude -gt 0) { 'claude' } else { 'codex' }
-            if ($free[$type] -le 0) { continue }
+            $needs = @(Get-PackageNeeds $cfg ([string]$k.Content)); $nk = ($needs -join ',')
+            if ($needs.Count -gt 0 -and -not (Test-CapabilityAvailable $cfg $needs)) {
+                # No provider with the needed capability has slots above 0: the package stays where it is and is reported once (round.ps1 does not repeat a known question).
+                $acts += [pscustomobject]@{ action = 'ask_owner'; plan = $rel; item = "CAP-$($k.Id)"; question = "Package $($k.Id) needs the capability '$($needs -join ', ')' but no provider with it has slots above 0, so the package is not started."; recommendation = "Set slots above 0 for a provider with this capability in the project file, or tell me how this package should run." }
+                continue
+            }
+            $kcls = Resolve-AgentClass $cfg 'work' $k.Class 0
+            $pv = Select-Provider $cfg $kcls $needs $free
+            if (-not $pv) { continue }
+            $type = $pv.Name
             # Bundling (plan 12.3): small (light) packages of the same plan with the same agent type run in ONE agent, because the start context costs more than a small task; at most config bundle.maxPackages per agent.
             $members = @($k)
             if ($k.Class -eq 'light') {
                 foreach ($o in $pkgs) {
                     if ($members.Count -ge [int]$cfg.bundle.maxPackages) { break }
-                    if ($o.Id -eq $k.Id -or $bundled -contains $o.Id -or $o.Class -ne 'light' -or ((Test-GfxText $o.Content) -ne $gfx)) { continue }
+                    if ($o.Id -eq $k.Id -or $bundled -contains $o.Id -or $o.Class -ne 'light' -or ((@(Get-PackageNeeds $cfg ([string]$o.Content)) -join ',') -ne $nk)) { continue }
                     if (& $isStartable $o) { $members += $o }
                 }
             }
@@ -346,7 +350,7 @@ function Get-Routine($Ctx) {
             }
             $tail = " Follow all rules in section 1 of ORCHESTRATOR.md, update the plan's state file, end when the package is finished."
             $prompt = if ($members.Count -gt 1) { "This agent works $($members.Count) small packages of plan $rel one after the other (bundled so that the start context is paid once). Finish each package and record it in the state file before you start the next. Packages in this order: $(($members | ForEach-Object { $_.Id }) -join ', ').`n`n" + ($texts -join "`n`n") + $tail } else { $texts[0] + $tail }
-            $acts += New-StartAction $nm $type 'work' $rel $k.Id $cwd $prompt $gfx (Resolve-AgentClass $cfg 'work' $k.Class 0) @($members | ForEach-Object { $_.Id })
+            $acts += New-StartAction $nm $type 'work' $rel $k.Id $cwd $prompt ($needs.Count -gt 0) $kcls @($members | ForEach-Object { $_.Id })
         }
         # New open-question entries (marker openMarker) of the state files of this plan -> brain (needs plain words and a recommendation).
         foreach ($sf in @(Get-PlanStateFiles $abs)) {
@@ -393,9 +397,10 @@ function Get-Routine($Ctx) {
     $acts += $cont
     # Integration: blocked rows go to the brain, a ready row without a running integrator starts the integrator.
     # Blocked rows are handled at the top of this function (fix agent started by the routine itself, no brain event).
-    if ($Ctx.CanStartIntegrator -and [int]$Ctx.Free.int -gt 0) {
+    $intPv = if ($Ctx.CanStartIntegrator -and [int]$Ctx.Free.int -gt 0) { @(Get-Providers $cfg | Where-Object { $_.Protocol -eq 'claude' -and $_.Slots -gt 0 -and $_.Classes.medium.model } | Select-Object -First 1) } else { @() }   # the integrator is a Claude Code agent (class medium); it uses no worker slot, but a provider that is off (slots 0) does not run it
+    if ($intPv.Count) {
         $nm = New-AgentName ('INTEGRATOR-' + (Get-Date -Format 'MMdd-HHmm')) $all $chosen
-        $acts += New-StartAction $nm 'claude' 'integrate' (Get-QueueRel $cfg) ('INT-' + (Get-Date -Format 'MMddHHmm')) $Ctx.Repo (Get-PromptText $cfg 'integrator' @{}) $false
+        $acts += New-StartAction $nm $intPv[0].Name 'integrate' (Get-QueueRel $cfg) ('INT-' + (Get-Date -Format 'MMddHHmm')) $Ctx.Repo (Get-PromptText $cfg 'integrator' @{}) $false
     }
     # Answered questions -> brain, once each.
     # Answered questions are handled at the top of this function (work agent started by the routine itself, no brain event).
@@ -424,14 +429,14 @@ function Get-HandoffContinuations($Cfg, $All, $Free, [ref]$Workers, $Taken) {
         $succ = @($All | Where-Object { $_.name -match ('^' + [regex]::Escape($base) + '-c\d+$') -and [string]$_.startedAt -gt [string]$a.startedAt })
         if ($succ.Count -gt 0) { continue }
         $isInt = ([string]$a.phase -eq 'integrate')
-        if ($isInt) { if ([int]$Free.int -le 0) { continue } } else { if ($Workers.Value -le 0 -or $Free[[string]$a.type] -le 0) { continue } }
+        if ($isInt) { if ([int]$Free.int -le 0) { continue } } else { if ($Workers.Value -le 0 -or $Free[(Get-RowProvider $a)] -le 0) { continue } }
         $pf = Join-Path $Cfg.runtime ('runs' + [char]92 + $a.name + '\prompt.md')
         $body = ''
         if (Test-Path $pf) { $t = (Get-Content $pf -Raw -Encoding UTF8).TrimStart([char]0xFEFF); $i = $t.IndexOf('TASK'); if ($i -ge 0) { $t = $t.Substring($i + 4).TrimStart() }; $j = $t.LastIndexOf('Pr' + [char]0xFC + 'fe nach jedem'); if ($j -gt 0) { $t = $t.Substring(0, $j).TrimEnd() }; $body = $t }
         $k = 2; while (@($All | Where-Object { $_.name -eq "$base-c$k" }).Count -gt 0 -or $Taken -contains "$base-c$k") { $k++ }
         $nm = "$base-c$k"
-        if ($isInt) { $Free.int = [int]$Free.int - 1 } else { $Free[[string]$a.type] = $Free[[string]$a.type] - 1; $Workers.Value-- }
-        $acts += New-StartAction $nm ([string]$a.type) ([string]$a.phase) ([string]$a.plan) ([string]$a.package) ([string]$a.cwd) ($body + "`n`nLies zuerst 'Handoff " + $a.name + "' in der State-Datei des Plans und mach von dort weiter.") $false $(if ($a.class) { [string]$a.class } else { 'medium' }) @($a.bundle)
+        if ($isInt) { $Free.int = [int]$Free.int - 1 } else { $Free[(Get-RowProvider $a)] = $Free[(Get-RowProvider $a)] - 1; $Workers.Value-- }
+        $acts += New-StartAction $nm (Get-RowProvider $a) ([string]$a.phase) ([string]$a.plan) ([string]$a.package) ([string]$a.cwd) ($body + "`n`nLies zuerst 'Handoff " + $a.name + "' in der State-Datei des Plans und mach von dort weiter.") $false $(if ($a.class) { [string]$a.class } else { 'medium' }) @($a.bundle)
     }
     return $acts
 }

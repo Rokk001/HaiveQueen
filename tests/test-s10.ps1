@@ -50,7 +50,7 @@ Check 'medium after 2 failures -> heavy, heavy stays' (((Resolve-AgentClass $cfg
 Check 'unknown class = medium' ((Resolve-AgentClass $cfg 'work' 'bogus' 0) -eq 'medium')
 $cl = Get-ClassModel $cfg 'claude' 'light'; $cm = Get-ClassModel $cfg 'claude' 'medium'; $ch = Get-ClassModel $cfg 'claude' 'heavy'
 Check 'Claude classes: haiku / sonnet / opus' (($cl.Model -eq 'claude-haiku-5-5') -and ($cm.Model -eq 'claude-sonnet-5-5') -and ($ch.Model -eq 'claude-opus-5-5')) "$($cl.Model)/$($cm.Model)/$($ch.Model)"
-Check 'medium equals the default model and effort of config' (($cm.Model -eq $cfg.claudeModel) -and ($cm.Effort -eq $cfg.effort) -and ((Get-ClassModel $cfg 'codex' 'medium').Model -eq $cfg.codexModel))
+Check 'medium class: Sonnet / Terra, effort medium' (($cm.Model -eq 'claude-sonnet-5-5') -and ($cm.Effort -eq 'medium') -and ((Get-ClassModel $cfg 'codex' 'medium').Model -eq 'gpt-6.1-terra'))
 $cxl = Get-ClassModel $cfg 'codex' 'light'
 $cache = Get-Content (Join-Path $env:USERPROFILE '.codex\models_cache.json') -Raw -ErrorAction SilentlyContinue
 if ($cache) { Check 'Codex light model is listed by the installed Codex CLI' ($cache.Contains('"' + $cxl.Model + '"')) $cxl.Model } else { Write-Host 'SKIP Codex light model check: no Codex model cache on this PC' }

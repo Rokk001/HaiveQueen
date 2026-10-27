@@ -16,7 +16,7 @@
             "properties": {
               "action": { "const": "start_agent" },
               "name": { "type": "string", "minLength": 1 },
-              "type": { "enum": ["claude", "codex"] },
+              "type": { "type": "string", "minLength": 1 },
               "phase": { "enum": ["work", "verify", "release", "integrate"] },
               "plan": { "type": "string" },
               "package": { "type": "string" },

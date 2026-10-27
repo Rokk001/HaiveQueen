@@ -37,7 +37,8 @@ repeat. With several agents at once it gets worse, and a supervising model that 
 | 🎨 **Agent names and colors** | Every agent gets a short first name and a fixed color, so panes are easy to tell apart. The orchestrator itself is always CHIEF. |
 | 💬 **Questions to the owner via files** | Agents and CHIEF put questions into a questions file; you answer in an answers file. No chat window has to stay open. |
 | 🔄 **Event sync of a private repo** | The optional `onEvent` hook calls your command once per round with the events of that round, for example to commit and push your plan files. |
-| 🎚️ **Model classes light / medium / heavy** | Each package can carry a class. The project file maps classes to a model and effort per agent type; repeated failures escalate to a higher class. |
+| 🎚️ **Model classes light / medium / heavy** | Each package can carry a class. The project file maps classes to a model and effort per provider; repeated failures escalate to a higher class. |
+| 🔌 **Extensible providers** | Claude Code, Codex, a local model through an OpenAI-compatible endpoint (for example LM Studio) or any other entry of the `providers` list: slots, purpose, capabilities and weekly limit per provider, no code change. |
 
 ## How it works
 
@@ -145,19 +146,18 @@ Everything project-specific lives in one JSON project file; `examples/project.ex
 | `owner` | Name of the person who answers questions |
 | `openMarker` | Heading in a state file that opens a question for the owner |
 | `pilot`, `pilotPlan`, `pilotMinFreeRamGB` | Pilot mode: only the packages of the pilot plan run and there is no integrator; `pilotMinFreeRamGB` is the free-RAM limit in that mode |
-| `claudeSlots`, `codexSlots`, `integratorSlots` | Maximum number of concurrent Claude Code agents, Codex agents and integrators |
+| `integratorSlots` | Maximum number of concurrent integrators |
+| `providers` | The list of agent providers, see [Providers](#providers): command, arguments, classes, capabilities, slots, use and weekly limit of every provider |
 | `roundMinutes` | Interval of the orchestration rounds |
 | `minFreeRamGB` | Free RAM required before an agent is started, otherwise it waits for the next round |
-| `claudeModel`, `codexModel`, `effort` | Default model and effort (the same as the `medium` class) |
 | `brainModel`, `brainEffort` | Model and effort of the CHIEF call |
 | `contextLimitTokens` | Context limit per agent; at the limit the agent writes a handoff and a fresh one continues (default 300000) |
 | `repo` | Repository of the project |
 | `runtime` | Runtime folder (agent list, logs, run folders; never commit it) |
 | `paneCloseDelaySeconds` | How long a finished agent pane stays open before it closes |
-| `claudeArgs`, `codexArgs`, `brainArgs` | Command-line templates of the CLIs (placeholders such as `{model}`, `{effort}`, `{repo}`, `{tools}`, `{cwd}`, `{rules}`, `{claudeTools}`) |
-| `claudeTools` | Tool list passed to Claude Code agents |
-| `claudeCommandTemplate`, `codexCommandTemplate` | Human-readable examples of the resulting command lines (documentation only, not read by the scripts) |
-| `classes` | Model and effort per agent type (`claude`, `codex`) for the classes `light`, `medium`, `heavy` |
+| `brainArgs` | Command-line template of the CHIEF call (placeholders such as `{brainModel}`, `{brainEffort}`, `{repo}`) |
+| `claudeTools` | Tool list passed to Claude Code agents (`{claudeTools}` in the provider arguments) |
+| `capabilityRules` | Optional. Rules that decide which capability a package needs: each rule has a `capability` and `patterns` that must all match the content cell of the package row. Without it, packages about models, textures, materials, particles, icons, clips or sounds together with Blender, assets or graphics need `images` |
 | `minClass` | Minimum class per phase (for example `verify` and `integrate` never run below `medium`) |
 | `escalateAfter` | Number of failures of a package after which its class is raised by one |
 | `bundle.maxPackages` | Maximum number of small packages of one plan that run in a single agent |
@@ -178,6 +178,49 @@ Everything project-specific lives in one JSON project file; `examples/project.ex
 
 The project rules file (`ruleSources.project`) holds the project's own hard rules under `## 1. Hard rules (project)`. The tool rules in
 `ORCHESTRATOR.md` and the project rules together form section 1 of the rules every agent gets; CHIEF gets both files.
+
+### Providers
+
+`providers` is a list. A new model or a new provider is only a new entry, no code change. Every entry has:
+
+| Field | Meaning |
+|---|---|
+| `name` | Name of the provider (shown in the agent row, used by the selection) |
+| `protocol` | `claude` or `codex`: which CLI event format the command speaks (default: the name) |
+| `command`, `args` | The command and its argument template (`{model}`, `{effort}`, `{repo}`, `{tools}`, `{cwd}`, `{rules}`, `{claudeTools}`). The prompt is added by the protocol |
+| `classes` | `light`, `medium`, `heavy`, each with `model` and `effort`. A provider only gets packages of the classes listed in its entry |
+| `capabilities` | What the provider can do, for example `["images"]` |
+| `slots` | How many tasks may run at once. `0` means off, for everything, without exception |
+| `use` | The purpose: `preferred` gets packages as soon as a slot is free; `fallback` only when every fitting `preferred` provider is full or at its weekly limit; `capability-only` only packages that need one of its capabilities |
+| `limit.source` | Where the weekly usage comes from: `claude` or `codex` (the readers of the dashboard block LIMITS). No `limit`: the provider counts as 100 % free |
+| `endpoint` | Optional: `baseUrl` of an OpenAI-compatible server (and optional `id`, `name`) for a codex-protocol provider |
+
+**Selection.** A task goes to the best provider that fits: it has a free slot and the class of the task, `use` allows the task, and the provider is not at its weekly limit. Among them, the highest value of
+(100 minus used percent) divided by the hours until the weekly reset wins; equal values go by list order. A busy slot never makes a package wait: it goes to the next fitting provider with a free slot at once.
+A follow-up task stays with the provider of its earlier task, and a verify agent prefers another provider than the work agent, as long as the providers are free. The 100 % for a provider without weekly limit
+(and a reset in 168 hours) is a choice of the tool, not a measured value.
+
+**Needed capabilities.** A package that needs a capability (a package about models or textures needs `images`) goes only to providers that have it, and the weekly limit does not matter then. If no provider
+with the capability has slots above 0, the package stays where it is and the orchestrator writes one open question for the owner into the questions file.
+
+**A local model (LM Studio).** An `endpoint` runs through the Codex CLI with its own `model_provider`, so the agent keeps its tools: the base URL from the project file is passed as
+`-c model_providers.<id>.base_url=...` (Codex 0.163 supports `wire_api = "responses"` only, which current LM Studio versions serve). The server runs on any PC, LM Studio's default port is 1234:
+
+```json
+{
+  "name": "lmstudio",
+  "protocol": "codex",
+  "command": "codex",
+  "args": ["exec", "--json", "--skip-git-repo-check", "-m", "{model}", "-c", "model_reasoning_effort={effort}", "--dangerously-bypass-approvals-and-sandbox", "--ignore-user-config", "-C", "{cwd}"],
+  "slots": 1,
+  "use": "preferred",
+  "capabilities": [],
+  "classes": { "light": { "model": "qwen3-coder-30b", "effort": "medium" } },
+  "endpoint": { "baseUrl": "http://192.168.1.50:1234/v1", "id": "lmstudio", "name": "LM Studio" }
+}
+```
+
+Without a `limit` this provider counts as 100 % free and only gets `light` packages.
 
 ### onEvent hook
 
@@ -207,6 +250,7 @@ No. `tests/*.ps1` build a throw-away project from the examples, use a temporary 
 pwsh -File tests/test-s7.ps1     # routine transitions, brain triggers, context limit, finished packages, questions
 pwsh -File tests/test-events.ps1 # onEvent hook and the sync example (local bare repository)
 pwsh -File tests/test-s10.ps1    # effort classes, bundling, escalation, lock
+pwsh -File tests/test-providers.ps1    # provider list: selection by weekly limit, capabilities, slots, use, config-only provider
 pwsh -File tests/test-s9.ps1     # rule files per phase
 pwsh -File tests/test-restart.ps1
 pwsh -File tests/test-panes.ps1
