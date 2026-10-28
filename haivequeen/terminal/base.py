@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 TITLE_PREFIX = "HaiveQueen"
+RETIRED = "~retired"   # suffix of the window name in pane records of a window that was closed and opened again
 
 
 class TerminalError(Exception):
@@ -72,11 +73,26 @@ class PaneRegistry:
         return out
 
     def find(self, pane_id):
-        """Return the record with this pane id or None."""
+        """Return the record with this pane id or None; a record of the current window wins over a retired one."""
+        found = None
         for rec in self.records():
             if rec.get("id") == pane_id:
-                return rec
-        return None
+                if not str(rec.get("window", "")).endswith(RETIRED):
+                    return rec
+                found = found or rec
+        return found
+
+    def retire(self, window):
+        """Move the records of `window` to the retired window, so a re-opened window numbers its panes from 0 again.
+
+        Windows Terminal numbers the panes of a new tab from 0; the old records must not count for the next index
+        (a focus-pane on a number that does not exist is how a split lost its target).
+        """
+        for rec in self.records():
+            if rec.get("window") == window:
+                name = rec.pop("name")
+                rec["window"] = window + RETIRED
+                self.save(name, rec)
 
     def next_index(self, window):
         """Return the next pane number of a window (creation order, never reused)."""

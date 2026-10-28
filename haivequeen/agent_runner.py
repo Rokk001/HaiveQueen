@@ -836,6 +836,11 @@ def pane_wrap(a, argv):
             runtime.upsert_agent(conn, a.project, a.name, {"paneClosed": True}, create=False)
         except Exception:
             pass
+        try:
+            from . import loop   # imported here: loop imports this module
+            loop.hold_pane_lock_until_exit()   # the pane closes while no other pane command runs; the lock ends with this process
+        except Exception:
+            pass
     return 0
 
 

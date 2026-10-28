@@ -194,11 +194,18 @@ class LoopTest(RoundCase):
         hl = loop.head_lines(80, brain.totals(self.conn), {"run_state": "PAUSED", "model": "x"})
         self.assertIn("PAUSED", hl[0][0])
 
-    def test_window_default_and_project_override(self):
-        """The default window name is HaiveQueen; a window set in a project (for example ODP) is kept."""
-        from haivequeen import scheduler
-        self.assertEqual(scheduler.build_settings({}, {})["window"], "HaiveQueen")
-        self.assertEqual(scheduler.build_settings({}, {"window": "ODP"})["window"], "ODP")
+    def test_window_is_one_for_all(self):
+        """One window for the Queen, the dashboard and every agent: a project cannot set its own window name."""
+        self.assertEqual(sch.build_settings({}, {})["window"], "HaiveQueen")
+        self.assertEqual(sch.build_settings({}, {"window": "ODP"})["window"], "HaiveQueen")
+        self.assertEqual(sch.build_settings({"window": "Main"}, {"window": "ODP"})["window"], "Main")
+
+    def test_pane_lock_held_until_exit(self):
+        """A closing pane takes pane.lock for its own process and keeps it."""
+        from unittest import mock
+        with mock.patch.object(loop, "pane_lock_file", return_value=self.base / "pane.lock"):
+            self.assertTrue(loop.hold_pane_lock_until_exit())
+            self.assertEqual((self.base / "pane.lock").read_text(encoding="ascii").strip(), str(os.getpid()))
 
     def test_agent_names_and_queen_title(self):
         """24 unique agent names, none is Queen, and the pane of the main agent is titled QUEEN."""

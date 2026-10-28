@@ -128,6 +128,19 @@ def pane_lock(timeout: float = 120.0, poll: float = 0.1):
             pass
 
 
+def hold_pane_lock_until_exit(timeout: float = 120.0, poll: float = 0.1) -> bool:
+    """Take pane.lock for the calling process and keep it: it counts as released when this process has exited (as in the first version).
+
+    A pane that closes itself thus never overlaps a split or an open in the same window. Returns False when the lock stayed busy for `timeout` seconds.
+    """
+    deadline = time.monotonic() + timeout
+    while _take_pid_lock(pane_lock_file(), own_ok=True) != 0:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll)
+    return True
+
+
 def first_split_target(panes) -> str:
     """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the Queen pane, else None."""
     for marker in ("job: Dashboard", "| QUEEN |"):

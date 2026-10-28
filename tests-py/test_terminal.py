@@ -97,7 +97,7 @@ class WtArgsTest(unittest.TestCase):
     def setUp(self):
         """Create a backend on a temp folder."""
         self.tmp = tempfile.TemporaryDirectory()
-        self.term = wt.WindowsTerminal(self.tmp.name, start_timeout=0, profile="PowerShell")
+        self.term = wt.WindowsTerminal(self.tmp.name, start_timeout=0, profile="PowerShell", settle=0)
 
     def tearDown(self):
         """Remove the temp folder."""
@@ -147,6 +147,26 @@ class WtArgsTest(unittest.TestCase):
         infos = self.term.list_panes("W9")
         self.assertEqual([i.id for i in infos], ["W9.0", "W9.1"])
         self.assertFalse(any(i.alive for i in infos))
+
+    def test_reopened_window_numbers_from_zero(self):
+        """A window that is opened again starts at pane 0; the records of the old window are retired, not reused."""
+        with mock.patch.object(wt.subprocess, "Popen"):
+            self.term.open_window("W5", "T", ["py"], name="a0")
+            self.term.split_pane("W5", "T", None, ["py"], "horizontal", 0.5, target="W5.0", name="a1")
+            reopened = self.term.open_window("W5", "T", ["py"], name="b0")
+            after = self.term.split_pane("W5", "T", None, ["py"], "horizontal", 0.5, target=reopened, name="b1")
+        self.assertEqual((reopened, after), ("W5.0", "W5.1"))
+        self.assertEqual([i.id for i in self.term.list_panes("W5")], ["W5.0", "W5.1"])
+        self.assertEqual(self.term.registry.find("W5.0")["name"], "b0")
+
+    def test_settle_before_every_command(self):
+        """The pause before a wt command (the first version's 2 s) runs before the process starts."""
+        term = wt.WindowsTerminal(self.tmp.name, start_timeout=0, settle=2.0)
+        order = []
+        with mock.patch.object(wt.time, "sleep", side_effect=lambda s: order.append(("sleep", s))), \
+                mock.patch.object(wt.subprocess, "Popen", side_effect=lambda *a, **k: order.append(("popen",))):
+            term.open_window("W6", "T", ["py"], name="c0")
+        self.assertLess(order.index(("sleep", 2.0)), order.index(("popen",)))
 
     def test_exe_override(self):
         """BZZ_WT_EXE replaces wt.exe (tests and stubs)."""

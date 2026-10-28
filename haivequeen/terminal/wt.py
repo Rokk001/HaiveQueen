@@ -43,13 +43,18 @@ class WindowsTerminal(Terminal):
 
     name = "wt"
 
-    def __init__(self, runs_dir, start_timeout=20, profile=None):
-        """Use `runs_dir` for pane records; wait up to `start_timeout` s for a started pane's pid file."""
+    def __init__(self, runs_dir, start_timeout=20, profile=None, settle=2.0):
+        """Use `runs_dir` for pane records; wait up to `start_timeout` s for a started pane's pid file.
+
+        `settle` is the pause in seconds before every wt command (as in the first version): the terminal finishes the
+        previous split or pane close first. Callers hold the pane lock, so no other command runs meanwhile.
+        """
         if not runs_dir:
             raise TerminalError("wt backend needs a runs folder")
         self.registry = PaneRegistry(runs_dir)
         self.start_timeout = start_timeout
         self.profile = profile
+        self.settle = settle
 
     def exe(self):
         """Return the wt.exe to call."""
@@ -99,6 +104,7 @@ class WindowsTerminal(Terminal):
         self.registry.save(folder_name, {"id": pane_id, "window": window, "index": pane_id_index,
                                          "title": title, "pid": 0, "pidfile": str(pidfile)})
         line = wt_quote(self.exe()) + " " + wt_commandline(subs_builder(self.wrapped(pidfile, command)))
+        time.sleep(self.settle)
         subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, close_fds=True)
         pids = self._wait_pids(pidfile)
@@ -124,7 +130,8 @@ class WindowsTerminal(Terminal):
             return None
 
     def open_window(self, window, title, command, colour=None, name=None):
-        """Open the named window (new tab) with the first pane; return its pane id."""
+        """Open the named window (new tab) with the first pane; return its pane id. The pane numbers start at 0 again."""
+        self.registry.retire(window)
         index = self.registry.next_index(window)
         return self._launch(window, lambda wrapped: self.open_window_args(window, title, wrapped, colour),
                             title, command, name, index)

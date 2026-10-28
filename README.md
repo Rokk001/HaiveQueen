@@ -83,6 +83,7 @@ bzz stop                              # no new agents; running agents finish the
 ```
 
 Put your machine settings (providers, slots) into `config.toml` (see `examples/config.example.toml`; folder: `%APPDATA%\HaiveQueen` on Windows, `~/.config/HaiveQueen` on Linux).
+The Queen, the dashboard and every agent share one terminal window; its name is the machine setting `window` (default `HaiveQueen`), a project cannot set its own.
 
 ## Plans
 

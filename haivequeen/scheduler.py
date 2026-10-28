@@ -61,7 +61,7 @@ DEFAULT_SETTINGS = {
                        "--effort", "{brainEffort}", "--tools", "Read,Glob,Grep", "--add-dir", "{repo}",
                        "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config"]},
 }
-MACHINE_ONLY = ("providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
+MACHINE_ONLY = ("providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects", "window")   # window: the Queen, the dashboard and all agents share one terminal window
 
 
 def deep_merge(base: dict, over: dict) -> dict:
