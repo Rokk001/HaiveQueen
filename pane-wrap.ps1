@@ -22,7 +22,7 @@ finally {
         $got = $false
         try { $got = $global:wtPaneMutex.WaitOne(180000) } catch [System.Threading.AbandonedMutexException] { $got = $true }
         if ($got) {
-            $rows = @(Read-Agents $cfg)
+            $rows = @(Get-OrchAgentRows $cfg)
             $me = $rows | Where-Object { $_.name -eq $agentName } | Select-Object -First 1
             $other = @($rows | Where-Object { $_.name -ne $agentName -and (Test-AgentPaneAlive $_) })
             $idlePidFile = Join-Path $cfg.runtime 'idle.pid'
@@ -44,6 +44,6 @@ finally {
             }
         }
     } catch {}
-    if ($agentName) { try { Update-Agent $cfg $agentName @{ paneClosed = $true } } catch {} }
+    if ($agentName) { try { [void](Set-OrchAgent $cfg $agentName @{ paneClosed = $true }) } catch {} }
 }
 exit 0

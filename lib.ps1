@@ -1158,3 +1158,15 @@ function Get-OrchKvList($Cfg, [string]$Prefix = '') {
 }
 # All handled event keys of the project (rows with key, ts, value).
 function Get-OrchHandledList($Cfg) { return @(Invoke-Orch @('handled', 'list', '--project', (Get-OrchProject $Cfg))) }
+# ---- v2 agent row helpers (pane scripts) ----
+# Adds the camelCase names the pane scripts use next to the snake_case columns of an agent row from orch.py (plan_path -> plan, started_at -> startedAt, ...); the original properties stay.
+function ConvertTo-OrchAgentRow($Row) {
+    if (-not $Row) { return $null }
+    $alias = [ordered]@{ plan_path = 'plan'; pane_id = 'paneId'; started_at = 'startedAt'; ended_at = 'endedAt'; exit_code = 'exitCode'; tokens_in = 'tokensIn'; tokens_out = 'tokensOut'; last_line = 'lastLine' }
+    foreach ($k in $alias.Keys) { if ($Row.PSObject.Properties[$k] -and -not $Row.PSObject.Properties[$alias[$k]]) { $Row | Add-Member -NotePropertyName $alias[$k] -NotePropertyValue $Row.$k } }
+    return $Row
+}
+# The newest row of the named agent with camelCase names, or $null when the agent is unknown.
+function Get-OrchAgentRow($Cfg, [string]$Name) { return (ConvertTo-OrchAgentRow (Get-OrchAgent $Cfg $Name)) }
+# All agent rows of the scope (active, archive, all) with camelCase names.
+function Get-OrchAgentRows($Cfg, [string]$Scope = 'active') { return @(Get-OrchAgents $Cfg $Scope | ForEach-Object { ConvertTo-OrchAgentRow $_ }) }
