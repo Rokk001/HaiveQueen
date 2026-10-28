@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -124,6 +125,39 @@ class RenderTest(unittest.TestCase):
             self.assertEqual(header.read_milestones(p), [("Green", "12:00 a"), ("Red", "12:01 b")])
             self.assertEqual(header.read_milestones(p, 1), [("Red", "12:01 b")])
             self.assertEqual(header.read_milestones(Path(tmp) / "none.txt"), [])
+
+    def test_small_pane_keeps_identity(self):
+        """A pane with few rows keeps the identity line first, then the token line, then the task; nothing is cut in the middle."""
+        full = texts(header.build_head(row(), "demo", "cyan", 120, NOW))
+        self.assertEqual(len(full), 3)
+        one = texts(header.build_head(row(), "demo", "cyan", 120, NOW, max_lines=1))
+        self.assertEqual(len(one), 1)
+        self.assertIn("MAX | A-1", one[0])
+        two = texts(header.build_head(row(), "demo", "cyan", 120, NOW, max_lines=2))
+        self.assertEqual(two, [full[0], full[2]])
+        self.assertEqual(texts(header.build_head(row(), "demo", "cyan", 120, NOW, max_lines=3)), full)
+        # a narrow pane wraps the identity over several lines; it is cut, never replaced by the token line
+        narrow = texts(header.build_head(row(), "demo", "cyan", 30, NOW, max_lines=2))
+        self.assertEqual(len(narrow), 2)
+        self.assertEqual(narrow[0], "demo")
+
+    def test_run_small_pane(self):
+        """The redraw loop uses the real pane height: in a 2-row pane the header is the identity line only."""
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["BZZ_DATA_DIR"] = str(Path(tmp) / "data")
+            try:
+                conn = db.connect(Path(tmp) / "data" / "haivequeen.db")
+                db.upsert_project(conn, "demo", None, "FF8800", 0)
+                runtime.upsert_agent(conn, "demo", "A-1", {"status": "running", "person": "Max", "color": "4FA8FF", "task": "T", "startedAt": "2026-10-28T11:58:30"})
+                out = io.StringIO()
+                with mock.patch("shutil.get_terminal_size", return_value=os.terminal_size((120, 2))):
+                    header.run("demo", "A-1", 0, Path(tmp) / "runs", out, interval=0, max_ticks=1)
+                self.assertIn("MAX | A-1", out.getvalue())
+                self.assertNotIn("Tokens", out.getvalue())
+                self.assertNotIn("[3;1H", out.getvalue())
+                conn.close()
+            finally:
+                os.environ.pop("BZZ_DATA_DIR", None)
 
     def test_run_loop(self):
         """The loop draws from the database: first a full redraw with the replayed milestones, then partial redraws; it ends after the agent ended and the parent is gone."""

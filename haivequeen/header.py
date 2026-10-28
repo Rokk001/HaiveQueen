@@ -108,8 +108,12 @@ def _parse_time(value, default):
     return db.parse_time(value, default)
 
 
-def build_head(row, project, project_colour, width, now=None):
-    """Return the header lines for `width` columns: a list of lines, each a list of (text, colour) parts."""
+def build_head(row, project, project_colour, width, now=None, max_lines=None):
+    """Return the header lines for `width` columns: a list of lines, each a list of (text, colour) parts.
+
+    `max_lines` is the number of rows the pane can spare for the header; when the full header is longer, the identity
+    lines (project, name, model, status) stay, then the token line, then the task line, and the rest is dropped.
+    """
     now = now or datetime.now()
     res = []
     person = str(row.get("person") or "-").upper()
@@ -136,10 +140,18 @@ def build_head(row, project, project_colour, width, now=None):
     task = " ".join(str(row.get("task") or "").split())
     if len(task) > width:
         task = task[:max(0, width - 3)] + "..."
-    res.append([(task, "Gray")])
-    for line in wrap_text(format_token_line(row.get("ctxTokens"), row.get("tokens_in"), row.get("tokens_out")), width):
-        res.append([(line, "White")])
-    return res
+    task_lines = [[(task, "Gray")]]
+    token_lines = [[(line, "White")] for line in
+                   wrap_text(format_token_line(row.get("ctxTokens"), row.get("tokens_in"), row.get("tokens_out")), width)]
+    if max_lines is None or len(res) + len(task_lines) + len(token_lines) <= max_lines:
+        return res + task_lines + token_lines
+    room = max(1, max_lines)
+    if len(res) >= room:
+        return res[:room]
+    room -= len(res)
+    if len(token_lines) <= room:
+        return res + (task_lines if len(token_lines) < room else []) + token_lines
+    return res + token_lines[:room]
 
 
 def line_str(parts):
@@ -220,8 +232,8 @@ def run(project, name, parent_pid=0, runs_dir=None, out=None, interval=1.0, max_
             row = runtime.get_agent(conn, project, name)
             if row:
                 size = shutil.get_terminal_size((120, 40))
-                width, height = max(30, size.columns), max(10, size.lines)
-                lines = build_head(row, project, project_colour_of(conn, project), width)
+                width, height = max(30, size.columns), max(2, size.lines)
+                lines = build_head(row, project, project_colour_of(conn, project), width, max_lines=height - 1)
                 key = (width, height, len(lines))
                 full = key != last
                 last = key
