@@ -137,6 +137,13 @@ class DashboardTest(unittest.TestCase):
         kinds = [(r[0], r[1]) for r in self.conn.execute("SELECT kind, text FROM events WHERE project='*' ORDER BY id")]
         self.assertTrue(all("dashboard key" in t for k, t in kinds if k in ("drain", "resume")), kinds)
 
+    def test_questions_in_triage_are_counted(self):
+        """Under QUESTIONS the dashboard shows how many questions wait for the triage."""
+        self.assertNotIn("in triage", self.text())
+        db.add_question(self.conn, "alpha", "x.md", "T1", "Which?", "A", status="triage")
+        db.add_question(self.conn, "alpha", "x.md", "T2", "Which?", "A", status="triage")
+        self.assertIn("in triage: 2", self.text())
+
     def test_run_state_colour_and_keys(self):
         """The run state shows coloured in the header; P and D change it; F cycles the filter."""
         self.assertIn("\x1b[92mRUNNING", self.text(color=True))

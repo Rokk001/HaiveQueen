@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import unittest
+from unittest import mock
 
 from bzztest import REL, RoundCase, runtime
 from haivequeen import cli, db, triage
@@ -76,6 +77,31 @@ class AskTriageTest(RoundCase):
         self.assertEqual((res["status"], res["answered_by"]), ("answered", "auto"))
         self.assertIn("decision %d" % did, res["answer"])
         self.assertEqual(runtime.list_questions(self.conn, "testproj", "open"), [])
+
+    def test_triage_off_goes_straight_to_the_owner(self):
+        """With the triage switched off a question is open at once and nothing waits for a triage agent."""
+        machine = dict(self.machine, triage=False)
+        with mock.patch("haivequeen.config.load_config", return_value=machine):
+            res = self.ask("O1")
+        self.assertEqual(res["status"], "open")
+        self.assertEqual(self.status(res["id"])["status"], "open")
+        self.assertEqual(triage.questions_to_triage(self.conn, "testproj"), [])
+
+    def test_queen_ask_owner_is_matched_against_decisions_and_questions(self):
+        """A question of the Queen for an item that a decision, an answered question or a waiting question settles is not asked; it is told in an event."""
+        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
+        runtime.add_decision(self.conn, "testproj", "owner", "Crystal bowl: yes.", REL, "M7")
+        old = db.add_question(self.conn, "testproj", REL, "V9", "Decay?", "A")
+        db.answer_question(self.conn, old, "Yes.", "owner")
+        waiting = self.ask("W5")["id"]
+        ask = lambda item: {"action": "ask_owner", "plan": REL, "item": item, "question": "q?", "recommendation": "r"}  # noqa: E731
+        self.agent("Z-ZZ-verify", type="codex", provider="codex", package="P1", phase="verify", status="failed", started=3, ended=2, last_line="x")
+        self.round(self.brain_answer(ask("M7"), ask("V9"), ask("W5"), ask("NEW1")))
+        qs = runtime.list_questions(self.conn, "testproj")
+        self.assertEqual([q["item"] for q in qs if q["id"] != old and q["id"] != waiting], ["NEW1"])
+        texts = " | ".join(r[0] for r in self.conn.execute("SELECT text FROM events WHERE text LIKE '%already settled%'"))
+        self.assertIn("M7", texts)
+        self.assertIn("V9", texts)
 
     def test_triage_agent_closes_by_reference_to_a_decision(self):
         """The triage agent can close a question by the id of a decision that answers it in other words; an unknown id is refused."""

@@ -698,14 +698,17 @@ def _do_ask_owner(c, a) -> None:
     if not a.get("question") or not a.get("plan"):
         report.append("REJECT ask_owner: missing plan/question")
         return
-    if any(q["plan"] == a["plan"] and q["item"] == a.get("item") and q["status"] in ("OPEN", "ANSWERED") for q in st["qs"]):
+    if any(q["plan"] == a["plan"] and q["item"] == a.get("item") and q["status"] in ("OPEN", "ANSWERED", "TRIAGE") for q in st["qs"]):
         report.append("SKIP ask_owner (already known): %s / %s" % (a["plan"], a.get("item")))
+        if not dry:
+            env.event("Question for %s not asked: %s / %s is already settled by a question of this item" % (env.settings.get("owner", "Owner"), a["plan"], a.get("item")))
         return
     src = routine.item_decided(routine.decided_items(env, st["qs"]), str(a["plan"]), str(a.get("item") or ""))
     if src:
         report.append("SKIP ask_owner (already decided in %s): %s / %s" % (src, a["plan"], a.get("item")))
         if not dry:
             env.log("skip ask_owner %s / %s: already decided in %s" % (a["plan"], a.get("item"), src))
+            env.event("Question for %s not asked: %s / %s is already settled by %s" % (env.settings.get("owner", "Owner"), a["plan"], a.get("item"), src))
         return
     report.append("ASK_OWNER: %s / %s: %s" % (a["plan"], a.get("item"), a["question"]))
     if not dry:

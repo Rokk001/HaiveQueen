@@ -347,6 +347,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
         "qs": db.open_questions(conn, project, only_open=True),
+        "triage": conn.execute("SELECT COUNT(*) FROM questions WHERE status='triage'" + (" AND project=?" if project else ""), pa).fetchone()[0],
         "bj": build_jobs_line(conn, cfg, scope, all_rows, sysinfo), "host": host,
         "orch": {"status": orch_status, "calls": len(brain_today), "model": (last_call or {}).get("model"),
                  "ctx": (last_call or {}).get("context"),
@@ -562,6 +563,8 @@ def build_lines(level, d, w, n_fin) -> list:
     else:
         head("! QUESTIONS", "red")
         L.append([("open: %d  %s" % (len(d["qs"]), ", ".join("%s#%s" % (q["project"], q["id"]) for q in d["qs"])), "yellow")])
+    if d["triage"]:
+        L.append([("in triage: %d" % d["triage"], "gray")])
     return L
 
 

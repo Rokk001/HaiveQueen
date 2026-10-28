@@ -143,8 +143,21 @@ def _close_with_reference(conn, qid, kind, ref_id, text) -> dict:
     return {"ok": True, "id": qid, "status": "answered", "answered_by": "auto", "answer": answer}
 
 
+def enabled(conn, project) -> bool:
+    """True when the triage is on for the project (setting triage, default on); an unreadable setting counts as on."""
+    from . import config, scheduler as sch
+    try:
+        env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == project), None)
+        return bool(env.settings.get("triage", True)) if env else True
+    except Exception:
+        return True
+
+
 def intake(conn, project, plan_path, item, question, recommendation="") -> dict:
-    """`bzz ask`: a new question first waits for triage; one that a stored decision or answered question already settles is closed right away."""
+    """`bzz ask`: a new question first waits for triage; one that a stored decision or answered question already settles is closed right away.
+    With the triage switched off nothing waits for it: the question goes straight to the owner."""
+    if not enabled(conn, project):
+        return {"ok": True, "id": db.add_question(conn, project, plan_path, item, question, recommendation), "status": "open"}
     qid = db.add_question(conn, project, plan_path, item, question, recommendation, status="triage")
     hit = _known_answer(conn, project, plan_path, item)
     if hit:
