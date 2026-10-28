@@ -17,14 +17,15 @@ def _read(conn) -> dict:
     return json.loads(row[0])
 
 
-def _write(conn, state: str, kind: str, text: str) -> None:
-    """Store a new state and log one event (inside a running transaction)."""
+def _write(conn, state: str, kind: str, text: str, source: str = "") -> None:
+    """Store a new state and log one event with the source of the change when given (inside a running transaction)."""
     ts = db.now()
     conn.execute(
         "INSERT INTO kv (project, key, value, updated_at) VALUES (?,?,?,?) "
         "ON CONFLICT(project, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
         (GLOBAL_PROJECT, KEY, json.dumps({"state": state, "since": ts}), ts))
-    db.add_event(conn, GLOBAL_PROJECT, kind, text, data={"state": state})
+    db.add_event(conn, GLOBAL_PROJECT, kind, text + (" (source: %s)" % source if source else ""),
+                 data={"state": state, "source": source} if source else {"state": state})
 
 
 def running_agents(conn) -> int:
@@ -41,28 +42,28 @@ def get_state(conn) -> dict:
     return {"state": rec["state"], "since": rec["since"], "running_agents": running_agents(conn)}
 
 
-def _transition(conn, allowed_from, new, kind, text) -> dict:
+def _transition(conn, allowed_from, new, kind, text, source: str = "") -> dict:
     """Move to a new state if the current one is allowed; an unchanged state writes nothing."""
     with db.transaction(conn):
         cur = _read(conn)["state"]
         if cur != new and (allowed_from is None or cur in allowed_from):
-            _write(conn, new, kind, text)
+            _write(conn, new, kind, text, source)
     return settle(conn) if new == "DRAINING" else get_state(conn)
 
 
-def pause(conn) -> dict:
+def pause(conn, source: str = "") -> dict:
     """Stop new starts (from any state); running agents keep running."""
-    return _transition(conn, None, "PAUSED", "pause", "paused: no new agents are started")
+    return _transition(conn, None, "PAUSED", "pause", "paused: no new agents are started", source)
 
 
-def resume(conn) -> dict:
+def resume(conn, source: str = "") -> dict:
     """Lift pause or drain (from any state)."""
-    return _transition(conn, None, "RUNNING", "resume", "resumed")
+    return _transition(conn, None, "RUNNING", "resume", "resumed", source)
 
 
-def drain(conn) -> dict:
+def drain(conn, source: str = "") -> dict:
     """Like pause, and report `drained` once no agent runs (from RUNNING or PAUSED)."""
-    return _transition(conn, ("RUNNING", "PAUSED"), "DRAINING", "drain", "draining: waiting for running agents")
+    return _transition(conn, ("RUNNING", "PAUSED"), "DRAINING", "drain", "draining: waiting for running agents", source)
 
 
 def settle(conn) -> dict:

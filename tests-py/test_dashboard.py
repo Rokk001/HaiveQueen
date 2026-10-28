@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from unittest import mock
@@ -114,14 +115,36 @@ class DashboardTest(unittest.TestCase):
         self.assertNotIn("beta-job-two", t)
         self.assertIn("none open", t)
 
+    def press(self, key, t=None):
+        """A confirmed press of P or D: the same key twice, one second apart (now by default)."""
+        t = time.monotonic() if t is None else t
+        dashboard.handle_key(self.conn, key, None, [], now=t)
+        dashboard.handle_key(self.conn, key, None, [], now=t + 1)
+
+    def test_single_press_changes_nothing_double_press_does(self):
+        """A single D changes nothing and asks for the confirmation; D-D drains, D-D again lifts the drain; a late second press counts as a first."""
+        state = lambda: runstate.get_state(self.conn)["state"]  # noqa: E731
+        dashboard.handle_key(self.conn, "d", None, [], now=10.0)
+        self.assertEqual(state(), "RUNNING")
+        self.assertEqual(dashboard.pending_confirm(11.0), "d")
+        self.assertEqual(dashboard.pending_confirm(14.0), "", "after 3 s the confirmation is gone")
+        dashboard.handle_key(self.conn, "d", None, [], now=14.0)   # too late: only a new first press
+        self.assertEqual(state(), "RUNNING")
+        dashboard.handle_key(self.conn, "d", None, [], now=15.0)
+        self.assertIn(state(), ("DRAINING", "DRAINED"))
+        self.press("d", 50.0)
+        self.assertEqual(state(), "RUNNING")
+        kinds = [(r[0], r[1]) for r in self.conn.execute("SELECT kind, text FROM events WHERE project='*' ORDER BY id")]
+        self.assertTrue(all("dashboard key" in t for k, t in kinds if k in ("drain", "resume")), kinds)
+
     def test_run_state_colour_and_keys(self):
         """The run state shows coloured in the header; P and D change it; F cycles the filter."""
         self.assertIn("\x1b[92mRUNNING", self.text(color=True))
-        dashboard.handle_key(self.conn, "p", None, [])
+        self.press("p")
         self.assertIn("\x1b[93mPAUSED", self.text(color=True))
-        dashboard.handle_key(self.conn, "p", None, [])
+        self.press("p")
         self.assertEqual(runstate.get_state(self.conn)["state"], "RUNNING")
-        dashboard.handle_key(self.conn, "d", None, [])
+        self.press("d")
         self.assertIn("DRAINING", self.text())
         with db.transaction(self.conn):
             self.conn.execute("UPDATE agents SET status='done', ended_at=?", (iso(1),))

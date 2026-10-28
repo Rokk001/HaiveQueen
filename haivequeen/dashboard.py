@@ -426,6 +426,9 @@ def build_lines(level, d, w, n_fin) -> list:
     run = d["run"]
     sub = {"RUNNING": "", "PAUSED": "no new agents", "DRAINING": "waiting for %d agent(s)" % run["running_agents"],
            "DRAINED": "no agent runs, safe to shut down"}[run["state"]]
+    ask = {"p": "Pause/resume: press P again to confirm", "d": "Drain: D nochmal drücken zum Bestätigen"}.get(pending_confirm(), "")
+    if ask:
+        sub = ask
     L.append([(run["state"], RUN_STATE_COLOUR[run["state"]]), ("  " + sub if sub else "", "gray"),
               ("  project: %s" % (d["project"] or "all"), "gray"), ("  [P] pause/resume [D] drain [F] project", "darkgray")])
     o = d["orch"]
@@ -623,13 +626,36 @@ class KeyReader:
         return sys.stdin.read(1).lower() if ready else ""
 
 
-def handle_key(conn, key, project, names):
-    """Apply one key: P toggles pause/resume, D drains, F steps through the project filter. Returns the new filter."""
-    if key == "p":
-        runstate.pause(conn) if runstate.get_state(conn)["state"] == "RUNNING" else runstate.resume(conn)
-    elif key == "d":
-        runstate.drain(conn)
-    elif key == "f":
+CONFIRM_SECONDS = 3.0   # P and D act only when the same key is pressed twice within this time (a stray key press changes nothing)
+KEY_SOURCE = "dashboard key"
+_confirm = {"key": "", "at": 0.0}
+
+
+def pending_confirm(now=None) -> str:
+    """The key (p or d) that waits for its second press, or "" when none does or the time ran out."""
+    now = time.monotonic() if now is None else now
+    return _confirm["key"] if _confirm["key"] and now - _confirm["at"] <= CONFIRM_SECONDS else ""
+
+
+def handle_key(conn, key, project, names, now=None):
+    """Apply one key: P toggles pause/resume, D drains (or lifts a drain), both only on the second press within CONFIRM_SECONDS;
+    F steps through the project filter. Returns the new filter."""
+    now = time.monotonic() if now is None else now
+    if key in ("p", "d"):
+        if pending_confirm(now) != key:
+            _confirm["key"], _confirm["at"] = key, now   # first press: only ask for the confirmation
+            return project
+        _confirm["key"] = ""
+        state = runstate.get_state(conn)["state"]
+        if key == "p":
+            runstate.pause(conn, KEY_SOURCE) if state == "RUNNING" else runstate.resume(conn, KEY_SOURCE)
+        elif state in ("DRAINING", "DRAINED"):
+            runstate.resume(conn, KEY_SOURCE)
+        else:
+            runstate.drain(conn, KEY_SOURCE)
+        return project
+    _confirm["key"] = ""
+    if key == "f":
         cycle = [None] + list(names)
         project = cycle[(cycle.index(project) + 1) % len(cycle)] if project in cycle else None
     return project
