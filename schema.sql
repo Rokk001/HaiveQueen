@@ -1,4 +1,4 @@
--- agent-orchestrator database schema, version 1.
+-- agent-orchestrator database schema, version 2 (v1 plus runtime tables and fields; orchlib/db.py migrates older files).
 -- journal_mode WAL is set per connection by orchlib/db.py (together with busy_timeout 10000 ms).
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -53,7 +53,9 @@ CREATE TABLE IF NOT EXISTS agents (
     tokens_in INTEGER,
     tokens_out INTEGER,
     last_line TEXT,
-    bundle_json TEXT
+    bundle_json TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -86,7 +88,8 @@ CREATE TABLE IF NOT EXISTS decisions (
     ts TEXT NOT NULL,
     source TEXT NOT NULL CHECK (source IN ('owner','coordinator','auto')),
     text TEXT NOT NULL,
-    plan_path TEXT
+    plan_path TEXT,
+    item TEXT
 );
 
 CREATE TABLE IF NOT EXISTS queue (
@@ -112,25 +115,42 @@ CREATE TABLE IF NOT EXISTS build_measurements (
     duration_s REAL
 );
 
+CREATE INDEX IF NOT EXISTS idx_build_key ON build_measurements (project, host, ts);
+
 CREATE TABLE IF NOT EXISTS providers_usage (
     ts TEXT,
     provider TEXT,
     model TEXT,
     tokens_in INTEGER,
     tokens_out INTEGER,
-    kind TEXT
+    kind TEXT,
+    project TEXT,
+    trigger TEXT,
+    context INTEGER,
+    duration_s REAL,
+    actions TEXT,
+    error INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS handled (
     project TEXT NOT NULL,
     key TEXT NOT NULL,
     ts TEXT,
+    value TEXT,
     PRIMARY KEY (project, key)
 );
 
 CREATE TABLE IF NOT EXISTS nofollow (
     project TEXT NOT NULL,
     key TEXT NOT NULL,
+    PRIMARY KEY (project, key)
+);
+
+CREATE TABLE IF NOT EXISTS kv (
+    project TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    updated_at TEXT,
     PRIMARY KEY (project, key)
 );
 

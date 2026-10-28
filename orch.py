@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from orchlib import config, db  # noqa: E402
+from orchlib import config, db, runtime, runtime_cli  # noqa: E402
 
 STUBS = ("init", "register", "start", "stop", "export", "import-legacy")
 
@@ -72,8 +72,8 @@ def cmd_status(args, conn) -> int:
 
 
 def cmd_questions(args, conn) -> int:
-    """List questions as JSON."""
-    out(db.open_questions(conn, args.project, args.open))
+    """List questions as JSON (filters: --open/--status, --project, --plan, --item)."""
+    out(runtime.list_questions(conn, args.project, "open" if args.open else args.status, args.plan, args.item))
     return 0
 
 
@@ -88,7 +88,12 @@ def cmd_answer(args, conn) -> int:
 
 
 def cmd_queue(args, conn) -> int:
-    """List the integration queue as JSON."""
+    """List the integration queue as JSON, or (action upsert) change or add the row of a branch."""
+    if args.action == "upsert":
+        if not (args.project and args.branch):
+            return fail("queue upsert needs --project and --branch", 2)
+        return runtime_cli.run(lambda a, c: runtime.queue_upsert(
+            c, a.project, a.branch, a.tip, a.plan, a.status, a.note, a.run))(args, conn)
     out(db.queue_rows(conn, args.project))
     return 0
 
@@ -136,6 +141,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("questions")
     p.add_argument("--open", action="store_true")
     p.add_argument("--project")
+    p.add_argument("--status")
+    p.add_argument("--plan")
+    p.add_argument("--item")
     p.set_defaults(fn=cmd_questions)
 
     p = sub.add_parser("answer")
@@ -145,8 +153,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_answer)
 
     p = sub.add_parser("queue")
+    p.add_argument("action", nargs="?", choices=["list", "upsert"], default="list")
     p.add_argument("--project")
+    for a in ("branch", "tip", "plan", "status", "note", "run"):
+        p.add_argument(f"--{a}")
     p.set_defaults(fn=cmd_queue)
+
+    runtime_cli.register(sub)
 
     for name in STUBS:
         p = sub.add_parser(name)
@@ -156,6 +169,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     """Entry point: parse arguments, open the database, run the command."""
+    for stream in (sys.stdout, sys.stdin):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     args, extra = build_parser().parse_known_args(argv)
     if extra and args.command not in STUBS:
         return fail("unexpected arguments: " + " ".join(extra), 2)

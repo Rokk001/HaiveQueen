@@ -973,3 +973,196 @@ function ConvertTo-Slug([string]$Text) {
     if (-not $s) { return 'pkg' }
     return $s
 }
+
+# ---- v2 runtime wrappers ----
+# Thin PowerShell wrappers around the runtime commands of orch.py (see docs/RUNTIME-API.md). Every wrapper takes the project config $Cfg first (the project name
+# comes from Get-OrchProject) and returns the parsed JSON; a failing command throws with its error message.
+
+# Name of the project in the database: $env:ORCH_PROJECT_NAME, else the projectName of the config, else the file name of the project file without extension.
+function Get-OrchProject($Cfg) {
+    if ($env:ORCH_PROJECT_NAME) { return [string]$env:ORCH_PROJECT_NAME }
+    if ($Cfg -and $Cfg.PSObject.Properties['projectName'] -and $Cfg.projectName) { return [string]$Cfg.projectName }
+    return [IO.Path]::GetFileNameWithoutExtension([string]$Cfg.projectFile)
+}
+
+# Escapes backslashes in front of a quote or at the end of the text, then quotes it with Quote-Arg, so the Windows command line parser reads the argument back unchanged.
+function ConvertTo-OrchArg([string]$Value) {
+    $v = [regex]::Replace($Value, '(\\+)("|$)', { param($m) $m.Groups[1].Value + $m.Groups[1].Value + $m.Groups[2].Value })
+    return (Quote-Arg $v)
+}
+
+# Runs "python -I orch.py <args>" (python from $env:ORCH_PYTHON, else the python on the PATH; the database folder comes from ORCH_DATA_DIR / the settings), optionally with text on stdin,
+# and returns the parsed JSON of stdout. Exit code <> 0 throws with the error text of the command.
+function Invoke-Orch([string[]]$OrchArgs, [string]$InputText = $null) {
+    $py = if ($env:ORCH_PYTHON) { $env:ORCH_PYTHON } else { $c = Get-Command python -ErrorAction SilentlyContinue; if ($c) { $c.Source } else { $null } }
+    if (-not $py) { throw 'no python: set ORCH_PYTHON to the python executable' }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $py
+    $psi.Arguments = (@('-I', (ConvertTo-OrchArg (Join-Path $script:ToolsDir 'orch.py'))) + @($OrchArgs | ForEach-Object { ConvertTo-OrchArg ([string]$_) })) -join ' '
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8; $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+    $psi.RedirectStandardInput = $true; $psi.StandardInputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $p.StandardOutput.ReadToEndAsync(); $errTask = $p.StandardError.ReadToEndAsync()
+    if ($null -ne $InputText) { $p.StandardInput.Write($InputText) }
+    $p.StandardInput.Close()
+    $p.WaitForExit()
+    $stdout = $outTask.GetAwaiter().GetResult(); $stderr = $errTask.GetAwaiter().GetResult()
+    $code = $p.ExitCode; $p.Dispose()
+    $parsed = $null
+    if (-not [string]::IsNullOrWhiteSpace($stdout)) { try { $parsed = ConvertFrom-Json -InputObject $stdout } catch { if ($code -eq 0) { throw "orch $($OrchArgs -join ' '): output is not JSON: $stdout" } } }
+    if ($code -ne 0) {
+        $msg = if ($parsed -and $parsed.PSObject.Properties['error']) { [string]$parsed.error } else { ($stderr + ' ' + $stdout).Trim() }
+        throw "orch $($OrchArgs[0]) $($OrchArgs[1]) failed (exit $code): $msg"
+    }
+    return $parsed
+}
+
+# Agent rows of the project: $Scope active (default), archive or all; optional status filter.
+function Get-OrchAgents($Cfg, [string]$Scope = 'active', [string]$Status = '') {
+    $a = @('agents', 'list', '--project', (Get-OrchProject $Cfg), '--scope', $Scope)
+    if ($Status) { $a += @('--status', $Status) }
+    return @(Invoke-Orch $a)
+}
+# One agent row by name ($null when unknown).
+function Get-OrchAgent($Cfg, [string]$Name) { return (Invoke-Orch @('agents', 'get', '--project', (Get-OrchProject $Cfg), '--name', $Name)) }
+# Creates or updates the active row of an agent from a hashtable of fields (unknown keys are kept as free fields).
+function Set-OrchAgent($Cfg, [string]$Name, [hashtable]$Fields) {
+    return (Invoke-Orch @('agents', 'upsert', '--project', (Get-OrchProject $Cfg), '--name', $Name, '--fields', '-') (ConvertTo-Json -InputObject $Fields -Compress -Depth 6))
+}
+# Like Set-OrchAgent, but throws when the agent does not exist.
+function Update-OrchAgentFields($Cfg, [string]$Name, [hashtable]$Fields) {
+    return (Invoke-Orch @('agents', 'update-fields', '--project', (Get-OrchProject $Cfg), '--name', $Name, '--fields', '-') (ConvertTo-Json -InputObject $Fields -Compress -Depth 6))
+}
+# Archives agent rows ended more than $Hours ago (or whose plan/name matches the regex $Match); returns the number of moved rows.
+function Move-OrchAgentsToArchive($Cfg, [double]$Hours = 12, [string]$Match = '') {
+    $a = @('agents', 'archive', '--project', (Get-OrchProject $Cfg), '--hours', ([string]$Hours))
+    if ($Match) { $a += @('--match', $Match) }
+    return [int](Invoke-Orch $a).moved
+}
+
+# Adds an event to the history and one line to the text log: $Mirror rounds (ROUNDS.log), events (ORCH-EVENTS.log, $IsError marks the line E), both or none.
+function Add-OrchEvent($Cfg, [string]$Text, [string]$Mirror = 'rounds', [bool]$IsError = $false, [string]$Kind = '', [string]$Agent = '', $Data = $null) {
+    $a = @('event', 'append', '--project', (Get-OrchProject $Cfg), '--text', $Text, '--mirror', $Mirror)
+    if ($IsError) { $a += '--error' }
+    if ($Kind) { $a += @('--kind', $Kind) }
+    if ($Agent) { $a += @('--agent', $Agent) }
+    if ($null -ne $Data) { $a += @('--data', (ConvertTo-Json -InputObject $Data -Compress -Depth 6)) }
+    return (Invoke-Orch $a)
+}
+# Events of the project after id $SinceId (oldest first); with $Tail the newest $Tail events.
+function Get-OrchEvents($Cfg, [int]$SinceId = 0, [int]$Tail = 0, [string]$Kind = '') {
+    $a = if ($Tail -gt 0) { @('events', 'tail', '-n', "$Tail") } else { @('events', 'list') }
+    $a += @('--project', (Get-OrchProject $Cfg), '--since-id', "$SinceId")
+    if ($Kind) { $a += @('--kind', $Kind) }
+    return @(Invoke-Orch $a)
+}
+# Paths of the text log files (rounds, events) of the project.
+function Get-OrchLogPaths($Cfg) { return (Invoke-Orch @('events', 'paths', '--project', (Get-OrchProject $Cfg))) }
+
+# Value of a kv key as text, or $null when the key does not exist.
+function Get-OrchKv($Cfg, [string]$Key) { $r = Invoke-Orch @('kv', 'get', '--project', (Get-OrchProject $Cfg), '--key', $Key); if ($r.found) { return [string]$r.value }; return $null }
+# Stores a text value under a kv key.
+function Set-OrchKv($Cfg, [string]$Key, [string]$Value) { [void](Invoke-Orch @('kv', 'set', '--project', (Get-OrchProject $Cfg), '--key', $Key, '--value', '-') $Value) }
+# Deletes a kv key.
+function Remove-OrchKv($Cfg, [string]$Key) { [void](Invoke-Orch @('kv', 'delete', '--project', (Get-OrchProject $Cfg), '--key', $Key)) }
+
+# Handled event keys: Get-OrchHandled returns the row (handled, value, ts); Add-OrchHandled remembers a key (optional value such as a retry counter); Remove-OrchHandled forgets it.
+function Get-OrchHandled($Cfg, [string]$Key) { return (Invoke-Orch @('handled', 'check', '--project', (Get-OrchProject $Cfg), '--key', $Key)) }
+function Add-OrchHandled($Cfg, [string]$Key, [string]$Value = '') {
+    $a = @('handled', 'add', '--project', (Get-OrchProject $Cfg), '--key', $Key)
+    if ($Value) { $a += @('--value', $Value) }
+    [void](Invoke-Orch $a)
+}
+function Remove-OrchHandled($Cfg, [string]$Key) { [void](Invoke-Orch @('handled', 'remove', '--project', (Get-OrchProject $Cfg), '--key', $Key)) }
+
+# Frozen plan|package keys (lower case): list, add, remove.
+function Get-OrchNofollow($Cfg) { return @(Invoke-Orch @('nofollow', 'list', '--project', (Get-OrchProject $Cfg))) }
+function Add-OrchNofollow($Cfg, [string]$Key) { [void](Invoke-Orch @('nofollow', 'add', '--project', (Get-OrchProject $Cfg), '--key', $Key)) }
+function Remove-OrchNofollow($Cfg, [string]$Key) { [void](Invoke-Orch @('nofollow', 'remove', '--project', (Get-OrchProject $Cfg), '--key', $Key)) }
+
+# Stores one build measurement; Get-OrchBuildMax returns the highest MB per job of this host and project, or $null.
+function Add-OrchBuild($Cfg, [int]$Jobs, [double]$FreeStartMB, [double]$FreeMinMB, [double]$PerJobMB, [double]$DurationSec, [string]$HostName = '') {
+    $a = @('build', 'add', '--project', (Get-OrchProject $Cfg), '--jobs', "$Jobs", '--free-start-mb', "$FreeStartMB", '--free-min-mb', "$FreeMinMB", '--per-job-mb', "$PerJobMB", '--duration-s', "$DurationSec")
+    if ($HostName) { $a += @('--host', $HostName) }
+    [void](Invoke-Orch $a)
+}
+function Get-OrchBuildMax($Cfg, [string]$HostName = '') {
+    $a = @('build', 'max-per-job', '--project', (Get-OrchProject $Cfg))
+    if ($HostName) { $a += @('--host', $HostName) }
+    return (Invoke-Orch $a).per_job_mb
+}
+
+# Usage rows: Add-OrchUsage stores a row from a hashtable (keys provider, model, tokensIn, tokensOut, kind, trigger, context, durationS, actions, error, ts); Get-OrchUsage lists rows (kind, since, newest $Limit).
+function Add-OrchUsage($Cfg, [hashtable]$Row) {
+    $map = [ordered]@{ provider = '--provider'; model = '--model'; tokensIn = '--tokens-in'; tokensOut = '--tokens-out'; kind = '--kind'; trigger = '--trigger'; context = '--context'; durationS = '--duration-s'; actions = '--actions'; error = '--error'; ts = '--ts' }
+    $a = @('usage', 'add', '--project', (Get-OrchProject $Cfg))
+    foreach ($k in $map.Keys) { if ($Row.ContainsKey($k) -and $null -ne $Row[$k]) { $v = $Row[$k]; if ($v -is [bool]) { $v = [int]$v }; $a += @($map[$k], [string]$v) } }
+    [void](Invoke-Orch $a)
+}
+function Get-OrchUsage($Cfg, [string]$Kind = '', [string]$Since = '', [int]$Limit = 0) {
+    $a = @('usage', 'list', '--project', (Get-OrchProject $Cfg))
+    if ($Kind) { $a += @('--kind', $Kind) }
+    if ($Since) { $a += @('--since', $Since) }
+    if ($Limit -gt 0) { $a += @('--limit', "$Limit") }
+    return @(Invoke-Orch $a)
+}
+
+# Plans: Sync-OrchPlans reads the plan files into the database and returns @{plans; startable}; Get-OrchPlans / Get-OrchPackages read the tables; Set-OrchPlanStatus changes the status in table and file; Set-OrchPackage changes phase / lock.
+function Sync-OrchPlans($Cfg, [string]$Workspace = '', [string[]]$Done = @()) {
+    $a = @('plans', 'sync', '--project', (Get-OrchProject $Cfg))
+    if ($Workspace) { $a += @('--workspace', $Workspace) }
+    if ($Done.Count) { $a += @('--done', ($Done -join ',')) }
+    return (Invoke-Orch $a)
+}
+function Get-OrchPlans($Cfg) { return @(Invoke-Orch @('plans', 'list', '--project', (Get-OrchProject $Cfg))) }
+function Get-OrchPackages($Cfg, [string]$Plan = '') {
+    $a = @('packages', 'list', '--project', (Get-OrchProject $Cfg))
+    if ($Plan) { $a += @('--plan', $Plan) }
+    return @(Invoke-Orch $a)
+}
+function Set-OrchPlanStatus($Cfg, [string]$Plan, [string]$Status, [string]$Workspace = '') {
+    $a = @('plans', 'set-status', '--project', (Get-OrchProject $Cfg), '--plan', $Plan, '--status', $Status)
+    if ($Workspace) { $a += @('--workspace', $Workspace) }
+    return (Invoke-Orch $a)
+}
+function Set-OrchPackage($Cfg, [string]$Plan, [string]$Id, [string]$Phase = '', $Locked = $null, [string]$Reason = '') {
+    $a = @('packages', 'set', '--project', (Get-OrchProject $Cfg), '--plan', $Plan, '--id', $Id)
+    if ($Phase) { $a += @('--phase', $Phase) }
+    if ($null -ne $Locked) { $a += @('--locked', $(if ($Locked) { '1' } else { '0' })) }
+    if ($Reason) { $a += @('--reason', $Reason) }
+    return (Invoke-Orch $a)
+}
+
+# Integration queue rows of the project; Set-OrchQueue changes or adds the row of a branch (hashtable keys tip, plan, status, note, run).
+function Get-OrchQueue($Cfg) { return @(Invoke-Orch @('queue', 'list', '--project', (Get-OrchProject $Cfg))) }
+function Set-OrchQueue($Cfg, [string]$Branch, [hashtable]$Fields = @{}) {
+    $a = @('queue', 'upsert', '--project', (Get-OrchProject $Cfg), '--branch', $Branch)
+    foreach ($k in 'tip', 'plan', 'status', 'note', 'run') { if ($Fields.ContainsKey($k) -and $null -ne $Fields[$k]) { $a += @("--$k", [string]$Fields[$k]) } }
+    return (Invoke-Orch $a)
+}
+
+# Questions (filters status open/answered, plan, item), decisions (filters plan, item) and recording a decision (source owner, coordinator or auto).
+function Get-OrchQuestions($Cfg, [string]$Status = '', [string]$Plan = '', [string]$Item = '') {
+    $a = @('questions', '--project', (Get-OrchProject $Cfg))
+    if ($Status) { $a += @('--status', $Status) }
+    if ($Plan) { $a += @('--plan', $Plan) }
+    if ($Item) { $a += @('--item', $Item) }
+    return @(Invoke-Orch $a)
+}
+function Add-OrchQuestion($Cfg, [string]$Plan, [string]$Item, [string]$Question, [string]$Recommendation = '') {
+    return (Invoke-Orch @('ask', '--project', (Get-OrchProject $Cfg), '--plan', $Plan, '--item', $Item, '--question', $Question, '--recommendation', $Recommendation))
+}
+function Get-OrchDecisions($Cfg, [string]$Plan = '', [string]$Item = '') {
+    $a = @('decisions', 'list', '--project', (Get-OrchProject $Cfg))
+    if ($Plan) { $a += @('--plan', $Plan) }
+    if ($Item) { $a += @('--item', $Item) }
+    return @(Invoke-Orch $a)
+}
+function Add-OrchDecision($Cfg, [string]$Source, [string]$Text, [string]$Plan = '', [string]$Item = '') {
+    $a = @('decisions', 'add', '--project', (Get-OrchProject $Cfg), '--source', $Source, '--text', $Text)
+    if ($Plan) { $a += @('--plan', $Plan) }
+    if ($Item) { $a += @('--item', $Item) }
+    return (Invoke-Orch $a)
+}

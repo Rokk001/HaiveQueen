@@ -6,8 +6,23 @@ from datetime import datetime
 from pathlib import Path
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BUSY_TIMEOUT_MS = 10000
+
+
+# Columns added in schema version 2; migrate() adds them to databases created by version 1.
+V2_COLUMNS = (
+    ("agents", "archived", "INTEGER NOT NULL DEFAULT 0"),
+    ("agents", "extra_json", "TEXT"),
+    ("decisions", "item", "TEXT"),
+    ("handled", "value", "TEXT"),
+    ("providers_usage", "project", "TEXT"),
+    ("providers_usage", "trigger", "TEXT"),
+    ("providers_usage", "context", "INTEGER"),
+    ("providers_usage", "duration_s", "REAL"),
+    ("providers_usage", "actions", "TEXT"),
+    ("providers_usage", "error", "INTEGER"),
+)
 
 
 def now() -> str:
@@ -30,8 +45,14 @@ def connect(path) -> sqlite3.Connection:
 def migrate(conn: sqlite3.Connection) -> None:
     """Bring the database up to SCHEMA_VERSION (user_version pragma)."""
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version < 1:
+    if version < SCHEMA_VERSION:
         conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+        for table, column, decl in V2_COLUMNS:
+            have = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+            if column not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_archived ON agents (project, archived)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_kind ON providers_usage (kind, ts)")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -152,8 +173,8 @@ def answer_question(conn, qid: int, text: str, by: str) -> dict:
             (text, by, now(), qid),
         )
         conn.execute(
-            "INSERT INTO decisions (project, ts, source, text, plan_path) VALUES (?,?,?,?,?)",
-            (row["project"], now(), by, f"{row['question']} -> {text}", row["plan_path"]),
+            "INSERT INTO decisions (project, ts, source, text, plan_path, item) VALUES (?,?,?,?,?,?)",
+            (row["project"], now(), by, f"{row['question']} -> {text}", row["plan_path"], row["item"]),
         )
         add_event(conn, row["project"], "answer", text, data={"question_id": qid, "by": by})
     return {"id": qid, "project": row["project"], "answered_by": by}
