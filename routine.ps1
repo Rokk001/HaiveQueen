@@ -133,14 +133,14 @@ function Set-LockRelease($Cfg, [string]$Plan, [string]$Pkg) {
     $h['lockrel:' + (Norm-Plan $Plan) + '|' + $Pkg] = (Get-Date).ToString('o')
     Write-FileAtomic (Join-Path $Cfg.runtime 'ORCH-HANDLED.json') (ConvertTo-Json -InputObject $h -Compress)
 }
-# Answer to the lock question of a package, or $null while it is unanswered. Counts only when the state file holds the lock section "<openMarker> - LOCK-<pkg>" (so only a real lock can be lifted) and one of these holds:
+# Answer to the lock question of a package, or $null while it is unanswered. Counts only when the state file holds the lock section "<openMarker> - LOCK-<pkg>" with an optional title after the tag (so only a real lock can be lifted) and one of these holds:
 # (a) a heading of the answers file names LOCK-<pkg> ($Decided key '*|LOCK-<PKG>'), (b) a later heading of the state file names a decision/answer and LOCK-<pkg>,
-# (c) a question of this plan with item LOCK-<pkg> has status ANSWERED. A question that is only OPEN does not count. $StateLines = line arrays of the state files of the plan.
+# (c) a question of this plan with item LOCK-<pkg> (or item <pkg> whose question text says the package is gesperrt/locked) has status ANSWERED. A question that is only OPEN does not count. $StateLines = line arrays of the state files of the plan.
 # Returns @{ Done; Source }: Done is true when the answer text (heading and body) says erledigt / done / closed / keine weiteren.
 function Get-LockDecision($Cfg, [string]$Rel, [string]$Pkg, $Decided, $Questions, $StateLines) {
     $tag = 'LOCK-' + $Pkg
     $tagRe = '(?<![A-Za-z0-9-])' + [regex]::Escape($tag) + '(?![A-Za-z0-9])'
-    $secRe = '(?i)^#+\s*' + [regex]::Escape([string]$Cfg.openMarker) + '\s*-\s*' + [regex]::Escape($tag) + '\s*$'
+    $secRe = '(?i)^#+\s*' + [regex]::Escape([string]$Cfg.openMarker) + '\s*-\s*' + [regex]::Escape($tag) + '(?![A-Za-z0-9-])'
     $hasLock = $false; $src = @(); $text = @()
     foreach ($sl in @($StateLines)) {
         $lines = @($sl); $at = -1
@@ -156,7 +156,7 @@ function Get-LockDecision($Cfg, [string]$Rel, [string]$Pkg, $Decided, $Questions
     }
     if (-not $hasLock) { return $null }
     if ($Decided.ContainsKey('*|' + $tag.ToUpper())) { $src += 'answers file'; $text += (Get-AnswerText $Cfg $tag.ToUpper()) }
-    foreach ($q in @($Questions | Where-Object { $_.status -eq 'ANSWERED' -and (Norm-Plan $_.plan) -eq (Norm-Plan $Rel) -and (Get-ItemToken ([string]$_.item)) -eq $tag.ToUpper() })) { $src += ('question ' + $q.id); $text += [string]$q.answer; $text += (Get-AnswerText $Cfg $tag.ToUpper()) }
+    foreach ($q in @($Questions | Where-Object { $_.status -eq 'ANSWERED' -and (Norm-Plan $_.plan) -eq (Norm-Plan $Rel) -and ((Get-ItemToken ([string]$_.item)) -eq $tag.ToUpper() -or ((Get-ItemToken ([string]$_.item)) -eq $Pkg.ToUpper() -and [string]$_.question -match '(?i)(gesperrt|\blocked\b)')) })) { $src += ('question ' + $q.id); $text += [string]$q.answer; $text += (Get-AnswerText $Cfg $tag.ToUpper()) }
     if (-not $src.Count) { return $null }
     $t = $text -join ' '
     return [pscustomobject]@{ Done = ($t -match '(?i)(erledigt|\bdone\b|\bclosed\b|keine weiteren)' -and $t -notmatch '(?i)(nicht erledigt|not done|not closed|nicht abgeschlossen)'); Source = ($src -join ', ') }
@@ -338,7 +338,7 @@ function Get-Routine($Ctx) {
             $st = if ($k -eq 'ALL') { Get-PkgStage $cfg $all $rel 'ALL' } else { $stages[$k] }
             $isBlockedK = @($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $rel) -and $_.Package -eq $k }).Count -gt 0
             if ($isBlockedK -or $locked.ContainsKey($k) -or (Test-Frozen $cfg $rel $k)) { continue }
-            if (@($acts | Where-Object { $_.action -eq 'start_agent' -and (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and [string]$_.package -eq "Q-LOCK-$k" }).Count -gt 0 -or @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and [string]$_.package -eq "Q-LOCK-$k" -and ($_.status -eq 'running' -or $_.status -eq 'starting') }).Count -gt 0) { continue }   # the work for the answered lock question is already starting or running: no second work agent on the same package
+            if (@($acts | Where-Object { $_.action -eq 'start_agent' -and (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and @("Q-LOCK-$k", "Q-$k") -contains [string]$_.package }).Count -gt 0 -or @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and @("Q-LOCK-$k", "Q-$k") -contains [string]$_.package -and ($_.status -eq 'running' -or $_.status -eq 'starting') }).Count -gt 0) { continue }   # the work for the answered lock question is already starting or running: no second work agent on the same package
             $kmine = @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and [string]$_.package -eq $k })
             $wcwd = if ($st.Work -and $st.Work.cwd) { [string]$st.Work.cwd } else { $cwd }
             $wtype = if ($st.Work) { Get-RowProvider $st.Work } else { '' }

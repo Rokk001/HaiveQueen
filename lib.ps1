@@ -197,9 +197,10 @@ function Get-Questions($Cfg) {
     if (-not (Test-Path $p)) { return @() }
     $cur = $null
     foreach ($l in (Get-Content $p -Encoding UTF8)) {
-        if ($l -match '^##\s+(Q-\S+)') { if ($cur) { $res += $cur }; $cur = [ordered]@{ id = $Matches[1]; plan = ''; item = ''; status = ''; answer = '' } }
+        if ($l -match '^##\s+(Q-\S+)') { if ($cur) { $res += $cur }; $cur = [ordered]@{ id = $Matches[1]; plan = ''; item = ''; question = ''; status = ''; answer = '' } }
         elseif ($cur -and $l -match '^- Plan:\s*(.*)$') { $cur.plan = $Matches[1].Trim() }
         elseif ($cur -and $l -match '^- Item:\s*(.*)$') { $cur.item = $Matches[1].Trim() }
+        elseif ($cur -and $l -match '^- Question:\s*(.*)$') { $cur.question = $Matches[1].Trim() }
         elseif ($cur -and $l -match '^- Status:\s*(\S+)') { $cur.status = $Matches[1] }
         elseif ($cur -and $l -match '^- Answer[^:]*:\s*(.*)$') { $cur.answer = $Matches[1].Trim() }
     }

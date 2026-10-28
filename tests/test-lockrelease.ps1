@@ -85,6 +85,23 @@ Add-Content "$root\QUESTIONS.md" "`n## Q-20260101-003`n- Plan: $plan`n- Item: LO
 $r = Routine
 Check 'erledigt via question: D4 starts, no run for K4 and no answer work agent' ((Acts $r 'start_agent' 'D4').Count -eq 1 -and (Acts $r 'start_agent' 'K4').Count -eq 0 -and (Acts $r 'start_agent' 'Q-LOCK-K4').Count -eq 0 -and (Acts $r 'lock_package' 'K4').Count -eq 0)
 
+# --- 5. real-world forms: heading with a title after the tag, question item without the LOCK- prefix ----------------
+New-Locked 'K5' 'D5'
+(Get-Content $state -Raw) -replace 'Open for Owner - LOCK-K5', 'Open for Owner - LOCK-K5 Config values' | Set-Content $state -Encoding UTF8
+Add-Content "$root\QUESTIONS.md" "`n## Q-20260101-004`n- Plan: $plan`n- Item: K5 Config values: range`n- Question: Paket K5 ist gesperrt, weil die Pruefung einen offenen Punkt meldet.`n- Status: OPEN`n" -Encoding UTF8
+$r = Routine
+Check 'title heading, OPEN question "K5 ...": the lock stays' ((Acts $r 'lock_package' 'K5').Count -eq 1)
+New-Locked 'K6' 'D6'
+(Get-Content $state -Raw) -replace 'Open for Owner - LOCK-K6', 'Open for Owner - LOCK-K6 Config values' | Set-Content $state -Encoding UTF8
+Add-Content "$root\QUESTIONS.md" "`n## Q-20260101-005`n- Plan: $plan`n- Item: K6 Config values: range`n- Question: Paket K6 ist gesperrt, weil die Pruefung einen offenen Punkt meldet.`n- Status: ANSWERED`n- Answer: siehe dort`n" -Encoding UTF8
+$r = Routine
+Check 'title heading, ANSWERED question "K6 ...": no lock_package action' ((Acts $r 'lock_package' 'K6').Count -eq 0)
+Check 'title heading, ANSWERED question "K6 ...": failures forgiven' ((Get-PackageFailures $cfg @(Read-Agents $cfg) $plan 'K6') -eq 0)
+New-Locked 'K7' 'D7'
+Add-Content "$root\QUESTIONS.md" "`n## Q-20260101-006`n- Plan: $plan`n- Item: K7 Something else`n- Question: Welche Farbe soll K7 haben?`n- Status: ANSWERED`n- Answer: blau`n" -Encoding UTF8
+$r = Routine
+Check 'ANSWERED question about K7 that is no lock question does not lift the lock' ((Acts $r 'lock_package' 'K7').Count -eq 1)
+
 Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "failures: $fails"
 exit $fails
