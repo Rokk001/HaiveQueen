@@ -63,10 +63,10 @@ def cmd_status(args, conn) -> int:
         out(data)
         return 0
     for p in data:
-        print(f"{p['project']}: {p['integrated']} / {p['total']} integriert ({p['percent']}%)")
-        w1 = max([len("Aufgabe")] + [len(t["task"]) for t in p["tasks"]])
-        w2 = max([len("Fenster/Agent")] + [len(t["agent"]) for t in p["tasks"]])
-        print(f"{'Aufgabe':<{w1}} | {'Fenster/Agent':<{w2}} | Status")
+        print(f"{p['project']}: {p['integrated']} / {p['total']} integrated ({p['percent']}%)")
+        w1 = max([len("Task")] + [len(t["task"]) for t in p["tasks"]])
+        w2 = max([len("Agent")] + [len(t["agent"]) for t in p["tasks"]])
+        print(f"{'Task':<{w1}} | {'Agent':<{w2}} | Status")
         for t in p["tasks"]:
             print(f"{t['task']:<{w1}} | {t['agent']:<{w2}} | {t['status']}")
         print()

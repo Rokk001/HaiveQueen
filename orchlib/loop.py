@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import brain, db, events, reattach, routine, runstate, runtime, triage, usage, views
+from . import brain, db, events, export, reattach, routine, runstate, runtime, triage, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -959,6 +959,18 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui:
             pass
 
 
+def daily_export(envs) -> None:
+    """Export the database when the daily export (03:30, C4) is due; a failure is logged and never stops the loop."""
+    try:
+        if export.export_due(datetime.now()):
+            res = export.run_export()
+            for env in envs[:1]:
+                env.log("database exported to %s" % res["file"])
+    except Exception as exc:
+        for env in envs[:1]:
+            env.log("EXPORT ERROR %s" % exc)
+
+
 def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds, round_kwargs) -> int:
     """The loop body (see run_loop)."""
     envs = sch.load_projects(conn, machine)
@@ -999,6 +1011,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
             for env in envs:
                 env.log("ROUND ERROR %s" % exc)
                 env.event("Round error: %s" % exc, True)
+        daily_export(envs)
         done += 1
         nxt = datetime.fromtimestamp(time.time() + minutes * 60)
         state.update(busy=False, since=datetime.now(), next_at=nxt)
