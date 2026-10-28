@@ -4,7 +4,7 @@ The orchestrator scripts read and write their runtime state through `orch.py`. E
 On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage errors with 2).
 
 - Call: `python -I orch.py <command> [<action>] [options]`
-- The database is `orchestrator.db` in the data folder (`ORCH_DATA_DIR`, else the machine default). It uses WAL and a busy timeout of 10 s;
+- The database is `orchestrator.db` in the data folder (`ORCH_DATA_DIR`, else the machine default). It uses WAL and a busy timeout of 10 s and must lie on a local disk: opening it on a network drive (UNC path, mapped share, NFS/CIFS mount) fails with an error;
   every command is one transaction, so several processes can call at the same time.
 - `--project` names the project. List commands accept it as optional filter (without it: all projects); all other commands require it.
 - An option value of a single `-` is read from stdin (`--fields`, `--value`, `--text` of `event append` and `decisions add`, `--data`), for long or awkward text.

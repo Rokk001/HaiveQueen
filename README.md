@@ -136,7 +136,7 @@ Free Markdown below the header: the agents read it.
 
 **Which agents can I use?** Claude Code and Codex CLI out of the box; any other command through the `providers` list.
 
-**Where does the state live?** In one SQLite database in the data folder. Export it with `orch export`; Markdown views are generated read-only.
+**Where does the state live?** In one SQLite database in the data folder. It must be on a local disk, never on a network drive (SQLite WAL needs it; the tool refuses to open it there). Export it with `orch export`; Markdown views are generated read-only.
 
 **Can I stop it safely?** Yes. `orch stop` starts no new agent and waits; after a crash the next start re-attaches to agents that are still alive.
 

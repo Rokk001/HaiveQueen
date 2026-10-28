@@ -3,6 +3,7 @@ name = "example"
 colour = "cyan"
 priority = 0                      # higher gets a free slot first
 planGlobs = ["docs/plans/*.md"]
+buildProcessNames = ["cl.exe"]    # compiler processes counted in the "active cores" display; empty = no display
 
 [views]                           # generated read-only Markdown views; empty = none
 queue = ""

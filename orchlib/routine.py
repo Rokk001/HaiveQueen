@@ -295,7 +295,7 @@ def _about_plan(row_plan, rel: str) -> bool:
 
 
 # Words by which the text of a question says that a package is locked (a lock question whose item has no LOCK- prefix).
-LOCK_QUESTION_WORDS = re.compile(r"(?i)(gesperrt|locked)")
+LOCK_QUESTION_WORDS = re.compile(r"(?i)(gesperrt|\blocked\b)")
 
 
 def lock_resolution(env, plan: str, pkg: str):

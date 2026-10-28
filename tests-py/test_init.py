@@ -73,5 +73,18 @@ class InitTest(unittest.TestCase):
         self.assertEqual(rows[0]["colour"], "cyan")
 
 
+
+
+class ExampleProjectFileTest(unittest.TestCase):
+    """examples/project.example.toml documents the compiler process names (C8)."""
+
+    def test_example_has_build_process_names(self):
+        """The example parses and lists cl.exe in buildProcessNames."""
+        import tomllib
+        path = Path(__file__).resolve().parent.parent / "examples" / "project.example.toml"
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["buildProcessNames"], ["cl.exe"])
+
+
 if __name__ == "__main__":
     unittest.main()

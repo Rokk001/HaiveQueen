@@ -197,5 +197,32 @@ class TestRealWindowsOrLinux(unittest.TestCase):
         self.assertGreaterEqual(osplat.count_processes([name]), 1)
 
 
+class TestNetworkPath(unittest.TestCase):
+    """Detection of network drives (C3): stubbed system values for both systems."""
+
+    def test_windows_unc_and_drive_types(self):
+        """A UNC path is a network path; a drive letter depends on the drive type (4 = remote)."""
+        bs = chr(92)
+        self.assertTrue(osplat._win_is_network(bs * 2 + "server" + bs + "share" + bs + "db"))
+        self.assertTrue(osplat._win_is_network(bs * 2 + "?" + bs + "UNC" + bs + "server" + bs + "share" + bs + "db"))
+        self.assertTrue(osplat._win_is_network("Z:" + bs + "data", drive_type=4))
+        self.assertFalse(osplat._win_is_network("C:" + bs + "data", drive_type=3))
+
+    def test_linux_mount_table(self):
+        """The longest mount point decides; nfs/cifs are network, ext4 and the root are not."""
+        mounts = chr(10).join(["/dev/sda1 / ext4 rw 0 0", "srv:/x /mnt/nas nfs4 rw 0 0", "//h/s /mnt/win cifs rw 0 0",
+                               "/dev/sdb /mnt/nas/local ext4 rw 0 0"])
+        self.assertTrue(osplat._linux_is_network("/mnt/nas/db", mounts))
+        self.assertTrue(osplat._linux_is_network("/mnt/win/a/b", mounts))
+        self.assertFalse(osplat._linux_is_network("/mnt/nas/local/db", mounts))
+        self.assertFalse(osplat._linux_is_network("/home/me/db", mounts))
+        self.assertFalse(osplat._linux_is_network("/mnt/nasty/db", mounts))
+
+    def test_local_temp_folder_is_not_network(self):
+        """The temp folder of the test machine is a local disk."""
+        import tempfile
+        self.assertFalse(osplat.is_network_path(tempfile.gettempdir()))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -146,5 +146,19 @@ class OpenNewDatabaseTest(unittest.TestCase):
         self.assertEqual(failed, [])
 
 
+
+
+class NetworkDriveTest(unittest.TestCase):
+    """The database refuses a path on a network drive (C3)."""
+
+    def test_connect_refuses_network_path(self):
+        """connect() raises before it creates any file when the path is on a network drive."""
+        from unittest import mock
+        with mock.patch.object(db.osplat, "is_network_path", return_value=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                db.connect("/never/created/orchestrator.db")
+        self.assertIn("network drive", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

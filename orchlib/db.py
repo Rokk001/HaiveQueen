@@ -6,6 +6,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from . import platform as osplat
+
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
 SCHEMA_VERSION = 3
 BUSY_TIMEOUT_MS = 10000
@@ -36,8 +38,10 @@ def now() -> str:
 
 
 def connect(path) -> sqlite3.Connection:
-    """Open the database (creating folder and schema if needed) with WAL and busy_timeout set; safe when many processes open a new database at once."""
+    """Open the database (creating folder and schema if needed) with WAL and busy_timeout set; refuses a path on a network drive; safe when many processes open a new database at once."""
     p = Path(path)
+    if osplat.is_network_path(p.absolute()):
+        raise RuntimeError("the database must not be on a network drive (SQLite WAL needs a local disk): %s" % p)
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p), timeout=BUSY_TIMEOUT_MS / 1000, isolation_level=None)
     conn.row_factory = sqlite3.Row

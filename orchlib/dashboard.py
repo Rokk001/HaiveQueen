@@ -359,6 +359,8 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
 def live_sysinfo(conn, project=None) -> dict:
     """Read the live system values: cores, free and total RAM in MB, host name and running compiler processes
     (names from buildProcessNames of the project.toml of the shown projects; none = no count)."""
+    if os.environ.get("ORCH_DASH_SYSINFO"):   # fixed values for the demo picture and tests
+        return json.loads(os.environ["ORCH_DASH_SYSINFO"])
     names = []
     rows = conn.execute("SELECT name, workspace FROM projects" + (" WHERE name=?" if project else ""),
                         (project,) if project else ()).fetchall()

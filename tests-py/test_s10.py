@@ -107,5 +107,16 @@ class S10Test(RoundCase):
         self.assertEqual(len(runtime.kv_list(self.conn, "testproj", "lock:")), 1)
 
 
+class LockQuestionWordsTest(unittest.TestCase):
+    """The words that mark a question as a package lock match whole words only."""
+
+    def test_locked_is_matched_as_a_word(self):
+        """"locked" and "gesperrt" match; "unlocked" does not."""
+        from orchlib import routine
+        self.assertTrue(routine.LOCK_QUESTION_WORDS.search("package is locked after two reviews"))
+        self.assertTrue(routine.LOCK_QUESTION_WORDS.search("Paket gesperrt"))
+        self.assertFalse(routine.LOCK_QUESTION_WORDS.search("the door is unlocked"))
+
+
 if __name__ == "__main__":
     unittest.main()

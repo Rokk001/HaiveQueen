@@ -7,6 +7,7 @@ import csv
 import ctypes
 import io
 import os
+import posixpath
 import signal
 import socket
 import subprocess
@@ -234,6 +235,56 @@ def list_processes(names) -> list:
 def count_processes(names) -> int:
     """Return how many running processes match the names (see list_processes)."""
     return len(list_processes(names))
+
+
+# ---------------------------------------------------------------- network drives (C3)
+
+DRIVE_REMOTE = 4   # GetDriveTypeW result for a network drive
+NETWORK_FS = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "afs", "ncpfs", "ceph", "glusterfs", "sshfs", "fuse.sshfs"}
+
+
+def _win_is_network(path: str, drive_type=None) -> bool:
+    """Windows: a UNC path or a drive letter that maps to a network share; `drive_type` replaces the system call (tests)."""
+    text = os.path.abspath(path)
+    if text.startswith("\\\\?\\UNC\\"):
+        return True
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    drive = os.path.splitdrive(text)[0]
+    if drive.startswith("\\\\"):
+        return True
+    if not drive:
+        return False
+    kind = drive_type if drive_type is not None else ctypes.windll.kernel32.GetDriveTypeW(drive + "\\")
+    return kind == DRIVE_REMOTE
+
+
+def _linux_is_network(path: str, mounts: str = None) -> bool:
+    """Linux: the longest mount point that contains the path has a network file system type; `mounts` replaces /proc/mounts (tests)."""
+    if mounts is None:
+        try:
+            with open("/proc/mounts", encoding="utf-8", errors="replace") as handle:
+                mounts = handle.read()
+        except OSError:
+            return False
+    target = posixpath.abspath(path)
+    best, best_type = "", ""
+    for line in mounts.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        point = parts[1].replace("\\040", " ")
+        if (target == point or target.startswith(point.rstrip("/") + "/")) and len(point) >= len(best):
+            best, best_type = point, parts[2]
+    return best_type in NETWORK_FS
+
+
+def is_network_path(path) -> bool:
+    """Return whether the path lies on a network drive (SQLite WAL does not work reliably there, C3)."""
+    try:
+        return _win_is_network(str(path)) if is_windows() else _linux_is_network(str(path))
+    except (OSError, AttributeError):
+        return False
 
 
 # ---------------------------------------------------------------- folders (D3)
