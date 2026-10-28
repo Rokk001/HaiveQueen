@@ -28,6 +28,7 @@ TOOL_ROOT = Path(__file__).resolve().parent.parent
 CLASSES = ("light", "medium", "heavy")
 CONTEXT_LIMIT = 300000   # context size at which the HANDOFF flag file is written (rule 13)
 MS_COLOURS = ("White", "Green", "Red", "Cyan", "Yellow", "Gray")
+DEFAULT_STALL_SECONDS = 3600   # an agent that prints nothing for this long is ended (config.toml agentStallSeconds, 0 = off)
 
 
 # ---------------------------------------------------------------- small text helpers
@@ -206,6 +207,19 @@ def sampler_loop(path, process_names, stop, seconds):
             pass
         if stop.wait(seconds):
             break
+
+
+def stall_watch(proc, last_output, limit, stalled, stop):
+    """End the agent process tree when it printed nothing for `limit` seconds; `last_output[0]` is the monotonic time of its last line.
+
+    Sets `stalled` before it ends the tree, so the caller can tell a stall from a normal end. Stops when `stop` is set.
+    """
+    poll = min(5.0, max(0.2, limit / 4.0))
+    while not stop.wait(poll):
+        if time.monotonic() - last_output[0] > limit:
+            stalled.set()
+            osplat.kill_process_tree(proc.pid)
+            return
 
 
 # ---------------------------------------------------------------- rule file of a phase
@@ -659,6 +673,8 @@ def run_agent(a, out=None):
         run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
 
     code = 0
+    stalled = threading.Event()
+    stall_limit = float(cfg.get("agentStallSeconds", DEFAULT_STALL_SECONDS) or 0)
     try:
         if os.environ.get("ORCH_FAKE_AGENT"):   # tests only: no model call, a few milestones and token numbers so the pane layout can be checked
             delay = float(os.environ.get("ORCH_FAKE_DELAY") or 3)
@@ -674,8 +690,13 @@ def run_agent(a, out=None):
             cmd = shutil.which(prov["command"]) or prov["command"]
             argv = [cmd, "-p", prompt] + arg_list if protocol == "claude" else [cmd] + arg_list + [prompt]
             with open(str(err_file), "wb") as err, open(str(events_file), "ab") as raw:
-                proc = subprocess.Popen(argv, cwd=a.cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
+                group = {} if osplat.is_windows() else {"start_new_session": True}   # own process group so a stall can end the whole tree
+                proc = subprocess.Popen(argv, cwd=a.cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err, **group)
+                last_output, watch_stop = [time.monotonic()], threading.Event()
+                if stall_limit > 0:
+                    threading.Thread(target=stall_watch, daemon=True, args=(proc, last_output, stall_limit, stalled, watch_stop)).start()
                 for bline in proc.stdout:
+                    last_output[0] = time.monotonic()
                     line = bline.decode("utf-8", errors="replace").rstrip("\r\n")
                     raw.write((line + "\n").encode("utf-8"))
                     raw.flush()
@@ -686,6 +707,10 @@ def run_agent(a, out=None):
                     if isinstance(e, dict):
                         run.handle_event(e)
                 code = proc.wait()
+                watch_stop.set()
+                if stalled.is_set() and not run.ok:
+                    run.last = "error: agent stalled, no output for %d s, ended" % stall_limit
+                    run.say(run.last, "Red")
     except Exception as exc:
         code = 99
         run.last = "runner error: " + str(exc)

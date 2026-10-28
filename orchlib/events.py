@@ -5,10 +5,10 @@ answered. No event, no call. A failed call is logged in the events log and repea
 it never stops the loop and costs no tokens. The hook state (seen keys and pending events) lives in the kv key `event-sync`.
 """
 import json
-import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from . import platform as osplat
 from . import runtime
 
 STATE_KEY = "event-sync"
@@ -17,11 +17,9 @@ STATE_KEY = "event-sync"
 def run_command(argv: list, work_dir, timeout: int) -> dict:
     """Run a program with UTF-8 output and a timeout; returns {ExitCode, StdOut, StdErr, TimedOut} (a missing program gives exit 127)."""
     try:
-        r = subprocess.run(argv, cwd=str(work_dir), stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
-        return {"ExitCode": r.returncode, "StdOut": r.stdout.decode("utf-8", "replace"),
-                "StdErr": r.stderr.decode("utf-8", "replace"), "TimedOut": False}
-    except subprocess.TimeoutExpired as exc:
-        return {"ExitCode": -1, "StdOut": "", "StdErr": (exc.stderr or b"").decode("utf-8", "replace"), "TimedOut": True}
+        code, out, err, timed_out = osplat.run_with_timeout(argv, timeout, cwd=str(work_dir))   # a timeout ends the whole process tree
+        return {"ExitCode": code, "StdOut": out.decode("utf-8", "replace"),
+                "StdErr": err.decode("utf-8", "replace"), "TimedOut": timed_out}
     except OSError as exc:
         return {"ExitCode": 127, "StdOut": "", "StdErr": str(exc), "TimedOut": False}
 

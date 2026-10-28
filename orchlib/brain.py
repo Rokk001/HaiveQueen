@@ -6,11 +6,11 @@ records the call as a usage row of kind `brain`.
 """
 import json
 import shutil
-import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
 
+from . import platform as osplat
 from . import runtime
 from . import scheduler as sch
 
@@ -130,10 +130,8 @@ def ask(env, delta: dict, new_plan: bool, tools_dir=None, runner=None) -> dict:
 def _run(argv, prompt, cwd, timeout):
     """Run the brain program with the prompt on stdin; returns (exit code, stdout, stderr, timed_out)."""
     try:
-        r = subprocess.run(argv, input=prompt.encode("utf-8"), cwd=cwd, capture_output=True, timeout=timeout)
-        return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace"), False
-    except subprocess.TimeoutExpired as exc:
-        return -1, "", (exc.stderr or b"").decode("utf-8", "replace"), True
+        code, out, err, timed_out = osplat.run_with_timeout(argv, timeout, cwd=cwd, input_bytes=prompt.encode("utf-8"))   # a timeout ends the whole process tree
+        return code, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"), timed_out
     except OSError as exc:
         return 127, "", str(exc), False
 

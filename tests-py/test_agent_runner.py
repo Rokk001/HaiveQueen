@@ -21,6 +21,9 @@ with open(os.environ["FAKE_RECORD"], "w", encoding="utf-8") as f:
 with open(os.environ["FAKE_STREAM"], encoding="utf-8") as f:
     sys.stdout.write(f.read())
 sys.stdout.flush()
+if os.environ.get("FAKE_HANG"):
+    import time
+    time.sleep(float(os.environ["FAKE_HANG"]))
 sys.stderr.write("fake stderr line\\n")
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 '''

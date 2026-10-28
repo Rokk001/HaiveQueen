@@ -33,7 +33,7 @@ What the runner must do for the loop:
 
 Provided by S13 for S14, S15 and S16: `scheduler.model_label/model_short/model_long/format_tokens/class_model/claude_usage/codex_usage`,
 `buildjobs.jobs_line(env, agents)` (dashboard text), `loop.read_state(conn)` (loop-state: status brain, round or idle, since, nextAt), `brain.totals(conn)`,
-`runstate` (S6b), `loop.stop_flag()`. Not provided (S14): phase rule files (`Write-PhaseRules`), `Update-AgentRetry`, header, milestones.
+`runstate` (S6b), `loop.stop_flag()`. Provided by S14 (`agent_runner.py`, `header.py`): phase rule files (`write_phase_rules`), `Update-AgentRetry` (`AgentRun.set_agent_retry`), header, milestones.
 
 The dashboard pane (S15) is opened by `orch start` when the module `orchlib.dashboard` exists, with the same bootstrap and `main(argv)`.
 

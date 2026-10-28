@@ -187,6 +187,28 @@ def kill_process_tree(pid) -> bool:
         return False
 
 
+def run_with_timeout(argv: list, timeout: float, cwd=None, input_bytes=None, env=None) -> tuple:
+    """Run a program and end it WITH ALL ITS CHILDREN when it does not finish within `timeout` seconds.
+
+    Returns (exit code, stdout bytes, stderr bytes, timed_out). A plain subprocess.run timeout only ends the direct child, a
+    grandchild that keeps the pipes open would hang the caller; here the whole tree is ended. A missing program raises OSError.
+    """
+    kwargs = {} if is_windows() else {"start_new_session": True}
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+    try:
+        out, err = proc.communicate(input_bytes, timeout=timeout)
+        return proc.returncode, out, err, False
+    except subprocess.TimeoutExpired:
+        kill_process_tree(proc.pid)
+        try:
+            out, err = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = b"", b""
+        return -1, out or b"", err or b"", True
+
+
 def _win_process_list() -> list:
     """Windows: all (pid, image name) pairs from `tasklist /FO CSV /NH`."""
     result = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=30)

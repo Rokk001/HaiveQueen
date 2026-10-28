@@ -21,3 +21,6 @@ window.txt
 step*/
 *-scratch/
 tokentest.log
+
+# Python bytecode
+__pycache__/
