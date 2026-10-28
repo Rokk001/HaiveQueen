@@ -6,6 +6,7 @@ is not affected because imports in this package are absolute.
 import csv
 import ctypes
 import io
+import ntpath
 import os
 import posixpath
 import signal
@@ -245,12 +246,12 @@ NETWORK_FS = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "afs", "ncpfs", "ceph", "g
 
 def _win_is_network(path: str, drive_type=None) -> bool:
     """Windows: a UNC path or a drive letter that maps to a network share; `drive_type` replaces the system call (tests)."""
-    text = os.path.abspath(path)
+    text = ntpath.abspath(path)
     if text.startswith("\\\\?\\UNC\\"):
         return True
     if text.startswith("\\\\?\\"):
         text = text[4:]
-    drive = os.path.splitdrive(text)[0]
+    drive = ntpath.splitdrive(text)[0]
     if drive.startswith("\\\\"):
         return True
     if not drive:
