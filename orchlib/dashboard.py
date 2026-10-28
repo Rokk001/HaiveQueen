@@ -33,8 +33,8 @@ COLOURS = {
 }
 RUN_STATE_COLOUR = {"RUNNING": "green", "PAUSED": "yellow", "DRAINING": "darkyellow", "DRAINED": "red"}
 PHASE_SYMBOL = {"work": "✎", "verify": "⚲", "release": "⇪", "integrate": "⛁"}
-STATUS_SYMBOL = {"running": "►", "starting": "◌", "done": "✓", "failed": "✗"}
-STATUS_COLOUR = {"done": "green", "running": "yellow", "starting": "yellow", "failed": "red"}
+STATUS_SYMBOL = {"running": "►", "starting": "◌", "done": "✓", "failed": "✗", "stalled": "⚠"}
+STATUS_COLOUR = {"done": "green", "running": "yellow", "starting": "yellow", "failed": "red", "stalled": "red"}
 PLAN_BADGES = (("DRAFT", "gray"), ("READY", "cyan"), ("IN_PROGRESS", "yellow"), ("DONE", "green"), ("PAUSED", "darkgray"))
 
 
@@ -442,6 +442,8 @@ def build_lines(level, d, w, n_fin) -> list:
     def agent(a):
         """One agent in the three-line format of the pane header, with project name and colour (D4)."""
         st = str(a["status"])
+        if st == "running" and a.get("stalledAt"):
+            st = "stalled"   # still running, but silent for longer than agentStallSeconds
         start, end = _parse_time(a.get("started_at")), _parse_time(a.get("ended_at"))
         rt = ""
         if start:

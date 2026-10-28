@@ -4,25 +4,33 @@ Mutex (v1: one process holds the agents lock, a second one must give up instead 
   v2: several processes write into the same database at once without losing or breaking state; a writer blocked by another
   process gives up after the busy timeout; a test runtime never touches the live database.
 Time limit (v1: a stuck test or command is ended after the limit, the whole process tree):
-  v2: a hanging command (event hook, brain) is ended after its timeout with its whole process tree; a hanging agent is ended
-  after the stall limit and its row ends as failed; an agent row never stays on running when the database write fails.
+  v2: a hanging command (event hook, brain) is ended after its timeout with its whole process tree; a silent agent is never ended
+  (running agents are not touched): after the stall limit its row only gets the stalled mark, shown in the dashboard and the status
+  output, with one event; an agent row never stays on running when the database write fails.
 """
+import argparse
+import contextlib
+import io
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import orch  # noqa: E402
 from orchlib import agent_runner as ar  # noqa: E402
-from orchlib import brain, db, events, runtime  # noqa: E402
+from orchlib import brain, dashboard, db, events, runtime  # noqa: E402
 from orchlib import platform as osplat  # noqa: E402
-from test_agent_runner import RunnerBase  # noqa: E402
+from test_agent_runner import RunnerBase, claude_stream  # noqa: E402
+from test_dashboard import SYS  # noqa: E402
 
 WRITER = '''import sys
 sys.path.insert(0, sys.argv[1])
@@ -157,27 +165,49 @@ class CommandTimeoutTest(unittest.TestCase):
 class StallTest(RunnerBase):
     """A hanging agent (alive but silent) is ended after the stall limit."""
 
-    def test_silent_agent_is_ended_and_failed(self):
-        """The fake CLI prints the start of a stream and then hangs for 300 s: with a 4 s stall limit the runner ends it, the row is failed with the reason."""
-        self.write_config('agentStallSeconds = 4')
+    def test_silent_agent_is_marked_but_not_ended(self):
+        """The fake CLI prints its stream and then stays silent for 10 s: with a 2 s limit the row gets the stalled mark while it still runs
+        (dashboard and status show it, one event is logged); nothing is ended, the agent finishes as done and the mark is gone."""
+        self.write_config('agentStallSeconds = 2')
         self.prepare("S-1")
-        t0 = time.monotonic()
-        r = self.run_runner("S-1", "claude", '{"type": "system", "subtype": "init"}\n', env={"FAKE_HANG": "300"})
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertLess(time.monotonic() - t0, 60, "the runner waited for the hanging agent")
+        self.conn.execute("INSERT INTO packages (project, plan_path, id, title) VALUES ('demo', 'plans/Demo-PLAN.md', 'P1', 'first')")
+        result = {}
+        worker = threading.Thread(target=lambda: result.update(r=self.run_runner("S-1", "claude", claude_stream(), env={"FAKE_HANG": "10"})))
+        worker.start()
+        marked = None
+        end = time.monotonic() + 40
+        while time.monotonic() < end and marked is None:
+            row = self.row("S-1")
+            marked = row if row and row.get("stalledAt") else None
+            time.sleep(0.3)
+        try:
+            self.assertIsNotNone(marked, "the silent agent was never marked as stalled")
+            self.assertEqual(marked["status"], "running", "a stalled agent keeps running")
+            text = dashboard.render(self.conn, 120, 60, now=datetime.now(), cfg={}, sysinfo=dict(SYS), color=False)
+            self.assertIn("stalled", text)
+            info = db.project_status(self.conn, "demo")[0]
+            self.assertEqual((info["tasks"][0]["status"], info["stalled"]), ("stalled", ["S-1"]))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                orch.cmd_status(argparse.Namespace(project="demo", json=False), self.conn)
+            self.assertIn("WARNING: 1 agent(s) stalled", buf.getvalue())
+        finally:
+            worker.join(120)
+        self.assertEqual(result["r"].returncode, 0, result["r"].stderr)
         row = self.row("S-1")
-        self.assertEqual(row["status"], "failed")
-        self.assertIn("stalled", row["last_line"])
-        self.assertIn("4", row["last_line"])
+        self.assertEqual(row["status"], "done", "a stalled agent must not be failed or ended")
+        self.assertFalse(row.get("stalledAt"))
+        logged = self.conn.execute("SELECT COUNT(*) FROM events WHERE text LIKE 'S-1 stalled%'").fetchone()[0]
+        self.assertEqual(logged, 1)
 
     def test_stall_limit_off(self):
-        """agentStallSeconds = 0 switches the watch off: a slow agent that finishes by itself is still done."""
+        """agentStallSeconds = 0 switches the watch off: a slow agent is never marked."""
         self.write_config('agentStallSeconds = 0')
         self.prepare("S-2")
-        from test_agent_runner import claude_stream
         r = self.run_runner("S-2", "claude", claude_stream(), env={"FAKE_HANG": "3"})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.row("S-2")["status"], "done")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM events WHERE text LIKE '%stalled%'").fetchone()[0], 0)
 
 
 class RowNeverStaysRunningTest(unittest.TestCase):

@@ -231,16 +231,19 @@ def project_status(conn, project=None) -> list:
         pkgs = rows(conn, "SELECT * FROM packages WHERE project=? ORDER BY plan_path, id", (name,))
         for p in pkgs:
             ag = conn.execute(
-                "SELECT name, status FROM agents WHERE project=? AND plan_path=? AND package=? "
+                "SELECT name, status, extra_json FROM agents WHERE project=? AND plan_path=? AND package=? "
                 "ORDER BY id DESC LIMIT 1",
                 (name, p["plan_path"], p["id"]),
             ).fetchone()
+            is_stalled = ag is not None and ag["status"] == "running" and bool(json.loads(ag["extra_json"] or "{}").get("stalledAt"))
             merged = conn.execute(
                 "SELECT 1 FROM queue WHERE project=? AND plan_path=? AND status='integrated' LIMIT 1",
                 (name, p["plan_path"]),
             ).fetchone()
             if ag is not None and ag["status"] == "done" and merged is not None:
                 status = "integrated"
+            elif is_stalled:
+                status = "stalled"   # running, but silent for longer than agentStallSeconds
             elif ag is not None:
                 status = ag["status"] or "running"
             elif p["locked"]:
@@ -256,5 +259,6 @@ def project_status(conn, project=None) -> list:
         done = sum(1 for t in tasks if t["status"] == "integrated")
         total = len(tasks)
         result.append({"project": name, "integrated": done, "total": total,
-                       "percent": round(100 * done / total) if total else 0, "tasks": tasks})
+                       "percent": round(100 * done / total) if total else 0, "tasks": tasks,
+                       "stalled": [t["agent"] for t in tasks if t["status"] == "stalled"]})
     return result

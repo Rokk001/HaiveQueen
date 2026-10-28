@@ -28,7 +28,7 @@ TOOL_ROOT = Path(__file__).resolve().parent.parent
 CLASSES = ("light", "medium", "heavy")
 CONTEXT_LIMIT = 300000   # context size at which the HANDOFF flag file is written (rule 13)
 MS_COLOURS = ("White", "Green", "Red", "Cyan", "Yellow", "Gray")
-DEFAULT_STALL_SECONDS = 3600   # an agent that prints nothing for this long is ended (config.toml agentStallSeconds, 0 = off)
+DEFAULT_STALL_SECONDS = 3600   # an agent that prints nothing for this long is marked stalled, never ended (config.toml agentStallSeconds, 0 = off)
 
 
 # ---------------------------------------------------------------- small text helpers
@@ -209,17 +209,35 @@ def sampler_loop(path, process_names, stop, seconds):
             break
 
 
-def stall_watch(proc, last_output, limit, stalled, stop):
-    """End the agent process tree when it printed nothing for `limit` seconds; `last_output[0]` is the monotonic time of its last line.
+def stall_watch(last_output, limit, on_stall, on_resume, stop):
+    """Report an agent that printed nothing for `limit` seconds; `last_output[0]` is the monotonic time of its last line.
 
-    Sets `stalled` before it ends the tree, so the caller can tell a stall from a normal end. Stops when `stop` is set.
+    Calls `on_stall(silent seconds)` once per silent period and `on_resume()` when the agent prints again. It never ends
+    anything: a running agent is only marked. Stops when `stop` is set.
     """
     poll = min(5.0, max(0.2, limit / 4.0))
+    flagged = False
     while not stop.wait(poll):
-        if time.monotonic() - last_output[0] > limit:
-            stalled.set()
-            osplat.kill_process_tree(proc.pid)
-            return
+        silent = time.monotonic() - last_output[0]
+        if silent > limit and not flagged:
+            flagged = True
+            on_stall(int(silent))
+        elif silent <= limit and flagged:
+            flagged = False
+            on_resume()
+
+
+def set_stalled(a, value, text):
+    """Write the stalled mark (a time, or "" to clear it) into the agent's row and log one event; uses its own connection because it runs in the watch thread."""
+    try:
+        conn = db.connect(config.db_path())
+        try:
+            runtime.upsert_agent(conn, a.project, a.name, {"stalledAt": value})
+            runtime.append_event(conn, a.project, text, kind="warning", agent=a.name, mirror="rounds")
+        finally:
+            conn.close()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------- rule file of a phase
@@ -673,8 +691,16 @@ def run_agent(a, out=None):
         run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
 
     code = 0
-    stalled = threading.Event()
     stall_limit = float(cfg.get("agentStallSeconds", DEFAULT_STALL_SECONDS) or 0)
+
+    def mark_stalled(secs):
+        """Mark the running agent as stalled (row field, event, pane line); the process keeps running."""
+        set_stalled(a, db.now(), "%s stalled: no output for %d s (still running, not ended)" % (a.name, secs))
+        run.say("Stalled: no output for %d s. The agent is still running." % secs, "Yellow")
+
+    def clear_stalled():
+        """Remove the stalled mark when the agent prints again."""
+        set_stalled(a, "", "%s prints again" % a.name)
     try:
         if os.environ.get("ORCH_FAKE_AGENT"):   # tests only: no model call, a few milestones and token numbers so the pane layout can be checked
             delay = float(os.environ.get("ORCH_FAKE_DELAY") or 3)
@@ -690,11 +716,10 @@ def run_agent(a, out=None):
             cmd = shutil.which(prov["command"]) or prov["command"]
             argv = [cmd, "-p", prompt] + arg_list if protocol == "claude" else [cmd] + arg_list + [prompt]
             with open(str(err_file), "wb") as err, open(str(events_file), "ab") as raw:
-                group = {} if osplat.is_windows() else {"start_new_session": True}   # own process group so a stall can end the whole tree
-                proc = subprocess.Popen(argv, cwd=a.cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err, **group)
+                proc = subprocess.Popen(argv, cwd=a.cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
                 last_output, watch_stop = [time.monotonic()], threading.Event()
                 if stall_limit > 0:
-                    threading.Thread(target=stall_watch, daemon=True, args=(proc, last_output, stall_limit, stalled, watch_stop)).start()
+                    threading.Thread(target=stall_watch, daemon=True, args=(last_output, stall_limit, mark_stalled, clear_stalled, watch_stop)).start()
                 for bline in proc.stdout:
                     last_output[0] = time.monotonic()
                     line = bline.decode("utf-8", errors="replace").rstrip("\r\n")
@@ -708,9 +733,6 @@ def run_agent(a, out=None):
                         run.handle_event(e)
                 code = proc.wait()
                 watch_stop.set()
-                if stalled.is_set() and not run.ok:
-                    run.last = "error: agent stalled, no output for %d s, ended" % stall_limit
-                    run.say(run.last, "Red")
     except Exception as exc:
         code = 99
         run.last = "runner error: " + str(exc)
@@ -734,7 +756,7 @@ def run_agent(a, out=None):
             run.last = "no result event, exit %s %s" % (code, err_txt)
         run.last = short(run.last)
     final_file.write_text(run.final, encoding="utf-8", newline="")
-    run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx})
+    run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx})
     if run.final and short(run.final, 1500) != short(run.last_said, 1500):
         run.say("Final message: " + run.final, "Green" if status == "done" else "Red")
     run.say("End: %s (exit %s), total input %s / output %s. The section closes after the close delay." % (status, code, header.fmt_tok(run.tin), header.fmt_tok(run.tout)),

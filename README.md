@@ -111,7 +111,7 @@ Free Markdown below the header: the agents read it.
 
 ## Configuration
 
-`config.toml` (machine): `slots`, `buildJobs` (0 = automatic), `ramReserveMb`, `agentStallSeconds` (an agent that prints nothing for this long is ended and marked failed, default 3600, 0 = off), `[[providers]]` (name, protocol, command, args, slots, use = preferred | fallback | capability-only, classes, limit) and `[[projects]]`.
+`config.toml` (machine): `slots`, `buildJobs` (0 = automatic), `ramReserveMb`, `agentStallSeconds` (an agent that prints nothing for this long is only marked as stalled in its row, an event, the dashboard and `orch status`, never ended or failed; default 3600, 0 = off), `[[providers]]` (name, protocol, command, args, slots, use = preferred | fallback | capability-only, classes, limit) and `[[projects]]`.
 
 `.orchestrator/project.toml` (per project): `name`, `colour`, `priority`, `planGlobs`, `[views]` and the branch and build settings. See `examples/`.
 

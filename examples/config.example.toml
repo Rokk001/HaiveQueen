@@ -2,7 +2,7 @@
 slots = 2                 # agents running at the same time, shared by all projects
 buildJobs = 0             # 0 = choose automatically
 ramReserveMb = 2048       # RAM that must stay free
-agentStallSeconds = 3600  # an agent that prints nothing for this long is ended and marked failed (0 = off)
+agentStallSeconds = 3600  # an agent that prints nothing for this long is marked as stalled, never ended (0 = off)
 exportDir = "%LOCALAPPDATA%\\agent-orchestrator\\exports"
 
 # Providers: slots = tasks at once (shared by all projects); use = preferred | fallback | capability-only; classes = model and effort per class.

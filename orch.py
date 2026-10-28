@@ -69,6 +69,8 @@ def cmd_status(args, conn) -> int:
         print(f"{'Task':<{w1}} | {'Agent':<{w2}} | Status")
         for t in p["tasks"]:
             print(f"{t['task']:<{w1}} | {t['agent']:<{w2}} | {t['status']}")
+        if p["stalled"]:
+            print(f"WARNING: {len(p['stalled'])} agent(s) stalled (no output, still running): {', '.join(p['stalled'])}")
         print()
     return 0
 
