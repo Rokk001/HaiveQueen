@@ -43,7 +43,20 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 | `questions` | `[--project] [--open] [--status] [--plan] [--item]` | question rows |
 | `decisions list` | `[--project] [--plan] [--item]` | decision rows |
 | `decisions add` | `--project --source owner\|coordinator\|auto --text [--plan] [--item]` | `{ok, id}` |
+| `pause` / `resume` / `drain` | none | the run state `{state, since, running_agents}`; see "Run state" below |
+| `run-state` | none | `{state, since, running_agents}`; also settles a finished drain |
+| `starts-allowed` | none | `{allowed, state}`; the round asks this before every agent start |
+| `reattach` | `--project --alive-pids 123,456` | `{ok, kept, failed}`; see "Run state" below |
 | `done`, `ready`, `ask`, `note`, `answer`, `status` | see the command line help | agent and owner commands |
+
+## Run state and restart (D8)
+
+The run state is one machine-wide value: kv row with project `*`, key `run-state`, value `{"state","since"}`; it survives restarts. No row means `RUNNING`. State changes write events with project `*`.
+
+- `pause`: any state to `PAUSED`. `resume`: any state to `RUNNING`. `drain`: `RUNNING` or `PAUSED` to `DRAINING`.
+- `DRAINING` becomes `DRAINED` automatically (every `drain`, `run-state` and `starts-allowed` call settles it) as soon as no agent (any project, status `starting` or `running`, not archived) runs; exactly one `drained` event is written.
+- `starts-allowed` is true only in `RUNNING`. Running agents are never stopped.
+- `reattach --project p --alive-pids 123,456` (run once on orchestrator start): `running` rows of the project whose PID is in the list stay `running`; rows with another or no PID become `failed` (`last_line` "process gone after orchestrator restart", one `failed` event each). The real PID check stays in PowerShell.
 
 ## PowerShell wrappers (lib.ps1, block "v2 runtime wrappers")
 

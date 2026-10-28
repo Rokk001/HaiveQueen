@@ -310,3 +310,30 @@ def register(sub) -> None:
         "add": (h_decisions_add, [P, ("--source", {"required": True}), ("--text", {"required": True}),
                                   ("--plan", {}), ("--item", {})]),
     })
+    register_runstate(sub)
+
+
+def register_runstate(sub) -> None:
+    """Add pause, resume, drain, run-state, starts-allowed and reattach (run state and restart, D8)."""
+    from . import reattach, runstate
+
+    def allowed(a, c):
+        """starts-allowed: may the round start an agent now."""
+        return {"allowed": runstate.starts_allowed(c), "state": runstate.get_state(c)["state"]}
+
+    def re_attach(a, c):
+        """reattach: fail running agents whose PID is not in the given list."""
+        alive = {int(x) for x in (a.alive_pids or "").split(",") if x.strip()}
+        return reattach.reattach(c, a.project, lambda pid: pid in alive)
+
+    for name, fn, flags in (
+            ("pause", lambda a, c: runstate.pause(c), []),
+            ("resume", lambda a, c: runstate.resume(c), []),
+            ("drain", lambda a, c: runstate.drain(c), []),
+            ("run-state", lambda a, c: runstate.get_state(c), []),
+            ("starts-allowed", allowed, []),
+            ("reattach", re_attach, [P, ("--alive-pids", {"default": ""})])):
+        p = sub.add_parser(name)
+        for flag, kw in flags:
+            p.add_argument(flag, **kw)
+        p.set_defaults(fn=run(fn))
