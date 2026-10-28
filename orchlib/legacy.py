@@ -79,6 +79,17 @@ def mtime_iso(path) -> str:
     return datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="seconds")
 
 
+def local_naive(text):
+    """Turn an ISO time text with a UTC offset (v1 wrote '+01:00') into local time without offset, as the database keeps all times; other text stays as it is."""
+    try:
+        when = datetime.fromisoformat(str(text).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if when.tzinfo is None:
+        return text
+    return when.astimezone().replace(tzinfo=None).isoformat(timespec="seconds")
+
+
 # ---- runtime folder ----
 
 def int_or_none(v):
@@ -108,8 +119,11 @@ def import_agents(conn, project, path, archived, counter) -> None:
             if cols.get("plan_path"):
                 cols["plan_path"] = slash(cols["plan_path"])
             started = cols.get("started_at")
-            if conn.execute("SELECT 1 FROM agents WHERE project=? AND name=? AND started_at IS ?",
-                            (project, name, started)).fetchone():
+            for k, v in list(cols.items()):
+                if k.endswith("_at") and v:
+                    cols[k] = local_naive(v)
+            if conn.execute("SELECT 1 FROM agents WHERE project=? AND name=? AND (started_at IS ? OR started_at IS ?)",
+                            (project, name, started, cols.get("started_at"))).fetchone():
                 counter.skipped += 1
                 return
             for k in ("pid", "exit_code", "tokens_in", "tokens_out"):
