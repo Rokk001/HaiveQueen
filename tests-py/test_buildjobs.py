@@ -5,9 +5,9 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from orchtest import REL, RoundCase, runtime
-from orchlib import buildjobs as bj
-from orchlib import events
+from bzztest import REL, RoundCase, runtime
+from haivequeen import buildjobs as bj
+from haivequeen import events
 
 
 def settings(**extra):
@@ -109,7 +109,7 @@ class EventHookTest(RoundCase):
         self.round(note)
         self.assertEqual(len(self.calls()), 1, "no new event: no second call")
         runtime.queue_upsert(self.conn, "testproj", "feature/dummy", "abc123def", REL, "ready", "x")
-        from orchlib import db
+        from haivequeen import db
         qid = db.add_question(self.conn, "testproj", REL, "X1", "Which one?", "A")
         self.round(note)
         self.assertEqual(len(self.calls()), 2)

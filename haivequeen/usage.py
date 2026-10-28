@@ -19,8 +19,8 @@ import zlib
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from orchlib import platform as osplat
-from orchlib import runtime
+from haivequeen import platform as osplat
+from haivequeen import runtime
 
 GLOBAL_PROJECT = "*"        # kv project value for machine-wide state
 CLAUDE_USAGE_KEY = "usage-claude"
@@ -552,7 +552,7 @@ def start_zst_helper(root, cache_path, lock_path, python_exe: str = ""):
     if not exe or not Path(exe).is_file():
         return None
     pkg_root = str(Path(__file__).resolve().parent.parent)
-    code = "import sys; sys.path.insert(0, sys.argv[1]); from orchlib import usage; usage.zst_main(sys.argv[2:])"
+    code = "import sys; sys.path.insert(0, sys.argv[1]); from haivequeen import usage; usage.zst_main(sys.argv[2:])"
     kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     if osplat.is_windows():
         kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
@@ -802,9 +802,9 @@ def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min
     """Write Codex's 5h/7d windows from the session logs into kv (key usage-codex, same form as usage-claude); True when written.
 
     Cheap: the logs are read at most once per `min_interval` seconds per folder. Nothing is written when no window is known
-    (the old value stays). Without an explicit folder it does nothing in a test runtime (ORCH_DATA_DIR set). Only reads ~/.codex.
+    (the old value stays). Without an explicit folder it does nothing in a test runtime (BZZ_DATA_DIR set). Only reads ~/.codex.
     """
-    if codex_dir is None and os.environ.get("ORCH_DATA_DIR"):
+    if codex_dir is None and os.environ.get("BZZ_DATA_DIR"):
         return False
     root = str(Path(codex_dir) if codex_dir else codex_root())
     nowt = time.monotonic()
@@ -838,16 +838,16 @@ def get_provider_limit(conn, provider: dict, project: str = GLOBAL_PROJECT, read
 
     The source is provider['limit']['source'] (claude | codex | none). free_pct is 100 minus the used percent,
     hours the time until the reset. No source, no reading or an unknown value counts as 100 % free with a
-    reset in 168 h (coordinator value). Tests: ORCH_PROVIDER_LIMITS_FILE = {"<provider>":{"usedPercent":80,
-    "resetHours":24}}. read_pc=None reads this PC unless ORCH_DATA_DIR is set (test runtime).
+    reset in 168 h (coordinator value). Tests: BZZ_PROVIDER_LIMITS_FILE = {"<provider>":{"usedPercent":80,
+    "resetHours":24}}. read_pc=None reads this PC unless BZZ_DATA_DIR is set (test runtime).
     """
     name = provider.get("name")
     limit = provider.get("limit")
     source = limit.get("source") if isinstance(limit, dict) else limit
     used, hours, at = None, None, None
-    lf = os.environ.get("ORCH_PROVIDER_LIMITS_FILE")
+    lf = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
     if read_pc is None:
-        read_pc = not os.environ.get("ORCH_DATA_DIR")
+        read_pc = not os.environ.get("BZZ_DATA_DIR")
     if lf and Path(lf).is_file():
         t = json.loads(Path(lf).read_text(encoding="utf-8-sig"))
         if name in t:

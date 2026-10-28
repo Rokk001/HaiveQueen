@@ -9,7 +9,7 @@ from . import config
 
 KEEP = 14
 EXPORT_TIME = time(3, 30)
-NAME_RE = re.compile(r"^orchestrator-\d{4}-\d{2}-\d{2}\.db$")
+NAME_RE = re.compile(r"^(?:haivequeen|orchestrator)-\d{4}-\d{2}-\d{2}\.db$")
 
 
 def export_dir() -> Path:
@@ -20,7 +20,7 @@ def export_dir() -> Path:
 
 def export_path(day, folder=None) -> Path:
     """Return the export file path of a day (a date or datetime)."""
-    return (Path(folder) if folder else export_dir()) / f"orchestrator-{day:%Y-%m-%d}.db"
+    return (Path(folder) if folder else export_dir()) / f"haivequeen-{day:%Y-%m-%d}.db"
 
 
 def export_due(now: datetime, folder=None) -> bool:
@@ -31,8 +31,8 @@ def export_due(now: datetime, folder=None) -> bool:
 
 
 def prune(folder, keep: int = KEEP) -> list:
-    """Delete all but the newest `keep` exports (only files named orchestrator-YYYY-MM-DD.db); returns removed names."""
-    files = sorted(p for p in Path(folder).iterdir() if p.is_file() and NAME_RE.match(p.name))
+    """Delete all but the newest `keep` exports (files named haivequeen-YYYY-MM-DD.db or the old orchestrator-YYYY-MM-DD.db); returns removed names."""
+    files = sorted((p for p in Path(folder).iterdir() if p.is_file() and NAME_RE.match(p.name)), key=lambda p: p.name.split("-", 1)[1])   # oldest day first, both name patterns
     removed = files[:-keep] if keep else files
     for p in removed:
         p.unlink()

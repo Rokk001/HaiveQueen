@@ -1,4 +1,4 @@
-# Project settings: <project>\.orchestrator\project.toml
+# Project settings: <project>\.haivequeen\project.toml
 name = "example"
 colour = "cyan"
 priority = 0                      # higher gets a free slot first

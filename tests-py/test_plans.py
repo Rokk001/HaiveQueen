@@ -1,11 +1,11 @@
-"""Tests for orchlib.plans using invented plan files in a temp folder."""
+"""Tests for haivequeen.plans using invented plan files in a temp folder."""
 import os
 import sys
 import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from orchlib import plans  # noqa: E402
+from haivequeen import plans  # noqa: E402
 
 
 def plan_text(status="READY"):

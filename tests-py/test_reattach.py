@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import db, reattach  # noqa: E402
+from haivequeen import db, reattach  # noqa: E402
 
 
 class ReattachTest(unittest.TestCase):
@@ -18,7 +18,7 @@ class ReattachTest(unittest.TestCase):
     def setUp(self):
         """Create a temp database with a living, a vanished and a pid-less invented agent."""
         self.tmp = tempfile.TemporaryDirectory()
-        self.path = Path(self.tmp.name) / "data" / "orchestrator.db"
+        self.path = Path(self.tmp.name) / "data" / "haivequeen.db"
         self.conn = db.connect(self.path)
         db.add_agent(self.conn, "p", name="Live", status="running", pid=111)
         db.add_agent(self.conn, "p", name="Gone", status="running", pid=222)
@@ -48,11 +48,11 @@ class ReattachTest(unittest.TestCase):
         self.assertEqual(reattach.reattach(self.conn, "p", lambda pid: pid == 111)["failed"], [])
 
     def test_command(self):
-        """orch reattach takes the living PIDs from --alive-pids."""
+        """bzz reattach takes the living PIDs from --alive-pids."""
         self.conn.close()
-        env = dict(os.environ, ORCH_CONFIG_DIR=str(Path(self.tmp.name) / "cfg"),
-                   ORCH_DATA_DIR=str(self.path.parent))
-        r = subprocess.run([sys.executable, "-I", str(ROOT / "orch.py"), "reattach", "--project", "p",
+        env = dict(os.environ, BZZ_CONFIG_DIR=str(Path(self.tmp.name) / "cfg"),
+                   BZZ_DATA_DIR=str(self.path.parent))
+        r = subprocess.run([sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), "reattach", "--project", "p",
                             "--alive-pids", "111,999"], env=env, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(json.loads(r.stdout)["kept"], ["Live"])

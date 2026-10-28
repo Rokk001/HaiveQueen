@@ -1,8 +1,8 @@
 """Port of test-rule11.ps1 and test-restart.ps1 and test-fixes.ps1: rule 11, restart-safe follow-ups, slug names, blocked row without a plan."""
 import unittest
 
-from orchtest import REL, RoundCase, runtime, write_plan
-from orchlib import scheduler as sch
+from bzztest import REL, RoundCase, runtime, write_plan
+from haivequeen import scheduler as sch
 
 
 class Rule11Test(RoundCase):
@@ -38,7 +38,7 @@ class RestartTest(RoundCase):
         self.agent("TT-A1-verify", package="A1", phase="verify", started=20, ended=19, last_line="ok")
         self.finish("TT-A1-verify", "Nein, teilweise.\nOffene Anforderungen: 3")
         self.agent("TT-A2-work", package="A2", status="failed", started=10, ended=9, last_line="pane never started (no runner process)")
-        from orchlib import routine
+        from haivequeen import routine
         for restart in (1, 2):   # two "restarts": the same state gives the same result
             env = self.env()
             ctx = {"plans": [{"path": REL, "status": "IN_PROGRESS"}], "queue": [], "all_rows": [], "questions": [], "can_start_integrator": False,
@@ -66,7 +66,7 @@ class FixesTest(RoundCase):
 
     def test_prompt_template_slugs(self):
         """The main-checkout template carries the slug folder and sub-branch names."""
-        from orchlib import routine
+        from haivequeen import routine
         env = self.env()
         slug = sch.to_slug("R4 experience, arena, prison")
         text = routine.prompt(env, "workInMainCheckout", {"cwd": str(self.repo), "newWorktree": "x/proj-dummy-" + slug, "subBranch": "dummy-" + slug})

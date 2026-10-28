@@ -1,4 +1,4 @@
-"""Tests for orchlib.platform: stubbed branches for both systems plus real calls on the current machine."""
+"""Tests for haivequeen.platform: stubbed branches for both systems plus real calls on the current machine."""
 import subprocess
 import sys
 import unittest
@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from orchlib import platform as osplat  # noqa: E402
+from haivequeen import platform as osplat  # noqa: E402
 
 
 class TestStandardModule(unittest.TestCase):
@@ -20,39 +20,39 @@ class TestStandardModule(unittest.TestCase):
 class TestPaths(unittest.TestCase):
     def test_windows_branch(self):
         env = {"APPDATA": "/r/roam", "LOCALAPPDATA": "/r/local"}
-        self.assertEqual(osplat.config_dir("windows", env), Path("/r/roam/agent-orchestrator"))
-        self.assertEqual(osplat.data_dir("windows", env), Path("/r/local/agent-orchestrator"))
+        self.assertEqual(osplat.config_dir("windows", env), Path("/r/roam/HaiveQueen"))
+        self.assertEqual(osplat.data_dir("windows", env), Path("/r/local/HaiveQueen"))
 
     def test_windows_fallback_home(self):
-        self.assertEqual(osplat.config_dir("windows", {}, "/h"), Path("/h/AppData/Roaming/agent-orchestrator"))
-        self.assertEqual(osplat.data_dir("windows", {}, "/h"), Path("/h/AppData/Local/agent-orchestrator"))
+        self.assertEqual(osplat.config_dir("windows", {}, "/h"), Path("/h/AppData/Roaming/HaiveQueen"))
+        self.assertEqual(osplat.data_dir("windows", {}, "/h"), Path("/h/AppData/Local/HaiveQueen"))
 
     def test_linux_xdg(self):
         env = {"XDG_CONFIG_HOME": "/x/c", "XDG_DATA_HOME": "/x/d", "APPDATA": "/ignored"}
-        self.assertEqual(osplat.config_dir("linux", env), Path("/x/c/agent-orchestrator"))
-        self.assertEqual(osplat.data_dir("linux", env), Path("/x/d/agent-orchestrator"))
+        self.assertEqual(osplat.config_dir("linux", env), Path("/x/c/HaiveQueen"))
+        self.assertEqual(osplat.data_dir("linux", env), Path("/x/d/HaiveQueen"))
 
     def test_linux_defaults(self):
-        self.assertEqual(osplat.config_dir("linux", {}, "/h"), Path("/h/.config/agent-orchestrator"))
-        self.assertEqual(osplat.data_dir("linux", {}, "/h"), Path("/h/.local/share/agent-orchestrator"))
+        self.assertEqual(osplat.config_dir("linux", {}, "/h"), Path("/h/.config/HaiveQueen"))
+        self.assertEqual(osplat.data_dir("linux", {}, "/h"), Path("/h/.local/share/HaiveQueen"))
 
     def test_override_wins_on_both(self):
-        env = {"ORCH_CONFIG_DIR": "/o/c", "ORCH_DATA_DIR": "/o/d", "APPDATA": "/a", "XDG_DATA_HOME": "/x"}
+        env = {"BZZ_CONFIG_DIR": "/o/c", "BZZ_DATA_DIR": "/o/d", "APPDATA": "/a", "XDG_DATA_HOME": "/x"}
         for system in ("windows", "linux"):
             self.assertEqual(osplat.config_dir(system, env), Path("/o/c"))
             self.assertEqual(osplat.data_dir(system, env), Path("/o/d"))
 
     def test_subfolders(self):
-        env = {"ORCH_DATA_DIR": "/o/d"}
+        env = {"BZZ_DATA_DIR": "/o/d"}
         self.assertEqual(osplat.logs_dir(system="linux", env=env), Path("/o/d/logs"))
         self.assertEqual(osplat.exports_dir(system="linux", env=env), Path("/o/d/exports"))
         self.assertEqual(osplat.runs_dir(system="linux", env=env), Path("/o/d/runs"))
 
     def test_config_module_uses_platform(self):
-        from orchlib import config
-        with mock.patch.dict("os.environ", {"ORCH_DATA_DIR": "dx"}):
+        from haivequeen import config
+        with mock.patch.dict("os.environ", {"BZZ_DATA_DIR": "dx"}):
             self.assertEqual(config.data_dir(), Path("dx"))
-            self.assertEqual(config.db_path(), Path("dx") / "orchestrator.db")
+            self.assertEqual(config.db_path(), Path("dx") / "haivequeen.db")
 
 
 class TestFlags(unittest.TestCase):

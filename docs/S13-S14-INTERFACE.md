@@ -1,11 +1,11 @@
 # Interface between the loop (S13) and the agent process (S14)
 
-The loop starts every agent through the terminal interface (`orchlib.terminal`). The pane runs
+The loop starts every agent through the terminal interface (`haivequeen.terminal`). The pane runs
 
     python -c "<bootstrap>" <tools folder> --project P --name N --provider PR --protocol claude|codex --plan PLAN --package PKG --phase PHASE --cwd DIR --prompt-file FILE [--env NAME=VALUE ...]
 
-The bootstrap puts the tools folder on `sys.path` and calls `orchlib.agent_runner.main(argv)` with everything after the tools folder, so it works from any
-folder (the same as `python -m orchlib.agent_runner ...` run from the tools folder). `main(argv=None) -> int` should parse the arguments with argparse.
+The bootstrap puts the tools folder on `sys.path` and calls `haivequeen.agent_runner.main(argv)` with everything after the tools folder, so it works from any
+folder (the same as `python -m haivequeen.agent_runner ...` run from the tools folder). `main(argv=None) -> int` should parse the arguments with argparse.
 `loop.runner_argv(env, spec)` builds this command line; tests replace it.
 
 | Argument | Meaning |
@@ -14,7 +14,7 @@ folder (the same as `python -m orchlib.agent_runner ...` run from the tools fold
 | `--provider`, `--protocol` | provider entry name and its protocol (claude or codex) |
 | `--plan`, `--package`, `--phase` | plan path (relative to the workspace), package id (`ALL`, `REL`, `INT-...`, `Q-...`, `FIX-...` possible), phase work, verify, release, integrate or triage |
 | `--cwd`, `--prompt-file` | working folder; prompt file (UTF-8) in the run folder |
-| `--env NAME=VALUE` | repeatable; set in `os.environ` first (test and folder overrides: ORCH_DATA_DIR, ORCH_CONFIG_DIR, ORCH_LOG_DIR, ORCH_RUNTIME_OVERRIDE, ORCH_HOST, ORCH_FAKE_AGENT, ORCH_SAMPLE_SEC) |
+| `--env NAME=VALUE` | repeatable; set in `os.environ` first (test and folder overrides: BZZ_DATA_DIR, BZZ_CONFIG_DIR, BZZ_LOG_DIR, BZZ_RUNTIME_OVERRIDE, BZZ_HOST, BZZ_FAKE_AGENT, BZZ_SAMPLE_SEC) |
 
 What the loop has already written into the agent row before the pane opens (read model, effort, command and args from the provider entry of the settings):
 `status` starting, `type` (protocol), `provider`, `plan_path`, `package`, `phase`, `cwd`, `class`, `model`, `effort`, `modelShort`, `person`, `color`, `task`,
@@ -28,14 +28,14 @@ What the runner must do for the loop:
   reads the LAST line `Offene Anforderungen: N`), `HANDOFF`, `milestones.txt`, `events.jsonl`, `stderr.txt`, `build-samples.txt`.
 - End with status `done` or `failed`, `ended_at`, `exit_code`, `tokens_in`, `tokens_out`, `last_line`.
 - Build jobs for phases integrate and release: `buildjobs.plan_build(env)` gives `{Jobs, Why, EnvVar, FreeMB}` (set the env var, start the sampler
-  `python -m orchlib.buildjobs sample --parent-pid N --out build-samples.txt`), at the end `buildjobs.complete_measure(env, name, jobs, start_free_mb, sample_file, started)`.
+  `python -m haivequeen.buildjobs sample --parent-pid N --out build-samples.txt`), at the end `buildjobs.complete_measure(env, name, jobs, start_free_mb, sample_file, started)`.
 - Claude rate-limit events: `scheduler.save_claude_usage(conn, event)` (global kv key `usage-claude`; the weekly-limit selection reads it).
 
 Provided by S13 for S14, S15 and S16: `scheduler.model_label/model_short/model_long/format_tokens/class_model/claude_usage/codex_usage`,
 `buildjobs.jobs_line(env, agents)` (dashboard text), `loop.read_state(conn)` (loop-state: status brain, round or idle, since, nextAt), `brain.totals(conn)`,
 `runstate` (S6b), `loop.stop_flag()`. Provided by S14 (`agent_runner.py`, `header.py`): phase rule files (`write_phase_rules`), `Update-AgentRetry` (`AgentRun.set_agent_retry`), header, milestones.
 
-The dashboard pane (S15) is opened by `orch start` when the module `orchlib.dashboard` exists, with the same bootstrap and `main(argv)`.
+The dashboard pane (S15) is opened by `bzz start` when the module `haivequeen.dashboard` exists, with the same bootstrap and `main(argv)`.
 
 
 ---
@@ -44,13 +44,13 @@ The dashboard pane (S15) is opened by `orch start` when the module `orchlib.dash
 
 
 The scheduler writes the agent row, then opens a pane whose command is the agent runner. The runner needs the tool folder on
-`PYTHONPATH` (or as working directory), because `-m orchlib...` does not work with `python -I`; the runner sets `PYTHONPATH` itself
+`PYTHONPATH` (or as working directory), because `-m haivequeen...` does not work with `python -I`; the runner sets `PYTHONPATH` itself
 for its own children (header process, wrapper child).
 
 ## Command line
 
 ```
-python -m orchlib.agent_runner [--wrap] --project P --name N --provider NAME --cwd DIR --prompt-file FILE
+python -m haivequeen.agent_runner [--wrap] --project P --name N --provider NAME --cwd DIR --prompt-file FILE
        [--plan PATH] [--package ID] [--phase work|verify|release|integrate] [--runs-dir DIR] [--model M] [--effort E]
 ```
 
@@ -71,7 +71,7 @@ The exit code of the runner is 0 (the result is the row status `done` or `failed
 ## What the scheduler writes before the start (row in `agents`)
 
 `class` (light/medium/heavy, default medium), `person`, `color`, optionally `modelShort` and `task` (the runner fills `modelShort` and `task` when they are missing), `status` `starting`.
-Environment: `ORCH_DATA_DIR` / `ORCH_CONFIG_DIR` as for every orchlib process. `ORCH_NO_HEADER=1` suppresses the header process (the runner also skips it when its stdout is not a terminal).
+Environment: `BZZ_DATA_DIR` / `BZZ_CONFIG_DIR` as for every haivequeen process. `BZZ_NO_HEADER=1` suppresses the header process (the runner also skips it when its stdout is not a terminal).
 
 ## What the runner writes
 
@@ -83,7 +83,7 @@ Environment: `ORCH_DATA_DIR` / `ORCH_CONFIG_DIR` as for every orchlib process. `
 
 ## Build jobs
 
-`config.toml` `buildJobs`: a number above 0 is a fixed job count, 0 is automatic, a table `[buildJobs]` may set `envVar` (default `BUILD_JOBS`), `coreShare`, `reserveMB`, `perJobMB`, `firstJobs`, `fixed`. For phases `integrate` and `release` the runner sets the variable in the agent's environment, samples free RAM and compiler processes (`buildProcessNames` of project.toml) every 10 s (`ORCH_SAMPLE_SEC`) and stores the measurement at the end. The count logic is also in `orchlib/agent_runner.py` (`build_job_count`); it may be replaced by `orchlib.buildjobs` after the merge of S13.
+`config.toml` `buildJobs`: a number above 0 is a fixed job count, 0 is automatic, a table `[buildJobs]` may set `envVar` (default `BUILD_JOBS`), `coreShare`, `reserveMB`, `perJobMB`, `firstJobs`, `fixed`. For phases `integrate` and `release` the runner sets the variable in the agent's environment, samples free RAM and compiler processes (`buildProcessNames` of project.toml) every 10 s (`BZZ_SAMPLE_SEC`) and stores the measurement at the end. The count logic is also in `haivequeen/agent_runner.py` (`build_job_count`); it may be replaced by `haivequeen.buildjobs` after the merge of S13.
 
 ## Phase rules
 

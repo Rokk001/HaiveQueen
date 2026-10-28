@@ -22,15 +22,15 @@ ACTIVE = ("running", "starting")
 # Prompt templates of the agents the routine starts itself (placeholders {name}, see expand_template). A project may replace any of them
 # in the [prompts] table of its project.toml.
 DEFAULT_PROMPTS = {
-    "fixBlocked": "Plan: {plan}. The integrator blocked branch {branch} (tip {tip}). Fix exactly what the queue row says (integration queue of project {project}, row of {branch}): {status} Work in the worktree {cwd} on that branch, run {compileCheck} until exit 0 and the check scripts of the changed files, push normally and register the branch again with orch ready (new tip, note 'Kompiliertest: Exit 0'). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the fix is finished.",
-    "fixBlockedNoPlan": "The integrator blocked branch {branch} (tip {tip}) and the queue row has no plan. The row says: {status} The main checkout ({cwd}) stays on {integrationBranch} and is never edited: create your own worktree for that branch next to it ({newWorktree}), fix exactly what the row says, run {compileCheck} until exit 0 and the check scripts of the changed files, push normally and register the branch again with orch ready (new tip, note 'Kompiliertest: Exit 0'). Follow all rules in section 1 of AGENT-RULES.md, end when the fix is finished.",
+    "fixBlocked": "Plan: {plan}. The integrator blocked branch {branch} (tip {tip}). Fix exactly what the queue row says (integration queue of project {project}, row of {branch}): {status} Work in the worktree {cwd} on that branch, run {compileCheck} until exit 0 and the check scripts of the changed files, push normally and register the branch again with bzz ready (new tip, note 'Kompiliertest: Exit 0'). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the fix is finished.",
+    "fixBlockedNoPlan": "The integrator blocked branch {branch} (tip {tip}) and the queue row has no plan. The row says: {status} The main checkout ({cwd}) stays on {integrationBranch} and is never edited: create your own worktree for that branch next to it ({newWorktree}), fix exactly what the row says, run {compileCheck} until exit 0 and the check scripts of the changed files, push normally and register the branch again with bzz ready (new tip, note 'Kompiliertest: Exit 0'). Follow all rules in section 1 of AGENT-RULES.md, end when the fix is finished.",
     "answeredQuestion": "Plan: {plan}, item {item} (question {qid}). {owner} answered: {answer} Implement exactly this answer in the worktree {cwd} on the branch the plan names for this item (never invent one). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the item is finished.",
     "verifyOpenWork": "Plan: {plan}, package {pkg}. The independent verification {verifier} answered that requirements are open (answer: {answerPath}). Implement exactly the open requirements it lists, nothing else, and nothing the plan leaves to {owner}. Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state with evidence per requirement, end when all of them are done.",
     "restartWork": "Plan: {plan}, package {pkg}. The previous work agent {previous} never got a pane (technical failure of the window); start the package again from the plan (what is already done stays done). Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the package is finished.",
     "workInMainCheckout": "The main checkout ({cwd}) stays on {integrationBranch} and is never edited. Work in your own worktree next to it ({newWorktree}) on a new sub-branch named {subBranch} of the feature branch that the plan names (create the feature branch from origin/{integrationBranch} if it does not exist, merge your sub-branch back into it locally when the package is finished).",
     "workInWorktree": "Work in the worktree {cwd} and the branch the plan names for this package (never invent them).",
-    "release": "Release of the branch of plan {plan} (worktree {cwd}): merge origin/{integrationBranch} (keep both sides of every conflict), run {compileCheck} until exit 0, run the check scripts for the changed files, push normally and register the branch with orch ready (note 'Kompiliertest: Exit 0'; {buildFlowDoc} rules 3-5). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the release is finished.",
-    "integrator": "You are the integrator. Follow {integratorInstructions} and {buildFlowDoc}: read the ready rows of the integration queue (orch queue --project {project}), merge them, one Release build, check scripts, load test, push {integrationBranch}, deploy, set the rows to integrated (orch queue upsert). Follow all rules in section 1 of AGENT-RULES.md.",
+    "release": "Release of the branch of plan {plan} (worktree {cwd}): merge origin/{integrationBranch} (keep both sides of every conflict), run {compileCheck} until exit 0, run the check scripts for the changed files, push normally and register the branch with bzz ready (note 'Kompiliertest: Exit 0'; {buildFlowDoc} rules 3-5). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the release is finished.",
+    "integrator": "You are the integrator. Follow {integratorInstructions} and {buildFlowDoc}: read the ready rows of the integration queue (bzz queue --project {project}), merge them, one Release build, check scripts, load test, push {integrationBranch}, deploy, set the rows to integrated (bzz queue upsert). Follow all rules in section 1 of AGENT-RULES.md.",
     "lockQuestion": "{marker} - {tag}\n\nPackage {pkg} is locked: the checks repeatedly reported open items, also after the attempt with a higher class. Last check ({agent}): {text}\n\nQuestion: How should the package continue (other approach, change the requirement, check in the game)? Recommendation: {owner} decides after seeing the open items.",
 }
 
@@ -54,7 +54,7 @@ DEFAULT_SETTINGS = {
     "buildProcessNames": [],
     "capabilityRules": [],
     "triage": True,
-    "window": "Orchestrator",
+    "window": "HaiveQueen",
     "terminal": "auto",
     "brain": {"command": "claude", "model": "sonnet", "effort": "medium", "timeoutSeconds": 1500,
               "args": ["--output-format", "stream-json", "--verbose", "--model", "{brainModel}", "--permission-mode", "auto",
@@ -259,19 +259,19 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
     """Weekly limit of a provider as {FreePct, Hours}: 100 minus the used percent and the hours until the reset.
 
     No limit source, no reading or an unknown value counts as 100 % free with a reset in 168 h. `limits` (name -> {usedPercent, resetHours})
-    or the file in ORCH_PROVIDER_LIMITS_FILE replaces the real sources (tests); with a test runtime (ORCH_RUNTIME_OVERRIDE) and neither
+    or the file in BZZ_PROVIDER_LIMITS_FILE replaces the real sources (tests); with a test runtime (BZZ_RUNTIME_OVERRIDE) and neither
     nothing is read from this PC.
     """
     used = hours = None
     table = limits
-    lf = os.environ.get("ORCH_PROVIDER_LIMITS_FILE")
+    lf = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
     if table is None and lf and Path(lf).is_file():
         table = json.loads(Path(lf).read_text(encoding="utf-8-sig"))
     if table is not None:
         entry = table.get(provider["name"])
         if entry:
             used, hours = entry.get("usedPercent"), entry.get("resetHours")
-    elif not os.environ.get("ORCH_RUNTIME_OVERRIDE") and provider["limit"] in ("claude", "codex"):
+    elif not os.environ.get("BZZ_RUNTIME_OVERRIDE") and provider["limit"] in ("claude", "codex"):
         u = (claude_usage(conn)["SevenDay"] if provider["limit"] == "claude" and conn is not None
              else codex_usage()["SevenDay"] if provider["limit"] == "codex" else None)
         if u and u.get("Pct") is not None:

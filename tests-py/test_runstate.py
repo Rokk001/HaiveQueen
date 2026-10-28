@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import db, runstate  # noqa: E402
+from haivequeen import db, runstate  # noqa: E402
 
 
 class RunStateTest(unittest.TestCase):
@@ -18,7 +18,7 @@ class RunStateTest(unittest.TestCase):
     def setUp(self):
         """Create a temp database."""
         self.tmp = tempfile.TemporaryDirectory()
-        self.path = Path(self.tmp.name) / "data" / "orchestrator.db"
+        self.path = Path(self.tmp.name) / "data" / "haivequeen.db"
         self.conn = db.connect(self.path)
 
     def tearDown(self):
@@ -71,13 +71,13 @@ class RunStateTest(unittest.TestCase):
         self.assertEqual((st["state"], st["running_agents"]), ("DRAINING", 1))
 
     def test_commands(self):
-        """The orch commands print JSON and starts-allowed follows the state."""
-        env = dict(os.environ, ORCH_CONFIG_DIR=str(Path(self.tmp.name) / "cfg"),
-                   ORCH_DATA_DIR=str(Path(self.tmp.name) / "cmd"))
+        """The bzz commands print JSON and starts-allowed follows the state."""
+        env = dict(os.environ, BZZ_CONFIG_DIR=str(Path(self.tmp.name) / "cfg"),
+                   BZZ_DATA_DIR=str(Path(self.tmp.name) / "cmd"))
 
         def orch(*args):
-            """Run orch.py and parse stdout."""
-            r = subprocess.run([sys.executable, "-I", str(ROOT / "orch.py"), *args], env=env,
+            """Run haivequeen/cli.py and parse stdout."""
+            r = subprocess.run([sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), *args], env=env,
                                capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             return json.loads(r.stdout)

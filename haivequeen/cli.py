@@ -1,13 +1,13 @@
-"""agent-orchestrator command line: python orch.py <command>. Machine-readable output is JSON on stdout."""
+"""HaiveQueen command line: python haivequeen/cli.py <command>. Machine-readable output is JSON on stdout."""
 import argparse
 import json
 import sys
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from orchlib import config, db, legacy, loop, runtime, runtime_cli  # noqa: E402
-from orchlib import export as export_mod, init as init_mod, views  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from haivequeen import config, db, legacy, loop, runtime, runtime_cli  # noqa: E402
+from haivequeen import export as export_mod, init as init_mod, views  # noqa: E402
 
 STUBS = ()
 
@@ -139,7 +139,7 @@ def make_stub(name: str):
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all commands."""
-    ap = argparse.ArgumentParser(prog="orch")
+    ap = argparse.ArgumentParser(prog="bzz")
     sub = ap.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("done")

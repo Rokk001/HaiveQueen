@@ -1,6 +1,6 @@
 """Gap 3c: a real loop run (run_loop, several rounds) over a throw-away project, headless, with the real agent runner and a fake provider CLI.
 
-Plan READY -> work agent -> verify agent ("Offene Anforderungen: 0") -> release agent (registers the branch with orch ready) -> integrator agent
+Plan READY -> work agent -> verify agent ("Offene Anforderungen: 0") -> release agent (registers the branch with bzz ready) -> integrator agent
 (dummy command: marks the queue row integrated). Nothing here touches the live runtime, a real model or a terminal.
 """
 import json
@@ -9,16 +9,16 @@ import stat
 import sys
 import unittest
 
-from orchtest import REL, RoundCase, provider, runtime
-from orchlib import loop
-from orchlib.terminal.headless import Headless
+from bzztest import REL, RoundCase, provider, runtime
+from haivequeen import loop
+from haivequeen.terminal.headless import Headless
 
 ONE = [{"id": "P1", "title": "first"}]
 
 # The fake provider CLI: finds the agent name in the prompt file, does what that kind of agent does and prints a Claude stream-json result.
 FAKE_CLI = r'''import json, os, re, sys
 sys.path.insert(0, os.environ["FAKE_TOOLS"])
-from orchlib import config, db, runtime
+from haivequeen import config, db, runtime
 prompt = sys.argv[sys.argv.index("-p") + 1]
 text = open(re.search(r"Read the file (.+?) completely", prompt).group(1), encoding="utf-8-sig").read()
 name = re.search(r"You are the agent (\S+)", text).group(1)
@@ -48,7 +48,7 @@ class FullLoopTest(RoundCase):
     def setUp(self):
         """Fake CLI as the only provider, headless terminal, a READY plan with one package."""
         super().setUp()
-        os.environ.pop("ORCH_TEST_NOSTART", None)
+        os.environ.pop("BZZ_TEST_NOSTART", None)
         script = self.base / "fake_cli.py"
         script.write_text(FAKE_CLI, encoding="utf-8")
         if sys.platform == "win32":
@@ -75,7 +75,7 @@ class FullLoopTest(RoundCase):
 
     def tearDown(self):
         """Close leftover panes and drop the fake-CLI variables."""
-        for p in self.term.list_panes("Orchestrator"):
+        for p in self.term.list_panes("HaiveQueen"):
             if p.alive:
                 self.term.close_pane(p.id)
         for k in ("FAKE_TOOLS", "FAKE_LOG", "FAKE_PLAN"):

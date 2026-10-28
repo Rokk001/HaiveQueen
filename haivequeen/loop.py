@@ -4,7 +4,7 @@ Ports round.ps1 and round-loop.ps1 onto the database. A round syncs the plans of
 the oldest waiting package), lets the routine decide what needs no language model, asks the brain only for events that need judgement,
 validates every action (rules 11 and others) and starts agents through the terminal interface. A pause or drain (D8) skips the starts,
 a lock starts a triage agent (D5), and at the start running agents are re-attached by process id.
-The agent process itself is `orchlib.agent_runner` (see docs/S13-S14-INTERFACE.md).
+The agent process itself is `haivequeen.agent_runner` (see docs/S13-S14-INTERFACE.md).
 """
 import json
 import os
@@ -25,10 +25,10 @@ from .terminal import TerminalError, get_terminal, pane_title
 TOOLS_DIR = Path(__file__).resolve().parent.parent
 PHASES = ("work", "verify", "release", "integrate")
 TEMPORARY = re.compile(r"^(no worker slot|no free slot|no integrator slot|free RAM|STOP flag|run state)")   # a start rejected for one of these keeps its brain event
-AGENT_NAMES = ["Max", "Fritz", "Lena", "Anna", "Jonas", "Mia", "Paul", "Emma", "Finn", "Hanna", "Ben", "Clara", "Leo", "Nora", "Tim",
-               "Ida", "Karl", "Rosa", "Otto", "Vera", "Emil", "Greta", "Jan", "Lotte"]   # short first names of the agents; the orchestrator itself is CHIEF
+AGENT_NAMES = ["Ada", "Bea", "Cleo", "Dina", "Ella", "Fia", "Gina", "Hana", "Ida", "Juna", "Kira", "Lea", "Mia", "Nora", "Ola",
+               "Pia", "Rita", "Sara", "Tara", "Uma", "Vera", "Wilma", "Yara", "Zoe"]   # short first names of the agents; the main agent is called Queen and is not in this list
 AGENT_COLOURS = ["4FA8FF", "C77DFF", "FF6FB5", "3DDCDC", "FF9F43", "3DDC97", "2B6CB0", "8A3FD1", "C2306F", "1E9C9C", "C26A10", "1E9B5F"]   # 6 hues at least 25 degrees apart, each light then dark (the first 6 agents differ in hue), none of the status colours
-FORWARD_ENV = ("ORCH_DATA_DIR", "ORCH_CONFIG_DIR", "ORCH_LOG_DIR", "ORCH_RUNTIME_OVERRIDE", "ORCH_HOST", "ORCH_FAKE_AGENT", "ORCH_SAMPLE_SEC")
+FORWARD_ENV = ("BZZ_DATA_DIR", "BZZ_CONFIG_DIR", "BZZ_LOG_DIR", "BZZ_RUNTIME_OVERRIDE", "BZZ_HOST", "BZZ_FAKE_AGENT", "BZZ_SAMPLE_SEC")
 
 
 # ---- flag files ----
@@ -107,7 +107,7 @@ def _take_pid_lock(path: Path, own_ok: bool, wait: float = 5.0) -> int:
 
 @contextmanager
 def pane_lock(timeout: float = 120.0, poll: float = 0.1):
-    """Serialise pane commands between processes: only the holder of pane.lock opens or splits a pane (loop round, `orch start`).
+    """Serialise pane commands between processes: only the holder of pane.lock opens or splits a pane (loop round, `bzz start`).
 
     Waits up to `timeout` seconds for another process to finish its pane command, then raises TimeoutError.
     """
@@ -129,17 +129,22 @@ def pane_lock(timeout: float = 120.0, poll: float = 0.1):
 
 
 def first_split_target(panes) -> str:
-    """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the chief pane, else None."""
-    for marker in ("job: Dashboard", "| CHIEF |"):
+    """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the Queen pane, else None."""
+    for marker in ("job: Dashboard", "| QUEEN |"):
         for pane in panes:
             if marker in pane.title:
                 return pane.id
     return None
 
 
+def queen_pane_title(model: str, test: bool) -> str:
+    """Fixed title of the pane of the main agent (the Queen)."""
+    return pane_title("all projects", "QUEEN", "Queen", model, test)
+
+
 def is_test_runtime() -> bool:
-    """True when the process runs with a test runtime (ORCH_RUNTIME_OVERRIDE set)."""
-    return bool(os.environ.get("ORCH_RUNTIME_OVERRIDE"))
+    """True when the process runs with a test runtime (BZZ_RUNTIME_OVERRIDE set)."""
+    return bool(os.environ.get("BZZ_RUNTIME_OVERRIDE"))
 
 
 # ---- loop state (kv key loop-state, machine wide) ----
@@ -227,10 +232,10 @@ def forward_env_args() -> list:
 def runner_argv(env, spec: dict) -> list:
     """Command line of the agent process. Arguments are documented in docs/S13-S14-INTERFACE.md.
 
-    The module is started through a small bootstrap, so it works from any folder: python -c "<add tools folder to sys.path; call orchlib.agent_runner.main(argv)>".
+    The module is started through a small bootstrap, so it works from any folder: python -c "<add tools folder to sys.path; call haivequeen.agent_runner.main(argv)>".
     The run folder is <data>/runs/<project>/<name> (--runs-dir = <data>/runs/<project>), the folder the routine reads final.txt from.
     """
-    boot = "import sys;sys.path.insert(0,sys.argv[1]);from orchlib.agent_runner import main;sys.exit(main(sys.argv[2:]))"
+    boot = "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.agent_runner import main;sys.exit(main(sys.argv[2:]))"
     return [osplat.python_executable(), "-c", boot, str(TOOLS_DIR),
             "--project", env.name, "--name", spec["name"], "--provider", spec["provider"], "--protocol", spec["protocol"],
             "--plan", spec["plan"], "--package", spec["package"], "--phase", spec["phase"], "--cwd", spec["cwd"],
@@ -377,7 +382,7 @@ def run_round(conn, machine: dict, envs=None, terminal=None, brain_answer=None, 
 
     A STOP flag, a pause or drain (D8) or low free RAM skips the starts (the event hooks still run). `brain_answer` (dict) replaces the brain call
     (tests), `dry_run` changes nothing, `terminal` is the terminal backend (default from the settings), `free_ram()` returns the free RAM in GB.
-    With ORCH_TEST_NOSTART no pane is opened: the agent is marked running with the pid of this process.
+    With BZZ_TEST_NOSTART no pane is opened: the agent is marked running with the pid of this process.
     """
     envs = envs if envs is not None else sch.load_projects(conn, machine)
     result = {"skipped": None, "projects": {}}
@@ -827,13 +832,13 @@ def _do_start(c, a, forced_pick=None) -> int:
                           "person": ident["Person"], "color": ident["Color"], "model": cm["Model"], "effort": cm["Effort"],
                           "modelShort": sch.model_short(protocol, cm["Model"], cm["Effort"]), "class": cls,
                           "bundle_json": json.dumps(bundle) if bundle else None, "task": agent_task(env, plan, pkg, phase, pf)})
-    if os.environ.get("ORCH_TEST_NOSTART"):   # tests only: no pane, the fake agent is marked running (this process is always alive)
+    if os.environ.get("BZZ_TEST_NOSTART"):   # tests only: no pane, the fake agent is marked running (this process is always alive)
         env.update_agent(nm, {"status": "running", "pid": os.getpid()})
     else:
         term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
         spec = {"name": nm, "provider": prov, "protocol": protocol, "plan": plan, "package": pkg, "phase": phase, "cwd": str(a["cwd"]),
                 "prompt_file": str(pf), "person": ident["Person"], "model_long": sch.model_long(protocol, cm["Model"], cm["Effort"])}
-        launch_agent(env, term, env.settings.get("window", "Orchestrator"), spec, c["settle"], c["poll"], c["tries"])
+        launch_agent(env, term, env.settings.get("window", "HaiveQueen"), spec, c["settle"], c["poll"], c["tries"])
     env.log("start %s (%s, %s)" % (nm, prov, phase))
     env.event("%s started (%s)" % (nm, {"codex": "Codex", "claude": "Claude"}.get(prov, prov)))
     if phase != "integrate":
@@ -846,7 +851,7 @@ def _do_start(c, a, forced_pick=None) -> int:
             except runtime.CmdError as exc:
                 env.log("plan %s: status change failed: %s" % (plan, exc))
     runtime.kv_delete(env.conn, env.name, "wait:%s|%s" % (plan, pkg))
-    if not os.environ.get("ORCH_TEST_NOSTART"):
+    if not os.environ.get("BZZ_TEST_NOSTART"):
         time.sleep(c["settle"])
     return 1
 
@@ -863,7 +868,7 @@ def _start_triage(c) -> int:
             continue
         nm = routine.new_agent_name("%s-%s-triage" % (routine.plan_tag(env, item["plan"]), item["id"]), [view(r) for r in env.agents("all")], st["names"])
         text = triage.triage_prompt(env.name, item["plan"], item["id"], item["points"], osplat.python_executable())
-        text = text.replace(" -I orch.py", ' -I "%s"' % (TOOLS_DIR / "orch.py"))
+        text = text.replace(" -I haivequeen/cli.py", ' -I "%s"' % (TOOLS_DIR / "haivequeen" / "cli.py"))
         a = {"action": "start_agent", "name": nm, "type": pick["name"], "phase": "triage", "plan": item["plan"], "package": item["id"],
              "cwd": str(env.workspace), "prompt": text, "class": triage.TRIAGE_CLASS, "bundle": []}
         if (norm_plan(a["plan"]) + "|" + a["package"]) not in st["busy"]:
@@ -871,7 +876,7 @@ def _start_triage(c) -> int:
     return n
 
 
-# ---- orchestrator pane (CHIEF): fixed header and one line per event ----
+# ---- orchestrator pane (QUEEN): fixed header and one line per event ----
 
 ESC = "\x1b"
 SGR = {"Cyan": "1;36", "Gray": "90", "White": "97", "Green": "32", "Red": "31", "Yellow": "33"}
@@ -934,7 +939,7 @@ def head_lines(width: int, tot: dict, ui: dict) -> list:
         state = "idle since %s, ◔ next round %s" % (ui["since"].strftime("%H:%M"), ui["next_at"].strftime("%H:%M"))
     else:
         state = "starting"
-    for ln in wrap_text("◆ CHIEF | ORCHESTRATOR | Claude %s | %s" % (ui.get("model", ""), state), width):
+    for ln in wrap_text("◆ QUEEN | Claude %s | %s" % (ui.get("model", ""), state), width):
         res.append((ln, "White"))
     res.append(("Projects: " + (", ".join(ui.get("projects") or []) or "none") + ". Decides only on events, the routine runs without a brain", "Gray"))
     lc = tot.get("LastCall")
@@ -1084,7 +1089,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         if res["kept"] or res["failed"]:
             env.log("restart: re-attached %d running agent(s), %d gone" % (len(res["kept"]), len(res["failed"])))
         env.log("loop started (roundMinutes=%s)" % minutes)
-        env.event("Orchestrator started (round every %s minutes)" % minutes)
+        env.event("Queen started (round every %s minutes)" % minutes)
     if pane:
         pane.out.write("%s[2J%s[H" % (ESC, ESC))
         pane.draw_head(state)
@@ -1135,10 +1140,10 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
     return 0
 
 
-# ---- command line: orch start / orch stop ----
+# ---- command line: bzz start / bzz stop ----
 
 def cmd_start(args, conn) -> int:
-    """`orch start`: run the loop in this process (--foreground) or open the orchestrator window whose first pane runs it."""
+    """`bzz start`: run the loop in this process (--foreground) or open the orchestrator window whose first pane runs it."""
     from . import config
     machine = config.load_config()
     pid = loop_running()
@@ -1153,10 +1158,10 @@ def cmd_start(args, conn) -> int:
         return run_loop(conn, machine, args.rounds, args.round_minutes, ui=sys.stdout.isatty())
     settings = sch.build_settings(machine, {})
     term = get_terminal(args.terminal or settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-    window = settings.get("window", "Orchestrator")
-    boot = [osplat.python_executable(), str(TOOLS_DIR / "orch.py"), "start", "--foreground"] + (["--terminal", args.terminal] if args.terminal else [])
-    title = pane_title("all projects", "CHIEF", "Orchestrator", sch.model_long("claude", "claude-sonnet-5-5", "medium"), is_test_runtime())
-    with pane_lock():   # a second `orch start` waits here and then finds the loop (or the pending start) of the first
+    window = settings.get("window", "HaiveQueen")
+    boot = [osplat.python_executable(), str(TOOLS_DIR / "haivequeen" / "cli.py"), "start", "--foreground"] + (["--terminal", args.terminal] if args.terminal else [])
+    title = queen_pane_title(sch.model_long("claude", "claude-sonnet-5-5", "medium"), is_test_runtime())
+    with pane_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first
         pid = loop_running()
         if pid:
             print(json.dumps({"ok": True, "running": True, "pid": pid, "note": "The orchestrator is already running."}))
@@ -1169,8 +1174,8 @@ def cmd_start(args, conn) -> int:
         try:
             panes = [term.open_window(window, title, boot, "white", "chief")]
             import importlib.util
-            if importlib.util.find_spec("orchlib.dashboard") is not None:
-                dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from orchlib.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
+            if importlib.util.find_spec("haivequeen.dashboard") is not None:
+                dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
                 panes.append(term.split_pane(window, pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime()), "white", dash,
                                              "vertical", 0.8, panes[0], "dashboard"))
         except Exception:
@@ -1181,7 +1186,7 @@ def cmd_start(args, conn) -> int:
 
 
 def cmd_stop(args, conn) -> int:
-    """`orch stop`: create the STOP flag; running agents finish their task, no new agent starts, the loop ends."""
+    """`bzz stop`: create the STOP flag; running agents finish their task, no new agent starts, the loop ends."""
     stop_flag().parent.mkdir(parents=True, exist_ok=True)
     stop_flag().write_text("stop requested %s\n" % datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
     print(json.dumps({"ok": True, "running_agents": active_count(conn)}))
@@ -1189,7 +1194,7 @@ def cmd_stop(args, conn) -> int:
 
 
 def register(sub) -> None:
-    """Add the commands start and stop to the sub-parser collection of orch.py."""
+    """Add the commands start and stop to the sub-parser collection of haivequeen/cli.py."""
     p = sub.add_parser("start")
     p.add_argument("--foreground", action="store_true", help="run the loop in this process")
     p.add_argument("--terminal", choices=["auto", "wt", "tmux", "headless"])

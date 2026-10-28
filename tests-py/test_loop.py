@@ -5,11 +5,11 @@ import sys
 import time
 import unittest
 
-from orchtest import REL, RoundCase, minutes_ago, provider, runtime
-from orchlib import brain, db, export, loop, routine, runstate, triage
-from orchlib import platform as osplat
-from orchlib import scheduler as sch
-from orchlib.terminal.headless import Headless
+from bzztest import REL, RoundCase, minutes_ago, provider, runtime
+from haivequeen import brain, db, export, loop, routine, runstate, triage
+from haivequeen import platform as osplat
+from haivequeen import scheduler as sch
+from haivequeen.terminal.headless import Headless
 
 ONE = [{"id": "P1", "title": "first"}]
 
@@ -67,7 +67,7 @@ class MultiProjectTest(RoundCase):
 
     def test_priority_from_project_toml(self):
         """The order uses the priority in project.toml, not the stale database column."""
-        (self.base / "repo-beta" / ".orchestrator" / "project.toml").write_text('name = "beta"\npriority = 9\nplanGlobs = ["docs/plans/**/*.md"]\n', encoding="utf-8")
+        (self.base / "repo-beta" / ".haivequeen" / "project.toml").write_text('name = "beta"\npriority = 9\nplanGlobs = ["docs/plans/**/*.md"]\n', encoding="utf-8")
         self.assertEqual([e.name for e in sch.order_projects(self.envs())], ["beta", "alpha", "testproj"])
 
 
@@ -165,12 +165,12 @@ class LoopTest(RoundCase):
         try:
             export.export_due = lambda now, folder=None: False
             loop.run_loop(self.conn, self.machine, rounds=1, sleep=lambda s: None, round_minutes=0.0001)
-            self.assertFalse(folder.exists() and list(folder.glob("orchestrator-*.db")))
+            self.assertFalse(folder.exists() and list(folder.glob("haivequeen-*.db")))
             export.export_due = lambda now, folder=None: True
             loop.run_loop(self.conn, self.machine, rounds=1, sleep=lambda s: None, round_minutes=0.0001)
         finally:
             export.export_due = orig
-        self.assertEqual(len(list(folder.glob("orchestrator-*.db"))), 1)
+        self.assertEqual(len(list(folder.glob("haivequeen-*.db"))), 1)
         self.assertIn("database exported to", self.log())
 
     def test_round_error_does_not_stop(self):
@@ -188,11 +188,26 @@ class LoopTest(RoundCase):
         self.assertEqual(loop.wrap_text("aaa bbb ccc", 7), ["aaa bbb", "ccc"])
         self.assertEqual(loop.wrap_text("abcdefghij", 4), ["abcd", "efgh", "ij"])
         hl = loop.head_lines(80, brain.totals(self.conn), {"busy": True, "model": "Son 5.5 med.", "projects": ["a", "b"]})
-        self.assertIn("CHIEF", hl[0][0])
+        self.assertIn("QUEEN", hl[0][0])
         self.assertIn("round running", hl[0][0])
         self.assertIn("Projects: a, b", hl[1][0])
         hl = loop.head_lines(80, brain.totals(self.conn), {"run_state": "PAUSED", "model": "x"})
         self.assertIn("PAUSED", hl[0][0])
+
+    def test_window_default_and_project_override(self):
+        """The default window name is HaiveQueen; a window set in a project (for example ODP) is kept."""
+        from haivequeen import scheduler
+        self.assertEqual(scheduler.build_settings({}, {})["window"], "HaiveQueen")
+        self.assertEqual(scheduler.build_settings({}, {"window": "ODP"})["window"], "ODP")
+
+    def test_agent_names_and_queen_title(self):
+        """24 unique agent names, none is Queen, and the pane of the main agent is titled QUEEN."""
+        self.assertEqual(len(loop.AGENT_NAMES), 24)
+        self.assertEqual(len(set(loop.AGENT_NAMES)), 24)
+        self.assertNotIn("Queen", loop.AGENT_NAMES)
+        self.assertEqual(loop.AGENT_NAMES[:3], ["Ada", "Bea", "Cleo"])
+        self.assertEqual(loop.AGENT_NAMES[-1], "Zoe")
+        self.assertIn("QUEEN", loop.queen_pane_title("m", True))
 
 
 class TriageStartTest(RoundCase):
@@ -219,7 +234,7 @@ class TriageStartTest(RoundCase):
         prompt = (self.env().run_dir(tri[0]["name"]) / "prompt.md").read_text(encoding="utf-8")
         self.assertIn("Layout: split the file", prompt)
         self.assertIn("triage decide", prompt)
-        self.assertIn("orch.py", prompt)
+        self.assertIn("cli.py", prompt)
         self.round()
         self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"]), 1, "no second triage agent while one runs")
 
@@ -437,12 +452,12 @@ class HeadlessStartTest(RoundCase):
     def setUp(self):
         """No NOSTART: the pane is really opened (headless), the runner is a tiny script that sets the pid of its agent row."""
         super().setUp()
-        os.environ.pop("ORCH_TEST_NOSTART", None)
+        os.environ.pop("BZZ_TEST_NOSTART", None)
         self.plan("IN_PROGRESS", ONE)
         self.seed()
         self.dummy = self.base / "dummy_runner.py"
         self.dummy.write_text(
-            "import os, sys, time\nsys.path.insert(0, %r)\nfrom orchlib import config, db, runtime\n"
+            "import os, sys, time\nsys.path.insert(0, %r)\nfrom haivequeen import config, db, runtime\n"
             "conn = db.connect(config.db_path())\nruntime.upsert_agent(conn, sys.argv[1], sys.argv[2], {'pid': os.getpid(), 'status': 'running'})\ntime.sleep(20)\n"
             % str(loop.TOOLS_DIR), encoding="utf-8")
         self.orig = loop.runner_argv
@@ -452,7 +467,7 @@ class HeadlessStartTest(RoundCase):
     def tearDown(self):
         """End the dummy processes this test started."""
         loop.runner_argv = self.orig
-        for p in self.term.list_panes("Orchestrator"):
+        for p in self.term.list_panes("HaiveQueen"):
             if p.alive:
                 self.term.close_pane(p.id)
         super().tearDown()
@@ -463,10 +478,10 @@ class HeadlessStartTest(RoundCase):
         row = self.ag("DUMMY-P1-work")
         self.assertEqual(row["status"], "running")
         self.assertTrue(row["pid"] and osplat.process_alive(row["pid"]))
-        panes = self.term.list_panes("Orchestrator")
+        panes = self.term.list_panes("HaiveQueen")
         self.assertEqual(len(panes), 1)
         self.assertIn(row["pane_id"], [p.id for p in panes])
-        self.assertRegex(panes[0].title, r"^Agent-Orchestrator TEST \| testproj \| Agent [A-Z]+ \| job: DUMMY-P1-work \| model: Claude Sonnet 5\.5 medium$")
+        self.assertRegex(panes[0].title, r"^HaiveQueen TEST \| testproj \| Agent [A-Z]+ \| job: DUMMY-P1-work \| model: Claude Sonnet 5\.5 medium$")
 
     def test_choose_slot(self):
         """The widest open pane is split side by side while both halves stay 40 columns wide, else the tallest top/bottom."""

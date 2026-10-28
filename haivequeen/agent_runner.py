@@ -1,12 +1,12 @@
 """Runs ONE agent (Claude Code or Codex, headless) in its own pane (port of agent-run.ps1, pane-wrap.ps1 and the agent part of build-sampler.ps1).
 
-The agent is tracked in the agents table; the pane shows a fixed header (orchlib.header) and below it only milestones with a
+The agent is tracked in the agents table; the pane shows a fixed header (haivequeen.header) and below it only milestones with a
 time stamp; the full raw output stays in <runs dir>/<agent>/ (events.jsonl, stderr.txt, milestones.txt, final.txt, rules.md).
 
 Usage:
-  python -m orchlib.agent_runner --project P --name N --provider claude --cwd DIR --prompt-file FILE
+  python -m haivequeen.agent_runner --project P --name N --provider claude --cwd DIR --prompt-file FILE
          [--plan PATH] [--package ID] [--phase work] [--runs-dir DIR] [--model M] [--effort E]
-  python -m orchlib.agent_runner --wrap ...same arguments...   (pane wrapper: runs the agent as a child, keeps the pane open
+  python -m haivequeen.agent_runner --wrap ...same arguments...   (pane wrapper: runs the agent as a child, keeps the pane open
                                                                  for the close delay, then exits 0)
 """
 import argparse
@@ -132,7 +132,7 @@ def class_model(prov, cls):
 def classify_cmd(cmd, queue_re=None):
     """Recognise a milestone command (commit, push, compile test, check, ready line, file write); returns {kind, label} or None.
 
-    A call of `orch ready` is the ready line; queue_re (optional) additionally marks writes into a legacy queue file.
+    A call of `bzz ready` is the ready line; queue_re (optional) additionally marks writes into a legacy queue file.
     """
     cmd = str(cmd or "")
     if re.search(r"git\s+commit", cmd):
@@ -145,7 +145,7 @@ def classify_cmd(cmd, queue_re=None):
     m = re.search(r"(check[\w\-]*\.(py|ps1))", cmd)
     if m:
         return {"kind": "check", "label": "Check " + m.group(1)}
-    if re.search(r"orch(\.py)?[\"']?\s+ready(\s|$)", cmd):
+    if re.search(r"(?:bzz|cli.py)[\"']?\s+ready(\s|$)", cmd):
         return {"kind": "ready", "label": "ready line registered"}
     if queue_re and re.search(queue_re, cmd) and re.search(r">>|Add-Content|Out-File|Set-Content", cmd):
         return {"kind": "ready", "label": "ready line registered"}
@@ -159,8 +159,8 @@ def classify_cmd(cmd, queue_re=None):
 # ---------------------------------------------------------------- Codex session log
 
 def codex_sessions_dir():
-    """Return the folder of the Codex session logs (ORCH_CODEX_SESSIONS overrides it, used by tests)."""
-    env = os.environ.get("ORCH_CODEX_SESSIONS")
+    """Return the folder of the Codex session logs (BZZ_CODEX_SESSIONS overrides it, used by tests)."""
+    env = os.environ.get("BZZ_CODEX_SESSIONS")
     if env:
         return Path(env)
     return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")) / "sessions"
@@ -200,7 +200,7 @@ def sample_once(path, process_names):
 
 
 def sampler_loop(path, process_names, stop, seconds):
-    """Sample free RAM and compiler processes every `seconds` seconds until `stop` is set (ORCH_SAMPLE_SEC overrides, tests only)."""
+    """Sample free RAM and compiler processes every `seconds` seconds until `stop` is set (BZZ_SAMPLE_SEC overrides, tests only)."""
     while True:
         try:
             sample_once(path, process_names)
@@ -301,31 +301,31 @@ def write_phase_rules(pcfg, workspace, phase, out_file):
 
 # ---------------------------------------------------------------- the run
 
-def orch_script_dirs():
-    """Return the folders that may hold the `orch` console script of the running Python (Scripts folder, sysconfig scripts folder, `which orch`)."""
+def bzz_script_dirs():
+    """Return the folders that may hold the `bzz` console script of the running Python (Scripts folder, sysconfig scripts folder, `which bzz`)."""
     dirs = [Path(sys.executable).parent / "Scripts", Path(sys.executable).parent]
     try:
         dirs.append(Path(sysconfig.get_path("scripts")))
     except (KeyError, TypeError):
         pass
-    found = shutil.which("orch")
+    found = shutil.which("bzz")
     if found:
         dirs.append(Path(found).parent)
     return dirs
 
 
-def with_orch_on_path(env, dirs=None):
-    """Put the folder of the `orch` console script at the front of PATH in `env` (a dict, changed in place and returned).
+def with_bzz_on_path(env, dirs=None):
+    """Put the folder of the `bzz` console script at the front of PATH in `env` (a dict, changed in place and returned).
 
-    Only a folder that holds an orch program is added, and only when it is not on PATH yet, so there are no duplicate entries.
+    Only a folder that holds a bzz program is added, and only when it is not on PATH yet, so there are no duplicate entries.
     `dirs` replaces the folders to look at (tests).
     """
     key = next((k for k in env if k.upper() == "PATH"), "PATH")
     current = [p for p in (env.get(key) or "").split(os.pathsep) if p]
     known = set(os.path.normcase(os.path.normpath(p)) for p in current)
-    for d in (orch_script_dirs() if dirs is None else dirs):
+    for d in (bzz_script_dirs() if dirs is None else dirs):
         d = Path(d)
-        if not any((d / n).is_file() for n in ("orch", "orch.exe", "orch.cmd", "orch.bat")):
+        if not any((d / n).is_file() for n in ("bzz", "bzz.exe", "bzz.cmd", "bzz.bat")):
             continue
         if os.path.normcase(os.path.normpath(str(d))) in known:
             return env
@@ -335,10 +335,10 @@ def with_orch_on_path(env, dirs=None):
 
 
 def child_env():
-    """Return the environment for child processes of the runner: the tool folder is on PYTHONPATH so `-m orchlib...` works, `orch` is found on PATH."""
+    """Return the environment for child processes of the runner: the tool folder is on PYTHONPATH so `-m haivequeen...` works, `bzz` is found on PATH."""
     env = dict(os.environ)
     env["PYTHONPATH"] = str(TOOL_ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    return with_orch_on_path(env)
+    return with_bzz_on_path(env)
 
 
 def task_text(conn, project, plan, package, phase, plan_short):
@@ -623,8 +623,8 @@ class AgentRun:
 
 
 def report_prompt(prompt_file, project, agent_id):
-    """Return the prompt handed to the CLI: read the prompt file, plus the report commands (orch done / ready / ask / note). It has no double quote."""
-    orch = "'%s' -I '%s'" % (osplat.python_executable(), TOOL_ROOT / "orch.py")
+    """Return the prompt handed to the CLI: read the prompt file, plus the report commands (bzz done / ready / ask / note). It has no double quote."""
+    orch = "'%s' -I '%s'" % (osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py")
     text = ('Read the file "%s" completely and carry out exactly the task described there. Do nothing else.' % prompt_file)
     text += (" Report only with these commands, never by editing a queue file or state table by hand (the handoff text in the state file of the plan stays your own file): "
              "final report: %s done --agent %s --result <file with your final report>; "
@@ -686,11 +686,11 @@ def run_agent(a, out=None):
                                 "task": (prev or {}).get("task") or task}):
         out.write("agent %s not started: the agent row could not be written, row set to failed\n" % a.name)   # the model is never called
         return 0
-    # The header is drawn by orchlib.header (own process in this pane); this process only prints milestones below it.
+    # The header is drawn by haivequeen.header (own process in this pane); this process only prints milestones below it.
     run.ms_file.write_text("", encoding="utf-8")
     header_proc = None
-    if sys.stdout.isatty() and not os.environ.get("ORCH_NO_HEADER"):
-        header_proc = subprocess.Popen([osplat.python_executable(), "-m", "orchlib.header", "--project", a.project, "--name", a.name,
+    if sys.stdout.isatty() and not os.environ.get("BZZ_NO_HEADER"):
+        header_proc = subprocess.Popen([osplat.python_executable(), "-m", "haivequeen.header", "--project", a.project, "--name", a.name,
                                         "--parent-pid", str(os.getpid()), "--runs-dir", str(runs)], env=child_env())
         time.sleep(2)
 
@@ -707,7 +707,7 @@ def run_agent(a, out=None):
     bj_raw = cfg.get("buildJobs")
     bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release") else None
     bj_jobs, bj_start_mb, samples, stop, sampler = 0, 0.0, run_dir / "build-samples.txt", threading.Event(), None
-    env = with_orch_on_path(dict(os.environ))   # the agent and everything it starts finds `orch`, also without a PATH entry of the pip Scripts folder
+    env = with_bzz_on_path(dict(os.environ))   # the agent and everything it starts finds `bzz`, also without a PATH entry of the pip Scripts folder
     if bj:
         bj_start_mb = float(osplat.free_ram_mb())
         measured = buildjobs.stored_per_job(conn, a.project)
@@ -719,7 +719,7 @@ def run_agent(a, out=None):
         except OSError:
             pass
         sampler = threading.Thread(target=sampler_loop, daemon=True, args=(
-            samples, [str(x) for x in pcfg.get("buildProcessNames") or []], stop, float(os.environ.get("ORCH_SAMPLE_SEC") or 10)))
+            samples, [str(x) for x in pcfg.get("buildProcessNames") or []], stop, float(os.environ.get("BZZ_SAMPLE_SEC") or 10)))
         sampler.start()
         runtime.upsert_agent(conn, a.project, a.name, {"buildJobs": bj_jobs})
         run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
@@ -736,8 +736,8 @@ def run_agent(a, out=None):
         """Remove the stalled mark when the agent prints again."""
         set_stalled(a, "", "%s prints again" % a.name)
     try:
-        if os.environ.get("ORCH_FAKE_AGENT"):   # tests only: no model call, a few milestones and token numbers so the pane layout can be checked
-            delay = float(os.environ.get("ORCH_FAKE_DELAY") or 3)
+        if os.environ.get("BZZ_FAKE_AGENT"):   # tests only: no model call, a few milestones and token numbers so the pane layout can be checked
+            delay = float(os.environ.get("BZZ_FAKE_DELAY") or 3)
             for i in range(1, 9):
                 run.say("Test milestone %d: this is a long line that should wrap in narrow panes so that the line wrapping becomes visible." % i, "White")
                 run.tin += 4000
@@ -828,7 +828,7 @@ def pane_wrap(a, argv):
         time.sleep(30)
         return 0
     try:
-        subprocess.run([osplat.python_executable(), "-m", "orchlib.agent_runner"] + argv, env=child_env())
+        subprocess.run([osplat.python_executable(), "-m", "haivequeen.agent_runner"] + argv, env=child_env())
     finally:
         print("pane closes in %d s" % delay)
         time.sleep(delay)
@@ -841,7 +841,7 @@ def pane_wrap(a, argv):
 
 def parse_args(argv=None):
     """Parse the command line (see the module help)."""
-    p = argparse.ArgumentParser(prog="orchlib.agent_runner")
+    p = argparse.ArgumentParser(prog="haivequeen.agent_runner")
     p.add_argument("--project", required=True)
     p.add_argument("--name", required=True, help="agent id")
     p.add_argument("--provider", required=True, help="provider name from config.toml")

@@ -2,7 +2,7 @@
 the context limit writes HANDOFF and a -c2 agent continues, finished packages are never startable, decided questions are not asked again."""
 import unittest
 
-from orchtest import REL, RoundCase, runtime
+from bzztest import REL, RoundCase, runtime
 
 P12 = [{"id": "P1", "title": "first"}, {"id": "P2", "title": "second", "depends": ["P1"]}]
 
@@ -79,7 +79,7 @@ class S7Test(RoundCase):
         self.round(note)
         self.assertEqual(self.calls(), b, "integration_blocked: handled by the routine (fix agent)")
         runtime.queue_upsert(self.conn, "testproj", "feature/dummy", status="integrated")
-        from orchlib import db
+        from haivequeen import db
         qid = db.add_question(self.conn, "testproj", REL, "X", "Which one?", "A")
         db.answer_question(self.conn, qid, "Take A.", "owner")
         b = self.calls()
@@ -162,7 +162,7 @@ class S7Test(RoundCase):
 
     def test_decided_questions_not_asked(self):
         """ask_owner for an item with a decision or a known question is skipped; a new item is written."""
-        from orchlib import db
+        from haivequeen import db
         self.reset_rt()
         runtime.add_decision(self.conn, "testproj", "owner", "Dummy room: crystal bowl (M7): yes.", REL, "M7")
         v9 = db.add_question(self.conn, "testproj", REL, "V9 Mood decay in the bath", "Decay?", "A")
@@ -187,7 +187,7 @@ class S7Test(RoundCase):
 
     def test_mechanical_rules(self):
         """Freeze list, duplicate and implemented answers, fixes first, verify_open on finished packages, rule 5 (graphics go to codex)."""
-        from orchlib import db
+        from haivequeen import db
         self.reset_rt()
         runtime.nofollow_add(self.conn, "testproj", "dummy-plan.md|p1")
         self.round()
@@ -243,7 +243,7 @@ class S7Test(RoundCase):
 
     def test_v1_fix_last_count_line_decides(self):
         """Fix from v1: the LAST 'Offene Anforderungen' line decides, text after it does not matter."""
-        from orchlib import routine
+        from haivequeen import routine
         env = self.env()
         self.finish("A", "Offene Anforderungen: 3\nnoch eine Zeile\nOffene Anforderungen: 0\nNachwort")
         self.finish("B", "Offene Anforderungen: 0\nOffene Anforderungen: 2")
@@ -252,7 +252,7 @@ class S7Test(RoundCase):
 
     def test_verify_partial_in_english_is_open(self):
         """A partly done item written as 'partial' or 'partially' (any case) keeps the package open even with 'Offene Anforderungen: 0'; 'impartial' is no match."""
-        from orchlib import routine
+        from haivequeen import routine
         env = self.env()
         forms = {"E1": "- Item A: partial", "E2": "* Item B: Partially done", "E3": "| Item C | PARTIAL |", "E4": "  - item d: partially"}
         for name, line in forms.items():
@@ -263,7 +263,7 @@ class S7Test(RoundCase):
 
     def test_verify_partial_in_box_table_row_is_open(self):
         """A partly done item in a table drawn with box-drawing frame characters (also other than the plain pipe) keeps the package open."""
-        from orchlib import routine
+        from haivequeen import routine
         env = self.env()
         frames = {"F1": "│", "F2": "┃", "F3": "║", "F4": "╎"}
         for name, bar in frames.items():

@@ -228,8 +228,13 @@ def h_questions(a, c):
 
 
 def h_decisions_list(a, c):
-    """decisions list: decisions."""
-    return runtime.list_decisions(c, a.project, a.plan, a.item)
+    """decisions list: the active decisions (all of them with --all)."""
+    return runtime.list_decisions(c, a.project, a.plan, a.item, active_only=not a.all)
+
+
+def h_decisions_update(a, c):
+    """decisions update: change plan, item and/or status of one decision."""
+    return {"ok": True, "decision": runtime.update_decision(c, a.id, a.plan, a.item, a.status)}
 
 
 def h_decisions_add(a, c):
@@ -243,7 +248,7 @@ def intflag(v):
 
 
 def register(sub) -> None:
-    """Add the runtime commands to the sub-parser collection of orch.py."""
+    """Add the runtime commands to the sub-parser collection of haivequeen/cli.py."""
     from . import triage
     triage.register(sub)
     actions(sub, "agents", {
@@ -308,7 +313,9 @@ def register(sub) -> None:
                                  ("--locked", {"type": intflag}), ("--reason", {})]),
     })
     actions(sub, "decisions", {
-        "list": (h_decisions_list, [PO, ("--plan", {}), ("--item", {})]),
+        "list": (h_decisions_list, [PO, ("--plan", {}), ("--item", {}), ("--all", {"action": "store_true"})]),
+        "update": (h_decisions_update, [("id", {"type": int}), ("--plan", {}), ("--item", {}),
+                                        ("--status", {"choices": runtime.DECISION_STATUSES})]),
         "add": (h_decisions_add, [P, ("--source", {"required": True}), ("--text", {"required": True}),
                                   ("--plan", {}), ("--item", {})]),
     })

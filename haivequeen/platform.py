@@ -1,6 +1,6 @@
 """Operating-system helpers (Windows and Linux): memory, processes, folders. Standard library only.
 
-Inside the package use `from orchlib import platform as osplat`; the standard module `platform`
+Inside the package use `from haivequeen import platform as osplat`; the standard module `platform`
 is not affected because imports in this package are absolute.
 """
 import csv
@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-APP = "agent-orchestrator"
+APP = "HaiveQueen"
 STILL_ACTIVE = 259
 
 
@@ -332,17 +332,17 @@ def _folder(override: str, var_win: str, var_xdg: str, win_fallback: tuple, posi
 
 
 def config_dir(system=None, env=None, home=None) -> Path:
-    """Return the settings folder: ORCH_CONFIG_DIR, else %APPDATA% (Windows) or $XDG_CONFIG_HOME (Linux).
+    """Return the settings folder: BZZ_CONFIG_DIR, else %APPDATA% (Windows) or $XDG_CONFIG_HOME (Linux).
 
     system ('windows'/'linux'), env (mapping) and home let tests check the other OS branch.
     """
-    return _folder("ORCH_CONFIG_DIR", "APPDATA", "XDG_CONFIG_HOME", ("AppData", "Roaming"), (".config",),
+    return _folder("BZZ_CONFIG_DIR", "APPDATA", "XDG_CONFIG_HOME", ("AppData", "Roaming"), (".config",),
                    system, env, home)
 
 
 def data_dir(system=None, env=None, home=None) -> Path:
-    """Return the machine data folder: ORCH_DATA_DIR, else %LOCALAPPDATA% (Windows) or $XDG_DATA_HOME (Linux)."""
-    return _folder("ORCH_DATA_DIR", "LOCALAPPDATA", "XDG_DATA_HOME", ("AppData", "Local"),
+    """Return the machine data folder: BZZ_DATA_DIR, else %LOCALAPPDATA% (Windows) or $XDG_DATA_HOME (Linux)."""
+    return _folder("BZZ_DATA_DIR", "LOCALAPPDATA", "XDG_DATA_HOME", ("AppData", "Local"),
                    (".local", "share"), system, env, home)
 
 

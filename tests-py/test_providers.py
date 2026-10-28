@@ -1,8 +1,8 @@
 """Port of test-providers.ps1: provider selection by weekly limit, capabilities, slots 0, forwarding, capability-only, fallback, dummy provider, rounds."""
 import unittest
 
-from orchtest import RoundCase, provider, runtime
-from orchlib import scheduler as sch
+from bzztest import RoundCase, provider, runtime
+from haivequeen import scheduler as sch
 
 
 def settings(*providers):

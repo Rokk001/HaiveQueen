@@ -1,9 +1,9 @@
 """Port of test-s10.ps1: effort classes, bundling of small packages, escalation, minimum class of verify and integrator, package lock."""
 import unittest
 
-from orchtest import REL, RoundCase, runtime
-from orchlib import routine
-from orchlib import scheduler as sch
+from bzztest import REL, RoundCase, runtime
+from haivequeen import routine
+from haivequeen import scheduler as sch
 
 
 def pk(i, title, deps="none", cls=""):
@@ -112,7 +112,7 @@ class LockQuestionWordsTest(unittest.TestCase):
 
     def test_locked_is_matched_as_a_word(self):
         """"locked" and "gesperrt" match; "unlocked" does not."""
-        from orchlib import routine
+        from haivequeen import routine
         self.assertTrue(routine.LOCK_QUESTION_WORDS.search("package is locked after two reviews"))
         self.assertTrue(routine.LOCK_QUESTION_WORDS.search("Paket gesperrt"))
         self.assertFalse(routine.LOCK_QUESTION_WORDS.search("the door is unlocked"))

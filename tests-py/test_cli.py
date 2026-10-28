@@ -1,4 +1,4 @@
-"""End-to-end tests of orch.py run as a subprocess against a temp runtime."""
+"""End-to-end tests of haivequeen/cli.py run as a subprocess against a temp runtime."""
 import json
 import os
 import subprocess
@@ -9,26 +9,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import db  # noqa: E402
+from haivequeen import db  # noqa: E402
 
 
 class CliTest(unittest.TestCase):
-    """Runs orch.py with ORCH_* folders pointing into a temp folder."""
+    """Runs haivequeen/cli.py with BZZ_* folders pointing into a temp folder."""
 
     def setUp(self):
         """Create temp config and data folders."""
         self.tmp = tempfile.TemporaryDirectory()
         self.env = dict(os.environ)
-        self.env["ORCH_CONFIG_DIR"] = str(Path(self.tmp.name) / "cfg")
-        self.env["ORCH_DATA_DIR"] = str(Path(self.tmp.name) / "data")
+        self.env["BZZ_CONFIG_DIR"] = str(Path(self.tmp.name) / "cfg")
+        self.env["BZZ_DATA_DIR"] = str(Path(self.tmp.name) / "data")
 
     def tearDown(self):
         """Remove the temp folder."""
         self.tmp.cleanup()
 
     def run_orch(self, *args):
-        """Run orch.py; return (exit code, stdout)."""
-        r = subprocess.run([sys.executable, "-I", str(ROOT / "orch.py"), *args], env=self.env,
+        """Run haivequeen/cli.py; return (exit code, stdout)."""
+        r = subprocess.run([sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), *args], env=self.env,
                            capture_output=True, text=True, encoding="utf-8")
         return r.returncode, r.stdout
 
@@ -57,7 +57,7 @@ class CliTest(unittest.TestCase):
 
     def test_done(self):
         """done reads the result file and marks the agent done."""
-        conn = db.connect(Path(self.env["ORCH_DATA_DIR"]) / "orchestrator.db")
+        conn = db.connect(Path(self.env["BZZ_DATA_DIR"]) / "haivequeen.db")
         aid = db.add_agent(conn, "p", name="a", status="running")
         conn.close()
         res = Path(self.tmp.name) / "res.txt"
@@ -69,7 +69,7 @@ class CliTest(unittest.TestCase):
 
     def test_status_text_and_json(self):
         """status prints 'X / Y integrated (P%)' and a table; --json gives the same data."""
-        conn = db.connect(Path(self.env["ORCH_DATA_DIR"]) / "orchestrator.db")
+        conn = db.connect(Path(self.env["BZZ_DATA_DIR"]) / "haivequeen.db")
         conn.execute("INSERT INTO packages (project, plan_path, id, title) VALUES ('p','x.md','P1','First')")
         conn.close()
         code, o = self.run_orch("status")
@@ -91,7 +91,7 @@ class CliTest(unittest.TestCase):
     def test_real_folders_untouched(self):
         """The runtime was created only inside the temp folder."""
         self.run_orch("queue")
-        self.assertTrue((Path(self.tmp.name) / "data" / "orchestrator.db").is_file())
+        self.assertTrue((Path(self.tmp.name) / "data" / "haivequeen.db").is_file())
 
 
 if __name__ == "__main__":

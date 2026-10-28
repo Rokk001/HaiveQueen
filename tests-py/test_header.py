@@ -1,4 +1,4 @@
-"""Tests of orchlib.header: colours, wrapping, header lines with the project colour, redraw strings and the redraw loop."""
+"""Tests of haivequeen.header: colours, wrapping, header lines with the project colour, redraw strings and the redraw loop."""
 import io
 import os
 import sys
@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import db, header, runtime  # noqa: E402
+from haivequeen import db, header, runtime  # noqa: E402
 
 ESC = header.ESC
 NOW = datetime(2026, 10, 28, 12, 0, 0)
@@ -128,9 +128,9 @@ class RenderTest(unittest.TestCase):
     def test_run_loop(self):
         """The loop draws from the database: first a full redraw with the replayed milestones, then partial redraws; it ends after the agent ended and the parent is gone."""
         with tempfile.TemporaryDirectory() as tmp:
-            os.environ["ORCH_DATA_DIR"] = str(Path(tmp) / "data")
+            os.environ["BZZ_DATA_DIR"] = str(Path(tmp) / "data")
             try:
-                conn = db.connect(Path(tmp) / "data" / "orchestrator.db")
+                conn = db.connect(Path(tmp) / "data" / "haivequeen.db")
                 db.upsert_project(conn, "demo", None, "FF8800", 0)
                 runtime.upsert_agent(conn, "demo", "A-1", {"status": "running", "person": "Max", "color": "4FA8FF", "task": "T", "startedAt": "2026-10-28T11:58:30"})
                 runs = Path(tmp) / "runs"
@@ -153,7 +153,7 @@ class RenderTest(unittest.TestCase):
                 self.assertEqual(header.run("demo", "A-1", os.getpid(), runs, io.StringIO(), interval=0, max_ticks=4), 4)
                 conn.close()
             finally:
-                os.environ.pop("ORCH_DATA_DIR", None)
+                os.environ.pop("BZZ_DATA_DIR", None)
 
 
 if __name__ == "__main__":

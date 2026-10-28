@@ -1,14 +1,14 @@
 # Runtime API
 
-The orchestrator scripts read and write their runtime state through `orch.py`. Every command prints one JSON value on stdout.
+The orchestrator scripts read and write their runtime state through `haivequeen/cli.py`. Every command prints one JSON value on stdout.
 On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage errors with 2).
 
-- Call: `python -I orch.py <command> [<action>] [options]`
-- The database is `orchestrator.db` in the data folder (`ORCH_DATA_DIR`, else the machine default). It uses WAL and a busy timeout of 10 s and must lie on a local disk: opening it on a network drive (UNC path, mapped share, NFS/CIFS mount) fails with an error;
+- Call: `python -I haivequeen/cli.py <command> [<action>] [options]`
+- The database is `haivequeen.db` in the data folder (`BZZ_DATA_DIR`, else the machine default). It uses WAL and a busy timeout of 10 s and must lie on a local disk: opening it on a network drive (UNC path, mapped share, NFS/CIFS mount) fails with an error;
   every command is one transaction, so several processes can call at the same time.
 - `--project` names the project. List commands accept it as optional filter (without it: all projects); all other commands require it.
 - An option value of a single `-` is read from stdin (`--fields`, `--value`, `--text` of `event append` and `decisions add`, `--data`), for long or awkward text.
-- Text mirror files: `event append` also appends one line to a plain text log in `ORCH_LOG_DIR` (else `<data folder>/logs/<project>`):
+- Text mirror files: `event append` also appends one line to a plain text log in `BZZ_LOG_DIR` (else `<data folder>/logs/<project>`):
   `ROUNDS.log` lines are `YYYY-MM-DD HH:MM:SS text`, `ORCH-EVENTS.log` lines are `HH:MM|O or E|text`.
 - Agent rows are flat. Known fields are columns (camelCase or snake_case accepted, `plan` is `plan_path`); any other field is stored and returned as a free field.
 
@@ -41,8 +41,9 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 | `queue [list]` | `[--project]` | integration queue rows |
 | `queue upsert` | `--project --branch [--tip] [--plan] [--status ready\|in_run\|integrated\|blocked\|withdrawn] [--note] [--run]` | the row; changes the newest row of the branch, a new tip after `integrated` adds a row |
 | `questions` | `[--project] [--open] [--status] [--plan] [--item]` | question rows |
-| `decisions list` | `[--project] [--plan] [--item]` | decision rows |
+| `decisions list` | `[--project] [--plan] [--item] [--all]` | decision rows; only `active` ones unless `--all` (status values: `active`, `rule`, `superseded`) |
 | `decisions add` | `--project --source owner\|coordinator\|auto --text [--plan] [--item]` | `{ok, id}` |
+| `decisions update` | `<id> [--plan] [--item] [--status active\|rule\|superseded]` | `{ok, decision}` |
 | `triage list` | `--project` | locked packages with open points and no running triage agent (`phase` `triage`): `[{plan, id, title, lock_reason, points}]`; points are the lines of the lock reason (`item: text`, else `pN`) without a decision or open question |
 | `triage prompt` | `--project --plan --package [--python]` | `{prompt, points}`; prompt for the triage agent (class medium): technical points go to `triage decide`, game/balance points to `triage ask`, in doubt game/balance |
 | `triage decide` | `--project --plan --package --item --text --reason --source` | `{ok, id, unlocked, remaining}`; writes a decision with source `auto` (text carries reason and source) and unlocks the package after the last point |

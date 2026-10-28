@@ -10,12 +10,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import agent_runner as ar  # noqa: E402
-from orchlib import config  # noqa: E402
+from haivequeen import agent_runner as ar  # noqa: E402
+from haivequeen import config  # noqa: E402
 
 
 class WrapperParityTest(unittest.TestCase):
-    """Runs orch.py with ORCH_* folders pointing into a temp folder (no live data, no model, no terminal window)."""
+    """Runs haivequeen/cli.py with BZZ_* folders pointing into a temp folder (no live data, no model, no terminal window)."""
 
     def setUp(self):
         """Create temp config, data and log folders."""
@@ -23,17 +23,17 @@ class WrapperParityTest(unittest.TestCase):
         base = Path(self.tmp.name)
         self.base = base
         self.env = dict(os.environ)
-        self.env["ORCH_CONFIG_DIR"] = str(base / "cfg")
-        self.env["ORCH_DATA_DIR"] = str(base / "data")
-        self.env["ORCH_LOG_DIR"] = str(base / "logs")
+        self.env["BZZ_CONFIG_DIR"] = str(base / "cfg")
+        self.env["BZZ_DATA_DIR"] = str(base / "data")
+        self.env["BZZ_LOG_DIR"] = str(base / "logs")
 
     def tearDown(self):
         """Remove the temp folder."""
         self.tmp.cleanup()
 
     def orch(self, *args):
-        """Run orch.py; return (exit code, stdout text, stderr text)."""
-        r = subprocess.run([sys.executable, "-I", str(ROOT / "orch.py"), *args], env=self.env, capture_output=True,
+        """Run haivequeen/cli.py; return (exit code, stdout text, stderr text)."""
+        r = subprocess.run([sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), *args], env=self.env, capture_output=True,
                            text=True, encoding="utf-8")
         return r.returncode, r.stdout, r.stderr
 
@@ -45,15 +45,15 @@ class WrapperParityTest(unittest.TestCase):
 
     def test_runtime_uses_own_database(self):
         """The test runtime has its own database below the temp folder, different from the default location."""
-        old = os.environ.get("ORCH_DATA_DIR")
-        os.environ.pop("ORCH_DATA_DIR", None)
+        old = os.environ.get("BZZ_DATA_DIR")
+        os.environ.pop("BZZ_DATA_DIR", None)
         try:
             default_db = config.db_path()
         finally:
             if old is not None:
-                os.environ["ORCH_DATA_DIR"] = old
+                os.environ["BZZ_DATA_DIR"] = old
         self.ok("kv", "set", "--project", "p", "--key", "k", "--value", "v")
-        own = Path(self.env["ORCH_DATA_DIR"]) / "orchestrator.db"
+        own = Path(self.env["BZZ_DATA_DIR"]) / "haivequeen.db"
         self.assertTrue(own.is_file())
         self.assertNotEqual(own.resolve(), default_db.resolve())
 

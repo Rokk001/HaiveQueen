@@ -5,8 +5,8 @@ import sys
 import unittest
 from pathlib import Path
 
-from orchtest import ROOT
-from orchlib import platform as osplat
+from bzztest import ROOT
+from haivequeen import platform as osplat
 
 ECHO = "import json,sys; print(json.dumps(sys.argv[1:]))"
 
@@ -33,7 +33,7 @@ class QuotedArgumentsTest(unittest.TestCase):
     def test_no_shell_string_calls(self):
         """No module starts a process through a shell string (the old unquoted call): no shell=True, no os.system."""
         bad = []
-        for f in sorted((ROOT / "orchlib").glob("*.py")) + [ROOT / "orch.py"]:
+        for f in sorted((ROOT / "haivequeen").glob("*.py")) + [ROOT / "haivequeen" / "cli.py"]:
             if re.search(r"shell\s*=\s*True|os\.system\(", f.read_text(encoding="utf-8")):
                 bad.append(f.name)
         self.assertEqual(bad, [])

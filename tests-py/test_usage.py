@@ -1,4 +1,4 @@
-"""Tests of orchlib.usage with invented log files in a temp folder and a temp database (no real logs touched)."""
+"""Tests of haivequeen.usage with invented log files in a temp folder and a temp database (no real logs touched)."""
 import json
 import os
 import sys
@@ -11,7 +11,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import db, runtime, usage  # noqa: E402
+from haivequeen import db, runtime, usage  # noqa: E402
 
 SONNET = "claude-sonnet-5-5"
 
@@ -392,8 +392,8 @@ class WindowTest(unittest.TestCase):
         provs = [{"name": "c", "limit": {"source": "claude"}}, {"name": "x", "limit": {"source": "codex"}},
                  {"name": "l", "limit": {"source": "none"}}, {"name": "n"}]
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("ORCH_PROVIDER_LIMITS_FILE", None)
-            os.environ.pop("ORCH_DATA_DIR", None)
+            os.environ.pop("BZZ_PROVIDER_LIMITS_FILE", None)
+            os.environ.pop("BZZ_DATA_DIR", None)
             lim = usage.provider_limits(self.conn, provs, codex_dir=d)
         self.assertEqual(lim["c"]["free_pct"], 25.0)
         self.assertAlmostEqual(lim["c"]["hours"], 2.0, delta=0.05)
@@ -403,19 +403,19 @@ class WindowTest(unittest.TestCase):
             self.assertEqual((lim[k]["free_pct"], lim[k]["hours"]), (100.0, 168.0))
 
     def test_provider_limit_test_runtime_reads_nothing(self):
-        """With a test runtime (ORCH_DATA_DIR) and no limits file nothing is read from this PC."""
+        """With a test runtime (BZZ_DATA_DIR) and no limits file nothing is read from this PC."""
         usage.save_claude_usage(self.conn, self.event(self.now + 3600, self.now + 7200, seven=0.75))
-        env = {"ORCH_DATA_DIR": self.tmp.name}
+        env = {"BZZ_DATA_DIR": self.tmp.name}
         with mock.patch.dict(os.environ, env):
-            os.environ.pop("ORCH_PROVIDER_LIMITS_FILE", None)
+            os.environ.pop("BZZ_PROVIDER_LIMITS_FILE", None)
             lim = usage.get_provider_limit(self.conn, {"name": "c", "limit": {"source": "claude"}})
         self.assertEqual((lim["free_pct"], lim["hours"]), (100.0, 168.0))
 
     def test_provider_limit_file(self):
-        """ORCH_PROVIDER_LIMITS_FILE overrides the sources (used by scheduler tests)."""
+        """BZZ_PROVIDER_LIMITS_FILE overrides the sources (used by scheduler tests)."""
         f = Path(self.tmp.name) / "limits.json"
         f.write_text('{"c":{"usedPercent":80,"resetHours":24},"d":{"usedPercent":10}}', encoding="utf-8")
-        with mock.patch.dict(os.environ, {"ORCH_PROVIDER_LIMITS_FILE": str(f)}):
+        with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(f)}):
             c = usage.get_provider_limit(self.conn, {"name": "c", "limit": {"source": "claude"}})
             d = usage.get_provider_limit(self.conn, {"name": "d"})
             e = usage.get_provider_limit(self.conn, {"name": "e"})
@@ -441,7 +441,7 @@ class PathTest(unittest.TestCase):
             self.assertEqual(usage.claude_root(), Path("/h/.claude/projects"))
             self.assertEqual(usage.codex_root(), Path("/h/.codex/sessions"))
             self.assertEqual(usage.claude_settings_path(), Path("/h/.claude/settings.json"))
-        with mock.patch.dict(os.environ, {"ORCH_DATA_DIR": "/d"}):
+        with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": "/d"}):
             self.assertEqual(usage.default_cache_dir(), Path("/d/usage-cache"))
 
 

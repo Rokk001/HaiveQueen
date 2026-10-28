@@ -1,4 +1,4 @@
-"""Project setup: `orch init` creates the project files, `orch register` records a project."""
+"""Project setup: `bzz init` creates the project files, `bzz register` records a project."""
 import json
 from pathlib import Path
 
@@ -19,13 +19,13 @@ def _write_new(path: Path, text: str, report: list) -> None:
 
 
 def init_project(folder) -> list:
-    """Create .orchestrator/project.toml, AGENTS.md, CLAUDE.md (only if missing) and docs/plans/; returns a report."""
+    """Create .haivequeen/project.toml, AGENTS.md, CLAUDE.md (only if missing) and docs/plans/; returns a report."""
     ws = Path(folder)
     ws.mkdir(parents=True, exist_ok=True)
     report = []
     toml = (EXAMPLES / "project.example.toml").read_text(encoding="utf-8").replace(
         'name = "example"', "name = " + json.dumps(ws.resolve().name), 1)
-    _write_new(ws / ".orchestrator" / "project.toml", toml, report)
+    _write_new(ws / ".haivequeen" / "project.toml", toml, report)
     _write_new(ws / "AGENTS.md", (EXAMPLES / "AGENTS.example.md").read_text(encoding="utf-8"), report)
     _write_new(ws / "CLAUDE.md", CLAUDE_LINE, report)
     plans = ws / "docs" / "plans"

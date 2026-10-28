@@ -1,7 +1,7 @@
 """Tests of the pane layout and the pane command lock (the v2 form of the v1 pane tests B and E).
 
 B: only the chief and dashboard panes are open and the first agent starts: its pane splits the dashboard pane, the next agent splits the first one.
-E: pane commands come from the loop round (launch_agent) and from `orch start`; both take pane.lock, so two processes never send them at the same
+E: pane commands come from the loop round (launch_agent) and from `bzz start`; both take pane.lock, so two processes never send them at the same
    time, and of several loops started at the same moment exactly one takes loop.lock.
 """
 import argparse
@@ -13,10 +13,10 @@ import subprocess
 import sys
 import unittest
 
-from orchtest import RoundCase
-from orchlib import loop
-from orchlib.terminal import pane_title
-from orchlib.terminal.headless import Headless
+from bzztest import RoundCase
+from haivequeen import loop
+from haivequeen.terminal import pane_title
+from haivequeen.terminal.headless import Headless
 
 ONE = [{"id": "P1", "title": "first"}]
 SLEEP = [sys.executable, "-c", "import time;time.sleep(60)"]
@@ -42,26 +42,26 @@ class PaneLayoutTest(RoundCase):
     def setUp(self):
         """A dummy runner that sets the pid of its agent row, a recording headless terminal with the chief and the dashboard pane."""
         super().setUp()
-        os.environ.pop("ORCH_TEST_NOSTART", None)
+        os.environ.pop("BZZ_TEST_NOSTART", None)
         self.plan("IN_PROGRESS", ONE)
         self.seed()
         dummy = self.base / "dummy_runner.py"
         dummy.write_text(
-            "import os, sys, time\nsys.path.insert(0, %r)\nfrom orchlib import config, db, runtime\n"
+            "import os, sys, time\nsys.path.insert(0, %r)\nfrom haivequeen import config, db, runtime\n"
             "conn = db.connect(config.db_path())\nruntime.upsert_agent(conn, sys.argv[1], sys.argv[2], {'pid': os.getpid(), 'status': 'running'})\ntime.sleep(30)\n"
             % str(loop.TOOLS_DIR), encoding="utf-8")
         self.orig = loop.runner_argv
         loop.runner_argv = lambda env, spec: [sys.executable, str(dummy), env.name, spec["name"]]
         self.term = RecordingHeadless(self.base / "panes")
-        self.chief = self.term.open_window("Orchestrator", pane_title("all projects", "CHIEF", "Orchestrator", "m", True), SLEEP, name="chief")
-        self.dash = self.term.split_pane("Orchestrator", pane_title("all projects", "Overview", "Dashboard", "-", True), "white", SLEEP,
+        self.chief = self.term.open_window("HaiveQueen", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
+        self.dash = self.term.split_pane("HaiveQueen", pane_title("all projects", "Overview", "Dashboard", "-", True), "white", SLEEP,
                                          "vertical", 0.8, self.chief, "dashboard")
         self.term.splits.clear()
 
     def tearDown(self):
         """End every process of the panes."""
         loop.runner_argv = self.orig
-        for p in self.term.list_panes("Orchestrator"):
+        for p in self.term.list_panes("HaiveQueen"):
             if p.alive:
                 self.term.close_pane(p.id)
         super().tearDown()
@@ -73,24 +73,24 @@ class PaneLayoutTest(RoundCase):
         self.assertEqual(self.term.splits, [(self.dash, "horizontal")])
         self.assertEqual(first["status"], "running")
         spec = {"name": "DUMMY-P2-work", "person": "Zed", "model_long": "Claude Sonnet 5.5 medium"}
-        loop.launch_agent(self.envs()[0], self.term, "Orchestrator", spec, settle=0, poll=0.2, tries=100)
+        loop.launch_agent(self.envs()[0], self.term, "HaiveQueen", spec, settle=0, poll=0.2, tries=100)
         second = self.ag("DUMMY-P2-work")
         self.assertEqual(self.term.splits[-1], (first["pane_id"], "horizontal"))
-        ids = [p.id for p in self.term.list_panes("Orchestrator") if p.alive]
+        ids = [p.id for p in self.term.list_panes("HaiveQueen") if p.alive]
         self.assertEqual(sorted(ids), sorted([self.chief, self.dash, first["pane_id"], second["pane_id"]]))
         self.assertEqual(len(set(ids)), 4)
 
     def test_without_dashboard_the_chief_pane_is_split(self):
         """With the dashboard pane gone the first agent pane splits the chief pane."""
         self.term.close_pane(self.dash)
-        loop.launch_agent(self.envs()[0], self.term, "Orchestrator",
+        loop.launch_agent(self.envs()[0], self.term, "HaiveQueen",
                           {"name": "DUMMY-P1-work", "person": "Max", "model_long": "Claude Sonnet 5.5 medium"}, settle=0, poll=0.2, tries=100)
         self.assertEqual(self.term.splits, [(self.chief, "horizontal")])
 
 
-HOLD = ("import sys, time\nsys.path.insert(0, sys.argv[1])\nfrom orchlib import loop\n"
+HOLD = ("import sys, time\nsys.path.insert(0, sys.argv[1])\nfrom haivequeen import loop\n"
         "with loop.pane_lock():\n    open(sys.argv[2], 'a').write('in %s\\n' % sys.argv[3])\n    time.sleep(0.6)\n    open(sys.argv[2], 'a').write('out %s\\n' % sys.argv[3])\n")
-TAKE = ("import sys, time\nsys.path.insert(0, sys.argv[1])\nfrom orchlib import loop\n"
+TAKE = ("import sys, time\nsys.path.insert(0, sys.argv[1])\nfrom haivequeen import loop\n"
         "res = loop._take_pid_lock(loop.lock_file(), own_ok=True)\nprint(res, flush=True)\ntime.sleep(2.5)\n")
 
 
@@ -141,7 +141,7 @@ class PaneLockTest(RoundCase):
             holder.wait()
 
     def start(self):
-        """Call `orch start` (window mode, headless backend) in this process and return its JSON output."""
+        """Call `bzz start` (window mode, headless backend) in this process and return its JSON output."""
         args = argparse.Namespace(foreground=False, terminal="headless", rounds=0, round_minutes=0)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -149,7 +149,7 @@ class PaneLockTest(RoundCase):
         return json.loads(buf.getvalue())
 
     def test_second_start_does_not_open_a_second_window(self):
-        """With a loop running, or a window start pending, `orch start` opens no pane."""
+        """With a loop running, or a window start pending, `bzz start` opens no pane."""
         holder = subprocess.Popen(SLEEP)
         try:
             loop.lock_file().parent.mkdir(parents=True, exist_ok=True)
