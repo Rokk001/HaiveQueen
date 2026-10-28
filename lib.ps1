@@ -72,7 +72,7 @@ function Get-MutexName([string]$Prefix, [string]$Lock) {
     return 'Global\' + $Prefix + $tag + $Lock
 }
 
-# Runs a script block while holding the AGENTS.json mutex (the mutex name starts with the project's mutexPrefix).
+# Runs a script block while holding the agents mutex (guards the pane slot counter file) (the mutex name starts with the project's mutexPrefix).
 # The wait is limited (ORCH_LOCK_TIMEOUT_SEC, default 120 s) and throws instead of waiting forever; a lock abandoned by an exited process counts as free.
 function Invoke-Locked([scriptblock]$Block) {
     $mutexName = Get-MutexName ([string](Get-ProjCfg).mutexPrefix) 'AgentsJson'
@@ -83,29 +83,32 @@ function Invoke-Locked([scriptblock]$Block) {
     if (-not $got) { throw "agents lock '$mutexName' not free within $limit s" }
     try { & $Block } finally { $m.ReleaseMutex() }
 }
-# Reads AGENTS.json as a flat array of agent rows (rows without a name, empty arrays and old nested wrappers are dropped).
-function Read-Agents($Cfg) {
-    $p = Join-Path $Cfg.runtime 'AGENTS.json'
-    if (-not (Test-Path $p)) { return @() }
-    # Open with full sharing (incl. delete) so that a reader never blocks the atomic rename of a writer.
-    $raw = $null
-    for ($try = 1; $try -le 20 -and $null -eq $raw; $try++) {
-        try { $fs = [System.IO.File]::Open($p, 'Open', 'Read', 'ReadWrite, Delete'); try { $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8); $raw = $sr.ReadToEnd() } finally { $fs.Dispose() } } catch { Start-Sleep -Milliseconds 50 }
+# Maps the snake_case column names of an agent row of the database to the camelCase names the scripts used in AGENTS.json.
+$script:AgentColumnNames = @{ plan_path = 'plan'; started_at = 'startedAt'; ended_at = 'endedAt'; last_line = 'lastLine'; pane_id = 'paneId'; exit_code = 'exitCode'; tokens_in = 'tokensIn'; tokens_out = 'tokensOut' }
+# Turns one agent row of the database into the flat row the scripts always saw (camelCase names, "bundle" as array); empty columns are left out like missing properties.
+function ConvertFrom-OrchAgentRow($R) {
+    $o = [ordered]@{}
+    foreach ($p in $R.PSObject.Properties) {
+        if ($p.Name -in @('id', 'archived', 'extra_json') -or $null -eq $p.Value) { continue }
+        if ($p.Name -eq 'bundle_json') { if (-not $R.PSObject.Properties['bundle']) { try { $o['bundle'] = @(ConvertFrom-Json -InputObject ([string]$p.Value)) } catch {} }; continue }
+        $n = if ($script:AgentColumnNames.ContainsKey($p.Name)) { $script:AgentColumnNames[$p.Name] } else { $p.Name }
+        $o[$n] = $p.Value
     }
-    if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
-    $parsed = ConvertFrom-Json -InputObject $raw
-    $out = New-Object System.Collections.ArrayList
-    $walk = $null
-    $walk = { param($x) foreach ($y in @($x)) { if ($null -eq $y) { continue }; if ($y.PSObject.Properties['name'] -and $y.name) { [void]$out.Add($y) } elseif ($y.PSObject.Properties['value']) { & $walk $y.value } elseif ($y -is [System.Array]) { & $walk $y } } }
-    & $walk $parsed
-    return $out.ToArray()
+    return [pscustomobject]$o
 }
-# Writes the agent list back to AGENTS.json.
+# Turns an agent row (or hashtable) back into the field hashtable of Set-OrchAgent (row bookkeeping fields are dropped).
+function ConvertTo-OrchAgentFields($Row) {
+    $h = @{}
+    foreach ($p in $Row.PSObject.Properties) { if ($p.Name -notin @('id', 'project', 'archived', 'extra_json', 'name')) { $h[$p.Name] = $p.Value } }
+    return $h
+}
+# Reads the active agent rows of the project from the database as a flat array of agent rows (same shape as the old AGENTS.json rows).
+function Read-Agents($Cfg) {
+    return @(Get-OrchAgents $Cfg | ForEach-Object { ConvertFrom-OrchAgentRow $_ })
+}
+# Writes an agent list back: every row with a name is created or updated in the database (rows missing from the list are not removed; use Move-AgentsToArchive for that).
 function Write-Agents($Cfg, $List) {
-    $p = Join-Path $Cfg.runtime 'AGENTS.json'
-    $flat = @($List | Where-Object { $_ -and $_.PSObject.Properties['name'] -and $_.name })
-    $json = if ($flat.Count -eq 0) { '[]' } else { ConvertTo-Json -InputObject $flat -Depth 6 }
-    Write-FileAtomic $p $json
+    foreach ($r in @($List | Where-Object { $_ -and $_.PSObject.Properties['name'] -and $_.name })) { [void](Set-OrchAgent $Cfg ([string]$r.name) (ConvertTo-OrchAgentFields $r)) }
 }
 
 # Writes a text file atomically: into a temporary file next to it first, then renamed over the target, so readers never see a half file.
@@ -118,64 +121,37 @@ function Write-FileAtomic([string]$Path, [string]$Text) {
     }
 }
 
-# Moves agent rows out of AGENTS.json into AGENTS-ARCHIVE.json (both written atomically, under the lock).
+# Marks agent rows as archived in the database (they leave the active list but stay in the history).
 # Without -Match: every row that ended more than $Hours hours ago (running rows always stay). With -Match: every row whose plan or name matches the regex. Returns the number of moved rows.
 function Move-AgentsToArchive($Cfg, [double]$Hours = 12, [string]$Match = '') {
-    $moved = Invoke-Locked {
-        $list = @(Read-Agents $Cfg)
-        $old = @($list | Where-Object {
-            if ($Match) { return ([string]$_.plan -match $Match -or [string]$_.name -match $Match) }
-            return ($_.endedAt -and $_.status -ne 'running' -and $_.status -ne 'starting' -and ((Get-Date) - [datetime]$_.endedAt).TotalHours -gt $Hours)
-        })
-        if ($old.Count -eq 0) { return 0 }
-        $ap = Join-Path $Cfg.runtime 'AGENTS-ARCHIVE.json'
-        $arch = @()
-        if (Test-Path $ap) { $raw = Get-Content $ap -Raw -Encoding UTF8; if (-not [string]::IsNullOrWhiteSpace($raw)) { $arch = @(ConvertFrom-Json -InputObject $raw) } }
-        Write-FileAtomic $ap (ConvertTo-Json -InputObject @($arch + $old) -Depth 6)
-        $keep = @($list | Where-Object { $old -notcontains $_ })
-        Write-Agents $Cfg $keep
-        return $old.Count
-    }
-    return [int]$moved
+    return [int](Move-OrchAgentsToArchive $Cfg $Hours $Match)
 }
 
-# Creates or updates the row of one agent (hashtable of properties) under the lock.
+# Creates or updates the row of one agent (hashtable of properties); the database makes the change in one transaction.
 function Update-Agent($Cfg, [string]$Name, [hashtable]$Props) {
-    Invoke-Locked {
-        $list = @(Read-Agents $Cfg)
-        $row = $list | Where-Object { $_.name -eq $Name } | Select-Object -First 1
-        if (-not $row) {
-            $row = [pscustomobject]@{ name = $Name }
-            $list = @($list) + @($row)
-        }
-        foreach ($k in $Props.Keys) { $row | Add-Member -NotePropertyName $k -NotePropertyValue $Props[$k] -Force }
-        Write-Agents $Cfg $list
-    }
+    [void](Set-OrchAgent $Cfg $Name $Props)
 }
 
-# Update-Agent with up to $Attempts tries (a lock timeout throws). When the last try fails, the row is written WITHOUT the lock (still atomic) as status 'failed' with the reason,
-# so a row never stays on 'starting'/'running' because of a lock problem. Returns $true when the requested properties were written, $false when the failure fallback was used.
+# Update-Agent with up to $Attempts tries (a failing call throws). When the last try fails, the row is written once more as status 'failed' with the reason,
+# so a row never stays on 'starting'/'running' because of a database problem. Returns $true when the requested properties were written, $false when the failure fallback was used.
 function Update-AgentRetry($Cfg, [string]$Name, [hashtable]$Props, [int]$Attempts = 3) {
     $err = ''
     for ($i = 1; $i -le $Attempts; $i++) {
         try { Update-Agent $Cfg $Name $Props; return $true } catch { $err = $_.Exception.Message; if ($i -lt $Attempts) { Start-Sleep -Seconds 2 } }
     }
     try { Write-RoundLog $Cfg "warning $Name could not update its row after $Attempts tries, set to failed: $err" } catch {}
-    $list = @(Read-Agents $Cfg)
-    $row = $list | Where-Object { $_.name -eq $Name } | Select-Object -First 1
-    if (-not $row) { $row = [pscustomobject]@{ name = $Name }; $list = @($list) + @($row) }
-    foreach ($k in $Props.Keys) { $row | Add-Member -NotePropertyName $k -NotePropertyValue $Props[$k] -Force }
-    $row | Add-Member -NotePropertyName status -NotePropertyValue 'failed' -Force
-    $row | Add-Member -NotePropertyName endedAt -NotePropertyValue (Get-Date).ToString('o') -Force
-    $row | Add-Member -NotePropertyName lastLine -NotePropertyValue ("agents lock error after $Attempts tries (wanted status '" + [string]$Props['status'] + "'): " + $err) -Force
-    Write-Agents $Cfg $list
+    $f = @{}
+    foreach ($k in $Props.Keys) { $f[$k] = $Props[$k] }
+    $f['status'] = 'failed'
+    $f['endedAt'] = (Get-Date).ToString('o')
+    $f['lastLine'] = "agents lock error after $Attempts tries (wanted status '" + [string]$Props['status'] + "'): " + $err
+    Update-Agent $Cfg $Name $f
     return $false
 }
 
-# Appends one timestamped line to ROUNDS.log.
+# Appends one timestamped line to the history and to the ROUNDS.log text mirror.
 function Write-RoundLog($Cfg, [string]$Text) {
-    $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Text
-    Add-Content -Path (Join-Path $Cfg.runtime 'ROUNDS.log') -Value $line -Encoding UTF8
+    [void](Add-OrchEvent $Cfg $Text 'rounds')
 }
 
 # Free physical RAM in GB.
@@ -190,20 +166,13 @@ function Get-BuildProcessNames {
 
 # True while any build process runs (same detection as Get-BuildProcessNames).
 function Test-FullBuildRunning { return ((Get-BuildProcessNames).Count -gt 0) }
-# Parses OPEN-QUESTIONS.md into blocks (id, plan, item, status).
+# Reads the questions of the project from the database as blocks (id "Q-<number>", plan, item, status OPEN or ANSWERED, answer).
 function Get-Questions($Cfg) {
-    $p = Get-QuestionsPath $Cfg
     $res = @()
-    if (-not (Test-Path $p)) { return @() }
-    $cur = $null
-    foreach ($l in (Get-Content $p -Encoding UTF8)) {
-        if ($l -match '^##\s+(Q-\S+)') { if ($cur) { $res += $cur }; $cur = [ordered]@{ id = $Matches[1]; plan = ''; item = ''; status = ''; answer = '' } }
-        elseif ($cur -and $l -match '^- Plan:\s*(.*)$') { $cur.plan = $Matches[1].Trim() }
-        elseif ($cur -and $l -match '^- Item:\s*(.*)$') { $cur.item = $Matches[1].Trim() }
-        elseif ($cur -and $l -match '^- Status:\s*(\S+)') { $cur.status = $Matches[1] }
-        elseif ($cur -and $l -match '^- Answer[^:]*:\s*(.*)$') { $cur.answer = $Matches[1].Trim() }
+    foreach ($q in @(Get-OrchQuestions $Cfg)) {
+        $st = if ([string]$q.status -eq 'open') { 'OPEN' } elseif ([string]$q.status -eq 'answered') { 'ANSWERED' } else { ([string]$q.status).ToUpper() }
+        $res += [ordered]@{ id = ('Q-' + [string]$q.id); plan = [string]$q.plan_path; item = [string]$q.item; status = $st; answer = [string]$q.answer }
     }
-    if ($cur) { $res += $cur }
     return @($res)
 }
 
@@ -293,13 +262,10 @@ function Get-PaneSlot($Cfg, [string]$Name, [int]$MinCols = 40, [int]$MinRows = 2
         if ($half) {
             $cols = [int]$half.paneCols; $rows = [int]$half.paneRows
             if ($dir -eq '-V') { $cols = [int][Math]::Floor($cols / 2) } else { $rows = [int][Math]::Floor($rows / 2) }
-            $old = $half.name
-            $list = @(Read-Agents $Cfg); $row = $list | Where-Object { $_.name -eq $old } | Select-Object -First 1
-            $row | Add-Member -NotePropertyName paneCols -NotePropertyValue $cols -Force; $row | Add-Member -NotePropertyName paneRows -NotePropertyValue $rows -Force   # estimate until the pane reports its real size
-            Write-Agents $Cfg $list
+            [void](Update-OrchAgentFields $Cfg ([string]$half.name) @{ paneCols = $cols; paneRows = $rows })   # estimate until the pane reports its real size
         }
-        $list = @(Read-Agents $Cfg); $mine = $list | Where-Object { $_.name -eq $Name } | Select-Object -First 1
-        if ($mine) { $mine | Add-Member -NotePropertyName paneId -NotePropertyValue $next -Force; $mine | Add-Member -NotePropertyName paneCols -NotePropertyValue $cols -Force; $mine | Add-Member -NotePropertyName paneRows -NotePropertyValue $rows -Force; $mine | Add-Member -NotePropertyName paneClosed -NotePropertyValue $false -Force; Write-Agents $Cfg $list }
+        $mine = @(Read-Agents $Cfg | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
+        if ($mine.Count) { [void](Update-OrchAgentFields $Cfg $Name @{ paneId = $next; paneCols = $cols; paneRows = $rows; paneClosed = $false }) }
         Write-FileAtomic $pp (ConvertTo-Json -InputObject @{ next = ($next + 1) } -Compress)
         return @{ Target = $target; Dir = $dir; Id = $next }
     })
@@ -344,21 +310,21 @@ function Format-ResetTime($Epoch) {
     return $d.ToString('dd.MM. HH:mm')
 }
 
-# Remembers the newest Claude usage windows (from a rate_limit_event of any headless claude run) in usage-claude.json.
+# Remembers the newest Claude usage windows (from a rate_limit_event of any headless claude run) in the kv key usage-claude.
 function Save-ClaudeUsage($Cfg, $Event) {
     $w = $Event.rate_limit_info.unifiedWindows
     if (-not $w) { return }
     $o = [ordered]@{ saved = (Get-Date).ToString('o'); fiveHour = $w.five_hour; sevenDay = $w.seven_day }
-    [System.IO.File]::WriteAllText((Join-Path $Cfg.runtime 'usage-claude.json'), ($o | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+    Set-OrchKv $Cfg 'usage-claude' ($o | ConvertTo-Json -Depth 5)
 }
 
 # Claude 5h / 7d usage: @{FiveHour=@{Pct;Reset}; SevenDay=@{Pct;Reset}}; values are $null when unknown or the window has already reset.
 function Get-ClaudeUsage($Cfg) {
     $res = @{ FiveHour = $null; SevenDay = $null }
-    $p = Join-Path $Cfg.runtime 'usage-claude.json'
-    if (-not (Test-Path $p)) { return $res }
     try {
-        $j = Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json
+        $raw = Get-OrchKv $Cfg 'usage-claude'
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $res }
+        $j = $raw | ConvertFrom-Json
         $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         if ($j.fiveHour) { if ([int64]$j.fiveHour.resetsAt -gt $now) { $res.FiveHour = @{ Pct = [math]::Round(100 * [double]$j.fiveHour.utilization); Reset = (Format-ResetTime $j.fiveHour.resetsAt) } } else { $res.FiveHour = @{ Pct = $null; Reset = 'neues Fenster' } } }
         if ($j.sevenDay) { if ([int64]$j.sevenDay.resetsAt -gt $now) { $res.SevenDay = @{ Pct = [math]::Round(100 * [double]$j.sevenDay.utilization); Reset = (Format-ResetTime $j.sevenDay.resetsAt); At = [int64]$j.sevenDay.resetsAt } } else { $res.SevenDay = @{ Pct = $null; Reset = 'neues Fenster' } } }
@@ -513,17 +479,23 @@ function Format-Tokens($n) {
     if ($n -ge 1000) { return ('{0:N0}k' -f ($n / 1e3)) }
     return "$n"
 }
-# Appends one brain-call line (a JSON object: ts, trigger, model, context, input, output, durationSec, actions, error) to BRAIN-USAGE.jsonl.
+# Stores one brain call (a hashtable or object: ts, trigger, model, context, input, output, durationSec, actions, error) as a usage row of kind brain.
 function Add-BrainRow($Cfg, $Row) {
-    $p = Join-Path $Cfg.runtime 'BRAIN-USAGE.jsonl'
-    Add-Content -Path $p -Value (ConvertTo-Json -InputObject $Row -Compress -Depth 5) -Encoding UTF8
+    $h = @{ kind = 'brain' }
+    $names = @{ ts = 'ts'; trigger = 'trigger'; model = 'model'; context = 'context'; input = 'tokensIn'; output = 'tokensOut'; durationSec = 'durationS'; actions = 'actions'; error = 'error' }
+    foreach ($k in $names.Keys) {
+        $v = if ($Row -is [System.Collections.IDictionary]) { $Row[$k] } else { $Row.$k }
+        if ($null -ne $v) { $h[$names[$k]] = $(if ($k -eq 'ts') { ConvertTo-OrchTime $v } elseif ($k -in @('actions', 'trigger', 'model')) { [string]$v } else { $v }) }
+    }
+    Add-OrchUsage $Cfg $h
 }
-# Reads all lines of BRAIN-USAGE.jsonl (damaged lines are skipped).
+# Reads all brain usage rows of the project (oldest first) in the old row shape: ts, trigger, model, context, input, output, durationSec, actions, error.
 function Read-BrainRows($Cfg) {
-    $p = Join-Path $Cfg.runtime 'BRAIN-USAGE.jsonl'
-    if (-not (Test-Path $p)) { return @() }
     $out = @()
-    foreach ($l in (Get-Content $p -Encoding UTF8)) { if ([string]::IsNullOrWhiteSpace($l)) { continue }; try { $out += ($l | ConvertFrom-Json) } catch { } }
+    foreach ($u in @(Get-OrchUsage $Cfg 'brain')) {
+        $o = [ordered]@{ ts = $u.ts; trigger = $u.trigger; model = $u.model; context = $u.context; input = $u.tokens_in; output = $u.tokens_out; durationSec = $u.duration_s; actions = $u.actions; error = [bool]$u.error }
+        $out += [pscustomobject]$o
+    }
     return $out
 }
 # Summary of the brain usage: the last call, and number of calls / input / output of today.
@@ -535,38 +507,29 @@ function Get-BrainTotals($Cfg) {
     $lastCall = @($rows | Where-Object { $null -ne $_.input } | Select-Object -Last 1)
     return [pscustomobject]@{ Calls = $today.Count; Input = $in; Output = $out; Last = $(if ($rows.Count) { $rows[-1] } else { $null }); LastCall = $(if ($lastCall.Count) { $lastCall[0] } else { $null }) }
 }
-# Writes the orchestrator state (status text, round number, next round time) for the dashboard and the pane header.
-function Write-OrchState($Cfg, [hashtable]$State) { Write-FileAtomic (Join-Path $Cfg.runtime 'ORCH-STATE.json') (ConvertTo-Json -InputObject $State -Compress) }
+# Writes the orchestrator state (status text, round number, next round time) for the dashboard and the pane header (kv key loop-state, JSON text).
+function Write-OrchState($Cfg, [hashtable]$State) { Set-OrchKv $Cfg 'loop-state' (ConvertTo-Json -InputObject $State -Compress) }
 # Reads the orchestrator state; $null when missing.
 function Read-OrchState($Cfg) {
-    $p = Join-Path $Cfg.runtime 'ORCH-STATE.json'
-    if (-not (Test-Path $p)) { return $null }
-    try { return (Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+    try { $raw = Get-OrchKv $Cfg 'loop-state'; if ([string]::IsNullOrWhiteSpace($raw)) { return $null }; return ($raw | ConvertFrom-Json) } catch { return $null }
 }
 
-# Appends one event line (HH:mm|E or O|text) to ORCH-EVENTS.log; the orchestrator pane shows exactly these lines.
+# Adds one event line (HH:mm|E or O|text) to the history and to the ORCH-EVENTS.log mirror; the orchestrator pane shows exactly these lines.
 function Write-OrchEvent($Cfg, [string]$Text, [bool]$IsError = $false) {
-    $line = '{0}|{1}|{2}' -f (Get-Date -Format 'HH:mm'), $(if ($IsError) { 'E' } else { 'O' }), ($Text -replace '\s+', ' ').Trim()
-    Add-Content -Path (Join-Path $Cfg.runtime 'ORCH-EVENTS.log') -Value $line -Encoding UTF8
+    [void](Add-OrchEvent $Cfg $Text 'events' $IsError)
 }
-# All agent rows: the live AGENTS.json plus the archive AGENTS-ARCHIVE.json (history for package states).
+# All agent rows: the archived rows (history for package states) followed by the active rows.
 function Read-AllAgents($Cfg) {
-    $rows = @(Read-Agents $Cfg)
-    $ap = Join-Path $Cfg.runtime 'AGENTS-ARCHIVE.json'
-    if (Test-Path $ap) { try { $rows = @(ConvertFrom-Json -InputObject (Get-Content $ap -Raw -Encoding UTF8)) + $rows } catch { } }
-    return $rows
+    return @(@(Get-OrchAgents $Cfg 'archive' | ForEach-Object { ConvertFrom-OrchAgentRow $_ }) + @(Read-Agents $Cfg))
 }
-
 
 # ---- Follow-up freeze, person names, colors, task text, short model names (2026-10-27) ----
 
 # Key of a package for the freeze list: plan file name (lower case) and package id (lower case).
 function Get-FreezeKey([string]$Plan, [string]$Pkg) { return (([string]$Plan).Replace('/', '\').Split('\')[-1].ToLower() + '|' + ([string]$Pkg).ToLower()) }
-# Packages that must not get any follow-up task (no verify, work, release, no event for the brain): runtime\NOFOLLOW.json = {"keys":["a-plan.md|a6", ...]}. Written by the coordinator or on request only.
+# Packages that must not get any follow-up task (no verify, work, release, no event for the brain): the nofollow keys of the project, e.g. "a-plan.md|a6". Set by the coordinator or on request only.
 function Get-FrozenKeys($Cfg) {
-    $p = Join-Path $Cfg.runtime 'NOFOLLOW.json'
-    if (-not (Test-Path $p)) { return @() }
-    try { return @((Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json).keys | ForEach-Object { ([string]$_).ToLower() }) } catch { return @() }
+    return @(Get-OrchNofollow $Cfg | ForEach-Object { ([string]$_).ToLower() })
 }
 # True when the package of this plan is frozen (see Get-FrozenKeys).
 function Test-Frozen($Cfg, [string]$Plan, [string]$Pkg) { return ((Get-FrozenKeys $Cfg) -contains (Get-FreezeKey $Plan $Pkg)) }
@@ -912,38 +875,28 @@ function Get-BuildUseMB([double]$StartFreeMB, [double]$MinFreeMB, [int]$Jobs) {
     return [math]::Round([math]::Max(0.0, $StartFreeMB - $MinFreeMB) / [math]::Max(1, $Jobs), 0)
 }
 
-# Key of this machine and project in the build-job store.
-function Get-BuildJobsKey($Cfg) { return ($env:COMPUTERNAME + '|' + [IO.Path]::GetFileNameWithoutExtension([string]$Cfg.projectFile)) }
-
 # Stored highest use per job (MB) of this host and project, or $null when never measured.
 function Get-BuildPerJobMB($Cfg) {
-    $f = Join-Path $Cfg.runtime 'BUILD-JOBS.json'
-    if (-not (Test-Path $f)) { return $null }
-    try { $o = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
-    $v = $o.(Get-BuildJobsKey $Cfg)
+    $v = Get-OrchBuildMax $Cfg
     if ($null -eq $v) { return $null }
     return [double]$v
 }
 
-# Stores the measured use per job for this host and project; only a higher value replaces the stored one. Returns the value that is stored afterwards.
-function Save-BuildPerJobMB($Cfg, [double]$UseMB) {
-    $f = Join-Path $Cfg.runtime 'BUILD-JOBS.json'
-    $h = [ordered]@{}
-    if (Test-Path $f) { try { $o = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json; foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = $p.Value } } catch {} }
-    $key = Get-BuildJobsKey $Cfg
-    if (-not $h.Contains($key) -or [double]$h[$key] -lt $UseMB) { $h[$key] = $UseMB }
-    [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $h), (New-Object System.Text.UTF8Encoding($false)))
-    return [double]$h[$key]
+# Stores the measured use per job for this host and project as a build measurement row; the stored value is the highest one ever measured. Returns the value that is stored afterwards.
+# The other numbers of the measurement (jobs, free RAM at the start and lowest free RAM, duration in seconds) are optional and default to 0.
+function Save-BuildPerJobMB($Cfg, [double]$UseMB, [int]$Jobs = 0, [double]$FreeStartMB = 0, [double]$FreeMinMB = 0, [double]$DurationSec = 0) {
+    Add-OrchBuild $Cfg $Jobs $FreeStartMB $FreeMinMB $UseMB $DurationSec
+    return [double](Get-OrchBuildMax $Cfg)
 }
 
 # Ends the measurement of one build (plan 16.3): reads the 10-second samples, takes the lowest free RAM, computes the use per job, stores the highest value per host and project
-# and writes one ROUNDS.log line (jobs, duration, lowest free RAM, use per job). Returns an object with MinFreeMB, UseMB and StoredMB.
+# and writes one round log line (jobs, duration, lowest free RAM, use per job). Returns an object with MinFreeMB, UseMB and StoredMB.
 function Complete-BuildMeasure($Cfg, [string]$Name, [int]$Jobs, [double]$StartFreeMB, [string]$SampleFile, [datetime]$Started) {
     $min = $StartFreeMB
     if (Test-Path $SampleFile) { foreach ($l in (Get-Content $SampleFile -Encoding UTF8)) { $p = $l -split ';'; if ($p.Count -ge 2) { $v = [double]$p[1]; if ($v -lt $min) { $min = $v } } } }
     $use = Get-BuildUseMB $StartFreeMB $min $Jobs
-    $stored = Save-BuildPerJobMB $Cfg $use
     $dur = (Get-Date) - $Started
+    $stored = Save-BuildPerJobMB $Cfg $use $Jobs $StartFreeMB $min $dur.TotalSeconds
     Write-RoundLog $Cfg ('build {0}: jobs={1}, duration={2}, lowest free RAM={3} MB, use per job={4} MB (stored maximum {5} MB)' -f $Name, $Jobs, $dur.ToString('hh\:mm\:ss'), $min, $use, $stored)
     return [pscustomobject]@{ MinFreeMB = $min; UseMB = $use; StoredMB = $stored }
 }
@@ -1041,13 +994,28 @@ function Get-OrchAgents($Cfg, [string]$Scope = 'active', [string]$Status = '') {
 }
 # One agent row by name ($null when unknown).
 function Get-OrchAgent($Cfg, [string]$Name) { return (Invoke-Orch @('agents', 'get', '--project', (Get-OrchProject $Cfg), '--name', $Name)) }
+# Turns a time value (DateTime or ISO text, with or without UTC offset) into local ISO text without offset (yyyy-MM-ddTHH:mm:ss), the one format the database compares; empty and unparsable values are returned unchanged.
+function ConvertTo-OrchTime($Value) {
+    if ($null -eq $Value -or "$Value" -eq '') { return $Value }
+    $d = [datetime]::MinValue
+    if ($Value -is [datetimeoffset]) { return $Value.LocalDateTime.ToString('yyyy-MM-ddTHH:mm:ss') }
+    if ($Value -is [datetime]) { $Value = $(if ($Value.Kind -eq 'Utc') { $Value.ToLocalTime() } else { $Value }); return $Value.ToString('yyyy-MM-ddTHH:mm:ss') }
+    if ([datetime]::TryParse([string]$Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$d)) { if ($d.Kind -eq 'Utc') { $d = $d.ToLocalTime() }; return $d.ToString('yyyy-MM-ddTHH:mm:ss') }
+    return $Value
+}
+# JSON text of an agent field hashtable for the runtime command; the time fields startedAt and endedAt are normalised with ConvertTo-OrchTime.
+function ConvertTo-OrchFieldsJson([hashtable]$Fields) {
+    $f = @{}
+    foreach ($k in $Fields.Keys) { $f[$k] = $(if ($k -in @('startedAt', 'endedAt', 'started_at', 'ended_at')) { ConvertTo-OrchTime $Fields[$k] } else { $Fields[$k] }) }
+    return (ConvertTo-Json -InputObject $f -Compress -Depth 6)
+}
 # Creates or updates the active row of an agent from a hashtable of fields (unknown keys are kept as free fields).
 function Set-OrchAgent($Cfg, [string]$Name, [hashtable]$Fields) {
-    return (Invoke-Orch @('agents', 'upsert', '--project', (Get-OrchProject $Cfg), '--name', $Name, '--fields', '-') (ConvertTo-Json -InputObject $Fields -Compress -Depth 6))
+    return (Invoke-Orch @('agents', 'upsert', '--project', (Get-OrchProject $Cfg), '--name', $Name, '--fields', '-') (ConvertTo-OrchFieldsJson $Fields))
 }
 # Like Set-OrchAgent, but throws when the agent does not exist.
 function Update-OrchAgentFields($Cfg, [string]$Name, [hashtable]$Fields) {
-    return (Invoke-Orch @('agents', 'update-fields', '--project', (Get-OrchProject $Cfg), '--name', $Name, '--fields', '-') (ConvertTo-Json -InputObject $Fields -Compress -Depth 6))
+    return (Invoke-Orch @('agents', 'update-fields', '--project', (Get-OrchProject $Cfg), '--name', $Name, '--fields', '-') (ConvertTo-OrchFieldsJson $Fields))
 }
 # Archives agent rows ended more than $Hours ago (or whose plan/name matches the regex $Match); returns the number of moved rows.
 function Move-OrchAgentsToArchive($Cfg, [double]$Hours = 12, [string]$Match = '') {
