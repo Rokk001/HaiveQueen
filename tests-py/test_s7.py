@@ -250,6 +250,30 @@ class S7Test(RoundCase):
         self.assertTrue(routine.verify_zero(env, "A"))
         self.assertFalse(routine.verify_zero(env, "B"))
 
+    def test_verify_partial_in_english_is_open(self):
+        """A partly done item written as 'partial' or 'partially' (any case) keeps the package open even with 'Offene Anforderungen: 0'; 'impartial' is no match."""
+        from orchlib import routine
+        env = self.env()
+        forms = {"E1": "- Item A: partial", "E2": "* Item B: Partially done", "E3": "| Item C | PARTIAL |", "E4": "  - item d: partially"}
+        for name, line in forms.items():
+            self.finish(name, "%s\nOffene Anforderungen: 0" % line)
+            self.assertFalse(routine.verify_zero(env, name), line)
+        self.finish("E5", "- The review was impartial\nOffene Anforderungen: 0")
+        self.assertTrue(routine.verify_zero(env, "E5"))
+
+    def test_verify_partial_in_box_table_row_is_open(self):
+        """A partly done item in a table drawn with box-drawing frame characters (also other than the plain pipe) keeps the package open."""
+        from orchlib import routine
+        env = self.env()
+        frames = {"F1": "│", "F2": "┃", "F3": "║", "F4": "╎"}
+        for name, bar in frames.items():
+            self.finish(name, "%s Item A %s teilweise %s\nOffene Anforderungen: 0" % (bar, bar, bar))
+            self.assertFalse(routine.verify_zero(env, name), repr(bar))
+        self.finish("F5", "│ Item A │ Partial │\nOffene Anforderungen: 0")
+        self.assertFalse(routine.verify_zero(env, "F5"))
+        self.finish("F6", "│ Item A │ done │\nOffene Anforderungen: 0")
+        self.assertTrue(routine.verify_zero(env, "F6"))
+
     def test_v1_fix_verify_without_count_restarts(self):
         """Fix from v1: a verify answer without any count line starts the verify again, at most 3 verifies per package."""
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])

@@ -17,7 +17,9 @@ They stay valid and are never weakened by the tool rules. The rule numbers are s
 5. Agent type: every graphics task (models, textures, materials, particles, icons, images, animation clips, sounds) goes to Codex.
    All other tasks go to Claude Code when a Claude slot is free, else to Codex. The slots per type come from the project file.
 8. Completeness: a package counts as done only when a separate verify agent answers the completeness question with
-   exactly "Offene Anforderungen: 0" and lists no partial item. Anything else = back to a work agent for the listed items.
+   exactly "Offene Anforderungen: 0" and lists no partial item. A partial item is any list or table line (starting with -, *, | or a
+   box-drawing frame character such as │ ┃ ║) that says "teilweise", "partial" or "partially" in any case.
+   Anything else = back to a work agent for the listed items.
    The flow of a package is work -> verify -> release -> integrator.
 11. Plan status: every plan file carries in its second line exactly one of
     `Status: DRAFT` (the owner still works on it, nothing is started), `Status: READY` (released by the owner, not started yet),

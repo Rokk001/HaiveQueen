@@ -142,9 +142,12 @@ def read_final(env, name: str) -> str:
 
 
 def verify_zero(env, name: str) -> bool:
-    """True when the LAST 'Offene Anforderungen: N' line of the final answer says 0 (lines after it do not matter) and no partial item is listed."""
+    """True when the LAST 'Offene Anforderungen: N' line of the final answer says 0 (lines after it do not matter) and no partial item is listed.
+
+    A partial item is a list or table line (starting with -, *, | or a box-drawing frame character) that says "teilweise", "partial" or "partially" in any case.
+    """
     t = read_final(env, name)
-    return bool(t) and verify_open_count(env, name) == 0 and not re.search(r"(?im)^\s*[-*|].*teilweise", t)
+    return bool(t) and verify_open_count(env, name) == 0 and not re.search(r"(?im)^\s*[-*|─-╿].*(?:teilweise|\bpartial)", t)
 
 
 def verify_open_count(env, name: str) -> int:
