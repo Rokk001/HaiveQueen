@@ -47,7 +47,8 @@ function Test-VerifyZero($Cfg, [string]$AgentName) {
     $ff = Join-Path $Cfg.runtime ('runs\' + $AgentName + '\final.txt')
     if (-not (Test-Path $ff)) { return $false }
     $t = Get-Content $ff -Raw -Encoding UTF8
-    return ($t -match 'Offene Anforderungen:\s*0\s*$' -and $t -notmatch '(?im)^\s*[-*|].*teilweise')
+    $m = [regex]::Matches($t, 'Offene Anforderungen[^:\r\n]*:\s*(\d+)')   # the LAST count line decides, also when the answer adds notes after it
+    return ($m.Count -gt 0 -and [int]$m[$m.Count - 1].Groups[1].Value -eq 0 -and $t -notmatch '(?im)^\s*[-*|].*teilweise')
 }
 
 # Number of open requirements named at the end of a verify answer ("Offene Anforderungen: N"); -1 when the answer is missing or has no such line.
@@ -238,7 +239,9 @@ function Get-Routine($Ctx) {
         # New plan: the script cannot plan it (no package table or no known worktree) -> brain, once.
         if ($pkgs.Count -eq 0 -or -not $cwd) {
             if (-not $handled.ContainsKey("newplan:$rel")) { $events += [pscustomobject]@{ type = 'new_plan'; key = "newplan:$rel"; plan = $rel; package = ''; agent = ''; text = "Plan $rel is $($pl.status) and has " + $(if ($pkgs.Count) { 'no known worktree yet' } else { 'no readable package table' }) + ': plan its packages (worktree, branch, first work agents).' } }
-            continue
+            # The brain was asked once already and a package table exists: the routine starts the packages itself in the main checkout (the work prompt makes the agent create its own worktree), instead of skipping the plan forever.
+            if ($pkgs.Count -eq 0 -or -not $handled.ContainsKey("newplan:$rel")) { continue }
+            $cwd = [string]$Ctx.Repo
         }
         $stages = @{}
         foreach ($k in $pkgs) { $stages[$k.Id] = Get-PkgStage $cfg $all $rel $k.Id }
@@ -271,7 +274,9 @@ function Get-Routine($Ctx) {
         foreach ($k in $pkgs) {
             $st = $stages[$k.Id]
             $retry = ($st.Stage -eq 'failed' -and $st.Verify -and $st.Verify.status -eq 'failed' -and $st.Work -and [string]$st.Work.startedAt -lt [string]$st.Verify.startedAt -and @($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $rel) -and $_.Package -eq $k.Id }).Count -eq 0)   # a verify that crashed is run again (stops after two crashes with the same error: blocked task)
-            if (($st.Stage -ne 'needVerify' -and -not $retry) -or $workers -le 0) { continue }
+            # A verify answer without the closing line "Offene Anforderungen: <n>" can be neither followed up nor locked: the verify is run again (at most 3 verify agents per package).
+            $noLine = ($st.Stage -eq 'open' -and $st.Verify -and (Get-VerifyOpenCount $cfg ([string]$st.Verify.name)) -lt 0 -and @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and [string]$_.package -eq $k.Id -and $_.phase -eq 'verify' }).Count -lt 3 -and @($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $rel) -and $_.Package -eq $k.Id }).Count -eq 0)
+            if (($st.Stage -ne 'needVerify' -and -not $retry -and -not $noLine) -or $workers -le 0) { continue }
             $pv = Select-Provider $cfg 'medium' @() $free -Avoid (Get-RowProvider $st.Work)   # verify never below medium; another provider than the work agent when one is free
             if (-not $pv) { continue }
             $type = $pv.Name
