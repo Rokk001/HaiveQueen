@@ -443,14 +443,36 @@ def list_questions(conn, project=None, status=None, plan=None, item=None) -> lis
     return db.rows(conn, sql + " ORDER BY id", args)
 
 
-def list_decisions(conn, project=None, plan=None, item=None) -> list:
-    """List decisions filtered by project, plan and item, oldest first."""
+DECISION_STATUSES = ("active", "rule", "superseded")
+
+
+def list_decisions(conn, project=None, plan=None, item=None, active_only=False) -> list:
+    """List decisions filtered by project, plan and item, oldest first; active_only hides the ones with status rule or superseded."""
     sql, args = "SELECT * FROM decisions WHERE 1=1", []
+    if active_only:
+        sql += " AND status='active'"
     for col, val in (("project", project), ("plan_path", plan), ("item", item)):
         if val:
             sql += f" AND {col}=?"
             args.append(val)
     return db.rows(conn, sql + " ORDER BY id", args)
+
+
+def update_decision(conn, decision_id, plan=None, item=None, status=None) -> dict:
+    """Change the plan, item and/or status of a decision (arguments left out stay as they are); return the updated row."""
+    if status is not None and status not in DECISION_STATUSES:
+        raise CmdError("status must be one of: " + ", ".join(DECISION_STATUSES))
+    sets, args = [], []
+    for col, val in (("plan_path", plan), ("item", item), ("status", status)):
+        if val is not None:
+            sets.append(col + "=?")
+            args.append(val)
+    if not sets:
+        raise CmdError("nothing to update: give --plan, --item or --status")
+    with db.transaction(conn):
+        if conn.execute("UPDATE decisions SET " + ", ".join(sets) + " WHERE id=?", args + [decision_id]).rowcount == 0:
+            raise CmdError("unknown decision id %s" % decision_id)
+    return db.rows(conn, "SELECT * FROM decisions WHERE id=?", (decision_id,))[0]
 
 
 def add_decision(conn, project, source, text, plan=None, item=None) -> int:

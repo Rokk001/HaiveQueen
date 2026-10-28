@@ -41,8 +41,9 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 | `queue [list]` | `[--project]` | integration queue rows |
 | `queue upsert` | `--project --branch [--tip] [--plan] [--status ready\|in_run\|integrated\|blocked\|withdrawn] [--note] [--run]` | the row; changes the newest row of the branch, a new tip after `integrated` adds a row |
 | `questions` | `[--project] [--open] [--status] [--plan] [--item]` | question rows |
-| `decisions list` | `[--project] [--plan] [--item]` | decision rows |
+| `decisions list` | `[--project] [--plan] [--item] [--all]` | decision rows; only `active` ones unless `--all` (status values: `active`, `rule`, `superseded`) |
 | `decisions add` | `--project --source owner\|coordinator\|auto --text [--plan] [--item]` | `{ok, id}` |
+| `decisions update` | `<id> [--plan] [--item] [--status active\|rule\|superseded]` | `{ok, decision}` |
 | `triage list` | `--project` | locked packages with open points and no running triage agent (`phase` `triage`): `[{plan, id, title, lock_reason, points}]`; points are the lines of the lock reason (`item: text`, else `pN`) without a decision or open question |
 | `triage prompt` | `--project --plan --package [--python]` | `{prompt, points}`; prompt for the triage agent (class medium): technical points go to `triage decide`, game/balance points to `triage ask`, in doubt game/balance |
 | `triage decide` | `--project --plan --package --item --text --reason --source` | `{ok, id, unlocked, remaining}`; writes a decision with source `auto` (text carries reason and source) and unlocks the package after the last point |

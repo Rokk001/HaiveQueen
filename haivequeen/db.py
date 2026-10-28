@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -30,6 +30,10 @@ V2_COLUMNS = (
 # Columns added in schema version 3 (the capability field of a package from the plan header).
 V3_COLUMNS = (
     ("packages", "capability", "TEXT"),
+)
+# Columns added in schema version 5 (lifecycle status of a decision: active, rule or superseded).
+V5_COLUMNS = (
+    ("decisions", "status", "TEXT NOT NULL DEFAULT 'active'"),
 )
 
 
@@ -97,7 +101,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         schema_text = SCHEMA_FILE.read_text(encoding="utf-8")
         rebuild_queue_table(conn, schema_text)
         conn.executescript(schema_text)
-        for table, column, decl in V2_COLUMNS + V3_COLUMNS:
+        for table, column, decl in V2_COLUMNS + V3_COLUMNS + V5_COLUMNS:
             have = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
             if column not in have:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")

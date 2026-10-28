@@ -159,6 +159,30 @@ class NetworkDriveTest(unittest.TestCase):
                 db.connect("/never/created/haivequeen.db")
         self.assertIn("network drive", str(ctx.exception))
 
+    def test_decisions_status_migration(self):
+        """A version 4 database gets decisions.status; old rows are active and nothing is lost."""
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "o.db"
+            raw = sqlite3.connect(path)
+            raw.executescript("CREATE TABLE decisions (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, ts TEXT NOT NULL, "
+                              "source TEXT NOT NULL, text TEXT NOT NULL, plan_path TEXT, item TEXT);"
+                              "INSERT INTO decisions (id, project, ts, source, text) VALUES (3, 'p', '2026-01-01T00:00:00', 'owner', 'old');"
+                              "PRAGMA user_version = 4;")
+            raw.commit()
+            raw.close()
+            conn = db.connect(path)
+            try:
+                self.assertEqual([tuple(r) for r in conn.execute("SELECT id, text, status FROM decisions")], [(3, "old", "active")])
+                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], db.SCHEMA_VERSION)
+            finally:
+                conn.close()
+            conn = db.connect(path)   # a second open changes nothing
+            try:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0], 1)
+            finally:
+                conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -199,6 +199,23 @@ class RuntimeTest(unittest.TestCase):
         self.ok("decisions", "add", "--project", "p", "--source", "auto", "--text", "d", "--item", "I3")
         self.assertEqual(len(self.ok("decisions", "list", "--project", "p")), 2)
 
+    def test_decisions_status_update_and_filter(self):
+        """decisions update changes status, plan and item; list hides non-active decisions unless --all."""
+        a = self.ok("decisions", "add", "--project", "p", "--source", "owner", "--text", "one")["id"]
+        b = self.ok("decisions", "add", "--project", "p", "--source", "owner", "--text", "two")["id"]
+        self.assertEqual(self.ok("decisions", "list", "--project", "p")[0]["status"], "active")
+        res = self.ok("decisions", "update", str(a), "--status", "rule")
+        self.assertEqual(res["decision"]["status"], "rule")
+        self.assertEqual([d["id"] for d in self.ok("decisions", "list", "--project", "p")], [b])
+        self.assertEqual([d["id"] for d in self.ok("decisions", "list", "--project", "p", "--all")], [a, b])
+        res = self.ok("decisions", "update", str(b), "--plan", "x.md", "--item", "I9", "--status", "superseded")["decision"]
+        self.assertEqual((res["plan_path"], res["item"], res["status"]), ("x.md", "I9", "superseded"))
+        self.assertEqual(self.ok("decisions", "list", "--project", "p"), [])
+        code, _ = self.orch("decisions", "update", "999", "--status", "rule")
+        self.assertEqual(code, 1)
+        code, _ = self.orch("decisions", "update", str(a))
+        self.assertEqual(code, 1)
+
     def test_migrates_version_1(self):
         """A database created by schema version 1 gets the new columns and tables."""
         import sqlite3

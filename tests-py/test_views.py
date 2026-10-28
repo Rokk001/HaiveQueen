@@ -61,6 +61,17 @@ class ViewsTest(unittest.TestCase):
         self.assertTrue(text.startswith(views.HEADER + "\n"))
         self.assertIn("Which? -> A", text)
 
+    def test_decisions_view_shows_only_active(self):
+        """A decision with status rule or superseded is not in the decisions view."""
+        db.add_question(self.conn, "demo", "p.md", "I1", "Keep?", "A")
+        db.add_question(self.conn, "demo", "p.md", "I2", "Drop?", "B")
+        db.answer_question(self.conn, 1, "A", "owner")
+        db.answer_question(self.conn, 2, "B", "owner")
+        self.conn.execute("UPDATE decisions SET status='superseded' WHERE text LIKE 'Drop?%'")
+        text = views.render_decisions(self.conn, "demo")
+        self.assertIn("Keep? -> A", text)
+        self.assertNotIn("Drop? -> B", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS decisions (
     source TEXT NOT NULL CHECK (source IN ('owner','coordinator','auto')),
     text TEXT NOT NULL,
     plan_path TEXT,
-    item TEXT
+    item TEXT,
+    status TEXT NOT NULL DEFAULT 'active'   -- active, rule (moved into a rule file) or superseded; validated in runtime.update_decision
 );
 
 CREATE TABLE IF NOT EXISTS queue (
