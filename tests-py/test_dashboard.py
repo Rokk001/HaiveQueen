@@ -184,3 +184,22 @@ class MixedTimeTest(unittest.TestCase):
                           ts="2026-10-28T12:50:00")
         rows = dashboard.usage_models(conn, [], datetime(2026, 10, 28, 0, 0, 0))
         self.assertEqual(rows[0]["Today"], (4, 6))
+
+    def test_usage_one_entry_per_model(self):
+        """The label "Sonnet 5.5" (older rows, written before the key was unified) and the id "claude-sonnet-5-5" are one entry with summed tokens."""
+        tmp = tempfile.TemporaryDirectory()
+        conn = db.connect(Path(tmp.name) / "o.db")
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(conn.close)
+        db.upsert_project(conn, "alpha", None, "cyan", 1)
+        self.assertEqual(runtime.model_key("Sonnet 5.5"), "claude-sonnet-5-5")
+        self.assertEqual(runtime.model_key("claude-sonnet-5-5[1m]"), "claude-sonnet-5-5")
+        self.assertEqual(runtime.model_key("gpt-6.1-terra"), "gpt-6.1-terra")
+        runtime.usage_add(conn, kind="brain", project="alpha", model="Sonnet 5.5", tokens_in=10, tokens_out=1, ts="2026-10-28T12:00:00")
+        self.assertEqual(conn.execute("SELECT model FROM providers_usage").fetchone()[0], "claude-sonnet-5-5")
+        conn.execute("INSERT INTO providers_usage (ts, model, tokens_in, tokens_out, kind, project) VALUES ('2026-10-28T12:01:00','Sonnet 5.5',20,2,'brain','alpha')")
+        conn.commit()
+        agent = {"model": "claude-sonnet-5-5", "tokens_in": 100, "tokens_out": 5, "started_at": "2026-10-28T12:02:00"}
+        rows = dashboard.usage_models(conn, [agent], datetime(2026, 10, 28, 0, 0, 0))
+        self.assertEqual([r["Label"] for r in rows], ["Sonnet 5.5"])
+        self.assertEqual(rows[0]["Plans"], (130, 8))

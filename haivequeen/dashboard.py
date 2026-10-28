@@ -18,6 +18,7 @@ if not __package__:   # started as a script: make the package importable
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from haivequeen import buildjobs, config, db, platform as osplat, runstate, runtime, usage  # noqa: E402
+from haivequeen import header, scheduler as sch  # noqa: E402
 
 FULL, LIGHT, LINE = "█", "░", "─"
 REFRESH_SECONDS = 5
@@ -261,7 +262,8 @@ def usage_models(conn, agents_all, today) -> list:
 
     def cell(label):
         """Return the accumulator of one model."""
-        return models.setdefault(label, {"Label": label, "logs": [0, 0, 0, 0, False, None], "orch": [0, 0, 0, 0, False, None]})
+        key = runtime.model_key(label)   # stored rows may still carry the label "Sonnet 5.5" next to the id "claude-sonnet-5-5": one entry per model
+        return models.setdefault(key, {"Label": sch.model_label(key) if key.startswith("claude-") else key, "logs": [0, 0, 0, 0, False, None], "orch": [0, 0, 0, 0, False, None]})
 
     def add(acc, ts, tin, tout):
         """Add one record to an accumulator: [total in, total out, today in, today out, any, since]."""
@@ -641,12 +643,21 @@ def screen_size():
     return w, h
 
 
+def frame_text(text, clear=False) -> str:
+    """Escape string that draws one frame in place: cursor to the top left, every line overwritten and cut at the pane edge (no wrapping),
+    the rest of each line and everything below erased. `clear` (first frame, size change) also empties the screen and the scrollback."""
+    lines = text.rstrip("\n").split("\n")
+    return "\x1b[?7l" + ("\x1b[2J\x1b[3J" if clear else "") + "\x1b[H" + "\r\n".join(ln + "\x1b[K" for ln in lines) + "\x1b[J\x1b[?7h"
+
+
 def run(project=None, once=False) -> int:
     """Open the database and redraw the dashboard until Ctrl+C (`once` draws one frame and returns)."""
     conn = db.connect(config.db_path())
     stdout = sys.stdout
     if hasattr(stdout, "reconfigure"):
         stdout.reconfigure(encoding="utf-8")
+    last_size = None
+    header.enable_vt()   # the cursor moves and erases of frame_text need escape processing (pwsh switched it on by itself)
     try:
         with KeyReader() as keys:
             while True:
@@ -655,7 +666,11 @@ def run(project=None, once=False) -> int:
                     text = render(conn, w, h, project)
                 except Exception as exc:   # a failed redraw must not close the pane
                     text = "\x1b[91mdashboard error: %s\x1b[0m" % exc
-                stdout.write(("" if os.environ.get("BZZ_DASH_WIDTH") else "\x1b[H\x1b[2J") + text + "\n")
+                if os.environ.get("BZZ_DASH_WIDTH"):
+                    stdout.write(text + "\n")
+                else:
+                    stdout.write(frame_text(text, clear=(w, h) != last_size))
+                last_size = (w, h)
                 stdout.flush()
                 if once:
                     return 0

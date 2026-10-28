@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from . import brain, db, events, export, reattach, routine, runstate, runtime, triage, usage, views
+from . import brain, db, events, export, header, reattach, routine, runstate, runtime, triage, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -226,7 +226,12 @@ def agent_identity(conn) -> dict:
     run_c = [str(a.get("color")) for a in rows if a.get("status") in ACTIVE]
     n = next((x for x in AGENT_NAMES if x not in used_n), AGENT_NAMES[len(rows) % len(AGENT_NAMES)])
     # Colours of agents that ended within the last hour are given up first; a colour of a running agent repeats only with more running agents than colours (then the least used one).
-    c = next((x for x in AGENT_COLOURS if x not in used_c), None) or next((x for x in AGENT_COLOURS if x not in run_c), None) or min(AGENT_COLOURS, key=run_c.count)
+    # The second shade of a hue is only taken when every hue is in use by a running agent: colours are compared by hue family (index modulo 6), not by exact value.
+    run_hues = {AGENT_COLOURS.index(x) % 6 for x in run_c if x in AGENT_COLOURS}
+    free_hue = [x for x in AGENT_COLOURS if AGENT_COLOURS.index(x) % 6 not in run_hues]
+    c = (next((x for x in free_hue if x not in used_c), None) or (free_hue[0] if free_hue else None)
+         or next((x for x in AGENT_COLOURS if x not in used_c), None) or next((x for x in AGENT_COLOURS if x not in run_c), None)
+         or min(AGENT_COLOURS, key=run_c.count))
     return {"Person": n, "Color": c}
 
 
@@ -969,6 +974,8 @@ class Pane:
     def __init__(self, conn, envs, out=None):
         """Remember the connection and projects; positions in the event mirror files start at their current end."""
         self.conn, self.envs, self.out = conn, envs, out or sys.stdout
+        if self.out.isatty():
+            header.enable_vt()   # the cursor moves of the fixed header need escape processing (pwsh switched it on by itself)
         self.rows = 0
         self.head_at = 0.0
         self.pos = {}
@@ -997,6 +1004,8 @@ class Pane:
     def draw_head(self, ui: dict) -> int:
         """Redraw the header in the top rows and keep the scroll region below it; the height is reserved for the worst case, so it never grows."""
         w, h = self.width(), self.height()
+        if self.out.isatty():
+            w = max(10, os.get_terminal_size().columns)   # the real width: 30 columns drawn into a narrower pane wrapped into the next rows
         hl = head_lines(w, brain.totals(self.conn), ui)
         if not self.rows:
             big = {"Calls": 99, "Input": 99999999, "Output": 9999999,
@@ -1004,10 +1013,10 @@ class Pane:
             self.rows = len(head_lines(w, big, dict(ui, next_at=datetime.now(), since=datetime.now(), stop=False, brain=False, busy=False)))
         while len(hl) < self.rows:
             hl.append(("", "White"))
-        buf = [ESC + "7", "%s[%d;%dr" % (ESC, len(hl) + 1, h)]
+        buf = [ESC + "7", ESC + "[?7l", "%s[%d;%dr" % (ESC, len(hl) + 1, h)]   # ?7l: a header line longer than the pane is cut, never wrapped into the next row
         for i, (t, c) in enumerate(hl):
             buf.append("%s[%d;1H%s[2K%s[%sm%s%s[0m" % (ESC, i + 1, ESC, ESC, SGR.get(c, "0"), t, ESC))
-        buf.append(ESC + "8")
+        buf.append(ESC + "[?7h" + ESC + "8")
         self.out.write("".join(buf))
         self.out.flush()
         self.head_at = time.time()
@@ -1103,7 +1112,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         env.log("loop started (roundMinutes=%s)" % minutes)
         env.event("Queen started (round every %s minutes)" % minutes)
     if pane:
-        pane.out.write("%s[2J%s[H" % (ESC, ESC))
+        pane.out.write("%s[2J%s[3J%s[H" % (ESC, ESC, ESC))
         pane.draw_head(state)
         pane.out.write("%s[%d;1H" % (ESC, pane.rows + 1))
     done = 0
@@ -1154,6 +1163,18 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
 
 # ---- command line: bzz start / bzz stop ----
 
+def start_boot_command(args) -> list:
+    """Command line of the Queen pane: `start --foreground` with the terminal, --rounds and --round-minutes of this call (so a limited run ends after its rounds)."""
+    cmd = [osplat.python_executable(), str(TOOLS_DIR / "haivequeen" / "cli.py"), "start", "--foreground"]
+    if args.terminal:
+        cmd += ["--terminal", args.terminal]
+    if args.rounds:
+        cmd += ["--rounds", str(args.rounds)]
+    if args.round_minutes:
+        cmd += ["--round-minutes", str(args.round_minutes)]
+    return cmd
+
+
 def cmd_start(args, conn) -> int:
     """`bzz start`: run the loop in this process (--foreground) or open the orchestrator window whose first pane runs it."""
     from . import config
@@ -1171,7 +1192,7 @@ def cmd_start(args, conn) -> int:
     settings = sch.build_settings(machine, {})
     term = get_terminal(args.terminal or settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
     window = settings.get("window", "HaiveQueen")
-    boot = [osplat.python_executable(), str(TOOLS_DIR / "haivequeen" / "cli.py"), "start", "--foreground"] + (["--terminal", args.terminal] if args.terminal else [])
+    boot = start_boot_command(args)
     title = queen_pane_title(sch.model_long("claude", "claude-sonnet-5-5", "medium"), is_test_runtime())
     with pane_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first
         pid = loop_running()

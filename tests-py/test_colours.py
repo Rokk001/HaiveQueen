@@ -73,6 +73,17 @@ class AgentColourTest(RoundCase):
         cols = self.start(2, "N")
         self.assertNotEqual(cols[0], cols[1])
 
+    def test_running_agents_differ_in_hue_although_recent_agents_hold_every_colour(self):
+        """Agents that ended within the hour hold all 12 colours and one running agent has a dark shade: 4 running agents still have 4 different hues."""
+        for i, c in enumerate(loop.AGENT_COLOURS):
+            self.agent("E%d" % i, package="E%d" % i, status="done", ended=5, color=c, person="Old%d" % i)
+        self.agent("D0", package="D0", status="running", pid=1, color=loop.AGENT_COLOURS[6], person="Dark")
+        cols = [loop.AGENT_COLOURS[6]] + self.start(3, "N")
+        hues = [hue(c) for c in cols]
+        for i, a in enumerate(hues):
+            for b in hues[i + 1:]:
+                self.assertGreaterEqual(min(abs(a - b), 360 - abs(a - b)), 25, cols)
+
 
 if __name__ == "__main__":
     unittest.main()

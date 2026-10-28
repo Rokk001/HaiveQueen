@@ -39,7 +39,8 @@ class LiveLockParityTest(unittest.TestCase):
                 conn = db.connect(test_db)
                 db.upsert_project(conn, "demo", tmp, "FF8800", 0)
                 t0 = time.monotonic()
-                runtime.append_event(conn, "demo", "through", kind="rounds", agent="x")
+                with mock.patch.dict(os.environ, {"BZZ_LOG_DIR": str(Path(tmp) / "logs")}):   # the event mirror goes into the temp folder
+                    runtime.append_event(conn, "demo", "through", kind="rounds", agent="x")
                 took = time.monotonic() - t0
                 conn.close()
                 self.assertLess(took, 5, "the test runtime waited for the lock of the live database")

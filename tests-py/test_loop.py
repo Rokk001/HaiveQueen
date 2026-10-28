@@ -422,7 +422,7 @@ class BrainTest(RoundCase):
         self.assertIn("agent_failed", self.prompt)
         self.assertEqual(self.argv[argv_index(self.argv, "--tools") + 1], "", "no tools without a new plan (rule 12)")
         row = runtime.usage_list(self.conn, kind="brain")[-1]
-        self.assertEqual((row["tokens_in"], row["tokens_out"], row["context"], row["model"]), (150, 7, 60, "Sonnet 5.5"))
+        self.assertEqual((row["tokens_in"], row["tokens_out"], row["context"], row["model"]), (150, 7, 60, "claude-sonnet-5-5"))   # stored as the model key, not the label
         self.assertEqual((row["trigger"], row["error"], row["actions"]), ("agent_failed", 0, "no action: hi"))
         self.assertEqual(sch.claude_usage(self.conn)["SevenDay"]["Pct"], 50)
         self.assertEqual(brain.totals(self.conn)["Input"], 150)

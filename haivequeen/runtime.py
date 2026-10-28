@@ -268,10 +268,24 @@ def build_max_per_job(conn, project, host):
     return row[0]
 
 
+def model_key(name):
+    """One key per model for storing and summing usage: the readable label "Sonnet 5.5" and the id "claude-sonnet-5-5" (also with a
+    bracket or date suffix) both give "claude-sonnet-5-5"; other names stay as they are; empty stays empty."""
+    if not name:
+        return name
+    key = re.sub(r"\[.*\]$", "", str(name).strip())
+    key = re.sub(r"-\d{8}$", "", key)
+    m = re.match(r"^([A-Za-z]+) (\d+)\.(\d+)$", key)
+    if m:
+        return "claude-%s-%s-%s" % (m.group(1).lower(), m.group(2), m.group(3))
+    return key
+
+
 def usage_add(conn, **f) -> None:
-    """Store one usage row (brain or agent call); missing fields stay empty."""
+    """Store one usage row (brain or agent call); missing fields stay empty. The model is stored as model_key()."""
     cols = ["ts", "provider", "model", "tokens_in", "tokens_out", "kind", "project", "trigger", "context",
             "duration_s", "actions", "error"]
+    f["model"] = model_key(f.get("model"))
     f.setdefault("ts", db.now())
     with db.transaction(conn):
         conn.execute(f"INSERT INTO providers_usage ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",

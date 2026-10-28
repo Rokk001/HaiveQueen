@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 
 ESC = "\x1b"
+AUTOWRAP_OFF = ESC + "[?7l"   # text beyond the last column is cut instead of wrapped into the next row
+AUTOWRAP_ON = ESC + "[?7h"
 DASH = "–"
 
 # ANSI codes of the colour names used in the pane (status colours and the colour names of project.toml).
@@ -183,9 +185,11 @@ def render(lines, width, height, milestones, full):
     n = len(lines)
     sb = []
     if full:
-        sb.append("%s[r%s[2J%s[H" % (ESC, ESC, ESC))
+        sb.append("%s[r%s[2J%s[3J%s[H" % (ESC, ESC, ESC, ESC))   # 3J: the old screen must not move into the scrollback (it would stack up headers)
+        sb.append(AUTOWRAP_OFF)   # a header line longer than a narrow pane is cut, never wrapped into the next row
         for i, parts in enumerate(lines):
             sb.append("%s[%d;1H%s" % (ESC, i + 1, line_str(parts)))
+        sb.append(AUTOWRAP_ON)
         sb.append("%s[%d;%dr" % (ESC, n + 1, height))
         room = height - n
         rep = []
@@ -199,10 +203,10 @@ def render(lines, width, height, milestones, full):
         for text, colour in rep[skip:]:
             sb.append("%s%s%s[0m\r\n" % (sgr(colour), text, ESC))
     else:
-        sb.append(ESC + "7")
+        sb.append(ESC + "7" + AUTOWRAP_OFF)
         for i, parts in enumerate(lines):
             sb.append("%s[%d;1H%s[2K%s" % (ESC, i + 1, ESC, line_str(parts)))
-        sb.append(ESC + "8")
+        sb.append(AUTOWRAP_ON + ESC + "8")
     return "".join(sb)
 
 
@@ -232,7 +236,7 @@ def run(project, name, parent_pid=0, runs_dir=None, out=None, interval=1.0, max_
             row = runtime.get_agent(conn, project, name)
             if row:
                 size = shutil.get_terminal_size((120, 40))
-                width, height = max(30, size.columns), max(2, size.lines)
+                width, height = max(10, size.columns), max(2, size.lines)   # the real width: 30 columns drawn into a narrower pane wrapped into the next rows
                 lines = build_head(row, project, project_colour_of(conn, project), width, max_lines=height - 1)
                 key = (width, height, len(lines))
                 full = key != last

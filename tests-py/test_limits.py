@@ -82,9 +82,12 @@ class MutexTest(unittest.TestCase):
         conn.close()
         self.script = Path(self.tmp.name) / "writer.py"
         self.script.write_text(WRITER, encoding="utf-8")
+        self.logs = mock.patch.dict(os.environ, {"BZZ_LOG_DIR": str(Path(self.tmp.name) / "logs")})   # the event mirror files go into the temp folder, not the real log folder
+        self.logs.start()
 
     def tearDown(self):
-        """Remove the temp database."""
+        """Restore the log folder variable and remove the temp database."""
+        self.logs.stop()
         self.tmp.cleanup()
 
     def test_parallel_writers_lose_nothing(self):

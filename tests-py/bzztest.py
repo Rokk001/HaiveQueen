@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import isolation  # noqa: E402,F401  (redirects the default data and settings folders to a temp folder before anything is imported)
 from haivequeen import config, db, loop, runtime  # noqa: E402
 from haivequeen import scheduler as sch  # noqa: E402
 

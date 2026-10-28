@@ -148,6 +148,15 @@ class PaneLockTest(RoundCase):
             loop.cmd_start(args, self.conn)
         return json.loads(buf.getvalue())
 
+    def test_window_start_passes_rounds_to_the_loop(self):
+        """`bzz start --rounds 1 --round-minutes 2.5` hands both to the loop that runs in the Queen pane (before, the loop ran until stopped)."""
+        args = argparse.Namespace(foreground=False, terminal="headless", rounds=1, round_minutes=2.5)
+        cmd = loop.start_boot_command(args)
+        self.assertEqual(cmd[-6:], ["--terminal", "headless", "--rounds", "1", "--round-minutes", "2.5"])
+        plain = loop.start_boot_command(argparse.Namespace(foreground=False, terminal=None, rounds=0, round_minutes=0))
+        self.assertNotIn("--rounds", plain)
+        self.assertNotIn("--round-minutes", plain)
+
     def test_second_start_does_not_open_a_second_window(self):
         """With a loop running, or a window start pending, `bzz start` opens no pane."""
         holder = subprocess.Popen(SLEEP)
