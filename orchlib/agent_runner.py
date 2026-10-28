@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import threading
 import time
 from datetime import datetime
@@ -300,11 +301,44 @@ def write_phase_rules(pcfg, workspace, phase, out_file):
 
 # ---------------------------------------------------------------- the run
 
+def orch_script_dirs():
+    """Return the folders that may hold the `orch` console script of the running Python (Scripts folder, sysconfig scripts folder, `which orch`)."""
+    dirs = [Path(sys.executable).parent / "Scripts", Path(sys.executable).parent]
+    try:
+        dirs.append(Path(sysconfig.get_path("scripts")))
+    except (KeyError, TypeError):
+        pass
+    found = shutil.which("orch")
+    if found:
+        dirs.append(Path(found).parent)
+    return dirs
+
+
+def with_orch_on_path(env, dirs=None):
+    """Put the folder of the `orch` console script at the front of PATH in `env` (a dict, changed in place and returned).
+
+    Only a folder that holds an orch program is added, and only when it is not on PATH yet, so there are no duplicate entries.
+    `dirs` replaces the folders to look at (tests).
+    """
+    key = next((k for k in env if k.upper() == "PATH"), "PATH")
+    current = [p for p in (env.get(key) or "").split(os.pathsep) if p]
+    known = set(os.path.normcase(os.path.normpath(p)) for p in current)
+    for d in (orch_script_dirs() if dirs is None else dirs):
+        d = Path(d)
+        if not any((d / n).is_file() for n in ("orch", "orch.exe", "orch.cmd", "orch.bat")):
+            continue
+        if os.path.normcase(os.path.normpath(str(d))) in known:
+            return env
+        env[key] = str(d) + os.pathsep + os.pathsep.join(current)
+        return env
+    return env
+
+
 def child_env():
-    """Return the environment for child processes of the runner: the tool folder is on PYTHONPATH so `-m orchlib...` works."""
+    """Return the environment for child processes of the runner: the tool folder is on PYTHONPATH so `-m orchlib...` works, `orch` is found on PATH."""
     env = dict(os.environ)
     env["PYTHONPATH"] = str(TOOL_ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    return env
+    return with_orch_on_path(env)
 
 
 def task_text(conn, project, plan, package, phase, plan_short):
@@ -673,7 +707,7 @@ def run_agent(a, out=None):
     bj_raw = cfg.get("buildJobs")
     bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release") else None
     bj_jobs, bj_start_mb, samples, stop, sampler = 0, 0.0, run_dir / "build-samples.txt", threading.Event(), None
-    env = dict(os.environ)
+    env = with_orch_on_path(dict(os.environ))   # the agent and everything it starts finds `orch`, also without a PATH entry of the pip Scripts folder
     if bj:
         bj_start_mb = float(osplat.free_ram_mb())
         measured = buildjobs.stored_per_job(conn, a.project)
