@@ -1,5 +1,6 @@
 """Generated read-only Markdown views per project: queue, questions and decisions."""
 import os
+import re
 from pathlib import Path
 
 from . import config, db
@@ -20,9 +21,18 @@ def _table(head, body) -> list:
     return lines
 
 
+def _status_text(row) -> str:
+    """Return the status of a queue row; a withdrawn row also shows the original status word kept at the start of its note."""
+    if row["status"] == "withdrawn":
+        word = re.match(r"[^\s(|,]+", str(row["note"] or ""))
+        if word:
+            return f"withdrawn ({word.group(0)})"
+    return row["status"]
+
+
 def render_queue(conn, project) -> str:
     """Render the integration queue of a project."""
-    body = [(r["branch"], r["tip"], r["status"], r["plan_path"], r["note"], r["updated_at"])
+    body = [(r["branch"], r["tip"], _status_text(r), r["plan_path"], r["note"], r["updated_at"])
             for r in db.queue_rows(conn, project)]
     lines = [HEADER, "", f"# Integration queue: {project}", ""]
     lines += _table(["Branch", "Tip", "Status", "Plan", "Note", "Updated"], body)

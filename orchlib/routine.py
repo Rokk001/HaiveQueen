@@ -14,7 +14,7 @@ from . import scheduler as sch
 from .scheduler import ACTIVE, norm_plan
 
 QUEUE_PLAN_ID = "integration-queue"   # pseudo plan name of the fix tasks for blocked queue rows that name no plan
-WORDS = {"ready": "ready", "in_run": "in Lauf", "blocked": "blockiert", "integrated": "integriert"}   # status words the routine and the brain know
+WORDS = {"ready": "ready", "in_run": "in Lauf", "blocked": "blockiert", "integrated": "integriert", "withdrawn": "zurückgezogen"}   # status words the routine and the brain know
 HANDOFF_TAIL = "Prüfe nach jedem"   # start of the handoff sentence of an agent prompt (cut off when a follow-up agent reuses the task)
 
 
@@ -272,7 +272,7 @@ def state_done_packages(env, rel: str, pkg_ids: list, rows: list) -> dict:
             res[p["id"]] = "packages table: done"
     rel_n = norm_plan(rel)
     for r in rows:
-        if re.match(r"^(blockiert|verworfen|ersetzt)", str(r["status"])):
+        if re.match(r"^(blockiert|verworfen|ersetzt|zurückgezogen)", str(r["status"])):
             continue
         pl = norm_plan(r["plan"]).lstrip("./")
         if not pl or not rel_n.endswith(pl):

@@ -12,7 +12,10 @@ from . import db, plans as plan_mod, runtime
 from .runtime import CmdError
 
 KV_FILES = (("ORCH-STATE.json", "loop-state"), ("ORCH-SYNC.json", "event-sync"), ("usage-claude.json", "usage-claude"))
-QUEUE_STATUS = (("ready", "ready"), ("in lauf", "in_run"), ("integriert", "integrated"), ("blockiert", "blocked"))
+QUEUE_STATUS = (("ready", "ready"), ("in lauf", "in_run"), ("integriert", "integrated"), ("blockiert", "blocked"),
+                ("zurückgezogen", "withdrawn"), ("zurueckgezogen", "withdrawn"), ("superseded", "withdrawn"),
+                ("ersetzt", "withdrawn"), ("verworfen", "withdrawn"), ("zurückgestellt", "withdrawn"),
+                ("zurueckgestellt", "withdrawn"))
 
 
 class Counter:
@@ -399,12 +402,22 @@ def queue_status(cell):
 
 
 def parse_queue(text) -> list:
-    """Parse the v1 queue table into dicts (branch, tip, plan, status_cell, order, date); header cells pick the columns."""
-    rows, cols = [], None
+    """Parse the v1 queue table into dicts (branch, tip, plan, status_cell, order, date); header cells pick the columns.
+
+    Only rows below a header whose first cell is 'Branch' are read; a heading line or a table with another header ends the queue table and its rows are skipped.
+    """
+    rows, cols, in_table = [], None, False
     for line in text.splitlines():
+        if re.match(r"^\s*#", line):
+            cols = None
         if not line.lstrip().startswith("|"):
+            in_table = False
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        starts_table = not in_table
+        in_table = True
+        if starts_table and not (cells and cells[0].lower() == "branch"):
+            cols = None   # a table with another header (for example a history table) is not the queue
         if cells and cells[0].lower() == "branch":
             cols = {"branch": 0, "tip": 1, "plan": 2, "status": 3, "order": 4, "date": 5}
             for i, c in enumerate(cells):
