@@ -1,13 +1,16 @@
 """Tests of the dashboard text with invented data (no terminal, temp database)."""
+import json
+import os
 import re
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from orchlib import dashboard, db, runstate, runtime  # noqa: E402
+from orchlib import dashboard, db, runstate, runtime, usage  # noqa: E402
 
 NOW = datetime(2026, 10, 28, 12, 0, 0)
 SYS = {"cores": 12, "free_mb": 8192, "total_mb": 16384, "host": "h1", "compiler_count": None}
@@ -68,6 +71,28 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("▲ Context 310k", t)
         self.assertIn("Total Input 2k / Output 100", t)
         self.assertIn("Total Input 120k / Output 3k", t)
+
+    def test_codex_limits_from_session_logs(self):
+        """Invented Codex session logs in a temp home: the dashboard writes kv usage-codex and shows percent and reset instead of n/a."""
+        home = Path(self.tmp.name) / "home"
+        day = home / ".codex" / "sessions" / "2026" / "10" / "28"
+        day.mkdir(parents=True)
+        t = int(datetime.now().timestamp())
+        rl = {"primary": {"used_percent": 37.0, "window_minutes": 300, "resets_at": t + 3600},
+              "secondary": {"used_percent": 64.0, "window_minutes": 10080, "resets_at": t + 86400 * 3}}
+        line = json.dumps({"payload": {"rate_limits": rl}}, separators=(",", ":"))
+        (day / "rollout-a.jsonl").write_text('{"x":1}\n' + line + "\n", encoding="utf-8")
+        before = self.text()
+        self.assertIn("n/a", before)
+        env = {k: v for k, v in os.environ.items() if k != "ORCH_DATA_DIR"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(usage, "home_dir", return_value=home):
+            usage._codex_refresh.clear()
+            out = dashboard.render(self.conn, width=100, height=60, now=datetime.now(), cfg={}, sysinfo=dict(SYS), color=False)
+        self.assertIsNotNone(runtime.kv_get(self.conn, "*", "usage-codex"))
+        codex_line = [x for x in out.split("\n") if "Codex" in x and "5h" in x][0]
+        self.assertIn("37%", codex_line)
+        self.assertNotIn("n/a", codex_line)
+        self.assertIn("64%", [x for x in out.split("\n") if "Codex" in x and "7d" in x][0])
 
     def test_build_jobs_line(self):
         """The build-jobs line shows jobs, cores, per-job use and the active cores of a running build."""

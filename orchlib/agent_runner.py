@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, db, header, runtime
+from . import buildjobs, config, db, header, runtime
 from . import platform as osplat
 
 TOOL_ROOT = Path(__file__).resolve().parent.parent
@@ -189,48 +189,6 @@ def get_codex_tokens(thread_id, sessions=None):
 
 
 # ---------------------------------------------------------------- build jobs
-
-def build_jobs_cfg(raw):
-    """Return the build-job settings from config.toml `buildJobs` with the defaults filled in, or None when off.
-
-    A table has the keys envVar, coreShare ("2/3" or a number), reserveMB, perJobMB ("auto" or a number), firstJobs, fixed.
-    A number above 0 means a fixed job count, 0 means automatic; the variable then is BUILD_JOBS.
-    """
-    if isinstance(raw, bool) or raw is None:
-        return None
-    if not isinstance(raw, dict):
-        raw = {"fixed": int(raw)} if int(raw) > 0 else {}
-    share = 2.0 / 3.0
-    cs = raw.get("coreShare")
-    if cs is not None:
-        m = re.match(r"^\s*(\d+)\s*/\s*(\d+)\s*$", str(cs))
-        share = float(m.group(1)) / float(m.group(2)) if m else float(cs)
-    per = raw.get("perJobMB")
-    return {"envVar": str(raw.get("envVar") or "BUILD_JOBS"), "coreShare": share,
-            "reserveMB": float(raw.get("reserveMB", 1024)),
-            "perJobMB": None if per is None or str(per) == "auto" else float(per),
-            "firstJobs": int(raw.get("firstJobs", 2)), "fixed": int(raw["fixed"]) if raw.get("fixed") is not None else None}
-
-
-def build_job_count(bj, cores, free_mb, measured_mb):
-    """Return (jobs, why): the smaller of (cores x coreShare, rounded up) and ((free RAM - reserve) / use per job, rounded down), at least 1.
-
-    Without any use value (neither configured nor measured) firstJobs applies, never more than the core limit; fixed overrides everything.
-    """
-    core_limit = max(1, int(-(-cores * bj["coreShare"] // 1)))
-    if bj["fixed"] is not None:
-        return max(1, bj["fixed"]), "fixed"
-    per = bj["perJobMB"] if bj["perJobMB"] is not None else (float(measured_mb) if measured_mb else None)
-    if per is None or per <= 0:
-        return max(1, min(bj["firstJobs"], core_limit)), "first"
-    ram_limit = int((free_mb - bj["reserveMB"]) // per)
-    return max(1, min(core_limit, ram_limit)), ("ram" if ram_limit < core_limit else "cores")
-
-
-def build_use_mb(start_free_mb, min_free_mb, jobs):
-    """Return the RAM use per job in MB: (free RAM at the start - lowest free RAM seen) / jobs; never negative."""
-    return round(max(0.0, start_free_mb - min_free_mb) / max(1, jobs))
-
 
 def sample_once(path, process_names):
     """Append one sample line "ISO time;free MB;compiler process count" to the sample file."""
@@ -680,14 +638,16 @@ def run_agent(a, out=None):
     arg_list = build_args(prov, vars_)
 
     # Build jobs: an agent that builds (integrate, release) gets the job count of this machine as environment variable and its RAM use is measured while it runs.
-    bj = build_jobs_cfg(cfg.get("buildJobs")) if a.phase in ("integrate", "release") else None
+    bj_raw = cfg.get("buildJobs")
+    bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release") else None
     bj_jobs, bj_start_mb, samples, stop, sampler = 0, 0.0, run_dir / "build-samples.txt", threading.Event(), None
     env = dict(os.environ)
     if bj:
         bj_start_mb = float(osplat.free_ram_mb())
-        measured = runtime.build_max_per_job(conn, a.project, runtime.host_name())
-        bj_jobs, why = build_job_count(bj, osplat.logical_cores(), bj_start_mb, measured)
-        env[bj["envVar"]] = str(bj_jobs)
+        measured = buildjobs.stored_per_job(conn, a.project)
+        calc = buildjobs.job_count(bj, osplat.logical_cores(), bj_start_mb, measured)
+        bj_jobs, why = calc["Jobs"], calc["Why"]
+        env[bj["EnvVar"]] = str(bj_jobs)
         try:
             samples.unlink()
         except OSError:
@@ -764,19 +724,10 @@ def run_agent(a, out=None):
 
 def complete_build_measure(conn, project, name, jobs, start_free_mb, sample_file, started):
     """End the measurement of one build: take the lowest free RAM from the samples, store the use per job and log one line. Returns the use per job in MB."""
-    low = start_free_mb
-    try:
-        for ln in Path(sample_file).read_text(encoding="utf-8").splitlines():
-            parts = ln.split(";")
-            if len(parts) >= 2:
-                low = min(low, float(parts[1]))
-    except (OSError, ValueError):
-        pass
-    use = build_use_mb(start_free_mb, low, jobs)
+    low = buildjobs.read_samples_min(sample_file, start_free_mb)
+    use = buildjobs.use_mb(start_free_mb, low, jobs)
     dur = (datetime.now() - started).total_seconds()
-    host = runtime.host_name()
-    runtime.build_add(conn, project, host, jobs, start_free_mb, low, use, dur)
-    stored = runtime.build_max_per_job(conn, project, host)
+    stored = buildjobs.save_per_job(conn, project, use, jobs, start_free_mb, low, dur)
     secs = int(dur)
     runtime.append_event(conn, project, "build %s: jobs=%d, duration=%02d:%02d:%02d, lowest free RAM=%d MB, use per job=%d MB (stored maximum %s MB)" % (
         name, jobs, secs // 3600, secs % 3600 // 60, secs % 60, low, use, int(stored) if stored is not None else use),

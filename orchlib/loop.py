@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import brain, db, events, reattach, routine, runstate, runtime, triage, views
+from . import brain, db, events, reattach, routine, runstate, runtime, triage, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -291,6 +291,11 @@ def run_round(conn, machine: dict, envs=None, terminal=None, brain_answer=None, 
     envs = envs if envs is not None else sch.load_projects(conn, machine)
     result = {"skipped": None, "projects": {}}
     free_ram = free_ram or ram_gb
+    if not dry_run:
+        try:
+            usage.refresh_codex_usage(conn)
+        except Exception:
+            pass
     for env in envs:
         routine_release_locks(env)
     summaries = {env.name: _state_summary(env) for env in envs}
@@ -343,20 +348,23 @@ def run_hook(env, summary: dict) -> None:
 
 
 def routine_release_locks(env) -> None:
-    """Release locks that were resolved: a package whose lock is gone (triage decided every point) or whose open points are all decided
-    (answered questions) is unlocked; the failures counted so far are forgiven so the package gets a fresh set of attempts."""
+    """Release locks that were resolved: a decision or an answer (owner, coordinator or auto) for item LOCK-<package>, a decision that closes the
+    package, or (with triage) a package whose open points are all decided. The package is unlocked and the failures counted so far are forgiven,
+    so it gets a fresh set of attempts."""
     conn = env.conn
-    if not env.settings.get("triage", True):
-        return   # without triage the lock text stays for the brain, as in v1
+    triage_on = env.settings.get("triage", True)
     for kv in runtime.kv_list(conn, env.name, "lock:"):
         plan, _, pkg = kv["key"][5:].rpartition("|")
         row = next((p for p in runtime.list_packages(conn, env.name, plan) if p["id"] == pkg), None)
+        resolved = routine.lock_resolution(env, plan, pkg)
         if row is None:
-            continue
-        if row["locked"] and not triage._undecided_points(conn, env.name, plan, pkg):
+            if not resolved:
+                continue
+            row = {"locked": False}   # the whole-plan check (ALL) has no package row
+        elif row["locked"] and (resolved or (triage_on and not triage._undecided_points(conn, env.name, plan, pkg))):
             runtime.set_package(conn, env.name, plan, pkg, locked=False, reason="")
             row["locked"] = False
-        if not row["locked"]:
+        if not row["locked"] and (resolved or triage_on):
             fails = routine.package_failures(env, routine.all_agents(env), plan, pkg)
             runtime.kv_set(conn, env.name, "lockrel:%s|%s" % (plan, pkg), str(fails))
             runtime.kv_delete(conn, env.name, kv["key"])

@@ -6,7 +6,7 @@ import time
 import unittest
 
 from orchtest import REL, RoundCase, minutes_ago, provider, runtime
-from orchlib import brain, db, loop, runstate, triage
+from orchlib import brain, db, loop, routine, runstate, triage
 from orchlib import platform as osplat
 from orchlib import scheduler as sch
 from orchlib.terminal.headless import Headless
@@ -233,6 +233,100 @@ class TriageStartTest(RoundCase):
         self.round()
         self.assertFalse([p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1"][0]["locked"])
 
+
+class LockResolvedTest(RoundCase):
+    """A decision or answer for item LOCK-<package> (owner, coordinator or auto) lifts the lock and forgives the failures; a closing decision ends the package."""
+
+    def setUp(self):
+        """K1 has three finished work/verify pairs with open items; K2 depends on K1."""
+        super().setUp()
+        self.plan("IN_PROGRESS", [{"id": "K1", "title": "stubborn task"}, {"id": "K2", "title": "next task", "depends": ["K1"]}])
+        for i, n in enumerate(("", "-2", "-3")):
+            t = 60 - 20 * i
+            self.agent("DUMMY-K1-work" + n, package="K1", started=t, ended=t - 5)
+            self.agent("DUMMY-K1-verify" + n, type="codex", provider="codex", package="K1", phase="verify", started=t - 10, ended=t - 15)
+            self.finish("DUMMY-K1-verify" + n, "Layout: split the file\nOffene Anforderungen: 1")
+
+    def pkg(self, pid="K1"):
+        """The package row of the dummy plan."""
+        return [p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == pid][0]
+
+    def locked_round(self):
+        """Run the round that locks K1 and finish its triage agent."""
+        self.round()
+        self.assertTrue(self.pkg()["locked"])
+        for a in runtime.list_agents(self.conn, "testproj"):
+            if a["phase"] == "triage":
+                self.finish(a["name"])
+
+    def assert_released(self):
+        """After the next round the lock is gone, three failures are forgiven and K1 has a work agent again."""
+        self.round()
+        self.assertFalse(self.pkg()["locked"])
+        self.assertEqual(runtime.kv_get(self.conn, "testproj", "lockrel:%s|K1" % REL), "3")
+        self.assertIsNone(runtime.kv_get(self.conn, "testproj", "lock:%s|K1" % REL))
+        self.assertTrue([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "work" and a["status"] == "running" and a["package"] == "K1"])
+
+    def decision(self, source):
+        """Release by a decision of this source."""
+        self.locked_round()
+        runtime.add_decision(self.conn, "testproj", source, "keep the layout", REL, "LOCK-K1")
+        self.assert_released()
+
+    def answer(self, by):
+        """Release by a question with item LOCK-K1 answered by this source."""
+        self.locked_round()
+        qid = db.add_question(self.conn, "testproj", REL, "LOCK-K1", "How to go on?", "retry")
+        db.answer_question(self.conn, qid, "retry with the old layout", by)
+        self.assert_released()
+
+    def test_decision_owner(self):
+        """Decision by the owner."""
+        self.decision("owner")
+
+    def test_decision_coordinator(self):
+        """Decision by the coordinator."""
+        self.decision("coordinator")
+
+    def test_decision_auto(self):
+        """Automatic decision."""
+        self.decision("auto")
+
+    def test_answer_owner(self):
+        """Answer by the owner."""
+        self.answer("owner")
+
+    def test_answer_coordinator(self):
+        """Answer by the coordinator."""
+        self.answer("coordinator")
+
+    def test_answer_auto(self):
+        """Automatic answer."""
+        self.answer("auto")
+
+    def test_open_question_keeps_lock(self):
+        """An unanswered question for LOCK-K1 does not lift the lock."""
+        self.locked_round()
+        db.add_question(self.conn, "testproj", REL, "LOCK-K1", "How to go on?", "retry")
+        self.round()
+        self.assertTrue(self.pkg()["locked"])
+
+    def test_closing_decision_marks_package_done(self):
+        """'K1 done, no further runs' ends K1: no work or verify run for it, the dependent package K2 starts."""
+        self.locked_round()
+        before = [a["name"] for a in runtime.list_agents(self.conn, "testproj") if a["package"] == "K1"]
+        runtime.add_decision(self.conn, "testproj", "coordinator", "K1 erledigt, keine weiteren K1-Work- oder Verify-Laeufe", REL, "LOCK-K1")
+        self.round()
+        self.assertEqual([a["name"] for a in runtime.list_agents(self.conn, "testproj") if a["package"] == "K1"], before)
+        self.assertTrue([a for a in runtime.list_agents(self.conn, "testproj") if a["package"] == "K2" and a["phase"] == "work"])
+        self.assertFalse(self.pkg()["locked"])
+
+    def test_done_wording_needs_done(self):
+        """A decision that only names the package does not close it, and 'not done' does not either."""
+        env = self.env()
+        runtime.add_decision(self.conn, "testproj", "owner", "K1 is not done yet", REL, None)
+        runtime.add_decision(self.conn, "testproj", "owner", "K1 keeps its layout", REL, "LOCK-K1")
+        self.assertEqual(routine.done_decisions(env, REL, ['K1', 'K2']), {})
 
 class BrainTest(RoundCase):
     """The brain call with a stub program (no model)."""
