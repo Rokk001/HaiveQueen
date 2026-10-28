@@ -1,7 +1,8 @@
 """Configuration: machine settings (config.toml), project settings (project.toml) and folder lookup."""
-import os
 import tomllib
 from pathlib import Path
+
+from orchlib import platform as osplat
 
 APP = "agent-orchestrator"
 
@@ -25,21 +26,13 @@ DEFAULT_PROJECT = {
 
 
 def config_dir() -> Path:
-    """Return the settings folder (ORCH_CONFIG_DIR overrides %APPDATA%/agent-orchestrator)."""
-    env = os.environ.get("ORCH_CONFIG_DIR")
-    if env:
-        return Path(env)
-    base = os.environ.get("APPDATA") or str(Path.home() / ".config")
-    return Path(base) / APP
+    """Return the settings folder (ORCH_CONFIG_DIR overrides the per-system default, see orchlib.platform)."""
+    return osplat.config_dir()
 
 
 def data_dir() -> Path:
-    """Return the machine data folder (ORCH_DATA_DIR overrides %LOCALAPPDATA%/agent-orchestrator)."""
-    env = os.environ.get("ORCH_DATA_DIR")
-    if env:
-        return Path(env)
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".local" / "share")
-    return Path(base) / APP
+    """Return the machine data folder (ORCH_DATA_DIR overrides the per-system default, see orchlib.platform)."""
+    return osplat.data_dir()
 
 
 def db_path() -> Path:
