@@ -142,12 +142,13 @@ def runner_argv(env, spec: dict) -> list:
     """Command line of the agent process. Arguments are documented in docs/S13-S14-INTERFACE.md.
 
     The module is started through a small bootstrap, so it works from any folder: python -c "<add tools folder to sys.path; call orchlib.agent_runner.main(argv)>".
+    The run folder is <data>/runs/<project>/<name> (--runs-dir = <data>/runs/<project>), the folder the routine reads final.txt from.
     """
     boot = "import sys;sys.path.insert(0,sys.argv[1]);from orchlib.agent_runner import main;sys.exit(main(sys.argv[2:]))"
     return [osplat.python_executable(), "-c", boot, str(TOOLS_DIR),
             "--project", env.name, "--name", spec["name"], "--provider", spec["provider"], "--protocol", spec["protocol"],
             "--plan", spec["plan"], "--package", spec["package"], "--phase", spec["phase"], "--cwd", spec["cwd"],
-            "--prompt-file", spec["prompt_file"]] + forward_env_args()
+            "--prompt-file", spec["prompt_file"], "--runs-dir", str(env.run_dir(spec["name"]).parent)] + forward_env_args()
 
 
 def alive_agent_pane(row: dict, alive=None) -> bool:
