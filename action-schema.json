@@ -1,6 +1,6 @@
 ﻿{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Orchestrator brain answer",
+  "title": "Queen brain answer",
   "type": "object",
   "required": ["actions"],
   "additionalProperties": false,

@@ -25,8 +25,8 @@ from .terminal import TerminalError, get_terminal, pane_title
 TOOLS_DIR = Path(__file__).resolve().parent.parent
 PHASES = ("work", "verify", "release", "integrate")
 TEMPORARY = re.compile(r"^(no worker slot|no free slot|no integrator slot|free RAM|STOP flag|run state)")   # a start rejected for one of these keeps its brain event
-AGENT_NAMES = ["Max", "Fritz", "Lena", "Anna", "Jonas", "Mia", "Paul", "Emma", "Finn", "Hanna", "Ben", "Clara", "Leo", "Nora", "Tim",
-               "Ida", "Karl", "Rosa", "Otto", "Vera", "Emil", "Greta", "Jan", "Lotte"]   # short first names of the agents; the orchestrator itself is CHIEF
+AGENT_NAMES = ["Ada", "Bea", "Cleo", "Dina", "Ella", "Fia", "Gina", "Hana", "Ida", "Juna", "Kira", "Lea", "Mia", "Nora", "Ola",
+               "Pia", "Rita", "Sara", "Tara", "Uma", "Vera", "Wilma", "Yara", "Zoe"]   # short first names of the agents; the main agent is called Queen and is not in this list
 AGENT_COLOURS = ["4FA8FF", "C77DFF", "FF6FB5", "3DDCDC", "FF9F43", "3DDC97", "2B6CB0", "8A3FD1", "C2306F", "1E9C9C", "C26A10", "1E9B5F"]   # 6 hues at least 25 degrees apart, each light then dark (the first 6 agents differ in hue), none of the status colours
 FORWARD_ENV = ("BZZ_DATA_DIR", "BZZ_CONFIG_DIR", "BZZ_LOG_DIR", "BZZ_RUNTIME_OVERRIDE", "BZZ_HOST", "BZZ_FAKE_AGENT", "BZZ_SAMPLE_SEC")
 
@@ -129,12 +129,17 @@ def pane_lock(timeout: float = 120.0, poll: float = 0.1):
 
 
 def first_split_target(panes) -> str:
-    """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the chief pane, else None."""
-    for marker in ("job: Dashboard", "| CHIEF |"):
+    """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the Queen pane, else None."""
+    for marker in ("job: Dashboard", "| QUEEN |"):
         for pane in panes:
             if marker in pane.title:
                 return pane.id
     return None
+
+
+def queen_pane_title(model: str, test: bool) -> str:
+    """Fixed title of the pane of the main agent (the Queen)."""
+    return pane_title("all projects", "QUEEN", "Queen", model, test)
 
 
 def is_test_runtime() -> bool:
@@ -871,7 +876,7 @@ def _start_triage(c) -> int:
     return n
 
 
-# ---- orchestrator pane (CHIEF): fixed header and one line per event ----
+# ---- orchestrator pane (QUEEN): fixed header and one line per event ----
 
 ESC = "\x1b"
 SGR = {"Cyan": "1;36", "Gray": "90", "White": "97", "Green": "32", "Red": "31", "Yellow": "33"}
@@ -934,7 +939,7 @@ def head_lines(width: int, tot: dict, ui: dict) -> list:
         state = "idle since %s, ◔ next round %s" % (ui["since"].strftime("%H:%M"), ui["next_at"].strftime("%H:%M"))
     else:
         state = "starting"
-    for ln in wrap_text("◆ CHIEF | ORCHESTRATOR | Claude %s | %s" % (ui.get("model", ""), state), width):
+    for ln in wrap_text("◆ QUEEN | Claude %s | %s" % (ui.get("model", ""), state), width):
         res.append((ln, "White"))
     res.append(("Projects: " + (", ".join(ui.get("projects") or []) or "none") + ". Decides only on events, the routine runs without a brain", "Gray"))
     lc = tot.get("LastCall")
@@ -1084,7 +1089,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         if res["kept"] or res["failed"]:
             env.log("restart: re-attached %d running agent(s), %d gone" % (len(res["kept"]), len(res["failed"])))
         env.log("loop started (roundMinutes=%s)" % minutes)
-        env.event("Orchestrator started (round every %s minutes)" % minutes)
+        env.event("Queen started (round every %s minutes)" % minutes)
     if pane:
         pane.out.write("%s[2J%s[H" % (ESC, ESC))
         pane.draw_head(state)
@@ -1155,7 +1160,7 @@ def cmd_start(args, conn) -> int:
     term = get_terminal(args.terminal or settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
     window = settings.get("window", "Orchestrator")
     boot = [osplat.python_executable(), str(TOOLS_DIR / "haivequeen" / "cli.py"), "start", "--foreground"] + (["--terminal", args.terminal] if args.terminal else [])
-    title = pane_title("all projects", "CHIEF", "Orchestrator", sch.model_long("claude", "claude-sonnet-5-5", "medium"), is_test_runtime())
+    title = queen_pane_title(sch.model_long("claude", "claude-sonnet-5-5", "medium"), is_test_runtime())
     with pane_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first
         pid = loop_running()
         if pid:

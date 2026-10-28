@@ -53,7 +53,7 @@ class PaneLayoutTest(RoundCase):
         self.orig = loop.runner_argv
         loop.runner_argv = lambda env, spec: [sys.executable, str(dummy), env.name, spec["name"]]
         self.term = RecordingHeadless(self.base / "panes")
-        self.chief = self.term.open_window("Orchestrator", pane_title("all projects", "CHIEF", "Orchestrator", "m", True), SLEEP, name="chief")
+        self.chief = self.term.open_window("Orchestrator", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
         self.dash = self.term.split_pane("Orchestrator", pane_title("all projects", "Overview", "Dashboard", "-", True), "white", SLEEP,
                                          "vertical", 0.8, self.chief, "dashboard")
         self.term.splits.clear()

@@ -26,7 +26,7 @@ class PaneInfo:
 def pane_title(project, who, job, model, test=False):
     """Return the fixed pane title: "HaiveQueen | <project> | <who> | job: <job> | model: <model>".
 
-    `who` is e.g. "Agent NAME" or "CHIEF"; test runtimes say "HaiveQueen TEST".
+    `who` is e.g. "Agent NAME" or "QUEEN"; test runtimes say "HaiveQueen TEST".
     """
     prefix = TITLE_PREFIX + (" TEST" if test else "")
     return "%s | %s | %s | job: %s | model: %s" % (prefix, project, who, job, model)

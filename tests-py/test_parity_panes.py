@@ -68,7 +68,7 @@ class ParityPanesTest(RoundCase):
 
     def test_stale_pane_records_open_the_window_again(self):
         """Test D: the only recorded pane is dead (its process is gone): it is not a split target, the window is opened."""
-        stale = self.term.open_window("Orchestrator", pane_title("all projects", "CHIEF", "Orchestrator", "m", True), SLEEP, name="chief")
+        stale = self.term.open_window("Orchestrator", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
         self.term.close_pane(stale)
         self.term.opens.clear()
         self.launch("DUMMY-P1-work")
@@ -78,7 +78,7 @@ class ParityPanesTest(RoundCase):
 
     def test_only_a_running_agent_pane_is_the_split_target(self):
         """Test C: the running agent pane is split; the wider pane of an ended agent, which is about to close, is never targeted."""
-        chief = self.term.open_window("Orchestrator", pane_title("all projects", "CHIEF", "Orchestrator", "m", True), SLEEP, name="chief")
+        chief = self.term.open_window("Orchestrator", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
         run_pane = self.term.split_pane("Orchestrator", "run", "white", SLEEP, "horizontal", 0.5, chief, "c-run")
         done_pane = self.term.split_pane("Orchestrator", "done", "white", SLEEP, "horizontal", 0.5, chief, "c-done")
         self.term.splits.clear()

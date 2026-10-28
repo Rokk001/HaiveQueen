@@ -430,7 +430,7 @@ def build_lines(level, d, w, n_fin) -> list:
     L.append([(run["state"], RUN_STATE_COLOUR[run["state"]]), ("  " + sub if sub else "", "gray"),
               ("  project: %s" % (d["project"] or "all"), "gray"), ("  [P] pause/resume [D] drain [F] project", "darkgray")])
     o = d["orch"]
-    L.append([("Orchestrator ", "cyan"), (o["status"], "gray"),
+    L.append([("Queen ", "cyan"), (o["status"], "gray"),
               (" | brain calls today %d | context %s | in %s / out %s" % (o["calls"], fmt_tok(o["ctx"]), fmt_tok0(o["tin"]), fmt_tok0(o["tout"])), "gray")])
 
     head("AGENTS %d" % len(d["agents"]), "cyan", "  %s  last round %s" % (now.strftime("%H:%M:%S"), d["last_round"]))

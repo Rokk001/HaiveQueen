@@ -60,8 +60,8 @@ class TitleTest(unittest.TestCase):
 
     def test_test_prefix(self):
         """A test runtime says TEST."""
-        self.assertTrue(pane_title("p", "CHIEF", "Orchestrator", "m", test=True)
-                        .startswith("HaiveQueen TEST | p | CHIEF | job: Orchestrator"))
+        self.assertTrue(pane_title("p", "QUEEN", "Queen", "m", test=True)
+                        .startswith("HaiveQueen TEST | p | QUEEN | job: Queen"))
 
 
 class QuotingTest(unittest.TestCase):
@@ -208,11 +208,11 @@ class TmuxStubTest(unittest.TestCase):
 
     def test_list_panes(self):
         """list-panes output is parsed into PaneInfo."""
-        self.outputs = ["%0\tHaiveQueen | p | CHIEF\t100\t0\n%1\tt\t101\t1\n"]
+        self.outputs = ["%0\tHaiveQueen | p | QUEEN\t100\t0\n%1\tt\t101\t1\n"]
         panes = self.term.list_panes("sess")
         self.assertEqual(self.calls[0][:6], ["tmux", "list-panes", "-s", "-t", "sess", "-F"])
         self.assertEqual([(p.id, p.title, p.pid, p.alive) for p in panes],
-                         [("%0", "HaiveQueen | p | CHIEF", 100, True), ("%1", "t", 101, False)])
+                         [("%0", "HaiveQueen | p | QUEEN", 100, True), ("%1", "t", 101, False)])
 
     def test_failure(self):
         """A failing tmux command raises TerminalError."""

@@ -188,11 +188,20 @@ class LoopTest(RoundCase):
         self.assertEqual(loop.wrap_text("aaa bbb ccc", 7), ["aaa bbb", "ccc"])
         self.assertEqual(loop.wrap_text("abcdefghij", 4), ["abcd", "efgh", "ij"])
         hl = loop.head_lines(80, brain.totals(self.conn), {"busy": True, "model": "Son 5.5 med.", "projects": ["a", "b"]})
-        self.assertIn("CHIEF", hl[0][0])
+        self.assertIn("QUEEN", hl[0][0])
         self.assertIn("round running", hl[0][0])
         self.assertIn("Projects: a, b", hl[1][0])
         hl = loop.head_lines(80, brain.totals(self.conn), {"run_state": "PAUSED", "model": "x"})
         self.assertIn("PAUSED", hl[0][0])
+
+    def test_agent_names_and_queen_title(self):
+        """24 unique agent names, none is Queen, and the pane of the main agent is titled QUEEN."""
+        self.assertEqual(len(loop.AGENT_NAMES), 24)
+        self.assertEqual(len(set(loop.AGENT_NAMES)), 24)
+        self.assertNotIn("Queen", loop.AGENT_NAMES)
+        self.assertEqual(loop.AGENT_NAMES[:3], ["Ada", "Bea", "Cleo"])
+        self.assertEqual(loop.AGENT_NAMES[-1], "Zoe")
+        self.assertIn("QUEEN", loop.queen_pane_title("m", True))
 
 
 class TriageStartTest(RoundCase):
