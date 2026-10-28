@@ -26,7 +26,7 @@ PHASES = ("work", "verify", "release", "integrate")
 TEMPORARY = re.compile(r"^(no worker slot|no free slot|no integrator slot|free RAM|STOP flag|run state)")   # a start rejected for one of these keeps its brain event
 AGENT_NAMES = ["Max", "Fritz", "Lena", "Anna", "Jonas", "Mia", "Paul", "Emma", "Finn", "Hanna", "Ben", "Clara", "Leo", "Nora", "Tim",
                "Ida", "Karl", "Rosa", "Otto", "Vera", "Emil", "Greta", "Jan", "Lotte"]   # short first names of the agents; the orchestrator itself is CHIEF
-AGENT_COLOURS = ["4FA8FF", "C77DFF", "FF6FB5", "3DDCDC", "B39DDB", "D7A86E", "8EA2C8", "E040FB", "6FA8DC", "F4A6D7"]   # clearly distinct, none of the status colours
+AGENT_COLOURS = ["4FA8FF", "C77DFF", "FF6FB5", "3DDCDC", "FF9F43", "3DDC97"]   # hues at least 25 degrees apart (no two look alike), none of the status colours
 FORWARD_ENV = ("ORCH_DATA_DIR", "ORCH_CONFIG_DIR", "ORCH_LOG_DIR", "ORCH_RUNTIME_OVERRIDE", "ORCH_HOST", "ORCH_FAKE_AGENT", "ORCH_SAMPLE_SEC")
 
 
@@ -120,8 +120,10 @@ def agent_identity(conn) -> dict:
             rows.append(a)
     used_n = [str(a.get("person")) for a in rows]
     used_c = [str(a.get("color")) for a in rows]
+    run_c = [str(a.get("color")) for a in rows if a.get("status") in ACTIVE]
     n = next((x for x in AGENT_NAMES if x not in used_n), AGENT_NAMES[len(rows) % len(AGENT_NAMES)])
-    c = next((x for x in AGENT_COLOURS if x not in used_c), AGENT_COLOURS[len(rows) % len(AGENT_COLOURS)])
+    # Colours of agents that ended within the last hour are given up first; a colour of a running agent repeats only with more running agents than colours (then the least used one).
+    c = next((x for x in AGENT_COLOURS if x not in used_c), None) or next((x for x in AGENT_COLOURS if x not in run_c), None) or min(AGENT_COLOURS, key=run_c.count)
     return {"Person": n, "Color": c}
 
 
