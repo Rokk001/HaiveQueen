@@ -294,15 +294,21 @@ def _about_plan(row_plan, rel: str) -> bool:
     return not row_plan or norm_plan(row_plan) == norm_plan(rel)
 
 
+# Words by which the text of a question says that a package is locked (a lock question whose item has no LOCK- prefix).
+LOCK_QUESTION_WORDS = re.compile(r"(?i)(gesperrt|locked)")
+
+
 def lock_resolution(env, plan: str, pkg: str):
     """Why the lock of a package counts as resolved, or None: a decision for item LOCK-<package> (source owner, coordinator or auto),
-    an answered question with that item (answered by owner, coordinator or auto), or a decision that closes the package."""
+    an answered question with that item, or with item "<package> <title>" when its text says the package is gesperrt/locked (answered by owner,
+    coordinator or auto), or a decision that closes the package."""
     tag = "LOCK-" + pkg.upper()
     for d in runtime.list_decisions(env.conn, env.name):
         if _about_plan(d["plan_path"], plan) and str(d["item"] or "").strip().upper() == tag:
             return "decision %s by %s" % (d["id"], d["source"])
     for q in runtime.list_questions(env.conn, env.name, "answered"):
-        if _about_plan(q["plan_path"], plan) and str(q["item"] or "").strip().upper() == tag:
+        if _about_plan(q["plan_path"], plan) and (str(q["item"] or "").strip().upper() == tag or (
+                item_token(q["item"]) == pkg.upper() and LOCK_QUESTION_WORDS.search(str(q["question"] or "")))):
             return "question %s answered by %s" % (q["id"], q["answered_by"])
     return done_decisions(env, plan, [pkg]).get(pkg)
 

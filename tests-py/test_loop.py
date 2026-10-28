@@ -304,6 +304,22 @@ class LockResolvedTest(RoundCase):
         """Automatic answer."""
         self.answer("auto")
 
+    def test_answer_item_with_title(self):
+        """A question with item 'K1 Config values' whose text says the package is gesperrt lifts the lock once answered (not before)."""
+        self.locked_round()
+        qid = db.add_question(self.conn, "testproj", REL, "K1 Config values: range", "Paket K1 ist gesperrt, weil die Pruefung einen offenen Punkt meldet.", "retry")
+        self.assertIsNone(routine.lock_resolution(self.env(), REL, "K1"))
+        db.answer_question(self.conn, qid, "siehe dort", "coordinator")
+        self.assert_released()
+
+    def test_answer_item_with_title_no_lock_question(self):
+        """An answered question about K1 that is no lock question does not lift the lock."""
+        self.locked_round()
+        qid = db.add_question(self.conn, "testproj", REL, "K1 Colour", "Which colour should K1 have?", "blue")
+        db.answer_question(self.conn, qid, "blue", "owner")
+        self.round()
+        self.assertTrue(self.pkg()["locked"])
+
     def test_open_question_keeps_lock(self):
         """An unanswered question for LOCK-K1 does not lift the lock."""
         self.locked_round()
