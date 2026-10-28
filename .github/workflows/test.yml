@@ -1,0 +1,28 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+      - name: Install tmux
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y tmux
+      - name: Unit tests (standard library only)
+        run: python -m unittest discover -s tests-py -v
+      - name: tmux smoke test
+        if: runner.os == 'Linux'
+        run: python -m unittest discover -s tests-py -p test_tmux_smoke.py -v
