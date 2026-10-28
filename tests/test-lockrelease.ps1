@@ -102,6 +102,12 @@ Add-Content "$root\QUESTIONS.md" "`n## Q-20260101-006`n- Plan: $plan`n- Item: K7
 $r = Routine
 Check 'ANSWERED question about K7 that is no lock question does not lift the lock' ((Acts $r 'lock_package' 'K7').Count -eq 1)
 
+New-Locked 'K8' 'D8'
+(Get-Content $state -Raw) -replace 'Open for Owner - LOCK-K8', 'Open for Owner - LOCK-K8 Config values' | Set-Content $state -Encoding UTF8
+Add-Content "$root\QUESTIONS.md" "`n## Q-20260101-007`n- Plan: $plan`n- Item: K8 Config values: range`n- Question: Paket K8 ist gesperrt, weil die Pruefung einen offenen Punkt meldet.`n- Status: ANSWERED`n- Answer: erledigt, keine weiteren Laeufe`n" -Encoding UTF8
+$r = Routine
+Check 'erledigt on item "K8 title": D8 starts, no run for K8 and no answer work agent' ((Acts $r 'start_agent' 'D8').Count -eq 1 -and (Acts $r 'start_agent' 'K8').Count -eq 0 -and (Acts $r 'start_agent' 'Q-K8').Count -eq 0 -and (Acts $r 'lock_package' 'K8').Count -eq 0)
+
 Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "failures: $fails"
 exit $fails

@@ -32,11 +32,15 @@ function Get-Hue([string]$hex) {
     if ($h -lt 0) { $h += 360 }
     return $h
 }
-$minGap = 360
-foreach ($i in 0..($script:AgentColors.Count - 1)) { foreach ($j in 0..($script:AgentColors.Count - 1)) { if ($j -gt $i) { $d = [Math]::Abs((Get-Hue $script:AgentColors[$i]) - (Get-Hue $script:AgentColors[$j])); $d = [Math]::Min($d, 360 - $d); if ($d -lt $minGap) { $minGap = $d } } } }
-Check 'palette colors differ in hue by at least 25 degrees (no two purples, blues or pinks)' ($minGap -ge 25) ([string][int]$minGap)
+# The palette must be 12 colors in 6 hue families (light and dark level each); the families are at least 25 degrees apart.
+$hues = @($script:AgentColors | ForEach-Object { Get-Hue $_ } | Sort-Object)
+$fam = @(); foreach ($h in $hues) { if ($fam.Count -and ($h - $fam[-1][-1]) -le 10) { $fam[-1] += $h } else { $fam += , @($h) } }
+if ($fam.Count -gt 1 -and (($fam[0][0] + 360) - $fam[-1][-1]) -le 10) { $fam[0] += $fam[-1]; $fam = $fam[0..($fam.Count - 2)] }
+$gaps = @(); for ($i = 0; $i -lt $fam.Count; $i++) { $a = ($fam[$i] | Measure-Object -Average).Average; $b = ($fam[($i + 1) % $fam.Count] | Measure-Object -Average).Average; $d = [Math]::Abs($a - $b); $gaps += [Math]::Min($d, 360 - $d) }
+Check 'palette has 12 colors in 6 hue families with two levels each' ($script:AgentColors.Count -eq 12 -and $fam.Count -eq 6 -and @($fam | Where-Object { $_.Count -ne 2 }).Count -eq 0) ("$($script:AgentColors.Count) colors, $($fam.Count) families")
+Check 'hue families are at least 25 degrees apart' ((($gaps | Measure-Object -Minimum).Minimum) -ge 25) ([string][int](($gaps | Measure-Object -Minimum).Minimum))
 Check 'palette has no duplicate entry' ((@($script:AgentColors | Select-Object -Unique)).Count -eq $script:AgentColors.Count)
-foreach ($n in 2, 4, $script:AgentColors.Count) {
+foreach ($n in 2, 4, 7, 12) {
     Remove-Item "$($cfg.runtime)\AGENTS.json" -ErrorAction SilentlyContinue
     $c = Start-Agents $n "R$n-"
     Check "$n running agents: all colors differ" ((@($c | Select-Object -Unique)).Count -eq $n) ($c -join ',')

@@ -574,8 +574,8 @@ function Test-Frozen($Cfg, [string]$Plan, [string]$Pkg) { return ((Get-FrozenKey
 
 # Fixed list of short, non-technical first names for agents (the orchestrator itself is always CHIEF).
 $script:AgentNames = @('Max', 'Fritz', 'Lena', 'Anna', 'Jonas', 'Mia', 'Paul', 'Emma', 'Finn', 'Hanna', 'Ben', 'Clara', 'Leo', 'Nora', 'Tim', 'Ida', 'Karl', 'Rosa', 'Otto', 'Vera', 'Emil', 'Greta', 'Jan', 'Lotte')
-# Fixed palette of colors (RGB hex) that differ in hue by at least 25 degrees (so two agents never look alike, e.g. two purples) and are not used for status (green, yellow, red, grey) and not for CHIEF.
-$script:AgentColors = @('4FA8FF', 'C77DFF', 'FF6FB5', '3DDCDC', 'FF9F43', '3DDC97')
+# Fixed palette of 12 colors (RGB hex): 6 hues at least 25 degrees apart (blue, violet, pink, cyan, orange, green), each in a light and a dark level; the light ones come first so the first 6 agents differ in hue. Not used for status (green, yellow, red, grey) and not for CHIEF.
+$script:AgentColors = @('4FA8FF', 'C77DFF', 'FF6FB5', '3DDCDC', 'FF9F43', '3DDC97', '2B6CB0', '8A3FD1', 'C2306F', '1E9C9C', 'C26A10', '1E9B5F')
 $script:ChiefColor = 'FFFFFF'
 # First name and color for a new agent: the first free entry of the lists; free = not used by a running agent or one that ended within the last hour.
 # The color is never taken from a running agent while another one is free: colors of agents that ended within the last hour are given up first, and only with more running agents than colors the least used one repeats.

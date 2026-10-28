@@ -251,9 +251,9 @@ function Get-Routine($Ctx) {
         if (-not $rp -or $workers -le 0) { continue }
         $relP = [string]$rp.path; $tok = Get-ItemToken ([string]$q.item); $pk = "Q-$tok"
         $absP = if ([System.IO.Path]::IsPathRooted($relP)) { $relP } else { Join-Path $Ctx.Repo $relP.Replace('/', '\') }
-        if ($tok -like 'LOCK-*') {   # answer to a lock question that says "erledigt": the package is finished, no new work (the plan loop below marks it stateDone)
+        if ($true) {   # answer to a lock question (item LOCK-<pkg> or "<pkg> <title>") that says "erledigt": the package is finished, no new work (the plan loop below marks it stateDone); no effect when the plan has no lock section for the package
             $lsl = @(Get-PlanStateFiles $absP | ForEach-Object { , @(Get-Content $_.FullName -Encoding UTF8) })
-            $lq = Get-LockDecision $cfg $relP $tok.Substring(5) $decided $Ctx.Questions $lsl
+            $lq = Get-LockDecision $cfg $relP $(if ($tok -like 'LOCK-*') { $tok.Substring(5) } else { $tok }) $decided $Ctx.Questions $lsl
             if ($lq -and $lq.Done) { continue }
         }
         $done = $false   # the item already stands as implemented in a state file of the plan
