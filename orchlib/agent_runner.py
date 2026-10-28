@@ -822,6 +822,8 @@ def parse_args(argv=None):
     p.add_argument("--model", default=None)
     p.add_argument("--effort", default=None)
     p.add_argument("--wrap", action="store_true", help="pane wrapper mode")
+    p.add_argument("--protocol", default=None, help="passed by the loop; the protocol is taken from the provider entry")
+    p.add_argument("--env", action="append", default=[], metavar="NAME=VALUE", help="environment value to set before the run (test and folder overrides)")
     return p.parse_args(argv)
 
 
@@ -829,6 +831,10 @@ def main(argv=None):
     """Command line entry."""
     argv = list(sys.argv[1:] if argv is None else argv)
     a = parse_args(argv)
+    for pair in a.env:
+        key, _, value = pair.partition("=")
+        if key:
+            os.environ[key] = value
     if a.wrap:
         return pane_wrap(a, [x for x in argv if x != "--wrap"])
     return run_agent(a)
