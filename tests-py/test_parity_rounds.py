@@ -54,7 +54,7 @@ class ParityRoundsTest(RoundCase):
         self.assertEqual(config.load_project(self.repo)["name"], "testproj")
         bad = self.base / "bad-ws"
         (bad / ".orchestrator").mkdir(parents=True)
-        (bad / ".orchestrator" / "project.toml").write_text('name = "C:\\Users\\x"\n', encoding="utf-8")
+        (bad / ".orchestrator" / "project.toml").write_text('name = "dir\\qname"\n', encoding="utf-8")
         with self.assertRaises(tomllib.TOMLDecodeError):
             config.load_project(bad)
 
