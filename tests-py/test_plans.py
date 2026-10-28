@@ -86,6 +86,46 @@ class DiscoveryTests(unittest.TestCase):
             found = plans.discover_plans(d, ["other/*.md"])
             self.assertEqual([p.status for p in found], ["DONE"])
 
+    def make_tree(self, d, names):
+        """Create invented plan files at the given relative paths below d."""
+        for rel in names:
+            full = os.path.join(d, *rel.split("/"))
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w", encoding="utf-8") as f:
+                f.write(plan_text())
+
+    def rels(self, d, found):
+        """Workspace-relative, slash-normalised paths of the found plans."""
+        return [os.path.relpath(p.path, d).replace("\\", "/") for p in found]
+
+    def test_exclude_folder(self):
+        """An exclude on a folder with ** removes every file below it."""
+        with tempfile.TemporaryDirectory() as d:
+            self.make_tree(d, ["docs/a.md", "docs/x/orchestrator/b.md", "docs/x/orchestrator/deep/c.md"])
+            found = plans.discover_plans(d, ["docs/**/*.md"], ["docs/x/orchestrator/**"])
+            self.assertEqual(self.rels(d, found), ["docs/a.md"])
+
+    def test_exclude_file_pattern(self):
+        """An exclude with a file pattern removes matching names only."""
+        with tempfile.TemporaryDirectory() as d:
+            self.make_tree(d, ["docs/plans/one.md", "docs/plans/one-STATE.md"])
+            found = plans.discover_plans(d, ["docs/plans/*.md"], ["docs/plans/*-STATE.md"])
+            self.assertEqual(self.rels(d, found), ["docs/plans/one.md"])
+
+    def test_no_exclude_keeps_old_behaviour(self):
+        """No excludes (None or empty list) returns all matches."""
+        with tempfile.TemporaryDirectory() as d:
+            self.make_tree(d, ["docs/plans/one.md", "docs/plans/one-STATE.md"])
+            self.assertEqual(len(plans.discover_plans(d)), 2)
+            self.assertEqual(len(plans.discover_plans(d, None, [])), 2)
+
+    def test_exclude_with_broad_glob(self):
+        """A broad docs/** glob combined with several excludes keeps only the rest."""
+        with tempfile.TemporaryDirectory() as d:
+            self.make_tree(d, ["docs/keep.md", "docs/sub/keep2.md", "docs/x/orchestrator/no.md", "docs/sub/no-STATE.md"])
+            found = plans.discover_plans(d, ["docs/**"], ["docs/x/orchestrator/**", "docs/**/*-STATE.md"])
+            self.assertEqual(self.rels(d, found), ["docs/keep.md", "docs/sub/keep2.md"])
+
 
 class Rule11Tests(unittest.TestCase):
     """startable_packages."""
