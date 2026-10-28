@@ -285,6 +285,46 @@ def state_done_packages(env, rel: str, pkg_ids: list, rows: list) -> dict:
     return res
 
 
+# Words of a decision that closes a package: 'done', 'closed', 'erledigt', 'abgeschlossen', 'no further runs' / 'keine weiteren Laeufe'.
+DONE_WORDS = re.compile(r"(?i)(?<!not )(?<!nicht )\b(erledigt|done|closed|abgeschlossen)\b|keine\s+weiteren|no\s+further")
+
+
+def _about_plan(row_plan, rel: str) -> bool:
+    """True when a decision or question belongs to this plan, or to no plan at all."""
+    return not row_plan or norm_plan(row_plan) == norm_plan(rel)
+
+
+def lock_resolution(env, plan: str, pkg: str):
+    """Why the lock of a package counts as resolved, or None: a decision for item LOCK-<package> (source owner, coordinator or auto),
+    an answered question with that item (answered by owner, coordinator or auto), or a decision that closes the package."""
+    tag = "LOCK-" + pkg.upper()
+    for d in runtime.list_decisions(env.conn, env.name):
+        if _about_plan(d["plan_path"], plan) and str(d["item"] or "").strip().upper() == tag:
+            return "decision %s by %s" % (d["id"], d["source"])
+    for q in runtime.list_questions(env.conn, env.name, "answered"):
+        if _about_plan(q["plan_path"], plan) and str(q["item"] or "").strip().upper() == tag:
+            return "question %s answered by %s" % (q["id"], q["answered_by"])
+    return done_decisions(env, plan, [pkg]).get(pkg)
+
+
+def done_decisions(env, rel: str, pkg_ids: list) -> dict:
+    """Packages a decision (or an answer) closes: id -> evidence. The text must say the package is done (or that no further runs follow)
+    and name the package (item LOCK-<package> or <package>; a decision without an item names it as a word in the text)."""
+    res = {}
+    texts = [("decision %s" % d["id"], d["plan_path"], d["item"], d["text"]) for d in runtime.list_decisions(env.conn, env.name)]
+    texts += [("question %s" % q["id"], q["plan_path"], q["item"], q["answer"]) for q in runtime.list_questions(env.conn, env.name, "answered")]
+    for ev, plan, item, text in texts:
+        if not _about_plan(plan, rel) or not DONE_WORDS.search(str(text or "")):
+            continue
+        for i in pkg_ids:
+            it = str(item or "").strip().upper()
+            named = it in (i.upper(), "LOCK-" + i.upper()) or (not it and re.search(
+                r"(?<![A-Za-z0-9-])" + re.escape(i) + r"(?![A-Za-z0-9])", str(text)))
+            if named:
+                res.setdefault(i, ev)
+    return res
+
+
 def item_token(item: str) -> str:
     """Short id of a question item ('ALL-V5 mood decay' -> 'ALL-V5', 'M1' -> 'M1')."""
     m = re.match(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", str(item or "").strip())
@@ -578,6 +618,11 @@ def get_routine(env, ctx: dict) -> dict:
         for k in pkgs:
             if stages[k["id"]]["Stage"] in ("new", "open") and k["id"] in sdone:
                 stages[k["id"]] = {"Stage": "stateDone", "Work": None, "Verify": None, "Evidence": sdone[k["id"]]}
+        # A decision or answer that closes a package ('done, no further runs') ends it for good: dependents start, no more work or verify runs.
+        closed = done_decisions(env, rel, [k["id"] for k in pkgs])
+        for k in pkgs:
+            if stages[k["id"]]["Stage"] not in ("running", "verified", "stateDone") and k["id"] in closed:
+                stages[k["id"]] = {"Stage": "stateDone", "Work": None, "Verify": None, "Evidence": closed[k["id"]]}
         # Frozen packages (nofollow list): no follow-up task of any kind.
         for k in pkgs:
             if stages[k["id"]]["Stage"] != "running" and is_frozen(env, rel, k["id"]):

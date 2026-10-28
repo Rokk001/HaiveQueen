@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import zlib
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -791,6 +792,38 @@ def get_codex_usage(codex_dir=None) -> dict:
     except (ValueError, KeyError, TypeError, OSError, AttributeError):
         pass
     return res
+
+
+CODEX_USAGE_KEY = "usage-codex"
+_codex_refresh = {}   # codex folder -> time of the last read, so the logs are read at most once per interval
+
+
+def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min_interval: float = 60.0, force: bool = False) -> bool:
+    """Write Codex's 5h/7d windows from the session logs into kv (key usage-codex, same form as usage-claude); True when written.
+
+    Cheap: the logs are read at most once per `min_interval` seconds per folder. Nothing is written when no window is known
+    (the old value stays). Without an explicit folder it does nothing in a test runtime (ORCH_DATA_DIR set). Only reads ~/.codex.
+    """
+    if codex_dir is None and os.environ.get("ORCH_DATA_DIR"):
+        return False
+    root = str(Path(codex_dir) if codex_dir else codex_root())
+    nowt = time.monotonic()
+    last = _codex_refresh.get(root)
+    if not force and last is not None and nowt - last < min_interval:
+        return False
+    _codex_refresh[root] = nowt
+    u = get_codex_usage(codex_dir)
+    value = {"saved": datetime.now().astimezone().isoformat()}
+    found = False
+    for key, name in (("fiveHour", "five_hour"), ("sevenDay", "seven_day")):
+        w = u[name]
+        if w:
+            value[key] = {"utilization": w["pct"] / 100.0, "resetsAt": w["at"]}
+            found = True
+    if not found:
+        return False
+    runtime.kv_set(conn, project, CODEX_USAGE_KEY, json.dumps(value))
+    return True
 
 
 def format_usage(u) -> str:

@@ -5,7 +5,6 @@ main() redraws it every few seconds and reads the keys P (pause/resume), D (drai
 Everything is read from the database; entry point: `python -m orchlib.dashboard [--project NAME] [--wrap]`.
 """
 import json
-import math
 import os
 import re
 import shutil
@@ -18,7 +17,7 @@ from pathlib import Path
 if not __package__:   # started as a script: make the package importable
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchlib import config, db, platform as osplat, runstate, runtime  # noqa: E402
+from orchlib import buildjobs, config, db, platform as osplat, runstate, runtime, usage  # noqa: E402
 
 FULL, LIGHT, LINE = "█", "░", "─"
 REFRESH_SECONDS = 5
@@ -238,27 +237,17 @@ def build_jobs_line(conn, cfg, projects, agents, sysinfo) -> str:
     if not bj:
         return None
     cores = sysinfo["cores"]
-    block = bj if isinstance(bj, dict) else {"fixed": int(bj)}
+    settings = buildjobs.settings_from(bj)
     marks = ",".join("?" * len(projects)) if projects else ""
     sql = "SELECT MAX(per_job_mb) FROM build_measurements WHERE host=?" + (" AND project IN (%s)" % marks if projects else "")
     per = conn.execute(sql, [sysinfo["host"]] + list(projects)).fetchone()[0]
-    if block.get("perJobMB") not in (None, "auto"):
-        per = float(block["perJobMB"])
+    if settings["PerJobMB"] is not None:
+        per = settings["PerJobMB"]
     running = [a for a in agents if a["status"] == "running" and a.get("buildJobs")]
     if running:
         text = "Build jobs %s of %d cores (running)" % (running[0]["buildJobs"], cores)
     else:
-        share = block.get("coreShare", 2.0 / 3.0)
-        if isinstance(share, str):
-            m = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", share)
-            share = int(m.group(1)) / int(m.group(2)) if m else float(share)
-        limit = max(1, math.ceil(cores * share))
-        if block.get("fixed") is not None:
-            jobs = max(1, int(block["fixed"]))
-        elif not per or per <= 0:
-            jobs = max(1, min(int(block.get("firstJobs", 2)), limit))
-        else:
-            jobs = max(1, min(limit, int((sysinfo["free_mb"] - float(block.get("reserveMB", 1024))) // per)))
+        jobs = buildjobs.job_count(settings, cores, sysinfo["free_mb"], per)["Jobs"]
         text = "Build jobs %d of %d cores (next build)" % (jobs, cores)
     text += " | per job " + ("%.0f MB" % per if per else "not measured yet")
     if sysinfo.get("compiler_count") is not None and (running or sysinfo["compiler_count"] > 0):
@@ -318,6 +307,10 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     if sysinfo is None:
         sysinfo = live_sysinfo(conn, project)
     host = sysinfo["host"]
+    try:
+        usage.refresh_codex_usage(conn)
+    except Exception:
+        pass
     all_rows = runtime.list_agents(conn, project, "active")
     agents_all = runtime.list_agents(conn, project, "all")
     agents = sorted([a for a in all_rows if a["status"] in runtime.ACTIVE_STATUSES], key=lambda a: a.get("started_at") or "")

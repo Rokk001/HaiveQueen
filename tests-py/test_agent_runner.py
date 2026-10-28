@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from orchlib import agent_runner as ar  # noqa: E402
-from orchlib import db, runtime  # noqa: E402
+from orchlib import buildjobs, db, runtime  # noqa: E402
 
 FAKE_CLI = '''import json, os, sys
 rec = {"argv": sys.argv[1:], "build_jobs": os.environ.get("BUILD_JOBS"), "cwd": os.getcwd()}
@@ -97,27 +97,32 @@ class HelperTest(unittest.TestCase):
         self.assertIsNone(ar.classify_cmd("ls -la"))
 
     def test_build_job_count(self):
-        """The scenarios of the build job test: first build, RAM limit, core limit, fixed, configured use."""
+        """The runner takes its job count from buildjobs: first build, RAM limit, core limit, fixed, configured use."""
         def bj(**extra):
             raw = {"envVar": "BUILD_JOBS", "coreShare": "2/3", "reserveMB": 1024, "perJobMB": "auto", "firstJobs": 2}
             raw.update(extra)
-            return ar.build_jobs_cfg(raw)
-        d = ar.build_jobs_cfg({"envVar": "X"})
-        self.assertTrue(abs(d["coreShare"] - 2 / 3) < 1e-9 and d["reserveMB"] == 1024 and d["firstJobs"] == 2 and d["perJobMB"] is None and d["fixed"] is None)
-        self.assertEqual(ar.build_job_count(bj(), 12, 32000, None), (2, "first"))
-        self.assertEqual(ar.build_job_count(bj(firstJobs=10), 6, 32000, None)[0], 4)
-        self.assertEqual(ar.build_job_count(bj(), 12, 4096, 1000), (3, "ram"))
-        self.assertEqual(ar.build_job_count(bj(), 12, 1500, 1000)[0], 1)
-        self.assertEqual(ar.build_job_count(bj(), 10, 64000, 500), (7, "cores"))
-        self.assertEqual(ar.build_job_count(bj(fixed=5), 4, 1200, 2000), (5, "fixed"))
-        self.assertEqual(ar.build_job_count(bj(perJobMB=2000), 12, 6144, 100)[0], 2)
-        self.assertEqual(ar.build_job_count(bj(), 12, 3072, 1000)[0], 2)
-        self.assertEqual(ar.build_job_count(bj(reserveMB=2048), 12, 3072, 1000)[0], 1)
-        self.assertEqual(ar.build_use_mb(8000, 5000, 3), 1000)
-        self.assertEqual(ar.build_use_mb(3000, 4000, 2), 0)
-        self.assertIsNone(ar.build_jobs_cfg(None))
-        self.assertEqual(ar.build_jobs_cfg(0)["fixed"], None)
-        self.assertEqual(ar.build_jobs_cfg(4)["fixed"], 4)
+            return buildjobs.settings_from(raw)
+
+        def count(b, cores, free, measured):
+            r = buildjobs.job_count(b, cores, free, measured)
+            return r["Jobs"], r["Why"]
+        self.assertFalse(hasattr(ar, "build_job_count") or hasattr(ar, "build_jobs_cfg") or hasattr(ar, "build_use_mb"))
+        d = buildjobs.settings_from({"envVar": "X"})
+        self.assertTrue(abs(d["CoreShare"] - 2 / 3) < 1e-9 and d["ReserveMB"] == 1024 and d["FirstJobs"] == 2 and d["PerJobMB"] is None and d["Fixed"] is None)
+        self.assertEqual(count(bj(), 12, 32000, None), (2, "first"))
+        self.assertEqual(count(bj(firstJobs=10), 6, 32000, None)[0], 4)
+        self.assertEqual(count(bj(), 12, 4096, 1000), (3, "ram"))
+        self.assertEqual(count(bj(), 12, 1500, 1000)[0], 1)
+        self.assertEqual(count(bj(), 10, 64000, 500), (7, "cores"))
+        self.assertEqual(count(bj(fixed=5), 4, 1200, 2000), (5, "fixed"))
+        self.assertEqual(count(bj(perJobMB=2000), 12, 6144, 100)[0], 2)
+        self.assertEqual(count(bj(), 12, 3072, 1000)[0], 2)
+        self.assertEqual(count(bj(reserveMB=2048), 12, 3072, 1000)[0], 1)
+        self.assertEqual(buildjobs.use_mb(8000, 5000, 3), 1000)
+        self.assertEqual(buildjobs.use_mb(3000, 4000, 2), 0)
+        self.assertIsNone(buildjobs.settings_from(None))
+        self.assertEqual(buildjobs.settings_from(0)["Fixed"], None)
+        self.assertEqual(buildjobs.settings_from(4)["Fixed"], 4)
 
     def test_args_and_endpoint(self):
         """Argument templates are filled; an endpoint adds the model_provider arguments."""
