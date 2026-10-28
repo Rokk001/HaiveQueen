@@ -2,12 +2,14 @@
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from orchlib import config, db, runtime, runtime_cli  # noqa: E402
+from orchlib import export as export_mod, init as init_mod, views  # noqa: E402
 
-STUBS = ("init", "register", "start", "stop", "export", "import-legacy")
+STUBS = ("start", "stop", "import-legacy")
 
 
 def out(obj) -> None:
@@ -98,6 +100,33 @@ def cmd_queue(args, conn) -> int:
     return 0
 
 
+def cmd_views(args, conn) -> int:
+    """Write the generated Markdown views of a project."""
+    out({"ok": True, "written": views.write_views(conn, args.project)})
+    return 0
+
+
+def cmd_export(args, conn) -> int:
+    """Export the database now (--force) or only when the daily export is due."""
+    if not args.force and not export_mod.export_due(datetime.now()):
+        out({"ok": True, "skipped": "not due"})
+        return 0
+    out(export_mod.run_export())
+    return 0
+
+
+def cmd_init(args, conn) -> int:
+    """Create the project files in a folder; existing files are kept."""
+    out({"ok": True, "files": init_mod.init_project(args.folder)})
+    return 0
+
+
+def cmd_register(args, conn) -> int:
+    """Register the project in a folder in config.toml and the database."""
+    out(init_mod.register_project(conn, args.folder))
+    return 0
+
+
 def make_stub(name: str):
     """Build a command handler that reports the command as not implemented yet."""
     def stub(args, conn) -> int:
@@ -158,6 +187,19 @@ def build_parser() -> argparse.ArgumentParser:
     for a in ("branch", "tip", "plan", "status", "note", "run"):
         p.add_argument(f"--{a}")
     p.set_defaults(fn=cmd_queue)
+
+    p = sub.add_parser("views")
+    p.add_argument("--project", required=True)
+    p.set_defaults(fn=cmd_views)
+
+    p = sub.add_parser("export")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(fn=cmd_export)
+
+    for name, fn in (("init", cmd_init), ("register", cmd_register)):
+        p = sub.add_parser(name)
+        p.add_argument("folder")
+        p.set_defaults(fn=fn)
 
     runtime_cli.register(sub)
 
