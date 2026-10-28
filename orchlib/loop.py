@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -49,6 +50,91 @@ def loop_running() -> int:
     except (OSError, ValueError):
         return 0
     return pid if osplat.process_alive(pid) and pid != os.getpid() else 0
+
+
+def pane_lock_file() -> Path:
+    """Path of the pane command lock (the process id of the process that sends pane commands right now)."""
+    return osplat.data_dir() / "pane.lock"
+
+
+def start_pending_file() -> Path:
+    """Path of the marker that a window start is under way (the loop of that window has not taken its lock yet)."""
+    return osplat.data_dir() / "start.pending"
+
+
+def start_pending(max_age: float = 120.0) -> bool:
+    """True when a window start began less than `max_age` seconds ago."""
+    try:
+        return time.time() - start_pending_file().stat().st_mtime < max_age
+    except OSError:
+        return False
+
+
+def _take_pid_lock(path: Path, own_ok: bool, wait: float = 5.0) -> int:
+    """Create the lock file `path` atomically (exclusive create) holding our process id.
+
+    Returns 0 on success, else the process id of the living holder (-1 when the file stays unreadable). The lock of a dead process is taken over:
+    the file is only removed when it still names that dead process. `own_ok` accepts a lock that names this very process.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + wait
+    holder = -1
+    while time.monotonic() < deadline:
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                holder = int(path.read_text(encoding="ascii").strip())
+            except (OSError, ValueError):
+                holder = -1   # just created and not written yet, or damaged
+                time.sleep(0.05)
+                continue
+            if own_ok and holder == os.getpid():
+                return 0
+            if osplat.process_alive(holder):
+                return holder
+            try:
+                if int(path.read_text(encoding="ascii").strip()) == holder:
+                    path.unlink()
+            except (OSError, ValueError):
+                pass
+            continue
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(str(os.getpid()))
+        return 0
+    return holder
+
+
+@contextmanager
+def pane_lock(timeout: float = 120.0, poll: float = 0.1):
+    """Serialise pane commands between processes: only the holder of pane.lock opens or splits a pane (loop round, `orch start`).
+
+    Waits up to `timeout` seconds for another process to finish its pane command, then raises TimeoutError.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        holder = _take_pid_lock(pane_lock_file(), own_ok=False)
+        if holder == 0:
+            break
+        if time.monotonic() >= deadline:
+            raise TimeoutError("pane commands are blocked by process %s" % holder)
+        time.sleep(poll)
+    try:
+        yield
+    finally:
+        try:
+            pane_lock_file().unlink()
+        except OSError:
+            pass
+
+
+def first_split_target(panes) -> str:
+    """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the chief pane, else None."""
+    for marker in ("job: Dashboard", "| CHIEF |"):
+        for pane in panes:
+            if marker in pane.title:
+                return pane.id
+    return None
 
 
 def is_test_runtime() -> bool:
@@ -199,12 +285,14 @@ def launch_agent(env, terminal, window: str, spec: dict, settle: float = 3.0, po
     pane_name = "%s__%s" % (env.name, spec["name"])
 
     def open_pane(label: str) -> str:
-        """Open the pane (split a live one, or open the window when none is alive)."""
-        if not live:
-            env.log("pane of %s: no live pane to split, opens the window%s" % (spec["name"], label))
-            return terminal.open_window(window, title, command, env.colour, pane_name)
-        env.log("pane of %s: splits %s (%s)%s" % (spec["name"], slot["target"] or "newest", slot["direction"], label))
-        return terminal.split_pane(window, title, env.colour, command, slot["direction"], 0.5, slot["target"], pane_name)
+        """Open the pane (split a live one, or open the window when none is alive); one pane command at a time across all processes."""
+        with pane_lock():
+            if not live:
+                env.log("pane of %s: no live pane to split, opens the window%s" % (spec["name"], label))
+                return terminal.open_window(window, title, command, env.colour, pane_name)
+            target = slot["target"] or first_split_target(live)   # no agent pane yet: beside the dashboard (else the chief) pane
+            env.log("pane of %s: splits %s (%s)%s" % (spec["name"], target or "newest", slot["direction"], label))
+            return terminal.split_pane(window, title, env.colour, command, slot["direction"], 0.5, target, pane_name)
 
     pane_id = open_pane("")
     cols, rows_n = slot["cols"], slot["rows"]
@@ -944,12 +1032,14 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui:
     Only one loop runs at a time: with a living lock the call ends at once. At the start running agents are re-attached by process id (D8): living
     ones stay running, vanished ones fail by the existing rules. `round_kwargs` go to run_round (tests). Returns the exit code.
     """
-    other = loop_running()
+    other = _take_pid_lock(lock_file(), own_ok=True)   # atomic: of two loops started at the same moment exactly one runs
     if other:
         print("Another orchestrator loop runs (pid %d): this one ends." % other)
         return 0
-    lock_file().parent.mkdir(parents=True, exist_ok=True)
-    lock_file().write_text(str(os.getpid()), encoding="ascii")
+    try:
+        start_pending_file().unlink()
+    except OSError:
+        pass
     try:
         return _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds, round_kwargs or {})
     finally:
@@ -1066,12 +1156,26 @@ def cmd_start(args, conn) -> int:
     window = settings.get("window", "Orchestrator")
     boot = [osplat.python_executable(), str(TOOLS_DIR / "orch.py"), "start", "--foreground"] + (["--terminal", args.terminal] if args.terminal else [])
     title = pane_title("all projects", "CHIEF", "Orchestrator", sch.model_long("claude", "claude-sonnet-5-5", "medium"), is_test_runtime())
-    panes = [term.open_window(window, title, boot, "white", "chief")]
-    import importlib.util
-    if importlib.util.find_spec("orchlib.dashboard") is not None:
-        dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from orchlib.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
-        panes.append(term.split_pane(window, pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime()), "white", dash,
-                                     "vertical", 0.8, panes[0], "dashboard"))
+    with pane_lock():   # a second `orch start` waits here and then finds the loop (or the pending start) of the first
+        pid = loop_running()
+        if pid:
+            print(json.dumps({"ok": True, "running": True, "pid": pid, "note": "The orchestrator is already running."}))
+            return 0
+        if start_pending():
+            print(json.dumps({"ok": True, "running": False, "starting": True, "note": "The orchestrator window is just starting."}))
+            return 0
+        start_pending_file().parent.mkdir(parents=True, exist_ok=True)
+        start_pending_file().write_text(str(os.getpid()), encoding="ascii")
+        try:
+            panes = [term.open_window(window, title, boot, "white", "chief")]
+            import importlib.util
+            if importlib.util.find_spec("orchlib.dashboard") is not None:
+                dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from orchlib.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
+                panes.append(term.split_pane(window, pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime()), "white", dash,
+                                             "vertical", 0.8, panes[0], "dashboard"))
+        except Exception:
+            start_pending_file().unlink()
+            raise
     print(json.dumps({"ok": True, "window": window, "panes": panes}))
     return 0
 
