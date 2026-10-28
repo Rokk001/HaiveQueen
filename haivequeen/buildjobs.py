@@ -1,7 +1,7 @@
 """Build jobs: how many parallel build jobs a building agent gets, the RAM measurement of a build and the dashboard line.
 
 Ports the build-job parts of lib.ps1 and build-sampler.ps1. The sampler is started by the agent process:
-`python -m orchlib.buildjobs sample --parent-pid N --out FILE` (one line `ISO time;free MB;compiler count` every 10 s until the parent is gone).
+`python -m haivequeen.buildjobs sample --parent-pid N --out FILE` (one line `ISO time;free MB;compiler count` every 10 s until the parent is gone).
 """
 import argparse
 import math
@@ -160,15 +160,15 @@ def sample_loop(out, parent_pid: int = 0, interval: float = 10.0, names=(), max_
 
 
 def main(argv=None) -> int:
-    """Command line of the sampler: `sample --out FILE [--parent-pid N] [--names cl.exe,link.exe]`; ORCH_SAMPLE_SEC sets the interval."""
-    ap = argparse.ArgumentParser(prog="orchlib.buildjobs")
+    """Command line of the sampler: `sample --out FILE [--parent-pid N] [--names cl.exe,link.exe]`; BZZ_SAMPLE_SEC sets the interval."""
+    ap = argparse.ArgumentParser(prog="haivequeen.buildjobs")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("sample")
     p.add_argument("--out", required=True)
     p.add_argument("--parent-pid", type=int, default=0)
     p.add_argument("--names", default="")
     args = ap.parse_args(argv)
-    sample_loop(args.out, args.parent_pid, float(os.environ.get("ORCH_SAMPLE_SEC", "10")),
+    sample_loop(args.out, args.parent_pid, float(os.environ.get("BZZ_SAMPLE_SEC", "10")),
                 [n for n in args.names.split(",") if n])
     return 0
 

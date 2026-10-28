@@ -1,4 +1,4 @@
-"""Unit tests for orchlib.db and orchlib.config using a temporary database."""
+"""Unit tests for haivequeen.db and haivequeen.config using a temporary database."""
 import os
 import subprocess
 import sys
@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from orchlib import config, db  # noqa: E402
+from haivequeen import config, db  # noqa: E402
 
 
 class DbTest(unittest.TestCase):
@@ -97,13 +97,13 @@ class ConfigTest(unittest.TestCase):
     """Tests for folder lookup and TOML defaults."""
 
     def test_env_override(self):
-        """ORCH_CONFIG_DIR and ORCH_DATA_DIR override the standard folders."""
+        """BZZ_CONFIG_DIR and BZZ_DATA_DIR override the standard folders."""
         old = dict(os.environ)
         try:
-            os.environ["ORCH_CONFIG_DIR"] = "cfgx"
-            os.environ["ORCH_DATA_DIR"] = "datax"
+            os.environ["BZZ_CONFIG_DIR"] = "cfgx"
+            os.environ["BZZ_DATA_DIR"] = "datax"
             self.assertEqual(config.config_dir(), Path("cfgx"))
-            self.assertEqual(config.db_path(), Path("datax") / "orchestrator.db")
+            self.assertEqual(config.db_path(), Path("datax") / "haivequeen.db")
         finally:
             os.environ.clear()
             os.environ.update(old)
@@ -111,18 +111,18 @@ class ConfigTest(unittest.TestCase):
     def test_defaults_and_files(self):
         """Missing files give defaults; present files override them."""
         with tempfile.TemporaryDirectory() as tmp:
-            os.environ["ORCH_CONFIG_DIR"] = tmp
+            os.environ["BZZ_CONFIG_DIR"] = tmp
             try:
                 self.assertEqual(config.load_config()["slots"], 2)
                 (Path(tmp) / "config.toml").write_text("slots = 5\n", encoding="utf-8")
                 self.assertEqual(config.load_config()["slots"], 5)
                 self.assertEqual(config.load_config()["ramReserveMb"], 2048)
             finally:
-                del os.environ["ORCH_CONFIG_DIR"]
+                del os.environ["BZZ_CONFIG_DIR"]
             ws = Path(tmp) / "myproj"
-            (ws / ".orchestrator").mkdir(parents=True)
+            (ws / ".haivequeen").mkdir(parents=True)
             self.assertEqual(config.load_project(ws)["name"], "myproj")
-            (ws / ".orchestrator" / "project.toml").write_text('colour = "red"\n[views]\nqueue = "q.md"\n',
+            (ws / ".haivequeen" / "project.toml").write_text('colour = "red"\n[views]\nqueue = "q.md"\n',
                                                                encoding="utf-8")
             pr = config.load_project(ws)
             self.assertEqual((pr["colour"], pr["views"]["queue"], pr["views"]["questions"]), ("red", "q.md", ""))
@@ -134,7 +134,7 @@ class OpenNewDatabaseTest(unittest.TestCase):
     def test_concurrent_first_open(self):
         """Eight processes connect to a database that does not exist yet, in 60 rounds: none fails with 'database is locked'."""
         root = str(Path(__file__).resolve().parent.parent)
-        code = "import sys; sys.path.insert(0, sys.argv[1]); from orchlib import db; db.connect(sys.argv[2]).close()"
+        code = "import sys; sys.path.insert(0, sys.argv[1]); from haivequeen import db; db.connect(sys.argv[2]).close()"
         failed = []
         for rnd in range(60):
             with tempfile.TemporaryDirectory() as tmp:
@@ -156,7 +156,7 @@ class NetworkDriveTest(unittest.TestCase):
         from unittest import mock
         with mock.patch.object(db.osplat, "is_network_path", return_value=True):
             with self.assertRaises(RuntimeError) as ctx:
-                db.connect("/never/created/orchestrator.db")
+                db.connect("/never/created/haivequeen.db")
         self.assertIn("network drive", str(ctx.exception))
 
 

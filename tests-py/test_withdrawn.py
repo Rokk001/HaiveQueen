@@ -11,9 +11,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from orchlib import db, legacy, runtime, views  # noqa: E402
-from orchlib.runtime import CmdError  # noqa: E402
-from orchtest import RoundCase  # noqa: E402
+from haivequeen import db, legacy, runtime, views  # noqa: E402
+from haivequeen.runtime import CmdError  # noqa: E402
+from bzztest import RoundCase  # noqa: E402
 
 QUEUE = """# Integration state
 
@@ -78,8 +78,8 @@ class QueueImportTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
         (self.base / "queue.md").write_text(QUEUE, encoding="utf-8")
-        self.env = dict(os.environ, ORCH_CONFIG_DIR=str(self.base / "cfg"), ORCH_DATA_DIR=str(self.base / "data"),
-                        ORCH_LOG_DIR=str(self.base / "logs"))
+        self.env = dict(os.environ, BZZ_CONFIG_DIR=str(self.base / "cfg"), BZZ_DATA_DIR=str(self.base / "data"),
+                        BZZ_LOG_DIR=str(self.base / "logs"))
 
     def tearDown(self):
         """Remove the temp folder."""
@@ -101,12 +101,12 @@ class QueueImportTest(unittest.TestCase):
 
     def test_import_status_note_and_no_errors(self):
         """The import stores withdrawn with the original status text as note and counts no error for the history table."""
-        r = subprocess.run([sys.executable, "-I", str(ROOT / "orch.py"), "import-legacy", "--project", "demo",
+        r = subprocess.run([sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), "import-legacy", "--project", "demo",
                             "--queue", str(self.base / "queue.md")], env=self.env, capture_output=True, text=True, encoding="utf-8")
         out = json.loads(r.stdout)
         self.assertEqual(out["sources"]["queue"]["errors"], 0)
         self.assertEqual(out["sources"]["queue"]["imported"], 8)
-        conn = sqlite3.connect(str(self.base / "data" / "orchestrator.db"))
+        conn = sqlite3.connect(str(self.base / "data" / "haivequeen.db"))
         conn.row_factory = sqlite3.Row
         try:
             st = {x["branch"]: dict(x) for x in conn.execute("SELECT * FROM queue")}
@@ -185,7 +185,7 @@ class LoopIgnoresWithdrawnTest(RoundCase):
     def test_no_fix_agent_and_not_open(self):
         """A round starts nothing for withdrawn rows (also one without a plan) and the loop's open-row filter does not match them."""
         import re
-        from orchlib import routine
+        from haivequeen import routine
         self.plan("DONE", [{"id": "P1", "title": "first"}])
         runtime.queue_upsert(self.conn, "testproj", "chore/gone", "feed1234abcd", "keiner", "withdrawn", "zurückgezogen: replaced")
         runtime.queue_upsert(self.conn, "testproj", "chore/gone-too", "bead1234abcd", "docs/plans/dummy/DUMMY-PLAN.md", "withdrawn", "verworfen")

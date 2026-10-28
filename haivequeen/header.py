@@ -1,4 +1,4 @@
-"""Header of one agent pane (port of head-ticker.ps1), started by orchlib.agent_runner.
+"""Header of one agent pane (port of head-ticker.ps1), started by haivequeen.agent_runner.
 
 It shares the console of the pane and redraws the header every second from the agent's row in the database:
   line 1  "<PROJECT> | <PERSON> | <agent name> | <type> <model short> | <status> <runtime>"
@@ -8,7 +8,7 @@ It shares the console of the pane and redraws the header every second from the a
 When the pane width or height changes, the screen is cleared first and the milestones are replayed,
 so no old header line stays behind.
 
-Usage: python -m orchlib.header --project P --name N [--parent-pid PID] [--runs-dir DIR]
+Usage: python -m haivequeen.header --project P --name N [--parent-pid PID] [--runs-dir DIR]
 """
 import argparse
 import os
@@ -244,8 +244,8 @@ def run(project, name, parent_pid=0, runs_dir=None, out=None, interval=1.0, max_
 
 
 def main(argv=None):
-    """Command line entry: python -m orchlib.header --project P --name N [--parent-pid PID] [--runs-dir DIR]."""
-    p = argparse.ArgumentParser(prog="orchlib.header")
+    """Command line entry: python -m haivequeen.header --project P --name N [--parent-pid PID] [--runs-dir DIR]."""
+    p = argparse.ArgumentParser(prog="haivequeen.header")
     p.add_argument("--project", required=True)
     p.add_argument("--name", required=True)
     p.add_argument("--parent-pid", type=int, default=0)

@@ -28,8 +28,8 @@ def snake(key: str) -> str:
 
 
 def host_name() -> str:
-    """Return the name of this machine (ORCH_HOST overrides it, used by tests)."""
-    return os.environ.get("ORCH_HOST") or platform.node() or "host"
+    """Return the name of this machine (BZZ_HOST overrides it, used by tests)."""
+    return os.environ.get("BZZ_HOST") or platform.node() or "host"
 
 
 # ---- agents ----
@@ -136,10 +136,10 @@ def archive_agents(conn, project, hours=12.0, match=None) -> int:
 # ---- events ----
 
 def mirror_dir(project, override=None) -> Path:
-    """Folder of the plain-text mirror logs (override, else ORCH_LOG_DIR, else <data>/logs/<project>)."""
+    """Folder of the plain-text mirror logs (override, else BZZ_LOG_DIR, else <data>/logs/<project>)."""
     if override:
         return Path(override)
-    env = os.environ.get("ORCH_LOG_DIR")
+    env = os.environ.get("BZZ_LOG_DIR")
     if env:
         return Path(env)
     return config.data_dir() / "logs" / (project or "_")

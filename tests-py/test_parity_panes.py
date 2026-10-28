@@ -9,9 +9,9 @@ import os
 import sys
 import unittest
 
-from orchtest import RoundCase
-from orchlib import loop
-from orchlib.terminal import pane_title
+from bzztest import RoundCase
+from haivequeen import loop
+from haivequeen.terminal import pane_title
 from test_panes import ONE, SLEEP, RecordingHeadless
 
 
@@ -35,12 +35,12 @@ class ParityPanesTest(RoundCase):
     def setUp(self):
         """A dummy runner that sets the pid of its agent row and an empty recording headless terminal."""
         super().setUp()
-        os.environ.pop("ORCH_TEST_NOSTART", None)
+        os.environ.pop("BZZ_TEST_NOSTART", None)
         self.plan("IN_PROGRESS", ONE)
         self.seed()
         dummy = self.base / "dummy_runner.py"
         dummy.write_text(
-            "import os, sys, time\nsys.path.insert(0, %r)\nfrom orchlib import config, db, runtime\n"
+            "import os, sys, time\nsys.path.insert(0, %r)\nfrom haivequeen import config, db, runtime\n"
             "conn = db.connect(config.db_path())\nruntime.upsert_agent(conn, sys.argv[1], sys.argv[2], {'pid': os.getpid(), 'status': 'running'})\ntime.sleep(30)\n"
             % str(loop.TOOLS_DIR), encoding="utf-8")
         self.orig = loop.runner_argv

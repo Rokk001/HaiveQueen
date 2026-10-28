@@ -1,14 +1,14 @@
 # Runtime API
 
-The orchestrator scripts read and write their runtime state through `orch.py`. Every command prints one JSON value on stdout.
+The orchestrator scripts read and write their runtime state through `haivequeen/cli.py`. Every command prints one JSON value on stdout.
 On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage errors with 2).
 
-- Call: `python -I orch.py <command> [<action>] [options]`
-- The database is `orchestrator.db` in the data folder (`ORCH_DATA_DIR`, else the machine default). It uses WAL and a busy timeout of 10 s and must lie on a local disk: opening it on a network drive (UNC path, mapped share, NFS/CIFS mount) fails with an error;
+- Call: `python -I haivequeen/cli.py <command> [<action>] [options]`
+- The database is `haivequeen.db` in the data folder (`BZZ_DATA_DIR`, else the machine default). It uses WAL and a busy timeout of 10 s and must lie on a local disk: opening it on a network drive (UNC path, mapped share, NFS/CIFS mount) fails with an error;
   every command is one transaction, so several processes can call at the same time.
 - `--project` names the project. List commands accept it as optional filter (without it: all projects); all other commands require it.
 - An option value of a single `-` is read from stdin (`--fields`, `--value`, `--text` of `event append` and `decisions add`, `--data`), for long or awkward text.
-- Text mirror files: `event append` also appends one line to a plain text log in `ORCH_LOG_DIR` (else `<data folder>/logs/<project>`):
+- Text mirror files: `event append` also appends one line to a plain text log in `BZZ_LOG_DIR` (else `<data folder>/logs/<project>`):
   `ROUNDS.log` lines are `YYYY-MM-DD HH:MM:SS text`, `ORCH-EVENTS.log` lines are `HH:MM|O or E|text`.
 - Agent rows are flat. Known fields are columns (camelCase or snake_case accepted, `plan` is `plan_path`); any other field is stored and returned as a free field.
 

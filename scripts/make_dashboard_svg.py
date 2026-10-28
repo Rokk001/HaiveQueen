@@ -14,8 +14,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import ansi_svg, config, db, runtime  # noqa: E402
-from orchlib.terminal import get_terminal  # noqa: E402
+from haivequeen import ansi_svg, config, db, runtime  # noqa: E402
+from haivequeen.terminal import get_terminal  # noqa: E402
 
 SYSINFO = {"cores": 12, "free_mb": 9216, "total_mb": 16384, "host": "dev-pc", "compiler_count": None}
 PANE_NAME = "dashboard"
@@ -27,7 +27,7 @@ def iso(now, minutes_ago):
 
 
 def build_demo_database(now):
-    """Fill the database of the throw-away runtime (found through ORCH_DATA_DIR) with invented projects, agents, plans and a question."""
+    """Fill the database of the throw-away runtime (found through BZZ_DATA_DIR) with invented projects, agents, plans and a question."""
     conn = db.connect(config.db_path())
     db.upsert_project(conn, "webshop", None, "cyan", 1)
     db.upsert_project(conn, "game-engine", None, "magenta", 0)
@@ -54,14 +54,14 @@ def build_demo_database(now):
 def main():
     """Build the demo runtime, show the dashboard once in a headless pane, convert its ANSI output and write the SVG."""
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["ORCH_DATA_DIR"] = str(Path(tmp) / "data")
-        os.environ["ORCH_CONFIG_DIR"] = str(Path(tmp) / "config")
-        os.environ["ORCH_DASH_WIDTH"] = "104"
-        os.environ["ORCH_DASH_HEIGHT"] = "40"
-        os.environ["ORCH_DASH_SYSINFO"] = json.dumps(SYSINFO)
+        os.environ["BZZ_DATA_DIR"] = str(Path(tmp) / "data")
+        os.environ["BZZ_CONFIG_DIR"] = str(Path(tmp) / "config")
+        os.environ["BZZ_DASH_WIDTH"] = "104"
+        os.environ["BZZ_DASH_HEIGHT"] = "40"
+        os.environ["BZZ_DASH_SYSINFO"] = json.dumps(SYSINFO)
         build_demo_database(datetime.now())
         terminal = get_terminal("headless", runs_dir=str(Path(tmp) / "runs"))
-        pane = terminal.open_window("demo", "Dashboard", [sys.executable, "-I", str(ROOT / "orchlib" / "dashboard.py"), "--once"], name=PANE_NAME)
+        pane = terminal.open_window("demo", "Dashboard", [sys.executable, "-I", str(ROOT / "haivequeen" / "dashboard.py"), "--once"], name=PANE_NAME)
         deadline = time.monotonic() + 60
         while any(p.alive for p in terminal.list_panes("demo")) and time.monotonic() < deadline:
             time.sleep(0.2)

@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import legacy  # noqa: E402
+from haivequeen import legacy  # noqa: E402
 
 
 class LocalNaiveTest(unittest.TestCase):
@@ -41,13 +41,13 @@ class ImportAgentsTimeTest(unittest.TestCase):
             (base / "rt" / "AGENTS.json").write_text(json.dumps([
                 {"name": "A-P1-work", "startedAt": "2026-01-02T10:00:00.5+01:00", "endedAt": "2026-01-02T10:30:00+01:00",
                  "status": "done"}]), encoding="utf-8")
-            env = dict(os.environ, ORCH_DATA_DIR=str(base / "data"), ORCH_CONFIG_DIR=str(base / "cfg"))
-            argv = [sys.executable, "-I", str(ROOT / "orch.py"), "import-legacy", "--project", "demo", "--runtime", str(base / "rt")]
+            env = dict(os.environ, BZZ_DATA_DIR=str(base / "data"), BZZ_CONFIG_DIR=str(base / "cfg"))
+            argv = [sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), "import-legacy", "--project", "demo", "--runtime", str(base / "rt")]
             first = json.loads(subprocess.run(argv, env=env, capture_output=True, text=True, encoding="utf-8").stdout)
             second = json.loads(subprocess.run(argv, env=env, capture_output=True, text=True, encoding="utf-8").stdout)
             self.assertEqual(first["sources"]["AGENTS.json"]["imported"], 1)
             self.assertEqual(second["sources"]["AGENTS.json"]["skipped"], 1)
-            conn = sqlite3.connect(str(base / "data" / "orchestrator.db"))
+            conn = sqlite3.connect(str(base / "data" / "haivequeen.db"))
             try:
                 row = conn.execute("SELECT started_at, ended_at FROM agents").fetchone()
             finally:

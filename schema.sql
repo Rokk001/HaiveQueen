@@ -1,5 +1,5 @@
--- agent-orchestrator database schema, version 2 (v1 plus runtime tables and fields; orchlib/db.py migrates older files).
--- journal_mode WAL is set per connection by orchlib/db.py (together with busy_timeout 10000 ms).
+-- HaiveQueen database schema, version 2 (v1 plus runtime tables and fields; haivequeen/db.py migrates older files).
+-- journal_mode WAL is set per connection by haivequeen/db.py (together with busy_timeout 10000 ms).
 
 CREATE TABLE IF NOT EXISTS projects (
     name TEXT PRIMARY KEY,

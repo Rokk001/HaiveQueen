@@ -10,7 +10,7 @@ from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from orchlib import dashboard, db, runstate, runtime, usage  # noqa: E402
+from haivequeen import dashboard, db, runstate, runtime, usage  # noqa: E402
 
 NOW = datetime(2026, 10, 28, 12, 0, 0)
 SYS = {"cores": 12, "free_mb": 8192, "total_mb": 16384, "host": "h1", "compiler_count": None}
@@ -84,7 +84,7 @@ class DashboardTest(unittest.TestCase):
         (day / "rollout-a.jsonl").write_text('{"x":1}\n' + line + "\n", encoding="utf-8")
         before = self.text()
         self.assertIn("n/a", before)
-        env = {k: v for k, v in os.environ.items() if k != "ORCH_DATA_DIR"}
+        env = {k: v for k, v in os.environ.items() if k != "BZZ_DATA_DIR"}
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(usage, "home_dir", return_value=home):
             usage._codex_refresh.clear()
             out = dashboard.render(self.conn, width=100, height=60, now=datetime.now(), cfg={}, sysinfo=dict(SYS), color=False)

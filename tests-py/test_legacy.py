@@ -1,4 +1,4 @@
-"""Tests of orch.py import-legacy with invented v1 files in a temp folder and a temp database."""
+"""Tests of haivequeen/cli.py import-legacy with invented v1 files in a temp folder and a temp database."""
 import json
 import os
 import sqlite3
@@ -58,8 +58,8 @@ class LegacyTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         self.base = base
-        self.env = dict(os.environ, ORCH_CONFIG_DIR=str(base / "cfg"), ORCH_DATA_DIR=str(base / "data"),
-                        ORCH_LOG_DIR=str(base / "logs"))
+        self.env = dict(os.environ, BZZ_CONFIG_DIR=str(base / "cfg"), BZZ_DATA_DIR=str(base / "data"),
+                        BZZ_LOG_DIR=str(base / "logs"))
         rt = base / "rt"
         rt.mkdir()
         (rt / "AGENTS.json").write_text(json.dumps(AGENTS, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -87,13 +87,13 @@ class LegacyTest(unittest.TestCase):
 
     def run_import(self):
         """Run the import; return (exit code, parsed JSON)."""
-        r = subprocess.run([sys.executable, "-I", str(ROOT / "orch.py"), *self.args], env=self.env,
+        r = subprocess.run([sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), *self.args], env=self.env,
                            capture_output=True, text=True, encoding="utf-8")
         return r.returncode, json.loads(r.stdout)
 
     def counts(self):
         """Row counts of all imported tables."""
-        conn = sqlite3.connect(str(self.base / "data" / "orchestrator.db"))
+        conn = sqlite3.connect(str(self.base / "data" / "haivequeen.db"))
         try:
             return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                     for t in ("agents", "events", "build_measurements", "providers_usage", "handled", "nofollow",
@@ -103,7 +103,7 @@ class LegacyTest(unittest.TestCase):
 
     def query(self, sql, args=()):
         """Run a query on the test database."""
-        conn = sqlite3.connect(str(self.base / "data" / "orchestrator.db"))
+        conn = sqlite3.connect(str(self.base / "data" / "haivequeen.db"))
         conn.row_factory = sqlite3.Row
         try:
             return [dict(r) for r in conn.execute(sql, args)]

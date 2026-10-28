@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-TITLE_PREFIX = "Agent-Orchestrator"
+TITLE_PREFIX = "HaiveQueen"
 
 
 class TerminalError(Exception):
@@ -24,9 +24,9 @@ class PaneInfo:
 
 
 def pane_title(project, who, job, model, test=False):
-    """Return the fixed pane title: "Agent-Orchestrator | <project> | <who> | job: <job> | model: <model>".
+    """Return the fixed pane title: "HaiveQueen | <project> | <who> | job: <job> | model: <model>".
 
-    `who` is e.g. "Agent NAME" or "CHIEF"; test runtimes say "Agent-Orchestrator TEST".
+    `who` is e.g. "Agent NAME" or "CHIEF"; test runtimes say "HaiveQueen TEST".
     """
     prefix = TITLE_PREFIX + (" TEST" if test else "")
     return "%s | %s | %s | job: %s | model: %s" % (prefix, project, who, job, model)
@@ -134,12 +134,12 @@ def check_size(size):
 def get_terminal(name="auto", runs_dir=None, **options):
     """Return the backend "wt", "tmux" or "headless"; "auto" picks wt on Windows and tmux elsewhere.
 
-    `runs_dir` (or the environment variable ORCH_RUNS_DIR) is where pane records and outputs live.
+    `runs_dir` (or the environment variable BZZ_RUNS_DIR) is where pane records and outputs live.
     """
     if name == "auto":
         name = "wt" if sys.platform == "win32" else "tmux"
     if runs_dir is None:
-        runs_dir = os.environ.get("ORCH_RUNS_DIR")
+        runs_dir = os.environ.get("BZZ_RUNS_DIR")
     if name == "wt":
         from .wt import WindowsTerminal
         return WindowsTerminal(runs_dir, **options)

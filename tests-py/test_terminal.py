@@ -9,9 +9,9 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib.terminal import TerminalError, get_terminal, pane_title  # noqa: E402
-from orchlib.terminal import headless, tmux, wt  # noqa: E402
-from orchlib.terminal import _proc  # noqa: E402
+from haivequeen.terminal import TerminalError, get_terminal, pane_title  # noqa: E402
+from haivequeen.terminal import headless, tmux, wt  # noqa: E402
+from haivequeen.terminal import _proc  # noqa: E402
 
 
 def wait_for(condition, seconds=10):
@@ -45,7 +45,7 @@ class FactoryTest(unittest.TestCase):
         """Backends that need a runs folder refuse to work without one."""
         with mock.patch.dict("os.environ", {}, clear=False):
             import os
-            os.environ.pop("ORCH_RUNS_DIR", None)
+            os.environ.pop("BZZ_RUNS_DIR", None)
             with self.assertRaises(TerminalError):
                 get_terminal("headless")
 
@@ -56,12 +56,12 @@ class TitleTest(unittest.TestCase):
     def test_format(self):
         """The title has the v1 format with the project name."""
         self.assertEqual(pane_title("demo", "Agent ANNA", "work-1", "claude opus 5.5 medium"),
-                         "Agent-Orchestrator | demo | Agent ANNA | job: work-1 | model: claude opus 5.5 medium")
+                         "HaiveQueen | demo | Agent ANNA | job: work-1 | model: claude opus 5.5 medium")
 
     def test_test_prefix(self):
         """A test runtime says TEST."""
         self.assertTrue(pane_title("p", "CHIEF", "Orchestrator", "m", test=True)
-                        .startswith("Agent-Orchestrator TEST | p | CHIEF | job: Orchestrator"))
+                        .startswith("HaiveQueen TEST | p | CHIEF | job: Orchestrator"))
 
 
 class QuotingTest(unittest.TestCase):
@@ -149,8 +149,8 @@ class WtArgsTest(unittest.TestCase):
         self.assertFalse(any(i.alive for i in infos))
 
     def test_exe_override(self):
-        """ORCH_WT_EXE replaces wt.exe (tests and stubs)."""
-        with mock.patch.dict("os.environ", {"ORCH_WT_EXE": "stub.exe"}):
+        """BZZ_WT_EXE replaces wt.exe (tests and stubs)."""
+        with mock.patch.dict("os.environ", {"BZZ_WT_EXE": "stub.exe"}):
             self.assertEqual(self.term.exe(), "stub.exe")
 
 
@@ -208,11 +208,11 @@ class TmuxStubTest(unittest.TestCase):
 
     def test_list_panes(self):
         """list-panes output is parsed into PaneInfo."""
-        self.outputs = ["%0\tAgent-Orchestrator | p | CHIEF\t100\t0\n%1\tt\t101\t1\n"]
+        self.outputs = ["%0\tHaiveQueen | p | CHIEF\t100\t0\n%1\tt\t101\t1\n"]
         panes = self.term.list_panes("sess")
         self.assertEqual(self.calls[0][:6], ["tmux", "list-panes", "-s", "-t", "sess", "-F"])
         self.assertEqual([(p.id, p.title, p.pid, p.alive) for p in panes],
-                         [("%0", "Agent-Orchestrator | p | CHIEF", 100, True), ("%1", "t", 101, False)])
+                         [("%0", "HaiveQueen | p | CHIEF", 100, True), ("%1", "t", 101, False)])
 
     def test_failure(self):
         """A failing tmux command raises TerminalError."""

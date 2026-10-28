@@ -61,7 +61,7 @@ def current_event_keys(env, plans: list, queue_rows: list, verify_zero, question
 def invoke_hook(env, plans: list, queue_rows: list, verify_zero, questions: list, tools_dir=None) -> None:
     """Call the onEvent command of the project settings with the pending events (see the module text). The first call records the baseline only.
 
-    The command is a list; {projectDir} (the .orchestrator folder of the workspace) and {tools} are replaced in it. Never raises.
+    The command is a list; {projectDir} (the .haivequeen folder of the workspace) and {tools} are replaced in it. Never raises.
     """
     hook = env.settings.get("onEvent") or {}
     if not hook.get("command"):
@@ -84,7 +84,7 @@ def invoke_hook(env, plans: list, queue_rows: list, verify_zero, questions: list
             runtime.kv_set(env.conn, env.name, STATE_KEY, json.dumps({"seen": seen, "pending": []}))
             return
         runtime.kv_set(env.conn, env.name, STATE_KEY, json.dumps({"seen": seen, "pending": pending}))   # kept before the command runs
-        project_dir = str(env.workspace / ".orchestrator")
+        project_dir = str(env.workspace / ".haivequeen")
         tools = str(tools_dir or Path(__file__).resolve().parent.parent)
         cmd = [str(c).replace("{projectDir}", project_dir).replace("{tools}", tools) for c in hook["command"]]
         work = str(hook.get("workDir") or "{projectDir}").replace("{projectDir}", project_dir)

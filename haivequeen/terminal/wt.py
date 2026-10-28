@@ -39,7 +39,7 @@ def pane_number(pane_id):
 
 
 class WindowsTerminal(Terminal):
-    """Windows Terminal through wt.exe (path override: environment variable ORCH_WT_EXE)."""
+    """Windows Terminal through wt.exe (path override: environment variable BZZ_WT_EXE)."""
 
     name = "wt"
 
@@ -53,7 +53,7 @@ class WindowsTerminal(Terminal):
 
     def exe(self):
         """Return the wt.exe to call."""
-        return os.environ.get("ORCH_WT_EXE") or "wt.exe"
+        return os.environ.get("BZZ_WT_EXE") or "wt.exe"
 
     def wrapped(self, pidfile, command):
         """Return the argument list that runs `command` behind the pid-file launcher."""

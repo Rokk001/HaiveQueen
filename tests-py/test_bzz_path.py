@@ -1,4 +1,4 @@
-"""Tests of the PATH handling for agent processes: the folder of the `orch` console script is put in front of PATH (no real models, no panes)."""
+"""Tests of the PATH handling for agent processes: the folder of the `bzz` console script is put in front of PATH (no real models, no panes)."""
 import os
 import stat
 import sys
@@ -11,22 +11,22 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchtest import REL, RoundCase, runtime  # noqa: E402
-from orchlib import agent_runner as ar  # noqa: E402
-from orchlib import loop  # noqa: E402
-from orchlib import platform as osplat  # noqa: E402
-from orchlib.terminal.headless import Headless  # noqa: E402
+from bzztest import REL, RoundCase, runtime  # noqa: E402
+from haivequeen import agent_runner as ar  # noqa: E402
+from haivequeen import loop  # noqa: E402
+from haivequeen import platform as osplat  # noqa: E402
+from haivequeen.terminal.headless import Headless  # noqa: E402
 
 
-class OrchPathTest(unittest.TestCase):
-    """with_orch_on_path and child_env."""
+class BzzPathTest(unittest.TestCase):
+    """with_bzz_on_path and child_env."""
 
     def setUp(self):
-        """Create a scripts folder with an orch program and an empty folder."""
+        """Create a scripts folder with a bzz program and an empty folder."""
         self.tmp = tempfile.TemporaryDirectory()
         self.scripts = Path(self.tmp.name) / "scripts"
         self.scripts.mkdir()
-        (self.scripts / "orch.exe").write_text("x", encoding="utf-8")
+        (self.scripts / "bzz.exe").write_text("x", encoding="utf-8")
         self.empty = Path(self.tmp.name) / "empty"
         self.empty.mkdir()
 
@@ -35,34 +35,34 @@ class OrchPathTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_scripts_folder_goes_first(self):
-        """A folder with an orch program is put in front of PATH."""
+        """A folder with a bzz program is put in front of PATH."""
         env = {"PATH": os.pathsep.join(["/a", "/b"])}
-        ar.with_orch_on_path(env, [self.scripts])
+        ar.with_bzz_on_path(env, [self.scripts])
         self.assertEqual(env["PATH"].split(os.pathsep), [str(self.scripts), "/a", "/b"])
 
     def test_no_duplicate(self):
         """A folder that is already on PATH is not added again."""
         env = {"PATH": os.pathsep.join(["/a", str(self.scripts)])}
-        ar.with_orch_on_path(env, [self.scripts])
+        ar.with_bzz_on_path(env, [self.scripts])
         self.assertEqual(env["PATH"].split(os.pathsep), ["/a", str(self.scripts)])
-        ar.with_orch_on_path(env, [self.scripts])
+        ar.with_bzz_on_path(env, [self.scripts])
         self.assertEqual(env["PATH"].count(str(self.scripts)), 1)
 
     def test_no_entry_without_orch_program(self):
-        """A folder without an orch program is not added."""
+        """A folder without a bzz program is not added."""
         env = {"PATH": "/a"}
-        ar.with_orch_on_path(env, [self.empty, self.empty / "missing"])
+        ar.with_bzz_on_path(env, [self.empty, self.empty / "missing"])
         self.assertEqual(env["PATH"], "/a")
 
     def test_missing_path_variable(self):
         """Without any PATH the folder alone becomes PATH."""
         env = {}
-        ar.with_orch_on_path(env, [self.scripts])
+        ar.with_bzz_on_path(env, [self.scripts])
         self.assertEqual(env["PATH"], str(self.scripts) + os.pathsep)
 
     def test_child_env(self):
         """child_env starts PATH with the scripts folder and keeps PYTHONPATH."""
-        with mock.patch.object(ar, "orch_script_dirs", return_value=[self.scripts]), \
+        with mock.patch.object(ar, "bzz_script_dirs", return_value=[self.scripts]), \
                 mock.patch.dict(os.environ, {"PATH": os.pathsep.join(["/a", "/b"])}):
             env = ar.child_env()
         self.assertEqual(env["PATH"].split(os.pathsep)[0], str(self.scripts))
@@ -70,13 +70,13 @@ class OrchPathTest(unittest.TestCase):
 
     def test_candidates_include_python_scripts(self):
         """The folders looked at include the Scripts folder next to the running Python."""
-        self.assertIn(Path(sys.executable).parent / "Scripts", ar.orch_script_dirs())
+        self.assertIn(Path(sys.executable).parent / "Scripts", ar.bzz_script_dirs())
 
 
 
-# Fake provider CLI: looks up `orch` on its own PATH like an agent would and calls `orch note`, then prints a Claude stream-json result.
+# Fake provider CLI: looks up `bzz` on its own PATH like an agent would and calls `bzz note`, then prints a Claude stream-json result.
 FAKE_CLI = r'''import json, os, shutil, subprocess
-found = shutil.which("orch")
+found = shutil.which("bzz")
 with open(os.environ["FAKE_FOUND"], "w", encoding="utf-8") as f:
     f.write(found or "")
 if found:
@@ -88,24 +88,24 @@ for ev in ({"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens
 
 
 class AgentFindsOrchTest(RoundCase):
-    """A pane started by loop.launch_agent (headless backend, fake CLI) finds `orch` although its folder is not on PATH."""
+    """A pane started by loop.launch_agent (headless backend, fake CLI) finds `bzz` although its folder is not on PATH."""
 
     def setUp(self):
-        """Venv without pip as the running Python (its Scripts folder holds a fake orch), fake CLI as provider, PATH without any orch."""
+        """Venv without pip as the running Python (its Scripts folder holds a fake bzz), fake CLI as provider, PATH without any bzz."""
         super().setUp()
-        os.environ.pop("ORCH_TEST_NOSTART", None)
+        os.environ.pop("BZZ_TEST_NOSTART", None)
         venv_dir = self.base / "venv"
         venv.create(str(venv_dir), with_pip=False)
         win = sys.platform == "win32"
         self.scripts = venv_dir / ("Scripts" if win else "bin")
         self.python = str(self.scripts / ("python.exe" if win else "python"))
-        self.mark = self.base / "orch-called.txt"
+        self.mark = self.base / "bzz-called.txt"
         if win:
-            (self.scripts / "orch.cmd").write_text('@echo %* > "%FAKE_MARK%"\r\n', encoding="utf-8")
+            (self.scripts / "bzz.cmd").write_text('@echo %* > "%FAKE_MARK%"\r\n', encoding="utf-8")
         else:
-            orch = self.scripts / "orch"
-            orch.write_text('#!/bin/sh\necho "$@" > "$FAKE_MARK"\n', encoding="utf-8")
-            orch.chmod(orch.stat().st_mode | stat.S_IEXEC)
+            bzz = self.scripts / "bzz"
+            bzz.write_text('#!/bin/sh\necho "$@" > "$FAKE_MARK"\n', encoding="utf-8")
+            bzz.chmod(bzz.stat().st_mode | stat.S_IEXEC)
         script = self.base / "fake_cli.py"
         script.write_text(FAKE_CLI, encoding="utf-8")
         if win:
@@ -118,7 +118,7 @@ class AgentFindsOrchTest(RoundCase):
         self.found = self.base / "found.txt"
         self.saved_env = {k: os.environ.get(k) for k in ("PATH", "FAKE_MARK", "FAKE_FOUND")}
         clean = [p for p in os.environ.get("PATH", "").split(os.pathsep)
-                 if p and not any((Path(p) / n).is_file() for n in ("orch", "orch.exe", "orch.cmd", "orch.bat"))]
+                 if p and not any((Path(p) / n).is_file() for n in ("bzz", "bzz.exe", "bzz.cmd", "bzz.bat"))]
         os.environ.update({"PATH": os.pathsep.join(clean), "FAKE_MARK": str(self.mark), "FAKE_FOUND": str(self.found)})
         cfg = self.base / "cfg"
         cfg.mkdir(exist_ok=True)
@@ -140,20 +140,20 @@ class AgentFindsOrchTest(RoundCase):
         super().tearDown()
 
     def test_pane_agent_finds_orch(self):
-        """The agent started through launch_agent finds the fake orch in the interpreter's Scripts folder and `orch note` runs."""
+        """The agent started through launch_agent finds the fake bzz in the interpreter's Scripts folder and `bzz note` runs."""
         prompt = self.base / "prompt.md"
         prompt.write_text("# Header\nTASK\nDo the demo task now\n", encoding="utf-8")
         runtime.upsert_agent(self.conn, "testproj", "A-1", {"status": "starting", "class": "medium", "person": "Max", "color": "4FA8FF"})
         spec = {"name": "A-1", "provider": "claude", "protocol": "claude", "plan": REL, "package": "P1", "phase": "work", "cwd": str(self.repo),
                 "prompt_file": str(prompt), "person": "Max", "model_long": "fake"}
-        with mock.patch.object(osplat, "python_executable", return_value=self.python), mock.patch.dict(os.environ, {"ORCH_NO_HEADER": "1"}):
+        with mock.patch.object(osplat, "python_executable", return_value=self.python), mock.patch.dict(os.environ, {"BZZ_NO_HEADER": "1"}):
             loop.launch_agent(self.env(), self.term, "Orchestrator", spec, settle=0, poll=0.2, tries=150)
             deadline = time.time() + 60
             while time.time() < deadline and not self.mark.is_file():
                 time.sleep(0.2)
         self.assertTrue(self.found.is_file(), "the fake CLI did not run")
         found = self.found.read_text(encoding="utf-8").strip()
-        self.assertTrue(found and Path(found).parent == self.scripts, "orch found at %r, expected folder %s" % (found, self.scripts))
+        self.assertTrue(found and Path(found).parent == self.scripts, "bzz found at %r, expected folder %s" % (found, self.scripts))
         self.assertIn("note", self.mark.read_text(encoding="utf-8"))
 
 

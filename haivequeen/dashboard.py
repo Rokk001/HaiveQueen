@@ -2,7 +2,7 @@
 
 render(conn, ...) returns the whole screen as text with ANSI colours (testable with invented data);
 main() redraws it every few seconds and reads the keys P (pause/resume), D (drain) and F (project filter).
-Everything is read from the database; entry point: `python -m orchlib.dashboard [--project NAME] [--wrap]`.
+Everything is read from the database; entry point: `python -m haivequeen.dashboard [--project NAME] [--wrap]`.
 """
 import json
 import os
@@ -17,7 +17,7 @@ from pathlib import Path
 if not __package__:   # started as a script: make the package importable
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchlib import buildjobs, config, db, platform as osplat, runstate, runtime, usage  # noqa: E402
+from haivequeen import buildjobs, config, db, platform as osplat, runstate, runtime, usage  # noqa: E402
 
 FULL, LIGHT, LINE = "█", "░", "─"
 REFRESH_SECONDS = 5
@@ -359,8 +359,8 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
 def live_sysinfo(conn, project=None) -> dict:
     """Read the live system values: cores, free and total RAM in MB, host name and running compiler processes
     (names from buildProcessNames of the project.toml of the shown projects; none = no count)."""
-    if os.environ.get("ORCH_DASH_SYSINFO"):   # fixed values for the demo picture and tests
-        return json.loads(os.environ["ORCH_DASH_SYSINFO"])
+    if os.environ.get("BZZ_DASH_SYSINFO"):   # fixed values for the demo picture and tests
+        return json.loads(os.environ["BZZ_DASH_SYSINFO"])
     names = []
     rows = conn.execute("SELECT name, workspace FROM projects" + (" WHERE name=?" if project else ""),
                         (project,) if project else ()).fetchall()
@@ -637,10 +637,10 @@ def handle_key(conn, key, project, names):
 
 
 def screen_size():
-    """Return (width, height) for drawing; ORCH_DASH_WIDTH / ORCH_DASH_HEIGHT override it (tests)."""
+    """Return (width, height) for drawing; BZZ_DASH_WIDTH / BZZ_DASH_HEIGHT override it (tests)."""
     size = shutil.get_terminal_size((100, 40))
-    w = int(os.environ.get("ORCH_DASH_WIDTH") or max(20, size.columns - 1))
-    h = int(os.environ.get("ORCH_DASH_HEIGHT") or max(5, size.lines - 1))
+    w = int(os.environ.get("BZZ_DASH_WIDTH") or max(20, size.columns - 1))
+    h = int(os.environ.get("BZZ_DASH_HEIGHT") or max(5, size.lines - 1))
     return w, h
 
 
@@ -658,7 +658,7 @@ def run(project=None, once=False) -> int:
                     text = render(conn, w, h, project)
                 except Exception as exc:   # a failed redraw must not close the pane
                     text = "\x1b[91mdashboard error: %s\x1b[0m" % exc
-                stdout.write(("" if os.environ.get("ORCH_DASH_WIDTH") else "\x1b[H\x1b[2J") + text + "\n")
+                stdout.write(("" if os.environ.get("BZZ_DASH_WIDTH") else "\x1b[H\x1b[2J") + text + "\n")
                 stdout.flush()
                 if once:
                     return 0
@@ -687,7 +687,7 @@ def wrap(project=None) -> int:
 
 
 def main(argv=None) -> int:
-    """Entry point: `python -m orchlib.dashboard [--project NAME] [--wrap] [--once]`."""
+    """Entry point: `python -m haivequeen.dashboard [--project NAME] [--wrap] [--once]`."""
     args = list(sys.argv[1:] if argv is None else argv)
     project = None
     if "--project" in args:

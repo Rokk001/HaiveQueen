@@ -4,9 +4,9 @@ import tomllib
 import unittest
 from unittest import mock
 
-from orchtest import REL, RoundCase, runtime
-from orchlib import agent_runner, config
-from orchlib import scheduler as sch
+from bzztest import REL, RoundCase, runtime
+from haivequeen import agent_runner, config
+from haivequeen import scheduler as sch
 
 
 def pk(i, title, deps="none", cls=""):
@@ -53,8 +53,8 @@ class ParityRoundsTest(RoundCase):
         """The written project file loads; a file with a bad escape sequence (single backslash path) is rejected by the parser."""
         self.assertEqual(config.load_project(self.repo)["name"], "testproj")
         bad = self.base / "bad-ws"
-        (bad / ".orchestrator").mkdir(parents=True)
-        (bad / ".orchestrator" / "project.toml").write_text('name = "dir\\qname"\n', encoding="utf-8")
+        (bad / ".haivequeen").mkdir(parents=True)
+        (bad / ".haivequeen" / "project.toml").write_text('name = "dir\\qname"\n', encoding="utf-8")
         with self.assertRaises(tomllib.TOMLDecodeError):
             config.load_project(bad)
 

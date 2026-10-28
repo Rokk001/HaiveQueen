@@ -243,7 +243,7 @@ def intflag(v):
 
 
 def register(sub) -> None:
-    """Add the runtime commands to the sub-parser collection of orch.py."""
+    """Add the runtime commands to the sub-parser collection of haivequeen/cli.py."""
     from . import triage
     triage.register(sub)
     actions(sub, "agents", {

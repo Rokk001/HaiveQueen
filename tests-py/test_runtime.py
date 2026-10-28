@@ -1,4 +1,4 @@
-"""Tests of the runtime commands of orch.py against a temporary database (run as subprocesses, like the scripts do)."""
+"""Tests of the runtime commands of haivequeen/cli.py against a temporary database (run as subprocesses, like the scripts do)."""
 import json
 import os
 import subprocess
@@ -10,20 +10,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import db  # noqa: E402
+from haivequeen import db  # noqa: E402
 
 
 class RuntimeTest(unittest.TestCase):
-    """Runs orch.py with ORCH_* folders pointing into a temp folder."""
+    """Runs haivequeen/cli.py with BZZ_* folders pointing into a temp folder."""
 
     def setUp(self):
         """Create temp config, data and log folders."""
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         self.env = dict(os.environ)
-        self.env["ORCH_CONFIG_DIR"] = str(base / "cfg")
-        self.env["ORCH_DATA_DIR"] = str(base / "data")
-        self.env["ORCH_LOG_DIR"] = str(base / "logs")
+        self.env["BZZ_CONFIG_DIR"] = str(base / "cfg")
+        self.env["BZZ_DATA_DIR"] = str(base / "data")
+        self.env["BZZ_LOG_DIR"] = str(base / "logs")
         self.base = base
 
     def tearDown(self):
@@ -31,8 +31,8 @@ class RuntimeTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def orch(self, *args, stdin=None):
-        """Run orch.py; return (exit code, parsed JSON)."""
-        r = subprocess.run([sys.executable, "-I", str(ROOT / "orch.py"), *args], env=self.env, input=stdin,
+        """Run haivequeen/cli.py; return (exit code, parsed JSON)."""
+        r = subprocess.run([sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), *args], env=self.env, input=stdin,
                            capture_output=True, text=True, encoding="utf-8")
         return r.returncode, json.loads(r.stdout)
 
@@ -166,7 +166,7 @@ class RuntimeTest(unittest.TestCase):
     def test_migrates_version_2_capability(self):
         """A version 2 database gets the packages.capability column when it is opened."""
         import sqlite3
-        path = Path(self.env["ORCH_DATA_DIR"]) / "orchestrator.db"
+        path = Path(self.env["BZZ_DATA_DIR"]) / "haivequeen.db"
         path.parent.mkdir(parents=True)
         conn = sqlite3.connect(path)
         conn.executescript("CREATE TABLE packages (project TEXT NOT NULL, plan_path TEXT NOT NULL, id TEXT NOT NULL, title TEXT, "
@@ -202,7 +202,7 @@ class RuntimeTest(unittest.TestCase):
     def test_migrates_version_1(self):
         """A database created by schema version 1 gets the new columns and tables."""
         import sqlite3
-        path = Path(self.env["ORCH_DATA_DIR"]) / "orchestrator.db"
+        path = Path(self.env["BZZ_DATA_DIR"]) / "haivequeen.db"
         path.parent.mkdir(parents=True)
         conn = sqlite3.connect(path)
         conn.executescript("CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, name TEXT, status TEXT);"
@@ -233,7 +233,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(len(self.ok("kv", "list", "--project", "p", "--prefix", "k")), 24)
         paths = self.ok("events", "paths", "--project", "p")
         self.assertEqual(len(Path(paths["rounds"]).read_text(encoding="utf-8").splitlines()), 24)
-        conn = db.connect(Path(self.env["ORCH_DATA_DIR"]) / "orchestrator.db")
+        conn = db.connect(Path(self.env["BZZ_DATA_DIR"]) / "haivequeen.db")
         self.assertEqual(conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
         conn.close()
 

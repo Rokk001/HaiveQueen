@@ -15,7 +15,7 @@ def tmux_command(command):
 
 
 class Tmux(Terminal):
-    """tmux through its command line (path override: environment variable ORCH_TMUX_EXE)."""
+    """tmux through its command line (path override: environment variable BZZ_TMUX_EXE)."""
 
     name = "tmux"
 
@@ -24,7 +24,7 @@ class Tmux(Terminal):
 
     def exe(self):
         """Return the tmux executable."""
-        return os.environ.get("ORCH_TMUX_EXE") or "tmux"
+        return os.environ.get("BZZ_TMUX_EXE") or "tmux"
 
     def _run(self, *args):
         """Run one tmux command; return its stdout or raise TerminalError."""

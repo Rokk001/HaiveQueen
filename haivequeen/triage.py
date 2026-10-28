@@ -69,7 +69,7 @@ def locked_packages(conn, project) -> list:
 
 def triage_prompt(project, plan_path, package, points, python_path) -> str:
     """Build the prompt of the triage agent (class medium) for the open points of one locked package."""
-    orch = f'"{python_path}" -I orch.py'
+    orch = f'"{python_path}" -I haivequeen/cli.py'
     lines = "\n".join(f"- {p['item']}: {p['text']}" for p in points)
     return f"""You are the triage agent for project {project}, plan {plan_path}, package {package}.
 The package is locked. Sort every open point below into exactly one of two kinds.
@@ -87,7 +87,7 @@ Send it to the owner with:
   {orch} triage ask --project {project} --plan {plan_path} --package {package} --item <item> --question "<bare question>" --recommendation "<your recommendation>"
 
 In doubt it is game/balance.
-Handle every point once. Report only through these orch commands; do not edit plan or state files, and do not unlock the package yourself (decide does that after the last point).
+Handle every point once. Report only through these bzz commands; do not edit plan or state files, and do not unlock the package yourself (decide does that after the last point).
 """
 
 
@@ -116,7 +116,7 @@ def escalate(conn, project, plan_path, package, item, question, recommendation="
 # ---- command line ----
 
 def register(sub) -> None:
-    """Add the 'triage' commands to the sub-parser collection of orch.py."""
+    """Add the 'triage' commands to the sub-parser collection of haivequeen/cli.py."""
     from . import runtime_cli as cli
     PL = ("--plan", {"required": True})
     PK = ("--package", {"required": True})

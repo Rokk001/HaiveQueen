@@ -1,4 +1,4 @@
-"""Small local process helpers for the terminal backends (a later step replaces them by orchlib.platform)."""
+"""Small local process helpers for the terminal backends (a later step replaces them by haivequeen.platform)."""
 import os
 import signal
 import subprocess

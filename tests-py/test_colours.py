@@ -2,8 +2,8 @@
 import colorsys
 import unittest
 
-from orchtest import RoundCase, runtime
-from orchlib import loop
+from bzztest import RoundCase, runtime
+from haivequeen import loop
 
 
 def hue(hex_colour):

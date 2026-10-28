@@ -566,7 +566,7 @@ def h_import_legacy(a, c):
 
 
 def register(sub) -> None:
-    """Add the import-legacy command to the sub-parser collection of orch.py."""
+    """Add the import-legacy command to the sub-parser collection of haivequeen/cli.py."""
     from . import runtime_cli
     p = sub.add_parser("import-legacy")
     p.add_argument("--project", required=True)

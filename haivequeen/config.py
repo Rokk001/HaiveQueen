@@ -2,9 +2,9 @@
 import tomllib
 from pathlib import Path
 
-from orchlib import platform as osplat
+from haivequeen import platform as osplat
 
-APP = "agent-orchestrator"
+APP = "HaiveQueen"
 
 DEFAULT_CONFIG = {
     "providers": [],
@@ -27,18 +27,18 @@ DEFAULT_PROJECT = {
 
 
 def config_dir() -> Path:
-    """Return the settings folder (ORCH_CONFIG_DIR overrides the per-system default, see orchlib.platform)."""
+    """Return the settings folder (BZZ_CONFIG_DIR overrides the per-system default, see haivequeen.platform)."""
     return osplat.config_dir()
 
 
 def data_dir() -> Path:
-    """Return the machine data folder (ORCH_DATA_DIR overrides the per-system default, see orchlib.platform)."""
+    """Return the machine data folder (BZZ_DATA_DIR overrides the per-system default, see haivequeen.platform)."""
     return osplat.data_dir()
 
 
 def db_path() -> Path:
     """Return the path of the central database file."""
-    return data_dir() / "orchestrator.db"
+    return data_dir() / "haivequeen.db"
 
 
 def _merge(defaults: dict, loaded: dict) -> dict:
@@ -68,9 +68,9 @@ def load_config() -> dict:
 
 
 def load_project(workspace) -> dict:
-    """Load <workspace>/.orchestrator/project.toml, filling in defaults (name falls back to the folder name)."""
+    """Load <workspace>/.haivequeen/project.toml, filling in defaults (name falls back to the folder name)."""
     ws = Path(workspace)
-    data = _merge(DEFAULT_PROJECT, _load_toml(ws / ".orchestrator" / "project.toml"))
+    data = _merge(DEFAULT_PROJECT, _load_toml(ws / ".haivequeen" / "project.toml"))
     if not data["name"]:
         data["name"] = ws.name
     return data

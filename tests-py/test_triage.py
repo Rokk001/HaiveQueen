@@ -9,24 +9,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import config, db  # noqa: E402
+from haivequeen import config, db  # noqa: E402
 
 PLAN = "docs/plans/x.md"
 
 
 class TriageTest(unittest.TestCase):
-    """Runs orch.py triage commands with ORCH_* folders pointing into a temp folder."""
+    """Runs haivequeen/cli.py triage commands with BZZ_* folders pointing into a temp folder."""
 
     def setUp(self):
         """Create temp folders and two locked packages: T1 (one technical point) and G1 (a game point plus a technical one)."""
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         self.env = dict(os.environ)
-        self.env["ORCH_CONFIG_DIR"] = str(base / "cfg")
-        self.env["ORCH_DATA_DIR"] = str(base / "data")
-        self.env["ORCH_LOG_DIR"] = str(base / "logs")
+        self.env["BZZ_CONFIG_DIR"] = str(base / "cfg")
+        self.env["BZZ_DATA_DIR"] = str(base / "data")
+        self.env["BZZ_LOG_DIR"] = str(base / "logs")
         old = dict(os.environ)
-        os.environ.update({k: self.env[k] for k in ("ORCH_CONFIG_DIR", "ORCH_DATA_DIR", "ORCH_LOG_DIR")})
+        os.environ.update({k: self.env[k] for k in ("BZZ_CONFIG_DIR", "BZZ_DATA_DIR", "BZZ_LOG_DIR")})
         conn = db.connect(config.db_path())
         for pid, title, reason in (("T1", "Docs", "doc1: write the module docstring"),
                                    ("G1", "Rules", "dmg: how much damage does the blade do\nlayout: split the file")):
@@ -42,8 +42,8 @@ class TriageTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def orch(self, *args):
-        """Run orch.py; return (exit code, parsed JSON)."""
-        r = subprocess.run([sys.executable, "-I", str(ROOT / "orch.py"), *args], env=self.env,
+        """Run haivequeen/cli.py; return (exit code, parsed JSON)."""
+        r = subprocess.run([sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), *args], env=self.env,
                            capture_output=True, text=True, encoding="utf-8")
         return r.returncode, json.loads(r.stdout)
 

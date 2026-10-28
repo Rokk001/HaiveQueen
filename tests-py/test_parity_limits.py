@@ -11,8 +11,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import agent_runner as ar  # noqa: E402
-from orchlib import config, db, runtime  # noqa: E402
+from haivequeen import agent_runner as ar  # noqa: E402
+from haivequeen import config, db, runtime  # noqa: E402
 from test_limits import HOLDER  # noqa: E402
 
 
@@ -21,7 +21,7 @@ class LiveLockParityTest(unittest.TestCase):
 
     def test_live_lock_held_test_runtime_still_writes(self):
         """Another process holds the write lock of a database in the 'live' folder; a test runtime in its own folder
-        (ORCH_DATA_DIR) has a different file and writes at once, well below the busy timeout."""
+        (BZZ_DATA_DIR) has a different file and writes at once, well below the busy timeout."""
         with tempfile.TemporaryDirectory() as tmp:
             live = Path(tmp) / "live" / "o.db"
             live.parent.mkdir()
@@ -33,7 +33,7 @@ class LiveLockParityTest(unittest.TestCase):
             p = subprocess.Popen([sys.executable, "-I", str(holder), str(ROOT), str(live), "20"], stdout=subprocess.PIPE, text=True)
             try:
                 self.assertEqual(p.stdout.readline().strip(), "held")
-                with mock.patch.dict(os.environ, {"ORCH_DATA_DIR": str(Path(tmp) / "test-data")}):
+                with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(Path(tmp) / "test-data")}):
                     test_db = Path(config.db_path())
                 self.assertNotEqual(test_db.resolve(), live.resolve())
                 conn = db.connect(test_db)

@@ -1,4 +1,4 @@
-"""Tests of orchlib.agent_runner: helpers, stream parsing for Claude and Codex (fake CLIs), tokens, HANDOFF, final report,
+"""Tests of haivequeen.agent_runner: helpers, stream parsing for Claude and Codex (fake CLIs), tokens, HANDOFF, final report,
 build jobs, the second-pane guard and the pane wrapper. Everything runs in a temp runtime (temp database, own runs folder)."""
 import json
 import os
@@ -11,8 +11,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import agent_runner as ar  # noqa: E402
-from orchlib import buildjobs, db, runtime  # noqa: E402
+from haivequeen import agent_runner as ar  # noqa: E402
+from haivequeen import buildjobs, db, runtime  # noqa: E402
 
 FAKE_CLI = '''import json, os, sys
 rec = {"argv": sys.argv[1:], "build_jobs": os.environ.get("BUILD_JOBS"), "cwd": os.getcwd()}
@@ -91,7 +91,7 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(ar.classify_cmd("git push origin x")["kind"], "push")
         self.assertEqual(ar.classify_cmd("pwsh scripts/compile-check-changed.ps1")["label"], "Compile test")
         self.assertEqual(ar.classify_cmd("python check-leaks.py")["label"], "Check check-leaks.py")
-        self.assertEqual(ar.classify_cmd("python -I orch.py ready --branch x")["kind"], "ready")
+        self.assertEqual(ar.classify_cmd("python -I haivequeen/cli.py ready --branch x")["kind"], "ready")
         self.assertEqual(ar.classify_cmd("echo hi >> QUEUE.md", "QUEUE")["kind"], "ready")
         self.assertIsNone(ar.classify_cmd("echo hi >> QUEUE.md"))
         edit = ar.classify_cmd("Set-Content -Path 'src\\x.txt' -Value 1")
@@ -173,7 +173,7 @@ class PushStateTest(unittest.TestCase):
     def test_push_state_reads_session_log(self):
         """The row gets the context and totals of the session log of the thread."""
         with tempfile.TemporaryDirectory() as tmp:
-            os.environ["ORCH_DATA_DIR"] = str(Path(tmp) / "data")
+            os.environ["BZZ_DATA_DIR"] = str(Path(tmp) / "data")
             try:
                 conn = db.connect(Path(tmp) / "data" / "o.db")
                 runtime.upsert_agent(conn, "p", "X-1", {"status": "running"})
@@ -188,7 +188,7 @@ class PushStateTest(unittest.TestCase):
                 self.assertEqual((row["ctxTokens"], row["tokens_in"], row["tokens_out"]), (11, 22, 33))
                 conn.close()
             finally:
-                os.environ.pop("ORCH_DATA_DIR", None)
+                os.environ.pop("BZZ_DATA_DIR", None)
 
 
 class RunnerBase(unittest.TestCase):
@@ -200,8 +200,8 @@ class RunnerBase(unittest.TestCase):
         base = Path(self.tmp.name)
         self.base = base
         self.env = dict(os.environ)
-        self.env.update({"ORCH_CONFIG_DIR": str(base / "cfg"), "ORCH_DATA_DIR": str(base / "data"), "ORCH_LOG_DIR": str(base / "logs"),
-                         "PYTHONPATH": str(ROOT), "ORCH_NO_HEADER": "1", "ORCH_CODEX_SESSIONS": str(base / "sessions"),
+        self.env.update({"BZZ_CONFIG_DIR": str(base / "cfg"), "BZZ_DATA_DIR": str(base / "data"), "BZZ_LOG_DIR": str(base / "logs"),
+                         "PYTHONPATH": str(ROOT), "BZZ_NO_HEADER": "1", "BZZ_CODEX_SESSIONS": str(base / "sessions"),
                          "FAKE_RECORD": str(base / "record.json"), "FAKE_STREAM": str(base / "stream.txt")})
         self.env.pop("BUILD_JOBS", None)
         self.runs = base / "runs"
@@ -221,8 +221,8 @@ class RunnerBase(unittest.TestCase):
                 path.chmod(path.stat().st_mode | stat.S_IEXEC)
             self.fake[name] = path
         self.write_config()
-        os.environ.update({k: self.env[k] for k in ("ORCH_CONFIG_DIR", "ORCH_DATA_DIR", "ORCH_LOG_DIR")})
-        self.conn = db.connect(base / "data" / "orchestrator.db")
+        os.environ.update({k: self.env[k] for k in ("BZZ_CONFIG_DIR", "BZZ_DATA_DIR", "BZZ_LOG_DIR")})
+        self.conn = db.connect(base / "data" / "haivequeen.db")
         db.upsert_project(self.conn, "demo", str(self.ws), "FF8800", 0)
         prompt = base / "prompt.md"
         prompt.write_text("# Header\nTASK\nDo the demo task now\n", encoding="utf-8")
@@ -231,7 +231,7 @@ class RunnerBase(unittest.TestCase):
     def tearDown(self):
         """Close the database and remove the runtime."""
         self.conn.close()
-        for k in ("ORCH_CONFIG_DIR", "ORCH_DATA_DIR", "ORCH_LOG_DIR"):
+        for k in ("BZZ_CONFIG_DIR", "BZZ_DATA_DIR", "BZZ_LOG_DIR"):
             os.environ.pop(k, None)
         self.tmp.cleanup()
 
@@ -253,12 +253,12 @@ class RunnerBase(unittest.TestCase):
         runtime.upsert_agent(self.conn, "demo", name, row)
 
     def run_runner(self, name, provider, stream, extra_args=(), exit_code=0, phase="work", env=None, wrap=False):
-        """Run `python -m orchlib.agent_runner` with a fake stream; returns the completed process."""
+        """Run `python -m haivequeen.agent_runner` with a fake stream; returns the completed process."""
         (self.base / "stream.txt").write_text(stream, encoding="utf-8")
         e = dict(self.env)
         e["FAKE_EXIT"] = str(exit_code)
         e.update(env or {})
-        cmd = [sys.executable, "-m", "orchlib.agent_runner"] + (["--wrap"] if wrap else []) + [
+        cmd = [sys.executable, "-m", "haivequeen.agent_runner"] + (["--wrap"] if wrap else []) + [
             "--project", "demo", "--name", name, "--provider", provider, "--plan", "plans/Demo-PLAN.md", "--package", "P1", "--phase", phase,
             "--cwd", str(self.ws), "--prompt-file", str(self.prompt), "--runs-dir", str(self.runs)] + list(extra_args)
         return subprocess.run(cmd, cwd=str(ROOT), env=e, capture_output=True, text=True, encoding="utf-8", timeout=120)
@@ -304,7 +304,7 @@ class ClaudeRunTest(RunnerBase):
         rec = self.record()
         argv = rec["argv"]
         self.assertEqual(argv[0], "-p")
-        self.assertIn("orch.py", argv[1])
+        self.assertIn("cli.py", argv[1])
         self.assertIn("done --agent %s --result" % row["id"], argv[1])
         self.assertNotIn('"', argv[1])
         self.assertEqual(argv[2:6], ["--model", "claude-sonnet-5-5", "--effort", "medium"])
@@ -392,9 +392,9 @@ class ClaudeRunTest(RunnerBase):
         self.assertEqual(self.row("C-1")["status"], "running")
 
     def test_fake_agent(self):
-        """ORCH_FAKE_AGENT (tests only) runs without a model call and ends done."""
+        """BZZ_FAKE_AGENT (tests only) runs without a model call and ends done."""
         self.prepare("C-2")
-        self.run_runner("C-2", "claude", "", env={"ORCH_FAKE_AGENT": "1", "ORCH_FAKE_DELAY": "0"})
+        self.run_runner("C-2", "claude", "", env={"BZZ_FAKE_AGENT": "1", "BZZ_FAKE_DELAY": "0"})
         row = self.row("C-2")
         self.assertEqual((row["status"], row["tokens_in"], row["tokens_out"]), ("done", 32000, 960))
         self.assertFalse((self.base / "record.json").exists())
@@ -434,7 +434,7 @@ class CodexRunTest(RunnerBase):
         self.assertEqual((self.runs / "D-1" / "final.txt").read_text(encoding="utf-8"), "OK")
         argv = self.record()["argv"]
         self.assertEqual(argv[:6], ["exec", "--json", "-m", "gpt-6.1-sol", "-C", str(self.ws)])
-        self.assertIn("orch.py", argv[6])   # the prompt is the last argument
+        self.assertIn("cli.py", argv[6])   # the prompt is the last argument
         self.assertEqual(len(argv), 7)
 
     def test_codex_no_session_log(self):
@@ -461,7 +461,7 @@ class BuildJobsTest(RunnerBase):
         """An integrator agent gets the job count as variable; the measurement is stored; a work agent gets none."""
         self.write_config("buildJobs = 3\nramReserveMb = 2048\n")
         self.prepare("E-1")
-        self.run_runner("E-1", "claude", claude_stream(), phase="integrate", env={"ORCH_SAMPLE_SEC": "0.2"})
+        self.run_runner("E-1", "claude", claude_stream(), phase="integrate", env={"BZZ_SAMPLE_SEC": "0.2"})
         row = self.row("E-1")
         self.assertEqual(row["status"], "done")
         self.assertEqual(row["buildJobs"], 3)

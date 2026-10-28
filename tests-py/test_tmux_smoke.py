@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib.terminal import get_terminal  # noqa: E402
+from haivequeen.terminal import get_terminal  # noqa: E402
 
 HAVE_TMUX = sys.platform.startswith("linux") and shutil.which("tmux") is not None
 

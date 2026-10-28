@@ -1,6 +1,6 @@
 """Shared helpers of the round tests: a throw-away runtime (database, settings, logs below a temp folder), dummy projects and plans, a provider list.
 
-Nothing here touches a real project: every test builds its own folders, the headless terminal backend or ORCH_TEST_NOSTART starts no real agent.
+Nothing here touches a real project: every test builds its own folders, the headless terminal backend or BZZ_TEST_NOSTART starts no real agent.
 """
 import json
 import os
@@ -12,10 +12,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from orchlib import config, db, loop, runtime  # noqa: E402
-from orchlib import scheduler as sch  # noqa: E402
+from haivequeen import config, db, loop, runtime  # noqa: E402
+from haivequeen import scheduler as sch  # noqa: E402
 
-ENV_KEYS = ("ORCH_DATA_DIR", "ORCH_CONFIG_DIR", "ORCH_LOG_DIR", "ORCH_RUNTIME_OVERRIDE", "ORCH_TEST_NOSTART", "ORCH_PROVIDER_LIMITS_FILE", "ORCH_HOST")
+ENV_KEYS = ("BZZ_DATA_DIR", "BZZ_CONFIG_DIR", "BZZ_LOG_DIR", "BZZ_RUNTIME_OVERRIDE", "BZZ_TEST_NOSTART", "BZZ_PROVIDER_LIMITS_FILE", "BZZ_HOST")
 REL = "docs/plans/dummy/DUMMY-PLAN.md"
 
 
@@ -76,16 +76,16 @@ class RoundCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
         self.saved = {k: os.environ.get(k) for k in ENV_KEYS}
-        os.environ["ORCH_DATA_DIR"] = str(self.base / "data")
-        os.environ["ORCH_CONFIG_DIR"] = str(self.base / "cfg")
+        os.environ["BZZ_DATA_DIR"] = str(self.base / "data")
+        os.environ["BZZ_CONFIG_DIR"] = str(self.base / "cfg")
         if self.shared_logs:
-            os.environ["ORCH_LOG_DIR"] = str(self.base / "logs")
+            os.environ["BZZ_LOG_DIR"] = str(self.base / "logs")
         else:
-            os.environ.pop("ORCH_LOG_DIR", None)
-        os.environ["ORCH_RUNTIME_OVERRIDE"] = str(self.base)
-        os.environ["ORCH_TEST_NOSTART"] = "1"
-        os.environ["ORCH_PROVIDER_LIMITS_FILE"] = ""
-        os.environ["ORCH_HOST"] = "testhost"
+            os.environ.pop("BZZ_LOG_DIR", None)
+        os.environ["BZZ_RUNTIME_OVERRIDE"] = str(self.base)
+        os.environ["BZZ_TEST_NOSTART"] = "1"
+        os.environ["BZZ_PROVIDER_LIMITS_FILE"] = ""
+        os.environ["BZZ_HOST"] = "testhost"
         self.conn = db.connect(config.db_path())
         self.machine = {"providers": self.providers if self.providers is not None else classic_providers(), "slots": 2, "buildJobs": 0,
                         "ramReserveMb": 2048, "projects": []}
@@ -107,8 +107,8 @@ class RoundCase(unittest.TestCase):
     def add_project(self, name, priority=0, extra=""):
         """Create a workspace folder with project.toml and register the project; returns the workspace path."""
         ws = self.base / ("repo-" + name if name != "testproj" else "repo")
-        (ws / ".orchestrator").mkdir(parents=True, exist_ok=True)
-        (ws / ".orchestrator" / "project.toml").write_text('name = "%s"\npriority = %d\nplanGlobs = ["docs/plans/**/*.md"]\n%s' % (name, priority, extra), encoding="utf-8")
+        (ws / ".haivequeen").mkdir(parents=True, exist_ok=True)
+        (ws / ".haivequeen" / "project.toml").write_text('name = "%s"\npriority = %d\nplanGlobs = ["docs/plans/**/*.md"]\n%s' % (name, priority, extra), encoding="utf-8")
         db.upsert_project(self.conn, name, str(ws), "white", priority)
         return ws
 

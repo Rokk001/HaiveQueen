@@ -25,16 +25,16 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import orch  # noqa: E402
-from orchlib import agent_runner as ar  # noqa: E402
-from orchlib import brain, dashboard, db, events, runtime  # noqa: E402
-from orchlib import platform as osplat  # noqa: E402
+from haivequeen import cli as orch  # noqa: E402
+from haivequeen import agent_runner as ar  # noqa: E402
+from haivequeen import brain, dashboard, db, events, runtime  # noqa: E402
+from haivequeen import platform as osplat  # noqa: E402
 from test_agent_runner import RunnerBase, claude_stream  # noqa: E402
 from test_dashboard import SYS  # noqa: E402
 
 WRITER = '''import sys
 sys.path.insert(0, sys.argv[1])
-from orchlib import db, runtime
+from haivequeen import db, runtime
 conn = db.connect(sys.argv[2])
 for i in range(int(sys.argv[4])):
     runtime.append_event(conn, "demo", "writer %s line %d" % (sys.argv[3], i), kind="rounds", agent="w" + sys.argv[3])
@@ -43,7 +43,7 @@ for i in range(int(sys.argv[4])):
 
 HOLDER = '''import sys, time
 sys.path.insert(0, sys.argv[1])
-from orchlib import db
+from haivequeen import db
 conn = db.connect(sys.argv[2])
 conn.execute("BEGIN IMMEDIATE")
 print("held", flush=True)
@@ -122,12 +122,12 @@ class MutexTest(unittest.TestCase):
             p.communicate()
 
     def test_test_runtime_is_separate_from_live(self):
-        """With ORCH_DATA_DIR set the database path lies inside that folder, so a lock on the live database cannot reach a test."""
-        from orchlib import config
-        with mock.patch.dict(os.environ, {"ORCH_DATA_DIR": self.tmp.name}):
+        """With BZZ_DATA_DIR set the database path lies inside that folder, so a lock on the live database cannot reach a test."""
+        from haivequeen import config
+        with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": self.tmp.name}):
             self.assertEqual(Path(config.db_path()).parent.resolve(), Path(self.tmp.name).resolve())
             inside = Path(config.db_path()).resolve()
-        self.assertNotEqual(inside, Path(osplat.data_dir()).resolve() / "orchestrator.db")
+        self.assertNotEqual(inside, Path(osplat.data_dir()).resolve() / "haivequeen.db")
 
 
 class CommandTimeoutTest(unittest.TestCase):

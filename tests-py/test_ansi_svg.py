@@ -1,10 +1,10 @@
-"""Tests of orchlib.ansi_svg: colours, bold, escaping and the size of the picture."""
+"""Tests of haivequeen.ansi_svg: colours, bold, escaping and the size of the picture."""
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from orchlib import ansi_svg  # noqa: E402
+from haivequeen import ansi_svg  # noqa: E402
 
 
 class AnsiSvgTest(unittest.TestCase):

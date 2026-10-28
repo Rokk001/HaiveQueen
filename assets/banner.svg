@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="agent-orchestrator">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="HaiveQueen">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0b1020"/>
@@ -46,6 +46,6 @@
     <path d="M 1060 150 Q 1120 100 1170 150" opacity="0.5"/>
   </g>
   <!-- title -->
-  <text x="48" y="140" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="68" font-weight="700" fill="url(#accent)">agent-orchestrator</text>
+  <text x="48" y="140" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="68" font-weight="700" fill="url(#accent)">HaiveQueen</text>
   <text x="52" y="188" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="26" fill="#c9d1f2">One conductor. Many AI coding agents. Few tokens.</text>
 </svg>
