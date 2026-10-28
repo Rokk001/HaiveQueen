@@ -175,6 +175,20 @@ class S7Test(RoundCase):
         self.assertEqual([q["question"] for q in qs if q["item"].startswith("V9")], ["Decay?"])
         self.assertEqual(len([q for q in qs if q["item"] == "M8 new item"]), 1)
 
+    def test_answered_question_uses_worktree_of_its_package(self):
+        """A Q-package works in the existing worktree of the package the question belongs to, not in the newer workspace folder."""
+        from haivequeen import db
+        self.reset_rt()
+        self.plan("IN_PROGRESS", [{"id": "D3", "title": "item with worktree"}])
+        pkg_wt = self.base / "wt-d3"
+        pkg_wt.mkdir()
+        self.agent("Z-D3-work", package="D3", cwd=str(pkg_wt), started=60, ended=50)
+        self.agent("Z-OTHER-work", package="OTHER", cwd=str(self.repo), started=40, ended=30)
+        q = db.add_question(self.conn, "testproj", REL, "D3", "Which one?", "A")
+        db.answer_question(self.conn, q, "yes, do it", "owner")
+        self.round()
+        self.assertEqual(self.ag("DUMMY-Q-D3-work")["cwd"], str(pkg_wt))
+
     def test_lock_text_with_decided_items_no_call(self):
         """An open-for-owner point naming only decided items causes no brain call."""
         self.machine["triage"] = False

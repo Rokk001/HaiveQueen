@@ -600,8 +600,18 @@ def get_routine(env, ctx: dict) -> dict:
         chosen.append(nm)
         free[pv["name"]] = free.get(pv["name"], 0) - 1
         workers[0] -= 1
-        acts.append(start_action(nm, pv["name"], "work", rel_p, pk, str(hist[-1]["cwd"]), prompt(env, "answeredQuestion", {
-            "plan": rel_p, "item": q["item"], "qid": q["id"], "answer": answer_text(env, tok), "cwd": str(hist[-1]["cwd"])})))
+        # The question belongs to a package: it works in that package's existing worktree (an agent of the package whose folder is not the
+        # workspace). Without one the rule of the work packages applies: last known folder of the plan, the main checkout gets a new worktree.
+        own = [a for a in hist if (str(a.get("package")) == tok or tok in a["bundle"])
+               and os.path.normcase(os.path.abspath(str(a["cwd"]))) != os.path.normcase(os.path.abspath(repo))]
+        qcwd = str((own or hist)[-1]["cwd"])
+        if os.path.normcase(os.path.abspath(qcwd)) == os.path.normcase(os.path.abspath(repo)):
+            slug = sch.to_slug(plan_tag(env, rel_p)) + "-" + sch.to_slug(pk)
+            where = prompt(env, "workInMainCheckout", {"cwd": qcwd, "newWorktree": new_worktree(env, slug), "subBranch": slug})
+        else:
+            where = prompt(env, "workInWorktree", {"cwd": qcwd})
+        acts.append(start_action(nm, pv["name"], "work", rel_p, pk, qcwd, prompt(env, "answeredQuestion", {
+            "plan": rel_p, "item": q["item"], "qid": q["id"], "answer": answer_text(env, tok), "where": where})))
 
     for pl in ctx["plans"]:
         rel = str(pl["path"])
