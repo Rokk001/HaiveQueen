@@ -44,7 +44,7 @@ QUEUE = (
     "| feature/two | bbb222 | alpha | ready | nach one | 2026-01-03 |\n"
     "| feature/three | ccc333 | beta | in Lauf | | 2026-01-04 |\n"
     "| feature/four | ddd444 | beta | blockiert (Build rot) | | 2026-01-05 |\n"
-    "| feature/five | eee555 | beta | superseded (anderswo) | | 2026-01-05 |\n"
+    "| feature/five | eee555 | beta | unbekannt (anderswo) | | 2026-01-05 |\n"
 )
 PLAN_A = ("# Plan A\nStatus: READY\n\n| Package | Content | Class | Depends on |\n|---|---|---|---|\n"
           "| P1 | Erstes Paket | light | none |\n| P2 | Zweites Paket | heavy | P1 |\n")

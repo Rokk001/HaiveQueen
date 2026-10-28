@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS queue (
     branch TEXT NOT NULL,
     tip TEXT,
     plan_path TEXT,
-    status TEXT NOT NULL CHECK (status IN ('ready','in_run','integrated','blocked')),
+    status TEXT NOT NULL CHECK (status IN ('ready','in_run','integrated','blocked','withdrawn')),
     note TEXT,
     run TEXT,
     updated_at TEXT

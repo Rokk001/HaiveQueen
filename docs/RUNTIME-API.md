@@ -39,7 +39,7 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 | `packages list` | `[--project] [--plan]` | package rows (`depends_on` as array, `locked` as boolean; `agent_type` and `capability` are the `agent` and `capability` fields of the plan header) |
 | `packages set` | `--project --plan --id [--phase] [--locked 0\|1] [--reason]` | the package row; phase `done` counts as done for `plans sync` |
 | `queue [list]` | `[--project]` | integration queue rows |
-| `queue upsert` | `--project --branch [--tip] [--plan] [--status ready\|in_run\|integrated\|blocked] [--note] [--run]` | the row; changes the newest row of the branch, a new tip after `integrated` adds a row |
+| `queue upsert` | `--project --branch [--tip] [--plan] [--status ready\|in_run\|integrated\|blocked\|withdrawn] [--note] [--run]` | the row; changes the newest row of the branch, a new tip after `integrated` adds a row |
 | `questions` | `[--project] [--open] [--status] [--plan] [--item]` | question rows |
 | `decisions list` | `[--project] [--plan] [--item]` | decision rows |
 | `decisions add` | `--project --source owner\|coordinator\|auto --text [--plan] [--item]` | `{ok, id}` |

@@ -14,7 +14,7 @@ AGENT_COLUMNS = (
 )
 AGENT_ALIASES = {"plan": "plan_path", "pane": "pane_id"}
 ACTIVE_STATUSES = ("running", "starting")
-QUEUE_STATUSES = ("ready", "in_run", "integrated", "blocked")
+QUEUE_STATUSES = ("ready", "in_run", "integrated", "blocked", "withdrawn")
 MIRRORS = {"rounds": "ROUNDS.log", "events": "ORCH-EVENTS.log"}
 
 
