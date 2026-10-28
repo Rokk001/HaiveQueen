@@ -157,3 +157,30 @@ class DashboardTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MixedTimeTest(unittest.TestCase):
+    """Times with and without a UTC offset (imported v1 rows next to new rows) must not break the readers."""
+
+    def test_parse_time_is_naive_local(self):
+        """db.parse_time returns local time without offset for naive and offset input, the default for junk."""
+        want = datetime(2026, 10, 28, 9, 0, 0).replace(tzinfo=None)
+        off = db.parse_time("2026-10-28T10:00:00.1234567+01:00")
+        self.assertIsNone(off.tzinfo)
+        self.assertEqual(db.parse_time("2026-10-28T09:00:00"), want)
+        self.assertIsNone(db.parse_time("junk"))
+        self.assertEqual(db.parse_time("", "d"), "d")
+
+    def test_usage_models_with_mixed_times(self):
+        """providers_usage rows with and without offset are summed without a naive/aware comparison error."""
+        tmp = tempfile.TemporaryDirectory()
+        conn = db.connect(Path(tmp.name) / "o.db")
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(conn.close)
+        db.upsert_project(conn, "alpha", None, "cyan", 1)
+        runtime.usage_add(conn, kind="brain", project="alpha", model="m", tokens_in=1, tokens_out=2,
+                          ts="2026-10-28T12:48:59.9456903+01:00")
+        runtime.usage_add(conn, kind="brain", project="alpha", model="m", tokens_in=3, tokens_out=4,
+                          ts="2026-10-28T12:50:00")
+        rows = dashboard.usage_models(conn, [], datetime(2026, 10, 28, 0, 0, 0))
+        self.assertEqual(rows[0]["Today"], (4, 6))

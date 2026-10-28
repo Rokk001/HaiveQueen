@@ -123,10 +123,8 @@ def archive_agents(conn, project, hours=12.0, match=None) -> int:
             else:
                 hit = False
                 if r["ended_at"] and r["status"] not in ACTIVE_STATUSES:
-                    try:
-                        hit = datetime.fromisoformat(r["ended_at"]) < limit
-                    except ValueError:
-                        hit = False
+                    ended = db.parse_time(r["ended_at"])
+                    hit = ended is not None and ended < limit
             if hit:
                 conn.execute("UPDATE agents SET archived=1 WHERE id=?", (r["id"],))
                 count += 1

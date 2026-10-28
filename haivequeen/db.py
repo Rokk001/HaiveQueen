@@ -42,6 +42,23 @@ def now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def parse_time(text, default=None):
+    """Parse a stored ISO time into local time without offset (the form db.now() writes); `default` when empty or not a time.
+
+    Times with a UTC offset (imported v1 rows, kv values written with astimezone) are converted to local time so that
+    every comparison and subtraction works on naive datetimes only.
+    """
+    if not text:
+        return default
+    try:
+        when = datetime.fromisoformat(str(text).strip())
+    except ValueError:
+        return default
+    if when.tzinfo is not None:
+        when = when.astimezone().replace(tzinfo=None)
+    return when
+
+
 def connect(path) -> sqlite3.Connection:
     """Open the database (creating folder and schema if needed) with WAL and busy_timeout set; refuses a path on a network drive; safe when many processes open a new database at once."""
     p = Path(path)

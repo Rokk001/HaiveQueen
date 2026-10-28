@@ -203,10 +203,9 @@ def agent_identity(conn) -> dict:
     for a in runtime.list_agents(conn, None, "active"):
         recent = False
         if a.get("ended_at"):
-            try:
-                recent = (datetime.now() - datetime.fromisoformat(a["ended_at"])).total_seconds() <= 3600
-            except ValueError:
-                pass
+            ended = db.parse_time(a["ended_at"])
+            if ended is not None:
+                recent = (datetime.now() - ended).total_seconds() <= 3600
         if a.get("status") in ACTIVE or recent:
             rows.append(a)
     used_n = [str(a.get("person")) for a in rows]

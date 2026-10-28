@@ -121,11 +121,9 @@ def repair_stale_agents(env, now: datetime = None, alive=None) -> None:
             if not alive(a["pid"]):
                 why = "runner process vanished (ended by executor or crashed)"
         elif a.get("started_at"):
-            try:
-                if (now - datetime.fromisoformat(a["started_at"])).total_seconds() > 120:
-                    why = "pane never started (no runner process)"
-            except ValueError:
-                pass
+            started = db.parse_time(a["started_at"])
+            if started is not None and (now - started).total_seconds() > 120:
+                why = "pane never started (no runner process)"
         if why:
             env.update_agent(a["name"], {"status": "failed", "ended_at": db.now(), "last_line": why, "paneClosed": True})
             env.log("TECHNICAL NOTE: %s: %s, marked failed" % (a["name"], why))

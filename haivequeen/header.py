@@ -104,10 +104,8 @@ def format_token_line(ctx, tin, tout):
 
 def _parse_time(value, default):
     """Parse an ISO time string; `default` when empty or invalid."""
-    try:
-        return datetime.fromisoformat(str(value)) if value else default
-    except ValueError:
-        return default
+    from . import db
+    return db.parse_time(value, default)
 
 
 def build_head(row, project, project_colour, width, now=None):

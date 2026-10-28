@@ -169,10 +169,7 @@ def paint(lines, color=True) -> str:
 
 def _parse_time(text):
     """Parse an ISO time written by the runtime; None when missing or broken."""
-    try:
-        return datetime.fromisoformat(text) if text else None
-    except ValueError:
-        return None
+    return db.parse_time(text)
 
 
 def _kv(conn, key):
