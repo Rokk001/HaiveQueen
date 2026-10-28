@@ -13,9 +13,8 @@ if (Test-Path $lock) {
 # Also refuse when a loop process runs although the lock file is missing or stale (a second loop would start agents twice).
 if (@(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" | Where-Object { $_.CommandLine -match ('round-loop\.ps1.*' + [regex]::Escape($Project)) }).Count -gt 0) { Write-Host 'The orchestrator is already running (loop process found).' -ForegroundColor Yellow; Start-Sleep 5; exit 0 }
 Remove-Item (Join-Path $cfg.runtime 'STOP') -ErrorAction SilentlyContinue
-if (-not (Test-Path (Join-Path $cfg.runtime 'AGENTS.json'))) { Write-Agents $cfg @() }
 # New window: all panes of the old window are gone, pane numbers start again (0 Orchestrator, 1 idle area, 2 Uebersicht, agents from 3).
-foreach ($r in @(Read-Agents $cfg | Where-Object { $null -ne $_.paneId -and -not $_.paneClosed })) { Update-Agent $cfg ([string]$r.name) @{ paneClosed = $true } }
+foreach ($r in @(Get-OrchAgents $cfg | Where-Object { $null -ne $_.pane_id -and -not $_.paneClosed })) { Update-OrchAgentFields $cfg ([string]$r.name) @{ paneClosed = $true } }
 Write-FileAtomic (Join-Path $cfg.runtime 'panes.json') '{"next":3}'
 $ps = 'pwsh -NoProfile -ExecutionPolicy Bypass'
 $t = $script:ToolsDir

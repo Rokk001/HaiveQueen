@@ -1,5 +1,5 @@
 ﻿# usage.ps1 - total token usage of all Claude Code and Codex sessions on this PC, as table data.
-# Usage:  . usage.ps1 ; $u = Get-UsageTable -CacheDir <dir> -AgentsFile <f> -ArchiveFile <f> -BrainFile <f>
+# Usage:  . usage.ps1 ; $u = Get-UsageTable -CacheDir <dir> -Cfg <project config>
 # Logs are read incrementally (byte offset per file, cache in <CacheDir>\usage-cache.bin).
 
 $script:UsageCs = @'
@@ -424,24 +424,13 @@ function Get-UsageModelLabel {
     return $Key
 }
 
-# Reads a JSON file that holds an array of objects; returns $null if the file is missing or unreadable.
-function Read-UsageJsonArray {
-    param([string]$Path)
-    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $null }
-    # The live AGENTS.json is rewritten all the time: read it shared with retries; when it still fails, the last good content is used (never a silently empty list, which made "alle Plaene" drop to the running agent only).
-    for ($try = 0; $try -lt 5; $try++) {
-        try {
-            $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
-            try { $txt = (New-Object IO.StreamReader($fs, [Text.Encoding]::UTF8)).ReadToEnd() } finally { $fs.Dispose() }
-            $rows = @($txt | ConvertFrom-Json)
-            $script:UsageJsonLastGood[$Path] = $rows
-            return $rows
-        } catch { Start-Sleep -Milliseconds 200 }
-    }
-    if ($script:UsageJsonLastGood.ContainsKey($Path)) { return $script:UsageJsonLastGood[$Path] }
+# Returns the first existing property of a row out of the given names (the runtime rows use snake_case columns, older rows camelCase), or $null.
+function Get-UsageField {
+    param($Row, [string[]]$Names)
+    foreach ($n in $Names) { if ($Row.PSObject.Properties[$n]) { return $Row.$n } }
     return $null
 }
-$script:UsageJsonLastGood = @{}
+$script:UsageAgentsLastGood = @()
 
 # Formats a date for the retention texts (fixed day.month.year format).
 function Format-UsageDate {
@@ -453,9 +442,7 @@ function Format-UsageDate {
 function Get-UsageTable {
     param(
         [Parameter(Mandatory)][string]$CacheDir,
-        [string]$AgentsFile,
-        [string]$ArchiveFile,
-        [string]$BrainFile,
+        $Cfg = $null,   # project config: the agent rows (active and archived) and the brain usage rows are read from the runtime database
         [string]$ClaudeRoot = (Join-Path $env:USERPROFILE '.claude\projects'),
         [string]$CodexRoot = (Join-Path $env:USERPROFILE '.codex\sessions'),
         [string]$PythonExe = ''   # Python 3.14 (module compression.zstd) for the compressed Codex logs; empty = python from the PATH
@@ -521,22 +508,22 @@ function Get-UsageTable {
         $sums[$key].In += [int64]$in; $sums[$key].Out += [int64]$out
     }
     $seen = @{}
-    foreach ($file in @($AgentsFile, $ArchiveFile)) {
-        foreach ($ag in (Read-UsageJsonArray $file)) {
+    if ($Cfg) {
+        # When the database is busy for a moment, the last good agent list is used (never a silently empty list, which made "alle Plaene" drop to the running agent only).
+        try { $agRows = @(Get-OrchAgents $Cfg 'all'); $script:UsageAgentsLastGood = $agRows } catch { $agRows = @($script:UsageAgentsLastGood) }
+        foreach ($ag in $agRows) {
             if ($null -eq $ag.name) { continue }
-            if ("$($ag.plan)" -match 'PILOT-PLAN' -or "$($ag.name)" -like 'ZZTEST*') { continue }
-            $id = "$($ag.name)|$($ag.startedAt)"
+            if ("$(Get-UsageField $ag @('plan_path', 'plan'))" -match 'PILOT-PLAN' -or "$($ag.name)" -like 'ZZTEST*') { continue }
+            $id = "$($ag.name)|$(Get-UsageField $ag @('started_at', 'startedAt'))"
             if ($seen.ContainsKey($id)) { continue }
             $seen[$id] = $true
-            $k = if ($ag.type -eq 'codex') { $codexKey } else { $claudeKey }
-            & $add $k ($ag.tokensIn) ($ag.tokensOut)
+            $typ = Get-UsageField $ag @('type', 'provider')
+            $k = if ($typ -eq 'codex') { $codexKey } else { $claudeKey }
+            & $add $k (Get-UsageField $ag @('tokens_in', 'tokensIn')) (Get-UsageField $ag @('tokens_out', 'tokensOut'))
         }
-    }
-    if ($BrainFile -and (Test-Path -LiteralPath $BrainFile)) {
-        foreach ($line in [IO.File]::ReadLines($BrainFile)) {
-            if (-not $line.Trim()) { continue }
-            try { $br = $line | ConvertFrom-Json } catch { continue }
-            if ("$($br.model)" -match 'sonnet') { & $add $claudeKey ($br.input) ($br.output) }
+        $brainRows = @(); try { $brainRows = @(Get-OrchUsage $Cfg 'brain') } catch { }
+        foreach ($br in $brainRows) {
+            if ("$($br.model)" -match 'sonnet') { & $add $claudeKey (Get-UsageField $br @('tokens_in', 'input')) (Get-UsageField $br @('tokens_out', 'output')) }
         }
     }
     foreach ($k in $sums.Keys) {
