@@ -10,7 +10,7 @@ Set-Content -LiteralPath $idlePid -Value $PID -Encoding ASCII   # tells the othe
 $shown = ''
 while ((Get-Date) -lt $until) {
     try {
-        $rows = @(Read-Agents $cfg)
+        $rows = @(Get-OrchAgentRows $cfg)
         if (@($rows | Where-Object { Test-AgentPaneAlive $_ }).Count -gt 0) { Start-Sleep -Seconds 3; break }   # an agent pane runs (confirmed by its live runner process): this pane makes room, after a settle time so the split that created it is finished
         $last = $rows | Where-Object { $_.endedAt } | Sort-Object { [datetime]$_.endedAt } -Descending | Select-Object -First 1
         $txt = if ($last) { 'Letzter Agent: {0} ({1}), beendet {2}: {3}' -f $last.name, $last.status, ([datetime]$last.endedAt).ToString('HH:mm'), (([string]$last.lastLine -replace '\s+', ' ').Trim() | ForEach-Object { if ($_.Length -gt 300) { $_.Substring(0, 300) } else { $_ } }) } else { '' }

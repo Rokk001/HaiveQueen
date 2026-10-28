@@ -1,4 +1,4 @@
-# Header of one agent pane (PowerShell 7). Started by agent-run.ps1, shares the console of the pane and redraws the header every second from the agent's row in AGENTS.json:
+# Header of one agent pane (PowerShell 7). Started by agent-run.ps1, shares the console of the pane and redraws the header every second from the agent's row in the agents table (orch.py):
 #   line 1 "<NAME> | <Agent-ID> | <Type> <model short> | <status> <runtime>" in the agent's own color (status word in its status color)
 #   line 2 the task in plain words (one line), line 3 the tokens ("Tokens: noch keine Daten" before the first token data).
 # When the pane width or height changes, the whole screen is cleared first and the milestones are replayed, so no old header line stays behind.
@@ -60,7 +60,8 @@ function Line-Str($parts) { $s = ''; foreach ($p in $parts) { $s += (Sgr $p[1]) 
 $lastW = -1; $lastH = -1; $lastN = -1; $endSeen = 0
 while ($true) {
     try {
-        $row = @(Read-Agents $cfg | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
+        $rowObj = Get-OrchAgentRow $cfg $Name
+        $row = @(if ($rowObj) { $rowObj })
         if ($row.Count) {
             $r = $row[0]
             $w = [Math]::Max(30, [Console]::WindowWidth); $h = [Math]::Max(10, [Console]::WindowHeight)

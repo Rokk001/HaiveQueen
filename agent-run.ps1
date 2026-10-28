@@ -1,4 +1,4 @@
-﻿# Runs ONE agent (Claude Code or Codex, headless) inside its own Windows Terminal pane, tracks it in AGENTS.json and ends.
+﻿# Runs ONE agent (Claude Code or Codex, headless) inside its own Windows Terminal pane, tracks it in the agents table (orch.py) and ends.
 # The pane shows a fixed header (redrawn on every update, never scrolls away) and below it only milestones with a time stamp; the full raw output stays in runs\<Name>\.
 param(
     [Parameter(Mandatory)][string]$Name,
@@ -12,7 +12,7 @@ if ($Project) { $env:ORCH_PROJECT = $Project }
 . (Join-Path $PSScriptRoot 'lib.ps1')
 $cfg = Get-Cfg
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$queueName = Split-Path ([string]$cfg.integrationStateFile) -Leaf   # a command that writes into the integration queue file is shown as the ready line
+$queueName = Split-Path ([string]$cfg.integrationStateFile) -Leaf   # a command that writes into the integration queue file (or calls orch.py ready) is shown as the ready line
 $queueNameRe = [regex]::Escape([IO.Path]::GetFileNameWithoutExtension($queueName))
 $runDir = Join-Path $cfg.runtime "runs\$Name"
 New-Item -ItemType Directory -Force $runDir | Out-Null
@@ -49,7 +49,8 @@ $planShort = [System.IO.Path]::GetFileNameWithoutExtension($Plan) -replace '-?PL
 $typeLabel = if ($Type -eq 'claude') { 'Claude' } else { 'Codex' }
 $headColor = if ($Type -eq 'claude') { 'Magenta' } else { 'Blue' }
 # Model and effort come from the class stored in the agent's row by round.ps1 (plan 12.2); no class = medium.
-$myRow = @(Read-Agents $cfg | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
+$myRowObj = Get-OrchAgentRow $cfg $Name
+$myRow = @(if ($myRowObj) { $myRowObj })
 $provName = if ($myRow.Count -and $myRow[0].provider) { [string]$myRow[0].provider } else { $Type }   # the provider entry of the project file (plan section 15); rows from before it use the type as the name
 $prov = Get-Provider $cfg $provName
 if (-not $prov) { throw "provider '$provName' is not in the project file" }
@@ -57,7 +58,7 @@ $classModel = Get-ClassModel $cfg $provName $(if ($myRow.Count -and $myRow[0].cl
 $modelCfg = $classModel.Model
 $effortCfg = $classModel.Effort
 $state.model = Model-Label $modelCfg
-# The task for the header: work = package row of the plan's package table (package id, branch suffix, content); verify / release / integrate = phase plus package. Falls back to the first line of the prompt.
+# The task for the header: work = package row of the plan (package id and title, read with Get-OrchPackages); verify / release / integrate = phase plus package. Falls back to the first line of the prompt.
 function Get-TaskText {
     $pkgTxt = if ($Package -and $Package -ne 'ALL' -and $Package -notmatch '^(REL|INT-)') { "Paket $Package" } else { 'ganzer Plan' }
     switch ($Phase) {
@@ -66,16 +67,9 @@ function Get-TaskText {
         'integrate' { return "Integrator: ready-Zeilen mergen, Build, Checks, Push" }
     }
     try {
-        $abs =if ([System.IO.Path]::IsPathRooted($Plan)) { $Plan } else { Join-Path $cfg.repo $Plan }
-        if (Test-Path $abs) {
-            $hdr = $null; $cont = -1; $suf = -1
-            foreach ($l in (Get-Content $abs -Encoding UTF8)) {
-                if ($l -notmatch '^\s*\|') { $hdr = $null; continue }
-                $c = @($l.Trim().Trim('|').Split('|') | ForEach-Object { $_.Trim() })
-                if (-not $hdr) { if ($c[0] -match '^(Package|Paket)$') { $hdr = $c; $cont = -1; $suf = -1; for ($i = 0; $i -lt $c.Count; $i++) { if ($c[$i] -match '^(Content|Inhalt)') { $cont = $i }; if ($c[$i] -match '^Branch') { $suf = $i } } }; continue }
-                if ($c[0] -eq $Package -and $cont -ge 0 -and $cont -lt $c.Count) { return ($Package + $(if ($suf -ge 0 -and $suf -lt $c.Count) { ' (' + $c[$suf] + ')' } else { '' }) + ': ' + $c[$cont]) }
-            }
-        }
+        $planKey = ([string]$Plan).Replace('\', '/')
+        $pk = @(Get-OrchPackages $cfg | Where-Object { $pp = ([string]$_.plan_path).Replace('\', '/'); $_.id -eq $Package -and $planKey -and ($pp -eq $planKey -or $planKey.EndsWith('/' + $pp) -or $pp.EndsWith('/' + $planKey)) } | Select-Object -First 1)
+        if ($pk.Count) { return ($Package + ': ' + [string]$pk[0].title) }
     } catch {}
     return ''
 }
@@ -160,7 +154,7 @@ function Say([string]$text, [string]$color = 'White') {
 }
 # Path relative to the working directory when it lies inside it.
 function Rel-Path([string]$p) { if ($p.StartsWith($Cwd + '\', [System.StringComparison]::OrdinalIgnoreCase)) { return $p.Substring($Cwd.Length + 1) }; return $p }
-# Recognizes a milestone command (commit, push, compile test, check, ready line, file write); returns @{ kind; label } or $null.
+# Recognizes a milestone command (commit, push, compile test, check, ready line, file write); returns @{ kind; label } or $null. A call of orch.py ready is the ready line.
 function Classify-Cmd([string]$c) {
     if ($c -match 'git\s+commit') {
         $m = ''; if ($c -match '-m\s+"([^"\r\n$]{3,})"') { $m = $Matches[1] } elseif ($c -match "-m\s+'([^'\r\n]{3,})'") { $m = $Matches[1] }
@@ -169,6 +163,7 @@ function Classify-Cmd([string]$c) {
     if ($c -match 'git\s+push') { return @{ kind = 'push'; label = 'Push' } }
     if ($c -match 'compile-check-changed') { return @{ kind = 'check'; label = 'Kompiliertest' } }
     if ($c -match '(check[\w\-]*\.(py|ps1))') { return @{ kind = 'check'; label = 'Check ' + $Matches[1] } }
+    if ($c -match 'orch(\.py)?["'']?\s+ready(\s|$)') { return @{ kind = 'ready'; label = 'ready-Zeile eingetragen' } }
     if ($c -match $queueNameRe -and $c -match '>>|Add-Content|Out-File|Set-Content') { return @{ kind = 'ready'; label = 'ready-Zeile eingetragen' } }
     if ($c -match '(Set-Content|Add-Content|Out-File|WriteAllText|sed\s+-i|apply_patch)') {
         if ($c -match "(?:-(?:Path|LiteralPath|FilePath)\s+|WriteAllText\(|sed\s+-i\S*\s+(?:'[^']*'\s+|`"[^`"]*`"\s+)?)['`"]?([^'`"\s,)]+\.[A-Za-z0-9]+)") { return @{ kind = 'edit'; label = 'geändert: ' + (Rel-Path ($Matches[1] -replace '\\\\', '\')) } }
@@ -185,18 +180,29 @@ function Say-Result($info, [string]$text, $exit, [bool]$isErr) {
     $msg = $label + ' - ' + $(if ($null -ne $ex) { "Exit $ex" } elseif ($ok) { 'OK' } else { 'Fehler' }) + $(if ($lastLine) { ': ' + (Short $lastLine 140) } else { '' })
     Say $msg $(if ($ok) { 'Green' } else { 'Red' })
 }
-# Pushes the current counters and last line into AGENTS.json (throttled to every 2 s unless forced).
+# Pushes the current counters and last line into the agent's row (throttled to every 2 s unless forced).
 function Push-State([bool]$Force) {
     if (-not $Force -and ((Get-Date) - $state.lastWrite).TotalSeconds -lt 2) { return }
     $state.lastWrite = Get-Date
     if ($Type -eq 'codex' -and $state.thread) { $cx = Get-CodexTokens $state.thread; if ($cx) { $state.ctx = $cx.ctx; $state.tin = $cx.tin; $state.tout = $cx.tout } }
-    Update-Agent $cfg $Name @{ tokensIn = $state.tin; tokensOut = $state.tout; ctxTokens = $state.ctx; lastLine = $state.last; paneCols = (Get-Width); paneRows = $Host.UI.RawUI.WindowSize.Height }   # pane size: the next pane is placed by it (Start-AgentPane)
+    try { [void](Set-OrchAgent $cfg $Name @{ tokensIn = $state.tin; tokensOut = $state.tout; ctxTokens = $state.ctx; lastLine = $state.last; paneCols = (Get-Width); paneRows = $Host.UI.RawUI.WindowSize.Height }) } catch {}   # pane size: the next pane is placed by it (Start-AgentPane); a failed write must not end the run
+}
+# Writes the given fields into the agent's row with up to $Attempts tries. When the last try fails, the row is set to failed with the reason (once more, best effort), so a row never stays on starting / running because of a database problem. Returns $true when the requested fields were written.
+function Set-AgentRetry([hashtable]$Props, [int]$Attempts = 3) {
+    $err = ''
+    for ($i = 1; $i -le $Attempts; $i++) {
+        try { [void](Set-OrchAgent $cfg $Name $Props); return $true } catch { $err = $_.Exception.Message; if ($i -lt $Attempts) { Start-Sleep -Seconds 2 } }
+    }
+    try { [void](Add-OrchEvent $cfg "warning $Name could not update its row after $Attempts tries, set to failed: $err" 'rounds' $false 'warning' $Name) } catch {}
+    try { [void](Set-OrchAgent $cfg $Name @{ status = 'failed'; endedAt = (Get-Date).ToString('o'); lastLine = ("agent row error after $Attempts tries (wanted status '" + [string]$Props['status'] + "'): " + $err) }) } catch {}
+    return $false
 }
 
-$prev = @(Read-Agents $cfg | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
+$prevObj = Get-OrchAgentRow $cfg $Name
+$prev = @(if ($prevObj) { $prevObj })
 if ($prev.Count -and $prev[0].pid -and [int]$prev[0].pid -ne $PID -and (Get-Process -Id ([int]$prev[0].pid) -ErrorAction SilentlyContinue)) { Write-Host "agent $Name already runs (pid $($prev[0].pid)), this second pane ends" -ForegroundColor Yellow; exit 0 }   # a relaunched pane must never start the task twice
-if (-not (Update-AgentRetry $cfg $Name @{ type = $Type; plan = $Plan; package = $Package; phase = $Phase; cwd = $Cwd; status = 'running'; startedAt = $started.ToString('o'); endedAt = $null; pid = $PID; tokensIn = $state.tin; tokensOut = $state.tout; lastLine = 'starting'; paneCols = (Get-Width); paneRows = $Host.UI.RawUI.WindowSize.Height })) { Write-Host "agent $Name not started: the agents lock stayed busy, row set to failed" -ForegroundColor Red; exit 0 }   # the row is on 'failed' now, the model is never called
-# The header is drawn by head-ticker.ps1 (own process in this pane, redraws every second from AGENTS.json, clears old header lines completely when the size changes); this script only prints milestones below it.
+if (-not (Set-AgentRetry @{ type = $Type; plan = $Plan; package = $Package; phase = $Phase; cwd = $Cwd; status = 'running'; startedAt = $started.ToString('o'); endedAt = $null; pid = $PID; tokensIn = $state.tin; tokensOut = $state.tout; lastLine = 'starting'; paneCols = (Get-Width); paneRows = $Host.UI.RawUI.WindowSize.Height })) { Write-Host "agent $Name not started: the agent row could not be written, row set to failed" -ForegroundColor Red; exit 0 }   # the row is on 'failed' now, the model is never called
+# The header is drawn by head-ticker.ps1 (own process in this pane, redraws every second from the agent's row, clears old header lines completely when the size changes); this script only prints milestones below it.
 function Draw-Head { return 0 }
 function Maybe-Head { }
 $null = New-Item -ItemType File -Force (Join-Path $runDir 'milestones.txt')
@@ -205,6 +211,11 @@ Set-Content -Path (Join-Path $runDir 'milestones.txt') -Value @() -Encoding UTF8
 Start-Sleep -Seconds 2
 
 $prompt = "Read the file `"$PromptFile`" completely and carry out exactly the task described there. Do nothing else."
+# Report commands (plan section 4): the agent calls orch.py instead of writing state tables or queue rows by hand; the handoff text in the state files of the project stays the agent's own file. The text has no double quote (removed below) and one line.
+$orchRow = Get-OrchAgentRow $cfg $Name
+$orchCall = "'" + (Get-OrchPython) + "' -I '" + (Join-Path $PSScriptRoot 'orch.py') + "'"
+$orchProj = Get-OrchProject $cfg
+$prompt += " Report only with these commands, never by editing a queue file or state table by hand (the handoff text in the state file of the plan stays your own file): final report: $orchCall done --agent $(if ($orchRow) { $orchRow.id } else { '?' }) --result <file with your final report>; branch ready for integration: $orchCall ready --project $orchProj --branch <branch> --tip <commit> --plan <plan path> --note <text>; question for the owner: $orchCall ask --project $orchProj --plan <plan path> --item <item> --question <question> --recommendation <recommendation>; note: $orchCall note --project $orchProj --text <text>."
 $prompt = $prompt.Replace('"', '')
 $model = $modelCfg
 $tmpl = @($prov.Args) + @(Get-EndpointArgs $prov)   # argument template of the provider entry (plus the model_provider arguments of an endpoint)
@@ -282,8 +293,8 @@ if ($bjCfg -and $bjCfg.EnvVar) {
     Set-Item -Path ('Env:' + $bjCfg.EnvVar) -Value ([string]$bjJobs)
     Remove-Item $bjSamples -ErrorAction SilentlyContinue
     $bjSampler = Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Quote-Arg (Join-Path $PSScriptRoot 'build-sampler.ps1')), '-ParentPid', "$PID", '-Out', (Quote-Arg $bjSamples)) -WindowStyle Hidden -PassThru
-    Update-Agent $cfg $Name @{ buildJobs = $bjJobs }
-    Write-RoundLog $cfg ('build {0}: starting with {1} jobs ({2}, free RAM {3} MB)' -f $Name, $bjJobs, $bjCalc.Why, $bjStartMB)
+    [void](Set-OrchAgent $cfg $Name @{ buildJobs = $bjJobs })
+    [void](Add-OrchEvent $cfg ('build {0}: starting with {1} jobs ({2}, free RAM {3} MB)' -f $Name, $bjJobs, $bjCalc.Why, $bjStartMB) 'rounds' $false 'build' $Name)
 }
 Push-Location $Cwd
 $ErrorActionPreference = 'Continue'
@@ -313,15 +324,15 @@ finally { Pop-Location }
 if ($bjJobs -gt 0) {
     if ($bjSampler -and -not $bjSampler.HasExited) { Stop-Process -Id $bjSampler.Id -Force -ErrorAction SilentlyContinue }
     $bjRes = Complete-BuildMeasure $cfg $Name $bjJobs $bjStartMB $bjSamples $started
-    Update-Agent $cfg $Name @{ buildUseMB = $bjRes.UseMB }
+    [void](Set-OrchAgent $cfg $Name @{ buildUseMB = $bjRes.UseMB })
 }
 
 # Success is judged by the agent's own result event (claude: type result without error; codex: completed turn), not by the exit code: a failing plugin hook after the end must not fail the task.
 $status = if ($state.ok) { 'done' } else { 'failed' }
-if ($state.ok -and $code -ne 0) { Say ("Hinweis: Exit-Code $code, obwohl der Agent fertig ist (siehe stderr.txt)") 'Yellow'; Write-RoundLog $cfg "warning $Name exit code $code after a finished task (hook/stderr), kept as done" }
+if ($state.ok -and $code -ne 0) { Say ("Hinweis: Exit-Code $code, obwohl der Agent fertig ist (siehe stderr.txt)") 'Yellow'; [void](Add-OrchEvent $cfg "warning $Name exit code $code after a finished task (hook/stderr), kept as done" 'rounds' $false 'warning' $Name) }
 if (-not $state.ok) { $errTxt = if (Test-Path $errFile) { (Get-Content $errFile -Tail 3 -ErrorAction SilentlyContinue) -join ' ' } else { '' }; if ($state.last -notmatch '^(error|runner error)') { $state.last = ('no result event, exit ' + $code + ' ' + $errTxt) }; $state.last = Short $state.last }
 [System.IO.File]::WriteAllText($finalFile, [string]$state.final, (New-Object System.Text.UTF8Encoding($false)))
-[void](Update-AgentRetry $cfg $Name @{ status = $status; endedAt = (Get-Date).ToString('o'); exitCode = $code; tokensIn = $state.tin; tokensOut = $state.tout; lastLine = $state.last })
+[void](Set-AgentRetry @{ status = $status; endedAt = (Get-Date).ToString('o'); exitCode = $code; tokensIn = $state.tin; tokensOut = $state.tout; lastLine = $state.last })
 $state.ended = Get-Date
 [void](Draw-Head)
 if ($state.final -and (Short $state.final 1500) -ne (Short $state.lastSaid 1500)) { Say ('Schlussmeldung: ' + $state.final) $(if ($status -eq 'done') { 'Green' } else { 'Red' }) }
