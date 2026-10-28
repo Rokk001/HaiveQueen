@@ -1,0 +1,18 @@
+S15 real Windows Terminal check (dashboard in a wt pane, test runtime)
+
+Setup: a temp data/config folder (ORCH_DATA_DIR / ORCH_CONFIG_DIR) with invented data: two projects (alpha, beta),
+one running and one finished agent, one open question, Claude 5h/7d windows in kv. Window ORCHTEST-S15-<random>,
+title "Agent-Orchestrator TEST | demo | Dashboard", opened with orchlib.terminal.get_terminal("wt", <temp runs folder>)
+.open_window(...), command `python -I <runner>` where the runner renders once into a probe file (size taken from the
+real pane) and then calls orchlib.dashboard.run().
+
+Observed:
+- The pane started (pid file present), list_panes showed alive=True after the 7 s wait, i.e. through at least one
+  5 s redraw cycle without an error.
+- Probe file written from inside the pane: pane size 119x29, 27 rendered lines (fits the height), ANSI colours present
+  (run state green, project name in its colour, agent colour as RGB, limit bars), all sections shown: header with run
+  state RUNNING and orchestrator line, AGENTS, LIMITS, USAGE, SYSTEM, PLANS, QUESTIONS.
+- close_pane ended the pane's process tree; list_panes then showed alive=False. No process of this test was left.
+- Not exercised in the real pane: the keys P / D / F (no key presses were sent to the window); they are covered by the
+  unit tests (handle_key) and use msvcrt on Windows.
+No other window or process was touched.
