@@ -11,6 +11,10 @@ class NothingWrittenToDefaultFoldersTest(unittest.TestCase):
         """Nothing below the redirected %LOCALAPPDATA% / %APPDATA%: a test that fell back to the default folders would have changed the real ones."""
         self.assertEqual(isolation.leaked(), [])
 
+    def test_real_data_folder_is_unchanged(self):
+        """The real %LOCALAPPDATA%\\HaiveQueen and %APPDATA%\\HaiveQueen look as they did before the suite (files a running loop writes itself are left out)."""
+        self.assertEqual(isolation.real_folder_changes(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

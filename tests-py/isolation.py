@@ -9,6 +9,27 @@ import os
 import tempfile
 from pathlib import Path
 
+REAL_FOLDERS = [Path(os.environ[_v]) / "HaiveQueen" for _v in ("LOCALAPPDATA", "APPDATA") if os.environ.get(_v)]
+LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs")  # written by a running loop, not by tests
+LIVE_PROJECT_LOGS = ("logs", "ODP")
+
+
+def snapshot_real() -> dict:
+    """Return {path: (size, mtime_ns)} of the files in the real data and settings folders, without what a running loop writes itself."""
+    snap = {}
+    for base in REAL_FOLDERS:
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*"):
+            rel = p.relative_to(base)
+            if not p.is_file() or rel.parts[0].startswith(LIVE_TOP) or rel.parts[:2] == LIVE_PROJECT_LOGS:
+                continue
+            st = p.stat()
+            snap[str(base / rel)] = (st.st_size, st.st_mtime_ns)
+    return snap
+
+
+REAL_BEFORE = snapshot_real()
 ROOT = Path(tempfile.mkdtemp(prefix="hq-tests-appdata-"))
 REDIRECTED = {"LOCALAPPDATA": ROOT / "local", "APPDATA": ROOT / "roaming", "XDG_DATA_HOME": ROOT / "local", "XDG_CONFIG_HOME": ROOT / "roaming"}
 for _var, _path in REDIRECTED.items():
@@ -19,3 +40,9 @@ for _var, _path in REDIRECTED.items():
 def leaked():
     """Return the files below the redirected folders: what a test wrote without its own BZZ_* folders."""
     return sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file())
+
+
+def real_folder_changes() -> list:
+    """Return the files of the real data and settings folders that a test added, removed or changed since this module was imported."""
+    now = snapshot_real()
+    return sorted(p for p in set(now) | set(REAL_BEFORE) if now.get(p) != REAL_BEFORE.get(p))
