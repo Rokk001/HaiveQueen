@@ -1,9 +1,5 @@
 <p align="center">
-  <img src="assets/haivequeen.png" alt="HaiveQueen logo" width="320">
-</p>
-
-<p align="center">
-  <img src="assets/banner.svg" alt="HaiveQueen" width="100%">
+  <img src="assets/haivequeen.png" alt="HaiveQueen" width="100%">
 </p>
 
 <p align="center">
@@ -52,12 +48,12 @@ flowchart LR
     V <--> DB
     R <--> DB
     I <--> DB
-    LOOP([Round loop<br/>routine, brain on events]) <--> DB
+    LOOP([Queen<br/>round loop, brain on events]) <--> DB
 ```
 
-1. Every round the loop syncs the plans of all projects into the database and applies the fixed transitions (work done, then verify, then release, then integrate).
+1. The **Queen** is the main instance: the round loop with its routine and the brain. Every round she syncs the plans of all projects into the database and applies the fixed transitions (work done, then verify, then release, then integrate).
 2. Only if something needs judgement does it become an **event**, and the brain (one fresh `claude -p` call) is asked once. Its answer is a validated JSON action.
-3. A started agent writes its result to the plan's state, reports with `bzz done` / `bzz ready` / `bzz ask` and ends. The next round sees the new state.
+3. The agents she starts carry short female names (Ada, Bea, Cleo, ...), so the panes are easy to tell apart. A started agent writes its result to the plan's state, reports with `bzz done` / `bzz ready` / `bzz ask` and ends. The next round sees the new state.
 
 ## Dashboard
 

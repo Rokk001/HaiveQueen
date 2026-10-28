@@ -3,23 +3,23 @@
 <g font-family="Consolas, Menlo, 'DejaVu Sans Mono', monospace" font-size="14" xml:space="preserve">
 <text x="14" y="28.2"><tspan fill="#23d18b">RUNNING</tspan><tspan fill="#e5e5e5">  project: all</tspan><tspan fill="#666666">  [P] pause/resume [D] drain [F] project</tspan></text>
 <text x="14" y="47.1"><tspan fill="#29b8db">Queen </tspan><tspan fill="#e5e5e5">idle</tspan><tspan fill="#e5e5e5"> | brain calls today 0 | context – | in 0 / out 0</tspan></text>
-<text x="14" y="66.0"><tspan fill="#666666">── </tspan><tspan fill="#29b8db">AGENTS 3</tspan><tspan fill="#29b8db">  13:42:39  last round -</tspan><tspan fill="#666666"> ────────────────────────────────────────────────────────────────────</tspan></text>
-<text x="14" y="84.9"><tspan fill="#29b8db">webshop | </tspan><tspan fill="#4fa8ff" font-weight="bold">ANN | webshop-P1-work | Claude Son 5.5 med. | </tspan><tspan fill="#f5f543">► running 12:00</tspan></text>
+<text x="14" y="66.0"><tspan fill="#666666">── </tspan><tspan fill="#29b8db">AGENTS 3</tspan><tspan fill="#29b8db">  21:19:54  last round -</tspan><tspan fill="#666666"> ────────────────────────────────────────────────────────────────────</tspan></text>
+<text x="14" y="84.9"><tspan fill="#29b8db">webshop | </tspan><tspan fill="#4fa8ff" font-weight="bold">ADA | webshop-P1-work | Claude Son 5.5 med. | </tspan><tspan fill="#f5f543">► running 12:00</tspan></text>
 <text x="14" y="103.8"><tspan fill="#e5e5e5">✎ CHECKOUT-PLAN.md P1</tspan></text>
 <text x="14" y="122.7"><tspan fill="#ffffff">Context – | Total Input 102k / Output 3k</tspan></text>
-<text x="14" y="141.6"><tspan fill="#29b8db">webshop | </tspan><tspan fill="#c77dff" font-weight="bold">BEN | webshop-P2-work | Codex Sol 6.1 med. | </tspan><tspan fill="#f5f543">► running 07:00</tspan></text>
+<text x="14" y="141.6"><tspan fill="#29b8db">webshop | </tspan><tspan fill="#c77dff" font-weight="bold">BEA | webshop-P2-work | Codex Sol 6.1 med. | </tspan><tspan fill="#f5f543">► running 07:00</tspan></text>
 <text x="14" y="160.5"><tspan fill="#e5e5e5">✎ CHECKOUT-PLAN.md P2</tspan></text>
 <text x="14" y="179.4"><tspan fill="#ffffff">Context – | Total Input 97k / Output 3k</tspan></text>
-<text x="14" y="198.3"><tspan fill="#d670d6">game-engine | </tspan><tspan fill="#ff6fb5" font-weight="bold">CLARA | engine-R3-verify | Codex Sol 6.1 med. | </tspan><tspan fill="#f5f543">► running 03:00</tspan></text>
+<text x="14" y="198.3"><tspan fill="#d670d6">game-engine | </tspan><tspan fill="#ff6fb5" font-weight="bold">CLEO | engine-R3-verify | Codex Sol 6.1 med. | </tspan><tspan fill="#f5f543">► running 03:00</tspan></text>
 <text x="14" y="217.2"><tspan fill="#e5e5e5">⚲ RENDER-PLAN.md R3</tspan></text>
 <text x="14" y="236.1"><tspan fill="#ffffff">Context – | Total Input 93k / Output 3k</tspan></text>
 <text x="14" y="255.0"><tspan fill="#666666">ended in the last hour</tspan></text>
-<text x="14" y="273.9"><tspan fill="#d670d6">game-engine | </tspan><tspan fill="#3ddcdc" font-weight="bold">LEO | engine-R2-work | Claude Son 5.5 med. | </tspan><tspan fill="#23d18b">✓ done 35:00</tspan></text>
+<text x="14" y="273.9"><tspan fill="#d670d6">game-engine | </tspan><tspan fill="#3ddcdc" font-weight="bold">DINA | engine-R2-work | Claude Son 5.5 med. | </tspan><tspan fill="#23d18b">✓ done 35:00</tspan></text>
 <text x="14" y="292.8"><tspan fill="#e5e5e5">✎ RENDER-PLAN.md R2</tspan></text>
 <text x="14" y="311.7"><tspan fill="#ffffff">Context – | Total Input 130k / Output 3k</tspan></text>
 <text x="14" y="330.6"><tspan fill="#666666">── </tspan><tspan fill="#29b8db">◔ LIMITS</tspan><tspan fill="#666666"> ────────────────────────────────────────────────────────────────────────────────────────────</tspan></text>
-<text x="14" y="349.5"><tspan fill="#e5e5e5">Claude 5h </tspan><tspan fill="#23d18b">████</tspan><tspan fill="#666666">░░░░░░</tspan><tspan fill="#23d18b">  42% 14:42</tspan></text>
-<text x="14" y="368.4"><tspan fill="#e5e5e5">Claude 7d </tspan><tspan fill="#f5f543">██████</tspan><tspan fill="#666666">░░░░</tspan><tspan fill="#f5f543">  61% 31.10. 13:42</tspan></text>
+<text x="14" y="349.5"><tspan fill="#e5e5e5">Claude 5h </tspan><tspan fill="#23d18b">████</tspan><tspan fill="#666666">░░░░░░</tspan><tspan fill="#23d18b">  42% 22:19</tspan></text>
+<text x="14" y="368.4"><tspan fill="#e5e5e5">Claude 7d </tspan><tspan fill="#f5f543">██████</tspan><tspan fill="#666666">░░░░</tspan><tspan fill="#f5f543">  61% 31.10. 21:19</tspan></text>
 <text x="14" y="387.3"><tspan fill="#e5e5e5">Codex 7d  </tspan><tspan fill="#666666">n/a</tspan></text>
 <text x="14" y="406.2"><tspan fill="#666666">── </tspan><tspan fill="#29b8db">Σ USAGE</tspan><tspan fill="#666666"> ─────────────────────────────────────────────────────────────────────────────────────────────</tspan></text>
 <text x="14" y="425.1"><tspan fill="#e5e5e5">                  </tspan><tspan fill="#29b8db">             claude-sonnet-5-5</tspan><tspan fill="#29b8db">                   gpt-6.1-sol</tspan></text>

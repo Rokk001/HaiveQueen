@@ -31,10 +31,10 @@ def build_demo_database(now):
     conn = db.connect(config.db_path())
     db.upsert_project(conn, "webshop", None, "cyan", 1)
     db.upsert_project(conn, "game-engine", None, "magenta", 0)
-    agents = [("webshop", "webshop-P1-work", "docs/plans/CHECKOUT-PLAN.md", "P1", "work", "claude", "claude-sonnet-5-5", "running", 12, "Ann", "4FA8FF"),
-              ("webshop", "webshop-P2-work", "docs/plans/CHECKOUT-PLAN.md", "P2", "work", "codex", "gpt-6.1-sol", "running", 7, "Ben", "C77DFF"),
-              ("game-engine", "engine-R3-verify", "docs/plans/RENDER-PLAN.md", "R3", "verify", "codex", "gpt-6.1-sol", "running", 3, "Clara", "FF6FB5"),
-              ("game-engine", "engine-R2-work", "docs/plans/RENDER-PLAN.md", "R2", "work", "claude", "claude-sonnet-5-5", "done", 40, "Leo", "3DDCDC")]
+    agents = [("webshop", "webshop-P1-work", "docs/plans/CHECKOUT-PLAN.md", "P1", "work", "claude", "claude-sonnet-5-5", "running", 12, "Ada", "4FA8FF"),
+              ("webshop", "webshop-P2-work", "docs/plans/CHECKOUT-PLAN.md", "P2", "work", "codex", "gpt-6.1-sol", "running", 7, "Bea", "C77DFF"),
+              ("game-engine", "engine-R3-verify", "docs/plans/RENDER-PLAN.md", "R3", "verify", "codex", "gpt-6.1-sol", "running", 3, "Cleo", "FF6FB5"),
+              ("game-engine", "engine-R2-work", "docs/plans/RENDER-PLAN.md", "R2", "work", "claude", "claude-sonnet-5-5", "done", 40, "Dina", "3DDCDC")]
     for proj, name, plan, pkg, phase, prov, model, status, started, person, color in agents:
         row = {"plan": plan, "package": pkg, "phase": phase, "provider": prov, "model": model, "effort": "medium", "status": status,
                "startedAt": iso(now, started), "tokensIn": 90000 + started * 1000, "tokensOut": 2500, "person": person, "color": color, "buildJobs": 2}
