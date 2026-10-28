@@ -90,7 +90,7 @@ class DbTest(unittest.TestCase):
         self.conn.execute("UPDATE queue SET status='integrated'")
         st = db.project_status(self.conn, "p")[0]
         self.assertEqual((st["integrated"], st["total"], st["percent"]), (1, 2, 50))
-        self.assertEqual([t["status"] for t in st["tasks"]], ["integriert", "offen"])
+        self.assertEqual([t["status"] for t in st["tasks"]], ["integrated", "open"])
 
 
 class ConfigTest(unittest.TestCase):

@@ -236,20 +236,20 @@ def project_status(conn, project=None) -> list:
                 (name, p["plan_path"]),
             ).fetchone()
             if ag is not None and ag["status"] == "done" and merged is not None:
-                status = "integriert"
+                status = "integrated"
             elif ag is not None:
                 status = ag["status"] or "running"
             elif p["locked"]:
-                status = "gesperrt"
+                status = "locked"
             else:
-                status = "offen"
+                status = "open"
             tasks.append({"task": f"{p['id']} {p['title'] or ''}".strip(),
                           "agent": ag["name"] or "" if ag else "", "status": status})
         if not pkgs:
             for q in queue_rows(conn, name):
                 tasks.append({"task": q["branch"], "agent": "",
-                              "status": "integriert" if q["status"] == "integrated" else q["status"]})
-        done = sum(1 for t in tasks if t["status"] == "integriert")
+                              "status": q["status"]})
+        done = sum(1 for t in tasks if t["status"] == "integrated")
         total = len(tasks)
         result.append({"project": name, "integrated": done, "total": total,
                        "percent": round(100 * done / total) if total else 0, "tasks": tasks})

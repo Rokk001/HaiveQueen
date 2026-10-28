@@ -6,7 +6,7 @@ import time
 import unittest
 
 from orchtest import REL, RoundCase, minutes_ago, provider, runtime
-from orchlib import brain, db, loop, routine, runstate, triage
+from orchlib import brain, db, export, loop, routine, runstate, triage
 from orchlib import platform as osplat
 from orchlib import scheduler as sch
 from orchlib.terminal.headless import Headless
@@ -157,6 +157,21 @@ class LoopTest(RoundCase):
         self.assertEqual(loop.run_loop(self.conn, self.machine, sleep=lambda s: None), 0)
         self.assertIn("STOP found", self.log())
         self.assertIn("Loop ended", (runtime.mirror_dir("testproj") / "ORCH-EVENTS.log").read_text(encoding="utf-8"))
+
+    def test_daily_export_in_loop(self):
+        """When the daily export is due the loop writes the export file; when not due it writes none."""
+        folder = export.export_dir()
+        orig = export.export_due
+        try:
+            export.export_due = lambda now, folder=None: False
+            loop.run_loop(self.conn, self.machine, rounds=1, sleep=lambda s: None, round_minutes=0.0001)
+            self.assertFalse(folder.exists() and list(folder.glob("orchestrator-*.db")))
+            export.export_due = lambda now, folder=None: True
+            loop.run_loop(self.conn, self.machine, rounds=1, sleep=lambda s: None, round_minutes=0.0001)
+        finally:
+            export.export_due = orig
+        self.assertEqual(len(list(folder.glob("orchestrator-*.db"))), 1)
+        self.assertIn("database exported to", self.log())
 
     def test_round_error_does_not_stop(self):
         """An exception in a round is logged and the loop goes on."""

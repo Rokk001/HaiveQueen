@@ -68,14 +68,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.run_orch("done", "--agent", "99", "--result", str(res))[0], 1)
 
     def test_status_text_and_json(self):
-        """status prints 'X / Y integriert (P%)' and a table; --json gives the same data."""
+        """status prints 'X / Y integrated (P%)' and a table; --json gives the same data."""
         conn = db.connect(Path(self.env["ORCH_DATA_DIR"]) / "orchestrator.db")
         conn.execute("INSERT INTO packages (project, plan_path, id, title) VALUES ('p','x.md','P1','First')")
         conn.close()
         code, o = self.run_orch("status")
         self.assertEqual(code, 0)
-        self.assertIn("0 / 1 integriert (0%)", o)
-        self.assertIn("Aufgabe  | Fenster/Agent | Status", o)
+        self.assertIn("0 / 1 integrated (0%)", o)
+        self.assertIn("Task     | Agent | Status", o)
         data = json.loads(self.run_orch("status", "--json")[1])
         self.assertEqual((data[0]["project"], data[0]["total"]), ("p", 1))
 
