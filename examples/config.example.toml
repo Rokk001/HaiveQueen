@@ -1,0 +1,17 @@
+# Machine settings: %APPDATA%\agent-orchestrator\config.toml
+slots = 2                 # agents running at the same time, shared by all projects
+buildJobs = 0             # 0 = choose automatically
+ramReserveMb = 2048       # RAM that must stay free
+exportDir = "%LOCALAPPDATA%\\agent-orchestrator\\exports"
+
+[[providers]]
+name = "claude"
+command = "claude"
+
+[[providers]]
+name = "codex"
+command = "codex"
+
+[[projects]]
+name = "example"
+workspace = "D:\\work\\example"

@@ -1,0 +1,10 @@
+# Project settings: <project>\.orchestrator\project.toml
+name = "example"
+colour = "cyan"
+priority = 0                      # higher gets a free slot first
+planGlobs = ["docs/plans/*.md"]
+
+[views]                           # generated read-only Markdown views; empty = none
+queue = ""
+questions = ""
+decisions = ""
