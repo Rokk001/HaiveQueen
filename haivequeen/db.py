@@ -217,15 +217,18 @@ def add_ready(conn, project, branch, tip, plan_path, note) -> dict:
     return {"id": qid, "status": "ready"}
 
 
-def add_question(conn, project, plan_path, item, question, recommendation) -> int:
-    """Insert an open question for the owner and return its id."""
+def add_question(conn, project, plan_path, item, question, recommendation, status="open") -> int:
+    """Insert a question and return its id. Status 'open' is a question for the owner; 'triage' waits for the triage of new questions first."""
     with transaction(conn):
         qid = conn.execute(
             "INSERT INTO questions (project, plan_path, item, question, recommendation, status, created_at) "
-            "VALUES (?,?,?,?,?,'open',?)",
-            (project, plan_path, item, question, recommendation, now()),
+            "VALUES (?,?,?,?,?,?,?)",
+            (project, plan_path, item, question, recommendation, status, now()),
         ).lastrowid
-        add_event(conn, project, "question", question, data={"question_id": qid})
+        if status == "open":
+            add_event(conn, project, "question", question, data={"question_id": qid})
+        else:
+            add_event(conn, project, "note", "question %d waits for triage" % qid, data={"question_id": qid})
     return qid
 
 

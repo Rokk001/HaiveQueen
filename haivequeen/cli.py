@@ -43,8 +43,8 @@ def cmd_ready(args, conn) -> int:
 
 def cmd_ask(args, conn) -> int:
     """File a question for the owner."""
-    qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation)
-    out({"ok": True, "id": qid})
+    from haivequeen import triage
+    out(triage.intake(conn, args.project, args.plan, args.item, args.question, args.recommendation))
     return 0
 
 

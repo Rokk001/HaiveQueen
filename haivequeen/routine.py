@@ -55,7 +55,7 @@ def queue_rows(env) -> dict:
 def question_rows(env) -> list:
     """Questions of the project as rows with id (Q-<number>), plan, item, status (OPEN or ANSWERED) and answer."""
     return [{"id": "Q-%s" % q["id"], "plan": str(q["plan_path"] or ""), "item": str(q["item"] or ""),
-             "status": str(q["status"]).upper(), "answer": str(q["answer"] or "")} for q in runtime.list_questions(env.conn, env.name)]
+             "status": str(q["status"]).upper(), "answer": str(q["answer"] or ""), "by": str(q["answered_by"] or "")} for q in runtime.list_questions(env.conn, env.name)]
 
 
 def handled_map(env) -> dict:
@@ -597,8 +597,8 @@ def get_routine(env, ctx: dict) -> dict:
             ftext = prompt(env, "fixBlocked", {"plan": rel_p, "branch": r["branch"], "tip": r["tip"], "status": r["status"], "cwd": fcwd})
         acts.append(start_action(nm, pv["name"], "work", rel_p, pk, fcwd, ftext))
     for q in [x for x in ctx["questions"] if x["status"] == "ANSWERED"]:
-        if re.search(r"(?i)duplicate", str(q["answer"])):
-            continue   # the coordinator marked it as a duplicate of an answered question
+        if re.search(r"(?i)duplicate", str(q["answer"])) or q.get("by") == "auto":
+            continue   # a duplicate of an answered question, or answered by the triage of an agent's question (that agent goes on by itself)
         rp = next((p for p in ctx["plans"] if norm_plan(p["path"]) == norm_plan(q["plan"])), None)
         if rp is None or workers[0] <= 0:
             continue

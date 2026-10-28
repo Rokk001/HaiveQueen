@@ -38,6 +38,8 @@ class CliTest(unittest.TestCase):
                                 "--question", "Which?", "--recommendation", "A")
         self.assertEqual(code, 0)
         qid = json.loads(o)["id"]
+        self.assertEqual(json.loads(self.run_orch("questions", "--open")[1]), [], "a new question waits for the triage first")
+        self.assertEqual(self.run_orch("triage", "release", "--project", "p", "--question-id", str(qid))[0], 0)
         self.assertEqual(len(json.loads(self.run_orch("questions", "--open")[1])), 1)
         code, o = self.run_orch("answer", str(qid), "A", "--by", "owner")
         self.assertEqual(code, 0)

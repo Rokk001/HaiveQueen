@@ -190,8 +190,10 @@ class RuntimeTest(unittest.TestCase):
         code, _ = self.orch("queue", "upsert", "--project", "p", "--branch", "b", "--status", "bogus")
         self.assertEqual(code, 1)
         qid = self.ok("ask", "--project", "p", "--plan", "x.md", "--item", "I1", "--question", "Q?")["id"]
-        self.ok("ask", "--project", "p", "--plan", "x.md", "--item", "I2", "--question", "Q2?")
+        q2 = self.ok("ask", "--project", "p", "--plan", "x.md", "--item", "I2", "--question", "Q2?")["id"]
         self.assertEqual(len(self.ok("questions", "--project", "p", "--item", "I1")), 1)
+        for n in (qid, q2):   # new questions wait for the triage; the triage agent releases them to the owner
+            self.ok("triage", "release", "--project", "p", "--question-id", str(n))
         self.ok("answer", str(qid), "yes", "--by", "owner")
         self.assertEqual(len(self.ok("questions", "--open")), 1)
         self.assertEqual(len(self.ok("questions", "--status", "answered")), 1)

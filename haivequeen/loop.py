@@ -166,6 +166,41 @@ def close_leftover_panes(term, window: str) -> list:
     return closed
 
 
+def close_session_panes(conn, term, window: str) -> list:
+    """Close the Overview pane, every agent pane whose agent has ended and, last, the Queen pane of `window`; return the ids.
+    A pane of an agent that still runs is never closed."""
+    closed, queen = [], []
+    for p in term.list_panes(window):
+        if not p.alive:
+            continue
+        parts = p.title.split(" | ")
+        if "| all projects | Overview |" in p.title:
+            term.close_pane(p.id)
+            closed.append(p.id)
+        elif "| all projects | QUEEN |" in p.title:
+            queen.append(p)
+        elif len(parts) >= 4 and parts[2].startswith("Agent ") and parts[3].startswith("job: "):
+            agent = runtime.get_agent(conn, parts[1], parts[3][len("job: "):])
+            if agent is None or agent["status"] not in runtime.ACTIVE_STATUSES:
+                term.close_pane(p.id)
+                closed.append(p.id)
+    for p in queen:   # the Queen pane may be the one this process runs in: it goes last
+        term.close_pane(p.id)
+        closed.append(p.id)
+    return closed
+
+
+def close_panes_after_stop(conn) -> list:
+    """Close the session panes of the configured window (see close_session_panes); a terminal error is ignored, it never blocks a stop."""
+    from . import config
+    try:
+        settings = sch.build_settings(config.load_config(), {})
+        term = get_terminal(settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
+        return close_session_panes(conn, term, settings.get("window", "HaiveQueen"))
+    except Exception:
+        return []
+
+
 def is_test_runtime() -> bool:
     """True when the process runs with a test runtime (BZZ_RUNTIME_OVERRIDE set)."""
     return bool(os.environ.get("BZZ_RUNTIME_OVERRIDE"))
@@ -903,6 +938,20 @@ def _start_triage(c) -> int:
              "cwd": str(env.workspace), "prompt": text, "class": triage.TRIAGE_CLASS, "bundle": []}
         if (norm_plan(a["plan"]) + "|" + a["package"]) not in st["busy"]:
             n += _do_start(c, a, pick)
+    for q in triage.questions_to_triage(env.conn, env.name):   # new questions of agents (bzz ask): triage before they reach the owner
+        if not runstate.starts_allowed(env.conn) or stop_flag().exists() or pool.workers() <= 0:
+            break
+        pick = sch.select_provider(env.providers, triage.TRIAGE_CLASS, [], pool.free, conn=env.conn)
+        if not pick:
+            continue
+        plan, pkg = str(q["plan_path"] or routine.QUEUE_PLAN_ID), triage.QUESTION_PKG % q["id"]
+        nm = routine.new_agent_name("%s-%s-triage" % (routine.plan_tag(env, plan), pkg), [view(r) for r in env.agents("all")], st["names"])
+        text = triage.question_prompt(env.conn, env.name, q, osplat.python_executable())
+        text = text.replace(" -I haivequeen/cli.py", ' -I "%s"' % (TOOLS_DIR / "haivequeen" / "cli.py"))
+        a = {"action": "start_agent", "name": nm, "type": pick["name"], "phase": "triage", "plan": plan, "package": pkg,
+             "cwd": str(env.workspace), "prompt": text, "class": triage.TRIAGE_CLASS, "bundle": []}
+        if (norm_plan(a["plan"]) + "|" + a["package"]) not in st["busy"]:
+            n += _do_start(c, a, pick)
     return n
 
 
@@ -1086,6 +1135,8 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui:
             lock_file().unlink()
         except OSError:
             pass
+        if stop_flag().exists():   # `bzz stop`: the loop has ended, so the Overview pane and the panes of ended agents go; the Queen pane last
+            close_panes_after_stop(conn)
 
 
 def daily_export(envs) -> None:
@@ -1200,6 +1251,7 @@ def cmd_start(args, conn) -> int:
         stop_flag().unlink()
     except OSError:
         pass
+    runstate.resume(conn, "bzz start")   # a pause or drain of the run before must not keep the new run from starting agents
     if args.foreground:
         return run_loop(conn, machine, args.rounds, args.round_minutes, ui=sys.stdout.isatty())
     settings = sch.build_settings(machine, {})
@@ -1236,7 +1288,8 @@ def cmd_stop(args, conn) -> int:
     """`bzz stop`: create the STOP flag; running agents finish their task, no new agent starts, the loop ends."""
     stop_flag().parent.mkdir(parents=True, exist_ok=True)
     stop_flag().write_text("stop requested %s\n" % datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
-    print(json.dumps({"ok": True, "running_agents": active_count(conn)}))
+    closed = [] if loop_running() else close_panes_after_stop(conn)   # a running loop closes the panes itself when it ends
+    print(json.dumps({"ok": True, "running_agents": active_count(conn), "closed_panes": closed}))
     return 0
 
 

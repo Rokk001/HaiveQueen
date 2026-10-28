@@ -113,6 +113,115 @@ def escalate(conn, project, plan_path, package, item, question, recommendation="
     return {"ok": True, "question_id": qid, "answered_by": "owner", "locked": True}
 
 
+# ---- questions asked by agents (bzz ask) ----
+
+QUESTION_PKG = "QUESTION-%d"   # package name of the triage agent of one question
+
+
+def _known_answer(conn, project, plan, item):
+    """The stored answer that already settles `item` of `plan`: ('question', id, text) of an answered question, or ('decision', id, text) of an active
+    decision of the plan or without a plan. None when there is none (or no item)."""
+    if not item:
+        return None
+    for q in reversed(runtime.list_questions(conn, project, "answered", plan, item)):
+        return ("question", q["id"], q["answer"] or "")
+    for d in reversed(runtime.list_decisions(conn, project, None, item, active_only=True)):
+        if d["plan_path"] in (None, "", plan):
+            return ("decision", d["id"], d["text"] or "")
+    return None
+
+
+def _close_with_reference(conn, qid, kind, ref_id, text) -> dict:
+    """Close a question in triage: answered by auto with a reference to the decision or question that settles it (no new decision)."""
+    answer = "Duplicate: already settled by %s %s (%s)" % (kind, ref_id, text[:300])
+    with db.transaction(conn):
+        row = conn.execute("SELECT project, status FROM questions WHERE id=?", (qid,)).fetchone()
+        if row is None or row["status"] != "triage":
+            raise CmdError(f"question {qid} is not waiting for triage")
+        conn.execute("UPDATE questions SET status='answered', answer=?, answered_by='auto', answered_at=? WHERE id=?", (answer, db.now(), qid))
+        db.add_event(conn, row["project"], "answer", answer, data={"question_id": qid, "by": "auto"})
+    return {"ok": True, "id": qid, "status": "answered", "answered_by": "auto", "answer": answer}
+
+
+def intake(conn, project, plan_path, item, question, recommendation="") -> dict:
+    """`bzz ask`: a new question first waits for triage; one that a stored decision or answered question already settles is closed right away."""
+    qid = db.add_question(conn, project, plan_path, item, question, recommendation, status="triage")
+    hit = _known_answer(conn, project, plan_path, item)
+    if hit:
+        return _close_with_reference(conn, qid, *hit)
+    return {"ok": True, "id": qid, "status": "triage"}
+
+
+def close_by_reference(conn, project, qid, kind, ref_id, reason) -> dict:
+    """Triage agent: the question is settled by an existing decision or answered question (checked to exist in the project)."""
+    if kind == "decision":
+        ref = next((d for d in runtime.list_decisions(conn, project, active_only=True) if d["id"] == ref_id), None)
+        text = ref["text"] if ref else None
+    else:
+        ref = next((q for q in runtime.list_questions(conn, project, "answered") if q["id"] == ref_id), None)
+        text = ref["answer"] if ref else None
+    if ref is None:
+        raise CmdError(f"{kind} {ref_id} is unknown or not active in {project}")
+    return _close_with_reference(conn, qid, kind, ref_id, "%s; %s" % (reason, text or ""))
+
+
+def answer_asked(conn, project, qid, text, reason, source_ref) -> dict:
+    """Triage agent: a technical question is answered by the Queen (answered_by auto, reason and source recorded); the asking package goes on."""
+    if not (reason or "").strip() or not (source_ref or "").strip():
+        raise CmdError("an answer needs a reason and a source")
+    with db.transaction(conn):
+        n = conn.execute("UPDATE questions SET status='open' WHERE id=? AND project=? AND status='triage'", (qid, project)).rowcount
+    if not n:
+        raise CmdError(f"question {qid} is not waiting for triage")
+    return db.answer_question(conn, qid, f"{text} (reason: {reason}; source: {source_ref})", "auto")
+
+
+def release_asked(conn, project, qid) -> dict:
+    """Triage agent: a game/balance/design question stays open for the owner."""
+    with db.transaction(conn):
+        row = conn.execute("SELECT question FROM questions WHERE id=? AND project=? AND status='triage'", (qid, project)).fetchone()
+        if row is None:
+            raise CmdError(f"question {qid} is not waiting for triage")
+        conn.execute("UPDATE questions SET status='open' WHERE id=?", (qid,))
+        db.add_event(conn, project, "question", row["question"], data={"question_id": qid})
+    return {"ok": True, "id": qid, "status": "open", "answered_by": "owner"}
+
+
+def questions_to_triage(conn, project) -> list:
+    """Questions waiting for triage without a running triage agent."""
+    busy = {a["package"] for a in runtime.list_agents(conn, project, "active") if a["phase"] == TRIAGE_PHASE}
+    return [q for q in runtime.list_questions(conn, project, "triage") if QUESTION_PKG % q["id"] not in busy]
+
+
+def question_prompt(conn, project, q, python_path) -> str:
+    """Prompt of the triage agent of one new question: first the stored decisions and answered questions, then technical or game/balance."""
+    orch = f'"{python_path}" -I haivequeen/cli.py'
+    decs = "\n".join("- decision %s: %s" % (d["id"], (d["text"] or "")[:220]) for d in runtime.list_decisions(conn, project, active_only=True)[-80:])
+    ans = "\n".join("- question %s (%s): %s -> %s" % (a["id"], a["item"] or "", (a["question"] or "")[:120], (a["answer"] or "")[:160])
+                    for a in runtime.list_questions(conn, project, "answered")[-40:])
+    return f"""You are the triage agent for project {project}. An agent asked this question (id {q['id']}, plan {q['plan_path'] or '-'}, item {q['item'] or '-'}):
+{q['question']}
+Recommendation of the asking agent: {q['recommendation'] or '-'}
+
+Step 1. Search the stored decisions and answered questions below. If one of them already answers the question, close it with a reference:
+  {orch} triage close --project {project} --question-id {q['id']} --ref decision|question --ref-id <id> --reason "<why it answers this>"
+
+Step 2. Otherwise sort it into exactly one kind.
+Kind "technical": documentation, tests, code structure, or a value that follows from the plan or the code. Read them, then answer it yourself:
+  {orch} triage answer --project {project} --question-id {q['id']} --text "<answer>" --reason "<why>" --source "<file or plan rule>"
+Kind "game/balance/design": mechanics, rules, balance values, level design, look and feel, or anything the plan does not settle. Leave it for the owner:
+  {orch} triage release --project {project} --question-id {q['id']}
+In doubt it goes to the owner.
+Handle the question once. Do not edit plan or state files.
+
+Stored decisions:
+{decs or '(none)'}
+
+Answered questions:
+{ans or '(none)'}
+"""
+
+
 # ---- command line ----
 
 def register(sub) -> None:
@@ -140,7 +249,25 @@ def register(sub) -> None:
         """triage ask: escalate a point to the owner."""
         return escalate(c, a.project, a.plan, a.package, a.item, cli.text_arg(a.question), a.recommendation)
 
+    QI = ("--question-id", {"required": True, "type": int})
+
+    def h_close(a, c):
+        """triage close: the question is settled by an existing decision or answered question."""
+        return close_by_reference(c, a.project, a.question_id, a.ref, a.ref_id, a.reason)
+
+    def h_answer(a, c):
+        """triage answer: the Queen answers a technical question."""
+        return answer_asked(c, a.project, a.question_id, cli.text_arg(a.text), a.reason, a.source)
+
+    def h_release(a, c):
+        """triage release: the question goes to the owner."""
+        return release_asked(c, a.project, a.question_id)
+
     cli.actions(sub, "triage", {
+        "close": (h_close, [cli.P, QI, ("--ref", {"required": True, "choices": ["decision", "question"]}),
+                            ("--ref-id", {"required": True, "type": int}), ("--reason", {"required": True})]),
+        "answer": (h_answer, [cli.P, QI, ("--text", {"required": True}), ("--reason", {"required": True}), ("--source", {"required": True})]),
+        "release": (h_release, [cli.P, QI]),
         "list": (h_list, [cli.P]),
         "prompt": (h_prompt, [cli.P, PL, PK, ("--python", {})]),
         "decide": (h_decide, [cli.P, PL, PK, IT, ("--text", {"required": True}), ("--reason", {"required": True}),

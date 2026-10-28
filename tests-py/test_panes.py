@@ -114,6 +114,46 @@ class LeftoverPanesTest(RoundCase):
                     term.close_pane(p.id)
 
 
+class StopAndStartTest(RoundCase):
+    """`bzz stop` closes the Queen and Overview panes and the panes of ended agents; `bzz start` resets pause and drain."""
+
+    def test_stop_closes_session_panes_but_not_running_agents(self):
+        """After the loop ended: Overview, Queen and the pane of an ended agent are closed, the pane of a running agent stays."""
+        term = Headless(self.base / "panes")
+        queen = term.open_window("HaiveQueen", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
+        over = term.split_pane("HaiveQueen", pane_title("all projects", "Overview", "Dashboard", "-", True), "white", SLEEP, "vertical", 0.8, queen, "dashboard")
+        done = term.split_pane("HaiveQueen", pane_title("testproj", "Agent PIA", "A-done", "m", True), "white", SLEEP, "vertical", 0.5, queen, "testproj__A-done")
+        live = term.split_pane("HaiveQueen", pane_title("testproj", "Agent PIA", "A-live", "m", True), "white", SLEEP, "vertical", 0.5, queen, "testproj__A-live")
+        self.agent("A-done", status="done", started=20, ended=10)
+        self.agent("A-live", status="running", started=20)
+        try:
+            closed = loop.close_session_panes(self.conn, term, "HaiveQueen")
+            alive = dict((p.id, p.alive) for p in term.list_panes("HaiveQueen"))
+            self.assertEqual(sorted(closed), sorted([queen, over, done]))
+            self.assertEqual(closed[-1], queen, "the Queen pane goes last")
+            self.assertTrue(alive[live])
+            self.assertFalse(alive[queen] or alive[over] or alive[done])
+        finally:
+            for p in term.list_panes("HaiveQueen"):
+                if p.alive:
+                    term.close_pane(p.id)
+
+    def test_start_resets_a_drain(self):
+        """A drain from the run before is lifted by `bzz start` (only the reset before the loop starts is under test)."""
+        from haivequeen import runstate
+        runstate.drain(self.conn, "test")
+        self.assertNotEqual(runstate.get_state(self.conn)["state"], "RUNNING")
+        args = argparse.Namespace(foreground=True, terminal="headless", rounds=0, round_minutes=0)
+        orig = loop.run_loop
+        loop.run_loop = lambda *a, **k: 0
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                loop.cmd_start(args, self.conn)
+        finally:
+            loop.run_loop = orig
+        self.assertEqual(runstate.get_state(self.conn)["state"], "RUNNING")
+
+
 class PaneLockTest(RoundCase):
     """Test E: pane commands and the loop lock across processes."""
 
