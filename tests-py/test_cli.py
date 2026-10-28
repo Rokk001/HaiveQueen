@@ -79,12 +79,14 @@ class CliTest(unittest.TestCase):
         data = json.loads(self.run_orch("status", "--json")[1])
         self.assertEqual((data[0]["project"], data[0]["total"]), ("p", 1))
 
-    def test_stubs(self):
-        """Commands planned for later steps report 'not implemented in S1'."""
-        for name in ("start", "stop"):
-            code, o = self.run_orch(name)
-            self.assertEqual(code, 2)
-            self.assertIn("not implemented in S1", o)
+    def test_start_stop(self):
+        """stop writes the STOP flag; start (foreground, one round, no project) removes it and ends."""
+        code, o = self.run_orch("stop")
+        self.assertEqual(code, 0)
+        self.assertTrue((Path(self.tmp.name) / "data" / "STOP").is_file())
+        code, o = self.run_orch("start", "--foreground", "--rounds", "1")
+        self.assertEqual(code, 0)
+        self.assertFalse((Path(self.tmp.name) / "data" / "STOP").exists())
 
     def test_real_folders_untouched(self):
         """The runtime was created only inside the temp folder."""
