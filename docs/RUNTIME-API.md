@@ -62,24 +62,6 @@ The run state is one machine-wide value: kv row with project `*`, key `run-state
 - `starts-allowed` is true only in `RUNNING`. Running agents are never stopped.
 - `reattach --project p --alive-pids 123,456` (run once on orchestrator start): `running` rows of the project whose PID is in the list stay `running`; rows with another or no PID become `failed` (`last_line` "process gone after orchestrator restart", one `failed` event each). The real PID check stays in PowerShell.
 
-## PowerShell wrappers (lib.ps1, block "v2 runtime wrappers")
-
-`Invoke-Orch <args> [<stdin text>]` runs `python -I orch.py` (python from `ORCH_PYTHON`, else the python on the PATH), quotes every argument, parses the JSON and throws with the error text when the exit code is not 0.
-The other wrappers take the project config first and use the project name from `Get-OrchProject` (`ORCH_PROJECT_NAME`, else `projectName` of the config, else the project file name).
-
-| Wrapper | Command |
-|---|---|
-| `Get-OrchAgents`, `Get-OrchAgent`, `Set-OrchAgent`, `Update-OrchAgentFields`, `Move-OrchAgentsToArchive` | `agents list`, `get`, `upsert`, `update-fields`, `archive` |
-| `Add-OrchEvent`, `Get-OrchEvents`, `Get-OrchLogPaths` | `event append`, `events list` / `tail`, `events paths` |
-| `Get-OrchKv`, `Set-OrchKv`, `Remove-OrchKv` | `kv get`, `set`, `delete` |
-| `Get-OrchHandled`, `Add-OrchHandled`, `Remove-OrchHandled` | `handled check`, `add`, `remove` |
-| `Get-OrchNofollow`, `Add-OrchNofollow`, `Remove-OrchNofollow` | `nofollow list`, `add`, `remove` |
-| `Add-OrchBuild`, `Get-OrchBuildMax` | `build add`, `build max-per-job` |
-| `Add-OrchUsage`, `Get-OrchUsage` | `usage add`, `usage list` |
-| `Sync-OrchPlans`, `Get-OrchPlans`, `Get-OrchPackages`, `Set-OrchPlanStatus`, `Set-OrchPackage` | `plans sync` / `list` / `set-status`, `packages list` / `set` |
-| `Get-OrchQueue`, `Set-OrchQueue` | `queue list`, `queue upsert` |
-| `Get-OrchQuestions`, `Add-OrchQuestion`, `Get-OrchDecisions`, `Add-OrchDecision` | `questions`, `ask`, `decisions list`, `decisions add` |
-
 ## What stays a file
 
 `STOP`, `HANDOFF`, the loop lock, `idle.pid`, the pane slot counters, the raw files of a run (`prompt.md`, `rules.md`, `milestones.txt`, `events.jsonl`, `stderr.txt`, `final.txt`, `build-samples.txt`), `window.txt` and the usage cache folder.

@@ -1,4 +1,4 @@
-"""Runtime queries and writes for the PowerShell scripts: agents, events, kv, handled, nofollow, builds, usage, plans, queue."""
+"""Runtime queries and writes (used by the loop, the CLI and the agents): agents, events, kv, handled, nofollow, builds, usage, plans, queue."""
 import json
 import os
 import platform

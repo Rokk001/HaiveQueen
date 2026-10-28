@@ -1,8 +1,8 @@
-# ORCHESTRATOR.md: instructions for the orchestrator brain
+# AGENT-RULES.md: instructions for the orchestrator brain and the rules of the agents
 
 You are the brain of the orchestrator (a fresh `claude -p` process on every event that needs judgement, never on a quiet round, model and effort from the project file: brainModel / brainEffort).
 You remember nothing except what is in the files. You do NOT write code, edit files or start anything yourself. You only read (Read, Glob, Grep)
-and answer with ONE JSON object (section "Output schema"). `round.ps1` validates your answer, enforces the slot, RAM, agent-type and plan-status rules
+and answer with ONE JSON object (section "Output schema"). the round loop (`orch start`) validates your answer, enforces the slot, RAM, agent-type and plan-status rules
 and executes it.
 
 The rules of the project are in the project rules file named by `ruleSources.project` in the project file. For the brain they are appended below this text, for every agent phase they are part of its rule file.
@@ -39,7 +39,7 @@ They stay valid and are never weakened by the tool rules. The rule numbers are s
 ## Your job (decision part only)
 
 You are called only when an event needs judgement. The message ends with "# EVENTS (JSON)": the events of this call (type, plan, package, agent, text) plus slots and free RAM.
-Everything routine is done by `round.ps1` itself and is NOT your job: filling free slots with startable packages of known plans, the verify agent after a work agent,
+Everything routine is done by the round loop itself and is NOT your job: filling free slots with startable packages of known plans, the verify agent after a work agent,
 the release agent after a verify answer of exactly "Offene Anforderungen: 0", the integrator, the status lines, the context-limit handoff. Never plan those.
 Answer per event type:
 - new_plan: read the plan's package table and its state file with Grep (never whole files). Start the work agents of the startable packages (start_agent, phase work, worktree and branch exactly as the plan names them, never invented).
@@ -53,7 +53,7 @@ Be short: one note at most, only when it explains why nothing is started. No per
 
 ## Files you read
 
-Only a `new_plan` event gives you the tools Read, Glob and Grep. For every other event you have NO tools (rule 12: one turn, no re-reading): the event text holds everything you need. `round.ps1` also skips every `ask_owner` whose item is already decided in the answers file or known in the questions file, and packages that the state files or the integration queue show as finished are never startable.
+Only a `new_plan` event gives you the tools Read, Glob and Grep. For every other event you have NO tools (rule 12: one turn, no re-reading): the event text holds everything you need. the round loop also skips every `ask_owner` whose item is already decided in the answers file or known in the questions file, and packages that the state files or the integration queue show as finished are never startable.
 
 - the plan and the state file named in the event (Grep, only the matching lines)
 - the answers file (read-only), the questions file and the integrator instruction file of the project (see the project rules)

@@ -721,12 +721,12 @@ def _do_start(c, a, forced_pick=None) -> int:
     pf = run_dir / "prompt.md"
     hf = run_dir / "HANDOFF"
     if protocol == "claude":
-        hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of ORCHESTRATOR.md and the rule sections you need) are "
-               "already in your system prompt: do not read ORCHESTRATOR.md or CLAUDE.md again; read other files they name (e.g. %s) only when your task "
+        hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of AGENT-RULES.md and the rule sections you need) are "
+               "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name (e.g. %s) only when your task "
                "needs them. Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, env.settings.get("buildFlowDoc", "")))
     else:
         hdr = ("You are the agent %s (one task, then you end). Follow all rules in section 1 of %s and every rule of the repository (CLAUDE.md and the "
-               "files it names). Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, TOOLS_DIR / "ORCHESTRATOR.md"))
+               "files it names). Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, TOOLS_DIR / "docs" / "AGENT-RULES.md"))
     handoff = ("Prüfe nach jedem abgeschlossenen Arbeitsschritt, ob die Datei %s existiert. Wenn ja: schreib den Stand (erledigt, offen, nächster Schritt, "
                "Branch, Worktree) in die State-Datei des Plans unter 'Handoff %s' und beende dich." % (hf, nm))
     pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff, encoding="utf-8")

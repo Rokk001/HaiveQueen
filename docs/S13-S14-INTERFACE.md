@@ -61,10 +61,10 @@ python -m orchlib.agent_runner [--wrap] --project P --name N --provider NAME --c
 | `--provider` | provider entry of `config.toml` (`[[providers]]`: name, protocol claude or codex, command, args template, `[providers.classes.light/medium/heavy]` model and effort, optional endpoint); the protocol decides how the event stream is read |
 | `--cwd` | working directory of the agent |
 | `--prompt-file` | file the agent is told to read |
-| `--plan`, `--package`, `--phase` | as in agent-run.ps1 (`work` default); shown in the header task text |
+| `--plan`, `--package`, `--phase` | as in v1 (`work` default); shown in the header task text |
 | `--runs-dir` | folder that holds `<name>/` run folders; default `<data folder>/runs` |
 | `--model`, `--effort` | optional override; default: class of the agent row, resolved through the provider entry |
-| `--wrap` | pane wrapper (pane-wrap.ps1): runs the agent as a child, keeps the pane for `paneCloseDelaySeconds` (config.toml, default 30), sets `paneClosed`, always exits 0 |
+| `--wrap` | pane wrapper (v1 pane wrapper): runs the agent as a child, keeps the pane for `paneCloseDelaySeconds` (config.toml, default 30), sets `paneClosed`, always exits 0 |
 
 The exit code of the runner is 0 (the result is the row status `done` or `failed`); a configuration error (unknown provider) ends it with an error and, in `--wrap` mode, still with exit code 0.
 

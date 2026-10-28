@@ -412,7 +412,7 @@ def verify_prompt(plan: str, pkg: str) -> str:
     what = "(alle Pakete)" if pkg == "ALL" else "(Paket %s)" % pkg
     return ("Wurden alle Tasks aus dem Plan %s %s umgesetzt? Gibt es Anforderungen, welche nicht umgesetzt wurden? Liste jede nicht oder nur "
             "teilweise umgesetzte Anforderung mit Beleg (Datei:Zeile oder Commit) und schliesse mit 'Offene Anforderungen: <Anzahl>'. "
-            "Schreib die Antwort in die State-Datei. Aendere nichts am Code. Follow all rules in section 1 of ORCHESTRATOR.md." % (plan, what))
+            "Schreib die Antwort in die State-Datei. Aendere nichts am Code. Follow all rules in section 1 of AGENT-RULES.md." % (plan, what))
 
 
 def start_action(name, provider, phase, plan, pkg, cwd, prompt, graphics=False, cls="medium", bundle=()) -> dict:
@@ -802,7 +802,7 @@ def get_routine(env, ctx: dict) -> dict:
                 wt_note = (prompt(env, "workInMainCheckout", {"cwd": cwd, "newWorktree": new_worktree(env, slug), "subBranch": slug})
                            if same else prompt(env, "workInWorktree", {"cwd": cwd}))
                 texts.append("Plan: %s, package %s. %s Names of worktree folders and branches you create: only lower-case letters, digits and hyphens (for this package: %s). Do the package exactly as the plan describes it." % (rel, m["id"], wt_note, slug))
-            tail = " Follow all rules in section 1 of ORCHESTRATOR.md, update the plan's state, end when the package is finished."
+            tail = " Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the package is finished."
             if len(members) > 1:
                 text = ("This agent works %d small packages of plan %s one after the other (bundled so that the start context is paid once). "
                         "Finish each package and record it in the state before you start the next. Packages in this order: %s.\n\n" % (
