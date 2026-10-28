@@ -1,0 +1,21 @@
+S12 real Windows Terminal check (wt backend, test runtime)
+
+Setup: orchlib.terminal.get_terminal("wt", <temp runs folder>), window name ORCHTEST-292204
+(random, unique), test titles (prefix "Agent-Orchestrator TEST"). Every pane ran
+`python -c "import time; print('...', flush=True); time.sleep(120)"` behind the pid-file launcher.
+
+Calls and wt command lines (all through wt.exe, one attempt):
+1. open_window  -> wt -w ORCHTEST-292204 new-tab --title "<title>" --suppressApplicationTitle --tabColor #336699 <launcher> ...
+2. split_pane horizontal 0.5 -> wt -w ORCHTEST-292204 split-pane -V -s 0.5 --title "<title>" --suppressApplicationTitle <launcher> ...
+3. split_pane vertical 0.5   -> wt -w ORCHTEST-292204 split-pane -H -s 0.5 --title "<title>" --suppressApplicationTitle <launcher> ...
+Semicolons inside the command (e.g. "orchestrator; pane") were passed escaped as \; and arrived intact.
+
+Observed:
+- All three calls returned pane ids ORCHTEST-292204.0 / .1 / .2 and the launcher pid files appeared
+  within the timeout (the commands really ran in the named window).
+- list_panes: pids 80564, 77304, 74768, all alive=True, titles in the format
+  "Agent-Orchestrator TEST | demo | Agent ONE | job: job-1 | model: test".
+- close_pane for each pane (reverse order) ended the command's process tree started by this test;
+  the launcher exited 0 on its own. Two seconds later list_panes showed alive=False for all three.
+- A process list check afterwards showed no process left over from this test.
+No key presses, no screenshots, no other window touched. The window closed after its last pane exited.
