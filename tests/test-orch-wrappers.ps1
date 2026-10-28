@@ -8,7 +8,6 @@ $pf = New-TestProject -Base $root -Repo "$root\repo" -Runtime "$root\rt"
 $env:ORCH_RUNTIME_OVERRIDE = "$root\rt"
 $env:ORCH_DATA_DIR = "$root\data"; $env:ORCH_CONFIG_DIR = "$root\cfg"; $env:ORCH_LOG_DIR = "$root\logs"
 $env:ORCH_PROJECT_NAME = 'wtest'
-if (-not $env:ORCH_PYTHON) { $env:ORCH_PYTHON = (Get-Command python).Source }
 . (Join-Path $tools 'lib.ps1')
 $cfg = Get-Cfg
 if ($cfg.runtime -ne "$root\rt") { throw 'runtime override not active: refusing to run against the live runtime' }

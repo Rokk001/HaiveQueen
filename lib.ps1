@@ -993,9 +993,23 @@ function ConvertTo-OrchArg([string]$Value) {
 
 # Runs "python -I orch.py <args>" (python from $env:ORCH_PYTHON, else the python on the PATH; the database folder comes from ORCH_DATA_DIR / the settings), optionally with text on stdin,
 # and returns the parsed JSON of stdout. Exit code <> 0 throws with the error text of the command.
+# Path of a Python >= 3.11: ORCH_PYTHON, else python on PATH, else the newest python of the py launcher; cached per process.
+function Get-OrchPython {
+    if ($env:ORCH_PYTHON) { return $env:ORCH_PYTHON }
+    if ($script:OrchPythonPath) { return $script:OrchPythonPath }
+    $cands = @()
+    $c = Get-Command python -ErrorAction SilentlyContinue
+    if ($c) { $cands += $c.Source }
+    $l = Get-Command py -ErrorAction SilentlyContinue
+    if ($l) { $exe = (& $l.Source -3 -c 'import sys;print(sys.executable)' 2>$null); if ($exe) { $cands += [string]$exe } }
+    foreach ($x in $cands) {
+        $ok = (& $x -I -c 'import sys;print(int(sys.version_info>=(3,11)))' 2>$null)
+        if ("$ok".Trim() -eq '1') { $script:OrchPythonPath = $x; return $x }
+    }
+    throw 'no Python 3.11 or newer found: install it or set ORCH_PYTHON to the python executable'
+}
 function Invoke-Orch([string[]]$OrchArgs, [string]$InputText = $null) {
-    $py = if ($env:ORCH_PYTHON) { $env:ORCH_PYTHON } else { $c = Get-Command python -ErrorAction SilentlyContinue; if ($c) { $c.Source } else { $null } }
-    if (-not $py) { throw 'no python: set ORCH_PYTHON to the python executable' }
+    $py = Get-OrchPython
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $py
     $psi.Arguments = (@('-I', (ConvertTo-OrchArg (Join-Path $script:ToolsDir 'orch.py'))) + @($OrchArgs | ForEach-Object { ConvertTo-OrchArg ([string]$_) })) -join ' '
