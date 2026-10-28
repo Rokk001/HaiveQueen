@@ -53,7 +53,7 @@ function Get-PlanPackages($Cfg, [string]$Plan) {
     $res = @()
     foreach ($p in @(Get-OrchPackages $Cfg $Plan)) {
         $deps = @($p.depends_on | ForEach-Object { [string]$_ } | Where-Object { $_ -and $_ -notmatch '^(?i)all(e)?$' })
-        $res += [pscustomobject]@{ Id = [string]$p.id; Class = $(if ([string]$p.class -match '(?i)^(light|medium|heavy)$') { ([string]$p.class).ToLower() } else { 'medium' }); Content = [string]$p.title; Depends = $deps; DependsAll = (@($p.depends_on | Where-Object { [string]$_ -match '^(?i)all(e)?$' }).Count -gt 0); Phase = [string]$p.phase }
+        $res += [pscustomobject]@{ Id = [string]$p.id; Class = $(if ([string]$p.class -match '(?i)^(light|medium|heavy)$') { ([string]$p.class).ToLower() } else { 'medium' }); Content = [string]$p.title; Depends = $deps; DependsAll = (@($p.depends_on | Where-Object { [string]$_ -match '^(?i)all(e)?$' }).Count -gt 0); Phase = [string]$p.phase; Capability = [string]$p.capability }
     }
     foreach ($r in $res) { if ($r.DependsAll) { $r.Depends = @($res | Where-Object { $_.Id -ne $r.Id } | ForEach-Object { $_.Id }) } }
     return $res
@@ -97,7 +97,7 @@ function Get-StateDonePackages($Cfg, [string]$RelPlan, [string[]]$PkgIds, $Rows)
 function Get-PackageNeedsFor($Cfg, [string]$Plan, [string]$Pkg) {
     $k = @(Get-PlanPackages $Cfg $Plan | Where-Object { $_.Id -eq $Pkg } | Select-Object -First 1)
     if (-not $k.Count) { return @() }
-    return @(Get-PackageNeeds $Cfg ([string]$k[0].Content))
+    return @(Get-PackageNeeds $Cfg ([string]$k[0].Content) ([string]$k[0].Capability))
 }
 # Short id of a question item ("ALL-V5 Stimmungsverfall im Bad" -> "ALL-V5", "M1" -> "M1").
 function Get-ItemToken([string]$Item) { $m = [regex]::Match(([string]$Item).Trim(), '^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*'); return $m.Value.ToUpper() }
@@ -300,7 +300,7 @@ function Get-Routine($Ctx) {
             if (-not $prompt) { continue }
             $kc = @($pkgs | Where-Object { $_.Id -eq $k } | Select-Object -First 1)
             $kcls = Resolve-AgentClass $cfg 'work' $(if ($kc.Count) { $kc[0].Class } else { 'medium' }) (Get-PackageFailures $cfg $all $rel $k)
-            $kneeds = @(if ($kc.Count) { Get-PackageNeeds $cfg ([string]$kc[0].Content) })
+            $kneeds = @(if ($kc.Count) { Get-PackageNeeds $cfg ([string]$kc[0].Content) ([string]$kc[0].Capability) })
             $pv = Select-Provider $cfg $kcls $kneeds $free -Prefer $wtype   # the follow-up stays with the provider of the earlier task when that one is a candidate
             if (-not $pv) { continue }
             $type = $pv.Name
@@ -336,7 +336,7 @@ function Get-Routine($Ctx) {
             if ($stages[$k.Id].Stage -ne 'new' -or $workers -le 0 -or $bundled -contains $k.Id) { continue }
             if (@($k.Depends | Where-Object { -not $stages.ContainsKey($_) -or ($stages[$_].Stage -ne 'verified' -and $stages[$_].Stage -ne 'stateDone') }).Count -gt 0) { continue }
             if (@($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $rel) -and $_.Package -eq $k.Id }).Count -gt 0) { continue }
-            $needs = @(Get-PackageNeeds $cfg ([string]$k.Content)); $nk = ($needs -join ',')
+            $needs = @(Get-PackageNeeds $cfg ([string]$k.Content) ([string]$k.Capability)); $nk = ($needs -join ',')
             if ($needs.Count -gt 0 -and -not (Test-CapabilityAvailable $cfg $needs)) {
                 # No provider with the needed capability has slots above 0: the package stays where it is and is reported once (round.ps1 does not repeat a known question).
                 $acts += [pscustomobject]@{ action = 'ask_owner'; plan = $rel; item = "CAP-$($k.Id)"; question = "Package $($k.Id) needs the capability '$($needs -join ', ')' but no provider with it has slots above 0, so the package is not started."; recommendation = "Set slots above 0 for a provider with this capability in the project file, or tell me how this package should run." }
@@ -351,7 +351,7 @@ function Get-Routine($Ctx) {
             if ($k.Class -eq 'light') {
                 foreach ($o in $pkgs) {
                     if ($members.Count -ge [int]$cfg.bundle.maxPackages) { break }
-                    if ($o.Id -eq $k.Id -or $bundled -contains $o.Id -or $o.Class -ne 'light' -or ((@(Get-PackageNeeds $cfg ([string]$o.Content)) -join ',') -ne $nk)) { continue }
+                    if ($o.Id -eq $k.Id -or $bundled -contains $o.Id -or $o.Class -ne 'light' -or ((@(Get-PackageNeeds $cfg ([string]$o.Content) ([string]$o.Capability)) -join ',') -ne $nk)) { continue }
                     if (& $isStartable $o) { $members += $o }
                 }
             }

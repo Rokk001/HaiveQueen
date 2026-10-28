@@ -145,6 +145,40 @@ class RuntimeTest(unittest.TestCase):
         code, _ = self.orch("plans", "sync", "--project", "nowhere")
         self.assertEqual(code, 1)
 
+    def test_package_capability_kept(self):
+        """A package with agent and capability keeps both in the table (the capability is not lost behind the agent)."""
+        ws = self.base / "ws"
+        (ws / "docs" / "plans").mkdir(parents=True)
+        (ws / "docs" / "plans" / "cap.md").write_text(
+            '+++\nstatus = "READY"\n[[packages]]\nid = "G1"\ntitle = "Art"\nagent = "claude"\ncapability = "images"\n'
+            '[[packages]]\nid = "G2"\ntitle = "Plain"\n+++\n# Cap\n', encoding="utf-8")
+        self.ok("plans", "sync", "--project", "p", "--workspace", str(ws))
+        pk = {r["id"]: r for r in self.ok("packages", "list", "--project", "p")}
+        self.assertEqual((pk["G1"]["agent_type"], pk["G1"]["capability"]), ("claude", "images"))
+        self.assertFalse(pk["G2"]["capability"])
+        # a second sync keeps the value, a changed header replaces it
+        (ws / "docs" / "plans" / "cap.md").write_text(
+            '+++\nstatus = "READY"\n[[packages]]\nid = "G1"\ntitle = "Art"\nagent = "claude"\ncapability = "voice"\n+++\n# Cap\n',
+            encoding="utf-8")
+        self.ok("plans", "sync", "--project", "p", "--workspace", str(ws))
+        self.assertEqual(self.ok("packages", "list", "--project", "p")[0]["capability"], "voice")
+
+    def test_migrates_version_2_capability(self):
+        """A version 2 database gets the packages.capability column when it is opened."""
+        import sqlite3
+        path = Path(self.env["ORCH_DATA_DIR"]) / "orchestrator.db"
+        path.parent.mkdir(parents=True)
+        conn = sqlite3.connect(path)
+        conn.executescript("CREATE TABLE packages (project TEXT NOT NULL, plan_path TEXT NOT NULL, id TEXT NOT NULL, title TEXT, "
+                           "class TEXT, agent_type TEXT, depends_on TEXT, phase TEXT, locked INTEGER NOT NULL DEFAULT 0, "
+                           "lock_reason TEXT, PRIMARY KEY (project, plan_path, id));"
+                           "INSERT INTO packages (project, plan_path, id) VALUES ('p', 'a.md', 'P1'); PRAGMA user_version = 2;")
+        conn.commit()
+        conn.close()
+        rows = self.ok("packages", "list", "--project", "p")
+        self.assertEqual(len(rows), 1)
+        self.assertIn("capability", rows[0])
+
     def test_queue_questions_decisions(self):
         """queue upsert changes rows in place, questions filter by item, decisions carry the item."""
         self.ok("queue", "upsert", "--project", "p", "--branch", "b", "--tip", "t1", "--plan", "x.md")

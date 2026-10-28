@@ -492,9 +492,9 @@ function Get-UsageTable {
     $claudeKey = ($byKey.Values | Where-Object { -not $_.Codex -and $_.Key -like 'claude-sonnet*' } | Select-Object -First 1).Key
     if (-not $claudeKey) { $claudeKey = 'claude-sonnet-5-5' }
     $codexKey = $null
-    $cfg = Join-Path (Split-Path $CodexRoot -Parent) 'config.toml'
-    if (Test-Path -LiteralPath $cfg) {
-        $m = Select-String -LiteralPath $cfg -Pattern '^\s*model\s*=\s*"([^"]+)"' | Select-Object -First 1
+    $codexCfg = Join-Path (Split-Path $CodexRoot -Parent) 'config.toml'
+    if (Test-Path -LiteralPath $codexCfg) {
+        $m = Select-String -LiteralPath $codexCfg -Pattern '^\s*model\s*=\s*"([^"]+)"' | Select-Object -First 1
         if ($m) { $codexKey = $m.Matches[0].Groups[1].Value }
     }
     if (-not $codexKey) { $codexKey = ($byKey.Values | Where-Object { $_.Codex } | Select-Object -First 1).Key }
@@ -551,9 +551,9 @@ function Get-UsageTable {
         $retClaude = "Claude Code: kein cleanupPeriodDays in $settings, Standard laut Claude Code 30 Tage (ungeprueft), aelteste Sitzungsdatei vom $cOld."
     }
     $hit = $null
-    if (Test-Path -LiteralPath $cfg) { $hit = Select-String -LiteralPath $cfg -Pattern 'retention|cleanup|max_age|expire|history' -List | Select-Object -First 1 }
+    if (Test-Path -LiteralPath $codexCfg) { $hit = Select-String -LiteralPath $codexCfg -Pattern 'retention|cleanup|max_age|expire|history' -List | Select-Object -First 1 }
     $xOld = if ($scan.CodexOldestTicks -ne [int64]::MaxValue) { Format-UsageDate ([datetime]::new($scan.CodexOldestTicks)) } else { 'keine Datei' }
-    $cfgText = if ($hit) { "Treffer in ${cfg}: $($hit.Line.Trim())" } else { "keine Aufbewahrungseinstellung in $cfg" }
+    $cfgText = if ($hit) { "Treffer in ${codexCfg}: $($hit.Line.Trim())" } else { "keine Aufbewahrungseinstellung in $codexCfg" }
     $retCodex = "Codex: $cfgText, aelteste Sitzungsdatei vom $xOld ($($scan.CodexOldestPath)); $($scan.CodexOtherFiles) komprimierte Dateien (jsonl.zst) werden nur lesend entpackt und ueber zst-cache.json eingerechnet."
 
     return [pscustomobject]@{

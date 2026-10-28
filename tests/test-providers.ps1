@@ -1,12 +1,13 @@
 # Test of the provider list (plan section 15): selection by weekly limit, needed capability at a full limit, provider without limit, slots 0, a busy slot forwards at once,
 # "capability-only" gets no normal packages, "fallback" only when every "preferred" provider is full or at its limit, and a dummy provider that exists only in the project file.
-# All limit values are invented (ORCH_PROVIDER_LIMITS_FILE); everything runs in a temporary folder with its own runtime; no pane is opened (ORCH_TEST_NOSTART) and no model is called.
+# A package that names its capability in the plan header (field "capability") needs it whatever its title says. All limit values are invented (ORCH_PROVIDER_LIMITS_FILE);
+# everything runs in a temporary folder with its own runtime and database; no pane is opened (ORCH_TEST_NOSTART) and no model is called.
 . (Join-Path $PSScriptRoot 'common.ps1')
 $tools = $ToolsRoot
 $root = Join-Path ([IO.Path]::GetTempPath()) ('orch-test-prov-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-New-Item -ItemType Directory -Force "$root\rt\runs", "$root\proj\dummy", "$root\wt" | Out-Null
+New-Item -ItemType Directory -Force "$root\rt\runs", "$root\wt" | Out-Null
 $pf = New-TestProject -Base $root -Repo "$root\repo" -Runtime "$root\rt"
-$env:ORCH_RUNTIME_OVERRIDE = "$root\rt"; $env:ORCH_PLANS_OVERRIDE = "$root\proj"; $env:ORCH_TEST_NOSTART = '1'; $env:ORCH_QUESTIONS_FILE = "$root\QUESTIONS.md"
+$env:ORCH_RUNTIME_OVERRIDE = "$root\rt"; $env:ORCH_TEST_NOSTART = '1'
 . (Join-Path $tools 'lib.ps1'); . (Join-Path $tools 'routine.ps1')
 $fails = 0
 function Check([string]$name, [bool]$ok, [string]$detail = '') { if (-not $ok) { $script:fails++ }; Write-Host ('{0} {1} {2}' -f $(if ($ok) { 'PASS' } else { 'FAIL' }), $name, $detail) -ForegroundColor $(if ($ok) { 'Green' } else { 'Red' }) }
@@ -115,6 +116,11 @@ $rules = [pscustomobject]@{ capabilityRules = @([pscustomobject]@{ capability = 
 Check 'rule from the configuration' ((@(Get-PackageNeeds $rules 'Record the narration') -contains 'voice') -and @(Get-PackageNeeds $rules 'Blender models').Count -eq 0)
 $lm = [pscustomobject]@{ name = 'lmstudio'; protocol = 'codex'; slots = 1; use = 'preferred'; classes = [pscustomobject]@{ light = [pscustomobject]@{ model = 'qwen-coder'; effort = 'medium' } }; endpoint = [pscustomobject]@{ baseUrl = 'http://192.0.2.10:1234/v1' } }
 $ea = @(Get-EndpointArgs (Get-Providers (Cfg2 @($lm)) | Select-Object -First 1))
+# A package that names its capability in the plan header keeps it (not only the title rules decide): declared capability first, title rules only as the fallback.
+Check 'declared capability is used although the title says nothing' ((@(Get-PackageNeeds ([pscustomobject]@{}) 'Draw the logo' 'images')) -contains 'images')
+Check 'declared capability replaces the title rules' ((@(Get-PackageNeeds ([pscustomobject]@{}) 'Blender models and textures' 'voice')) -join ',' -eq 'voice')
+Check 'several declared capabilities (comma separated)' ((@(Get-PackageNeeds ([pscustomobject]@{}) 'Draw the logo' 'images, voice')) -join ',' -eq 'images,voice')
+Check 'no declared capability: the title rules are the fallback' ((@(Get-PackageNeeds ([pscustomobject]@{}) 'Blender models and textures' '')) -contains 'images')
 Check 'endpoint: model_provider arguments for the codex CLI' (($ea -contains 'model_provider=lmstudio') -and ($ea -contains 'model_providers.lmstudio.base_url=http://192.0.2.10:1234/v1') -and ($ea -contains 'model_providers.lmstudio.wire_api=responses')) ($ea -join ' ')
 
 # --- 10. whole rounds with a provider list that exists only in the project file ----------------------------------
@@ -122,18 +128,19 @@ $proj = Get-Content $pf -Raw | ConvertFrom-Json -AsHashtable
 # Writes the project file with the given providers.
 function Set-ProjectProviders($list) { $proj.providers = @($list); [IO.File]::WriteAllText($pf, ($proj | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding($false))) }
 $cfg = Get-Cfg
-$plan = "$root\proj\dummy\DUMMY-PLAN.md"
-function New-Plan([string]$rows) { Set-Content $plan ("# Dummy plan`nStatus: IN_PROGRESS`n`n| Package | Branch suffix | Content | Files | Depends on |`n|---|---|---|---|---|`n" + $rows) -Encoding UTF8 }
+$plan = "$root\repo\docs\plans\dummy\DUMMY-PLAN.md"; $rel = 'docs/plans/dummy/DUMMY-PLAN.md'
+# Writes the dummy plan from package hashtables (id, title, optional capability).
+function New-Plan($packages) { Write-TestPlan $plan 'IN_PROGRESS' $packages }
 function Ag([string]$n) { return @(Read-Agents $cfg | Where-Object { $_.name -eq $n } | Select-Object -First 1) }
 function Round { Set-Content "$root\note.json" '{"actions":[{"action":"note","text":"test"}]}' -Encoding UTF8; & pwsh -NoProfile -File (Join-Path $tools 'round.ps1') -BrainAnswerFile "$root\note.json" *> $null }
 function Reset-Agents {
-    Remove-Item "$($cfg.runtime)\AGENTS.json", "$($cfg.runtime)\ORCH-HANDLED.json" -ErrorAction SilentlyContinue; Remove-Item "$($cfg.runtime)\runs" -Recurse -Force -ErrorAction SilentlyContinue
-    Update-Agent $cfg 'DUMMY-SEED-work' @{ type = 'claude'; plan = $plan; package = 'SEED'; phase = 'work'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-30).ToString('o'); endedAt = (Get-Date).AddMinutes(-20).ToString('o'); exitCode = 0; lastLine = 'seed' }   # gives the plan a known worktree
+    Reset-TestDb; Remove-Item "$($cfg.runtime)\runs" -Recurse -Force -ErrorAction SilentlyContinue
+    Update-Agent $cfg 'DUMMY-SEED-work' @{ type = 'claude'; plan = $rel; package = 'SEED'; phase = 'work'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-30).ToString('o'); endedAt = (Get-Date).AddMinutes(-20).ToString('o'); exitCode = 0; lastLine = 'seed' }   # gives the plan a known worktree
 }
 Set-Limits @{}
 Reset-Agents
 Set-ProjectProviders @((Prov 'dummy' 1 'preferred' @() '' @('light', 'medium', 'heavy')))
-New-Plan "| W1 | one | change the parser | a | none |`n| W2 | two | change the lexer | b | none |`n"
+New-Plan @(@{ id = 'W1'; title = 'change the parser' }, @{ id = 'W2'; title = 'change the lexer' })
 Round
 Check 'round: the dummy provider from the project file starts the package' (((Ag 'DUMMY-W1-work').status -eq 'running') -and ((Ag 'DUMMY-W1-work').provider -eq 'dummy')) "provider=$((Ag 'DUMMY-W1-work').provider) type=$((Ag 'DUMMY-W1-work').type)"
 Check 'round: its single slot is used up, the second package waits' ((Ag 'DUMMY-W2-work').Count -eq 0)
@@ -147,17 +154,21 @@ Round
 Check 'round: a busy slot forwards at once (two packages, two providers in one round)' ((@(Read-Agents $cfg | Where-Object { $_.phase -eq 'work' -and $_.status -eq 'running' } | ForEach-Object { Get-RowProvider $_ } | Sort-Object) -join ',') -eq 'dummy,other')
 Reset-Agents
 Set-ProjectProviders @((Prov 'plain' 2), (Prov 'gfx' 1 'capability-only' @('images') '' @('light', 'medium', 'heavy') 'codex'))
-New-Plan "| G1 | art | Blender models and textures | a | none |`n| W1 | one | change the parser | b | none |`n"
+New-Plan @(@{ id = 'G1'; title = 'Blender models and textures' }, @{ id = 'W1'; title = 'change the parser' })
 Round
 Check 'round: a graphics package goes to the provider with images' (((Ag 'DUMMY-G1-work').provider -eq 'gfx') -and ((Ag 'DUMMY-G1-work').type -eq 'codex')) "provider=$((Ag 'DUMMY-G1-work').provider)"
 Check 'round: a normal package never goes to the capability-only provider' ((Ag 'DUMMY-W1-work').provider -eq 'plain')
 Reset-Agents
+New-Plan @(@{ id = 'G2'; title = 'Draw the logo'; capability = 'images' }, @{ id = 'W1'; title = 'change the parser' })
+Round
+Check 'round: a package that declares the capability in the plan header goes to the provider with images, whatever its title says' (((Ag 'DUMMY-G2-work').provider -eq 'gfx') -and ((Ag 'DUMMY-W1-work').provider -eq 'plain')) "provider=$((Ag 'DUMMY-G2-work').provider)"
+Reset-Agents
 Set-ProjectProviders @((Prov 'plain' 2), (Prov 'gfx' 0 'capability-only' @('images') '' @('light', 'medium', 'heavy') 'codex'))
-if (Test-Path $env:ORCH_QUESTIONS_FILE) { Remove-Item $env:ORCH_QUESTIONS_FILE }
+New-Plan @(@{ id = 'G1'; title = 'Blender models and textures' }, @{ id = 'W1'; title = 'change the parser' })
 Round; Round
-$q = if (Test-Path $env:ORCH_QUESTIONS_FILE) { Get-Content $env:ORCH_QUESTIONS_FILE -Raw } else { '' }
+$capQ = @(Get-OrchQuestions $cfg | Where-Object { $_.item -eq 'CAP-G1' })
 Check 'round: no provider with images has slots above 0: the package stays and is reported' ((Ag 'DUMMY-G1-work').Count -eq 0)
-Check 'the question in OPEN-QUESTIONS.md exists exactly once after two rounds' (([regex]::Matches($q, 'CAP-G1')).Count -eq 1) "count=$(([regex]::Matches($q, 'CAP-G1')).Count)"
+Check 'the question in the database exists exactly once after two rounds' ($capQ.Count -eq 1) "count=$($capQ.Count)"
 
 Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "failures: $fails"

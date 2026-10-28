@@ -1,6 +1,7 @@
-﻿# usage-test.ps1 - checks usage.ps1 with small test logs in a temporary folder (no real logs are touched).
+﻿# usage-test.ps1 - checks usage.ps1 with small test logs and a test database in a temporary folder (no real logs and no real runtime are touched).
 $ErrorActionPreference = 'Stop'
-$tools = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'common.ps1')
+$tools = $ToolsRoot
 . (Join-Path $tools 'usage.ps1')
 
 $base = Join-Path ([IO.Path]::GetTempPath()) ('orch-test-usage-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -8,6 +9,11 @@ if (Test-Path $base) { Remove-Item -Recurse -Force $base }
 $claude = Join-Path $base 'claude\proj'; $codex = Join-Path $base 'codex\2026\10\27'; $cache = Join-Path $base 'cache'
 New-Item -ItemType Directory -Force -Path $claude, $codex, $cache | Out-Null
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+[void](New-TestProject -Base $base)
+$env:ORCH_RUNTIME_OVERRIDE = "$base\rt"
+. (Join-Path $tools 'lib.ps1')
+$cfg = Get-Cfg
+if ($cfg.runtime -ne "$base\rt") { throw 'runtime override not active: refusing to run against the live runtime' }
 
 $script:fail = 0
 # Prints PASS or FAIL for one check.
@@ -61,21 +67,21 @@ $s3 = @((CodexCtx $t12 'gpt-6.1-sol'), ('{"timestamp":"' + (Ts $t12) + '","ordin
 [IO.File]::WriteAllText("$codex\rollout-s2.jsonl", ($s2 -join "`n") + "`n", $utf8)
 [IO.File]::WriteAllText("$codex\rollout-s3.jsonl", ($s3 -join "`n") + "`n", $utf8)
 
-# Orchestrator files with pilot and test entries.
-$agents = @(
+# Agent rows (with pilot and test entries) and brain rows in the test database; A5 is an old ended row and is moved to the archive.
+foreach ($ag in @(
     @{ name = 'A1'; startedAt = '2026-10-27T08:00:00+01:00'; type = 'claude'; plan = 'x\REAL-PLAN.md'; tokensIn = 1000; tokensOut = 100 },
     @{ name = 'A2'; startedAt = '2026-10-27T08:01:00+01:00'; type = 'codex'; plan = 'x\REAL-PLAN.md'; tokensIn = 2000; tokensOut = 200 },
     @{ name = 'A3'; startedAt = '2026-10-27T08:02:00+01:00'; type = 'claude'; plan = 'x\PILOT-PLAN.md'; tokensIn = 999; tokensOut = 99 },
-    @{ name = 'ZZTEST-x'; startedAt = '2026-10-27T08:03:00+01:00'; type = 'codex'; plan = 'x\REAL-PLAN.md'; tokensIn = 888; tokensOut = 88 }
-) | ConvertTo-Json
-$archive = @(@{ name = 'A5'; startedAt = '2026-10-26T08:00:00+01:00'; type = 'claude'; plan = 'x\REAL-PLAN.md'; tokensIn = 500; tokensOut = 50 }) | ConvertTo-Json -AsArray
-[IO.File]::WriteAllText("$base\AGENTS.json", $agents, $utf8)
-[IO.File]::WriteAllText("$base\AGENTS-ARCHIVE.json", $archive, $utf8)
-[IO.File]::WriteAllText("$base\BRAIN-USAGE.jsonl", '{"model":"Sonnet 5.5","input":300,"output":30}' + "`n" + '{"model":"Opus 4","input":777,"output":77}' + "`n", $utf8)
+    @{ name = 'ZZTEST-x'; startedAt = '2026-10-27T08:03:00+01:00'; type = 'codex'; plan = 'x\REAL-PLAN.md'; tokensIn = 888; tokensOut = 88 },
+    @{ name = 'A5'; startedAt = '2026-10-26T08:00:00+01:00'; endedAt = '2026-10-26T09:00:00+01:00'; status = 'done'; type = 'claude'; plan = 'x\REAL-PLAN.md'; tokensIn = 500; tokensOut = 50 }
+)) { [void](Set-OrchAgent $cfg ([string]$ag.name) $ag) }
+if ((Move-OrchAgentsToArchive $cfg 12) -ne 1) { throw 'test setup: the old row was not archived' }
+Add-OrchUsage $cfg @{ kind = 'brain'; model = 'Sonnet 5.5'; tokensIn = 300; tokensOut = 30 }
+Add-OrchUsage $cfg @{ kind = 'brain'; model = 'Opus 4'; tokensIn = 777; tokensOut = 77 }
 
-# Calls Get-UsageTable with the test paths.
+# Calls Get-UsageTable with the test log folders and the test database.
 function Run-Usage {
-    return Get-UsageTable -CacheDir $cache -AgentsFile "$base\AGENTS.json" -ArchiveFile "$base\AGENTS-ARCHIVE.json" -BrainFile "$base\BRAIN-USAGE.jsonl" -ClaudeRoot (Join-Path $base 'claude') -CodexRoot (Join-Path $base 'codex')
+    return Get-UsageTable -CacheDir $cache -Cfg $cfg -ClaudeRoot (Join-Path $base 'claude') -CodexRoot (Join-Path $base 'codex')
 }
 # Returns the model entry with the given key.
 function M($u, [string]$Key) { return $u.Models | Where-Object { $_.Key -eq $Key } }

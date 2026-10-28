@@ -5,9 +5,9 @@
 . (Join-Path $PSScriptRoot 'common.ps1')
 $tools = $ToolsRoot
 $root = Join-Path ([IO.Path]::GetTempPath()) ('orch-test-fix-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-New-Item -ItemType Directory -Force "$root\rt\runs", "$root\proj\dummy", "$root\proj\queue", "$root\wt" | Out-Null
+New-Item -ItemType Directory -Force "$root\rt\runs", "$root\wt" | Out-Null
 [void](New-TestProject -Base $root -Repo "$root\repo" -Runtime "$root\rt")
-$env:ORCH_RUNTIME_OVERRIDE = "$root\rt"; $env:ORCH_PLANS_OVERRIDE = "$root\proj"; $env:ORCH_TEST_NOSTART = '1'; $env:ORCH_QUESTIONS_FILE = "$root\QUESTIONS.md"
+$env:ORCH_RUNTIME_OVERRIDE = "$root\rt"; $env:ORCH_TEST_NOSTART = '1'
 . (Join-Path $tools 'lib.ps1'); . (Join-Path $tools 'routine.ps1')
 $cfg = Get-Cfg
 if ($cfg.runtime -ne "$root\rt") { throw 'runtime override not active: refusing to run against the live runtime' }
@@ -48,22 +48,23 @@ $wtText = Get-PromptText $cfg 'workInMainCheckout' @{ cwd = "$root\repo"; newWor
 Check 'prompt template: worktree folder and sub-branch are slugs' ($wtText.Contains('proj-dummy-r4-experience-arena-prison') -and $wtText.Contains('dummy-r4-experience-arena-prison') -and -not $wtText.Contains('experience,')) $wtText
 $rSrc = Get-Content (Join-Path $tools 'routine.ps1') -Raw
 Check 'routine: worktree folder, sub-branch and the naming rule use ConvertTo-Slug' ($rSrc.Contains('newWorktree = ((Split-Path $Ctx.Repo -Parent) + ''\'' + [string]$cfg.worktreePrefix + ''-'' + (ConvertTo-Slug $tag)') -and $rSrc.Contains('subBranch = ((ConvertTo-Slug $tag)') -and $rSrc.Contains('only lower-case letters, digits and hyphens'))
-$plan = "$root\proj\dummy\DUMMY-PLAN.md"
+$plan = "$root\repo\docs\plans\dummy\DUMMY-PLAN.md"
 
 # --- 3. blocked row without a plan ----------------------------------------------------------------
-Remove-Item "$($cfg.runtime)\AGENTS.json", "$($cfg.runtime)\ORCH-HANDLED.json" -ErrorAction SilentlyContinue
-Set-Content $plan ("# Dummy plan`nStatus: DONE`n`n| Package | Branch suffix | Content | Files | Depends on |`n|---|---|---|---|---|`n| P1 | one | first | a | none |`n") -Encoding UTF8
-Set-Content "$root\proj\queue\QUEUE.md" "| Branch | Tip | Plan | Status | Notes | Date |`n|---|---|---|---|---|---|`n| chore/no-plan-fix | feed1234abcd | keiner | blockiert (two checks red) | fix the two checks | 2026-10-28 |`n" -Encoding UTF8
+Reset-TestDb
+Write-TestPlan $plan 'DONE' @(@{ id = 'P1'; title = 'first' })
+[void](Set-OrchQueue $cfg 'chore/no-plan-fix' @{ tip = 'feed1234abcd'; plan = 'keiner'; status = 'blocked'; note = 'two checks red: fix the two checks' })
 Round
 $fx = @(Agents | Where-Object { $_.package -eq 'FIX-feed123' } | Select-Object -First 1)
 Check 'row without a plan: a fix agent was started' ($fx.Count -eq 1 -and $fx[0].phase -eq 'work') $(if ($fx.Count) { $fx[0].name } else { 'no agent: ' + ((Get-Content "$root\round.out" -Tail 8 -ErrorAction SilentlyContinue) -join ' // ') })
 $fp = if ($fx.Count) { Get-Content (Join-Path $cfg.runtime ('runs\' + $fx[0].name + '\prompt.md')) -Raw } else { '' }
-Check 'row without a plan: the row text is the task' ($fp -match 'blockiert \(two checks red\)' -and $fp -match 'fix the two checks' -and $fp -match 'chore/no-plan-fix')
+Check 'row without a plan: the row text is the task' ($fp -match 'blockiert two checks red' -and $fp -match 'fix the two checks' -and $fp -match 'chore/no-plan-fix')
 Check 'row without a plan: own worktree with a slug name' ($fp -match 'fix-chore-no-plan-fix')
 Round
 Check 'a second round does not start the same fix again' (@(Agents | Where-Object { $_.package -eq 'FIX-feed123' }).Count -eq 1)
-Remove-Item "$($cfg.runtime)\AGENTS.json" -ErrorAction SilentlyContinue
-Set-Content "$root\proj\queue\QUEUE.md" "| Branch | Tip | Plan | Status | Notes | Date |`n|---|---|---|---|---|---|`n| chore/other | bad99999 | some\unknown\PLAN.md | blockiert (x) | y | 2026-10-28 |`n" -Encoding UTF8
+Reset-TestDb
+Write-TestPlan $plan 'DONE' @(@{ id = 'P1'; title = 'first' })
+[void](Set-OrchQueue $cfg 'chore/other' @{ tip = 'bad99999'; plan = 'some/unknown/PLAN.md'; status = 'blocked'; note = 'x: y' })
 Round
 Check 'row naming a plan that is not startable is still skipped (old behaviour)' (@(Agents | Where-Object { $_.package -like 'FIX-*' }).Count -eq 0)
 

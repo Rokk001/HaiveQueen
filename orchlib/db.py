@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -22,6 +22,10 @@ V2_COLUMNS = (
     ("providers_usage", "duration_s", "REAL"),
     ("providers_usage", "actions", "TEXT"),
     ("providers_usage", "error", "INTEGER"),
+)
+# Columns added in schema version 3 (the capability field of a package from the plan header).
+V3_COLUMNS = (
+    ("packages", "capability", "TEXT"),
 )
 
 
@@ -47,7 +51,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < SCHEMA_VERSION:
         conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
-        for table, column, decl in V2_COLUMNS:
+        for table, column, decl in V2_COLUMNS + V3_COLUMNS:
             have = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
             if column not in have:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")

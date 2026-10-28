@@ -81,6 +81,12 @@ try {
     [void](Set-OrchPlanStatus $cfg 'docs/plans/one.md' 'IN_PROGRESS' "$root\ws")
     Check 'plan status written to table and file' ((Get-OrchPlans $cfg)[0].status -eq 'IN_PROGRESS' -and (Get-Content $plan -Raw) -match 'status = "IN_PROGRESS"')
 
+    # a package with agent and capability keeps both fields (the capability is not lost behind the agent), a package without one has none
+    Write-TestPlan "$root\ws\docs\plans\cap.md" 'READY' @(@{ id = 'G1'; title = 'Art'; agent = 'claude'; capability = 'images' }, @{ id = 'G2'; title = 'Plain change' }) 'Capability plan'
+    [void](Sync-OrchPlans $cfg "$root\ws")
+    $cp = @(Get-OrchPackages $cfg 'docs/plans/cap.md')
+    Check 'package keeps agent and capability' ($cp.Count -eq 2 -and $cp[0].agent_type -eq 'claude' -and $cp[0].capability -eq 'images' -and -not $cp[1].capability) (($cp | ForEach-Object { "$($_.id):$($_.agent_type)/$($_.capability)" }) -join ' ')
+
     # queue, questions, decisions
     [void](Set-OrchQueue $cfg 'b1' @{ tip = 't1'; plan = 'x.md' })
     $q = Set-OrchQueue $cfg 'b1' @{ status = 'in_run'; run = 'r1' }
