@@ -26,7 +26,7 @@ PHASES = ("work", "verify", "release", "integrate")
 TEMPORARY = re.compile(r"^(no worker slot|no free slot|no integrator slot|free RAM|STOP flag|run state)")   # a start rejected for one of these keeps its brain event
 AGENT_NAMES = ["Max", "Fritz", "Lena", "Anna", "Jonas", "Mia", "Paul", "Emma", "Finn", "Hanna", "Ben", "Clara", "Leo", "Nora", "Tim",
                "Ida", "Karl", "Rosa", "Otto", "Vera", "Emil", "Greta", "Jan", "Lotte"]   # short first names of the agents; the orchestrator itself is CHIEF
-AGENT_COLOURS = ["4FA8FF", "C77DFF", "FF6FB5", "3DDCDC", "FF9F43", "3DDC97"]   # hues at least 25 degrees apart (no two look alike), none of the status colours
+AGENT_COLOURS = ["4FA8FF", "C77DFF", "FF6FB5", "3DDCDC", "FF9F43", "3DDC97", "2B6CB0", "8A3FD1", "C2306F", "1E9C9C", "C26A10", "1E9B5F"]   # 6 hues at least 25 degrees apart, each light then dark (the first 6 agents differ in hue), none of the status colours
 FORWARD_ENV = ("ORCH_DATA_DIR", "ORCH_CONFIG_DIR", "ORCH_LOG_DIR", "ORCH_RUNTIME_OVERRIDE", "ORCH_HOST", "ORCH_FAKE_AGENT", "ORCH_SAMPLE_SEC")
 
 

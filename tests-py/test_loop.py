@@ -337,6 +337,16 @@ class LockResolvedTest(RoundCase):
         self.assertTrue([a for a in runtime.list_agents(self.conn, "testproj") if a["package"] == "K2" and a["phase"] == "work"])
         self.assertFalse(self.pkg()["locked"])
 
+    def test_done_answer_on_item_with_title(self):
+        """An answered question with item 'K1 Config values' that says erledigt closes K1 (done_decisions), a lock question without that word does not."""
+        env = self.env()
+        qid = db.add_question(self.conn, "testproj", REL, "K1 Config values: range", "Paket K1 ist gesperrt, weil die Pruefung einen offenen Punkt meldet.", "x")
+        db.answer_question(self.conn, qid, "siehe dort", "coordinator")
+        self.assertEqual(routine.done_decisions(env, REL, ["K1", "K2"]), {})
+        qid = db.add_question(self.conn, "testproj", REL, "K1 Config values: range", "Paket K1 ist gesperrt.", "x")
+        db.answer_question(self.conn, qid, "erledigt, keine weiteren Laeufe", "coordinator")
+        self.assertEqual(list(routine.done_decisions(env, REL, ["K1", "K2"])), ["K1"])
+
     def test_done_wording_needs_done(self):
         """A decision that only names the package does not close it, and 'not done' does not either."""
         env = self.env()

@@ -315,7 +315,7 @@ def lock_resolution(env, plan: str, pkg: str):
 
 def done_decisions(env, rel: str, pkg_ids: list) -> dict:
     """Packages a decision (or an answer) closes: id -> evidence. The text must say the package is done (or that no further runs follow)
-    and name the package (item LOCK-<package> or <package>; a decision without an item names it as a word in the text)."""
+    and name the package (item LOCK-<package>, <package> or "<package> <title>"; a decision without an item names it as a word in the text)."""
     res = {}
     texts = [("decision %s" % d["id"], d["plan_path"], d["item"], d["text"]) for d in runtime.list_decisions(env.conn, env.name)]
     texts += [("question %s" % q["id"], q["plan_path"], q["item"], q["answer"]) for q in runtime.list_questions(env.conn, env.name, "answered")]
@@ -324,7 +324,7 @@ def done_decisions(env, rel: str, pkg_ids: list) -> dict:
             continue
         for i in pkg_ids:
             it = str(item or "").strip().upper()
-            named = it in (i.upper(), "LOCK-" + i.upper()) or (not it and re.search(
+            named = it in (i.upper(), "LOCK-" + i.upper()) or item_token(item) in (i.upper(), "LOCK-" + i.upper()) or (not it and re.search(
                 r"(?<![A-Za-z0-9-])" + re.escape(i) + r"(?![A-Za-z0-9])", str(text)))
             if named:
                 res.setdefault(i, ev)
