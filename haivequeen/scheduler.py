@@ -54,7 +54,7 @@ DEFAULT_SETTINGS = {
     "buildProcessNames": [],
     "capabilityRules": [],
     "triage": True,
-    "window": "Orchestrator",
+    "window": "HaiveQueen",
     "terminal": "auto",
     "brain": {"command": "claude", "model": "sonnet", "effort": "medium", "timeoutSeconds": 1500,
               "args": ["--output-format", "stream-json", "--verbose", "--model", "{brainModel}", "--permission-mode", "auto",

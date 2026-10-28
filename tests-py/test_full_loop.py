@@ -75,7 +75,7 @@ class FullLoopTest(RoundCase):
 
     def tearDown(self):
         """Close leftover panes and drop the fake-CLI variables."""
-        for p in self.term.list_panes("Orchestrator"):
+        for p in self.term.list_panes("HaiveQueen"):
             if p.alive:
                 self.term.close_pane(p.id)
         for k in ("FAKE_TOOLS", "FAKE_LOG", "FAKE_PLAN"):

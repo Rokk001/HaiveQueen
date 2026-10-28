@@ -838,7 +838,7 @@ def _do_start(c, a, forced_pick=None) -> int:
         term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
         spec = {"name": nm, "provider": prov, "protocol": protocol, "plan": plan, "package": pkg, "phase": phase, "cwd": str(a["cwd"]),
                 "prompt_file": str(pf), "person": ident["Person"], "model_long": sch.model_long(protocol, cm["Model"], cm["Effort"])}
-        launch_agent(env, term, env.settings.get("window", "Orchestrator"), spec, c["settle"], c["poll"], c["tries"])
+        launch_agent(env, term, env.settings.get("window", "HaiveQueen"), spec, c["settle"], c["poll"], c["tries"])
     env.log("start %s (%s, %s)" % (nm, prov, phase))
     env.event("%s started (%s)" % (nm, {"codex": "Codex", "claude": "Claude"}.get(prov, prov)))
     if phase != "integrate":
@@ -1158,7 +1158,7 @@ def cmd_start(args, conn) -> int:
         return run_loop(conn, machine, args.rounds, args.round_minutes, ui=sys.stdout.isatty())
     settings = sch.build_settings(machine, {})
     term = get_terminal(args.terminal or settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-    window = settings.get("window", "Orchestrator")
+    window = settings.get("window", "HaiveQueen")
     boot = [osplat.python_executable(), str(TOOLS_DIR / "haivequeen" / "cli.py"), "start", "--foreground"] + (["--terminal", args.terminal] if args.terminal else [])
     title = queen_pane_title(sch.model_long("claude", "claude-sonnet-5-5", "medium"), is_test_runtime())
     with pane_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first

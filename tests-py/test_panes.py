@@ -53,15 +53,15 @@ class PaneLayoutTest(RoundCase):
         self.orig = loop.runner_argv
         loop.runner_argv = lambda env, spec: [sys.executable, str(dummy), env.name, spec["name"]]
         self.term = RecordingHeadless(self.base / "panes")
-        self.chief = self.term.open_window("Orchestrator", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
-        self.dash = self.term.split_pane("Orchestrator", pane_title("all projects", "Overview", "Dashboard", "-", True), "white", SLEEP,
+        self.chief = self.term.open_window("HaiveQueen", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
+        self.dash = self.term.split_pane("HaiveQueen", pane_title("all projects", "Overview", "Dashboard", "-", True), "white", SLEEP,
                                          "vertical", 0.8, self.chief, "dashboard")
         self.term.splits.clear()
 
     def tearDown(self):
         """End every process of the panes."""
         loop.runner_argv = self.orig
-        for p in self.term.list_panes("Orchestrator"):
+        for p in self.term.list_panes("HaiveQueen"):
             if p.alive:
                 self.term.close_pane(p.id)
         super().tearDown()
@@ -73,17 +73,17 @@ class PaneLayoutTest(RoundCase):
         self.assertEqual(self.term.splits, [(self.dash, "horizontal")])
         self.assertEqual(first["status"], "running")
         spec = {"name": "DUMMY-P2-work", "person": "Zed", "model_long": "Claude Sonnet 5.5 medium"}
-        loop.launch_agent(self.envs()[0], self.term, "Orchestrator", spec, settle=0, poll=0.2, tries=100)
+        loop.launch_agent(self.envs()[0], self.term, "HaiveQueen", spec, settle=0, poll=0.2, tries=100)
         second = self.ag("DUMMY-P2-work")
         self.assertEqual(self.term.splits[-1], (first["pane_id"], "horizontal"))
-        ids = [p.id for p in self.term.list_panes("Orchestrator") if p.alive]
+        ids = [p.id for p in self.term.list_panes("HaiveQueen") if p.alive]
         self.assertEqual(sorted(ids), sorted([self.chief, self.dash, first["pane_id"], second["pane_id"]]))
         self.assertEqual(len(set(ids)), 4)
 
     def test_without_dashboard_the_chief_pane_is_split(self):
         """With the dashboard pane gone the first agent pane splits the chief pane."""
         self.term.close_pane(self.dash)
-        loop.launch_agent(self.envs()[0], self.term, "Orchestrator",
+        loop.launch_agent(self.envs()[0], self.term, "HaiveQueen",
                           {"name": "DUMMY-P1-work", "person": "Max", "model_long": "Claude Sonnet 5.5 medium"}, settle=0, poll=0.2, tries=100)
         self.assertEqual(self.term.splits, [(self.chief, "horizontal")])
 

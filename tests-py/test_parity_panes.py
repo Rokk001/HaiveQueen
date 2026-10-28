@@ -50,7 +50,7 @@ class ParityPanesTest(RoundCase):
     def tearDown(self):
         """End every process of the panes."""
         loop.runner_argv = self.orig
-        for p in self.term.list_panes("Orchestrator"):
+        for p in self.term.list_panes("HaiveQueen"):
             if p.alive:
                 self.term.close_pane(p.id)
         super().tearDown()
@@ -58,29 +58,29 @@ class ParityPanesTest(RoundCase):
     def launch(self, name):
         """Launch the pane of one agent through launch_agent and return its pane id."""
         spec = {"name": name, "person": "Max", "model_long": "Claude Sonnet 5.5 medium"}
-        return loop.launch_agent(self.envs()[0], self.term, "Orchestrator", spec, settle=0, poll=0.2, tries=100)
+        return loop.launch_agent(self.envs()[0], self.term, "HaiveQueen", spec, settle=0, poll=0.2, tries=100)
 
     def test_no_live_pane_opens_the_window(self):
         """Test A: without any pane the agent pane opens the window; focus or split of a missing pane is never sent."""
         self.launch("DUMMY-P1-work")
-        self.assertEqual(self.term.opens, ["Orchestrator"])
+        self.assertEqual(self.term.opens, ["HaiveQueen"])
         self.assertEqual(self.term.splits, [])
 
     def test_stale_pane_records_open_the_window_again(self):
         """Test D: the only recorded pane is dead (its process is gone): it is not a split target, the window is opened."""
-        stale = self.term.open_window("Orchestrator", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
+        stale = self.term.open_window("HaiveQueen", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
         self.term.close_pane(stale)
         self.term.opens.clear()
         self.launch("DUMMY-P1-work")
-        self.assertEqual(self.term.opens, ["Orchestrator"])
+        self.assertEqual(self.term.opens, ["HaiveQueen"])
         self.assertEqual(self.term.splits, [])
-        self.assertNotIn(stale, [p.id for p in self.term.list_panes("Orchestrator") if p.alive])
+        self.assertNotIn(stale, [p.id for p in self.term.list_panes("HaiveQueen") if p.alive])
 
     def test_only_a_running_agent_pane_is_the_split_target(self):
         """Test C: the running agent pane is split; the wider pane of an ended agent, which is about to close, is never targeted."""
-        chief = self.term.open_window("Orchestrator", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
-        run_pane = self.term.split_pane("Orchestrator", "run", "white", SLEEP, "horizontal", 0.5, chief, "c-run")
-        done_pane = self.term.split_pane("Orchestrator", "done", "white", SLEEP, "horizontal", 0.5, chief, "c-done")
+        chief = self.term.open_window("HaiveQueen", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
+        run_pane = self.term.split_pane("HaiveQueen", "run", "white", SLEEP, "horizontal", 0.5, chief, "c-run")
+        done_pane = self.term.split_pane("HaiveQueen", "done", "white", SLEEP, "horizontal", 0.5, chief, "c-done")
         self.term.splits.clear()
         me = os.getpid()
         self.agent("C-run", status="running", pid=me, pane_id=run_pane, paneCols=100, paneRows=50)

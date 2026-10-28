@@ -194,6 +194,12 @@ class LoopTest(RoundCase):
         hl = loop.head_lines(80, brain.totals(self.conn), {"run_state": "PAUSED", "model": "x"})
         self.assertIn("PAUSED", hl[0][0])
 
+    def test_window_default_and_project_override(self):
+        """The default window name is HaiveQueen; a window set in a project (for example ODP) is kept."""
+        from haivequeen import scheduler
+        self.assertEqual(scheduler.build_settings({}, {})["window"], "HaiveQueen")
+        self.assertEqual(scheduler.build_settings({}, {"window": "ODP"})["window"], "ODP")
+
     def test_agent_names_and_queen_title(self):
         """24 unique agent names, none is Queen, and the pane of the main agent is titled QUEEN."""
         self.assertEqual(len(loop.AGENT_NAMES), 24)
@@ -461,7 +467,7 @@ class HeadlessStartTest(RoundCase):
     def tearDown(self):
         """End the dummy processes this test started."""
         loop.runner_argv = self.orig
-        for p in self.term.list_panes("Orchestrator"):
+        for p in self.term.list_panes("HaiveQueen"):
             if p.alive:
                 self.term.close_pane(p.id)
         super().tearDown()
@@ -472,7 +478,7 @@ class HeadlessStartTest(RoundCase):
         row = self.ag("DUMMY-P1-work")
         self.assertEqual(row["status"], "running")
         self.assertTrue(row["pid"] and osplat.process_alive(row["pid"]))
-        panes = self.term.list_panes("Orchestrator")
+        panes = self.term.list_panes("HaiveQueen")
         self.assertEqual(len(panes), 1)
         self.assertIn(row["pane_id"], [p.id for p in panes])
         self.assertRegex(panes[0].title, r"^HaiveQueen TEST \| testproj \| Agent [A-Z]+ \| job: DUMMY-P1-work \| model: Claude Sonnet 5\.5 medium$")
