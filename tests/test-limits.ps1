@@ -59,20 +59,22 @@ Check 'live lock held: the test run still goes through without waiting' ($ran -a
 if (-not $liveHolder.HasExited) { & taskkill.exe /PID $liveHolder.Id /T /F | Out-Null }   # only the holder started above
 
 # --- 5. the row never stays on 'running': Update-AgentRetry retries 3 times, then sets the row to failed with the reason ----
+# With the database runtime a write can no longer be blocked by the agents mutex; the equivalent failure is a runtime call that does not work. The python of the test
+# is replaced by a stub that fails its first three calls (nothing on stdout, exit 3) and starts the real python from the fourth call on.
 $cfg5 = Get-Cfg
 Update-Agent $cfg5 'LOCKTEST' @{ status = 'running'; lastLine = 'starting' }
 Check 'free lock: Update-AgentRetry writes the requested status at once' ((Update-AgentRetry $cfg5 'LOCKTEST' @{ status = 'running'; lastLine = 'working' }) -and (@(Read-Agents $cfg5 | Where-Object { $_.name -eq 'LOCKTEST' })[0].lastLine -eq 'working'))
-$holder5 = Start-Process pwsh -ArgumentList @('-NoProfile', '-Command', "`$m = New-Object System.Threading.Mutex(`$false, '$mutexName'); [void]`$m.WaitOne(); Start-Sleep 30") -PassThru -WindowStyle Hidden
-Start-Sleep -Seconds 3
-$env:ORCH_LOCK_TIMEOUT_SEC = '1'
+$realPy = Get-OrchPython
+$stubDir = "$root\pystub"; New-Item -ItemType Directory -Force $stubDir | Out-Null
+Set-Content "$stubDir\py.cmd" ("@echo off`r`nif exist `"%~dp0f3`" goto run`r`nif exist `"%~dp0f2`" (echo x> `"%~dp0f3`"& exit /b 3)`r`nif exist `"%~dp0f1`" (echo x> `"%~dp0f2`"& exit /b 3)`r`necho x> `"%~dp0f1`"& exit /b 3`r`n:run`r`n`"$realPy`" %*`r`n") -Encoding ASCII
+$env:ORCH_PYTHON = "$stubDir\py.cmd"
 $t0 = Get-Date
 $res5 = Update-AgentRetry $cfg5 'LOCKTEST' @{ status = 'done'; exitCode = 0 }
 $sec5 = ((Get-Date) - $t0).TotalSeconds
-Remove-Item Env:ORCH_LOCK_TIMEOUT_SEC
+Remove-Item Env:ORCH_PYTHON
 $row5 = @(Read-Agents $cfg5 | Where-Object { $_.name -eq 'LOCKTEST' })[0]
-Check 'busy lock: Update-AgentRetry gives up after 3 tries' (($res5 -eq $false) -and $sec5 -ge 4 -and $sec5 -lt 20) ("after {0:N1} s" -f $sec5)
-Check "busy lock: the row is 'failed' with the reason, not 'running'" (($row5.status -eq 'failed') -and ([string]$row5.lastLine -match 'agents lock error after 3 tries') -and $row5.endedAt) ("status=$($row5.status) last=$($row5.lastLine)")
-if (-not $holder5.HasExited) { & taskkill.exe /PID $holder5.Id /T /F | Out-Null }   # only the holder started above
+Check 'failing runtime: Update-AgentRetry gives up after 3 tries' (($res5 -eq $false) -and $sec5 -ge 4 -and $sec5 -lt 20) ("after {0:N1} s" -f $sec5)
+Check "failing runtime: the row is 'failed' with the reason, not 'running'" (($row5.status -eq 'failed') -and ([string]$row5.lastLine -match 'agents lock error after 3 tries') -and $row5.endedAt) ("status=$($row5.status) last=$($row5.lastLine)")
 
 Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "failures: $fails"

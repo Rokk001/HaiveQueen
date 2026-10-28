@@ -470,9 +470,9 @@ def import_plans(conn, project, patterns, workspace, counter) -> None:
                 counter.skipped += 1
                 return
             for pkg in plan.packages:
-                conn.execute("INSERT OR IGNORE INTO packages (project, plan_path, id, title, class, agent_type, depends_on) "
-                             "VALUES (?,?,?,?,?,?,?)",
-                             (project, rel, pkg.id, pkg.title, pkg.cls, pkg.agent or pkg.capability,
+                conn.execute("INSERT OR IGNORE INTO packages (project, plan_path, id, title, class, agent_type, capability, depends_on) "
+                             "VALUES (?,?,?,?,?,?,?,?)",
+                             (project, rel, pkg.id, pkg.title, pkg.cls, pkg.agent, pkg.capability,
                               json.dumps(pkg.depends_on)))
             counter.imported += 1
         guarded(conn, counter, f, one)

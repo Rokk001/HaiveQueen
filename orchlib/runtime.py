@@ -320,11 +320,11 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
             ids = [p.id for p in plan.packages]
             for pkg in plan.packages:
                 conn.execute(
-                    "INSERT INTO packages (project, plan_path, id, title, class, agent_type, depends_on) "
-                    "VALUES (?,?,?,?,?,?,?) ON CONFLICT(project, plan_path, id) DO UPDATE SET "
+                    "INSERT INTO packages (project, plan_path, id, title, class, agent_type, capability, depends_on) "
+                    "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(project, plan_path, id) DO UPDATE SET "
                     "title=excluded.title, class=excluded.class, agent_type=excluded.agent_type, "
-                    "depends_on=excluded.depends_on",
-                    (project, rel, pkg.id, pkg.title, pkg.cls, pkg.agent or pkg.capability,
+                    "capability=excluded.capability, depends_on=excluded.depends_on",
+                    (project, rel, pkg.id, pkg.title, pkg.cls, pkg.agent, pkg.capability,
                      json.dumps(pkg.depends_on)))
             conn.execute(f"DELETE FROM packages WHERE project=? AND plan_path=? AND id NOT IN ({','.join('?' * len(ids)) or 'NULL'})",
                          [project, rel] + ids)

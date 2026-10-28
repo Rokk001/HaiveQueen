@@ -1,5 +1,5 @@
 # Shared helpers of the test scripts. Every test builds its own throw-away project (project file, repository folder, runtime folder, rule fixtures) from
-# examples\project.example.json; nothing here ever touches a real project or its runtime data.
+# examples\project.example.json and its own test runtime (own database, settings and log folders below the test folder); nothing here ever touches a real project or its runtime data.
 $script:ToolsRoot = Split-Path $PSScriptRoot -Parent
 $ToolsRoot = $script:ToolsRoot
 
@@ -22,6 +22,8 @@ public static class OrchTestWatchdog {
 
 # Builds the test project below $Base and points $env:ORCH_PROJECT to its project file. Returns the path of the project file.
 # The rule fixtures give the phases different rule sets: "Coding style" only for work, "Process rules" for every phase.
+# It also creates the test runtime: ORCH_DATA_DIR (database), ORCH_CONFIG_DIR (settings) and ORCH_LOG_DIR (text mirrors, the runtime folder) point below $Base and the project name in the
+# database is "testproj"; the plans of the test project are the Markdown files below <repo>\docs\plans (any depth).
 function New-TestProject([string]$Base, [string]$Repo = '', [string]$Runtime = '') {
     if (-not $Repo) { $Repo = Join-Path $Base 'repo' }
     if (-not $Runtime) { $Runtime = Join-Path $Base 'rt' }
@@ -43,5 +45,30 @@ function New-TestProject([string]$Base, [string]$Repo = '', [string]$Runtime = '
     $pf = Join-Path $Base 'project.json'
     [System.IO.File]::WriteAllText($pf, $json, (New-Object System.Text.UTF8Encoding($false)))
     $env:ORCH_PROJECT = $pf
+    $env:ORCH_DATA_DIR = Join-Path $Base 'orch-data'; $env:ORCH_CONFIG_DIR = Join-Path $Base 'orch-config'; $env:ORCH_LOG_DIR = $Runtime; $env:ORCH_PROJECT_NAME = 'testproj'
+    New-Item -ItemType Directory -Force $env:ORCH_DATA_DIR, $env:ORCH_CONFIG_DIR, (Join-Path $Repo 'docs\plans'), (Join-Path $Repo '.orchestrator') | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $Repo '.orchestrator\project.toml'), "name = `"testproj`"`nplanGlobs = [`"docs/plans/**/*.md`"]`n", (New-Object System.Text.UTF8Encoding($false)))
     return $pf
+}
+
+# Empties the database of the test runtime (agents, events, queue, questions, kv, ...): the next runtime call creates a fresh one. Only the test database is touched.
+function Reset-TestDb {
+    if (-not $env:ORCH_DATA_DIR -or -not $env:ORCH_RUNTIME_OVERRIDE) { throw 'Reset-TestDb: no test runtime active, refusing to delete anything' }
+    Remove-Item -LiteralPath (Join-Path $env:ORCH_DATA_DIR 'orchestrator.db'), (Join-Path $env:ORCH_DATA_DIR 'orchestrator.db-wal'), (Join-Path $env:ORCH_DATA_DIR 'orchestrator.db-shm') -ErrorAction SilentlyContinue
+}
+
+# Writes a plan file in the v2 format (TOML header between +++ lines, then Markdown); an empty $Status writes a plan without any header. $Packages: array of hashtables with id, title and optional class, agent, capability, depends (array of ids).
+function Write-TestPlan([string]$Path, [string]$Status, $Packages = @(), [string]$Title = 'Dummy plan') {
+    New-Item -ItemType Directory -Force (Split-Path $Path -Parent) | Out-Null
+    if (-not $Status) { [System.IO.File]::WriteAllText($Path, "# $Title`nNo header here.`n", (New-Object System.Text.UTF8Encoding($false))); return }
+    $t = "+++`nstatus = `"$Status`"`n"
+    foreach ($p in @($Packages)) {
+        $t += "[[packages]]`nid = `"$($p.id)`"`ntitle = `"$($p.title)`"`n"
+        if ($p.class) { $t += "class = `"$($p.class)`"`n" }
+        if ($p.agent) { $t += "agent = `"$($p.agent)`"`n" }
+        if ($p.capability) { $t += "capability = `"$($p.capability)`"`n" }
+        $t += 'depends_on = [' + ((@($p.depends) | Where-Object { $_ } | ForEach-Object { "`"$_`"" }) -join ', ') + "]`n"
+    }
+    $t += "+++`n# $Title`n"
+    [System.IO.File]::WriteAllText($Path, $t, (New-Object System.Text.UTF8Encoding($false)))
 }

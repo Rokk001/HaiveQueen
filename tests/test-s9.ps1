@@ -1,4 +1,4 @@
-# S9 test (plan 12.1): phase rule files and start context. Uses its own runtime folder (ORCH_RUNTIME_OVERRIDE), never the live AGENTS.json.
+# S9 test (plan 12.1): phase rule files and start context. Uses its own runtime folder (ORCH_RUNTIME_OVERRIDE) and test database, never the live runtime.
 # Usage: pwsh -File test-s9.ps1 [-Live]   (-Live additionally starts one real Claude agent per phase with the task "Reply OK" and prints its first context)
 param([switch]$Live)
 $ErrorActionPreference = 'Stop'

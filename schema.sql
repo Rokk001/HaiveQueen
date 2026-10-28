@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS packages (
     title TEXT,
     class TEXT,
     agent_type TEXT,
+    capability TEXT,
     depends_on TEXT,
     phase TEXT,
     locked INTEGER NOT NULL DEFAULT 0,

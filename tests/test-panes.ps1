@@ -16,12 +16,14 @@ $cfg = Get-Cfg
 $fail = 0
 function Check([string]$what, [bool]$ok) { if ($ok) { Write-Host "PASS $what" } else { Write-Host "FAIL $what" -ForegroundColor Red; $script:fail++ } }
 function Row($name, $status, $pane, $pid2, $closed) { return [pscustomobject]@{ name = $name; type = 'claude'; plan = 'x/X-PLAN.md'; package = 'S1'; phase = 'work'; status = $status; paneId = $pane; paneClosed = $closed; pid = $pid2; paneCols = 140; paneRows = 50 } }
+# Replaces the agent rows of the test database by these rows (the database keeps rows until they are removed, so the old list is dropped first).
+function SetAgents($rows) { Reset-TestDb; Write-Agents $cfg $rows }
 function NewA($name) { return @{ name = $name; type = 'claude'; plan = 'x'; package = 'S1'; phase = 'work'; cwd = $rt; promptFile = (Join-Path $rt 'p.md') } }
 # Simulates the runner of a new pane: sets the pid of the agent row after 3 s (like agent-run.ps1).
 function Runner($name) { Start-Job -ScriptBlock { param($n, $pidv, $rtp, $tools) $env:ORCH_RUNTIME_OVERRIDE = $rtp; . (Join-Path $tools 'lib.ps1'); $c = Get-Cfg; Start-Sleep -Seconds 3; Update-Agent $c $n @{ pid = $pidv; status = 'running' } } -ArgumentList $name, $PID, $rt, $tools | Out-Null }
 
 # A: no pane, no idle -> new tab, never focus-pane / split-pane
-Write-Agents $cfg @((Row 'A1' 'starting' $null $null $false))
+SetAgents @((Row 'A1' 'starting' $null $null $false))
 Set-Content (Join-Path $rt 'panes.json') '{"next":3}'
 Runner 'A1'; Start-AgentPane $cfg (NewA 'A1')
 $log = if (Test-Path $stubLog) { Get-Content $stubLog -Raw } else { '' }
@@ -30,7 +32,7 @@ Check 'A: no focus-pane / split-pane on a missing pane' ($log -notmatch 'focus-p
 
 # B: idle pane alive (pid file with a live pid) -> split of the idle pane id
 Remove-Item $stubLog -ErrorAction SilentlyContinue
-Write-Agents $cfg @((Row 'B1' 'starting' $null $null $false))
+SetAgents @((Row 'B1' 'starting' $null $null $false))
 Set-Content (Join-Path $rt 'panes.json') '{"next":8,"idle":7}'; Set-Content (Join-Path $rt 'idle.pid') $PID
 Runner 'B1'; Start-AgentPane $cfg (NewA 'B1')
 $log = Get-Content $stubLog -Raw
@@ -38,7 +40,7 @@ Check 'B: live idle pane is the split target' ($log -match 'focus-pane -t 7 ; sp
 
 # C: running agent pane (live runner) is the target, an ended agent whose pane is closing is not
 Remove-Item $stubLog -ErrorAction SilentlyContinue; Remove-Item (Join-Path $rt 'idle.pid')
-Write-Agents $cfg @((Row 'C-run' 'running' 5 $PID $false), (Row 'C-done' 'done' 6 $PID $false), (Row 'C1' 'starting' $null $null $false))
+SetAgents @((Row 'C-run' 'running' 5 $PID $false), (Row 'C-done' 'done' 6 $PID $false), (Row 'C1' 'starting' $null $null $false))
 Runner 'C1'; Start-AgentPane $cfg (NewA 'C1')
 $log = Get-Content $stubLog -Raw
 Check 'C: split target is the running pane 5' ($log -match 'focus-pane -t 5 ;')
@@ -46,7 +48,7 @@ Check 'C: the closing pane 6 is never targeted' ($log -notmatch '-t 6')
 
 # D: dead idle pid file + no agent pane -> new tab again (stale pid file is not trusted)
 Remove-Item $stubLog -ErrorAction SilentlyContinue
-Write-Agents $cfg @((Row 'D1' 'starting' $null $null $false)); Set-Content (Join-Path $rt 'idle.pid') 999999
+SetAgents @((Row 'D1' 'starting' $null $null $false)); Set-Content (Join-Path $rt 'idle.pid') 999999
 Runner 'D1'; Start-AgentPane $cfg (NewA 'D1')
 $log = Get-Content $stubLog -Raw
 Check 'D: dead idle pid -> new-tab' ($log -match 'new-tab' -and $log -notmatch 'focus-pane')

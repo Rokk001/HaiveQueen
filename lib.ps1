@@ -594,15 +594,10 @@ function Get-AgentTask($Cfg, [string]$Plan, [string]$Package, [string]$Phase, [s
         'integrate' { return 'Integrator: ready-Zeilen mergen, Build, Checks, Push' }
     }
     try {
-        $abs = if ([System.IO.Path]::IsPathRooted($Plan)) { $Plan } else { Join-Path $Cfg.repo $Plan }
-        if (Test-Path $abs) {
-            $hdr = $null; $cont = -1; $suf = -1
-            foreach ($l in (Get-Content $abs -Encoding UTF8)) {
-                if ($l -notmatch '^\s*\|') { $hdr = $null; continue }
-                $c = @($l.Trim().Trim('|').Split('|') | ForEach-Object { $_.Trim() })
-                if (-not $hdr) { if ($c[0] -match '^(Package|Paket)$') { $hdr = $c; $cont = -1; $suf = -1; for ($i = 0; $i -lt $c.Count; $i++) { if ($c[$i] -match '^(Content|Inhalt)') { $cont = $i }; if ($c[$i] -match '^Branch') { $suf = $i } } }; continue }
-                if ($c[0] -eq $Package -and $cont -ge 0 -and $cont -lt $c.Count) { return ($Package + $(if ($suf -ge 0 -and $suf -lt $c.Count) { ' (' + $c[$suf] + ')' } else { '' }) + ': ' + $c[$cont]) }
-            }
+        # the title of the package row in the packages table (filled from the plan header)
+        if (Get-Command Get-PlanPackages -ErrorAction SilentlyContinue) {
+            $k = @(Get-PlanPackages $Cfg (Resolve-PlanPath $Cfg $Plan) | Where-Object { $_.Id -eq $Package } | Select-Object -First 1)
+            if ($k.Count -and $k[0].Content) { return ($Package + ': ' + $k[0].Content) }
         }
     } catch {}
     if ($PromptFile -and (Test-Path $PromptFile)) {
@@ -731,7 +726,10 @@ function Get-ProviderLimit($Cfg, $P) {
 }
 # Capabilities a package needs, from its content text, by the config list "capabilityRules" (each rule: capability + patterns that must ALL match). Without the list the graphics rule applies:
 # models, textures, materials, particles, icons, clips or sounds together with Blender, assets or graphics need "images".
-function Get-PackageNeeds($Cfg, [string]$Content) {
+# A capability named in the plan header (package field "capability", comma separated) is used as it stands; only a package without one falls back to the content rules.
+function Get-PackageNeeds($Cfg, [string]$Content, [string]$Capability = '') {
+    $declared = @(([string]$Capability).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($declared.Count) { return $declared }
     $rules = if ($Cfg.capabilityRules) { @($Cfg.capabilityRules) } else { @([pscustomobject]@{ capability = 'images'; patterns = @('(?i)\b(models?|textures?|materials?|particles?|icons?|clips?|sounds?)\b', '(?i)\b(Blender|assets?|graphics?)\b') }) }
     $need = @()
     foreach ($r in $rules) { $ok = $true; foreach ($pat in @($r.patterns)) { if ($Content -notmatch [string]$pat) { $ok = $false; break } }; if ($ok -and $need -notcontains [string]$r.capability) { $need += [string]$r.capability } }
@@ -830,9 +828,8 @@ function Get-StartClass($Cfg, [string]$Phase, [string]$Plan, [string]$Pkg, [stri
     $base = Get-ClassIndex $Sent
     $failures = 0
     if ($Phase -eq 'work') {
-        $planAbs = if ([IO.Path]::IsPathRooted($Plan)) { $Plan } else { Join-Path $Cfg.repo $Plan }
         if (Get-Command Get-PlanPackages -ErrorAction SilentlyContinue) {
-            $row = @(Get-PlanPackages $planAbs | Where-Object { $_.Id -eq $Pkg } | Select-Object -First 1)
+            $row = @(Get-PlanPackages $Cfg (Resolve-PlanPath $Cfg $Plan) | Where-Object { $_.Id -eq $Pkg } | Select-Object -First 1)
             if ($row.Count) { $base = Get-ClassIndex $row[0].Class }   # the table class is the base: the class sent with the action may already be escalated and must not be raised twice
         }
         $failures = Get-PackageFailures $Cfg @(Read-Agents $Cfg) $Plan $Pkg

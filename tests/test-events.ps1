@@ -6,8 +6,7 @@ $ErrorActionPreference = 'Stop'
 $tools = $ToolsRoot
 $root = Join-Path ([IO.Path]::GetTempPath()) ('orch-test-events-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $pf = New-TestProject -Base $root -Repo "$root\repo" -Runtime "$root\rt"
-New-Item -ItemType Directory -Force "$root\proj\dummy", "$root\proj\queue" | Out-Null
-$env:ORCH_RUNTIME_OVERRIDE = "$root\rt"; $env:ORCH_PLANS_OVERRIDE = "$root\proj"; $env:ORCH_TEST_NOSTART = '1'; $env:ORCH_QUESTIONS_FILE = "$root\QUESTIONS.md"
+$env:ORCH_RUNTIME_OVERRIDE = "$root\rt"; $env:ORCH_TEST_NOSTART = '1'
 # The command of the hook is a recorder: it logs its arguments and fails while the flag file exists.
 $rec = "$root\recorder.ps1"
 Set-Content $rec 'param([Parameter(ValueFromRemainingArguments = $true)][string[]]$E)
@@ -19,7 +18,7 @@ $j.onEvent = [ordered]@{ command = @('pwsh', '-NoProfile', '-File', $rec); workD
 . (Join-Path $tools 'lib.ps1'); . (Join-Path $tools 'routine.ps1'); . (Join-Path $tools 'events.ps1')
 $cfg = Get-Cfg
 if ($cfg.runtime -ne "$root\rt") { throw 'runtime override not active: refusing to run' }
-$plan = "$root\proj\dummy\DUMMY-PLAN.md"
+$plan = "$root\repo\docs\plans\dummy\DUMMY-PLAN.md"; $rel = 'docs/plans/dummy/DUMMY-PLAN.md'
 $calls = "$root\calls.log"
 $fails = 0
 # Records one check.
@@ -29,29 +28,29 @@ function Calls { if (Test-Path $calls) { return @(Get-Content $calls) } else { r
 # Runs one round in its own process (like the loop does) with a fake brain answer.
 function Round { & pwsh -NoProfile -File (Join-Path $tools 'round.ps1') -BrainAnswerFile "$root\note.json" *> $null }
 Set-Content "$root\note.json" '{"actions":[{"action":"note","text":"test"}]}' -Encoding UTF8
-Set-Content $plan "# Dummy plan`nStatus: IN_PROGRESS`n`n| Package | Content | Depends on |`n|---|---|---|`n| P1 | first | none |`n" -Encoding UTF8
+Write-TestPlan $plan 'IN_PROGRESS' @(@{ id = 'P1'; title = 'first' })
 
 Round
 Check 'first round only records the baseline: no call' ((Calls).Count -eq 0)
 Round
 Check 'quiet round: no call' ((Calls).Count -eq 0)
-[void](Set-PlanStatus $plan 'PAUSED'); Round
+[void](Set-OrchPlanStatus $cfg $rel 'PAUSED' $cfg.repo); Round
 Check 'plan status change: exactly one call with the event' ((@(Calls)).Count -eq 1 -and (@(Calls))[0] -match 'plan DUMMY-PLAN PAUSED') ((Calls) -join ' / ')
 Round
 Check 'no new event: no second call' ((Calls).Count -eq 1)
-Set-Content "$root\proj\queue\QUEUE.md" "| Branch | Tip | Plan | Status | Notes | Date |`n|---|---|---|---|---|---|`n| feature/dummy | abc123def | $plan | ready | x | 2026-10-27 |`n" -Encoding UTF8
-Set-Content $env:ORCH_QUESTIONS_FILE "# Open questions`n`n## Q-T-1`n- Plan: $plan`n- Item: X1`n- Status: OPEN`n" -Encoding UTF8
+[void](Set-OrchQueue $cfg 'feature/dummy' @{ tip = 'abc123def'; plan = $rel; status = 'ready'; note = 'x' })
+$qid = (Add-OrchQuestion $cfg $rel 'X1' 'Which one?' 'A').id
 Round
-Check 'two events in one round: one call that lists both' ((Calls).Count -eq 2 -and (Calls)[1] -match 'ready feature/dummy' -and (Calls)[1] -match 'question Q-T-1 asked') ((Calls) -join ' / ')
+Check 'two events in one round: one call that lists both' ((Calls).Count -eq 2 -and (Calls)[1] -match 'ready feature/dummy' -and (Calls)[1] -match "question Q-$qid asked") ((Calls) -join ' / ')
 # A failing command: logged in ORCH-EVENTS.log, repeated in the next round with the same events, never stops anything.
 Set-Content "$root\fail.flag" 'x'
-Set-Content $env:ORCH_QUESTIONS_FILE "# Open questions`n`n## Q-T-1`n- Plan: $plan`n- Item: X1`n- Status: ANSWERED`n" -Encoding UTF8
+[void](Invoke-Orch @('answer', "$qid", 'A', '--by', 'owner'))
 Round
 $ev = if (Test-Path "$root\rt\ORCH-EVENTS.log") { Get-Content "$root\rt\ORCH-EVENTS.log" -Raw } else { '' }
 Check 'failed call is logged as an error line in ORCH-EVENTS.log' ((Calls).Count -eq 3 -and $ev -match '\|E\|Ereignis-Befehl fehlgeschlagen') ((Calls) -join ' / ')
 Remove-Item "$root\fail.flag"
 Round
-Check 'next round repeats the failed events and succeeds' ((Calls).Count -eq 4 -and (Calls)[3] -eq (Calls)[2] -and (Calls)[3] -match 'question Q-T-1 answered') ((Calls) -join ' / ')
+Check 'next round repeats the failed events and succeeds' ((Calls).Count -eq 4 -and (Calls)[3] -eq (Calls)[2] -and (Calls)[3] -match "question Q-$qid answered") ((Calls) -join ' / ')
 Round
 Check 'after success nothing is repeated' ((Calls).Count -eq 4)
 
@@ -59,10 +58,10 @@ Check 'after success nothing is repeated' ((Calls).Count -eq 4)
 $j.onEvent.command = @('pwsh-does-not-exist.exe', '-x')
 [System.IO.File]::WriteAllText($pf, ($j | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
 $cfg = Get-Cfg
-[void](Set-PlanStatus $plan 'READY')
+[void](Set-OrchPlanStatus $cfg $rel 'READY' $cfg.repo)
 $threw = $false
-try { Invoke-EventHook $cfg @($plan) @() } catch { $threw = $true }
-$sync = Get-Content "$root\rt\ORCH-SYNC.json" -Raw | ConvertFrom-Json
+try { Invoke-EventHook $cfg @([pscustomobject]@{ path = $rel; status = 'READY' }) @() } catch { $threw = $true }
+$sync = (Get-OrchKv $cfg 'event-sync') | ConvertFrom-Json
 Check 'missing command: no exception, the event stays pending' (-not $threw -and @($sync.pending).Count -eq 1) ("threw=$threw pending=" + (@($sync.pending) -join ';') + ' evlog=' + (Get-Content "$root\rt\ORCH-EVENTS.log" -Tail 1))
 
 # The sync example against a throw-away repository with a local bare remote.

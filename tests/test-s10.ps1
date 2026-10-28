@@ -1,16 +1,16 @@
 # S10 test (plan sections 12.2-12.4): effort classes from the package table, bundling of small packages, escalation, minimum class of verify and integrator.
-# Everything runs in a temporary folder with its own AGENTS.json and dummy plans; the live runtime is never touched. No pane is opened (ORCH_TEST_NOSTART), no model is called.
+# Everything runs in a temporary folder with its own test database and dummy plans; the live runtime is never touched. No pane is opened (ORCH_TEST_NOSTART), no model is called.
 . (Join-Path $PSScriptRoot 'common.ps1')
 $tools = $ToolsRoot
 $root = Join-Path ([IO.Path]::GetTempPath()) ('orch-test-s10-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 if (Test-Path $root) { Remove-Item $root -Recurse -Force }
-New-Item -ItemType Directory -Force "$root\rt\runs", "$root\proj\dummy", "$root\proj\queue", "$root\wt" | Out-Null
+New-Item -ItemType Directory -Force "$root\rt\runs", "$root\wt" | Out-Null
 [void](New-TestProject -Base $root -Repo "$root\repo" -Runtime "$root\rt")
-$env:ORCH_RUNTIME_OVERRIDE = "$root\rt"; $env:ORCH_PLANS_OVERRIDE = "$root\proj"; $env:ORCH_TEST_NOSTART = '1'; $env:ORCH_QUESTIONS_FILE = "$root\QUESTIONS.md"
+$env:ORCH_RUNTIME_OVERRIDE = "$root\rt"; $env:ORCH_TEST_NOSTART = '1'
 . (Join-Path $tools 'lib.ps1'); . (Join-Path $tools 'routine.ps1')
 $cfg = Get-Cfg
 if ($cfg.runtime -ne "$root\rt") { throw 'runtime override not active: refusing to run against the live runtime' }
-$plan = "$root\proj\dummy\DUMMY-PLAN.md"
+$plan = "$root\repo\docs\plans\dummy\DUMMY-PLAN.md"; $rel = 'docs/plans/dummy/DUMMY-PLAN.md'
 $fails = 0
 Set-Content "$root\note.json" '{"actions":[{"action":"note","text":"test"}]}' -Encoding UTF8
 # Records one check.
@@ -21,25 +21,26 @@ function Ag([string]$n) { return @(Read-Agents $cfg | Where-Object { $_.name -eq
 function Round { & pwsh -NoProfile -File (Join-Path $tools 'round.ps1') -BrainAnswerFile "$root\note.json" *> $null }   # a fake brain answer is always given: no real brain call
 # Marks an agent as ended with an optional final answer.
 function End-Agent([string]$n, [string]$final = '', [string]$status = 'done') { Update-Agent $cfg $n @{ status = $status; endedAt = (Get-Date).ToString('o'); exitCode = 0; lastLine = 'test' }; if ($final) { $d = Join-Path $cfg.runtime "runs\$n"; New-Item -ItemType Directory -Force $d | Out-Null; Set-Content (Join-Path $d 'final.txt') $final -Encoding UTF8 } }
-# Writes the dummy plan from package rows (Id, Content, Depends, Class).
+# Writes the dummy plan (plan header with packages) from package rows (Id, Content, Depends, Class) and reads it into the packages table.
 function New-Plan($rows) {
-    $t = "# Dummy plan`nStatus: IN_PROGRESS`n`n| Package | Branch suffix | Content | Files | Depends on | Class |`n|---|---|---|---|---|---|`n"
-    foreach ($r in $rows) { $t += ('| {0} | {1} | {2} | x | {3} | {4} |' -f $r[0], $r[0].ToLower(), $r[1], $r[2], $r[3]) + "`n" }
-    Set-Content $plan $t -Encoding UTF8
+    $pk = @(); foreach ($r in $rows) { $pk += @{ id = $r[0]; title = $r[1]; depends = @(if ($r[2] -ne 'none') { $r[2] }); class = $r[3] } }
+    Write-TestPlan $plan 'IN_PROGRESS' $pk
+    [void](Sync-OrchPlans $cfg $cfg.repo)
 }
-# Empties the agent list and the run folders of the test runtime.
+# Empties the test database (agents, events, queue, kv, ...) and the run folders of the test runtime.
 function Reset-Agents {
-    Remove-Item "$($cfg.runtime)\AGENTS.json", "$($cfg.runtime)\ORCH-HANDLED.json" -ErrorAction SilentlyContinue; Remove-Item "$($cfg.runtime)\runs" -Recurse -Force -ErrorAction SilentlyContinue
+    Reset-TestDb; Remove-Item "$($cfg.runtime)\runs" -Recurse -Force -ErrorAction SilentlyContinue
     # The seed row gives the plan a known worktree, so the routine plans it without the brain.
-    Update-Agent $cfg 'DUMMY-SEED-work' @{ type = 'claude'; plan = $plan; package = 'SEED'; phase = 'work'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-30).ToString('o'); endedAt = (Get-Date).AddMinutes(-20).ToString('o'); exitCode = 0; lastLine = 'seed' }
+    Update-Agent $cfg 'DUMMY-SEED-work' @{ type = 'claude'; plan = $rel; package = 'SEED'; phase = 'work'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-30).ToString('o'); endedAt = (Get-Date).AddMinutes(-20).ToString('o'); exitCode = 0; lastLine = 'seed' }
 }
 
 # --- 1. units: class column, class resolution, class models -------------------------------------
 New-Plan @(@('A1', 'one', 'none', 'light'), @('A2', 'two', 'none', 'Heavy'), @('A3', 'three', 'none', ''), @('A4', 'four', 'none', 'bogus'))
-$pk = @(Get-PlanPackages $plan)
+$pk = @(Get-PlanPackages $cfg $rel)
 Check 'Class column: light / heavy / empty / bogus' (($pk[0].Class -eq 'light') -and ($pk[1].Class -eq 'heavy') -and ($pk[2].Class -eq 'medium') -and ($pk[3].Class -eq 'medium')) (($pk | ForEach-Object { $_.Class }) -join ',')
-Set-Content $plan "# No class column`nStatus: IN_PROGRESS`n`n| Package | Content | Depends on |`n|---|---|---|`n| B1 | x | none |`n" -Encoding UTF8
-Check 'plan without Class column = medium' ((@(Get-PlanPackages $plan))[0].Class -eq 'medium')
+Write-TestPlan $plan 'IN_PROGRESS' @(@{ id = 'B1'; title = 'x' }) 'No class field'
+[void](Sync-OrchPlans $cfg $cfg.repo)
+Check 'plan without class field = medium' ((@(Get-PlanPackages $cfg $rel))[0].Class -eq 'medium')
 Check 'verify never below medium' ((Resolve-AgentClass $cfg 'verify' 'light' 0) -eq 'medium')
 Check 'integrator never below medium' ((Resolve-AgentClass $cfg 'integrate' 'light' 0) -eq 'medium')
 Check 'verify keeps heavy' ((Resolve-AgentClass $cfg 'verify' 'heavy' 0) -eq 'heavy')
@@ -97,25 +98,27 @@ Check 'after two open verifies the repeat is one class higher (medium)' ($f2.Cou
 # --- 5. lock: repeated open verifies stop the work agents and report the package as a question ------------
 Reset-Agents
 New-Plan @(, @('K1', 'stubborn task', 'none', 'medium'))
-Set-Content "$root\proj\dummy\DUMMY-STATE.md" "# State`n" -Encoding UTF8
-Update-Agent $cfg 'DUMMY-K1-work' @{ type = 'claude'; plan = $plan; package = 'K1'; phase = 'work'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-60).ToString('o'); endedAt = (Get-Date).AddMinutes(-55).ToString('o'); exitCode = 0; lastLine = 'x' }
-Update-Agent $cfg 'DUMMY-K1-verify' @{ type = 'codex'; plan = $plan; package = 'K1'; phase = 'verify'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-50).ToString('o'); endedAt = (Get-Date).AddMinutes(-45).ToString('o'); exitCode = 0; lastLine = 'x' }
+Update-Agent $cfg 'DUMMY-K1-work' @{ type = 'claude'; plan = $rel; package = 'K1'; phase = 'work'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-60).ToString('o'); endedAt = (Get-Date).AddMinutes(-55).ToString('o'); exitCode = 0; lastLine = 'x' }
+Update-Agent $cfg 'DUMMY-K1-verify' @{ type = 'codex'; plan = $rel; package = 'K1'; phase = 'verify'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-50).ToString('o'); endedAt = (Get-Date).AddMinutes(-45).ToString('o'); exitCode = 0; lastLine = 'x' }
 End-Agent 'DUMMY-K1-verify' "Offen: A.`nOffene Anforderungen: 2"
-Update-Agent $cfg 'DUMMY-K1-work-2' @{ type = 'claude'; plan = $plan; package = 'K1'; phase = 'work'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-40).ToString('o'); endedAt = (Get-Date).AddMinutes(-35).ToString('o'); exitCode = 0; lastLine = 'x' }
-Update-Agent $cfg 'DUMMY-K1-verify-2' @{ type = 'codex'; plan = $plan; package = 'K1'; phase = 'verify'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-30).ToString('o'); endedAt = (Get-Date).AddMinutes(-25).ToString('o'); exitCode = 0; lastLine = 'x' }
+Update-Agent $cfg 'DUMMY-K1-work-2' @{ type = 'claude'; plan = $rel; package = 'K1'; phase = 'work'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-40).ToString('o'); endedAt = (Get-Date).AddMinutes(-35).ToString('o'); exitCode = 0; lastLine = 'x' }
+Update-Agent $cfg 'DUMMY-K1-verify-2' @{ type = 'codex'; plan = $rel; package = 'K1'; phase = 'verify'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-30).ToString('o'); endedAt = (Get-Date).AddMinutes(-25).ToString('o'); exitCode = 0; lastLine = 'x' }
 End-Agent 'DUMMY-K1-verify-2' "Offen: A.`nOffene Anforderungen: 1"
-Check 'two open verifies: any work start (also from the brain) is one class higher' ((Get-StartClass $cfg 'work' $plan 'K1' '') -eq 'heavy') (Get-StartClass $cfg 'work' $plan 'K1' '')
-Check 'two open verifies: package is not locked yet' (-not (Test-PackageLocked $cfg $plan 'K1'))
-Update-Agent $cfg 'DUMMY-K1-work-3' @{ type = 'claude'; plan = $plan; package = 'K1'; phase = 'work'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-20).ToString('o'); endedAt = (Get-Date).AddMinutes(-15).ToString('o'); exitCode = 0; lastLine = 'x' }
-Update-Agent $cfg 'DUMMY-K1-verify-3' @{ type = 'codex'; plan = $plan; package = 'K1'; phase = 'verify'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-10).ToString('o'); endedAt = (Get-Date).AddMinutes(-5).ToString('o'); exitCode = 0; lastLine = 'x' }
+Check 'two open verifies: any work start (also from the brain) is one class higher' ((Get-StartClass $cfg 'work' $rel 'K1' '') -eq 'heavy') (Get-StartClass $cfg 'work' $rel 'K1' '')
+Check 'two open verifies: package is not locked yet' (-not (Test-PackageLocked $cfg $rel 'K1'))
+Update-Agent $cfg 'DUMMY-K1-work-3' @{ type = 'claude'; plan = $rel; package = 'K1'; phase = 'work'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-20).ToString('o'); endedAt = (Get-Date).AddMinutes(-15).ToString('o'); exitCode = 0; lastLine = 'x' }
+Update-Agent $cfg 'DUMMY-K1-verify-3' @{ type = 'codex'; plan = $rel; package = 'K1'; phase = 'verify'; cwd = "$root\wt"; status = 'done'; startedAt = (Get-Date).AddMinutes(-10).ToString('o'); endedAt = (Get-Date).AddMinutes(-5).ToString('o'); exitCode = 0; lastLine = 'x' }
 End-Agent 'DUMMY-K1-verify-3' "Offen: A.`nOffene Anforderungen: 1"
-Check 'third open verify: package is locked' (Test-PackageLocked $cfg $plan 'K1')
+Check 'third open verify: package is locked' (Test-PackageLocked $cfg $rel 'K1')
 Round
 $before = @(Read-Agents $cfg).Count
 Check 'locked package: no new agent' (@(Read-Agents $cfg | Where-Object { $_.name -like 'DUMMY-K1-work-4*' -or $_.name -like 'DUMMY-K1-verify-4*' }).Count -eq 0)
-Check 'locked package: reported once as Open for Owner in the state file' ((Get-Content "$root\proj\dummy\DUMMY-STATE.md" -Raw) -match 'Open for Owner - LOCK-K1')
+# The open point of the lock is recorded in the database (kv key lock:<plan>|<package> with the open-question text, and the lock flag of the package row) instead of in a state file of the plan.
+$lockText = Get-OrchKv $cfg "lock:$rel|K1"
+Check 'locked package: reported once as Open for Owner (open point in the database, package row locked)' (($lockText -match 'Open for Owner - LOCK-K1') -and (@(Get-OrchPackages $cfg $rel | Where-Object { $_.id -eq 'K1' })[0].locked -eq $true)) $lockText
 Round
-Check 'second round does not write the question twice' (([regex]::Matches((Get-Content "$root\proj\dummy\DUMMY-STATE.md" -Raw), 'Open for Owner - LOCK-K1')).Count -eq 1)
+$lockLogs = @(Get-Content "$($cfg.runtime)\ROUNDS.log" | Where-Object { $_ -match 'package K1 of .* locked' }).Count
+Check 'second round does not record the question twice' (([regex]::Matches((Get-OrchKv $cfg "lock:$rel|K1"), 'Open for Owner - LOCK-K1')).Count -eq 1 -and $lockLogs -eq 1 -and @(Get-OrchKvList $cfg 'lock:').Count -eq 1) "log lines=$lockLogs"
 
 # --- 6. a pane wrapper that fails at start (invalid project file) closes its pane after the delay with exit 0 ----
 $pw = "$root\panewrap"; New-Item -ItemType Directory -Force $pw | Out-Null
