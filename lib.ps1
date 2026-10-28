@@ -574,16 +574,21 @@ function Test-Frozen($Cfg, [string]$Plan, [string]$Pkg) { return ((Get-FrozenKey
 
 # Fixed list of short, non-technical first names for agents (the orchestrator itself is always CHIEF).
 $script:AgentNames = @('Max', 'Fritz', 'Lena', 'Anna', 'Jonas', 'Mia', 'Paul', 'Emma', 'Finn', 'Hanna', 'Ben', 'Clara', 'Leo', 'Nora', 'Tim', 'Ida', 'Karl', 'Rosa', 'Otto', 'Vera', 'Emil', 'Greta', 'Jan', 'Lotte')
-# Fixed palette of clearly distinct colors (RGB hex) that are not used for status (green, yellow, red, grey) and not for CHIEF.
-$script:AgentColors = @('4FA8FF', 'C77DFF', 'FF6FB5', '3DDCDC', 'B39DDB', 'D7A86E', '8EA2C8', 'E040FB', '6FA8DC', 'F4A6D7')
+# Fixed palette of colors (RGB hex) that differ in hue by at least 25 degrees (so two agents never look alike, e.g. two purples) and are not used for status (green, yellow, red, grey) and not for CHIEF.
+$script:AgentColors = @('4FA8FF', 'C77DFF', 'FF6FB5', '3DDCDC', 'FF9F43', '3DDC97')
 $script:ChiefColor = 'FFFFFF'
 # First name and color for a new agent: the first free entry of the lists; free = not used by a running agent or one that ended within the last hour.
+# The color is never taken from a running agent while another one is free: colors of agents that ended within the last hour are given up first, and only with more running agents than colors the least used one repeats.
 function Get-AgentIdentity($Cfg) {
-    $rows = @(Read-Agents $Cfg | Where-Object { $_.status -eq 'running' -or $_.status -eq 'starting' -or ($_.endedAt -and ((Get-Date) - [datetime]$_.endedAt).TotalHours -le 1) })
-    $usedN = @($rows | ForEach-Object { [string]$_.person }); $usedC = @($rows | ForEach-Object { [string]$_.color })
+    $all = @(Read-Agents $Cfg)
+    $run = @($all | Where-Object { $_.status -eq 'running' -or $_.status -eq 'starting' })
+    $rows = @($all | Where-Object { $_.status -eq 'running' -or $_.status -eq 'starting' -or ($_.endedAt -and ((Get-Date) - [datetime]$_.endedAt).TotalHours -le 1) })
+    $usedN = @($rows | ForEach-Object { [string]$_.person }); $usedC = @($rows | ForEach-Object { [string]$_.color }); $runC = @($run | ForEach-Object { [string]$_.color })
     $n = @($script:AgentNames | Where-Object { $usedN -notcontains $_ } | Select-Object -First 1)
     $c = @($script:AgentColors | Where-Object { $usedC -notcontains $_ } | Select-Object -First 1)
-    return @{ Person = $(if ($n.Count) { $n[0] } else { $script:AgentNames[$rows.Count % $script:AgentNames.Count] }); Color = $(if ($c.Count) { $c[0] } else { $script:AgentColors[$rows.Count % $script:AgentColors.Count] }) }
+    if (-not $c.Count) { $c = @($script:AgentColors | Where-Object { $runC -notcontains $_ } | Select-Object -First 1) }
+    if (-not $c.Count) { $c = @($script:AgentColors | Sort-Object { $col = $_; @($runC | Where-Object { $_ -eq $col }).Count } | Select-Object -First 1) }
+    return @{ Person = $(if ($n.Count) { $n[0] } else { $script:AgentNames[$rows.Count % $script:AgentNames.Count] }); Color = $c[0] }
 }
 # Short model text for the first display line: "Son 5.5 med." / "Sol 6.1 med.".
 function Get-ModelShort([string]$Type, [string]$Model, [string]$Effort) {
