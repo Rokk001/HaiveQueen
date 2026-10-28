@@ -36,7 +36,7 @@ The tool was renamed from agent-orchestrator to HaiveQueen. Existing installatio
 |---|---|
 | command `orch` | command `bzz` (also `python -m haivequeen`) |
 | Python package `orchlib`, script `orch.py`, distribution `agent-orchestrator` | package `haivequeen` (`haivequeen/cli.py`), distribution `haivequeen` |
-| `%APPDATA%gent-orchestrator`, `%LOCALAPPDATA%gent-orchestrator` (Linux: `~/.config/agent-orchestrator`, `~/.local/share/agent-orchestrator`) | `%APPDATA%\HaiveQueen`, `%LOCALAPPDATA%\HaiveQueen` (Linux: `~/.config/HaiveQueen`, `~/.local/share/HaiveQueen`) |
+| `%APPDATA%\agent-orchestrator`, `%LOCALAPPDATA%\agent-orchestrator` (Linux: `~/.config/agent-orchestrator`, `~/.local/share/agent-orchestrator`) | `%APPDATA%\HaiveQueen`, `%LOCALAPPDATA%\HaiveQueen` (Linux: `~/.config/HaiveQueen`, `~/.local/share/HaiveQueen`) |
 | database file `orchestrator.db` | `haivequeen.db` (rename the file together with its `-wal` and `-shm` files) |
 | workspace folder `.orchestrator/` | `.haivequeen/` |
 | environment variables `ORCH_*` | `BZZ_*` (same suffixes) |
