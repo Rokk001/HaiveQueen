@@ -43,6 +43,10 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 | `questions` | `[--project] [--open] [--status] [--plan] [--item]` | question rows |
 | `decisions list` | `[--project] [--plan] [--item]` | decision rows |
 | `decisions add` | `--project --source owner\|coordinator\|auto --text [--plan] [--item]` | `{ok, id}` |
+| `triage list` | `--project` | locked packages with open points and no running triage agent (`phase` `triage`): `[{plan, id, title, lock_reason, points}]`; points are the lines of the lock reason (`item: text`, else `pN`) without a decision or open question |
+| `triage prompt` | `--project --plan --package [--python]` | `{prompt, points}`; prompt for the triage agent (class medium): technical points go to `triage decide`, game/balance points to `triage ask`, in doubt game/balance |
+| `triage decide` | `--project --plan --package --item --text --reason --source` | `{ok, id, unlocked, remaining}`; writes a decision with source `auto` (text carries reason and source) and unlocks the package after the last point |
+| `triage ask` | `--project --plan --package --item --question [--recommendation]` | `{ok, question_id, answered_by: owner, locked: true}`; the package stays locked, unlocking after `answer` is the routine's job |
 | `done`, `ready`, `ask`, `note`, `answer`, `status` | see the command line help | agent and owner commands |
 
 ## PowerShell wrappers (lib.ps1, block "v2 runtime wrappers")
