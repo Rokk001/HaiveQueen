@@ -189,6 +189,19 @@ class S7Test(RoundCase):
         self.round()
         self.assertEqual(self.ag("DUMMY-Q-D3-work")["cwd"], str(pkg_wt))
 
+    def test_fix_and_plan_start_use_worktree_not_workspace(self):
+        """A fix agent for a blocked row and a package start work in the newest worktree of the plan, not in the newer workspace folder."""
+        self.reset_rt()
+        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
+        old_wt = self.base / "wt-old"
+        old_wt.mkdir()
+        self.agent("Z-ZZ-work", package="ZZ", cwd=str(old_wt), started=60, ended=50)
+        self.agent("Z-YY-work", package="YY", cwd=str(self.repo), started=40, ended=30)
+        runtime.queue_upsert(self.conn, "testproj", "feature/dummy", "abc123def", REL, "blocked", "2 checks red: x")
+        self.round()
+        self.assertEqual(self.ag("DUMMY-FIX-abc123d-work")["cwd"], str(old_wt))
+        self.assertEqual(self.ag("DUMMY-P1-work")["cwd"], str(old_wt))
+
     def test_lock_text_with_decided_items_no_call(self):
         """An open-for-owner point naming only decided items causes no brain call."""
         self.machine["triage"] = False

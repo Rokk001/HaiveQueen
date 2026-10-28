@@ -440,6 +440,19 @@ def new_worktree(env, middle: str) -> str:
     return os.path.join(os.path.dirname(str(env.workspace).rstrip("\\/")), "%s-%s" % (env.settings.get("worktreePrefix", "wt"), middle))
 
 
+def same_dir(a: str, b: str) -> bool:
+    """True when both paths name the same folder (case and separators ignored)."""
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def pick_cwd(hist: list, repo: str, pkg: str = "") -> str:
+    """Working folder for a new agent of a plan: the newest worktree of the package `pkg`, else the newest worktree of the plan (never the
+    workspace folder while a worktree is known), else the newest folder of the plan (the workspace). `hist` is sorted by start time."""
+    wts = [a for a in hist if not same_dir(str(a["cwd"]), repo)]
+    own = [a for a in wts if pkg and (str(a.get("package")) == pkg or pkg in a["bundle"])]
+    return str((own or wts or hist)[-1]["cwd"])
+
+
 # ---- handoff (rule 13) ----
 
 def set_handoff_flags(env, agents: list) -> list:
@@ -575,8 +588,14 @@ def get_routine(env, ctx: dict) -> dict:
         chosen.append(nm)
         free[pv["name"]] = free.get(pv["name"], 0) - 1
         workers[0] -= 1
-        acts.append(start_action(nm, pv["name"], "work", rel_p, pk, str(hist[-1]["cwd"]), prompt(env, "fixBlocked", {
-            "plan": rel_p, "branch": r["branch"], "tip": r["tip"], "status": r["status"], "cwd": str(hist[-1]["cwd"])})))
+        fcwd = pick_cwd(hist, repo)
+        if same_dir(fcwd, repo):   # no worktree known: the fix agent creates its own next to the main checkout
+            ftext = "Plan: %s. " % rel_p + prompt(env, "fixBlockedNoPlan", {
+                "branch": r["branch"], "tip": r["tip"], "status": (r["status"] + " " + r["note"]).strip(), "cwd": repo,
+                "newWorktree": new_worktree(env, "fix-" + sch.to_slug(r["branch"]))})
+        else:
+            ftext = prompt(env, "fixBlocked", {"plan": rel_p, "branch": r["branch"], "tip": r["tip"], "status": r["status"], "cwd": fcwd})
+        acts.append(start_action(nm, pv["name"], "work", rel_p, pk, fcwd, ftext))
     for q in [x for x in ctx["questions"] if x["status"] == "ANSWERED"]:
         if re.search(r"(?i)duplicate", str(q["answer"])):
             continue   # the coordinator marked it as a duplicate of an answered question
@@ -602,10 +621,8 @@ def get_routine(env, ctx: dict) -> dict:
         workers[0] -= 1
         # The question belongs to a package: it works in that package's existing worktree (an agent of the package whose folder is not the
         # workspace). Without one the rule of the work packages applies: last known folder of the plan, the main checkout gets a new worktree.
-        own = [a for a in hist if (str(a.get("package")) == tok or tok in a["bundle"])
-               and os.path.normcase(os.path.abspath(str(a["cwd"]))) != os.path.normcase(os.path.abspath(repo))]
-        qcwd = str((own or hist)[-1]["cwd"])
-        if os.path.normcase(os.path.abspath(qcwd)) == os.path.normcase(os.path.abspath(repo)):
+        qcwd = pick_cwd(hist, repo, tok)
+        if same_dir(qcwd, repo):
             slug = sch.to_slug(plan_tag(env, rel_p)) + "-" + sch.to_slug(pk)
             where = prompt(env, "workInMainCheckout", {"cwd": qcwd, "newWorktree": new_worktree(env, slug), "subBranch": slug})
         else:
@@ -618,7 +635,7 @@ def get_routine(env, ctx: dict) -> dict:
         tag = plan_tag(env, rel)
         pkgs = env.packages(rel)
         hist = sorted([a for a in allr if norm_plan(a["plan"]) == norm_plan(rel) and a.get("cwd")], key=lambda a: a["started"])
-        cwd = str(hist[-1]["cwd"]) if hist else ""
+        cwd = pick_cwd(hist, repo) if hist else ""
         # New plan: the script cannot plan it (no package table or no known worktree) -> brain, once.
         if not pkgs or not cwd:
             if "newplan:" + rel not in handled:
@@ -808,7 +825,7 @@ def get_routine(env, ctx: dict) -> dict:
             workers[0] -= 1
             texts = []
             for m in members:
-                same = os.path.normcase(os.path.abspath(cwd)) == os.path.normcase(os.path.abspath(repo))
+                same = same_dir(cwd, repo)
                 slug = sch.to_slug(tag) + "-" + sch.to_slug(m["id"])
                 wt_note = (prompt(env, "workInMainCheckout", {"cwd": cwd, "newWorktree": new_worktree(env, slug), "subBranch": slug})
                            if same else prompt(env, "workInWorktree", {"cwd": cwd}))
