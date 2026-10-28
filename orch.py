@@ -5,9 +5,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from orchlib import config, db, runtime, runtime_cli  # noqa: E402
+from orchlib import config, db, legacy, runtime, runtime_cli  # noqa: E402
 
-STUBS = ("init", "register", "start", "stop", "export", "import-legacy")
+STUBS = ("init", "register", "start", "stop", "export")
 
 
 def out(obj) -> None:
@@ -160,6 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_queue)
 
     runtime_cli.register(sub)
+    legacy.register(sub)
 
     for name in STUBS:
         p = sub.add_parser(name)
