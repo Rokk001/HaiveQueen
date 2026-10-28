@@ -27,3 +27,19 @@ The commands for agents stay the same four: `bzz done`, `bzz ready`, `bzz ask`, 
 6. Start with `bzz start`.
 
 Old files are only read, never changed, so you can go back to version 1 at any time.
+
+## agent-orchestrator -> HaiveQueen
+
+The tool was renamed from agent-orchestrator to HaiveQueen. Existing installations change like this:
+
+| Before | After |
+|---|---|
+| command `orch` | command `bzz` (also `python -m haivequeen`) |
+| Python package `orchlib`, script `orch.py`, distribution `agent-orchestrator` | package `haivequeen` (`haivequeen/cli.py`), distribution `haivequeen` |
+| `%APPDATA%gent-orchestrator`, `%LOCALAPPDATA%gent-orchestrator` (Linux: `~/.config/agent-orchestrator`, `~/.local/share/agent-orchestrator`) | `%APPDATA%\HaiveQueen`, `%LOCALAPPDATA%\HaiveQueen` (Linux: `~/.config/HaiveQueen`, `~/.local/share/HaiveQueen`) |
+| database file `orchestrator.db` | `haivequeen.db` (rename the file together with its `-wal` and `-shm` files) |
+| workspace folder `.orchestrator/` | `.haivequeen/` |
+| environment variables `ORCH_*` | `BZZ_*` (same suffixes) |
+| GitHub repository `Rokk001/agent-orchestrator` | `Rokk001/HaiveQueen` |
+
+To switch: stop the loop, move the folders and the database file as listed, run `pip uninstall agent-orchestrator` and `pip install -e .` in the new clone, and rename the environment variables in your scripts.

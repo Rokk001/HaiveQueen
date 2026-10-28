@@ -1,9 +1,13 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="agent-orchestrator" width="100%">
+  <img src="assets/haivequeen.png" alt="HaiveQueen logo" width="320">
 </p>
 
 <p align="center">
-  <a href="https://github.com/Rokk001/agent-orchestrator/actions/workflows/test.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Rokk001/agent-orchestrator/test.yml?branch=main&style=for-the-badge&label=CI"></a>
+  <img src="assets/banner.svg" alt="HaiveQueen" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Rokk001/HaiveQueen/actions/workflows/test.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Rokk001/HaiveQueen/test.yml?branch=main&style=for-the-badge&label=CI"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge"></a>
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-%E2%89%A53.11-3776AB?style=for-the-badge">
   <img alt="Windows and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4?style=for-the-badge">
@@ -18,7 +22,7 @@
 Working through a big plan with AI coding agents means a lot of babysitting: paste the prompt, wait, `/clear`, paste the next one, check the result, repeat.
 With several agents at once it gets worse, and a supervising model that just watches burns tokens while it waits.
 
-**agent-orchestrator** removes that loop. It reads your plans, builds the prompt for every task itself, starts a fresh agent for it and checks the result with a second, independent agent.
+**HaiveQueen** removes that loop. It reads your plans, builds the prompt for every task itself, starts a fresh agent for it and checks the result with a second, independent agent.
 A language model is only asked when something needs judgement; everything routine is plain Python.
 
 ## Features
@@ -53,7 +57,7 @@ flowchart LR
 
 1. Every round the loop syncs the plans of all projects into the database and applies the fixed transitions (work done, then verify, then release, then integrate).
 2. Only if something needs judgement does it become an **event**, and the brain (one fresh `claude -p` call) is asked once. Its answer is a validated JSON action.
-3. A started agent writes its result to the plan's state, reports with `orch done` / `orch ready` / `orch ask` and ends. The next round sees the new state.
+3. A started agent writes its result to the plan's state, reports with `bzz done` / `bzz ready` / `bzz ask` and ends. The next round sees the new state.
 
 ## Dashboard
 
@@ -72,17 +76,17 @@ Rendered by the tool itself from a throw-away runtime with invented data (the sc
 **Steps**
 
 ```bash
-git clone https://github.com/Rokk001/agent-orchestrator
-cd agent-orchestrator
-pip install -e .                       # optional: gives you the command `orch` (else use `python orch.py`)
+git clone https://github.com/Rokk001/HaiveQueen
+cd HaiveQueen
+pip install -e .                       # optional: gives you the command `bzz` (else use `python -m haivequeen`)
 
-orch init /path/to/my-project          # creates .orchestrator/project.toml, AGENTS.md and an example plan
-orch register /path/to/my-project      # adds the project to config.toml and the database
-orch start                             # opens the orchestrator window and the dashboard
-orch stop                              # no new agents; running agents finish their task
+bzz init /path/to/my-project          # creates .haivequeen/project.toml, AGENTS.md and an example plan
+bzz register /path/to/my-project      # adds the project to config.toml and the database
+bzz start                             # opens the HaiveQueen window and the dashboard
+bzz stop                              # no new agents; running agents finish their task
 ```
 
-Put your machine settings (providers, slots) into `config.toml` (see `examples/config.example.toml`; folder: `%APPDATA%\agent-orchestrator` on Windows, `~/.config/agent-orchestrator` on Linux).
+Put your machine settings (providers, slots) into `config.toml` (see `examples/config.example.toml`; folder: `%APPDATA%\HaiveQueen` on Windows, `~/.config/HaiveQueen` on Linux).
 
 ## Plans
 
@@ -111,34 +115,35 @@ Free Markdown below the header: the agents read it.
 
 ## Configuration
 
-`config.toml` (machine): `slots`, `buildJobs` (0 = automatic), `ramReserveMb`, `agentStallSeconds` (an agent that prints nothing for this long is only marked as stalled in its row, an event, the dashboard and `orch status`, never ended or failed; default 3600, 0 = off), `[[providers]]` (name, protocol, command, args, slots, use = preferred | fallback | capability-only, classes, limit) and `[[projects]]`.
+`config.toml` (machine): `slots`, `buildJobs` (0 = automatic), `ramReserveMb`, `agentStallSeconds` (an agent that prints nothing for this long is only marked as stalled in its row, an event, the dashboard and `bzz status`, never ended or failed; default 3600, 0 = off), `[[providers]]` (name, protocol, command, args, slots, use = preferred | fallback | capability-only, classes, limit) and `[[projects]]`.
 
-`.orchestrator/project.toml` (per project): `name`, `colour`, `priority`, `planGlobs`, `planExclude` (globs removed from the planGlobs matches), `[views]` and the branch and build settings. See `examples/`.
+`.haivequeen/project.toml` (per project): `name`, `colour`, `priority`, `planGlobs`, `planExclude` (globs removed from the planGlobs matches), `[views]` and the branch and build settings. See `examples/`.
 
 ## Command line
 
 | Command | Who | What it does |
 |---|---|---|
-| `orch start` / `orch stop` | owner | start the loop (`--terminal auto/wt/tmux/headless`, `--rounds N`), or stop starting new agents |
-| `orch pause` / `orch resume` / `orch drain` | owner | pause new starts, resume, or let the running agents finish |
-| `orch status [--project p] [--json]` | owner | "X / Y integrated (%)" and a task / agent / status table per project |
-| `orch questions [--open]`, `orch answer <id> "<text>" --by owner` | owner | read and answer questions of the agents |
-| `orch queue [upsert]` | owner, integrator | the integration queue |
-| `orch init <folder>`, `orch register <folder>` | owner | create and register a project |
-| `orch export`, `orch views --project p` | owner | export the state, write the Markdown views |
-| `orch import-legacy ...` | owner | import the state of version 1 (see `docs/MIGRATION-v1.md`) |
-| `orch triage ...` | triage agent | list, decide or ask about the open points of a locked package |
-| `orch done`, `orch ready`, `orch ask`, `orch note` | agents | final report, branch ready for integration, question, note (`docs/RUNTIME-API.md`) |
+| `bzz start` / `bzz stop` | owner | start the loop (`--terminal auto/wt/tmux/headless`, `--rounds N`), or stop starting new agents |
+| `bzz pause` / `bzz resume` / `bzz drain` | owner | pause new starts, resume, or let the running agents finish |
+| `bzz status [--project p] [--json]` | owner | "X / Y integrated (%)" and a task / agent / status table per project |
+| `bzz questions [--open]`, `bzz answer <id> "<text>" --by owner` | owner | read and answer questions of the agents |
+| `bzz queue [upsert]` | owner, integrator | the integration queue |
+| `bzz decisions list [--all]`, `bzz decisions update <id> --status active\|rule\|superseded` | owner | decisions; the list shows only `active` ones unless `--all` |
+| `bzz init <folder>`, `bzz register <folder>` | owner | create and register a project |
+| `bzz export`, `bzz views --project p` | owner | export the state, write the Markdown views |
+| `bzz import-legacy ...` | owner | import the state of version 1 (see `docs/MIGRATION-v1.md`) |
+| `bzz triage ...` | triage agent | list, decide or ask about the open points of a locked package |
+| `bzz done`, `bzz ready`, `bzz ask`, `bzz note` | agents | final report, branch ready for integration, question, note (`docs/RUNTIME-API.md`) |
 
 ## FAQ
 
-**Does the orchestrator call a model all the time?** No. A model is called only on events (new plan, open items, failure, question) and for triage.
+**Does HaiveQueen call a model all the time?** No. A model is called only on events (new plan, open items, failure, question) and for triage.
 
 **Which agents can I use?** Claude Code and Codex CLI out of the box; any other command through the `providers` list.
 
-**Where does the state live?** In one SQLite database in the data folder. It must be on a local disk, never on a network drive (SQLite WAL needs it; the tool refuses to open it there). Export it with `orch export`; Markdown views are generated read-only.
+**Where does the state live?** In one SQLite database in the data folder. It must be on a local disk, never on a network drive (SQLite WAL needs it; the tool refuses to open it there). Export it with `bzz export`; Markdown views are generated read-only.
 
-**Can I stop it safely?** Yes. `orch stop` starts no new agent and waits; after a crash the next start re-attaches to agents that are still alive.
+**Can I stop it safely?** Yes. `bzz stop` starts no new agent and waits; after a crash the next start re-attaches to agents that are still alive.
 
 **I used version 1 (PowerShell).** See `docs/MIGRATION-v1.md`.
 
