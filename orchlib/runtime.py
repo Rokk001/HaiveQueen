@@ -307,7 +307,8 @@ def _workspace(conn, project, override=None) -> Path:
 def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
     """Read the plan files of a project into plans/packages and return the plans and the startable packages (rule 11)."""
     ws = _workspace(conn, project, workspace)
-    found = plan_mod.discover_plans(str(ws), config.load_project(ws)["planGlobs"])
+    pcfg = config.load_project(ws)
+    found = plan_mod.discover_plans(str(ws), pcfg["planGlobs"], pcfg["planExclude"])
     stamp = db.now()
     startable = []
     with db.transaction(conn):

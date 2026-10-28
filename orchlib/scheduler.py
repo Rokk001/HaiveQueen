@@ -445,9 +445,10 @@ def format_tokens(n) -> str:
 class ProjectEnv:
     """Everything the round needs for one project: connection, name, workspace, merged settings and its providers."""
 
-    def __init__(self, conn, name: str, workspace, settings: dict, colour: str = "white", priority: int = 0, plan_globs=None):
-        """Remember the project data (plan_globs: where its plan files are); the provider list is built from the settings."""
+    def __init__(self, conn, name: str, workspace, settings: dict, colour: str = "white", priority: int = 0, plan_globs=None, plan_exclude=None):
+        """Remember the project data (plan_globs: where its plan files are, plan_exclude: globs removed from them); the provider list is built from the settings."""
         self.plan_globs = list(plan_globs or ["docs/plans/*.md"])
+        self.plan_exclude = list(plan_exclude or [])
         self.conn = conn
         self.name = name
         self.workspace = Path(workspace)
@@ -502,7 +503,7 @@ def load_projects(conn, machine: dict) -> list:
         pcfg = config.load_project(ws)
         settings = build_settings(machine, pcfg)
         envs.append(ProjectEnv(conn, row["name"], ws, settings, pcfg.get("colour") or row["colour"] or "white",
-                               int(pcfg.get("priority", row["priority"] or 0)), pcfg.get("planGlobs")))
+                               int(pcfg.get("priority", row["priority"] or 0)), pcfg.get("planGlobs"), pcfg.get("planExclude")))
     return envs
 
 

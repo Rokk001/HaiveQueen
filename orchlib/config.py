@@ -21,6 +21,7 @@ DEFAULT_PROJECT = {
     "colour": "white",
     "priority": 0,
     "planGlobs": ["docs/plans/*.md"],
+    "planExclude": [],
     "views": {"queue": "", "questions": "", "decisions": ""},
 }
 

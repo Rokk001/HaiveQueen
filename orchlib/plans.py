@@ -108,14 +108,21 @@ def load_plan(path):
         return parse_plan_text(f.read(), path)
 
 
-def discover_plans(root, globs=None):
-    """Load all plans below root matching the glob list (default docs/plans/*.md), sorted by path."""
+def discover_plans(root, globs=None, excludes=None):
+    """Load all plans below root matching the glob list (default docs/plans/*.md), sorted by path.
+
+    excludes is an optional list of globs (same syntax, ** allowed) whose matches are removed again;
+    a pattern such as docs/x/** excludes every file below that folder."""
     found = set()
     for pattern in (globs or DEFAULT_GLOBS):
         for p in glob.glob(os.path.join(root, pattern), recursive=True):
             if os.path.isfile(p):
                 found.add(os.path.normpath(p))
-    return [load_plan(p) for p in sorted(found)]
+    skip = set()
+    for pattern in (excludes or []):
+        for p in glob.glob(os.path.join(root, pattern), recursive=True):
+            skip.add(os.path.normcase(os.path.normpath(p)))
+    return [load_plan(p) for p in sorted(found) if os.path.normcase(p) not in skip]
 
 
 def _is_all(value):
