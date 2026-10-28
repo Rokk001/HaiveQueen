@@ -94,6 +94,26 @@ TAKE = ("import sys, time\nsys.path.insert(0, sys.argv[1])\nfrom haivequeen impo
         "res = loop._take_pid_lock(loop.lock_file(), own_ok=True)\nprint(res, flush=True)\ntime.sleep(2.5)\n")
 
 
+class LeftoverPanesTest(RoundCase):
+    """A new start closes the Overview pane a previous start left behind, so the window keeps one tab."""
+
+    def test_leftover_overview_is_closed_agent_pane_stays(self):
+        """The old Overview pane ends, a running agent pane of the same window and the (ended) old Queen pane are not touched or counted."""
+        term = Headless(self.base / "panes")
+        dash = term.open_window("HaiveQueen", pane_title("all projects", "Overview", "Dashboard", "-", True), SLEEP, name="dashboard")
+        agent = term.split_pane("HaiveQueen", pane_title("ODP", "Agent PIA", "INGAME-QS-1", "m", True), "white", SLEEP,
+                                "vertical", 0.5, dash, "ODP__INGAME-QS-1")
+        try:
+            self.assertEqual(loop.close_leftover_panes(term, "HaiveQueen"), [dash])
+            alive = dict((p.id, p.alive) for p in term.list_panes("HaiveQueen"))
+            self.assertFalse(alive[dash])
+            self.assertTrue(alive[agent])
+        finally:
+            for p in term.list_panes("HaiveQueen"):
+                if p.alive:
+                    term.close_pane(p.id)
+
+
 class PaneLockTest(RoundCase):
     """Test E: pane commands and the loop lock across processes."""
 

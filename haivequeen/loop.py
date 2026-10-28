@@ -155,6 +155,17 @@ def queen_pane_title(model: str, test: bool) -> str:
     return pane_title("all projects", "QUEEN", "Queen", model, test)
 
 
+def close_leftover_panes(term, window: str) -> list:
+    """Close the Queen and Overview panes a previous start left in `window` (the loop ended, the dashboard never does) and return their ids.
+    Without this a new start opens a second tab next to the old one. Agent panes are never touched: only these two fixed titles match."""
+    closed = []
+    for p in term.list_panes(window):
+        if p.alive and ("| all projects | QUEEN |" in p.title or "| all projects | Overview |" in p.title):
+            term.close_pane(p.id)
+            closed.append(p.id)
+    return closed
+
+
 def is_test_runtime() -> bool:
     """True when the process runs with a test runtime (BZZ_RUNTIME_OVERRIDE set)."""
     return bool(os.environ.get("BZZ_RUNTIME_OVERRIDE"))
@@ -1207,6 +1218,7 @@ def cmd_start(args, conn) -> int:
         start_pending_file().parent.mkdir(parents=True, exist_ok=True)
         start_pending_file().write_text(str(os.getpid()), encoding="ascii")
         try:
+            close_leftover_panes(term, window)
             panes = [term.open_window(window, title, boot, "white", "chief")]
             import importlib.util
             if importlib.util.find_spec("haivequeen.dashboard") is not None:
