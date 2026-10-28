@@ -6,10 +6,10 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from orchlib import config, db, runtime, runtime_cli  # noqa: E402
+from orchlib import config, db, legacy, runtime, runtime_cli  # noqa: E402
 from orchlib import export as export_mod, init as init_mod, views  # noqa: E402
 
-STUBS = ("start", "stop", "import-legacy")
+STUBS = ("start", "stop")
 
 
 def out(obj) -> None:
@@ -202,6 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(fn=fn)
 
     runtime_cli.register(sub)
+    legacy.register(sub)
 
     for name in STUBS:
         p = sub.add_parser(name)

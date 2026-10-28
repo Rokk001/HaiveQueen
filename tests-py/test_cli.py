@@ -81,7 +81,7 @@ class CliTest(unittest.TestCase):
 
     def test_stubs(self):
         """Commands planned for later steps report 'not implemented in S1'."""
-        for name in ("start", "stop", "import-legacy"):
+        for name in ("start", "stop"):
             code, o = self.run_orch(name)
             self.assertEqual(code, 2)
             self.assertIn("not implemented in S1", o)
