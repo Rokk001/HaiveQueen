@@ -160,6 +160,7 @@ function Build-Lines([int]$level, $d, [int]$w, [int]$nFin) {
     return $lines
 }
 
+$roundsLog = ''; try { $roundsLog = [string](Get-OrchLogPaths $cfg).rounds } catch { }   # text mirror of the round history: only its last write time is shown
 $usageAt = [datetime]::MinValue; $cu = $null; $xu = $null; $counts = @{}; $draftNames = @()
 while ($true) {
     try {
@@ -167,9 +168,9 @@ while ($true) {
             $usageAt = Get-Date; $cu = Get-ClaudeUsage $cfg; $xu = Get-CodexUsage
             # VERBRAUCH data (all Claude Code and Codex sessions of this PC); incremental with a cache, so the once-a-minute call stays cheap.
             $usage = $null
-            if (Get-Command Get-UsageTable -ErrorAction SilentlyContinue) { try { $usage = Get-UsageTable -PythonExe ([string]$cfg.pythonExe) -CacheDir (Join-Path $cfg.runtime 'usage-cache') -AgentsFile (Join-Path $cfg.runtime 'AGENTS.json') -ArchiveFile (Join-Path $cfg.runtime 'AGENTS-ARCHIVE.json') -BrainFile (Join-Path $cfg.runtime 'BRAIN-USAGE.jsonl') } catch { $usage = $null } }
+            if (Get-Command Get-UsageTable -ErrorAction SilentlyContinue) { try { $usage = Get-UsageTable -PythonExe ([string]$cfg.pythonExe) -CacheDir (Join-Path $cfg.runtime 'usage-cache') -Cfg $cfg } catch { $usage = $null } }
             $counts = @{ DRAFT = 0; READY = 0; IN_PROGRESS = 0; DONE = 0; PAUSED = 0 }; $draftNames = @()
-            foreach ($pf in (Get-PlanFiles $cfg.projectsRoot)) { $s = Get-PlanStatus $pf.FullName; if ($counts.ContainsKey($s)) { $counts[$s]++ } else { $counts[$s] = 1 }; if ($s -eq 'DRAFT') { $draftNames += ($pf.BaseName -replace '-?PLAN$', '') } }
+            foreach ($pf in (Get-OrchPlans $cfg)) { $s = [string]$pf.status; if ($counts.ContainsKey($s)) { $counts[$s]++ } else { $counts[$s] = 1 }; if ($s -eq 'DRAFT') { $draftNames += ([IO.Path]::GetFileNameWithoutExtension([string]$pf.path) -replace '-?PLAN$', '') } }
         }
         $w = if ($env:ORCH_DASH_WIDTH) { [int]$env:ORCH_DASH_WIDTH } else { [Math]::Max(20, $Host.UI.RawUI.WindowSize.Width - 1) }   # ORCH_DASH_WIDTH only for tests
         $h = if ($env:ORCH_DASH_HEIGHT) { [int]$env:ORCH_DASH_HEIGHT } else { [Math]::Max(5, $Host.UI.RawUI.WindowSize.Height - 1) }   # ORCH_DASH_HEIGHT only for tests
@@ -179,7 +180,7 @@ while ($true) {
         $os = Get-CimInstance Win32_OperatingSystem
         $totGB = $os.TotalVisibleMemorySize / 1MB; $usedGB = $totGB - $os.FreePhysicalMemory / 1MB
         $bn = @(Get-BuildProcessNames)
-        $rl = Join-Path $cfg.runtime 'ROUNDS.log'
+        $rl = $roundsLog
         $bt = Get-BrainTotals $cfg; $os2 = Read-OrchState $cfg
         $orch = @{ modelShort = (Get-ModelShort 'claude' ([string]$cfg.brainModel) ([string]$cfg.brainEffort)); model =$(if ($bt.Last -and $bt.Last.model) { [string]$bt.Last.model } else { Get-ModelLabel $cfg.brainModel }); effort = [string]$cfg.brainEffort; calls = $bt.Calls; ctx = $(if ($bt.LastCall) { $bt.LastCall.context } else { $null }); lastIn = $(if ($bt.LastCall) { $bt.LastCall.input } else { $null }); lastOut = $(if ($bt.LastCall) { $bt.LastCall.output } else { $null }); todayIn = $bt.Input; todayOut = $bt.Output; status = $(if ($os2 -and $os2.status -eq 'brain') { 'Gehirnaufruf l' + [char]0xE4 + 'uft' } elseif ($os2 -and $os2.since) { 'idle seit ' + ([datetime]$os2.since).ToString('HH:mm') } else { 'idle' }) }
         $today = @{ cIn = [int64]0; cOut = [int64]0; xIn = [int64]0; xOut = [int64]0; noData = 0 }
@@ -198,13 +199,13 @@ while ($true) {
         foreach ($br in @(Read-BrainRows $cfg | Where-Object { -not $_.error })) { if ($null -ne $br.input) { $total.cIn += [int64]$br.input }; if ($null -ne $br.output) { $total.cOut += [int64]$br.output } }
         $d = @{
             usage = $usage; orch = $orch; agents = $agents; fin = $fin; blocked = @(Get-BlockedTasks $allAgents); cu = $cu; xu = $xu; counts = $counts; draftNames = $draftNames
-            qs = @(Get-Questions $cfg | Where-Object { $_.status -eq 'OPEN' })
+            qs = @(Get-OrchQuestions $cfg 'open')
             badges = @(@('DRAFT', 'Gray'), @('READY', 'Cyan'), @('IN_PROGRESS', 'Yellow'), @('DONE', 'Green'), @('PAUSED', 'DarkGray'))
             totGB = $totGB; usedGB = $usedGB; ramPct = [int][Math]::Round(100 * $usedGB / $totGB)
             cpu = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
             bj = $(Get-BuildJobsLine $cfg @($allAgents))
             bld = $(if ($bn.Count) { 'Build: ja (' + ($bn -join ', ') + ')' } else { 'Build: nein' })
-            now = (Get-Date -Format 'HH:mm:ss'); lastRound = $(if (Test-Path $rl) { (Get-Item $rl).LastWriteTime.ToString('HH:mm:ss') } else { '-' })
+            now = (Get-Date -Format 'HH:mm:ss'); lastRound = $(if ($rl -and (Test-Path $rl)) { (Get-Item $rl).LastWriteTime.ToString('HH:mm:ss') } else { '-' })
         }
         # First detail level whose line count fits the height: bars drop first, then separators, then the headings. Never more lines than the height (no scrolling); the sections below the agents are clipped last.
         # No section is ever hidden: when the height is short, the list of ended agents shrinks first (newest stay), then bars and the limit lines get more compact.

@@ -14,7 +14,7 @@ $ui = @{ busy = $false; since = (Get-Date); nextAt = $null; headAt = [datetime]:
 $otherLoops = @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match ('round-loop\.ps1.*' + [regex]::Escape([string]$env:ORCH_PROJECT)) })
 if ($otherLoops.Count -gt 0) { Write-Host ('Another orchestrator loop runs (pid ' + (($otherLoops | ForEach-Object { $_.ProcessId }) -join ', ') + '): this one ends.') -ForegroundColor Yellow; Start-Sleep -Seconds 5; exit 0 }
 Set-Content -Path (Join-Path $cfg.runtime 'loop.lock') -Value $PID
-$evFile = Join-Path $cfg.runtime 'ORCH-EVENTS.log'
+$evFile = [string](Get-OrchLogPaths $cfg).events   # text mirror of the orchestrator events (lines HH:MM|O or E|text)
 if (Test-Path $evFile) { $ui.evPos = @(Get-Content $evFile -Encoding UTF8).Count }
 
 # ANSI color code of a color name.
@@ -123,7 +123,7 @@ while ($true) {
 Write-RoundLog $cfg 'STOP found, loop ending'
 Write-OrchEvent $cfg 'STOP-Datei gefunden: keine neuen Agenten, warte auf laufende Agenten'
 $ui.nextAt = $null; Save-State $false; Show-NewEvents
-while (@(Read-Agents $cfg | Where-Object { $_.status -eq 'running' -or $_.status -eq 'starting' }).Count -gt 0) { Start-Sleep -Seconds 5; Show-NewEvents; Maybe-Head }
+while (@(Get-OrchAgents $cfg | Where-Object { $_.status -eq 'running' -or $_.status -eq 'starting' }).Count -gt 0) { Start-Sleep -Seconds 5; Show-NewEvents; Maybe-Head }
 Write-RoundLog $cfg 'loop ended'
 Write-OrchEvent $cfg 'Schleife beendet: alle Agenten fertig'
 Show-NewEvents; [void](Draw-Head)
