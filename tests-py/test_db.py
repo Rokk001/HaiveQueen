@@ -1,5 +1,6 @@
 """Unit tests for orchlib.db and orchlib.config using a temporary database."""
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -125,6 +126,24 @@ class ConfigTest(unittest.TestCase):
                                                                encoding="utf-8")
             pr = config.load_project(ws)
             self.assertEqual((pr["colour"], pr["views"]["queue"], pr["views"]["questions"]), ("red", "q.md", ""))
+
+
+class OpenNewDatabaseTest(unittest.TestCase):
+    """Many processes opening a brand-new database at the same moment must all succeed."""
+
+    def test_concurrent_first_open(self):
+        """Eight processes connect to a database that does not exist yet, in 60 rounds: none fails with 'database is locked'."""
+        root = str(Path(__file__).resolve().parent.parent)
+        code = "import sys; sys.path.insert(0, sys.argv[1]); from orchlib import db; db.connect(sys.argv[2]).close()"
+        failed = []
+        for rnd in range(60):
+            with tempfile.TemporaryDirectory() as tmp:
+                procs = [subprocess.Popen([sys.executable, "-I", "-c", code, root, str(Path(tmp) / "x.db")], stderr=subprocess.PIPE, text=True) for _ in range(8)]
+                for p in procs:
+                    err = p.communicate()[1]
+                    if p.returncode:
+                        failed.append(err.strip().splitlines()[-1] if err.strip() else "exit %s" % p.returncode)
+        self.assertEqual(failed, [])
 
 
 if __name__ == "__main__":

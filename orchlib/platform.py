@@ -109,7 +109,16 @@ def _posix_process_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
-    return True
+    return not _linux_zombie(pid)
+
+
+def _linux_zombie(pid: int) -> bool:
+    """Linux: True when the process has ended but its parent has not collected it yet (state Z); a zombie is no running process."""
+    try:
+        with open("/proc/%d/stat" % pid, encoding="utf-8", errors="replace") as handle:
+            return handle.read().rsplit(")", 1)[1].split()[0] == "Z"
+    except (OSError, IndexError):
+        return False
 
 
 def process_alive(pid) -> bool:

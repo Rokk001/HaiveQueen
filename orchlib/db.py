@@ -1,6 +1,7 @@
 """SQLite access: schema creation and migration, atomic writes and queries."""
 import json
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -35,15 +36,24 @@ def now() -> str:
 
 
 def connect(path) -> sqlite3.Connection:
-    """Open the database (creating folder and schema if needed) with WAL and busy_timeout set."""
+    """Open the database (creating folder and schema if needed) with WAL and busy_timeout set; safe when many processes open a new database at once."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p), timeout=BUSY_TIMEOUT_MS / 1000, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
-    conn.execute("PRAGMA journal_mode = WAL")
-    migrate(conn)
-    return conn
+    # Several processes may open a brand-new database at the same moment: switching to WAL and creating the schema can then answer "database is locked"
+    # at once (the busy timeout does not apply there), so the setup is repeated for a short time.
+    deadline = time.monotonic() + BUSY_TIMEOUT_MS / 1000
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+            migrate(conn)
+            return conn
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or time.monotonic() > deadline:
+                raise
+            time.sleep(0.05)
 
 
 def migrate(conn: sqlite3.Connection) -> None:
