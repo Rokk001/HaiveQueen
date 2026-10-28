@@ -92,10 +92,12 @@ class QueueImportTest(unittest.TestCase):
                          ["feature/alpha", "feature/beta", "feature/gamma", "feature/delta", "feature/eps", "feature/zeta",
                           "feature/eta", "feature/theta"])
 
-    def test_heading_ends_the_table(self):
-        """A heading ends the queue table even when a later table has no header of its own."""
-        text = "| Branch | Tip | Plan | Status |\n|---|---|---|---|\n| b1 | t1 | p | ready |\n\n## Next\n| b2 | t2 | p | ready |\n"
-        self.assertEqual([r["branch"] for r in legacy.parse_queue(text)], ["b1"])
+    def test_rows_without_header_below_a_heading(self):
+        """Rows without a header of their own below a later heading still count when they are as wide as the 'Branch' header; shorter rows and tables with another header do not."""
+        text = ("| Branch | Tip | Plan | Status |\n|---|---|---|---|\n| b1 | t1 | p | ready |\n\n"
+                "## History\n| Run | Branches |\n|---|---|\n| r1 | b9 |\n\n"
+                "## Next\n| b2 | t2 | p | integriert |\n| short | row |\n")
+        self.assertEqual([r["branch"] for r in legacy.parse_queue(text)], ["b1", "b2"])
 
     def test_import_status_note_and_no_errors(self):
         """The import stores withdrawn with the original status text as note and counts no error for the history table."""

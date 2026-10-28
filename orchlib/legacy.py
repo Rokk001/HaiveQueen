@@ -404,21 +404,26 @@ def queue_status(cell):
 def parse_queue(text) -> list:
     """Parse the v1 queue table into dicts (branch, tip, plan, status_cell, order, date); header cells pick the columns.
 
-    Only rows below a header whose first cell is 'Branch' are read; a heading line or a table with another header ends the queue table and its rows are skipped.
+    Rows are read once a header whose first cell is 'Branch' was seen. A table with another header (for example a run history) is skipped up to the next heading;
+    rows without a header of their own below a heading still count when they have at least as many cells as the 'Branch' header minus the last one (a row may lack its date), shorter rows are skipped.
     """
-    rows, cols, in_table = [], None, False
-    for line in text.splitlines():
+    rows, cols, in_table, skip, width = [], None, False, False, 0
+    lines = text.splitlines()
+    for n, line in enumerate(lines):
         if re.match(r"^\s*#", line):
-            cols = None
+            skip = False
         if not line.lstrip().startswith("|"):
             in_table = False
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         starts_table = not in_table
         in_table = True
-        if starts_table and not (cells and cells[0].lower() == "branch"):
-            cols = None   # a table with another header (for example a history table) is not the queue
+        if starts_table and not (cells and cells[0].lower() == "branch") and n + 1 < len(lines) \
+                and re.match(r"^\s*\|[-:| ]+\|?\s*$", lines[n + 1]):
+            skip = True   # a table with another header (for example a history table) is not the queue
         if cells and cells[0].lower() == "branch":
+            skip = False
+            width = len(cells)
             cols = {"branch": 0, "tip": 1, "plan": 2, "status": 3, "order": 4, "date": 5}
             for i, c in enumerate(cells):
                 low = c.lower()
@@ -427,7 +432,7 @@ def parse_queue(text) -> list:
                     if pat in low:
                         cols[key] = i
             continue
-        if cols is None or all(re.match(r"^[-: ]*$", c) for c in cells):
+        if cols is None or skip or len(cells) < width - 1 or all(re.match(r"^[-: ]*$", c) for c in cells):
             continue
         row = {k: (cells[i] if i < len(cells) else "") for k, i in cols.items()}
         rows.append(row)
