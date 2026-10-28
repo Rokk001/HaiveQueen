@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from . import brain, db, events, export, header, reattach, routine, runstate, runtime, triage, usage, views
+from . import brain, db, events, export, header, inbox, reattach, routine, runstate, runtime, triage, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -410,6 +410,8 @@ def run_round(conn, machine: dict, envs=None, terminal=None, brain_answer=None, 
         except Exception:
             pass
     for env in envs:
+        if not dry_run:
+            inbox.process_inbox(env)
         routine_release_locks(env)
     summaries = {env.name: _state_summary(env) for env in envs}
     skip = None

@@ -60,6 +60,10 @@ Only a `new_plan` event gives you the tools Read, Glob and Grep. For every other
 - the plan and the state file named in the event (Grep, only the matching lines)
 - the answers file (read-only), the questions file and the integrator instruction file of the project (see the project rules)
 
+## Inbox
+
+The owner and the coordinator can leave answers and decisions as `*.toml` files in `<workspace>/.haivequeen/inbox/`. The round loop takes them over at the start of each round, before it looks at locked packages, so an answered question counts in that same round. You do not read or write the inbox: if an answer is missing, ask with `ask_owner` as usual. Files that moved to `inbox/failed/` are reported as a warning event; do not retry them.
+
 ## Output schema
 
 Answer with exactly one JSON object and nothing else (no code fence, no text before or after). Same schema as `action-schema.json`:

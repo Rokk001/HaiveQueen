@@ -116,6 +116,15 @@ Free Markdown below the header: the agents read it.
 
 `.haivequeen/project.toml` (per project): `name`, `colour`, `priority`, `planGlobs`, `planExclude` (globs removed from the planGlobs matches), `[views]` and the branch and build settings. See `examples/`.
 
+## Inbox
+
+Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the owner, the coordinator, a script) can leave answers and decisions there as TOML files, and the Queen takes them over at the start of the next round. This works for every project and needs no command.
+
+- Only files that end in `.toml` (UTF-8) are read, oldest first. Write a file as `<name>.toml.tmp` and rename it when it is complete; other endings are ignored.
+- A file holds one or more `[[answer]]` tables (`question_id`, `text`, `by` = `owner` or `coordinator`) and `[[decision]]` tables (`text`, `source` = `owner` or `coordinator`, optional `plan` and `item`). See `examples/inbox.example.toml`.
+- The values are stored through the same functions as `bzz answer` and `bzz decisions add`: same checks, same events, and a package that was locked by the question is released in the same round.
+- A file is taken over completely or not at all. It then moves to `inbox/done/<YYYYMMDD-HHMMSS>-<name>.toml`. An invalid file (parse error, unknown or already answered question, wrong value) moves to `inbox/failed/` with `<name>.error.txt` next to it that names the reason and the line, and a warning event is written.
+
 ## Command line
 
 | Command | Who | What it does |

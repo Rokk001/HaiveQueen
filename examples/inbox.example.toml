@@ -1,0 +1,17 @@
+# Inbox file: <workspace>\.haivequeen\inbox\<any name>.toml  (UTF-8)
+# Write it as <name>.toml.tmp first and rename it to <name>.toml when it is complete: the Queen reads only files that end in .toml.
+# Each round the Queen takes over the files oldest first, as a whole or not at all, and moves them to inbox\done\ (taken over)
+# or inbox\failed\ (with <name>.error.txt that names the reason and the line).
+
+# Same as: bzz answer 12 "Use five slots." --by owner
+[[answer]]
+question_id = 12            # id of an open question of this project
+text = "Use five slots."
+by = "owner"                # owner or coordinator
+
+# Same as: bzz decisions add --source owner --text "..." --plan docs/plans/ALPHA.md --item A1
+[[decision]]
+text = "The inbox folder is the place where the owner leaves answers and decisions."
+source = "owner"            # owner or coordinator
+plan = "docs/plans/ALPHA.md"   # optional
+item = "A1"                    # optional
