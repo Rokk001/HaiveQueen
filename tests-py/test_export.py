@@ -52,6 +52,21 @@ class ExportTest(unittest.TestCase):
         self.assertIn("notes.txt", names)
         self.assertIn("haivequeen-2026-01-01.db.bak", names)
 
+    def test_keep_14_over_both_name_patterns(self):
+        """Old orchestrator-*.db and new haivequeen-*.db exports count together; the oldest days go first, the newest stay."""
+        self.dir.mkdir(parents=True)
+        for day in range(1, 11):
+            (self.dir / ("orchestrator-2026-01-%02d.db" % day)).write_text("x")
+        for day in range(11, 21):
+            (self.dir / ("haivequeen-2026-01-%02d.db" % day)).write_text("x")
+        removed = export.prune(self.dir)
+        self.assertEqual(len(removed), 6)
+        left = sorted(p.name for p in self.dir.iterdir())
+        self.assertEqual(len(left), 14)
+        self.assertIn("orchestrator-2026-01-07.db", left)
+        self.assertNotIn("orchestrator-2026-01-06.db", left)
+        self.assertIn("haivequeen-2026-01-20.db", left)
+
     def test_export_due(self):
         """Due from 03:30 on, only while today's file is missing."""
         self.dir.mkdir(parents=True)
