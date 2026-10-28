@@ -1180,3 +1180,13 @@ function Add-OrchDecision($Cfg, [string]$Source, [string]$Text, [string]$Plan = 
     if ($Item) { $a += @('--item', $Item) }
     return (Invoke-Orch $a)
 }
+
+# ---- v2 runtime wrappers, additions of the round scripts ----
+# Key/value pairs of the project whose key starts with the prefix (rows with key, value, updated_at).
+function Get-OrchKvList($Cfg, [string]$Prefix = '') {
+    $a = @('kv', 'list', '--project', (Get-OrchProject $Cfg))
+    if ($Prefix) { $a += @('--prefix', $Prefix) }
+    return @(Invoke-Orch $a)
+}
+# All handled event keys of the project (rows with key, ts, value).
+function Get-OrchHandledList($Cfg) { return @(Invoke-Orch @('handled', 'list', '--project', (Get-OrchProject $Cfg))) }

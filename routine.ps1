@@ -4,40 +4,57 @@
 # Plan path in one comparable form (forward slashes, lower case).
 function Norm-Plan([string]$p) { return ([string]$p).Replace('\', '/').ToLower() }
 
-# Keys of events the brain already handled (ORCH-HANDLED.json): @{ key = 'yyyy-MM-dd HH:mm' }.
-function Get-Handled($Cfg) {
-    $p = Join-Path $Cfg.runtime 'ORCH-HANDLED.json'
-    if (-not (Test-Path $p)) { return @{} }
-    try { $h = (Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable); if ($null -eq $h) { return @{} }; return $h } catch { return @{} }
-}
-# Remembers an event key as handled.
-function Set-Handled($Cfg, [string]$Key) {
-    $h = Get-Handled $Cfg
-    $h[$Key] = (Get-Date -Format 'yyyy-MM-dd HH:mm')
-    Write-FileAtomic (Join-Path $Cfg.runtime 'ORCH-HANDLED.json') (ConvertTo-Json -InputObject $h -Compress)
+# Pseudo plan name of the fix tasks for blocked queue rows that name no plan (the queue has no plan file any more).
+function Get-QueuePlanId($Cfg) { return 'integration-queue' }
+
+# Plan path as the database stores it: relative to the workspace (the repo), forward slashes; an absolute path inside the repo is made relative.
+function Resolve-PlanPath($Cfg, [string]$Path) {
+    $s = ([string]$Path).Replace('\', '/')
+    $repo = ([string]$Cfg.repo).Replace('\', '/').TrimEnd('/')
+    if ($repo -and $s.StartsWith($repo + '/', [System.StringComparison]::OrdinalIgnoreCase)) { $s = $s.Substring($repo.Length + 1) }
+    return $s
 }
 
-# Package table of a plan: rows (Id, Content, Depends = list of package ids). A table is recognized by a header cell "Package" or "Paket" in the first column.
-function Get-PlanPackages([string]$PlanPath) {
-    if (-not (Test-Path -LiteralPath $PlanPath)) { return @() }   # an agent row may name a file that is not a plan (the queue file of a fix without a plan) or is gone
-    $res = @(); $hdr = $null; $depIdx = -1; $contIdx = -1; $clsIdx = -1
-    $range = '([A-Za-z]+)(\d+)\s*[-–]\s*(?:[A-Za-z]+)?(\d+)'
-    foreach ($l in (Get-Content $PlanPath -Encoding UTF8)) {
-        if ($l -notmatch '^\s*\|') { $hdr = $null; continue }
-        $c = @($l.Trim().Trim('|').Split('|') | ForEach-Object { $_.Trim() })
-        if (-not $hdr) {
-            if ($c[0] -match '^(Package|Paket)$' -or ($c[0] -match '^Item$' -and @($c | Where-Object { $_ -match '^(Depends on|Abh)' }).Count -gt 0)) { $hdr = $c; $depIdx = -1; $contIdx = -1; $clsIdx = -1; for ($i = 0; $i -lt $c.Count; $i++) { if ($c[$i] -match '^(Class|Klasse)$') { $clsIdx = $i }; if ($c[$i] -match '^(Depends on|Abh)') { $depIdx = $i }; if ($c[$i] -match '^(Content|Inhalt)') { $contIdx = $i } } }
-            continue
-        }
-        if ($c[0] -match '^[-: ]+$' -or -not $c[0]) { continue }
-        $dep = if ($depIdx -ge 0 -and $depIdx -lt $c.Count) { $c[$depIdx] } else { 'none' }
-        $deps = @()
-        foreach ($m in [regex]::Matches($dep, $range)) { $a = [int]$m.Groups[2].Value; $b = [int]$m.Groups[3].Value; for ($k = $a; $k -le $b; $k++) { $deps += ($m.Groups[1].Value + $k) } }
-        $rest = [regex]::Replace($dep, $range, '')
-        foreach ($m in [regex]::Matches($rest, '[A-Za-z]+\d+')) { $deps += $m.Value }
-        $res += [pscustomobject]@{ Id = $c[0]; Class = $(if ($clsIdx -ge 0 -and $clsIdx -lt $c.Count -and $c[$clsIdx] -match '(?i)^(light|medium|heavy)$') { $c[$clsIdx].ToLower() } else { 'medium' }); Content = $(if ($contIdx -ge 0 -and $contIdx -lt $c.Count) { $c[$contIdx] } else { '' }); Depends = @($deps | Select-Object -Unique); DependsAll = ($dep.Trim() -match '^(?i)all(e)?$') }
+# Plans of the project from the database after a fresh read of the plan files (header status and packages): rows with path, title, status; plans whose file is gone are left out.
+function Get-PlanRows($Cfg) {
+    $sync = Sync-OrchPlans $Cfg ([string]$Cfg.repo)
+    return @($sync.plans | Where-Object { Test-Path -LiteralPath (Join-Path ([string]$Cfg.repo) ([string]$_.path)) })
+}
+
+# Integration queue rows, the last row per branch (ordered branch -> row with branch, tip (9 characters), plan, status word, note, date). The status words stay the ones the routine and the brain know:
+# ready, in Lauf, blockiert, integriert.
+function Get-QueueRows($Cfg) {
+    $word = @{ ready = 'ready'; in_run = 'in Lauf'; blocked = 'blockiert'; integrated = 'integriert' }
+    $rows = [ordered]@{}
+    foreach ($r in @(Get-OrchQueue $Cfg | Sort-Object { [int]$_.id })) {
+        $st = [string]$r.status
+        $tip = [string]$r.tip
+        $rows[[string]$r.branch] = [ordered]@{ branch = [string]$r.branch; tip = $tip.Substring(0, [Math]::Min(9, $tip.Length)); plan = [string]$r.plan_path; status = $(if ($word.ContainsKey($st)) { $word[$st] } else { $st }); note = [string]$r.note; date = [string]$r.updated_at }
     }
-    # "all" in the dependency column: the package waits for every other package of the table.
+    return $rows
+}
+
+# Questions of the project as rows with id (Q-<number>), plan, item, status (OPEN or ANSWERED) and answer.
+function Get-QuestionRows($Cfg) {
+    return @(Get-OrchQuestions $Cfg | ForEach-Object { [ordered]@{ id = ('Q-' + [string]$_.id); plan = [string]$_.plan_path; item = [string]$_.item; status = ([string]$_.status).ToUpper(); answer = [string]$_.answer } })
+}
+
+# Keys of events the brain already handled: @{ key = 'yyyy-MM-dd HH:mm' }; a key with a value (retry counter) returns the value.
+function Get-Handled($Cfg) {
+    $h = @{}
+    foreach ($r in @(Get-OrchHandledList $Cfg)) { $h[[string]$r.key] = $(if ($r.value) { [string]$r.value } else { [string]$r.ts }) }
+    return $h
+}
+# Remembers an event key as handled (the optional value is a retry counter).
+function Set-Handled($Cfg, [string]$Key, [string]$Value = '') { Add-OrchHandled $Cfg $Key $Value }
+
+# Package table of a plan from the database: rows (Id, Class, Content = title, Depends = list of package ids, Phase). A dependency "all" makes the package wait for every other package of the plan.
+function Get-PlanPackages($Cfg, [string]$Plan) {
+    $res = @()
+    foreach ($p in @(Get-OrchPackages $Cfg $Plan)) {
+        $deps = @($p.depends_on | ForEach-Object { [string]$_ } | Where-Object { $_ -and $_ -notmatch '^(?i)all(e)?$' })
+        $res += [pscustomobject]@{ Id = [string]$p.id; Class = $(if ([string]$p.class -match '(?i)^(light|medium|heavy)$') { ([string]$p.class).ToLower() } else { 'medium' }); Content = [string]$p.title; Depends = $deps; DependsAll = (@($p.depends_on | Where-Object { [string]$_ -match '^(?i)all(e)?$' }).Count -gt 0); Phase = [string]$p.phase }
+    }
     foreach ($r in $res) { if ($r.DependsAll) { $r.Depends = @($res | Where-Object { $_.Id -ne $r.Id } | ForEach-Object { $_.Id }) } }
     return $res
 }
@@ -59,21 +76,12 @@ function Get-VerifyOpenCount($Cfg, [string]$AgentName) {
     return [int]$m[$m.Count - 1].Groups[1].Value
 }
 
-# Packages that the state files or the integration queue already show as finished (done, merged, verified, integrated, released). Returns @{ id = evidence }.
-# Sources: "Alle Pakete G1-G7 sind fertig" lines and table rows whose first cell is the package id in the plan's *STATE*.md files; integration rows (any status except blockiert) whose note says "Paket ALL" or names the package.
-function Get-StateDonePackages([string]$AbsPlan, [string[]]$PkgIds, $Rows) {
+# Packages that the packages table or the integration queue already show as finished (phase done, or integration rows). Returns @{ id = evidence }.
+# Sources: packages of the plan with phase done; integration rows (any status except blockiert) whose note says "Paket ALL" or names the package.
+function Get-StateDonePackages($Cfg, [string]$RelPlan, [string[]]$PkgIds, $Rows) {
     $res = @{}
-    $doneRe = '(?i)(fertig|erledigt|\bdone\b|gemergt|merged|verifiziert|verified|integriert|released|umgesetzt)'
-    $negRe = '(?i)(\bnicht\b|noch offen|\bwartet|teilweise|partial|\bnot\b|\btodo\b|in arbeit|blockiert)'
-    foreach ($sf in @(Get-PlanStateFiles $AbsPlan)) {
-        foreach ($l in (Get-Content $sf.FullName -Encoding UTF8)) {
-            $m = [regex]::Match($l, '(?i)alle pakete\s+([A-Za-z]+)(\d+)\s*[-\u2013]\s*(?:[A-Za-z]+)?(\d+)\s+sind\s+(fertig|erledigt)')
-            if ($m.Success) { for ($k = [int]$m.Groups[2].Value; $k -le [int]$m.Groups[3].Value; $k++) { $id = $m.Groups[1].Value + $k; if ($PkgIds -contains $id) { $res[$id] = $sf.Name + ': ' + $m.Value } } }
-            $t = [regex]::Match($l, '^\|\s*\**([A-Za-z]+\d+)\**\s*(?:\s[^|]*)?\|(.*)$')
-            if ($t.Success -and ($PkgIds -contains $t.Groups[1].Value) -and $t.Groups[2].Value -match $doneRe -and $t.Groups[2].Value -notmatch $negRe) { $res[$t.Groups[1].Value] = $sf.Name + ': ' + $l.Substring(0, [Math]::Min(80, $l.Length)) }
-        }
-    }
-    $relN = Norm-Plan $AbsPlan
+    foreach ($p in @(Get-PlanPackages $Cfg $RelPlan)) { if ($p.Phase -eq 'done' -and ($PkgIds -contains $p.Id)) { $res[$p.Id] = 'packages table: done' } }
+    $relN = Norm-Plan $RelPlan
     foreach ($r in @($Rows)) {
         if ([string]$r.status -match '^(blockiert|verworfen|ersetzt)') { continue }
         $pl = (Norm-Plan ([string]$r.plan)).TrimStart('.', '/')
@@ -86,23 +94,25 @@ function Get-StateDonePackages([string]$AbsPlan, [string[]]$PkgIds, $Rows) {
 }
 
 # Capabilities the package of the plan needs (plan section 15; graphics packages need "images", see Get-PackageNeeds): such work goes only to providers that have them.
-function Get-PackageNeedsFor($Cfg, [string]$AbsPlan, [string]$Pkg) {
-    if (-not (Test-Path $AbsPlan)) { return @() }
-    $k = @(Get-PlanPackages $AbsPlan | Where-Object { $_.Id -eq $Pkg } | Select-Object -First 1)
+function Get-PackageNeedsFor($Cfg, [string]$Plan, [string]$Pkg) {
+    $k = @(Get-PlanPackages $Cfg $Plan | Where-Object { $_.Id -eq $Pkg } | Select-Object -First 1)
     if (-not $k.Count) { return @() }
     return @(Get-PackageNeeds $Cfg ([string]$k[0].Content))
 }
 # Short id of a question item ("ALL-V5 Stimmungsverfall im Bad" -> "ALL-V5", "M1" -> "M1").
 function Get-ItemToken([string]$Item) { $m = [regex]::Match(([string]$Item).Trim(), '^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*'); return $m.Value.ToUpper() }
-# Ids (M1, ALL-V5 ...) the owner has already decided: found in the headings of the answers file ("*|ID"); plus "plan|ID" of every known question in the questions file (any status).
+# Item ids (M1, ALL-V5 ...) already decided or asked: the decisions of the database ("plan|ID", or "*|ID" for a decision without a plan) plus "plan|ID" of every known question (any status).
 function Get-DecidedItems($Cfg, $Questions) {
     $res = @{}
-    $dp = Get-AnswersPath $Cfg
-    if (Test-Path $dp) { foreach ($l in (Get-Content $dp -Encoding UTF8)) { if ($l -match '^##\s') { foreach ($m in [regex]::Matches($l, '(?<![A-Za-z0-9-])[A-Za-z]{1,4}(?:-[A-Za-z]+)?-?\d+[A-Za-z]?(?![A-Za-z0-9])')) { $res[('*|' + $m.Value.ToUpper())] = (Split-Path ([string]$Cfg.answersFile) -Leaf) } } } }
-    foreach ($q in @($Questions)) { $res[((Norm-Plan $q.plan) + '|' + (Get-ItemToken $q.item))] = (Split-Path ([string]$Cfg.questionsFile) -Leaf) + ' ' + $q.id }
+    foreach ($d in @(Get-OrchDecisions $Cfg)) {
+        $tok = Get-ItemToken ([string]$d.item)
+        if (-not $tok) { continue }
+        $res[$(if ($d.plan_path) { (Norm-Plan $d.plan_path) + '|' + $tok } else { '*|' + $tok })] = 'decisions'
+    }
+    foreach ($q in @($Questions)) { $res[((Norm-Plan $q.plan) + '|' + (Get-ItemToken $q.item))] = 'questions ' + $q.id }
     return $res
 }
-# Returns the source (answers file name / questions file name and question id) when the item of this plan is already decided or asked, else $null.
+# Returns the source (decisions, or questions and the question id) when the item of this plan is already decided or asked, else $null.
 function Test-ItemDecided($Decided, [string]$Plan, [string]$Item) {
     $tok = Get-ItemToken $Item
     if (-not $tok) { return $null }
@@ -111,17 +121,12 @@ function Test-ItemDecided($Decided, [string]$Plan, [string]$Item) {
     if ($Decided.ContainsKey('*|' + $tok)) { return $Decided['*|' + $tok] }
     return $null
 }
-# Text of the answers-file section whose heading names the item id (at most 1200 characters), so the brain needs no file reading.
+# Answer text of the item (at most 1200 characters): the answers of the answered questions of that item, else its decisions, so the brain needs no lookup.
 function Get-AnswerText($Cfg, [string]$Token) {
-    $dp = Get-AnswersPath $Cfg
-
-    if (-not $Token -or -not (Test-Path $dp)) { return '' }
-    $out = @(); $in = $false
-    foreach ($l in (Get-Content $dp -Encoding UTF8)) {
-        if ($l -match '^##\s') { if ($in) { break }; $in = ($l.ToUpper() -match ('(?<![A-Z0-9-])' + [regex]::Escape($Token) + '(?![A-Z0-9])')); if ($in) { $out += $l }; continue }
-        if ($in -and $l.Trim()) { $out += $l.Trim() }
-    }
-    $t = $out -join ' '
+    if (-not $Token) { return '' }
+    $parts = @(Get-OrchQuestions $Cfg 'answered' | Where-Object { (Get-ItemToken ([string]$_.item)) -eq $Token.ToUpper() } | ForEach-Object { ([string]$_.answer).Trim() } | Where-Object { $_ })
+    if (-not $parts.Count) { $parts = @(Get-OrchDecisions $Cfg | Where-Object { (Get-ItemToken ([string]$_.item)) -eq $Token.ToUpper() } | ForEach-Object { ([string]$_.text).Trim() } | Where-Object { $_ }) }
+    $t = $parts -join ' '
     if ($t.Length -gt 1200) { $t = $t.Substring(0, 1200) }
     return $t
 }
@@ -187,7 +192,7 @@ function Get-Routine($Ctx) {
         $noPlan = (-not $rp) -and ([string]$r.plan -match '(?i)^\s*(keiner?|none|n/?a|-+|–)?\s*$')   # plan column "keiner": the row text itself is the task (plan 6.5)
         if ((-not $rp -and -not $noPlan) -or $workers -le 0) { continue }
         if ($noPlan) {
-            $tip = ([string]$r.tip); $tip = $tip.Substring(0, [Math]::Min(7, $tip.Length)); $pk = "FIX-$tip"; $relP = Get-QueueRel $cfg
+            $tip = ([string]$r.tip); $tip = $tip.Substring(0, [Math]::Min(7, $tip.Length)); $pk = "FIX-$tip"; $relP = Get-QueuePlanId $cfg
             if (@($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $relP) -and [string]$_.package -eq $pk -and $_.status -ne 'failed' }).Count -gt 0) { continue }
             if (@($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $relP) -and $_.Package -eq $pk }).Count -gt 0) { continue }
             $pv = Select-Provider $cfg 'medium' @() $free
@@ -214,9 +219,7 @@ function Get-Routine($Ctx) {
         $rp = $Ctx.Plans | Where-Object { (Norm-Plan $_.path) -eq (Norm-Plan ([string]$q.plan)) } | Select-Object -First 1
         if (-not $rp -or $workers -le 0) { continue }
         $relP = [string]$rp.path; $tok = Get-ItemToken ([string]$q.item); $pk = "Q-$tok"
-        $absP = if ([System.IO.Path]::IsPathRooted($relP)) { $relP } else { Join-Path $Ctx.Repo $relP.Replace('/', '\') }
-        $done = $false   # the item already stands as implemented in a state file of the plan
-        foreach ($sf in @(Get-PlanStateFiles $absP)) { foreach ($l in (Get-Content $sf.FullName -Encoding UTF8)) { if ($l -match '^\|' -and $l.Split('|').Count -gt 2 -and $l.Split('|')[1].ToUpper() -match ('(?<![A-Z0-9-])' + [regex]::Escape($tok) + '(?![A-Z0-9])') -and $l -match '(?i)(implementiert|umgesetzt|implemented)' -and $l -notmatch '(?i)(\bnicht\b|teilweise|\boffen\b|partial)') { $done = $true } } }
+        $done = (@(Get-PlanPackages $cfg $relP | Where-Object { $_.Id.ToUpper() -eq $tok -and $_.Phase -eq 'done' }).Count -gt 0)   # the item already stands as done in the packages table of the plan
         if ($done) { continue }
         if (@($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $relP) -and [string]$_.package -eq $pk -and $_.status -ne 'failed' }).Count -gt 0) { continue }   # a failed start is tried again (stops after two failures with the same error: blocked tasks)
         $h2 = @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $relP) -and $_.cwd } | Sort-Object { [string]$_.startedAt })
@@ -229,10 +232,8 @@ function Get-Routine($Ctx) {
     }
     foreach ($pl in $Ctx.Plans) {
         $rel = [string]$pl.path
-        $abs = if ([System.IO.Path]::IsPathRooted($rel)) { $rel } else { Join-Path $Ctx.Repo $rel.Replace('/', '\') }
-        if (-not (Test-Path $abs)) { continue }
         $tag = Get-PlanTag $rel
-        $pkgs = @(Get-PlanPackages $abs)
+        $pkgs = @(Get-PlanPackages $cfg $rel)
         $hist = @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and $_.cwd } | Sort-Object { [string]$_.startedAt })
         $cwd = if ($hist.Count) { [string]$hist[-1].cwd } else { '' }
         # New plan: the script cannot plan it (no package table or no known worktree) -> brain, once.
@@ -243,11 +244,11 @@ function Get-Routine($Ctx) {
         $stages = @{}
         foreach ($k in $pkgs) { $stages[$k.Id] = Get-PkgStage $cfg $all $rel $k.Id }
         # A package without agent history that the state files or the queue already show as finished is never startable (stage stateDone).
-        $sdone = Get-StateDonePackages $abs @($pkgs | ForEach-Object { $_.Id }) $Ctx.AllRows
+        $sdone = Get-StateDonePackages $cfg $rel @($pkgs | ForEach-Object { $_.Id }) $Ctx.AllRows
         foreach ($k in $pkgs) { if (($stages[$k.Id].Stage -eq 'new' -or $stages[$k.Id].Stage -eq 'open') -and $sdone.ContainsKey($k.Id)) { $stages[$k.Id] = [pscustomobject]@{ Stage = 'stateDone'; Work = $null; Verify = $null; Evidence = $sdone[$k.Id] } } }
-        # Frozen packages (runtime\NOFOLLOW.json): no follow-up task of any kind, their results only go into the state file.
+        # Frozen packages (nofollow list of the database): no follow-up task of any kind, their results only go into the state file.
         foreach ($k in $pkgs) { if ($stages[$k.Id].Stage -ne 'running' -and (Test-Frozen $cfg $rel $k.Id)) { $stages[$k.Id] = [pscustomobject]@{ Stage = 'stateDone'; Work = $null; Verify = $null; Evidence = 'NOFOLLOW' } } }
-        # Lock (plan 12.4): a package whose verifications reported open items more often than the escalation allows (escalateAfter + 1 times: two attempts of the class, then one attempt one class higher) gets no further work agent, no event for the brain and no follow-up task; it is reported once under the open-question marker with the open items.
+        # Lock (plan 12.4): a package whose verifications reported open items more often than the escalation allows (escalateAfter + 1 times: two attempts of the class, then one attempt one class higher) gets no further work agent, no event for the brain and no follow-up task; it is reported once as a lock question with the open items.
         $locked = @{}
         foreach ($k in (@($pkgs | ForEach-Object { $_.Id }) + 'ALL')) {
             $lst = if ($k -eq 'ALL') { Get-PkgStage $cfg $all $rel 'ALL' } else { $stages[$k] }
@@ -365,37 +366,12 @@ function Get-Routine($Ctx) {
             $prompt = if ($members.Count -gt 1) { "This agent works $($members.Count) small packages of plan $rel one after the other (bundled so that the start context is paid once). Finish each package and record it in the state file before you start the next. Packages in this order: $(($members | ForEach-Object { $_.Id }) -join ', ').`n`n" + ($texts -join "`n`n") + $tail } else { $texts[0] + $tail }
             $acts += New-StartAction $nm $type 'work' $rel $k.Id $cwd $prompt ($needs.Count -gt 0) $kcls @($members | ForEach-Object { $_.Id })
         }
-        # New open-question entries (marker openMarker) of the state files of this plan -> brain (needs plain words and a recommendation).
-        foreach ($sf in @(Get-PlanStateFiles $abs)) {
-            # Sections with the marker openMarker (also "### <marker> - M3") of the state file of THIS plan; a section is done when a later heading of the same file names a decision or answer for its tag (e.g. "Entscheidung zu <marker> - M3").
-            $slines = @(Get-Content $sf.FullName -Encoding UTF8)
-            $secs = @(); $cur = $null
-            for ($li = 0; $li -lt $slines.Count; $li++) {
-                $l = $slines[$li]
-                if ($l -match ('^#+\s*' + [regex]::Escape([string]$cfg.openMarker) + '\s*(?:-\s*(.+))?$')) { $cur = [pscustomobject]@{ Tag = [string]$Matches[1]; Line = $li; Text = @() }; $secs += $cur; continue }
-                if ($cur -and $l -match '^#') { $cur = $null }
-                if ($cur -and $l.Trim()) { $cur.Text += $l.Trim() }
-            }
-            $sec = @()
-            foreach ($sc in $secs) {
-                $tg = $sc.Tag.Trim()
-                $resolved = $false
-                # Items of the section: its tag, else the item ids named in its text (all of them must be decided later).
-                $items = if ($tg) { @($tg) } else { @([regex]::Matches(($sc.Text -join ' '), '(?<![A-Za-z0-9.-])[A-Z]{1,4}(?:-[A-Z]+)?-?\d+[A-Za-z]?(?![A-Za-z0-9])') | ForEach-Object { $_.Value } | Select-Object -Unique) }
-                if ($items.Count) {
-                    $resolved = $true
-                    foreach ($it in $items) {
-                        $hit = $false
-                        for ($li = $sc.Line + 1; $li -lt $slines.Count; $li++) { if ($slines[$li] -match '^#' -and $slines[$li] -match '(?i)(Entscheidung|decision|Antwort|answer|erledigt|umgesetzt|implemented)' -and $slines[$li] -match ('(?<![A-Za-z0-9-])' + [regex]::Escape($it) + '(?![A-Za-z0-9])')) { $hit = $true; break } }
-                        if (-not $hit) { $resolved = $false; break }
-                    }
-                }
-                if (-not $resolved -and (($sc.Text -join ' ') -match '\?')) { $sec += $sc.Text }   # a section without a question mark ("leer", "keine Frage") asks nothing
-            }
-            $txt = ($sec -join "`n")
+        # Lock questions waiting for the brain (written by lock_package under the kv key lock:<plan>|<package>) -> brain (needs plain words and a recommendation).
+        foreach ($lk in @(Get-OrchKvList $cfg ('lock:' + $rel + '|'))) {
+            $txt = ([string]$lk.value).Trim()
             $ids = @([regex]::Matches($txt, '(?<![A-Za-z0-9-])[A-Za-z]{1,4}(?:-[A-Za-z]+)?-?\d+[A-Za-z]?(?![A-Za-z0-9])') | ForEach-Object { $_.Value })
-            $allDecided = ($ids.Count -gt 0 -and @($ids | Where-Object { -not (Test-ItemDecided $decided $rel $_) }).Count -eq 0)   # every item named in the section is already decided or asked
-            if ($txt -and $txt -notmatch '^(?i)(none|keine)\.?$' -and -not $allDecided) {
+            $allDecided = ($ids.Count -gt 0 -and @($ids | Where-Object { -not (Test-ItemDecided $decided $rel $_) }).Count -eq 0)   # every item named in the text is already decided or asked
+            if ($txt -and -not $allDecided) {
                 $h = [BitConverter]::ToString([System.Security.Cryptography.SHA1]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($txt))).Replace('-', '').Substring(0, 10)
                 $key = "open:${rel}:$h"
                 if (-not $handled.ContainsKey($key)) { $events += [pscustomobject]@{ type = 'open_for_owner'; key = $key; plan = $rel; package = ''; agent = ''; text = $(if ($txt.Length -gt 1500) { $txt.Substring(0, 1500) } else { $txt }) } }
@@ -413,7 +389,7 @@ function Get-Routine($Ctx) {
     $intPv = if ($Ctx.CanStartIntegrator -and [int]$Ctx.Free.int -gt 0) { @(Get-Providers $cfg | Where-Object { $_.Protocol -eq 'claude' -and $_.Slots -gt 0 -and $_.Classes.medium.model } | Select-Object -First 1) } else { @() }   # the integrator is a Claude Code agent (class medium); it uses no worker slot, but a provider that is off (slots 0) does not run it
     if ($intPv.Count) {
         $nm = New-AgentName ('INTEGRATOR-' + (Get-Date -Format 'MMdd-HHmm')) $all $chosen
-        $acts += New-StartAction $nm $intPv[0].Name 'integrate' (Get-QueueRel $cfg) ('INT-' + (Get-Date -Format 'MMddHHmm')) $Ctx.Repo (Get-PromptText $cfg 'integrator' @{}) $false
+        $acts += New-StartAction $nm $intPv[0].Name 'integrate' (Get-QueuePlanId $cfg) ('INT-' + (Get-Date -Format 'MMddHHmm')) $Ctx.Repo (Get-PromptText $cfg 'integrator' @{}) $false
     }
     # Answered questions -> brain, once each.
     # Answered questions are handled at the top of this function (work agent started by the routine itself, no brain event).
@@ -455,8 +431,5 @@ function Get-HandoffContinuations($Cfg, $All, $Free, [ref]$Workers, $Taken) {
 }
 
 
-# Removes an event key from ORCH-HANDLED.json (the event is asked again in the next round).
-function Remove-Handled($Cfg, [string]$Key) {
-    $h = Get-Handled $Cfg
-    if ($h.ContainsKey($Key)) { [void]$h.Remove($Key); Write-FileAtomic (Join-Path $Cfg.runtime 'ORCH-HANDLED.json') (ConvertTo-Json -InputObject $h -Compress) }
-}
+# Removes an event key from the handled list (the event is asked again in the next round).
+function Remove-Handled($Cfg, [string]$Key) { Remove-OrchHandled $Cfg $Key }
