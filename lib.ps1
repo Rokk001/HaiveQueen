@@ -837,10 +837,23 @@ function Save-JsonFile([string]$Path, [string]$Text) {
     Write-FileAtomic $Path $Text
 }
 
+# Time at which the lock of a package was lifted because its lock question was answered (key 'lockrel:<plan>|<pkg>' in ORCH-HANDLED.json); $null when it never was.
+function Get-LockReleaseTime($Cfg, [string]$Plan, [string]$Pkg) {
+    $p = Join-Path $Cfg.runtime 'ORCH-HANDLED.json'
+    if (-not (Test-Path $p)) { return $null }
+    try { $h = (Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable) } catch { return $null }
+    $key = 'lockrel:' + ([string]$Plan).Replace('\', '/').ToLower() + '|' + $Pkg
+    if ($null -eq $h -or -not $h.ContainsKey($key)) { return $null }
+    try { return [datetime]$h[$key] } catch { return $null }
+}
+
 # Failures of one package (technical failure of a work agent except "pane never started", or a verify with open items) counted over all agents; used by the escalation and the lock (plan 12.4).
+# Agents started before the lock of the package was lifted by an answer (Get-LockReleaseTime) are forgiven and not counted.
 function Get-PackageFailures($Cfg, $Agents, [string]$Plan, [string]$Pkg) {
     $norm = { param($p) ([string]$p).Replace('\', '/').ToLower() }
     $mine = @($Agents | Where-Object { (& $norm $_.plan) -eq (& $norm $Plan) -and ([string]$_.package -eq $Pkg -or @($_.bundle) -contains $Pkg) })
+    $rel = Get-LockReleaseTime $Cfg $Plan $Pkg
+    if ($rel) { $mine = @($mine | Where-Object { -not $_.startedAt -or [datetime]([string]$_.startedAt) -gt $rel }) }
     $f = @($mine | Where-Object { $_.phase -eq 'work' -and $_.status -eq 'failed' -and [string]$_.lastLine -notmatch '^pane never started' }).Count
     $o = 0
     foreach ($v in @($mine | Where-Object { $_.phase -eq 'verify' -and $_.status -eq 'done' })) {

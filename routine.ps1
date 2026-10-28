@@ -127,6 +127,41 @@ function Get-AnswerText($Cfg, [string]$Token) {
     return $t
 }
 
+# Remembers that the lock of a package was lifted now (read by Get-PackageFailures, which then ignores the earlier failures).
+function Set-LockRelease($Cfg, [string]$Plan, [string]$Pkg) {
+    $h = Get-Handled $Cfg
+    $h['lockrel:' + (Norm-Plan $Plan) + '|' + $Pkg] = (Get-Date).ToString('o')
+    Write-FileAtomic (Join-Path $Cfg.runtime 'ORCH-HANDLED.json') (ConvertTo-Json -InputObject $h -Compress)
+}
+# Answer to the lock question of a package, or $null while it is unanswered. Counts only when the state file holds the lock section "<openMarker> - LOCK-<pkg>" (so only a real lock can be lifted) and one of these holds:
+# (a) a heading of the answers file names LOCK-<pkg> ($Decided key '*|LOCK-<PKG>'), (b) a later heading of the state file names a decision/answer and LOCK-<pkg>,
+# (c) a question of this plan with item LOCK-<pkg> has status ANSWERED. A question that is only OPEN does not count. $StateLines = line arrays of the state files of the plan.
+# Returns @{ Done; Source }: Done is true when the answer text (heading and body) says erledigt / done / closed / keine weiteren.
+function Get-LockDecision($Cfg, [string]$Rel, [string]$Pkg, $Decided, $Questions, $StateLines) {
+    $tag = 'LOCK-' + $Pkg
+    $tagRe = '(?<![A-Za-z0-9-])' + [regex]::Escape($tag) + '(?![A-Za-z0-9])'
+    $secRe = '(?i)^#+\s*' + [regex]::Escape([string]$Cfg.openMarker) + '\s*-\s*' + [regex]::Escape($tag) + '\s*$'
+    $hasLock = $false; $src = @(); $text = @()
+    foreach ($sl in @($StateLines)) {
+        $lines = @($sl); $at = -1
+        for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match $secRe) { $at = $i; break } }
+        if ($at -lt 0) { continue }
+        $hasLock = $true
+        for ($i = $at + 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^#' -and $lines[$i] -match '(?i)(Entscheidung|decision|Antwort|answer|erledigt|umgesetzt|implemented)' -and $lines[$i] -match $tagRe) {
+                $src = @('state file'); $text = @($lines[$i])
+                for ($j = $i + 1; $j -lt $lines.Count -and $lines[$j] -notmatch '^#'; $j++) { if ($lines[$j].Trim()) { $text += $lines[$j].Trim() } }
+            }
+        }
+    }
+    if (-not $hasLock) { return $null }
+    if ($Decided.ContainsKey('*|' + $tag.ToUpper())) { $src += 'answers file'; $text += (Get-AnswerText $Cfg $tag.ToUpper()) }
+    foreach ($q in @($Questions | Where-Object { $_.status -eq 'ANSWERED' -and (Norm-Plan $_.plan) -eq (Norm-Plan $Rel) -and (Get-ItemToken ([string]$_.item)) -eq $tag.ToUpper() })) { $src += ('question ' + $q.id); $text += [string]$q.answer; $text += (Get-AnswerText $Cfg $tag.ToUpper()) }
+    if (-not $src.Count) { return $null }
+    $t = $text -join ' '
+    return [pscustomobject]@{ Done = ($t -match '(?i)(erledigt|\bdone\b|\bclosed\b|keine weiteren)' -and $t -notmatch '(?i)(nicht erledigt|not done|not closed|nicht abgeschlossen)'); Source = ($src -join ', ') }
+}
+
 # Stage of one package from the agent history: new, running, needVerify, verified, open (verify found items), failed.
 function Get-PkgStage($Cfg, $Agents, [string]$Plan, [string]$Pkg) {
     # The whole-plan stage (ALL) also counts the follow-up work of the plan (Q-* = answered question, FIX-* = integration fix): it makes an earlier ALL verify outdated.
@@ -216,6 +251,11 @@ function Get-Routine($Ctx) {
         if (-not $rp -or $workers -le 0) { continue }
         $relP = [string]$rp.path; $tok = Get-ItemToken ([string]$q.item); $pk = "Q-$tok"
         $absP = if ([System.IO.Path]::IsPathRooted($relP)) { $relP } else { Join-Path $Ctx.Repo $relP.Replace('/', '\') }
+        if ($tok -like 'LOCK-*') {   # answer to a lock question that says "erledigt": the package is finished, no new work (the plan loop below marks it stateDone)
+            $lsl = @(Get-PlanStateFiles $absP | ForEach-Object { , @(Get-Content $_.FullName -Encoding UTF8) })
+            $lq = Get-LockDecision $cfg $relP $tok.Substring(5) $decided $Ctx.Questions $lsl
+            if ($lq -and $lq.Done) { continue }
+        }
         $done = $false   # the item already stands as implemented in a state file of the plan
         foreach ($sf in @(Get-PlanStateFiles $absP)) { foreach ($l in (Get-Content $sf.FullName -Encoding UTF8)) { if ($l -match '^\|' -and $l.Split('|').Count -gt 2 -and $l.Split('|')[1].ToUpper() -match ('(?<![A-Z0-9-])' + [regex]::Escape($tok) + '(?![A-Z0-9])') -and $l -match '(?i)(implementiert|umgesetzt|implemented)' -and $l -notmatch '(?i)(\bnicht\b|teilweise|\boffen\b|partial)') { $done = $true } } }
         if ($done) { continue }
@@ -250,6 +290,14 @@ function Get-Routine($Ctx) {
         foreach ($k in $pkgs) { if (($stages[$k.Id].Stage -eq 'new' -or $stages[$k.Id].Stage -eq 'open') -and $sdone.ContainsKey($k.Id)) { $stages[$k.Id] = [pscustomobject]@{ Stage = 'stateDone'; Work = $null; Verify = $null; Evidence = $sdone[$k.Id] } } }
         # Frozen packages (runtime\NOFOLLOW.json): no follow-up task of any kind, their results only go into the state file.
         foreach ($k in $pkgs) { if ($stages[$k.Id].Stage -ne 'running' -and (Test-Frozen $cfg $rel $k.Id)) { $stages[$k.Id] = [pscustomobject]@{ Stage = 'stateDone'; Work = $null; Verify = $null; Evidence = 'NOFOLLOW' } } }
+        # Answered lock question (see Get-LockDecision): "erledigt / keine weiteren" -> the package counts as finished (stateDone); any other answer lifts the lock and forgives the earlier failures (Get-PackageFailures counts only agents started after that moment).
+        $stLines = @(Get-PlanStateFiles $abs | ForEach-Object { , @(Get-Content $_.FullName -Encoding UTF8) })
+        foreach ($k in (@($pkgs | ForEach-Object { $_.Id }) + 'ALL')) {
+            $ld = Get-LockDecision $cfg $rel $k $decided $Ctx.Questions $stLines
+            if (-not $ld) { continue }
+            if (-not (Get-LockReleaseTime $cfg $rel $k)) { Set-LockRelease $cfg $rel $k }
+            if ($ld.Done -and $k -ne 'ALL' -and $stages[$k].Stage -notin @('running', 'handoff', 'verified', 'stateDone')) { $stages[$k] = [pscustomobject]@{ Stage = 'stateDone'; Work = $null; Verify = $null; Evidence = ('lock answered: ' + $ld.Source) } }
+        }
         # Lock (plan 12.4): a package whose verifications reported open items more often than the escalation allows (escalateAfter + 1 times: two attempts of the class, then one attempt one class higher) gets no further work agent, no event for the brain and no follow-up task; it is reported once under the open-question marker with the open items.
         $locked = @{}
         foreach ($k in (@($pkgs | ForEach-Object { $_.Id }) + 'ALL')) {
@@ -290,6 +338,7 @@ function Get-Routine($Ctx) {
             $st = if ($k -eq 'ALL') { Get-PkgStage $cfg $all $rel 'ALL' } else { $stages[$k] }
             $isBlockedK = @($blocked | Where-Object { (Norm-Plan $_.Plan) -eq (Norm-Plan $rel) -and $_.Package -eq $k }).Count -gt 0
             if ($isBlockedK -or $locked.ContainsKey($k) -or (Test-Frozen $cfg $rel $k)) { continue }
+            if (@($acts | Where-Object { $_.action -eq 'start_agent' -and (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and [string]$_.package -eq "Q-LOCK-$k" }).Count -gt 0 -or @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and [string]$_.package -eq "Q-LOCK-$k" -and ($_.status -eq 'running' -or $_.status -eq 'starting') }).Count -gt 0) { continue }   # the work for the answered lock question is already starting or running: no second work agent on the same package
             $kmine = @($all | Where-Object { (Norm-Plan $_.plan) -eq (Norm-Plan $rel) -and [string]$_.package -eq $k })
             $wcwd = if ($st.Work -and $st.Work.cwd) { [string]$st.Work.cwd } else { $cwd }
             $wtype = if ($st.Work) { Get-RowProvider $st.Work } else { '' }
