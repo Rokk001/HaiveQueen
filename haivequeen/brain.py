@@ -37,11 +37,11 @@ def build_prompt(env, delta: dict, tools_dir=None) -> str:
 
 
 def brain_command(env) -> list:
-    """The brain command line (without the prompt): executable and arguments with {brainModel}, {brainEffort} and {repo} replaced."""
+    """The brain command line (without the prompt): executable and arguments with {brainModel}, {brainEffort}, {repo} (the code repo) and {workspace} replaced."""
     b = env.settings.get("brain") or {}
     cmd = b.get("command", "claude")
     exe = list(cmd) if isinstance(cmd, list) else [shutil.which(str(cmd)) or str(cmd)]
-    repl = {"{brainModel}": str(b.get("model", "sonnet")), "{brainEffort}": str(b.get("effort", "medium")), "{repo}": str(env.workspace)}
+    repl = {"{brainModel}": str(b.get("model", "sonnet")), "{brainEffort}": str(b.get("effort", "medium")), "{repo}": str(env.code_repo), "{workspace}": str(env.workspace)}
     args = ["-p"] if not isinstance(cmd, list) else []
     for a in b.get("args", []):
         a = str(a)

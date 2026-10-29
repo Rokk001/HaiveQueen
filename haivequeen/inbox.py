@@ -188,7 +188,7 @@ def process_inbox(env) -> dict:
     files = sorted((p for p in folder.iterdir() if p.is_file() and p.suffix == ".toml"), key=lambda p: (p.stat().st_mtime, p.name))
     for path in files:
         try:
-            answers, decisions, orders = parse_file(path, env.name, env.conn, env.settings.get("repo") or env.workspace,
+            answers, decisions, orders = parse_file(path, env.name, env.conn, env.settings.get("codeRepo") or env.settings.get("repo") or env.workspace,
                                                     "origin/" + str(env.settings.get("integrationBranch") or "integration/all"))
             for a in answers:
                 db.answer_question(env.conn, a["qid"], a["text"], a["by"])

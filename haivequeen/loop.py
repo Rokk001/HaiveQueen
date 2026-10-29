@@ -583,7 +583,7 @@ def _project_round(env, pool, summary, terminal, brain_answer, brain_runner, dry
     blocked = routine.blocked_tasks(agents)
     can_start = (not pilot and not plan_files and any_ready and not any_in_run and pool.int_free > 0 and not build_running)
     slots = {"freeByProvider": dict(pool.free), "integratorFree": pool.int_free, "workersMax": sum(p["slots"] for p in env.providers)}
-    snapshot = {"now": datetime.now().strftime("%Y-%m-%d %H:%M"), "project": env.name, "repo": str(env.workspace), "dryRun": dry_run,
+    snapshot = {"now": datetime.now().strftime("%Y-%m-%d %H:%M"), "project": env.name, "repo": str(env.code_repo), "workspace": str(env.workspace), "dryRun": dry_run,
                 "plans": startable, "notStartablePlans": others, "blockedTasks": [{"plan": b["Plan"], "package": b["Package"], "phase": b["Phase"], "error": b["Error"]} for b in blocked],
                 "agents": [{"name": a["name"], "type": a.get("type"), "plan": a["plan"], "package": a.get("package"), "phase": a.get("phase"), "status": a.get("status"),
                             "finalFile": str(env.run_dir(a["name"]) / "final.txt").replace("\\", "/")} for a in agents],
@@ -742,7 +742,8 @@ def _do_lock(c, a) -> None:
     key = "lock:%s|%s" % (a["plan"], a["package"])
     if not c["dry"] and runtime.kv_get(env.conn, env.name, key) is None:
         q = routine.prompt(env, "lockQuestion", {"marker": env.settings.get("openMarker", "Open for Owner"), "tag": tag, "pkg": str(a["package"]),
-                                                  "agent": str(a.get("agent")), "text": str(a.get("text"))})
+                                                  "agent": str(a.get("agent")), "text": str(a.get("text")),
+                                                  "plan": routine.plan_ref(env, str(a["plan"]))})
         runtime.kv_set(env.conn, env.name, key, q)
         reason = routine.lock_reason(str(a.get("text") or "")) if env.settings.get("triage", True) else q[:300]
         try:
@@ -899,12 +900,14 @@ def _do_start(c, a, forced_pick=None) -> int:
     pf = run_dir / "prompt.md"
     hf = run_dir / "HANDOFF"
     if protocol == "claude":
+        flow_doc = env.settings.get("buildFlowDoc", "")
         hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of AGENT-RULES.md and the rule sections you need) are "
-               "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name (e.g. %s) only when your task "
-               "needs them. Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, env.settings.get("buildFlowDoc", "")))
+               "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name%s only when your task "
+               "needs them. Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, " (e.g. %s)" % flow_doc if flow_doc else ""))
     else:
-        hdr = ("You are the agent %s (one task, then you end). Follow all rules in section 1 of %s and every rule of the repository (CLAUDE.md and the "
-               "files it names). Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, TOOLS_DIR / "docs" / "AGENT-RULES.md"))
+        rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"   # a project with a separate code repo keeps its rules in the workspace
+        hdr = ("You are the agent %s (one task, then you end). Follow all rules in section 1 of %s and every rule of the repository (%s and the "
+               "files it names). Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, TOOLS_DIR / "docs" / "AGENT-RULES.md", rules_doc))
     handoff = ("Prüfe nach jedem abgeschlossenen Arbeitsschritt, ob die Datei %s existiert. Wenn ja: schreib den Stand (erledigt, offen, nächster Schritt, "
                "Branch, Worktree) in die State-Datei des Plans unter 'Handoff %s' und beende dich." % (hf, nm))
     pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff, encoding="utf-8")

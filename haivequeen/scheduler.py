@@ -457,6 +457,12 @@ class ProjectEnv:
         self.priority = priority
         self.providers = get_providers(settings)
 
+    @property
+    def code_repo(self) -> Path:
+        """Git main checkout of the project: `codeRepo` of project.toml when the code lives apart from the workspace, else the workspace."""
+        cr = self.settings.get("codeRepo")
+        return Path(cr) if cr else self.workspace
+
     def run_dir(self, agent: str) -> Path:
         """Folder of the raw files of one agent run (prompt.md, final.txt, HANDOFF, ...): <data>/runs/<project>/<agent>."""
         return osplat.runs_dir() / self.name / agent

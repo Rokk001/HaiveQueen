@@ -451,8 +451,8 @@ def prompt(env, name: str, values: dict) -> str:
 
 
 def new_worktree(env, middle: str) -> str:
-    """Folder of a new worktree next to the workspace: <parent>/<worktreePrefix>-<middle>."""
-    return os.path.join(os.path.dirname(str(env.workspace).rstrip("\\/")), "%s-%s" % (env.settings.get("worktreePrefix", "wt"), middle))
+    """Folder of a new worktree next to the code repo (the workspace when the project has no `codeRepo`): <parent>/<worktreePrefix>-<middle>."""
+    return os.path.join(os.path.dirname(str(env.code_repo).rstrip("\\/")), "%s-%s" % (env.settings.get("worktreePrefix", "wt"), middle))
 
 
 def same_dir(a: str, b: str) -> bool:
@@ -460,11 +460,28 @@ def same_dir(a: str, b: str) -> bool:
     return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
-def pick_cwd(hist: list, repo: str, pkg: str = "") -> str:
+def plan_ref(env, rel: str) -> str:
+    """How a prompt names a plan (or its state file): the path as it stands when the plan lives in the code repo, the absolute path in the
+    workspace when the project has a separate code repo (`codeRepo`), because an agent in a worktree of the code repo cannot resolve it."""
+    if same_dir(str(env.code_repo), str(env.workspace)):
+        return rel
+    return str(env.workspace / rel)
+
+
+def other_workspace(env) -> str:
+    """The workspace folder when it is not the code repo (the project has a `codeRepo`), else an empty text."""
+    return "" if same_dir(str(env.code_repo), str(env.workspace)) else str(env.workspace)
+
+
+def pick_cwd(hist: list, repo: str, pkg: str = "", workspace: str = "") -> str:
     """Working folder for a new agent of a plan: the newest worktree of the package `pkg`, else the newest worktree of the plan (never the
-    workspace folder while a worktree is known), else the newest folder of the plan (the workspace). `hist` is sorted by start time."""
-    wts = [a for a in hist if not same_dir(str(a["cwd"]), repo)]
+    main checkout `repo`, nor the `workspace` folder when one is given, while a worktree is known), else the newest folder of the plan
+    (the main checkout). With a separate `workspace` and no worktree in the history (only triage agents ran) the result is `repo`, never the workspace.
+    `hist` is sorted by start time."""
+    wts = [a for a in hist if not same_dir(str(a["cwd"]), repo) and not (workspace and same_dir(str(a["cwd"]), workspace))]
     own = [a for a in wts if pkg and (str(a.get("package")) == pkg or pkg in a["bundle"])]
+    if workspace and not wts:
+        return repo
     return str((own or wts or hist)[-1]["cwd"])
 
 
@@ -550,9 +567,14 @@ def get_routine(env, ctx: dict) -> dict:
     workers = [max(0, int(ctx["free"].get("workers", 0)))]
     blocked = blocked_tasks(allr)
     decided = decided_items(env, ctx["questions"])
-    repo = str(env.workspace)
+    repo = str(env.code_repo)
+    ws_other = other_workspace(env)
     providers = env.providers
     triage_on = bool(s.get("triage", True))
+
+    def in_main(folder):
+        """True when the folder is the main checkout of the code (or the separate workspace): a new agent works in a worktree instead."""
+        return same_dir(folder, repo) or bool(ws_other and same_dir(folder, ws_other))
 
     def blocked_for(rel, pkg):
         """True when the task (plan, package) is on the blocked list."""
@@ -603,13 +625,13 @@ def get_routine(env, ctx: dict) -> dict:
         chosen.append(nm)
         free[pv["name"]] = free.get(pv["name"], 0) - 1
         workers[0] -= 1
-        fcwd = pick_cwd(hist, repo)
-        if same_dir(fcwd, repo):   # no worktree known: the fix agent creates its own next to the main checkout
-            ftext = "Plan: %s. " % rel_p + prompt(env, "fixBlockedNoPlan", {
+        fcwd = pick_cwd(hist, repo, "", ws_other)
+        if in_main(fcwd):   # no worktree known: the fix agent creates its own next to the main checkout
+            ftext = "Plan: %s. " % plan_ref(env, rel_p) + prompt(env, "fixBlockedNoPlan", {
                 "branch": r["branch"], "tip": r["tip"], "status": (r["status"] + " " + r["note"]).strip(), "cwd": repo,
                 "newWorktree": new_worktree(env, "fix-" + sch.to_slug(r["branch"]))})
         else:
-            ftext = prompt(env, "fixBlocked", {"plan": rel_p, "branch": r["branch"], "tip": r["tip"], "status": r["status"], "cwd": fcwd})
+            ftext = prompt(env, "fixBlocked", {"plan": plan_ref(env, rel_p), "branch": r["branch"], "tip": r["tip"], "status": r["status"], "cwd": fcwd})
         acts.append(start_action(nm, pv["name"], "work", rel_p, pk, fcwd, ftext))
     for q in [x for x in ctx["questions"] if x["status"] == "ANSWERED"]:
         if re.search(r"(?i)duplicate", str(q["answer"])) or q.get("by") == "auto":
@@ -636,21 +658,21 @@ def get_routine(env, ctx: dict) -> dict:
         workers[0] -= 1
         # The question belongs to a package: it works in that package's existing worktree (an agent of the package whose folder is not the
         # workspace). Without one the rule of the work packages applies: last known folder of the plan, the main checkout gets a new worktree.
-        qcwd = pick_cwd(hist, repo, tok)
-        if same_dir(qcwd, repo):
+        qcwd = pick_cwd(hist, repo, tok, ws_other)
+        if in_main(qcwd):
             slug = sch.to_slug(plan_tag(env, rel_p)) + "-" + sch.to_slug(pk)
             where = prompt(env, "workInMainCheckout", {"cwd": qcwd, "newWorktree": new_worktree(env, slug), "subBranch": slug})
         else:
             where = prompt(env, "workInWorktree", {"cwd": qcwd})
         acts.append(start_action(nm, pv["name"], "work", rel_p, pk, qcwd, prompt(env, "answeredQuestion", {
-            "plan": rel_p, "item": q["item"], "qid": q["id"], "answer": answer_text(env, tok), "where": where})))
+            "plan": plan_ref(env, rel_p), "item": q["item"], "qid": q["id"], "answer": answer_text(env, tok), "where": where})))
 
     for pl in ctx["plans"]:
         rel = str(pl["path"])
         tag = plan_tag(env, rel)
         pkgs = env.packages(rel)
         hist = sorted([a for a in allr if norm_plan(a["plan"]) == norm_plan(rel) and a.get("cwd")], key=lambda a: a["started"])
-        cwd = pick_cwd(hist, repo) if hist else ""
+        cwd = pick_cwd(hist, repo, "", ws_other) if hist else ""
         # New plan: the script cannot plan it (no package table or no known worktree) -> brain, once.
         if not pkgs or not cwd:
             if "newplan:" + rel not in handled:
@@ -711,7 +733,7 @@ def get_routine(env, ctx: dict) -> dict:
             chosen.append(nm)
             free[pv["name"]] = free.get(pv["name"], 0) - 1
             workers[0] -= 1
-            acts.append(start_action(nm, pv["name"], "verify", rel, k["id"], str(st["Work"]["cwd"]), verify_prompt(rel, k["id"])))
+            acts.append(start_action(nm, pv["name"], "verify", rel, k["id"], str(st["Work"]["cwd"]), verify_prompt(plan_ref(env, rel), k["id"])))
         # A verify answer without any count line (stage open, count -1) cannot be judged: the verify is run again, at most 3 verifies per package.
         for k in pkgs:
             st = stages[k["id"]]
@@ -727,7 +749,7 @@ def get_routine(env, ctx: dict) -> dict:
             chosen.append(nm)
             free[pv["name"]] = free.get(pv["name"], 0) - 1
             workers[0] -= 1
-            acts.append(start_action(nm, pv["name"], "verify", rel, k["id"], str((st["Work"] or st["Verify"]).get("cwd") or cwd), verify_prompt(rel, k["id"])))
+            acts.append(start_action(nm, pv["name"], "verify", rel, k["id"], str((st["Work"] or st["Verify"]).get("cwd") or cwd), verify_prompt(plan_ref(env, rel), k["id"])))
         # Follow-up tasks derived from the STATE (found again after every restart of the loop): (1) a verify with open requirements and no
         # work after it -> a work agent for exactly those items (at most 3 rounds per package); (2) a work agent that failed technically
         # ('pane never started') -> started again (at most 3 times).
@@ -744,13 +766,13 @@ def get_routine(env, ctx: dict) -> dict:
             if (st["Stage"] == "open" and st["Verify"] and verify_open_count(env, str(st["Verify"]["name"])) > 0
                     and sum(1 for a in kmine if a.get("phase") == "verify" and a.get("status") == "done") < 4):
                 ans = str(env.run_dir(str(st["Verify"]["name"])) / "final.txt").replace("\\", "/")
-                text = prompt(env, "verifyOpenWork", {"plan": rel, "pkg": k, "verifier": str(st["Verify"]["name"]), "answerPath": ans, "cwd": wcwd})
+                text = prompt(env, "verifyOpenWork", {"plan": plan_ref(env, rel), "pkg": k, "verifier": str(st["Verify"]["name"]), "answerPath": ans, "cwd": wcwd})
             elif (st["Stage"] == "failed" and st["Work"] and st["Work"].get("status") == "failed"
                   and re.match(r"^pane never started", str(st["Work"].get("last_line") or ""))
                   and (not st["Verify"] or st["Verify"]["started"] < st["Work"]["started"])
                   and sum(1 for a in kmine if a.get("phase") == "work" and a.get("status") == "failed"
                           and re.match(r"^pane never started", str(a.get("last_line") or ""))) < 3):
-                text = prompt(env, "restartWork", {"plan": rel, "pkg": k, "previous": str(st["Work"]["name"]), "cwd": wcwd})
+                text = prompt(env, "restartWork", {"plan": plan_ref(env, rel), "pkg": k, "previous": str(st["Work"]["name"]), "cwd": wcwd})
             if not text:
                 continue
             kc = next((p for p in pkgs if p["id"] == k), None)
@@ -777,7 +799,7 @@ def get_routine(env, ctx: dict) -> dict:
                 chosen.append(nm)
                 free[pv["name"]] = free.get(pv["name"], 0) - 1
                 workers[0] -= 1
-                acts.append(start_action(nm, pv["name"], "verify", rel, "ALL", cwd, verify_prompt(rel, "ALL")))
+                acts.append(start_action(nm, pv["name"], "verify", rel, "ALL", cwd, verify_prompt(plan_ref(env, rel), "ALL")))
         if all_st["Stage"] == "open" and "ALL" not in locked and "verify:" + all_st["Verify"]["name"] not in handled:
             events.append({"type": "verify_open", "key": "verify:" + all_st["Verify"]["name"], "plan": rel, "package": "ALL",
                            "agent": str(all_st["Verify"]["name"]), "text": final_tail(env, str(all_st["Verify"]["name"]))})
@@ -788,7 +810,7 @@ def get_routine(env, ctx: dict) -> dict:
             chosen.append(nm)
             free[rel_pv["name"]] = free.get(rel_pv["name"], 0) - 1
             workers[0] -= 1
-            acts.append(start_action(nm, rel_pv["name"], "release", rel, "REL", cwd, prompt(env, "release", {"plan": rel, "cwd": cwd})))
+            acts.append(start_action(nm, rel_pv["name"], "release", rel, "REL", cwd, prompt(env, "release", {"plan": plan_ref(env, rel), "cwd": cwd})))
         open_rows = [r for r in ctx["queue"] if str(r["plan"]).lower().endswith(rel.lower())]
         if (all_st["Stage"] == "verified" and pl["status"] == "IN_PROGRESS"
                 and any(a.get("status") == "done" for a in rels) and not open_rows):
@@ -840,16 +862,16 @@ def get_routine(env, ctx: dict) -> dict:
             workers[0] -= 1
             texts = []
             for m in members:
-                same = same_dir(cwd, repo)
+                same = in_main(cwd)
                 slug = sch.to_slug(tag) + "-" + sch.to_slug(m["id"])
                 wt_note = (prompt(env, "workInMainCheckout", {"cwd": cwd, "newWorktree": new_worktree(env, slug), "subBranch": slug})
                            if same else prompt(env, "workInWorktree", {"cwd": cwd}))
-                texts.append("Plan: %s, package %s. %s Names of worktree folders and branches you create: only lower-case letters, digits and hyphens (for this package: %s). Do the package exactly as the plan describes it." % (rel, m["id"], wt_note, slug))
+                texts.append("Plan: %s, package %s. %s Names of worktree folders and branches you create: only lower-case letters, digits and hyphens (for this package: %s). Do the package exactly as the plan describes it." % (plan_ref(env, rel), m["id"], wt_note, slug))
             tail = " Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the package is finished."
             if len(members) > 1:
                 text = ("This agent works %d small packages of plan %s one after the other (bundled so that the start context is paid once). "
                         "Finish each package and record it in the state before you start the next. Packages in this order: %s.\n\n" % (
-                            len(members), rel, ", ".join(m["id"] for m in members)) + "\n\n".join(texts) + tail)
+                            len(members), plan_ref(env, rel), ", ".join(m["id"] for m in members)) + "\n\n".join(texts) + tail)
             else:
                 text = texts[0] + tail
             acts.append(start_action(nm, pv["name"], "work", rel, k["id"], cwd, text, bool(needs), kcls, [m["id"] for m in members]))

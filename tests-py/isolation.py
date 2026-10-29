@@ -10,19 +10,23 @@ import tempfile
 from pathlib import Path
 
 REAL_FOLDERS = [Path(os.environ[_v]) / "HaiveQueen" for _v in ("LOCALAPPDATA", "APPDATA") if os.environ.get(_v)]
-LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs")  # written by a running loop, not by tests
-LIVE_PROJECT_LOGS = ("logs", "ODP")
+LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-update.lock")  # written by a running loop (STOP: set by a self-update), not by tests
 
 
-def snapshot_real() -> dict:
-    """Return {path: (size, mtime_ns)} of the files in the real data and settings folders, without what a running loop writes itself."""
+def is_live(rel: Path) -> bool:
+    """True when the file (path relative to a data folder) is written by a running loop: a top-level live file or anything below logs/<project>."""
+    return rel.parts[0].startswith(LIVE_TOP) or (rel.parts[0] == "logs" and len(rel.parts) > 2)
+
+
+def snapshot_real(bases=None) -> dict:
+    """Return {path: (size, mtime_ns)} of the files in the real data and settings folders (or in `bases`), without what a running loop writes itself."""
     snap = {}
-    for base in REAL_FOLDERS:
+    for base in (REAL_FOLDERS if bases is None else bases):
         if not base.is_dir():
             continue
         for p in base.rglob("*"):
             rel = p.relative_to(base)
-            if not p.is_file() or rel.parts[0].startswith(LIVE_TOP) or rel.parts[:2] == LIVE_PROJECT_LOGS:
+            if not p.is_file() or is_live(rel):
                 continue
             st = p.stat()
             snap[str(base / rel)] = (st.st_size, st.st_mtime_ns)
