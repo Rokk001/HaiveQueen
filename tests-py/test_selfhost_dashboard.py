@@ -18,12 +18,13 @@ class SelfhostDashboardTest(unittest.TestCase):
     """Dashboard and views with the project HaiveQueen; the table self_updates is a stub of the one the self-update step creates."""
 
     def setUp(self):
-        """Temp database with the projects ODP (cyan) and HaiveQueen (magenta); no self_updates table yet."""
+        """Temp database with the projects ODP (cyan) and HaiveQueen (magenta); the self_updates table is dropped again below."""
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.conn = db.connect(self.root / "o.db")
         db.upsert_project(self.conn, "ODP", None, "cyan", 1)
         db.upsert_project(self.conn, "HaiveQueen", None, "magenta", 0)
+        self.conn.execute("DROP TABLE IF EXISTS self_updates")   # db.connect creates the real table now; these tests start without it
 
     def tearDown(self):
         """Close and remove the database."""
