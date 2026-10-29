@@ -88,6 +88,15 @@ def is_frozen(env, plan: str, pkg: str) -> bool:
     return freeze_key(plan, pkg) in frozen_keys(env)
 
 
+TECHNICAL_END = re.compile(r"^(pane never started|runner process vanished|process gone after orchestrator restart)")   # ends that say nothing about the task
+
+
+def is_technical_end(last_line) -> bool:
+    """True when an agent ended only technically: its pane never came up, its runner process vanished (window closed, killed, crash) or a
+    restart of the Queen lost it. Such an end is no failure of the task: it blocks nothing, counts for no escalation or lock and is started again."""
+    return bool(TECHNICAL_END.match(str(last_line or "")))
+
+
 def blocked_tasks(agents: list) -> list:
     """Tasks (plan|package|phase) whose last 2 starts failed with the same error: blocked, never restarted. Returns dicts Key, Name, Error, Plan, Package, Phase."""
     res = []
@@ -101,8 +110,8 @@ def blocked_tasks(agents: list) -> list:
         rows.sort(key=lambda r: r["started"])
         a, b = rows[-1], rows[-2]
         last_a, last_b = str(a.get("last_line") or ""), str(b.get("last_line") or "")
-        # a pane that never came up says nothing about the task, so it never blocks it
-        if last_a == last_b and not re.match(r"^pane never started", last_a):
+        # a technical end (pane never came up, process vanished) says nothing about the task, so it never blocks it
+        if last_a == last_b and not is_technical_end(last_a):
             res.append({"Key": key, "Name": str(a.get("name")), "Error": last_a, "Plan": a["plan"],
                         "Package": str(a.get("package")), "Phase": str(a.get("phase"))})
     return res
@@ -137,9 +146,9 @@ COUNT_RE = re.compile(r"Offene Anforderungen[^:\r\n]*:\s*(\d+)")   # the count l
 def read_final(env, name: str) -> str:
     """Text of the final answer of an agent run ('' when missing).
 
-    That is final.txt (the last complete answer of the agent). When it has no 'Offene Anforderungen: <n>' line, the report.md that the agent
-    wrote into its run folder is read as well, and its text is appended when it has such a line (a Codex run often ends with an empty message
-    and puts its answer into the report file).
+    That is final.txt (the last complete answer of the agent). When it has no 'Offene Anforderungen: <n>' line, the report.md or report.txt that
+    the agent wrote into its run folder is read as well, and its text is appended when it has such a line (a Codex run often ends with only an
+    introductory sentence and puts its answer into the report file).
     """
     try:
         text = (env.run_dir(name) / "final.txt").read_text(encoding="utf-8-sig")
@@ -147,11 +156,14 @@ def read_final(env, name: str) -> str:
         text = ""
     if COUNT_RE.search(text):
         return text
-    try:
-        report = (env.run_dir(name) / "report.md").read_text(encoding="utf-8-sig")
-    except OSError:
-        return text
-    return (text + "\n" + report) if COUNT_RE.search(report) else text
+    for report_name in ("report.md", "report.txt"):
+        try:
+            report = (env.run_dir(name) / report_name).read_text(encoding="utf-8-sig")
+        except OSError:
+            continue
+        if COUNT_RE.search(report):
+            return text + "\n" + report
+    return text
 
 
 def verify_zero(env, name: str) -> bool:
@@ -217,17 +229,15 @@ def pkg_stage(env, agents: list, plan: str, pkg: str) -> dict:
 
 
 def package_failures(env, agents: list, plan: str, pkg: str) -> int:
-    """Failures of one package: failed work agents (not 'pane never started') plus verifies that reported open items.
+    """Failures of one package: failed work agents (not technical ends) plus verifies that reported open items.
 
-    A finished verify without any count line (not in final.txt and not in report.md either) counts as one failed attempt, once per verify.
+    A finished verify without any count line (not in final.txt and not in a report file either) counts as one failed attempt, once per verify.
     """
     mine = [a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and (str(a.get("package")) == pkg or pkg in a["bundle"])]
-    f = sum(1 for a in mine if a.get("phase") == "work" and a.get("status") == "failed"
-            and not re.match(r"^pane never started", str(a.get("last_line") or "")))
+    f = sum(1 for a in mine if a.get("phase") == "work" and a.get("status") == "failed" and not is_technical_end(a.get("last_line")))
     o = 0
     for v in (a for a in mine if a.get("phase") == "verify" and a.get("status") == "done"):
-        m = re.search(r"Offene Anforderungen:\s*(\d+)", read_final(env, v["name"]))
-        if not m or int(m.group(1)) > 0:
+        if verify_open_count(env, v["name"]) != 0:
             o += 1
     return f + o
 
@@ -779,12 +789,16 @@ def get_routine(env, ctx: dict) -> dict:
             if st["Stage"] == "open" and k["id"] not in locked and k["id"] not in sdone and "verify:" + st["Verify"]["name"] not in handled:
                 events.append({"type": "verify_open", "key": "verify:" + st["Verify"]["name"], "plan": rel, "package": k["id"],
                                "agent": str(st["Verify"]["name"]), "text": final_tail(env, str(st["Verify"]["name"]))})
+        def deps_open(p):
+            """True when a dependency of the package is not verified or done yet (such a package gets no verify)."""
+            return any(d not in stages or stages[d]["Stage"] not in ("verified", "stateDone") for d in p["depends"])
+
         # Verify after work.
         for k in pkgs:
             st = stages[k["id"]]
             retry = (st["Stage"] == "failed" and st["Verify"] and st["Verify"].get("status") == "failed" and st["Work"]
                      and st["Work"]["started"] < st["Verify"]["started"] and not blocked_for(rel, k["id"]))   # a verify that crashed is run again
-            if (st["Stage"] != "needVerify" and not retry) or workers[0] <= 0:
+            if (st["Stage"] != "needVerify" and not retry) or workers[0] <= 0 or deps_open(k):
                 continue
             pv = select("medium", [], avoid=sch.row_provider(st["Work"]))   # verify never below medium; another provider than the work agent when one is free
             if not pv:
@@ -798,7 +812,7 @@ def get_routine(env, ctx: dict) -> dict:
         for k in pkgs:
             st = stages[k["id"]]
             if (st["Stage"] != "open" or workers[0] <= 0 or not st["Verify"] or k["id"] in locked or k["id"] in sdone
-                    or blocked_for(rel, k["id"]) or verify_open_count(env, str(st["Verify"]["name"])) != -1):
+                    or blocked_for(rel, k["id"]) or verify_open_count(env, str(st["Verify"]["name"])) != -1 or deps_open(k)):
                 continue
             done_v = fresh_verifies(env, allr, rel, k["id"])
             pv = select("medium", [], avoid=sch.row_provider(st["Verify"])) if done_v < 3 else None
@@ -811,7 +825,7 @@ def get_routine(env, ctx: dict) -> dict:
             acts.append(start_action(nm, pv["name"], "verify", rel, k["id"], str((st["Work"] or st["Verify"]).get("cwd") or cwd), verify_prompt(plan_ref(env, rel), k["id"])))
         # Follow-up tasks derived from the STATE (found again after every restart of the loop): (1) a verify with open requirements and no
         # work after it -> a work agent for exactly those items (at most 3 rounds per package); (2) a work agent that failed technically
-        # ('pane never started') -> started again (at most 3 times).
+        # ('pane never started', runner process vanished, lost by a restart of the Queen) -> started again ('pane never started' at most 3 times).
         for k in [p["id"] for p in pkgs] + ["ALL"]:
             if workers[0] <= 0:
                 break
@@ -827,10 +841,11 @@ def get_routine(env, ctx: dict) -> dict:
                 ans = str(env.run_dir(str(st["Verify"]["name"])) / "final.txt").replace("\\", "/")
                 text = prompt(env, "verifyOpenWork", {"plan": plan_ref(env, rel), "pkg": k, "verifier": str(st["Verify"]["name"]), "answerPath": ans, "cwd": wcwd})
             elif (st["Stage"] == "failed" and st["Work"] and st["Work"].get("status") == "failed"
-                  and re.match(r"^pane never started", str(st["Work"].get("last_line") or ""))
+                  and is_technical_end(st["Work"].get("last_line"))
                   and (not st["Verify"] or st["Verify"]["started"] < st["Work"]["started"])
-                  and sum(1 for a in kmine if a.get("phase") == "work" and a.get("status") == "failed"
-                          and re.match(r"^pane never started", str(a.get("last_line") or ""))) < 3):
+                  and (not re.match(r"^pane never started", str(st["Work"].get("last_line") or "")) or sum(
+                      1 for a in kmine if a.get("phase") == "work" and a.get("status") == "failed"
+                      and re.match(r"^pane never started", str(a.get("last_line") or ""))) < 3)):   # a vanished process is restarted without a limit
                 text = prompt(env, "restartWork", {"plan": plan_ref(env, rel), "pkg": k, "previous": str(st["Work"]["name"]), "cwd": wcwd})
             if not text:
                 continue
