@@ -8,9 +8,9 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from . import db, runtime
+from . import db, interrupt, runtime
 from . import scheduler as sch
 from .scheduler import ACTIVE, norm_plan
 
@@ -89,21 +89,88 @@ def is_frozen(env, plan: str, pkg: str) -> bool:
     return freeze_key(plan, pkg) in frozen_keys(env)
 
 
-TECHNICAL_END = re.compile(r"^(pane never started|runner process vanished|process gone after orchestrator restart)")   # ends that say nothing about the task
-
-
 def is_technical_end(last_line) -> bool:
     """True when an agent ended only technically: its pane never came up, its runner process vanished (window closed, killed, crash) or a
     restart of the Queen lost it. Such an end is no failure of the task: it blocks nothing, counts for no escalation or lock and is started again."""
-    return bool(TECHNICAL_END.match(str(last_line or "")))
+    return bool(interrupt.VANISHED_RE.match(str(last_line or "")))
+
+
+def interrupted_count(agents: list, plan: str, pkg: str, phase: str) -> int:
+    """Number of consecutive interrupted ends at the end of the history of one task (same plan, package and phase); a normal end starts the count again."""
+    rows = sorted([a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and str(a.get("package")) == pkg and a.get("phase") == phase
+                   and a.get("status") in ("done", "failed")], key=lambda a: a["started"])
+    n = 0
+    for a in reversed(rows):
+        if a.get("status") == "failed" and interrupt.is_interrupted(a):
+            n += 1
+        else:
+            break
+    return n
+
+
+def retry_due(env, agents: list, a: dict, now: datetime = None) -> bool:
+    """True when the retry after the interrupted end `a` may start now.
+
+    The time of the next try is stored in the agent row (retryAt), so a waiting retry survives a restart of the Queen. A rate limit has none
+    yet: it is due at once when a provider with room is left (the normal provider choice then skips the limited one), otherwise the later
+    reset time of the providers at their limit (15 minutes when none is known) is stored and waited for. API and connection errors wait 1, 2,
+    4, 8 minutes, then 15, counted over the consecutive interrupted ends of the task; sleep and vanished processes are retried at once.
+    """
+    from . import usage
+    now = now or datetime.now()
+    stored = db.parse_time(a.get("retryAt"))
+    if stored is not None:
+        return stored <= now
+    kind = interrupt.kind_of(a)
+    if kind == interrupt.RATE_LIMIT:
+        limits = usage.provider_limits(env.conn, env.providers)
+        if any(p["slots"] > 0 and limits[p["name"]]["free_pct"] > 0 for p in env.providers):
+            return True
+        hours = [limits[p["name"]]["hours"] for p in env.providers if p["slots"] > 0 and limits[p["name"]]["used_pct"] is not None]
+        at = now + (timedelta(hours=max(hours)) if hours else timedelta(minutes=interrupt.RATE_LIMIT_MINUTES))
+        env.update_agent(a["name"], {"retryAt": at.isoformat(timespec="seconds")})
+        return False
+    if kind in (interrupt.API, interrupt.CONNECTION):
+        count = interrupted_count(agents, a["plan"], str(a.get("package")), str(a.get("phase")))
+        ended = db.parse_time(a.get("ended_at")) or now
+        at = ended + timedelta(minutes=interrupt.backoff_minutes(count))
+        env.update_agent(a["name"], {"retryAt": at.isoformat(timespec="seconds")})
+        return at <= now
+    return True
+
+
+def last_integrator(agents: list):
+    """The newest integrator agent row (phase integrate), or None."""
+    rows = sorted([a for a in agents if a.get("phase") == "integrate"], key=lambda a: a["started"])
+    return rows[-1] if rows else None
+
+
+def return_interrupted_rows(env) -> None:
+    """When the last integrator ended interrupted (and none runs), the queue rows it had taken (in Lauf) go back to waiting (ready), so the next
+    integrator takes them again."""
+    agents = all_agents(env)
+    last = last_integrator(agents)
+    if not last or last.get("status") != "failed" or not interrupt.is_interrupted(last) or any(
+            a.get("phase") == "integrate" and a.get("status") in ACTIVE for a in agents):
+        return
+    for r in queue_rows(env).values():
+        if r["status"] == WORDS["in_run"]:
+            runtime.queue_upsert(env.conn, env.name, r["branch"], None, None, "ready", "integrator interrupted (%s): taken again" % interrupt.kind_of(last))
+            env.log("queue row %s back to ready: the integrator %s was interrupted" % (r["branch"], last["name"]))
+
+
+INTERRUPTED_INTEGRATOR_TEXT = ("The previous integrator was interrupted (laptop sleep, network or API problem, or its process vanished). Before anything "
+                               "else check the main checkout for an unfinished merge and abort it (git merge --abort), then integrate the ready rows again.")
 
 
 def blocked_tasks(agents: list) -> list:
-    """Tasks (plan|package|phase) whose last 2 starts failed with the same error: blocked, never restarted. Returns dicts Key, Name, Error, Plan, Package, Phase."""
+    """Tasks (plan|package|phase) whose last 2 starts failed with the same error: blocked, never restarted. Returns dicts Key, Name, Error, Plan, Package, Phase.
+
+    Interrupted ends (sleep, network, API error, vanished process) are no failures and never block."""
     res = []
     groups = {}
     for a in agents:
-        if a.get("status") == "failed":
+        if a.get("status") == "failed" and not interrupt.is_interrupted(a):
             groups.setdefault("%s|%s|%s" % (a["plan"], a.get("package"), a.get("phase")), []).append(a)
     for key, rows in groups.items():
         if len(rows) < 2:
@@ -135,7 +202,7 @@ def repair_stale_agents(env, now: datetime = None, alive=None) -> None:
             if started is not None and (now - started).total_seconds() > 120:
                 why = "pane never started (no runner process)"
         if why:
-            env.update_agent(a["name"], {"status": "failed", "ended_at": db.now(), "last_line": why, "paneClosed": True})
+            env.update_agent(a["name"], {"status": "failed", "ended_at": db.now(), "last_line": why, "paneClosed": True, "interrupted": interrupt.VANISHED})
             env.log("TECHNICAL NOTE: %s: %s, marked failed" % (a["name"], why))
 
 
@@ -235,7 +302,7 @@ def package_failures(env, agents: list, plan: str, pkg: str) -> int:
     A finished verify without any count line (not in final.txt and not in a report file either) counts as one failed attempt, once per verify.
     """
     mine = [a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and (str(a.get("package")) == pkg or pkg in a["bundle"])]
-    f = sum(1 for a in mine if a.get("phase") == "work" and a.get("status") == "failed" and not is_technical_end(a.get("last_line")))
+    f = sum(1 for a in mine if a.get("phase") == "work" and a.get("status") == "failed" and not interrupt.is_interrupted(a))
     o = 0
     for v in (a for a in mine if a.get("phase") == "verify" and a.get("status") == "done"):
         if verify_open_count(env, v["name"]) != 0:
@@ -884,10 +951,48 @@ def get_routine(env, ctx: dict) -> dict:
                                and a.get("status") == "done"], key=lambda a: a["started"])[-1]
                 locked[k] = True
                 acts.append({"action": "stall_package", "plan": rel, "package": k, "agent": str(last["name"]), "text": final_tail(env, str(last["name"]))})
+        # Interrupted ends (sleep, network, API error, vanished process) are no failures: the task waits for its time and is then started again in
+        # the same phase with the same class. While it waits or retries, no other agent of any phase starts for it and the brain is not asked.
+        interrupted_tasks = set()
+        for k in [p["id"] for p in pkgs] + ["ALL", "REL"]:
+            kmine = sorted([a for a in allr if norm_plan(a["plan"]) == norm_plan(rel) and (str(a.get("package")) == k or k in a["bundle"])],
+                           key=lambda a: a["started"])
+            last = kmine[-1] if kmine else None
+            if (not last or last.get("status") != "failed" or not interrupt.is_interrupted(last) or last.get("phase") not in ("work", "verify", "release")
+                    or is_frozen(env, rel, k)):
+                continue
+            interrupted_tasks.add(k)
+            locked[k] = True
+            if workers[0] <= 0 or not retry_due(env, allr, last):
+                continue
+            phase, kind = str(last.get("phase")), interrupt.kind_of(last)
+            prefer = "" if kind == interrupt.RATE_LIMIT else sch.row_provider(last)   # after a rate limit the normal provider choice decides
+            kc = next((p for p in pkgs if p["id"] == k), None)
+            kneeds = sch.package_needs(s, kc["content"], kc["capability"]) if kc else []
+            kcwd = str(last["cwd"]) if last.get("cwd") else cwd
+            if phase == "work":
+                kcls = sch.resolve_agent_class(s, "work", kc["cls"] if kc else "medium", package_failures(env, allr, rel, k))
+                text = prompt(env, "interruptedWork", {"plan": plan_ref(env, rel), "pkg": k, "previous": str(last["name"]), "cwd": kcwd})
+                pv = select(kcls, kneeds, prefer=prefer)
+            elif phase == "verify":
+                kcls, kneeds = "medium", []
+                text = verify_prompt(plan_ref(env, rel), k)
+                pv = select("medium", [], prefer=prefer)
+            else:
+                kcls, kneeds = "medium", []
+                text = prompt(env, "release", {"plan": plan_ref(env, rel), "cwd": kcwd})
+                pv = select("medium", [], protocol="claude")
+            if not pv:
+                continue
+            nm = new_agent_name("%s-%s" % (tag, "release" if phase == "release" else "%s-%s" % (k, phase)), allr, chosen)
+            chosen.append(nm)
+            free[pv["name"]] = free.get(pv["name"], 0) - 1
+            workers[0] -= 1
+            acts.append(start_action(nm, pv["name"], phase, rel, k, kcwd, text, bool(kneeds), kcls))
         # Events for the brain: failed agents, verify answers with open items.
         for k in pkgs:
             st = stages[k["id"]]
-            if st["Stage"] == "failed" and not blocked_for(rel, k["id"]):
+            if st["Stage"] == "failed" and not blocked_for(rel, k["id"]) and k["id"] not in interrupted_tasks:
                 ag = st["Verify"] if st["Verify"] and st["Verify"].get("status") == "failed" else st["Work"]
                 if "failed:" + ag["name"] not in handled:
                     events.append({"type": "agent_failed", "key": "failed:" + ag["name"], "plan": rel, "package": k["id"], "agent": str(ag["name"]),
@@ -950,13 +1055,6 @@ def get_routine(env, ctx: dict) -> dict:
                     and sum(1 for a in kmine if a.get("phase") == "verify" and a.get("status") == "done") < 4):
                 ans = str(env.run_dir(str(st["Verify"]["name"])) / "final.txt").replace("\\", "/")
                 text = prompt(env, "verifyOpenWork", {"plan": plan_ref(env, rel), "pkg": k, "verifier": str(st["Verify"]["name"]), "answerPath": ans, "cwd": wcwd})
-            elif (st["Stage"] == "failed" and st["Work"] and st["Work"].get("status") == "failed"
-                  and is_technical_end(st["Work"].get("last_line"))
-                  and (not st["Verify"] or st["Verify"]["started"] < st["Work"]["started"])
-                  and (not re.match(r"^pane never started", str(st["Work"].get("last_line") or "")) or sum(
-                      1 for a in kmine if a.get("phase") == "work" and a.get("status") == "failed"
-                      and re.match(r"^pane never started", str(a.get("last_line") or ""))) < 3)):   # a vanished process is restarted without a limit
-                text = prompt(env, "restartWork", {"plan": plan_ref(env, rel), "pkg": k, "previous": str(st["Work"]["name"]), "cwd": wcwd})
             elif (k != "ALL" and st["Stage"] == "needVerify" and st["Work"] and st["Work"].get("status") == "done"
                   and not made_progress(env, rel, k, st["Work"], st["Verify"])):
                 # The work agent ended without a new commit: the package is not finished, the next agent is work again (with its report), not a verify.
@@ -980,7 +1078,7 @@ def get_routine(env, ctx: dict) -> dict:
         all_verified = all(stages[p["id"]]["Stage"] in ("verified", "stateDone") for p in pkgs)
         all_st = pkg_stage(env, allr, rel, "ALL")
         all_retry = (all_st["Stage"] == "failed" and all_st["Verify"] and all_st["Verify"].get("status") == "failed"
-                     and not blocked_for(rel, "ALL"))   # a crashed whole-plan verify is run again
+                     and not blocked_for(rel, "ALL") and "ALL" not in interrupted_tasks)   # a crashed whole-plan verify is run again (an interrupted one: see above)
         if all_verified and (all_st["Stage"] in ("new", "needVerify") or all_retry) and workers[0] > 0:
             last_w = sorted([a for a in allr if norm_plan(a["plan"]) == norm_plan(rel) and a.get("phase") == "work"], key=lambda a: a["started"])
             pv = select("medium", [], avoid=sch.row_provider(last_w[-1]) if last_w else "")
@@ -1083,10 +1181,12 @@ def get_routine(env, ctx: dict) -> dict:
     acts += cont
     # Integration: a ready row without a running integrator starts the integrator. Blocked rows are handled at the top (fix agent, no brain event).
     int_pv = None
-    if ctx["can_start_integrator"] and int(ctx["free"].get("int", 0)) > 0:
+    last_int = last_integrator(allr)
+    int_interrupted = bool(last_int and last_int.get("status") == "failed" and interrupt.is_interrupted(last_int))
+    if ctx["can_start_integrator"] and int(ctx["free"].get("int", 0)) > 0 and not (int_interrupted and not retry_due(env, allr, last_int)):
         int_pv = next((p for p in providers if p["protocol"] == "claude" and p["slots"] > 0 and (p["classes"].get("medium") or {}).get("model")), None)   # the integrator is a Claude Code agent (class medium); it uses no worker slot
     if int_pv:
         nm = new_agent_name("INTEGRATOR-" + datetime.now().strftime("%m%d-%H%M"), allr, chosen)
         acts.append(start_action(nm, int_pv["name"], "integrate", QUEUE_PLAN_ID, "INT-" + datetime.now().strftime("%m%d%H%M"), repo,
-                                 prompt(env, "integrator", {})))
+                                 prompt(env, "integrator", {}) + ((" " + INTERRUPTED_INTEGRATOR_TEXT) if int_interrupted else "")))
     return {"actions": acts, "events": events}

@@ -567,6 +567,8 @@ def _project_round(env, pool, summary, terminal, brain_answer, brain_runner, dry
     use_rows = [p for p in prows if not plan_files or any(norm_plan(f) == norm_plan(p["path"]) or norm_plan(p["path"]).endswith(norm_plan(f)) for f in plan_files)]
     startable = [{"path": p["path"], "status": p["status"]} for p in use_rows if p["status"] in ("READY", "IN_PROGRESS")]
     others = [{"path": p["path"], "status": p["status"]} for p in use_rows if p["status"] not in ("READY", "IN_PROGRESS")]
+    if not dry_run:
+        routine.return_interrupted_rows(env)   # rows taken by an integrator that ended interrupted go back to waiting
     qmap = routine.queue_rows(env)
     all_rows = [dict(r) for r in qmap.values()]
     queue = []

@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import buildjobs, config, db, header, runtime
+from . import buildjobs, config, db, header, interrupt, runtime
 from . import platform as osplat
 
 TOOL_ROOT = Path(__file__).resolve().parent.parent
@@ -392,6 +392,7 @@ class AgentRun:
         self.last = ""
         self.final = ""
         self.ok = False
+        self.api_errors = []   # error texts of the agent's error events (Claude result with is_error, Codex turn.failed / error), for the interruption check
         self.model = ""
         self.pending = {}
         self.last_said = ""
@@ -575,6 +576,8 @@ class AgentRun:
                 self.tout = int(u.get("output_tokens") or 0)
             self.final = str(e.get("result") or "")
             self.ok = not e.get("is_error")
+            if e.get("is_error"):
+                self.api_errors.append(self.final)
             self.last = short(self.final)
 
     def _codex_event(self, e):
@@ -612,6 +615,7 @@ class AgentRun:
             self.ok = True
         elif et in ("turn.failed", "error"):
             self.last = "error: " + short(json.dumps(e, separators=(",", ":")))
+            self.api_errors.append(json.dumps(e, separators=(",", ":")))
             self.say(self.last, "Red")
 
     def save_claude_usage(self, e):
@@ -736,6 +740,8 @@ def run_agent(a, out=None):
         run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
 
     code = 0
+    clock_jumps = []   # filled when the wall clock jumps by more than interrupt.JUMP_SECONDS during the run (laptop sleep)
+    threading.Thread(target=clock_watch, daemon=True, args=(clock_jumps,)).start()
     stall_limit = float(cfg.get("agentStallSeconds", DEFAULT_STALL_SECONDS) or 0)
 
     def mark_stalled(secs):
@@ -801,7 +807,11 @@ def run_agent(a, out=None):
             run.last = "no result event, exit %s %s" % (code, err_txt)
         run.last = short(run.last)
     final_file.write_text(run.final, encoding="utf-8", newline="")
-    run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx})
+    # An end caused by sleep, network, API error or a vanished process is marked interrupted: it is no failure and is tried again after a wait.
+    err_text = err_file.read_text(encoding="utf-8", errors="replace") if err_file.is_file() else ""
+    kind = interrupt.classify_end(status == "failed", run.api_errors, err_text, bool(clock_jumps), run.last)
+    run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx,
+                         "interrupted": kind, "retryAt": ""})
     if run.final and short(run.final, 1500) != short(run.last_said, 1500):
         run.say("Final message: " + run.final, "Green" if status == "done" else "Red")
     run.say("End: %s (exit %s), total input %s / output %s. The section closes after the close delay." % (status, code, header.fmt_tok(run.tin), header.fmt_tok(run.tout)),
@@ -812,6 +822,17 @@ def run_agent(a, out=None):
         except subprocess.TimeoutExpired:
             header_proc.terminate()
     return 0
+
+
+def clock_watch(jumps: list, step: float = 5.0) -> None:
+    """Thread body: sleep in short steps and append to `jumps` when the wall clock advanced by more than interrupt.JUMP_SECONDS in one step."""
+    last = time.time()
+    while True:
+        time.sleep(step)
+        now = time.time()
+        if abs(now - last - step) > interrupt.JUMP_SECONDS:
+            jumps.append(now - last)
+        last = now
 
 
 def complete_build_measure(conn, project, name, jobs, start_free_mb, sample_file, started):
