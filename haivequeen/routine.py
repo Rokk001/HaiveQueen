@@ -464,6 +464,38 @@ def stagnant(env, agents: list, plan: str, pkg: str) -> bool:
     return len(counts) == n and counts[-1] > 0 and all(counts[i + 1] >= counts[i] for i in range(n - 1))
 
 
+def package_works(agents: list, plan: str, pkg: str) -> list:
+    """Finished work agents of one package, oldest first (failed and interrupted ends are not in the list)."""
+    return sorted([a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and str(a.get("package")) == pkg and a.get("phase") == "work"
+                   and a.get("status") == "done"], key=lambda a: a["started"])
+
+
+def stall_released_works(env, plan: str, pkg: str) -> int:
+    """Finished work agents that already existed when the owner released a stall of this package; 0 when never released."""
+    try:
+        return int(runtime.kv_get(env.conn, env.name, "stallrelw:%s|%s" % (plan, pkg)) or 0)
+    except ValueError:
+        return 0
+
+
+def idle_work_streak(env, agents: list, plan: str, pkg: str) -> int:
+    """Number of the newest finished work runs in a row that ended without a new commit (since the last release by the owner).
+
+    A run made no commit when the state of the branch at its start (kv head:<agent>) equals the state at the start of the next run, or for the
+    newest run the state now. A run without a recorded state counts as progress. Interrupted ends are not finished work and do not count.
+    """
+    works = package_works(agents, plan, pkg)[stall_released_works(env, plan, pkg):]
+    heads = [runtime.kv_get(env.conn, env.name, "head:" + str(w["name"])) for w in works]
+    streak = 0
+    for i in range(len(works) - 1, -1, -1):
+        end = heads[i + 1] if i + 1 < len(works) else progress_marker(env, plan, pkg, works[i].get("cwd"))
+        if heads[i] and end and heads[i] == end:
+            streak += 1
+        else:
+            break
+    return streak
+
+
 def plan_stalled(env, agents: list, plan: str, queue: list) -> bool:
     """True when agents ran for the plan in the last `planStallHours` but no package of it was integrated (and no stall was released) in that time."""
     hours = float(env.settings.get("planStallHours", 6))
@@ -946,11 +978,14 @@ def get_routine(env, ctx: dict) -> dict:
         for k in [p["id"] for p in pkgs] + ["ALL"]:
             if stall_open(env, rel, k):
                 locked[k] = True
-            elif stagnant(env, allr, rel, k):
+            elif stagnant(env, allr, rel, k) or idle_work_streak(env, allr, rel, k) >= max(2, int(s.get("progressVerifies", 3))):
+                # the report that goes to the owner: the last verify of the package, else the last work agent
                 last = sorted([a for a in allr if norm_plan(a["plan"]) == norm_plan(rel) and str(a.get("package")) == k and a.get("phase") == "verify"
-                               and a.get("status") == "done"], key=lambda a: a["started"])[-1]
+                               and a.get("status") == "done"], key=lambda a: a["started"])
+                last = last[-1] if last else package_works(allr, rel, k)[-1]
                 locked[k] = True
-                acts.append({"action": "stall_package", "plan": rel, "package": k, "agent": str(last["name"]), "text": final_tail(env, str(last["name"]))})
+                acts.append({"action": "stall_package", "plan": rel, "package": k, "agent": str(last["name"]), "text": final_tail(env, str(last["name"])),
+                             "idle": idle_work_streak(env, allr, rel, k) >= max(2, int(s.get("progressVerifies", 3)))})
         # Interrupted ends (sleep, network, API error, vanished process) are no failures: the task waits for its time and is then started again in
         # the same phase with the same class. While it waits or retries, no other agent of any phase starts for it and the brain is not asked.
         interrupted_tasks = set()

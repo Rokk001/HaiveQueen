@@ -775,8 +775,9 @@ def _do_stall(c, a) -> None:
     plan, pkg = str(a["plan"]), str(a.get("package") or "")
     if pkg:
         key, item = "stall:%s|%s" % (plan, pkg), "STALL-" + pkg
-        what = ("Package %s is stopped: the number of open requirements did not fall over the last %d verifies, so no new agent is started for it. "
-                "Last report (%s):\n%s" % (pkg, int(env.settings.get("progressVerifies", 3)), a.get("agent"), a.get("text")))
+        why = ("the last %d work runs ended without a new commit" if a.get("idle") else "the number of open requirements did not fall over the last %d verifies")
+        what = ("Package %s is stopped: %s, so no new agent is started for it. Last report (%s):\n%s"
+                % (pkg, why % int(env.settings.get("progressVerifies", 3)), a.get("agent"), a.get("text")))
     else:
         key, item = "planstall:" + plan, "STALL-PLAN"
         what = ("Plan %s is stopped: agents ran for it during the last %s hours but no package of it was integrated, so no new agent is started."
@@ -801,7 +802,9 @@ def routine_release_stalls(env) -> None:
                 continue
             if prefix == "stall:":
                 plan, _, pkg = kv["key"][len(prefix):].rpartition("|")
-                runtime.kv_set(conn, env.name, "stallrel:%s|%s" % (plan, pkg), str(routine.done_verifies(routine.all_agents(env), plan, pkg)))
+                agents = routine.all_agents(env)
+                runtime.kv_set(conn, env.name, "stallrel:%s|%s" % (plan, pkg), str(routine.done_verifies(agents, plan, pkg)))
+                runtime.kv_set(conn, env.name, "stallrelw:%s|%s" % (plan, pkg), str(len(routine.package_works(agents, plan, pkg))))
             else:
                 runtime.kv_set(conn, env.name, "planstallrel:" + kv["key"][len(prefix):], db.now())
             runtime.kv_delete(conn, env.name, kv["key"])
