@@ -1234,6 +1234,8 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         pane.show_new_events()
     while active_count(conn) > 0:
         sleep(wait_seconds)
+        for env in envs:   # a row whose runner process is gone must not hold the stopped loop open
+            routine.repair_stale_agents(env)
         runstate.settle(conn)
         refresh()
     for env in envs:

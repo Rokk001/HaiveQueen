@@ -158,6 +158,31 @@ class LoopTest(RoundCase):
         self.assertIn("STOP found", self.log())
         self.assertIn("Loop ended", (runtime.mirror_dir("testproj") / "ORCH-EVENTS.log").read_text(encoding="utf-8"))
 
+    def test_stop_ends_loop_when_a_running_runner_dies(self):
+        """A runner that dies while the stopped loop waits is marked failed, so the loop ends instead of waiting for the orphaned row."""
+        import subprocess
+        self.plan("IN_PROGRESS", ONE)
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        runtime.upsert_agent(self.conn, "testproj", "DUMMY-T-triage", {"type": "claude", "provider": "claude", "plan": REL, "package": "P1", "phase": "triage",
+                                                                     "status": "running", "startedAt": db.now(), "pid": proc.pid})
+        loop.stop_flag().parent.mkdir(parents=True, exist_ok=True)
+        loop.stop_flag().write_text("x")
+        calls = []
+
+        def sleeper(seconds):
+            """Kill the runner on the first wait; fail the test when the loop is still waiting after many waits."""
+            calls.append(seconds)
+            if len(calls) == 1:
+                proc.kill()
+                proc.wait()
+            self.assertLess(len(calls), 50, "the stopped loop keeps waiting for an orphaned row")
+        try:
+            self.assertEqual(loop.run_loop(self.conn, self.machine, sleep=sleeper), 0)
+        finally:
+            proc.kill()
+            proc.wait()
+        self.assertEqual(runtime.get_agent(self.conn, "testproj", "DUMMY-T-triage")["status"], "failed")
+
     def test_daily_export_in_loop(self):
         """When the daily export is due the loop writes the export file; when not due it writes none."""
         folder = export.export_dir()
