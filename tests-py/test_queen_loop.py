@@ -2,6 +2,7 @@
 by work and never by another verify, a package whose dependencies are not finished gets no verify, and a task whose agents only vanished
 (window closed, killed, crash, restart of the Queen) is neither blocked nor counted as failed and is started again."""
 import subprocess
+from datetime import datetime, timedelta
 
 from bzztest import REL, RoundCase
 from haivequeen import db, routine, runtime
@@ -316,3 +317,52 @@ class ProgressGuardTest(RoundCase):
         self.plan_agents(420, 10)
         self.round()
         self.assertEqual([q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == "STALL-PLAN"], [])
+
+    def test_verifies_before_the_start_of_the_guard_do_not_count(self):
+        """Only agents started after the go-live time of the guard (kv guard-since) count: old verifies cause no stop."""
+        self.verifies([4, 4, 5])
+        runtime.kv_set(self.conn, "*", "guard-since", db.now())
+        self.round()
+        self.assertEqual(self.questions("STALL-S1"), [])
+
+    def test_verifies_after_the_start_of_the_guard_count(self):
+        """With the go-live time before the verifies the same history stops the package."""
+        self.verifies([4, 4, 5])
+        runtime.kv_set(self.conn, "*", "guard-since", (datetime.now() - timedelta(hours=5)).isoformat(timespec="seconds"))
+        self.round()
+        self.assertEqual(len(self.questions("STALL-S1")), 1)
+
+    def test_owner_answer_of_the_plan_stop_resets_the_count_of_its_packages(self):
+        """The owner answered the stop of the plan: verifies from before that answer no longer count for any package of the plan."""
+        self.verifies([4, 4, 5])
+        qid = db.add_question(self.conn, "testproj", REL, "STALL-PLAN", "plan stopped", "")
+        db.answer_question(self.conn, qid, "go on", "owner")
+        self.round()
+        self.assertEqual(self.questions("STALL-S1"), [])
+
+    def test_answered_stop_question_starts_no_work(self):
+        """The answer to a STALL question is no task: no Q-<item> work agent starts for it."""
+        self.verifies([5, 3, 1])
+        qid = db.add_question(self.conn, "testproj", REL, "STALL-S1", "package stopped", "")
+        db.answer_question(self.conn, qid, "go on", "owner")
+        self.round()
+        self.assertFalse([n for n in self.names() if "STALL" in n])
+
+
+class StartStateAndQuestionRunTest(NewCommitTest):
+    """A missing start state is no progress, and a question run of a package counts as running work of the package."""
+
+    def test_missing_start_state_is_no_progress(self):
+        """A work agent without a recorded start state (older row) in a git repository gets work again, not a verify."""
+        self.agent("DUMMY-C1-work", package="C1", started=30, ended=20)
+        self.round()
+        self.assertIn("DUMMY-C1-work-2", self.names())
+        self.assertNotIn("DUMMY-C1-verify", self.names())
+
+    def test_no_verify_while_a_question_run_of_the_package_works(self):
+        """A running Q-<package> work agent (answered question of the package) holds back the verify of the package."""
+        self.started("DUMMY-C1-work", started=30, ended=20)
+        self.commit("two")
+        self.agent("DUMMY-Q-C1-work", package="Q-C1", status="running", pid=__import__("os").getpid(), started=5)
+        self.round()
+        self.assertNotIn("DUMMY-C1-verify", self.names())

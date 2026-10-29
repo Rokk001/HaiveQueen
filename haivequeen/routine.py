@@ -284,7 +284,10 @@ def pkg_stage(env, agents: list, plan: str, pkg: str) -> dict:
     """
     mine = [a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and (
         str(a.get("package")) == pkg or pkg in a["bundle"] or (pkg == "ALL" and re.match(r"^(Q|FIX)-", str(a.get("package") or ""))))]
-    if any(a.get("status") in ACTIVE for a in mine):
+    # a running work agent of the package, or a running Q-<package> run (work for an answered question of the package), holds back every other start
+    question_run = any(a.get("status") in ACTIVE and norm_plan(a["plan"]) == norm_plan(plan) and str(a.get("package") or "").upper() == "Q-" + pkg.upper()
+                       for a in agents)
+    if any(a.get("status") in ACTIVE for a in mine) or question_run:
         return {"Stage": "running", "Work": None, "Verify": None}
     work = sorted([a for a in mine if a.get("phase") == "work"], key=lambda a: a["started"])
     ver = sorted([a for a in mine if a.get("phase") == "verify"], key=lambda a: a["started"])
@@ -439,12 +442,12 @@ def record_progress(env, name: str, plan: str, pkg: str, cwd) -> None:
 
 
 def made_progress(env, plan: str, pkg: str, work: dict, verify: dict = None) -> bool:
-    """True when the branch has a new commit since the work agent started and since the last verify. When the state cannot be read or was
-    not recorded (older agents) it counts as progress, so nothing is held back for a missing record."""
+    """True when the branch has a new commit since the work agent started and since the last verify. When the branch state cannot be read it
+    counts as progress; a missing start state (older agent rows) does not: the work is then run again, which records a start state."""
     cur = progress_marker(env, plan, pkg, work.get("cwd"))
     bases = [runtime.kv_get(env.conn, env.name, "head:" + str(x["name"])) for x in (work, verify) if x]
     bases = [b for b in bases if b]
-    return not cur or not bases or cur not in bases
+    return not cur or (bool(bases) and cur not in bases)
 
 
 def stall_open(env, plan: str, pkg: str) -> bool:
@@ -465,11 +468,31 @@ def stall_released_verifies(env, plan: str, pkg: str) -> int:
         return 0
 
 
+def guard_baseline(env, plan: str, pkg: str = ""):
+    """Time from which the progress guard counts agents of a package (or of the plan when `pkg` is empty): the latest of the go-live time of the
+    guard (kv guard-since, global; none = no limit) and the owner's last answer to a stop of this package or of its plan. None = count all."""
+    marks = [db.parse_time(runtime.kv_get(env.conn, "*", "guard-since"))]
+    items = {"STALL-PLAN"} | ({"STALL-" + pkg.upper()} if pkg else set())
+    for q in runtime.list_questions(env.conn, env.name, "answered"):
+        if q["answered_by"] == "owner" and norm_plan(q["plan_path"] or "") == norm_plan(plan) and str(q["item"] or "").upper() in items:
+            marks.append(db.parse_time(q["answered_at"]))
+    marks = [m for m in marks if m is not None]
+    return max(marks) if marks else None
+
+
+def started_after(agents: list, base) -> list:
+    """The agent rows that started after `base` (all of them when `base` is None)."""
+    if base is None:
+        return list(agents)
+    return [a for a in agents if (db.parse_time(a.get("started_at")) or datetime.min) > base]
+
+
 def stagnant(env, agents: list, plan: str, pkg: str) -> bool:
     """True when the open count of the last `progressVerifies` verifies (since the last release) never fell and the last one is not 0."""
     n = max(2, int(env.settings.get("progressVerifies", 3)))
-    ver = sorted([a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and str(a.get("package")) == pkg
-                  and a.get("phase") == "verify" and a.get("status") == "done"], key=lambda a: a["started"])[stall_released_verifies(env, plan, pkg):]
+    ver = sorted(started_after([a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and str(a.get("package")) == pkg
+                                and a.get("phase") == "verify" and a.get("status") == "done"], guard_baseline(env, plan, pkg)),
+                 key=lambda a: a["started"])[stall_released_verifies(env, plan, pkg):]
     counts = [c for c in (verify_open_count(env, str(a["name"])) for a in ver) if c != -1][-n:]
     return len(counts) == n and counts[-1] > 0 and all(counts[i + 1] >= counts[i] for i in range(n - 1))
 
@@ -494,7 +517,7 @@ def idle_work_streak(env, agents: list, plan: str, pkg: str) -> int:
     A run made no commit when the state of the branch at its start (kv head:<agent>) equals the state at the start of the next run, or for the
     newest run the state now. A run without a recorded state counts as progress. Interrupted ends are not finished work and do not count.
     """
-    works = package_works(agents, plan, pkg)[stall_released_works(env, plan, pkg):]
+    works = started_after(package_works(agents, plan, pkg), guard_baseline(env, plan, pkg))[stall_released_works(env, plan, pkg):]
     heads = [runtime.kv_get(env.conn, env.name, "head:" + str(w["name"])) for w in works]
     streak = 0
     for i in range(len(works) - 1, -1, -1):
@@ -521,6 +544,9 @@ def plan_stalled(env, agents: list, plan: str, queue: list) -> bool:
     rel = db.parse_time(runtime.kv_get(env.conn, env.name, "planstallrel:" + plan))
     if rel is not None:
         marks.append(rel)
+    base = guard_baseline(env, plan)
+    if base is not None:
+        marks.append(base)
     return (now - max(marks)).total_seconds() >= hours * 3600
 
 
@@ -904,6 +930,8 @@ def get_routine(env, ctx: dict) -> dict:
             ftext = prompt(env, "fixBlocked", {"plan": plan_ref(env, rel_p), "branch": r["branch"], "tip": r["tip"], "status": r["status"], "cwd": fcwd})
         acts.append(start_action(nm, pv["name"], "work", rel_p, pk, fcwd, ftext))
     for q in [x for x in ctx["questions"] if x["status"] == "ANSWERED"]:
+        if str(q["item"]).upper().startswith("STALL-"):
+            continue   # the answer to a stop of the progress guard is only a release, never a task
         if re.search(r"(?i)duplicate", str(q["answer"])) or q.get("by") == "auto":
             continue   # a duplicate of an answered question, or answered by the triage of an agent's question (that agent goes on by itself)
         rp = next((p for p in ctx["plans"] if norm_plan(p["path"]) == norm_plan(q["plan"])), None)
