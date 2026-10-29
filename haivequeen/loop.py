@@ -476,6 +476,7 @@ def run_round(conn, machine: dict, envs=None, terminal=None, brain_answer=None, 
         if not dry_run:
             inbox.process_inbox(env)
         routine_release_locks(env)
+        routine_release_stalls(env)
     summaries = {env.name: _state_summary(env) for env in envs}
     skip = None
     if not dry_run:
@@ -663,6 +664,8 @@ def _project_round(env, pool, summary, terminal, brain_answer, brain_runner, dry
             started += _do_start(ctxs, a)
         elif kind == "lock_package":
             _do_lock(ctxs, a)
+        elif kind in ("stall_package", "stall_plan"):
+            _do_stall(ctxs, a)
         elif kind == "plan_done":
             _do_plan_done(ctxs, a)
         else:
@@ -760,6 +763,49 @@ def _do_lock(c, a) -> None:
     report.append("LOCK %s %s" % (a["plan"], a["package"]))
 
 
+def _do_stall(c, a) -> None:
+    """Action stall_package / stall_plan (progress guard): stop the package or plan and ask the owner once, with the last verify report.
+
+    The question goes straight to the owner (status open, never to the triage). The stop is the kv key stall:<plan>|<package> or
+    planstall:<plan> with the question id; routine_release_stalls removes it only when the owner answered.
+    """
+    env, report = c["env"], c["report"]
+    plan, pkg = str(a["plan"]), str(a.get("package") or "")
+    if pkg:
+        key, item = "stall:%s|%s" % (plan, pkg), "STALL-" + pkg
+        what = ("Package %s is stopped: the number of open requirements did not fall over the last %d verifies, so no new agent is started for it. "
+                "Last report (%s):\n%s" % (pkg, int(env.settings.get("progressVerifies", 3)), a.get("agent"), a.get("text")))
+    else:
+        key, item = "planstall:" + plan, "STALL-PLAN"
+        what = ("Plan %s is stopped: agents ran for it during the last %s hours but no package of it was integrated, so no new agent is started."
+                % (plan, env.settings.get("planStallHours", 6)))
+    if not c["dry"] and runtime.kv_get(env.conn, env.name, key) is None:
+        qid = db.add_question(env.conn, env.name, plan, item, what + "\n\nHow should it continue (other approach, change the requirement, release the stop)?",
+                              "%s decides after seeing the report." % env.settings.get("owner", "Owner"))
+        runtime.kv_set(env.conn, env.name, key, str(qid))
+        env.log("%s of %s stopped by the progress guard, question Q-%d" % (pkg or "plan", plan, qid))
+        env.event("%s stopped (%s)" % ("Package " + pkg if pkg else "Plan " + os.path.basename(plan), env.settings.get("openMarker", "Open for Owner")), True)
+    report.append("STALL %s %s" % (plan, pkg or "(plan)"))
+
+
+def routine_release_stalls(env) -> None:
+    """Lift a progress-guard stop only when the owner answered its question (an answer of the Queen or the coordinator does not count, and a
+    restart of the Queen changes nothing). A released package starts counting its verifies anew, a released plan its hours."""
+    conn = env.conn
+    for prefix in ("stall:", "planstall:"):
+        for kv in runtime.kv_list(conn, env.name, prefix):
+            q = next((x for x in runtime.list_questions(conn, env.name, "answered") if str(x["id"]) == str(kv["value"])), None)
+            if q is None or q["answered_by"] != "owner":
+                continue
+            if prefix == "stall:":
+                plan, _, pkg = kv["key"][len(prefix):].rpartition("|")
+                runtime.kv_set(conn, env.name, "stallrel:%s|%s" % (plan, pkg), str(routine.done_verifies(routine.all_agents(env), plan, pkg)))
+            else:
+                runtime.kv_set(conn, env.name, "planstallrel:" + kv["key"][len(prefix):], db.now())
+            runtime.kv_delete(conn, env.name, kv["key"])
+            env.log("progress-guard stop %s lifted by the owner" % kv["key"])
+
+
 def _do_plan_done(c, a) -> None:
     """Action plan_done (rule 11): IN_PROGRESS -> DONE only after every branch of the plan is integrated and the whole-plan verify ended with 'Offene Anforderungen: 0'."""
     env, st, report = c["env"], c["state"], c["report"]
@@ -822,6 +868,8 @@ def _reject_reason(c, a):
             env.log("TECHNICAL NOTE: task %s failed 2 times with the same error and is not started again: %s" % (name, bk["Error"]))
     elif (norm_plan(plan) + "|" + pkg) in st["busy"] or any((norm_plan(plan) + "|" + b) in st["busy"] for b in bundle):
         why = "an agent already works on this package"
+    elif phase in ("work", "verify") and (routine.stall_open(env, plan, pkg) or routine.plan_stall_open(env, plan)):
+        why = "stopped by the progress guard: waiting for the answer of the owner"
     elif phase == "work" and routine.package_locked(env, plan, pkg):
         why = "package is locked: verifications reported open items too often (open question)"
     elif routine.is_frozen(env, plan, pkg):
@@ -925,6 +973,8 @@ def _do_start(c, a, forced_pick=None) -> int:
                           "person": ident["Person"], "color": ident["Color"], "model": cm["Model"], "effort": cm["Effort"],
                           "modelShort": sch.model_short(protocol, cm["Model"], cm["Effort"]), "class": cls,
                           "bundle_json": json.dumps(bundle) if bundle else None, "task": agent_task(env, plan, pkg, phase, pf)})
+    if phase in ("work", "verify"):
+        routine.record_progress(env, nm, plan, pkg, str(a["cwd"]))   # state of the branch at the start, to see later whether the agent committed
     if os.environ.get("BZZ_TEST_NOSTART"):   # tests only: no pane, the fake agent is marked running (this process is always alive)
         env.update_agent(nm, {"status": "running", "pid": os.getpid()})
     else:
