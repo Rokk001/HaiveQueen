@@ -219,24 +219,33 @@ def repair_stale_agents(env, now: datetime = None, alive=None) -> None:
 # ---- final answers of verify agents ----
 
 COUNT_RE = re.compile(r"Offene Anforderungen[^:\r\n]*:\s*(\d+)")   # the count line of a verify answer
+RUNNER_FILES = {"final.txt", "prompt.md", "rules.md", "milestones.txt", "stderr.txt", "build-samples.txt", "pane.pid", "pane.json"}   # files the runner writes itself, never a report
 
 
 def read_final(env, name: str) -> str:
     """Text of the final answer of an agent run ('' when missing).
 
-    That is final.txt (the last complete answer of the agent). When it has no 'Offene Anforderungen: <n>' line, the report.md or report.txt that
-    the agent wrote into its run folder is read as well, and its text is appended when it has such a line (a Codex run often ends with only an
-    introductory sentence and puts its answer into the report file).
+    That is final.txt (the last complete answer of the agent). When it has no 'Offene Anforderungen: <n>' line, the report the agent wrote into
+    its run folder is read as well, and its text is appended when it has such a line (a Codex run often ends with only an introductory
+    sentence and puts its answer into a report file). Agents name that file as they like (report.txt, result.md, final-report.txt,
+    verify-report.txt ...), so every .md or .txt file of the run folder counts except the files the runner itself writes; the newest one with a
+    count line wins.
     """
+    folder = env.run_dir(name)
     try:
-        text = (env.run_dir(name) / "final.txt").read_text(encoding="utf-8-sig")
+        text = (folder / "final.txt").read_text(encoding="utf-8-sig")
     except OSError:
         text = ""
     if COUNT_RE.search(text):
         return text
-    for report_name in ("report.md", "report.txt"):
+    try:
+        files = sorted([p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in (".md", ".txt") and p.name not in RUNNER_FILES],
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return text
+    for p in files:
         try:
-            report = (env.run_dir(name) / report_name).read_text(encoding="utf-8-sig")
+            report = p.read_text(encoding="utf-8-sig")
         except OSError:
             continue
         if COUNT_RE.search(report):

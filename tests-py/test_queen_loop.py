@@ -39,6 +39,28 @@ class ReportTxtTest(RoundCase):
         self.assertEqual(routine.verify_open_count(env, "DUMMY-E1-verify"), 2)
         self.assertFalse(routine.verify_zero(env, "DUMMY-E1-verify"))
 
+    def test_report_under_any_name_is_read(self):
+        """Codex verifies name their report result.txt, result.md, final-report.txt, verify-report.txt and so on: every such file is read."""
+        self.agent("DUMMY-E1-verify", package="E1", phase="verify", type="codex", provider="codex", started=10, ended=5)
+        self.finish("DUMMY-E1-verify", INTRO)
+        d = self.env().run_dir("DUMMY-E1-verify")
+        d.mkdir(parents=True, exist_ok=True)
+        for name in ("result.txt", "result.md", "final-report.txt", "final-report.md", "verify-report.txt", "verification-report.txt", "answer-215.txt"):
+            for f in d.iterdir():
+                if f.name not in ("final.txt",):
+                    f.unlink()
+            (d / name).write_text("Befund\nOffene Anforderungen: 3\n", encoding="utf-8")
+            self.assertEqual(routine.verify_open_count(self.env(), "DUMMY-E1-verify"), 3, name)
+
+    def test_helper_files_are_not_reports(self):
+        """The prompt, the milestones and the stderr of the run are never taken as a report, even when they mention a count."""
+        self.agent("DUMMY-E1-verify", package="E1", phase="verify", type="codex", provider="codex", started=10, ended=5)
+        self.finish("DUMMY-E1-verify", INTRO)
+        d = self.env().run_dir("DUMMY-E1-verify")
+        for name in ("prompt.md", "milestones.txt", "stderr.txt"):
+            (d / name).write_text("Offene Anforderungen: 9\n", encoding="utf-8")
+        self.assertEqual(routine.verify_open_count(self.env(), "DUMMY-E1-verify"), -1)
+
     def test_open_items_in_report_txt_are_followed_by_work_not_by_verify(self):
         """The verify ended with a count of 2 in report.txt: the next agent of the package is a work agent, no second verify is started."""
         self.agent("DUMMY-E1-work", package="E1", started=30, ended=20)
