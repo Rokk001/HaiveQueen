@@ -171,6 +171,60 @@ class NewCommitTest(RoundCase):
         self.assertNotIn("DUMMY-C1-verify-2", self.names())
 
 
+class IdleWorkGuardTest(NewCommitTest):
+    """Work runs without a new commit count as no progress for the guard; after progressVerifies of them in a row the package is stopped."""
+
+    def idle(self, n, **f):
+        """Finished work agent number n that started at the current state of the branch and ended without a commit."""
+        name = "DUMMY-C1-work" + ("" if n == 1 else "-%d" % n)
+        self.started(name, started=100 - 10 * n, ended=95 - 10 * n, **f)
+
+    def stalls(self):
+        """Open STALL question of package C1 (empty list when none)."""
+        return [q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == "STALL-C1"]
+
+    def test_three_idle_works_stop_the_package(self):
+        """Three work runs in a row without a new commit: a question to the owner and no fourth work agent."""
+        for n in (1, 2, 3):
+            self.idle(n)
+        self.round()
+        self.assertEqual(len(self.stalls()), 1)
+        self.assertNotIn("DUMMY-C1-work-4", self.names())
+
+    def test_two_idle_works_do_not_stop_it(self):
+        """Two idle runs are fewer than progressVerifies: the next work agent starts."""
+        for n in (1, 2):
+            self.idle(n)
+        self.round()
+        self.assertEqual(self.stalls(), [])
+        self.assertIn("DUMMY-C1-work-3", self.names())
+
+    def test_interrupted_ends_do_not_count(self):
+        """Two idle runs and an interrupted one between them: only two count, nothing is stopped."""
+        self.idle(1)
+        self.idle(2, status="failed", last_line="error: connection", interrupted="connection")
+        self.idle(3)
+        self.round()
+        self.assertEqual(self.stalls(), [])
+
+    def test_a_commit_ends_the_streak(self):
+        """A run that made a commit breaks the streak."""
+        self.idle(1)
+        self.idle(2)
+        self.commit("two")
+        self.idle(3)
+        self.round()
+        self.assertEqual(self.stalls(), [])
+
+    def test_streak_length_is_a_setting(self):
+        """With progressVerifies 2 two idle runs stop the package."""
+        self.machine["progressVerifies"] = 2
+        for n in (1, 2):
+            self.idle(n)
+        self.round()
+        self.assertEqual(len(self.stalls()), 1)
+
+
 class ProgressGuardTest(RoundCase):
     """A package whose open count does not fall over 3 verifies, and a plan without an integrated package for 6 hours, get no new agents
     and a question to the owner; only an answer of the owner lifts that."""
