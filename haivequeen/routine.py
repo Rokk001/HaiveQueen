@@ -239,6 +239,21 @@ def package_locked(env, plan: str, pkg: str, agents: list = None) -> bool:
     return package_failures(env, agents, plan, pkg) > lock_limit(env, plan, pkg)
 
 
+def no_next_step(env, agents: list, plan: str, pkg: str, st: dict) -> bool:
+    """True when a package in stage open has no follow-up left, so it must be locked instead of lying still.
+
+    A verify without a count line is repeated at most until 3 verifies are done, a verify with open items gets a work round only while fewer
+    than 4 verifies are done. A verify without a count line is no failure (package_failures), so the failures never reach the lock limit.
+    """
+    v = st.get("Verify")
+    if st.get("Stage") != "open" or not v:
+        return False
+    open_count = verify_open_count(env, str(v["name"]))
+    done_v = sum(1 for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and str(a.get("package")) == pkg
+                 and a.get("phase") == "verify" and a.get("status") == "done")
+    return (open_count == -1 and done_v >= 3) or (open_count > 0 and done_v >= 4)
+
+
 def start_class(env, phase: str, plan: str, pkg: str, sent: str = "") -> str:
     """Class of a work start, decided centrally: the class of the package row in the plan table (else the class sent), raised by escalation, then the phase minimum."""
     base = sch.class_index(sent)
@@ -666,7 +681,7 @@ def get_routine(env, ctx: dict) -> dict:
         locked = {}
         for k in [p["id"] for p in pkgs] + ["ALL"]:
             lst = pkg_stage(env, allr, rel, "ALL") if k == "ALL" else stages[k]
-            if lst["Stage"] == "open" and lst["Verify"] and package_failures(env, allr, rel, k) > lock_limit(env, rel, k):
+            if lst["Stage"] == "open" and lst["Verify"] and (package_failures(env, allr, rel, k) > lock_limit(env, rel, k) or no_next_step(env, allr, rel, k, lst)):
                 locked[k] = True
                 acts.append({"action": "lock_package", "plan": rel, "package": k, "agent": str(lst["Verify"]["name"]),
                              "text": final_tail(env, str(lst["Verify"]["name"]))})

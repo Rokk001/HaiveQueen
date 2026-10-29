@@ -271,6 +271,27 @@ class TriageStartTest(RoundCase):
         self.assertFalse([p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1"][0]["locked"])
 
 
+class NoNextStepTest(RoundCase):
+    """A package whose verifies gave no count line is locked once the verify repeats are used up, instead of lying still."""
+
+    def setUp(self):
+        """K1 has three finished work/verify pairs; no verify answer carries an 'Offene Anforderungen' line."""
+        super().setUp()
+        self.plan("IN_PROGRESS", [{"id": "K1", "title": "stubborn task"}])
+        for i, n in enumerate(("", "-2", "-3")):
+            t = 60 - 20 * i
+            self.agent("DUMMY-K1-work" + n, package="K1", started=t, ended=t - 5)
+            self.agent("DUMMY-K1-verify" + n, type="codex", provider="codex", package="K1", phase="verify", started=t - 10, ended=t - 15)
+            self.finish("DUMMY-K1-verify" + n, "Layout: split the file")
+
+    def test_package_without_next_step_is_locked(self):
+        """The failures stay 0 (no count line), yet the round locks the package and starts no fourth verify."""
+        self.round()
+        pkg = [p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1"][0]
+        self.assertTrue(pkg["locked"])
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "verify" and a["package"] == "K1"]), 3)
+
+
 class LockResolvedTest(RoundCase):
     """A decision or answer for item LOCK-<package> (owner, coordinator or auto) lifts the lock and forgives the failures; a closing decision ends the package."""
 
