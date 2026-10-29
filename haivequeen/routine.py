@@ -131,12 +131,27 @@ def repair_stale_agents(env, now: datetime = None, alive=None) -> None:
 
 # ---- final answers of verify agents ----
 
+COUNT_RE = re.compile(r"Offene Anforderungen[^:\r\n]*:\s*(\d+)")   # the count line of a verify answer
+
+
 def read_final(env, name: str) -> str:
-    """Text of the final answer file of an agent run ('' when missing)."""
+    """Text of the final answer of an agent run ('' when missing).
+
+    That is final.txt (the last complete answer of the agent). When it has no 'Offene Anforderungen: <n>' line, the report.md that the agent
+    wrote into its run folder is read as well, and its text is appended when it has such a line (a Codex run often ends with an empty message
+    and puts its answer into the report file).
+    """
     try:
-        return (env.run_dir(name) / "final.txt").read_text(encoding="utf-8-sig")
+        text = (env.run_dir(name) / "final.txt").read_text(encoding="utf-8-sig")
     except OSError:
-        return ""
+        text = ""
+    if COUNT_RE.search(text):
+        return text
+    try:
+        report = (env.run_dir(name) / "report.md").read_text(encoding="utf-8-sig")
+    except OSError:
+        return text
+    return (text + "\n" + report) if COUNT_RE.search(report) else text
 
 
 def verify_zero(env, name: str) -> bool:
@@ -202,16 +217,61 @@ def pkg_stage(env, agents: list, plan: str, pkg: str) -> dict:
 
 
 def package_failures(env, agents: list, plan: str, pkg: str) -> int:
-    """Failures of one package: failed work agents (not 'pane never started') plus verifies that reported open items."""
+    """Failures of one package: failed work agents (not 'pane never started') plus verifies that reported open items.
+
+    A finished verify without any count line (not in final.txt and not in report.md either) counts as one failed attempt, once per verify.
+    """
     mine = [a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and (str(a.get("package")) == pkg or pkg in a["bundle"])]
     f = sum(1 for a in mine if a.get("phase") == "work" and a.get("status") == "failed"
             and not re.match(r"^pane never started", str(a.get("last_line") or "")))
     o = 0
     for v in (a for a in mine if a.get("phase") == "verify" and a.get("status") == "done"):
         m = re.search(r"Offene Anforderungen:\s*(\d+)", read_final(env, v["name"]))
-        if m and int(m.group(1)) > 0:
+        if not m or int(m.group(1)) > 0:
             o += 1
     return f + o
+
+
+def done_verifies(agents: list, plan: str, pkg: str) -> int:
+    """Number of finished verify agents of one package."""
+    return sum(1 for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and str(a.get("package")) == pkg
+               and a.get("phase") == "verify" and a.get("status") == "done")
+
+
+def released_verifies(env, plan: str, pkg: str) -> int:
+    """Finished verifies that already existed when a lock of this package was released; 0 when never released."""
+    try:
+        return int(runtime.kv_get(env.conn, env.name, "lockrelv:%s|%s" % (plan, pkg)) or 0)
+    except ValueError:
+        return 0
+
+
+def fresh_verifies(env, agents: list, plan: str, pkg: str) -> int:
+    """Finished verifies of the package since its last lock release, so a released package gets new attempts instead of being locked again at once."""
+    return max(0, done_verifies(agents, plan, pkg) - released_verifies(env, plan, pkg))
+
+
+def ready_refusal(env, name: str) -> str:
+    """Why `bzz ready` of the agent `name` is refused; '' when it is allowed.
+
+    Only the release phase registers a branch as ready, and only after the whole-plan verify (package ALL) ended with 'Offene Anforderungen: 0'.
+    The one other case is the fix of a blocked queue row (work phase, package FIX-<tip>), which registers its branch again. An unknown agent
+    name is not judged (the call comes from a person or a test).
+    """
+    row = runtime.get_agent(env.conn, env.name, name)
+    if row is None:
+        return ""
+    a = view(row)
+    phase, pkg = str(a.get("phase") or ""), str(a.get("package") or "")
+    if phase == "work" and re.match(r"^FIX-", pkg):
+        return ""
+    if phase != "release":
+        return "only the release phase registers a branch as ready (this agent is in phase %s)" % (phase or "unknown")
+    ver = sorted([x for x in all_agents(env) if norm_plan(x["plan"]) == norm_plan(a["plan"]) and str(x.get("package")) == "ALL"
+                  and x.get("phase") == "verify" and x.get("status") == "done"], key=lambda x: x["started"])
+    if not ver or not verify_zero(env, ver[-1]["name"]):
+        return 'the whole-plan verify did not end with "Offene Anforderungen: 0"'
+    return ""
 
 
 def released_failures(env, plan: str, pkg: str) -> int:
@@ -243,14 +303,14 @@ def no_next_step(env, agents: list, plan: str, pkg: str, st: dict) -> bool:
     """True when a package in stage open has no follow-up left, so it must be locked instead of lying still.
 
     A verify without a count line is repeated at most until 3 verifies are done, a verify with open items gets a work round only while fewer
-    than 4 verifies are done. A verify without a count line is no failure (package_failures), so the failures never reach the lock limit.
+    than 4 verifies are done. Only the verifies since the last lock release count (fresh_verifies), so a released package is not locked again
+    in the same round.
     """
     v = st.get("Verify")
     if st.get("Stage") != "open" or not v:
         return False
     open_count = verify_open_count(env, str(v["name"]))
-    done_v = sum(1 for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and str(a.get("package")) == pkg
-                 and a.get("phase") == "verify" and a.get("status") == "done")
+    done_v = fresh_verifies(env, agents, plan, pkg)
     return (open_count == -1 and done_v >= 3) or (open_count > 0 and done_v >= 4)
 
 
@@ -740,8 +800,7 @@ def get_routine(env, ctx: dict) -> dict:
             if (st["Stage"] != "open" or workers[0] <= 0 or not st["Verify"] or k["id"] in locked or k["id"] in sdone
                     or blocked_for(rel, k["id"]) or verify_open_count(env, str(st["Verify"]["name"])) != -1):
                 continue
-            done_v = sum(1 for a in allr if norm_plan(a["plan"]) == norm_plan(rel) and str(a.get("package")) == k["id"]
-                         and a.get("phase") == "verify" and a.get("status") == "done")
+            done_v = fresh_verifies(env, allr, rel, k["id"])
             pv = select("medium", [], avoid=sch.row_provider(st["Verify"])) if done_v < 3 else None
             if not pv:
                 continue

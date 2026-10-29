@@ -543,8 +543,10 @@ def routine_release_locks(env) -> None:
             runtime.set_package(conn, env.name, plan, pkg, locked=False, reason="")
             row["locked"] = False
         if not row["locked"] and (resolved or triage_on):
-            fails = routine.package_failures(env, routine.all_agents(env), plan, pkg)
+            agents = routine.all_agents(env)
+            fails = routine.package_failures(env, agents, plan, pkg)
             runtime.kv_set(conn, env.name, "lockrel:%s|%s" % (plan, pkg), str(fails))
+            runtime.kv_set(conn, env.name, "lockrelv:%s|%s" % (plan, pkg), str(routine.done_verifies(agents, plan, pkg)))   # verifies up to now no longer count towards a new lock
             runtime.kv_delete(conn, env.name, kv["key"])
             env.log("package %s of %s unlocked, %d earlier failure(s) forgiven" % (pkg, plan, fails))
 
