@@ -89,7 +89,7 @@ The Queen, the dashboard and every agent share one terminal window; its name is 
 
 HaiveQueen is developed with HaiveQueen. A project can keep its plans in one folder (its workspace) and its code in another git checkout, named by the setting `codeRepo` in `.haivequeen/project.toml`. Every package then works in its own worktree of the code checkout, on its own branch.
 
-1. An agent works in its worktree, runs the project's `compileCheck` until it exits 0 and registers the branch with `bzz ready`. It never pushes.
+1. An agent works in its worktree and runs the project's `compileCheck` until it exits 0. Only the release agent registers the branch with `bzz ready`, and only after the whole-plan verify ended with the count line `Offene Anforderungen: 0`; `bzz ready` from an agent in any other phase is refused (the fix of a blocked row may register its branch again). It never pushes.
 2. The integrator merges the ready branches, oldest first, into the integration branch of the code checkout, runs the test suite and pushes that branch. A branch that does not pass is set to `blocked`, and a fix is started for it.
 3. Then `self-update` runs. It stops the loop once the running agents have ended by themselves, fast-forwards the live checkout, restarts HaiveQueen and checks the first round. If that check fails, the live checkout is rolled back.
 4. Faults of its own operation (a stalled agent, a vanished runner, an agent that ended without a result, a terminal crash, a rollback) are never hidden: each one is filed as an open question for the owner.

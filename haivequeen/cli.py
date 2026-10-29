@@ -1,6 +1,7 @@
 """HaiveQueen command line: python haivequeen/cli.py <command>. Machine-readable output is JSON on stdout."""
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +36,14 @@ def cmd_done(args, conn) -> int:
 
 
 def cmd_ready(args, conn) -> int:
-    """Register a branch as ready in the integration queue."""
+    """Register a branch as ready in the integration queue; an agent (BZZ_AGENT set by the agent runner) is refused unless the release rules allow it."""
+    agent = os.environ.get("BZZ_AGENT")
+    if agent:
+        from haivequeen import routine, scheduler as sch
+        env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
+        why = routine.ready_refusal(env, agent) if env is not None else ""
+        if why:
+            return fail("ready refused: " + why)
     res = db.add_ready(conn, args.project, args.branch, args.tip, args.plan, args.note)
     out({"ok": True, **res})
     return 0

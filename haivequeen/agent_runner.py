@@ -718,6 +718,7 @@ def run_agent(a, out=None):
     bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release") else None
     bj_jobs, bj_start_mb, samples, stop, sampler = 0, 0.0, run_dir / "build-samples.txt", threading.Event(), None
     env = with_bzz_on_path(dict(os.environ))   # the agent and everything it starts finds `bzz`, also without a PATH entry of the pip Scripts folder
+    env["BZZ_AGENT"] = a.name   # tells `bzz ready` which agent calls it (only the release phase may register a branch as ready)
     if bj:
         bj_start_mb = float(osplat.free_ram_mb())
         measured = buildjobs.stored_per_job(conn, a.project)

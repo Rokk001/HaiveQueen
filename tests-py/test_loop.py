@@ -310,7 +310,7 @@ class NoNextStepTest(RoundCase):
             self.finish("DUMMY-K1-verify" + n, "Layout: split the file")
 
     def test_package_without_next_step_is_locked(self):
-        """The failures stay 0 (no count line), yet the round locks the package and starts no fourth verify."""
+        """Each verify without a count line counts as one failure, so the round locks the package and starts no fourth verify."""
         self.round()
         pkg = [p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1"][0]
         self.assertTrue(pkg["locked"])

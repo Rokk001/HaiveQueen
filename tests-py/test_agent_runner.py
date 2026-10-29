@@ -15,7 +15,7 @@ from haivequeen import agent_runner as ar  # noqa: E402
 from haivequeen import buildjobs, db, runtime  # noqa: E402
 
 FAKE_CLI = '''import json, os, sys
-rec = {"argv": sys.argv[1:], "build_jobs": os.environ.get("BUILD_JOBS"), "cwd": os.getcwd()}
+rec = {"argv": sys.argv[1:], "build_jobs": os.environ.get("BUILD_JOBS"), "cwd": os.getcwd(), "bzz_agent": os.environ.get("BZZ_AGENT")}
 with open(os.environ["FAKE_RECORD"], "w", encoding="utf-8") as f:
     json.dump(rec, f)
 with open(os.environ["FAKE_STREAM"], encoding="utf-8") as f:
