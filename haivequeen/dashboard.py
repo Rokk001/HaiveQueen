@@ -349,11 +349,23 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "qs": db.open_questions(conn, project, only_open=True),
         "triage": conn.execute("SELECT COUNT(*) FROM questions WHERE status='triage'" + (" AND project=?" if project else ""), pa).fetchone()[0],
         "bj": build_jobs_line(conn, cfg, scope, all_rows, sysinfo), "host": host,
+        "selfupdate": db.last_self_update(conn),
         "orch": {"status": orch_status, "calls": len(brain_today), "model": (last_call or {}).get("model"),
                  "ctx": (last_call or {}).get("context"),
                  "tin": sum(b["tokens_in"] or 0 for b in brain_today), "tout": sum(b["tokens_out"] or 0 for b in brain_today)},
         "last_round": (_parse_time(last_round[0]).strftime("%H:%M:%S") if last_round and _parse_time(last_round[0]) else "-"),
     }
+
+
+def self_update_line(su) -> list:
+    """Line parts of the last self-update: result in its colour, end (else start) time, new commit, and for a rollback the commit it went back to."""
+    result = su.get("result") or "?"
+    when = _parse_time(su.get("ended")) or _parse_time(su.get("started"))
+    text = "  " + (when.strftime("%d.%m. %H:%M") if when else "-") + "  " + (su.get("new_commit") or "-")[:7]
+    if result == "rollback":
+        text += " (back to " + (su.get("old_commit") or "-")[:7] + ")"
+    col = {"ok": "green", "rollback": "yellow"}.get(result, "red")
+    return [("self-update ", "gray"), (result, col), (text, "gray")]
 
 
 def live_sysinfo(conn, project=None) -> dict:
@@ -548,6 +560,9 @@ def build_lines(level, d, w, n_fin) -> list:
     L.append([(("▲ " if tot and free < 2 else "") + "RAM %d%% %.1f/%.0f GB" % (pct, used, tot), level_colour(pct))])
     if d["bj"]:
         L.append([(d["bj"], "gray")])
+    su = d["selfupdate"]
+    if su:
+        L.append(self_update_line(su))
 
     head("☰ PLANS")
     pl = [("%s %d  " % (name, d["counts"].get(name, 0)), col) for name, col in PLAN_BADGES]

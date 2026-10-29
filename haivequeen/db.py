@@ -145,6 +145,15 @@ def rows(conn, sql: str, args=()) -> list:
     return [dict(r) for r in conn.execute(sql, args).fetchall()]
 
 
+def last_self_update(conn):
+    """Return the newest row of the table self_updates as a dict, or None when it has no row or does not exist (yet)."""
+    try:
+        found = rows(conn, "SELECT * FROM self_updates ORDER BY id DESC LIMIT 1")
+    except sqlite3.OperationalError:   # the table is created by the self-update step, older databases lack it
+        return None
+    return found[0] if found else None
+
+
 def add_event(conn, project, kind, text, agent=None, data=None) -> int:
     """Insert an event row (history) inside a running transaction and return its id."""
     cur = conn.execute(
