@@ -1337,6 +1337,11 @@ def cmd_start(args, conn) -> int:
         print(json.dumps({"ok": True, "running": True, "pid": pid, "note": "The orchestrator is already running."}))
         return 0
     try:
+        if "(self-update)" in stop_flag().read_text(encoding="utf-8", errors="replace"):   # an older self-update restarts without --keep-pause
+            args.keep_pause = True
+    except OSError:
+        pass
+    try:
         stop_flag().unlink()
     except OSError:
         pass

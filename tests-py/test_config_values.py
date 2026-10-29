@@ -102,6 +102,24 @@ class PauseKeptTest(RoundCase):
         self.start(keep_pause=True)
         self.assertEqual(runstate.get_state(self.conn)["state"], "PAUSED")
 
+    def test_self_update_stop_flag_keeps_the_pause(self):
+        """An older self-update restarts without the flag; its STOP flag text names the self-update, so the pause stays too."""
+        flag = loop.stop_flag()
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("stop requested 2026-10-30T01:00:00 (self-update)\n", encoding="utf-8")
+        runstate.pause(self.conn, "test")
+        self.start(keep_pause=False)
+        self.assertEqual(runstate.get_state(self.conn)["state"], "PAUSED")
+
+    def test_plain_stop_flag_still_resumes(self):
+        """A STOP flag from `bzz stop` does not keep the pause."""
+        flag = loop.stop_flag()
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("stop requested 2026-10-30T01:00:00\n", encoding="utf-8")
+        runstate.pause(self.conn, "test")
+        self.start(keep_pause=False)
+        self.assertEqual(runstate.get_state(self.conn)["state"], "RUNNING")
+
     def test_plain_start_still_resumes(self):
         """Without the flag `bzz start` lifts the pause as before."""
         runstate.pause(self.conn, "test")
