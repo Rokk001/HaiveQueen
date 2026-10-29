@@ -15,3 +15,10 @@ text = "The inbox folder is the place where the owner leaves answers and decisio
 source = "owner"            # owner or coordinator
 plan = "docs/plans/ALPHA.md"   # optional
 item = "A1"                    # optional
+
+# Orders to the integration queue. withdraw: only when the tip is in origin/<integrationBranch> or the reason is exactly ueberholt.
+[[queue]]
+branch = "fix/old-branch"
+tip = "abc1234"            # optional; without it every ready or blocked row of the branch
+action = "withdraw"         # withdraw, mark_cleanup (mark only, nothing is deleted) or requeue (row back to ready)
+reason = "bereits integriert"

@@ -1,5 +1,6 @@
 """Tests of the inbox folder: valid file, invalid file (all or nothing), .tmp file, two rounds without taking a file over twice, oldest first."""
 import os
+import subprocess
 import unittest
 
 from bzztest import REL, RoundCase, db, runtime
@@ -92,6 +93,75 @@ class InboxTest(RoundCase):
         self.assertEqual(runtime.list_questions(self.conn, "testproj", "answered")[0]["answer"], "older")
         self.assertTrue((self.box / "failed" / "new.toml").exists())
         self.assertIn("already answered", (self.box / "failed" / "new.error.txt").read_text(encoding="utf-8"))
+
+
+class QueueOrderTest(InboxTest):
+    """[[queue]] orders: withdraw only for a tip that is in the integration ref (or the reason "ueberholt"), mark_cleanup writes a mark, requeue sets ready."""
+
+    def git(self, *args):
+        """Run git in the workspace and return the output."""
+        res = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(self.repo)] + list(args), capture_output=True, text=True, check=True)
+        return res.stdout.strip()
+
+    def setUp(self):
+        """A git workspace with one commit inside origin/integration/all (self.inside) and one commit outside it (self.outside)."""
+        super().setUp()
+        with open(self.repo / ".haivequeen" / "project.toml", "a", encoding="utf-8") as fh:
+            fh.write('integrationBranch = "integration/all"' + chr(10))
+        self.git("init", "-q")
+        (self.repo / "f.txt").write_text("a", encoding="utf-8")
+        self.git("add", "f.txt")
+        self.git("commit", "-q", "-m", "a")
+        self.inside = self.git("rev-parse", "HEAD")
+        self.git("update-ref", "refs/remotes/origin/integration/all", self.inside)
+        (self.repo / "f.txt").write_text("b", encoding="utf-8")
+        self.git("commit", "-q", "-am", "b")
+        self.outside = self.git("rev-parse", "HEAD")
+
+    def row(self, branch, tip, status="blocked"):
+        """Add a queue row of the dummy project with the given status and return its id."""
+        return runtime.queue_upsert(self.conn, "testproj", branch, tip=tip, status=status, note="was " + status)["id"]
+
+    def status(self, qid):
+        """Status and note of a queue row."""
+        r = self.conn.execute("SELECT status, note FROM queue WHERE id=?", (qid,)).fetchone()
+        return r["status"], r["note"]
+
+    def order(self, branch, action, reason, tip=None):
+        """Text of one [[queue]] entry."""
+        return '[[queue]]\nbranch = "%s"\naction = "%s"\nreason = "%s"\n%s\n' % (branch, action, reason, 'tip = "%s"' % tip if tip else "")
+
+    def test_withdraw_needs_tip_in_integration(self):
+        """A tip inside origin/integration/all is withdrawn with the old status word and the reason in the note."""
+        qid = self.row("fix/a", self.inside)
+        self.put("w.toml", self.order("fix/a", "withdraw", "bereits integriert"))
+        self.round()
+        self.assertEqual(self.status(qid), ("withdrawn", "blocked (bereits integriert)"))
+        self.assertTrue((self.box / "done").is_dir())
+
+    def test_withdraw_outside_fails_unless_ueberholt(self):
+        """A tip outside the integration ref keeps its row and moves the file to failed/ with a reason; the reason ueberholt allows it."""
+        qid = self.row("fix/b", self.outside)
+        self.put("w1.toml", '[[decision]]\ntext = "Must not appear"\nsource = "owner"\n\n' + self.order("fix/b", "withdraw", "bereits integriert"))
+        self.round()
+        self.assertEqual(self.status(qid)[0], "blocked")
+        self.assertNotIn("Must not appear", self.decisions())
+        self.assertIn("not in origin/integration/all", (self.box / "failed" / "w1.error.txt").read_text(encoding="utf-8"))
+        self.put("w2.toml", self.order("fix/b", "withdraw", "ueberholt", tip=self.outside[:9]))
+        self.round()
+        self.assertEqual(self.status(qid), ("withdrawn", "blocked (ueberholt)"))
+
+    def test_mark_cleanup_and_requeue(self):
+        """mark_cleanup writes a mark and keeps the row; requeue sets the newest open row of the branch to ready; a branch without row fails."""
+        qid = self.row("fix/c", self.inside)
+        qid2 = self.row("chore/d", self.outside)
+        self.put("m.toml", self.order("fix/c", "mark_cleanup", "integriert") + "\n" + self.order("chore/d", "requeue", "nur Umgebung"))
+        self.put("n.toml", self.order("fix/none", "requeue", "x"), age=-60)
+        self.round()
+        self.assertEqual(self.status(qid)[0], "blocked")
+        self.assertEqual(self.status(qid2), ("ready", "requeued: nur Umgebung"))
+        self.assertEqual(runtime.kv_get(self.conn, "testproj", "branch-cleanup:fix/c"), "erledigt, Aufraeumen erlaubt: integriert")
+        self.assertIn("no queue row of branch fix/none", (self.box / "failed" / "n.error.txt").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
