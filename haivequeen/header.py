@@ -263,7 +263,7 @@ def run(project, name, parent_pid=0, runs_dir=None, out=None, interval=1.0, max_
                         out.write(text)
                         out.flush()
                         last_text = text
-                if row.get("ended_at") and parent_pid > 0:
+                if (row.get("ended_at") or row.get("status") in ("done", "failed")) and parent_pid > 0:   # a row set to failed by hand has no end time
                     if not osplat.process_alive(parent_pid):
                         end_seen += 1
                         if end_seen >= 2:

@@ -204,6 +204,9 @@ class RenderTest(unittest.TestCase):
                 ticks = header.run("demo", "A-1", 99999999, runs, out2, interval=0, max_ticks=50)
                 self.assertEqual(ticks, 2)
                 self.assertIn("done", out2.getvalue())
+                # a failed row without an end time (set by hand) ends the loop as well once the parent is gone
+                runtime.upsert_agent(conn, "demo", "A-1", {"status": "failed", "endedAt": None})
+                self.assertEqual(header.run("demo", "A-1", 99999999, runs, io.StringIO(), interval=0, max_ticks=50), 2)
                 # a parent that is alive keeps it running
                 self.assertEqual(header.run("demo", "A-1", os.getpid(), runs, io.StringIO(), interval=0, max_ticks=4), 4)
                 conn.close()
