@@ -742,6 +742,8 @@ def run_agent(a, out=None):
     code = 0
     clock_jumps = []   # filled when the wall clock jumps by more than interrupt.JUMP_SECONDS during the run (laptop sleep)
     threading.Thread(target=clock_watch, daemon=True, args=(clock_jumps,)).start()
+    if os.environ.get("BZZ_FAKE_CLOCK_JUMP"):   # tests only: simulate a clock jump of this many seconds during the run
+        clock_jumps.append(float(os.environ["BZZ_FAKE_CLOCK_JUMP"]))
     stall_limit = float(cfg.get("agentStallSeconds", DEFAULT_STALL_SECONDS) or 0)
 
     def mark_stalled(secs):
@@ -824,15 +826,20 @@ def run_agent(a, out=None):
     return 0
 
 
-def clock_watch(jumps: list, step: float = 5.0) -> None:
-    """Thread body: sleep in short steps and append to `jumps` when the wall clock advanced by more than interrupt.JUMP_SECONDS in one step."""
-    last = time.time()
-    while True:
-        time.sleep(step)
-        now = time.time()
-        if abs(now - last - step) > interrupt.JUMP_SECONDS:
-            jumps.append(now - last)
-        last = now
+def clock_watch(jumps: list, step: float = 5.0, now=time.time, sleep=time.sleep, rounds=None) -> None:
+    """Thread body: sleep in short steps and append to `jumps` when the wall clock advanced by more than interrupt.JUMP_SECONDS in one step.
+
+    `now`, `sleep` and `rounds` (number of steps, None = forever) are for tests that simulate the clock.
+    """
+    last = now()
+    done = 0
+    while rounds is None or done < rounds:
+        sleep(step)
+        cur = now()
+        if abs(cur - last - step) > interrupt.JUMP_SECONDS:
+            jumps.append(cur - last)
+        last = cur
+        done += 1
 
 
 def complete_build_measure(conn, project, name, jobs, start_free_mb, sample_file, started):

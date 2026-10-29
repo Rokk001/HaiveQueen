@@ -1011,6 +1011,8 @@ def _start_triage(c) -> int:
     for item in triage.locked_packages(env.conn, env.name):
         if not runstate.starts_allowed(env.conn) or stop_flag().exists() or pool.workers() <= 0:
             break
+        if routine.waiting_retry(env, [view(r) for r in env.agents("all")], item["plan"], item["id"], triage.TRIAGE_PHASE):
+            continue   # the last triage agent of this package was interrupted: its retry waits for its time
         pick = sch.select_provider(env.providers, triage.TRIAGE_CLASS, [], pool.free, conn=env.conn)
         if not pick:
             continue

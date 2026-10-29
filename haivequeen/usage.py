@@ -865,6 +865,39 @@ def get_provider_limit(conn, provider: dict, project: str = GLOBAL_PROJECT, read
             "hours": float(hours) if hours is not None else 168.0, "reset_epoch": at}
 
 
+def limit_windows(conn, provider: dict, project: str = GLOBAL_PROJECT, read_pc=None, codex_dir=None) -> list:
+    """Usage windows of a provider as the LIMITS display has them: [{used_pct, reset_epoch}] for the 5h and the weekly window (reset_epoch None
+    when unknown); windows that already reset are left out. Tests: an entry of BZZ_PROVIDER_LIMITS_FILE may carry "windows": [{"usedPercent",
+    "resetHours"}, ...]; without it the plain usedPercent / resetHours of the entry is the one window."""
+    name = provider.get("name")
+    limit = provider.get("limit")
+    source = limit.get("source") if isinstance(limit, dict) else limit
+    now = datetime.now(timezone.utc).timestamp()
+    lf = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
+    if read_pc is None:
+        read_pc = not os.environ.get("BZZ_DATA_DIR")
+    out = []
+    if lf and Path(lf).is_file():
+        entry = json.loads(Path(lf).read_text(encoding="utf-8-sig")).get(name) or {}
+        wins = entry.get("windows") or ([{"usedPercent": entry.get("usedPercent"), "resetHours": entry.get("resetHours")}] if entry.get("usedPercent") is not None else [])
+        for w in wins:
+            hours = w.get("resetHours")
+            out.append({"used_pct": float(w["usedPercent"]), "reset_epoch": now + float(hours) * 3600 if hours is not None else None})
+    elif read_pc and source == "claude":
+        try:
+            j = json.loads(runtime.kv_get(conn, project, CLAUDE_USAGE_KEY) or "{}")
+        except ValueError:
+            j = {}
+        for w in (j.get("fiveHour"), j.get("sevenDay")):
+            if w and int(w["resetsAt"]) > now:
+                out.append({"used_pct": 100 * float(w["utilization"]), "reset_epoch": int(w["resetsAt"])})
+    elif read_pc and source == "codex":
+        for w in (get_codex_usage(codex_dir) or {}).values():
+            if w and w.get("pct") is not None:
+                out.append({"used_pct": float(w["pct"]), "reset_epoch": w.get("at")})
+    return out
+
+
 def provider_limits(conn, providers, project: str = GLOBAL_PROJECT, read_pc=None, codex_dir=None) -> dict:
     """Return {provider name: get_provider_limit(...)} for a list of provider dicts (the scheduler's source)."""
     return {p["name"]: get_provider_limit(conn, p, project, read_pc, codex_dir) for p in providers}

@@ -127,12 +127,122 @@ class InterruptedRetryTest(RoundCase):
         self.round()
         self.assertEqual(self.ag("DUMMY-R1-work-2")["provider"], "codex")
 
-    def test_rate_limit_with_both_providers_at_limit_waits(self):
-        """Both providers are at their limit: the retry waits for the reset (the later one), nothing starts."""
-        self.limits(claude=(100, 2), codex=(100, 5))
-        self.interrupted("DUMMY-R1-work", kind=interrupt.RATE_LIMIT, ended=1, started=10)
+    def window_limits(self, claude, codex):
+        """Provider limits with usage windows: each argument is a list of (used percent, hours to reset or None) for the 5h and the weekly window."""
+        f = self.base / "limits.json"
+        weekly = lambda ws: ws[1][0]
+        f.write_text(json.dumps({
+            "claude": {"usedPercent": weekly(claude), "resetHours": claude[1][1], "windows": [{"usedPercent": u, "resetHours": h} for u, h in claude]},
+            "codex": {"usedPercent": weekly(codex), "resetHours": codex[1][1], "windows": [{"usedPercent": u, "resetHours": h} for u, h in codex]}}),
+            encoding="utf-8")
+        os.environ["BZZ_PROVIDER_LIMITS_FILE"] = str(f)
+
+    def wait_hours(self, name):
+        """Hours from now until the stored retry time of an agent row (None when none is stored)."""
+        at = routine.db.parse_time(self.ag(name).get("retryAt"))
+        return None if at is None else (at - datetime.now()).total_seconds() / 3600
+
+    def test_rate_limit_waits_for_the_window_at_its_limit(self):
+        """Both providers are full; only the 5h window of Claude is at its limit (reset in 3 h): the retry waits 3 hours, nothing starts."""
+        self.window_limits(claude=[(100, 3), (40, 100)], codex=[(100, 4), (100, 60)])
+        self.interrupted("DUMMY-R1-work", kind=interrupt.RATE_LIMIT)
         self.round()
         self.assertEqual(self.names(), ["DUMMY-R1-work"])
+        self.assertAlmostEqual(self.wait_hours("DUMMY-R1-work"), 3, delta=0.1)
+
+    def test_rate_limit_with_both_windows_at_limit_waits_for_the_later_reset(self):
+        """Both windows of the limited provider are at their limit (reset in 2 h and 48 h): the later reset counts."""
+        self.window_limits(claude=[(100, 2), (100, 48)], codex=[(100, 4), (100, 60)])
+        self.interrupted("DUMMY-R1-work", kind=interrupt.RATE_LIMIT)
+        self.round()
+        self.assertEqual(self.names(), ["DUMMY-R1-work"])
+        self.assertAlmostEqual(self.wait_hours("DUMMY-R1-work"), 48, delta=0.1)
+
+    def test_rate_limit_without_known_reset_waits_15_minutes(self):
+        """No reset time is known: 15 minutes."""
+        self.window_limits(claude=[(100, None), (100, None)], codex=[(100, None), (100, None)])
+        self.interrupted("DUMMY-R1-work", kind=interrupt.RATE_LIMIT)
+        self.round()
+        self.assertEqual(self.names(), ["DUMMY-R1-work"])
+        self.assertAlmostEqual(self.wait_hours("DUMMY-R1-work"), 0.25, delta=0.02)
+
+
+class InterruptedTriageTest(RoundCase):
+    """A triage agent that ended interrupted is started again in the triage phase after its wait."""
+
+    def setUp(self):
+        """A locked package K1 with open points (three work/verify pairs, falling counts) and its first triage agent."""
+        super().setUp()
+        self.plan("IN_PROGRESS", [{"id": "K1", "title": "stubborn task"}])
+        for i, n in enumerate(("", "-2", "-3")):
+            t = 60 - 20 * i
+            self.agent("DUMMY-K1-work" + n, package="K1", started=t, ended=t - 5)
+            self.agent("DUMMY-K1-verify" + n, type="codex", provider="codex", package="K1", phase="verify", started=t - 10, ended=t - 15)
+            self.finish("DUMMY-K1-verify" + n, "Layout: split the file\nOffene Anforderungen: %d" % (3 - i))
+        self.round()
+        self.triage = [a["name"] for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "triage"]
+
+    def triage_count(self):
+        """Number of triage agents so far."""
+        return len([a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "triage"])
+
+    def test_interrupted_triage_waits_and_is_retried(self):
+        """The first triage agent was interrupted: no new one during the wait, a new one in the triage phase after it."""
+        self.assertEqual(len(self.triage), 1)
+        runtime.upsert_agent(self.conn, "testproj", self.triage[0], {"status": "failed", "ended_at": datetime.now().isoformat(timespec="seconds"),
+                                                                    "last_line": "error: connection", "interrupted": interrupt.CONNECTION,
+                                                                    "retryAt": later(10)})
+        self.round()
+        self.assertEqual(self.triage_count(), 1)
+        runtime.upsert_agent(self.conn, "testproj", self.triage[0], {"retryAt": later(-1)})
+        self.round()
+        self.assertEqual(self.triage_count(), 2)
+
+
+class ClockJumpTest(unittest.TestCase):
+    """A run during which the wall clock jumped by more than 120 seconds counts as interrupted when it then fails, and stays done when it succeeds."""
+
+    def watch(self, readings):
+        """Run clock_watch over fake clock readings (the sleeps are skipped) and return the jumps it found."""
+        from haivequeen import agent_runner as ar
+        jumps, it = [], iter(readings)
+        ar.clock_watch(jumps, step=5.0, now=lambda: next(it), sleep=lambda s: None, rounds=len(readings) - 1)
+        return jumps
+
+    def test_jump_is_detected(self):
+        """Readings 0, 5, 10, then 400: the last step is a jump of about 390 seconds."""
+        self.assertEqual(len(self.watch([0, 5, 10, 400])), 1)
+
+    def test_normal_clock_has_no_jump(self):
+        """Readings every 5 seconds (and one 60 s hiccup) give no jump."""
+        self.assertEqual(self.watch([0, 5, 10, 70, 75]), [])
+
+    def test_failed_run_after_a_jump_is_interrupted_and_a_good_run_stays_done(self):
+        """The same jump: a failed end is interrupted (sleep), a successful end is not."""
+        jumps = self.watch([0, 5, 400])
+        self.assertEqual(interrupt.classify_end(True, [], clock_jumped=bool(jumps)), interrupt.SLEEP)
+        self.assertEqual(interrupt.classify_end(False, [], clock_jumped=bool(jumps)), "")
+
+
+class RunnerClockJumpTest(RunnerBase):
+    """The runner marks an end after a simulated clock jump (BZZ_FAKE_CLOCK_JUMP, tests only)."""
+
+    def test_failed_end_after_jump_is_interrupted(self):
+        """A failing run with a simulated jump of 300 s ends interrupted (sleep); the same without a jump does not."""
+        self.prepare("J-1")
+        self.run_runner("J-1", "claude", json.dumps({"type": "result", "is_error": True, "result": "task failed"}) + "\n", exit_code=1,
+                        env={"BZZ_FAKE_CLOCK_JUMP": "300"})
+        self.assertEqual((self.row("J-1")["status"], self.row("J-1").get("interrupted")), ("failed", interrupt.SLEEP))
+        self.prepare("J-2")
+        self.run_runner("J-2", "claude", json.dumps({"type": "result", "is_error": True, "result": "task failed"}) + "\n", exit_code=1)
+        self.assertEqual(self.row("J-2").get("interrupted") or "", "")
+
+    def test_good_end_after_jump_stays_done(self):
+        """A successful run with a simulated jump stays done and is not marked."""
+        self.prepare("J-3")
+        self.run_runner("J-3", "claude", json.dumps({"type": "result", "is_error": False, "result": "Open requirements: 0"}) + "\n", exit_code=0,
+                        env={"BZZ_FAKE_CLOCK_JUMP": "300"})
+        self.assertEqual((self.row("J-3")["status"], self.row("J-3").get("interrupted") or ""), ("done", ""))
 
 
 class InterruptedIntegratorTest(RoundCase):

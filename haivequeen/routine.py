@@ -123,13 +123,15 @@ def retry_due(env, agents: list, a: dict, now: datetime = None) -> bool:
         return stored <= now
     kind = interrupt.kind_of(a)
     if kind == interrupt.RATE_LIMIT:
-        limits = usage.provider_limits(env.conn, env.providers)
-        if any(p["slots"] > 0 and limits[p["name"]]["free_pct"] > 0 for p in env.providers):
-            return True
-        hours = [limits[p["name"]]["hours"] for p in env.providers if p["slots"] > 0 and limits[p["name"]]["used_pct"] is not None]
-        at = now + (timedelta(hours=max(hours)) if hours else timedelta(minutes=interrupt.RATE_LIMIT_MINUTES))
+        wins = {p["name"]: usage.limit_windows(env.conn, p) for p in env.providers if p["slots"] > 0}
+        limited = sch.row_provider(a)
+        if any(not any(w["used_pct"] >= 100 for w in ws) for n, ws in wins.items() if n != limited):
+            return True   # another provider has room: the normal provider choice takes it at once
+        # wait for the reset of the window of the limited provider that is at its limit (the later one when both are); 15 minutes when unknown
+        resets = [w["reset_epoch"] for w in wins.get(limited, []) if w["used_pct"] >= 100 and w["reset_epoch"]]
+        at = datetime.fromtimestamp(max(resets)) if resets else now + timedelta(minutes=interrupt.RATE_LIMIT_MINUTES)
         env.update_agent(a["name"], {"retryAt": at.isoformat(timespec="seconds")})
-        return False
+        return at <= now
     if kind in (interrupt.API, interrupt.CONNECTION):
         count = interrupted_count(agents, a["plan"], str(a.get("package")), str(a.get("phase")))
         ended = db.parse_time(a.get("ended_at")) or now
@@ -137,6 +139,14 @@ def retry_due(env, agents: list, a: dict, now: datetime = None) -> bool:
         env.update_agent(a["name"], {"retryAt": at.isoformat(timespec="seconds")})
         return at <= now
     return True
+
+
+def waiting_retry(env, agents: list, plan: str, pkg: str, phase: str) -> bool:
+    """True when the newest agent of this task (plan, package, phase) ended interrupted and its retry is not due yet."""
+    rows = sorted([a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and str(a.get("package")) == pkg and a.get("phase") == phase],
+                  key=lambda a: a["started"])
+    last = rows[-1] if rows else None
+    return bool(last and last.get("status") == "failed" and interrupt.is_interrupted(last) and not retry_due(env, agents, last))
 
 
 def last_integrator(agents: list):
