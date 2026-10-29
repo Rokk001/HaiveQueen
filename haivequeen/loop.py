@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from . import brain, db, events, export, header, inbox, reattach, routine, runstate, runtime, triage, usage, views
+from . import brain, db, events, export, faults, header, inbox, reattach, routine, runstate, runtime, triage, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -646,6 +646,8 @@ def _project_round(env, pool, summary, terminal, brain_answer, brain_runner, dry
     ctxs = {"env": env, "pool": pool, "dry": dry_run, "terminal": terminal, "settle": settle, "poll": poll, "tries": tries, "free_ram": free_ram,
             "pilot": pilot, "plan_files": plan_files, "snapshot": snapshot, "rt_events": rt["events"], "state": state, "alive": alive,
             "min_ram": _min_ram(env), "report": pr.report, "machine": machine}
+    can_start_any = (not pilot and runstate.starts_allowed(conn) and not stop_flag().exists() and pool.workers() > 0
+                     and free_ram() >= _min_ram(env) and not build_running)   # nothing held back this round: an idle round is then a fault
     started = 0
     for a in acts:
         kind = str(a.get("action"))
@@ -667,6 +669,7 @@ def _project_round(env, pool, summary, terminal, brain_answer, brain_runner, dry
         started += _start_triage(ctxs)
     if not dry_run:
         env.log("round done: %d action(s), %d agent(s) started" % (len(acts), started))
+        faults.check_round(env, started, can_start_any)
     run_hook(env, summary)
     if rt["events"] and answer is not None and (not dry_run or is_test_runtime()):
         _brain_summary(ctxs, answer, trigger, bres, pr.report)

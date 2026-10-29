@@ -1,5 +1,6 @@
 """Triage of locked packages: technical points are decided automatically, game/balance points go to the owner."""
 from . import db, runtime
+from .faults import FAULT_PLAN
 from .runtime import CmdError
 
 TRIAGE_PHASE = "triage"
@@ -203,7 +204,8 @@ def release_asked(conn, project, qid) -> dict:
 def questions_to_triage(conn, project) -> list:
     """Questions waiting for triage without a running triage agent."""
     busy = {a["package"] for a in runtime.list_agents(conn, project, "active") if a["phase"] == TRIAGE_PHASE}
-    return [q for q in runtime.list_questions(conn, project, "triage") if QUESTION_PKG % q["id"] not in busy]
+    return [q for q in runtime.list_questions(conn, project, "triage")
+            if QUESTION_PKG % q["id"] not in busy and q["plan_path"] != FAULT_PLAN]   # fault questions are read by the coordinator, never triaged
 
 
 def question_prompt(conn, project, q, python_path) -> str:
