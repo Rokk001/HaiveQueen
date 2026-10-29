@@ -156,6 +156,16 @@ CREATE TABLE IF NOT EXISTS kv (
     PRIMARY KEY (project, key)
 );
 
+CREATE TABLE IF NOT EXISTS self_updates (
+    id INTEGER PRIMARY KEY,
+    started TEXT,
+    ended TEXT,
+    old_commit TEXT,
+    new_commit TEXT,
+    result TEXT CHECK (result IS NULL OR result IN ('ok','rollback','failed')),   -- NULL while the update runs
+    note TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_agents_project ON agents (project, status);
 CREATE INDEX IF NOT EXISTS idx_events_project ON events (project, id);
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions (project, status);

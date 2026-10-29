@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from haivequeen import config, db, legacy, loop, runtime, runtime_cli  # noqa: E402
+from haivequeen import config, db, legacy, loop, runtime, runtime_cli, selfupdate  # noqa: E402
 from haivequeen import export as export_mod, init as init_mod, views  # noqa: E402
 
 STUBS = ()
@@ -206,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_cli.register(sub)
     legacy.register(sub)
     loop.register(sub)
+    selfupdate.register(sub)
 
     for name in STUBS:
         p = sub.add_parser(name)
