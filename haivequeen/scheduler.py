@@ -45,6 +45,9 @@ DEFAULT_SETTINGS = {
     "escalateAfter": 2,
     "progressVerifies": 3,   # a package whose open count does not fall over this many consecutive verifies is stopped (question to the owner)
     "planStallHours": 6,     # a plan with agents running but no integrated package for this many hours is stopped (question to the owner)
+    "clockJumpSeconds": 120,   # a wall clock jump above this many seconds during an agent run counts as laptop sleep
+    "retryWaitMinutes": [1, 2, 4, 8, 15],   # wait before the n-th retry of consecutive interrupted ends (API, connection); the last value repeats
+    "rateLimitWaitMinutes": 15,   # wait after a rate limit when no reset time of the limited provider is known
     "minClass": {"verify": "medium", "integrate": "medium"},
     "bundle": {"maxPackages": 3},
     "contextLimitTokens": 300000,

@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import buildjobs, config, db, header, interrupt, runtime
+from . import buildjobs, config, db, header, interrupt, runtime, scheduler
 from . import platform as osplat
 
 TOOL_ROOT = Path(__file__).resolve().parent.parent
@@ -741,7 +741,8 @@ def run_agent(a, out=None):
 
     code = 0
     clock_jumps = []   # filled when the wall clock jumps by more than interrupt.JUMP_SECONDS during the run (laptop sleep)
-    threading.Thread(target=clock_watch, daemon=True, args=(clock_jumps,)).start()
+    jump_limit = float(scheduler.build_settings(cfg, pcfg).get("clockJumpSeconds", interrupt.JUMP_SECONDS))
+    threading.Thread(target=clock_watch, daemon=True, args=(clock_jumps,), kwargs={"limit": jump_limit}).start()
     if os.environ.get("BZZ_FAKE_CLOCK_JUMP"):   # tests only: simulate a clock jump of this many seconds during the run
         clock_jumps.append(float(os.environ["BZZ_FAKE_CLOCK_JUMP"]))
     stall_limit = float(cfg.get("agentStallSeconds", DEFAULT_STALL_SECONDS) or 0)
@@ -826,17 +827,19 @@ def run_agent(a, out=None):
     return 0
 
 
-def clock_watch(jumps: list, step: float = 5.0, now=time.time, sleep=time.sleep, rounds=None) -> None:
-    """Thread body: sleep in short steps and append to `jumps` when the wall clock advanced by more than interrupt.JUMP_SECONDS in one step.
+def clock_watch(jumps: list, step: float = 5.0, now=time.time, sleep=time.sleep, rounds=None, limit=None) -> None:
+    """Thread body: sleep in short steps and append to `jumps` when the wall clock advanced by more than `limit` seconds in one step.
 
-    `now`, `sleep` and `rounds` (number of steps, None = forever) are for tests that simulate the clock.
+    `limit` is the setting clockJumpSeconds (default interrupt.JUMP_SECONDS). `now`, `sleep` and `rounds` (number of steps, None = forever) are for
+    tests that simulate the clock.
     """
+    limit = interrupt.JUMP_SECONDS if limit is None else limit
     last = now()
     done = 0
     while rounds is None or done < rounds:
         sleep(step)
         cur = now()
-        if abs(cur - last - step) > interrupt.JUMP_SECONDS:
+        if abs(cur - last - step) > limit:
             jumps.append(cur - last)
         last = cur
         done += 1

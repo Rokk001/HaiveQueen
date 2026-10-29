@@ -1,7 +1,7 @@
 """Interrupted agent ends: an end caused by a sleeping laptop, a lost network, an API error or a vanished process is not a failure of the task.
 
 Such an end is marked interrupted (agent fields `interrupted` = kind and `retryAt` = ISO time of the next try, stored in the database) and the
-task is tried again after a wait. Every counting of failures, escalation, locks and blocks ignores interrupted ends. The values here are fixed.
+task is tried again after a wait. Every counting of failures, escalation, locks and blocks ignores interrupted ends. The values are settings with the defaults below.
 """
 import re
 from datetime import datetime, timedelta
@@ -18,9 +18,9 @@ CONNECTION_RE = re.compile(r"(?i)ECONNRESET|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EAI
                            r"stream disconnected|error sending request")
 VANISHED_RE = re.compile(r"^(pane never started|runner process vanished|process gone after orchestrator restart)")
 JUMP_SECONDS = 120   # a wall clock jump above this many seconds during a run counts as laptop sleep
-BACKOFF_MINUTES = (1, 2, 4, 8)   # wait before the n-th retry of consecutive interrupted ends (API and connection errors); then LATER_MINUTES
-LATER_MINUTES = 15
+BACKOFF_MINUTES = (1, 2, 4, 8, 15)   # wait before the n-th retry of consecutive interrupted ends (API and connection errors); the last value repeats
 RATE_LIMIT_MINUTES = 15   # wait after a rate limit when no reset time is known
+# These values are the defaults of the settings clockJumpSeconds, retryWaitMinutes and rateLimitWaitMinutes (scheduler.DEFAULT_SETTINGS).
 
 
 def classify_end(failed: bool, api_errors=(), stderr: str = "", clock_jumped: bool = False, last_line: str = "") -> str:
@@ -55,9 +55,13 @@ def kind_of(agent: dict) -> str:
     return VANISHED if is_interrupted(agent) else ""
 
 
-def backoff_minutes(count: int) -> int:
-    """Wait in minutes before the retry after `count` consecutive interrupted ends of the same task (API and connection errors)."""
-    return BACKOFF_MINUTES[count - 1] if 1 <= count <= len(BACKOFF_MINUTES) else LATER_MINUTES
+def backoff_minutes(count: int, steps=None) -> int:
+    """Wait in minutes before the retry after `count` consecutive interrupted ends of the same task (API and connection errors).
+
+    `steps` is the setting retryWaitMinutes (default BACKOFF_MINUTES): the n-th entry is the n-th wait, the last entry repeats.
+    """
+    steps = list(steps or BACKOFF_MINUTES)
+    return steps[min(max(count, 1), len(steps)) - 1]
 
 
 def retry_at(kind: str, count: int, now: datetime = None) -> str:

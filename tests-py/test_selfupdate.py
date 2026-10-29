@@ -55,6 +55,7 @@ class FakeGit:
             self.calls.append(("pip", str(cwd)))
             return self.fail.get("pip", 0), "pip out"
         self.calls.append(("start", str(cwd)))
+        self.start_argv = list(argv)
         self.started = True
         if self.fail.get("start"):
             return self.fail["start"], "start failed"
@@ -327,6 +328,12 @@ class WaitTest(SelfUpdateBase):
 
 class UpdateTest(SelfUpdateBase):
     """The update steps and the rollback."""
+
+    def test_restart_keeps_a_pause(self):
+        """The restart runs `start --keep-pause`, so a Queen that was paused before the self-update stays paused."""
+        git = FakeGit(self.conn)
+        self.update(git)
+        self.assertEqual(git.start_argv[-2:], ["start", "--keep-pause"])
 
     def test_happy_path(self):
         """Steps in order, in the live folder, push with the allowed command, no pip without pyproject change, result ok in the row."""

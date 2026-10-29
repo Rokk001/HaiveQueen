@@ -1323,6 +1323,8 @@ def start_boot_command(args) -> list:
         cmd += ["--rounds", str(args.rounds)]
     if args.round_minutes:
         cmd += ["--round-minutes", str(args.round_minutes)]
+    if getattr(args, "keep_pause", False):
+        cmd += ["--keep-pause"]
     return cmd
 
 
@@ -1338,7 +1340,8 @@ def cmd_start(args, conn) -> int:
         stop_flag().unlink()
     except OSError:
         pass
-    runstate.resume(conn, "bzz start")   # a pause or drain of the run before must not keep the new run from starting agents
+    if not getattr(args, "keep_pause", False):   # the self-update restart keeps a pause
+        runstate.resume(conn, "bzz start")   # a pause or drain of the run before must not keep the new run from starting agents
     if args.foreground:
         return run_loop(conn, machine, args.rounds, args.round_minutes, ui=sys.stdout.isatty())
     settings = sch.build_settings(machine, {})
@@ -1385,6 +1388,7 @@ def register(sub) -> None:
     p.add_argument("--terminal", choices=["auto", "wt", "tmux", "headless"])
     p.add_argument("--rounds", type=int, default=0, help="end after this many rounds (0 = until stopped)")
     p.add_argument("--round-minutes", type=float, default=0)
+    p.add_argument("--keep-pause", action="store_true", help="do not lift a pause or drain of the run before (used by the self-update)")
     p.set_defaults(fn=cmd_start)
     p = sub.add_parser("stop")
     p.set_defaults(fn=cmd_stop)

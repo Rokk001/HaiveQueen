@@ -129,13 +129,13 @@ def retry_due(env, agents: list, a: dict, now: datetime = None) -> bool:
             return True   # another provider has room: the normal provider choice takes it at once
         # wait for the reset of the window of the limited provider that is at its limit (the later one when both are); 15 minutes when unknown
         resets = [w["reset_epoch"] for w in wins.get(limited, []) if w["used_pct"] >= 100 and w["reset_epoch"]]
-        at = datetime.fromtimestamp(max(resets)) if resets else now + timedelta(minutes=interrupt.RATE_LIMIT_MINUTES)
+        at = datetime.fromtimestamp(max(resets)) if resets else now + timedelta(minutes=float(env.settings.get("rateLimitWaitMinutes", interrupt.RATE_LIMIT_MINUTES)))
         env.update_agent(a["name"], {"retryAt": at.isoformat(timespec="seconds")})
         return at <= now
     if kind in (interrupt.API, interrupt.CONNECTION):
         count = interrupted_count(agents, a["plan"], str(a.get("package")), str(a.get("phase")))
         ended = db.parse_time(a.get("ended_at")) or now
-        at = ended + timedelta(minutes=interrupt.backoff_minutes(count))
+        at = ended + timedelta(minutes=interrupt.backoff_minutes(count, env.settings.get("retryWaitMinutes")))
         env.update_agent(a["name"], {"retryAt": at.isoformat(timespec="seconds")})
         return at <= now
     return True

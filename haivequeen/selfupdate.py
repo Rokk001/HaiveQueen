@@ -224,7 +224,7 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
 
         def restart():
             """Start the loop through the live code; (True, '') when `start` answered with exit 0."""
-            code, out = run([osplat.python_executable(), "-m", "haivequeen", "start"], live)
+            code, out = run([osplat.python_executable(), "-m", "haivequeen", "start", "--keep-pause"], live)
             return code == 0, out.strip()[:300]
 
         for argv in (["fetch", "origin"], ["merge", "--ff-only", "origin/v2"]):

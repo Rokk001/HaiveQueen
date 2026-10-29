@@ -5,6 +5,11 @@ ramReserveMb = 2048       # RAM that must stay free
 agentStallSeconds = 3600  # an agent that prints nothing for this long is marked as stalled, never ended (0 = off)
 exportDir = "%LOCALAPPDATA%\\HaiveQueen\\exports"
 
+# Interrupted agent ends (laptop sleep, network or API errors, vanished process): the values below are the defaults.
+clockJumpSeconds = 120                  # a wall clock jump above this many seconds during an agent run counts as laptop sleep
+retryWaitMinutes = [1, 2, 4, 8, 15]     # wait before the 1st, 2nd, ... retry of consecutive API or connection errors of one task; the last value repeats
+rateLimitWaitMinutes = 15               # wait after a rate limit when no reset time of the limited provider is known
+
 # Providers: slots = tasks at once (shared by all projects); use = preferred | fallback | capability-only; classes = model and effort per class.
 # limit.source says where the weekly usage comes from (claude | codex | none); the scheduler picks the provider with the most weekly limit left per hour.
 [[providers]]
