@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6   # 6: table self_updates (CREATE TABLE IF NOT EXISTS in schema.sql, no column changes)
 BUSY_TIMEOUT_MS = 10000
 
 
