@@ -253,7 +253,7 @@ class TriageStartTest(RoundCase):
             t = 60 - 20 * i
             self.agent("DUMMY-K1-work" + n, package="K1", started=t, ended=t - 5)
             self.agent("DUMMY-K1-verify" + n, type="codex", provider="codex", package="K1", phase="verify", started=t - 10, ended=t - 15)
-            self.finish("DUMMY-K1-verify" + n, "Layout: split the file\nOffene Anforderungen: 1")
+            self.finish("DUMMY-K1-verify" + n, "Layout: split the file\nOffene Anforderungen: %d" % (3 - i))   # the count falls, so the progress guard does not stop the package
 
     def test_lock_starts_triage_agent(self):
         """The lock is recorded and a triage agent (class medium, phase triage) starts with the open points in its prompt."""
@@ -353,7 +353,7 @@ class LockResolvedTest(RoundCase):
             t = 60 - 20 * i
             self.agent("DUMMY-K1-work" + n, package="K1", started=t, ended=t - 5)
             self.agent("DUMMY-K1-verify" + n, type="codex", provider="codex", package="K1", phase="verify", started=t - 10, ended=t - 15)
-            self.finish("DUMMY-K1-verify" + n, "Layout: split the file\nOffene Anforderungen: 1")
+            self.finish("DUMMY-K1-verify" + n, "Layout: split the file\nOffene Anforderungen: %d" % (3 - i))   # the count falls, so the progress guard does not stop the package
 
     def pkg(self, pid="K1"):
         """The package row of the dummy plan."""

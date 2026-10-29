@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 from datetime import datetime
 
 from . import db, runtime
@@ -322,6 +323,96 @@ def no_next_step(env, agents: list, plan: str, pkg: str, st: dict) -> bool:
     open_count = verify_open_count(env, str(v["name"]))
     done_v = fresh_verifies(env, agents, plan, pkg)
     return (open_count == -1 and done_v >= 3) or (open_count > 0 and done_v >= 4)
+
+
+# ---- progress: new commits, stalled packages, stalled plans ----
+
+def git_sha(folder, ref: str = "HEAD") -> str:
+    """Commit a ref of the git repository in `folder` points to; '' when the folder is no repository or the ref does not exist."""
+    if not folder:
+        return ""
+    try:
+        res = subprocess.run(["git", "-C", str(folder), "rev-parse", "--verify", "-q", ref], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def package_slug(env, plan: str, pkg: str) -> str:
+    """Name of the sub-branch and worktree an agent of the package uses (plan tag and package id as a slug)."""
+    return sch.to_slug(plan_tag(env, plan)) + "-" + sch.to_slug(pkg)
+
+
+def progress_marker(env, plan: str, pkg: str, cwd) -> str:
+    """State of the work of a package: the commit of the agent's folder and the commit of the package's sub-branch ('' when it cannot be read).
+
+    An agent started in the main checkout works in a new worktree on the sub-branch, so only that branch moves; an agent in its own worktree moves HEAD.
+    """
+    head = git_sha(cwd)
+    if not head:
+        return ""
+    return "%s|%s" % (head, git_sha(env.code_repo, "refs/heads/" + package_slug(env, plan, pkg)))
+
+
+def record_progress(env, name: str, plan: str, pkg: str, cwd) -> None:
+    """Remember the state of the work at the start of an agent (kv key head:<agent>), so a later end can be compared with it."""
+    marker = progress_marker(env, plan, pkg, cwd)
+    if marker:
+        runtime.kv_set(env.conn, env.name, "head:" + name, marker)
+
+
+def made_progress(env, plan: str, pkg: str, work: dict, verify: dict = None) -> bool:
+    """True when the branch has a new commit since the work agent started and since the last verify. When the state cannot be read or was
+    not recorded (older agents) it counts as progress, so nothing is held back for a missing record."""
+    cur = progress_marker(env, plan, pkg, work.get("cwd"))
+    bases = [runtime.kv_get(env.conn, env.name, "head:" + str(x["name"])) for x in (work, verify) if x]
+    bases = [b for b in bases if b]
+    return not cur or not bases or cur not in bases
+
+
+def stall_open(env, plan: str, pkg: str) -> bool:
+    """True while a package is stopped by the progress guard (kv key stall:<plan>|<package>); only an answer of the owner removes it."""
+    return runtime.kv_get(env.conn, env.name, "stall:%s|%s" % (plan, pkg)) is not None
+
+
+def plan_stall_open(env, plan: str) -> bool:
+    """True while a plan is stopped because it integrated nothing for too long (kv key planstall:<plan>); only an answer of the owner removes it."""
+    return runtime.kv_get(env.conn, env.name, "planstall:" + plan) is not None
+
+
+def stall_released_verifies(env, plan: str, pkg: str) -> int:
+    """Finished verifies that already existed when the owner released a stall of this package; 0 when never released."""
+    try:
+        return int(runtime.kv_get(env.conn, env.name, "stallrel:%s|%s" % (plan, pkg)) or 0)
+    except ValueError:
+        return 0
+
+
+def stagnant(env, agents: list, plan: str, pkg: str) -> bool:
+    """True when the open count of the last `progressVerifies` verifies (since the last release) never fell and the last one is not 0."""
+    n = max(2, int(env.settings.get("progressVerifies", 3)))
+    ver = sorted([a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and str(a.get("package")) == pkg
+                  and a.get("phase") == "verify" and a.get("status") == "done"], key=lambda a: a["started"])[stall_released_verifies(env, plan, pkg):]
+    counts = [c for c in (verify_open_count(env, str(a["name"])) for a in ver) if c != -1][-n:]
+    return len(counts) == n and counts[-1] > 0 and all(counts[i + 1] >= counts[i] for i in range(n - 1))
+
+
+def plan_stalled(env, agents: list, plan: str, queue: list) -> bool:
+    """True when agents ran for the plan in the last `planStallHours` but no package of it was integrated (and no stall was released) in that time."""
+    hours = float(env.settings.get("planStallHours", 6))
+    if hours <= 0:
+        return False
+    now = datetime.now()
+    starts = [t for t in (db.parse_time(a.get("started_at")) for a in agents if norm_plan(a["plan"]) == norm_plan(plan)) if t is not None]
+    if not starts or not any((now - t).total_seconds() < hours * 3600 for t in starts):
+        return False
+    marks = [min(starts)]
+    marks += [t for t in (db.parse_time(r["date"]) for r in queue
+                          if r["status"] == WORDS["integrated"] and str(r["plan"]).lower().endswith(str(plan).lower())) if t is not None]
+    rel = db.parse_time(runtime.kv_get(env.conn, env.name, "planstallrel:" + plan))
+    if rel is not None:
+        marks.append(rel)
+    return (now - max(marks)).total_seconds() >= hours * 3600
 
 
 def start_class(env, phase: str, plan: str, pkg: str, sent: str = "") -> str:
@@ -753,6 +844,12 @@ def get_routine(env, ctx: dict) -> dict:
             if not pkgs:
                 continue
             cwd = repo   # the brain was asked already: the routine starts the packages itself in the main checkout (never skip the plan for good)
+        # Progress guard of the plan: agents ran for hours and nothing was integrated -> no new agent, one question to the owner (only his answer lifts it).
+        if plan_stall_open(env, rel):
+            continue
+        if plan_stalled(env, allr, rel, ctx["all_rows"]):
+            acts.append({"action": "stall_plan", "plan": rel})
+            continue
         stages = {k["id"]: pkg_stage(env, allr, rel, k["id"]) for k in pkgs}
         # A package without agent history that the packages table or the queue already show as finished is never startable (stage stateDone).
         sdone = state_done_packages(env, rel, [k["id"] for k in pkgs], ctx["all_rows"])
@@ -777,6 +874,16 @@ def get_routine(env, ctx: dict) -> dict:
                 locked[k] = True
                 acts.append({"action": "lock_package", "plan": rel, "package": k, "agent": str(lst["Verify"]["name"]),
                              "text": final_tail(env, str(lst["Verify"]["name"]))})
+        # Progress guard of a package: the open count did not fall over the last verifies -> no new agent, one question to the owner with the last
+        # report; the stop stays (also after a restart of the Queen) until the owner answers.
+        for k in [p["id"] for p in pkgs] + ["ALL"]:
+            if stall_open(env, rel, k):
+                locked[k] = True
+            elif stagnant(env, allr, rel, k):
+                last = sorted([a for a in allr if norm_plan(a["plan"]) == norm_plan(rel) and str(a.get("package")) == k and a.get("phase") == "verify"
+                               and a.get("status") == "done"], key=lambda a: a["started"])[-1]
+                locked[k] = True
+                acts.append({"action": "stall_package", "plan": rel, "package": k, "agent": str(last["name"]), "text": final_tail(env, str(last["name"]))})
         # Events for the brain: failed agents, verify answers with open items.
         for k in pkgs:
             st = stages[k["id"]]
@@ -798,7 +905,10 @@ def get_routine(env, ctx: dict) -> dict:
             st = stages[k["id"]]
             retry = (st["Stage"] == "failed" and st["Verify"] and st["Verify"].get("status") == "failed" and st["Work"]
                      and st["Work"]["started"] < st["Verify"]["started"] and not blocked_for(rel, k["id"]))   # a verify that crashed is run again
-            if (st["Stage"] != "needVerify" and not retry) or workers[0] <= 0 or deps_open(k):
+            if (st["Stage"] != "needVerify" and not retry) or workers[0] <= 0 or deps_open(k) or k["id"] in locked:
+                continue
+            # A verify needs a new commit since the work started and since the last verify; without one the work is not finished (see below).
+            if not retry and not made_progress(env, rel, k["id"], st["Work"], st["Verify"]):
                 continue
             pv = select("medium", [], avoid=sch.row_provider(st["Work"]))   # verify never below medium; another provider than the work agent when one is free
             if not pv:
@@ -847,6 +957,12 @@ def get_routine(env, ctx: dict) -> dict:
                       1 for a in kmine if a.get("phase") == "work" and a.get("status") == "failed"
                       and re.match(r"^pane never started", str(a.get("last_line") or ""))) < 3)):   # a vanished process is restarted without a limit
                 text = prompt(env, "restartWork", {"plan": plan_ref(env, rel), "pkg": k, "previous": str(st["Work"]["name"]), "cwd": wcwd})
+            elif (k != "ALL" and st["Stage"] == "needVerify" and st["Work"] and st["Work"].get("status") == "done"
+                  and not made_progress(env, rel, k, st["Work"], st["Verify"])):
+                # The work agent ended without a new commit: the package is not finished, the next agent is work again (with its report), not a verify.
+                prev = str(st["Work"]["name"])
+                text = prompt(env, "unfinishedWork", {"plan": plan_ref(env, rel), "pkg": k, "previous": prev, "cwd": wcwd,
+                                                      "answerPath": str(env.run_dir(prev) / "final.txt").replace("\\", "/")})
             if not text:
                 continue
             kc = next((p for p in pkgs if p["id"] == k), None)

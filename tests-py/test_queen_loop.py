@@ -1,8 +1,10 @@
 """Tests of the fix of the verify loop: a Codex verify keeps its answer in report.txt (read like report.md), a verify with open items is followed
 by work and never by another verify, a package whose dependencies are not finished gets no verify, and a task whose agents only vanished
 (window closed, killed, crash, restart of the Queen) is neither blocked nor counted as failed and is started again."""
+import subprocess
+
 from bzztest import REL, RoundCase
-from haivequeen import routine
+from haivequeen import db, routine, runtime
 
 INTRO = "Ich lese den vollstaendigen Auftrag und fuehre anschliessend die beschriebenen Schritte aus."
 VANISHED = "runner process vanished (ended by executor or crashed)"
@@ -112,3 +114,151 @@ class VanishedEndsTest(RoundCase):
         self.vanished_work(2)
         self.round()
         self.assertIn("DUMMY-R1-work-3", self.names())
+
+
+def git(cwd, *args):
+    """Run git in a folder (test identity, no hooks) and return its output."""
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(cwd)] + list(args), check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+class NewCommitTest(RoundCase):
+    """A verify starts only when the branch has a new commit; a work agent that ended without one is followed by work, not by a verify."""
+
+    def setUp(self):
+        """Package C1 whose worktree is a real git repository with one commit."""
+        super().setUp()
+        self.plan("IN_PROGRESS", [pk("C1", "committing task")])
+        git(self.wt, "init", "-q")
+        (self.wt / "a.txt").write_text("one", encoding="utf-8")
+        git(self.wt, "add", "a.txt")
+        git(self.wt, "commit", "-q", "-m", "one")
+
+    def commit(self, text):
+        """Add a commit to the worktree."""
+        (self.wt / "a.txt").write_text(text, encoding="utf-8")
+        git(self.wt, "commit", "-q", "-a", "-m", text)
+
+    def started(self, name, **f):
+        """An agent row that was started now (its start state is recorded as a start does)."""
+        self.agent(name, package="C1", **f)
+        routine.record_progress(self.env(), name, REL, "C1", str(self.wt))
+
+    def test_work_without_new_commit_gets_work_not_verify(self):
+        """The work agent ended at the state it started with (like the P1 work that ended after 90 seconds): the next agent is work."""
+        self.started("DUMMY-C1-work", started=30, ended=20)
+        self.round()
+        self.assertIn("DUMMY-C1-work-2", self.names())
+        self.assertNotIn("DUMMY-C1-verify", self.names())
+
+    def test_work_with_new_commit_gets_verify(self):
+        """The work agent made a commit: the next agent is the verify."""
+        self.started("DUMMY-C1-work", started=30, ended=20)
+        self.commit("two")
+        self.round()
+        self.assertIn("DUMMY-C1-verify", self.names())
+        self.assertNotIn("DUMMY-C1-work-2", self.names())
+
+    def test_second_verify_needs_a_new_commit(self):
+        """The verify found open items, the next work agent ended without a commit: work again, no second verify on the same state."""
+        self.started("DUMMY-C1-work", started=60, ended=50)
+        self.commit("two")
+        self.started("DUMMY-C1-verify", phase="verify", type="codex", provider="codex", started=45, ended=40)
+        self.finish("DUMMY-C1-verify", "Offene Anforderungen: 2")
+        self.started("DUMMY-C1-work-2", started=30, ended=20)
+        self.round()
+        self.assertIn("DUMMY-C1-work-3", self.names())
+        self.assertNotIn("DUMMY-C1-verify-2", self.names())
+
+
+class ProgressGuardTest(RoundCase):
+    """A package whose open count does not fall over 3 verifies, and a plan without an integrated package for 6 hours, get no new agents
+    and a question to the owner; only an answer of the owner lifts that."""
+
+    def setUp(self):
+        """Package S1 with a finished work agent."""
+        super().setUp()
+        self.plan("IN_PROGRESS", [pk("S1", "stubborn task")])
+
+    def verifies(self, counts):
+        """Finished work/verify pairs of S1, oldest first, each verify with one count."""
+        for i, n in enumerate(counts):
+            t = 100 - 20 * i
+            suffix = "" if i == 0 else "-%d" % (i + 1)
+            self.agent("DUMMY-S1-work" + suffix, package="S1", started=t, ended=t - 5)
+            self.agent("DUMMY-S1-verify" + suffix, package="S1", phase="verify", type="codex", provider="codex", started=t - 10, ended=t - 15)
+            self.finish("DUMMY-S1-verify" + suffix, "Offene Anforderungen: %d" % n)
+
+    def questions(self, item):
+        """Open questions of the dummy plan with this item."""
+        return [q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == item]
+
+    def test_count_that_does_not_fall_stalls_the_package(self):
+        """Counts 4, 4, 5 over three verifies: a question with the last report, no new agent for the package."""
+        self.verifies([4, 4, 5])
+        self.round()
+        qs = self.questions("STALL-S1")
+        self.assertEqual(len(qs), 1)
+        self.assertIn("Offene Anforderungen: 5", qs[0]["question"])
+        self.assertNotIn("DUMMY-S1-work-4", self.names())
+
+    def test_falling_count_does_not_stall(self):
+        """Counts 5, 3, 1 fall: no question."""
+        self.verifies([5, 3, 1])
+        self.round()
+        self.assertEqual(self.questions("STALL-S1"), [])
+
+    def test_number_of_verifies_is_a_setting(self):
+        """With progressVerifies 2 two verifies are enough (counts 4, 4)."""
+        self.machine["progressVerifies"] = 2
+        self.verifies([4, 4])
+        self.round()
+        self.assertEqual(len(self.questions("STALL-S1")), 1)
+
+    def test_restart_and_auto_answer_do_not_lift_the_stall(self):
+        """A new round (like a Queen restart) and a Queen answer keep the stall; the answer of the owner lifts it and the package gets new attempts."""
+        self.verifies([4, 4, 5])
+        self.round()
+        qid = self.questions("STALL-S1")[0]["id"]
+        self.round()
+        db.answer_question(self.conn, qid, "go on", "auto")
+        self.round()
+        self.assertNotIn("DUMMY-S1-work-4", self.names(), "no new agent while stalled")
+        self.assertIsNotNone(runtime.kv_get(self.conn, "testproj", "stall:%s|S1" % REL))
+
+    def test_owner_answer_lifts_the_stall_once(self):
+        """After the owner answered, the old verifies no longer count: the package is not stalled again in the next round."""
+        self.verifies([4, 4, 5])
+        self.round()
+        qid = [q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == "STALL-S1"][0]["id"]
+        db.answer_question(self.conn, qid, "go on", "owner")
+        self.round()
+        self.assertIsNone(runtime.kv_get(self.conn, "testproj", "stall:%s|S1" % REL))
+        self.round()
+        self.assertEqual(self.questions("STALL-S1"), [])
+
+    def plan_agents(self, ago_first, ago_last):
+        """Two finished agents of the plan: the first started ago_first minutes ago, the last ago_last minutes ago."""
+        self.agent("DUMMY-S1-work", package="S1", started=ago_first, ended=ago_first - 5)
+        self.agent("DUMMY-S1-work-2", package="S1", started=ago_last, ended=ago_last - 5)
+
+    def test_plan_without_integration_for_six_hours_is_stopped(self):
+        """Agents ran for 7 hours and nothing was integrated: question about the plan, no new agent."""
+        self.plan_agents(420, 10)
+        self.round()
+        self.assertEqual(len([q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == "STALL-PLAN"]), 1)
+        self.assertEqual(self.names(), ["DUMMY-S1-work", "DUMMY-S1-work-2"])
+
+    def test_plan_with_recent_integration_is_not_stopped(self):
+        """A branch of the plan was integrated one hour ago: no stall."""
+        self.plan_agents(420, 10)
+        runtime.queue_upsert(self.conn, "testproj", "feature/s1", "abc123", REL, "integrated", "done")
+        self.round()
+        self.assertEqual([q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == "STALL-PLAN"], [])
+
+    def test_hours_are_a_setting(self):
+        """With planStallHours 10 seven hours are not enough."""
+        self.machine["planStallHours"] = 10
+        self.plan_agents(420, 10)
+        self.round()
+        self.assertEqual([q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == "STALL-PLAN"], [])
