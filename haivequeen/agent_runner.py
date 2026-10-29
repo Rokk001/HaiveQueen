@@ -704,7 +704,7 @@ def run_agent(a, out=None):
         rules_file = run_dir / "rules.md"
         if protocol == "claude":
             write_phase_rules(pcfg, workspace, a.phase, rules_file)
-        vars_ = {"model": model, "effort": effort, "repo": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
+        vars_ = {"model": model, "effort": effort, "repo": pcfg.get("codeRepo") or workspace or a.cwd, "workspace": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
                  "claudeTools": pcfg.get("claudeTools") or cfg.get("claudeTools") or "", "rules": str(rules_file)}
         arg_list = build_args(prov, vars_)
     except Exception as exc:   # a broken rule file or argument template must show up as a failed agent at once, not as a vanished runner one round later
