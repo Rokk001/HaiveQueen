@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 
 from bzztest import RoundCase
 from haivequeen import loop
@@ -20,6 +21,7 @@ from haivequeen.terminal.headless import Headless
 
 ONE = [{"id": "P1", "title": "first"}]
 SLEEP = [sys.executable, "-c", "import time;time.sleep(60)"]
+ROOT = Path(__file__).resolve().parent.parent
 
 
 class RecordingHeadless(Headless):
@@ -304,10 +306,11 @@ class RealWindowsTerminalCloseTest(RoundCase):
         try:
             with loop.pane_lock():
                 panes = loop.open_session_panes(term, window, qtitle, SLEEP, self.dash_command())
-            for name in names:
-                live = [p for p in term.list_panes(window) if p.alive]
-                panes.append(term.split_pane(window, pane_title("testproj", "Agent PIA", name, "m", True), "white", self.head_command(name), "vertical", 0.5,
-                                             loop.first_split_target(live), "testproj__" + name))
+            spots = [(panes[1], "horizontal"), (None, "vertical"), (panes[1], "vertical")]   # beside the dashboard, below the first agent, below the dashboard: no pane gets too small to split
+            for name, (target, direction) in zip(names, spots):
+                target = target or panes[-1]
+                panes.append(term.split_pane(window, pane_title("testproj", "Agent PIA", name, "m", True), "white", self.head_command(name), direction, 0.5,
+                                             target, "testproj__" + name))
             steps = self.drag_new_window(before)
             self.assertEqual(steps, 12, "the test window was not found or not resized")
             for p in term.list_panes(window):
