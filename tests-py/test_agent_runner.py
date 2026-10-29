@@ -154,6 +154,21 @@ class HelperTest(unittest.TestCase):
             self.assertEqual(ar.write_phase_rules({}, str(ws), "work", out), 1)
             self.assertIn("rule 1", out.read_text(encoding="utf-8"))
 
+    def test_triage_follows_the_verify_rules(self):
+        """A project without its own triage rules gives a triage agent the verify rules; an own entry wins, other unknown phases still raise."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp)
+            (ws / "RULES.md").write_text("# Top\n\n## Check\nread only\n\n## Triage\ndecide\n", encoding="utf-8")
+            out = ws / "agent-rules.md"
+            pcfg = {"phaseRules": {"verify": {"main": ["## Check"]}}, "ruleSources": {"main": "RULES.md"}}
+            self.assertEqual(ar.write_phase_rules(pcfg, str(ws), "triage", out), 1)
+            self.assertIn("read only", out.read_text(encoding="utf-8"))
+            pcfg["phaseRules"]["triage"] = {"main": ["## Triage"]}
+            ar.write_phase_rules(pcfg, str(ws), "triage", out)
+            self.assertIn("decide", out.read_text(encoding="utf-8"))
+            with self.assertRaises(ValueError):
+                ar.write_phase_rules(pcfg, str(ws), "release", out)
+
     def test_codex_tokens(self):
         """Live tokens come from the last token_count line of the session log."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -325,6 +340,44 @@ class ClaudeRunTest(RunnerBase):
         self.prepare("A-4")
         self.run_runner("A-4", "claude", claude_stream(), phase="verify")
         self.assertEqual(self.row("A-4")["task"], "Verify package P1, completeness check")
+
+    def write_phase_rules_project(self):
+        """A project.toml whose phaseRules list work and verify only (as the real project did when the Claude triage agents died)."""
+        (self.ws / ".haivequeen").mkdir(exist_ok=True)
+        (self.ws / ".haivequeen" / "project.toml").write_text(
+            "[ruleSources]\nmain = 'AGENTS.md'\n[phaseRules.work]\nmain = ['# Agents']\n[phaseRules.verify]\nmain = ['# Agents']\n", encoding="utf-8")
+
+    def test_claude_triage_without_own_rules_finishes(self):
+        """A Claude triage agent starts and ends done although project.toml has no phaseRules.triage (it died at start before)."""
+        self.write_phase_rules_project()
+        self.prepare("T-1")
+        r = self.run_runner("T-1", "claude", claude_stream(), phase="triage")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.row("T-1")["status"], "done")
+        self.assertIn("be nice", (self.runs / "T-1" / "rules.md").read_text(encoding="utf-8"))
+
+    def test_rule_error_fails_the_agent_at_once(self):
+        """A phase without rules ends the agent as failed with the reason in the row, not as a runner that vanishes unseen."""
+        self.write_phase_rules_project()
+        self.prepare("T-2")
+        r = self.run_runner("T-2", "claude", claude_stream(), phase="release")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        row = self.row("T-2")
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("no phaseRules for phase 'release'", row["last_line"])
+
+    def test_codex_empty_closing_message_keeps_the_last_answer(self):
+        """A Codex run that ends with an empty agent message leaves final.txt with the last non-empty message (it was empty before)."""
+        stream = "\n".join(json.dumps(e) for e in [
+            {"type": "thread.started", "thread_id": "thr-5"},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "Offene Anforderungen: 2"}},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": ""}},
+            {"type": "turn.completed", "usage": {"input_tokens": 9, "output_tokens": 1}},
+        ]) + "\n"
+        self.prepare("C-9", provider="codex")
+        r = self.run_runner("C-9", "codex", stream, phase="verify")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.runs / "C-9" / "final.txt").read_text(encoding="utf-8"), "Offene Anforderungen: 2")
 
     def test_handoff_flag(self):
         """A context of 300k or more writes the HANDOFF flag file; the agent still finishes normally."""

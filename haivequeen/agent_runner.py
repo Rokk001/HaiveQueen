@@ -280,6 +280,8 @@ def write_phase_rules(pcfg, workspace, phase, out_file):
     parts, n = [], 0
     if rules:
         sel = rules.get(phase)
+        if sel is None and phase == "triage":
+            sel = rules.get("verify")   # a triage agent only reads and decides, so it follows the verify rules unless project.toml names its own
         if sel is None:
             raise ValueError("no phaseRules for phase '%s' in project.toml" % phase)
         sources = pcfg.get("ruleSources") or {}
@@ -584,9 +586,11 @@ class AgentRun:
         elif et == "item.completed" and item:
             it = item.get("type")
             if it == "agent_message":
-                self.final = str(item.get("text") or "")
-                self.last = short(self.final)
-                self.say(self.final, "White")
+                text = str(item.get("text") or "")
+                if text.strip():   # an empty closing message (seen with the Codex model) must not wipe the last real answer
+                    self.final = text
+                    self.last = short(self.final)
+                    self.say(self.final, "White")
             elif it == "command_execution":
                 self.last = "cmd: " + short(item.get("command"))
                 info = classify_cmd(str(item.get("command") or ""), self.queue_re)
@@ -694,14 +698,20 @@ def run_agent(a, out=None):
                                         "--parent-pid", str(os.getpid()), "--runs-dir", str(runs)], env=child_env())
         time.sleep(2)
 
-    agent_row = runtime.get_agent(conn, a.project, a.name)
-    prompt = report_prompt(a.prompt_file, a.project, agent_row["id"] if agent_row else "?")
-    rules_file = run_dir / "rules.md"
-    if protocol == "claude":
-        write_phase_rules(pcfg, workspace, a.phase, rules_file)
-    vars_ = {"model": model, "effort": effort, "repo": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
-             "claudeTools": pcfg.get("claudeTools") or cfg.get("claudeTools") or "", "rules": str(rules_file)}
-    arg_list = build_args(prov, vars_)
+    try:
+        agent_row = runtime.get_agent(conn, a.project, a.name)
+        prompt = report_prompt(a.prompt_file, a.project, agent_row["id"] if agent_row else "?")
+        rules_file = run_dir / "rules.md"
+        if protocol == "claude":
+            write_phase_rules(pcfg, workspace, a.phase, rules_file)
+        vars_ = {"model": model, "effort": effort, "repo": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
+                 "claudeTools": pcfg.get("claudeTools") or cfg.get("claudeTools") or "", "rules": str(rules_file)}
+        arg_list = build_args(prov, vars_)
+    except Exception as exc:   # a broken rule file or argument template must show up as a failed agent at once, not as a vanished runner one round later
+        run.last = short("runner error: " + str(exc))
+        run.say(run.last, "Red")
+        run.set_agent_retry({"status": "failed", "endedAt": db.now(), "exitCode": 99, "lastLine": run.last})
+        return 0
 
     # Build jobs: an agent that builds (integrate, release) gets the job count of this machine as environment variable and its RAM use is measured while it runs.
     bj_raw = cfg.get("buildJobs")

@@ -292,6 +292,31 @@ class NoNextStepTest(RoundCase):
         self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "verify" and a["package"] == "K1"]), 3)
 
 
+class LiveRunnerSurvivesTest(RoundCase):
+    """The round check never marks a running agent whose runner process lives, however long it has been running."""
+
+    def test_running_for_six_minutes_survives_until_the_process_is_gone(self):
+        """A runner alive for 6 minutes stays running; only after its process is gone the row is marked failed."""
+        import subprocess
+        from datetime import datetime, timedelta
+        self.plan("IN_PROGRESS", ONE)
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        try:
+            started = datetime.now() - timedelta(minutes=6)
+            runtime.upsert_agent(self.conn, "testproj", "DUMMY-T-triage", {"type": "claude", "provider": "claude", "plan": REL, "package": "P1", "phase": "triage",
+                                                                         "status": "running", "startedAt": started.isoformat(), "pid": proc.pid})
+            env = self.env()
+            routine.repair_stale_agents(env, now=datetime.now() + timedelta(minutes=6))
+            self.assertEqual(runtime.get_agent(self.conn, "testproj", "DUMMY-T-triage")["status"], "running")
+        finally:
+            proc.kill()
+            proc.wait()
+        routine.repair_stale_agents(env)
+        row = runtime.get_agent(self.conn, "testproj", "DUMMY-T-triage")
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("runner process vanished", row["last_line"])
+
+
 class LockResolvedTest(RoundCase):
     """A decision or answer for item LOCK-<package> (owner, coordinator or auto) lifts the lock and forgives the failures; a closing decision ends the package."""
 
