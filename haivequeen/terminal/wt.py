@@ -154,10 +154,14 @@ class WindowsTerminal(Terminal):
         return pids if pids is not None else (rec.get("pid", 0), 0)
 
     def close_pane(self, pane_id):
-        """End the command's process tree; the launcher then exits 0 and wt closes the pane."""
+        """End the command's process tree; the launcher then exits 0 and wt closes the pane.
+
+        Pauses `settle` seconds first (as before every split): the terminal finishes the previous split or pane close before the next pane goes.
+        """
         rec = self.registry.find(pane_id)
         if rec is None:
             raise TerminalError("unknown pane: %s" % (pane_id,))
+        time.sleep(self.settle)
         launcher, command = self._pids(rec)
         if command:
             _proc.kill_tree(command)

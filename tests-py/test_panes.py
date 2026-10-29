@@ -233,5 +233,147 @@ class PaneLockTest(RoundCase):
         self.assertFalse((loop.osplat.runs_dir() / "_panes").exists(), "no pane was opened")
 
 
+class RealWindowsTerminalCloseTest(RoundCase):
+    """Real Windows Terminal in the test runtime (opt in with BZZ_REAL_WT=1: the test opens, resizes, moves and closes a real window of the Windows
+    Terminal process it runs in, and a crash of that process ends every window and shell in it).
+    Covers: restart, new agents in the same tab, resize and move with live headers and dashboard, several panes closed one after another."""
+
+    def require_real_wt(self):
+        """Skip unless Windows, wt.exe and the opt-in variable are there."""
+        import shutil
+        if sys.platform != "win32" or not shutil.which("wt.exe") or not os.environ.get("BZZ_REAL_WT"):
+            self.skipTest("opt in with BZZ_REAL_WT=1 (opens, resizes and closes a real Windows Terminal window)")
+
+    def window_handles(self):
+        """Native window handles of all Windows Terminal windows, comma separated."""
+        return self.powershell(
+            "Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes; $r=[System.Windows.Automation.AutomationElement]::RootElement; "
+            "($r.FindAll('Children',(New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty,'CASCADIA_HOSTING_WINDOW_CLASS'))) "
+            "| ForEach-Object { $_.Current.NativeWindowHandle }) -join ','")
+
+    def drag_new_window(self, before, rounds=12):
+        """Resize and move the window that is not in `before` the way a drag does (every 0.4 s a new size and place, also across the screen); return the number of steps."""
+        out = self.powershell(
+            "Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes; $before=@('%s'.Split(',')); $r=[System.Windows.Automation.AutomationElement]::RootElement; "
+            "$ws=$r.FindAll('Children',(New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty,'CASCADIA_HOSTING_WINDOW_CLASS'))); "
+            "$w=$null; foreach($x in $ws){ if($before -notcontains [string]$x.Current.NativeWindowHandle){ $w=$x } }; if(-not $w){ 0; exit }; "
+            "$p=$w.GetCurrentPattern([System.Windows.Automation.TransformPattern]::Pattern); $n=0; "
+            "for($i=0;$i -lt %d;$i++){ $p.Resize(700+($i*53)%%500, 420+($i*37)%%300); $p.Move(40+($i*97)%%600, 30+($i*61)%%300); Start-Sleep -Milliseconds 400; $n++ }; $n" % (before, rounds))
+        return int(out or "0")
+
+    def head_command(self, name):
+        """Command of a pane that runs the real header redraw loop of one agent against the test database."""
+        code = ("import os,sys;os.environ['BZZ_DATA_DIR']=sys.argv[1];sys.path.insert(0,sys.argv[2]);"
+                "from haivequeen import header;header.run('testproj',sys.argv[3],0,sys.argv[4])")
+        return [sys.executable, "-c", code, os.environ["BZZ_DATA_DIR"], str(ROOT), name, str(self.base / "runs")]
+
+    def dash_command(self):
+        """Command of a pane that runs the real dashboard against the test database."""
+        code = "import os,sys;os.environ['BZZ_DATA_DIR']=sys.argv[1];sys.path.insert(0,sys.argv[2]);from haivequeen.dashboard import main;sys.exit(main([]))"
+        return [sys.executable, "-c", code, os.environ["BZZ_DATA_DIR"], str(ROOT)]
+
+    def powershell(self, script):
+        """Run a PowerShell snippet and return its trimmed output."""
+        return subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=90).stdout.strip()
+
+    def crashes_since(self, since):
+        """Application Error / Hang events of WindowsTerminal.exe after `since` (Get-WinEvent); return the count."""
+        return int(self.powershell("@(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1002; StartTime=[datetime]'%s'} -ErrorAction SilentlyContinue "
+                                   "| Where-Object { $_.Message -match 'WindowsTerminal' }).Count" % since.strftime("%Y-%m-%d %H:%M:%S")) or "0")
+
+    def tab_count(self):
+        """Number of tabs in all Windows Terminal windows (UI Automation)."""
+        return int(self.powershell(
+            "Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes; $n=0; $r=[System.Windows.Automation.AutomationElement]::RootElement; "
+            "$ws=$r.FindAll('Children',(New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty,'CASCADIA_HOSTING_WINDOW_CLASS'))); "
+            "foreach($w in $ws){$n+=$w.FindAll('Descendants',(New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::TabItem))).Count}; $n") or "0")
+
+    def test_resize_and_move_with_live_headers_and_dashboard_do_not_crash_the_terminal(self):
+        """Queen, dashboard and three agent panes with the real header loop stay alive while the window is resized and moved twelve times, then all panes close one after another."""
+        import datetime
+        from haivequeen.terminal import wt
+        self.require_real_wt()
+        window = "HQTEST%d" % os.getpid()
+        term = wt.WindowsTerminal(str(self.base / "panes"), start_timeout=30, settle=2.0)
+        before = self.window_handles()
+        started = datetime.datetime.now() - datetime.timedelta(seconds=2)
+        qtitle = pane_title("all projects", "QUEEN", "Queen", "m", True)
+        names = ["A-head-%d" % i for i in range(3)]
+        for name in names:
+            self.agent(name, status="running", started=20)
+        try:
+            with loop.pane_lock():
+                panes = loop.open_session_panes(term, window, qtitle, SLEEP, self.dash_command())
+            for name in names:
+                live = [p for p in term.list_panes(window) if p.alive]
+                panes.append(term.split_pane(window, pane_title("testproj", "Agent PIA", name, "m", True), "white", self.head_command(name), "vertical", 0.5,
+                                             loop.first_split_target(live), "testproj__" + name))
+            steps = self.drag_new_window(before)
+            self.assertEqual(steps, 12, "the test window was not found or not resized")
+            for p in term.list_panes(window):
+                self.assertTrue(p.alive, "pane %s ended during the drag" % p.id)
+            for name in names:
+                self.finish(name)
+            with loop.pane_lock():
+                closed = loop.close_session_panes(self.conn, term, window)
+            self.assertEqual(sorted(closed), sorted(panes))
+            self.assertEqual(self.crashes_since(started), 0, "Windows Terminal crashed or hung during resize, move or close")
+        finally:
+            for p in term.list_panes(window):
+                if p.alive:
+                    term.close_pane(p.id)
+
+    def test_restart_keeps_one_tab_and_closing_panes_does_not_crash_the_terminal(self):
+        """A restart while an agent pane runs adds no tab, the next agent splits in the same tab, and `bzz stop` closes all panes without a crash or hang."""
+        import datetime
+        from haivequeen.terminal import wt
+        self.require_real_wt()
+        window = "HQTEST%d" % os.getpid()
+        term = wt.WindowsTerminal(str(self.base / "panes"), start_timeout=30, settle=2.0)
+        tabs_before = self.tab_count()
+        started = datetime.datetime.now() - datetime.timedelta(seconds=2)
+        qtitle = pane_title("all projects", "QUEEN", "Queen", "m", True)
+        try:
+            with loop.pane_lock():
+                first = loop.open_session_panes(term, window, qtitle, SLEEP, SLEEP)
+            agents = []
+            self.agent("A-run", status="running", started=20)
+            agents.append(term.split_pane(window, pane_title("testproj", "Agent PIA", "A-run", "m", True), "white", SLEEP, "horizontal", 0.5, first[1], "testproj__A-run"))
+            self.assertEqual(self.tab_count(), tabs_before + 1)
+            with loop.pane_lock():   # restart: the agent pane is still open
+                second = loop.open_session_panes(term, window, qtitle, SLEEP, SLEEP)
+            self.assertEqual(self.tab_count(), tabs_before + 1, "the restart opened a second tab")
+            for i in range(2):
+                name = "A-new-%d" % i
+                self.agent(name, status="done", started=20, ended=10)
+                live = [p for p in term.list_panes(window) if p.alive]
+                agents.append(term.split_pane(window, pane_title("testproj", "Agent PIA", name, "m", True), "white", SLEEP, "vertical", 0.5,
+                                              loop.first_split_target(live), "testproj__" + name))
+            self.assertEqual(self.tab_count(), tabs_before + 1, "an agent pane opened a second tab")
+            self.finish("A-run")
+            with loop.pane_lock():
+                closed = loop.close_session_panes(self.conn, term, window)
+            self.assertEqual(sorted(closed), sorted(second + agents))
+            for p in term.list_panes(window):
+                self.assertTrue(wait_dead(p.pid), "pane %s still runs" % p.id)
+            self.assertEqual(self.crashes_since(started), 0, "Windows Terminal crashed or hung while the panes closed")
+        finally:
+            for p in term.list_panes(window):
+                if p.alive:
+                    term.close_pane(p.id)
+
+
+def wait_dead(pid, seconds=30):
+    """Poll until the process is gone or the time is up; return True when it is gone."""
+    import time
+    from haivequeen.terminal import _proc
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if not _proc.pid_alive(pid):
+            return True
+        time.sleep(0.2)
+    return not _proc.pid_alive(pid)
+
+
 if __name__ == "__main__":
     unittest.main()

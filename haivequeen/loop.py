@@ -166,6 +166,21 @@ def close_leftover_panes(term, window: str) -> list:
     return closed
 
 
+def open_session_panes(term, window: str, title: str, boot: list, dash=None) -> list:
+    """Open the Queen pane running `boot` and, when `dash` is given, the dashboard pane below it; return the pane ids. The caller holds pane.lock.
+    Old Queen and Overview panes go first. Panes of running agents that are still open keep their tab and the Queen joins it: a new tab would split the one window in two."""
+    close_leftover_panes(term, window)
+    stay = [p for p in term.list_panes(window) if p.alive]
+    if stay:
+        panes = [term.split_pane(window, title, "white", boot, "horizontal", 0.5, stay[0].id, "chief")]
+    else:
+        panes = [term.open_window(window, title, boot, "white", "chief")]
+    if dash is not None:
+        panes.append(term.split_pane(window, pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime()), "white", dash,
+                                     "vertical", 0.8, panes[0], "dashboard"))
+    return panes
+
+
 def close_session_panes(conn, term, window: str) -> list:
     """Close the Overview pane, every agent pane whose agent has ended and, last, the Queen pane of `window`; return the ids.
     A pane of an agent that still runs is never closed."""
@@ -196,7 +211,8 @@ def close_panes_after_stop(conn) -> list:
     try:
         settings = sch.build_settings(config.load_config(), {})
         term = get_terminal(settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-        return close_session_panes(conn, term, settings.get("window", "HaiveQueen"))
+        with pane_lock():   # no pane opens, splits or closes itself while these panes go (as the mutex of the first version)
+            return close_session_panes(conn, term, settings.get("window", "HaiveQueen"))
     except Exception:
         return []
 
@@ -343,11 +359,12 @@ def launch_agent(env, terminal, window: str, spec: dict, settle: float = 3.0, po
     """
     conn = env.conn
     rows = runtime.list_agents(conn, None, "active")
-    slot = choose_slot(rows, spec["name"])
     try:
         live = [p for p in terminal.list_panes(window) if p.alive]
     except TerminalError:
         live = []
+    live_ids = set(p.id for p in live)
+    slot = choose_slot([r for r in rows if r.get("pane_id") in live_ids], spec["name"])   # a pane the register no longer knows is no split target
     title = pane_title(env.name, "Agent " + spec["person"].upper(), spec["name"], spec["model_long"], is_test_runtime())
     command = runner_argv(env, spec)
     pane_name = "%s__%s" % (env.name, spec["name"])
@@ -1273,13 +1290,11 @@ def cmd_start(args, conn) -> int:
         start_pending_file().parent.mkdir(parents=True, exist_ok=True)
         start_pending_file().write_text(str(os.getpid()), encoding="ascii")
         try:
-            close_leftover_panes(term, window)
-            panes = [term.open_window(window, title, boot, "white", "chief")]
             import importlib.util
+            dash = None
             if importlib.util.find_spec("haivequeen.dashboard") is not None:
                 dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
-                panes.append(term.split_pane(window, pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime()), "white", dash,
-                                             "vertical", 0.8, panes[0], "dashboard"))
+            panes = open_session_panes(term, window, title, boot, dash)
         except Exception:
             start_pending_file().unlink()
             raise

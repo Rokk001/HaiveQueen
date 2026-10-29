@@ -219,6 +219,9 @@ def project_colour_of(conn, project):
 def run(project, name, parent_pid=0, runs_dir=None, out=None, interval=1.0, max_ticks=None):
     """Redraw the header every `interval` seconds until the agent ended and its parent process is gone.
 
+    A full redraw (clear, header, replayed milestones) only happens at the start and after a size change that stayed for one more tick: while a
+    window is dragged or moved to another screen the size changes every tick, and only the header rows are rewritten (as in the first version).
+    A header that did not change is not written again, so a pane gets at most one write per `interval`.
     `max_ticks` stops after that many redraws (tests). Returns the number of redraws.
     """
     from . import config, db, runtime
@@ -228,6 +231,8 @@ def run(project, name, parent_pid=0, runs_dir=None, out=None, interval=1.0, max_
     ms_file = base / name / "milestones.txt"
     conn = db.connect(config.db_path())
     last = (-1, -1, -1)
+    settling = None   # the size of the previous tick while it differs from `last`: a resize is in progress
+    last_text = None   # the header rows written last, so an unchanged header is not written again
     end_seen = 0
     ticks = 0
     while True:
@@ -239,10 +244,25 @@ def run(project, name, parent_pid=0, runs_dir=None, out=None, interval=1.0, max_
                 width, height = max(10, size.columns), max(2, size.lines)   # the real width: 30 columns drawn into a narrower pane wrapped into the next rows
                 lines = build_head(row, project, project_colour_of(conn, project), width, max_lines=height - 1)
                 key = (width, height, len(lines))
-                full = key != last
-                last = key
-                out.write(render(lines, width, height, read_milestones(ms_file) if full else [], full))
-                out.flush()
+                if last == (-1, -1, -1):
+                    full = True
+                elif key != last:
+                    full = key == settling   # the size stayed for one more tick: the resize is over
+                    settling = key
+                else:
+                    full = False
+                    settling = None
+                if full:
+                    last, settling = key, None
+                    out.write(render(lines, width, height, read_milestones(ms_file), True))
+                    out.flush()
+                    last_text = None
+                else:
+                    text = render(lines, width, height, [], False)
+                    if text != last_text:
+                        out.write(text)
+                        out.flush()
+                        last_text = text
                 if row.get("ended_at") and parent_pid > 0:
                     if not osplat.process_alive(parent_pid):
                         end_seen += 1

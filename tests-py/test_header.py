@@ -159,6 +159,27 @@ class RenderTest(unittest.TestCase):
             finally:
                 os.environ.pop("BZZ_DATA_DIR", None)
 
+    def test_resize_redraws_fully_only_after_the_size_settled(self):
+        """While the size changes every tick (window drag, DPI change) only the header rows are rewritten; the full redraw follows once the size stayed; an unchanged header is not written twice."""
+        sizes = [(120, 30), (110, 30), (100, 30), (90, 30), (90, 30), (90, 30), (90, 30)]
+        fixed = header.build_head(row(), "demo", "cyan", 120, NOW, max_lines=29)
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["BZZ_DATA_DIR"] = str(Path(tmp) / "data")
+            try:
+                conn = db.connect(Path(tmp) / "data" / "haivequeen.db")
+                db.upsert_project(conn, "demo", None, "FF8800", 0)
+                runtime.upsert_agent(conn, "demo", "A-1", {"status": "running", "person": "Max", "color": "4FA8FF", "task": "T", "startedAt": "2026-10-28T11:58:30"})
+                out = io.StringIO()
+                with mock.patch("shutil.get_terminal_size", side_effect=[os.terminal_size(s) for s in sizes]), \
+                        mock.patch.object(header, "build_head", return_value=fixed):
+                    header.run("demo", "A-1", 0, Path(tmp) / "runs", out, interval=0, max_ticks=len(sizes))
+                text = out.getvalue()
+                self.assertEqual(text.count("[2J"), 2, "one full redraw at the start, one after the size settled at 90 columns")
+                self.assertEqual(text.count("[2K"), 2 * len(fixed), "header rows written twice: ticks 2 to 4 (same text once) and tick 6 after the full redraw; ticks 3, 4 and 7 write nothing")
+                conn.close()
+            finally:
+                os.environ.pop("BZZ_DATA_DIR", None)
+
     def test_run_loop(self):
         """The loop draws from the database: first a full redraw with the replayed milestones, then partial redraws; it ends after the agent ended and the parent is gone."""
         with tempfile.TemporaryDirectory() as tmp:
