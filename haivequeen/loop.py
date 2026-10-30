@@ -1082,49 +1082,25 @@ def wrap_text(s: str, w: int) -> list:
     return out
 
 
-def wrap_parts(parts: list, w: int) -> list:
-    """Wrap a list of text parts to the width w; a break only happens between two parts."""
-    out, cur = [], ""
-    for p in parts:
-        if cur and len(cur) + len(p) > w:
-            out.append(cur)
-            cur = ""
-        if len(p) > w:
-            out += wrap_text(p.strip(), w)
-            continue
-        cur += p
-    if cur:
-        out.append(cur)
-    return out
+def head_lines(width: int, ui: dict) -> list:
+    """The fixed header of the orchestrator pane as (text, colour) pairs; the Beekeeper calls no language model, so it shows none.
 
-
-def head_lines(width: int, tot: dict, ui: dict) -> list:
-    """The fixed header of the orchestrator pane as (text, colour) pairs.
-
-    `tot` is brain.totals(); `ui` holds stop (bool), run_state, brain (bool), busy (bool), since and next_at (datetimes or None), model (text) and projects (names).
+    `ui` holds stop (bool), run_state, busy (bool), since and next_at (datetimes or None) and projects (names).
     """
     res = []
     if ui.get("stop"):
         state = "‖ STOP set, no new agents"
     elif ui.get("run_state", "RUNNING") != "RUNNING":
         state = ui["run_state"]
-    elif ui.get("brain"):
-        state = "brain call running"
     elif ui.get("busy"):
         state = "round running"
     elif ui.get("next_at"):
         state = "idle since %s, ◔ next round %s" % (ui["since"].strftime("%H:%M"), ui["next_at"].strftime("%H:%M"))
     else:
         state = "starting"
-    for ln in wrap_text("◆ Beekeeper | Claude %s | %s" % (ui.get("model", ""), state), width):
+    for ln in wrap_text("◆ Beekeeper | %s" % state, width):
         res.append((ln, "White"))
-    res.append(("Projects: " + (", ".join(ui.get("projects") or []) or "none") + ". Decides only on events, the routine runs without a brain", "Gray"))
-    lc = tot.get("LastCall")
-    last = (["Last call: context %s | " % sch.format_tokens(lc["context"]), "Total input %s / Output %s" % (sch.format_tokens(lc["tokens_in"]), sch.format_tokens(lc["tokens_out"]))]
-            if lc else ["Last call: none yet"])
-    res += [(ln.rstrip(" |"), "Gray") for ln in wrap_parts(last, width)]
-    res += [(ln.rstrip(" |"), "Gray") for ln in wrap_parts(
-        ["Today: Total input %s / Output %s | " % (sch.format_tokens(tot["Input"]), sch.format_tokens(tot["Output"])), "Brain calls today %d" % tot["Calls"]], width)]
+    res.append(("Projects: " + (", ".join(ui.get("projects") or []) or "none"), "Gray"))
     return res
 
 
@@ -1166,11 +1142,9 @@ class Pane:
         w, h = self.width(), self.height()
         if self.out.isatty():
             w = max(10, os.get_terminal_size().columns)   # the real width: 30 columns drawn into a narrower pane wrapped into the next rows
-        hl = head_lines(w, brain.totals(self.conn), ui)
+        hl = head_lines(w, ui)
         if not self.rows:
-            big = {"Calls": 99, "Input": 99999999, "Output": 9999999,
-                   "LastCall": {"context": 999999, "tokens_in": 99999999, "tokens_out": 9999999}}
-            self.rows = len(head_lines(w, big, dict(ui, next_at=datetime.now(), since=datetime.now(), stop=False, brain=False, busy=False)))
+            self.rows = len(head_lines(w, dict(ui, next_at=datetime.now(), since=datetime.now(), stop=False, busy=False)))
         while len(hl) < self.rows:
             hl.append(("", "White"))
         buf = [ESC + "7", ESC + "[?7l", "%s[%d;%dr" % (ESC, len(hl) + 1, h)]   # ?7l: a header line longer than the pane is cut, never wrapped into the next row
@@ -1253,16 +1227,13 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
     """The loop body (see run_loop)."""
     envs = sch.load_projects(conn, machine)
     minutes = round_minutes if round_minutes else float(machine.get("roundMinutes", 5))
-    state = {"since": datetime.now(), "next_at": None, "busy": False, "brain": False, "model": "", "projects": [e.name for e in envs]}
-    if envs:
-        state["model"] = sch.model_short("claude", str((envs[0].settings.get("brain") or {}).get("model", "sonnet")), "medium")
+    state = {"since": datetime.now(), "next_at": None, "busy": False, "projects": [e.name for e in envs]}
     pane = Pane(conn, envs, out) if ui else None
 
     def refresh() -> None:
         """Update the header values from the stored state and redraw."""
         rs = runstate.get_state(conn)["state"]
-        ls = read_state(conn) or {}
-        state.update(stop=stop_flag().exists(), run_state=rs, brain=ls.get("status") == "brain")
+        state.update(stop=stop_flag().exists(), run_state=rs)
         if pane:
             pane.show_new_events()
             pane.maybe_head(state)

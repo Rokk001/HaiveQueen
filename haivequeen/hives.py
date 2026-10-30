@@ -258,6 +258,13 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     projects = sch.order_projects(envs)
     result['projects'] = {env.name: {'report': [], 'started': 0, 'actions': 0} for env in projects}
     result['projects'].update({name: {'report': [reason], 'started': 0, 'actions': 0} for name, reason in deferred.items()})
+    skipped = {env.name: [] for env in projects}
+
+    # Remember why a plan got no Queen this round; the reasons are logged with the round line.
+    def not_started(env, path, reason):
+        """Remember why a plan got no Queen this round."""
+        skipped[env.name].append('%s not started: %s' % (Path(path).stem, reason))
+
     for existing_pass in (True, False):
         for env in projects:
             report = result["projects"][env.name]["report"]
@@ -301,6 +308,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     continue
                 if hive and hive['state'] == 'handoff':
                     if not can_handoff(conn, env.name, plan['path']):
+                        not_started(env, plan['path'], 'handing off, Bee processes are still running')
                         continue
                     release_integration(conn, env.name, plan['path'])
                     conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, plan['path']))
@@ -311,6 +319,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     if last and last.get('interrupted') in ('api', 'connection'):
                         history_views = [routine.view(a) for a in history]
                         if not routine.retry_due(env, history_views, routine.view(last)):
+                            not_started(env, plan['path'], 'retry after an interrupted Queen is not due yet')
                             continue
                     if last and last.get('interrupted') == 'rate_limit':
                         provider = sch.get_provider(env.providers, hive['provider'])
@@ -333,9 +342,11 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     provider = sch.get_provider(env.providers, wait[0]) if wait else None
                     limited = not provider or any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, provider))
                     if not provider or not bees.provider_available(conn, env.name, plan['path'], provider['name'], pool.free.get(provider['name'], 0), limited):
+                        not_started(env, plan['path'], 'waiting for a free slot or limit of provider %s' % (provider['name'] if provider else wait[0] if wait else '?'))
                         continue
                     hive = get(conn, env.name, plan['path'])
                 if hive and hive['state'] in ('queenless', 'resting', 'answer', 'handoff'):
+                    not_started(env, plan['path'], 'Hive state "%s"%s' % (hive['state'], ' (questions %s)' % ', '.join(str(i) for i in json.loads(hive['questions_json'] or '[]')) if hive['state'] == 'answer' else ''))
                     continue
                 qs = runtime.list_packages(conn, env.name, plan['path'])
                 waiting = min((sch.waiting_since(env, plan['path'], p['id']) for p in qs), default='')
@@ -344,8 +355,10 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
             for _, _, path, plan, hive in ordered:
                 force = bool(hive and hive['state'] == 'requeen')
                 if queen_count >= limit and not force:
+                    not_started(env, path, 'Hive limit %d reached' % limit)
                     continue
                 if free_ram() < loop._min_ram(env):
+                    not_started(env, path, 'free RAM %.2f GB is below the minimum %.2f GB' % (free_ram(), loop._min_ram(env)))
                     continue
                 providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and not p.get('endpoint')
                              and not any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, p))]
@@ -357,9 +370,11 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 else:
                     pick = sch.select_provider(providers, cls, [], pool.free, prefer=preferred, conn=conn)
                 if not pick:
+                    not_started(env, path, 'no provider with a free slot and a free limit offers class %s' % cls)
                     continue
                 if hive and hive['state'] == 'integration_wait':
                     if not take_integration(conn, env.name, path):
+                        not_started(env, path, 'waiting for the integration place')
                         continue
                     conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, path))
                     hive = get(conn, env.name, path)
@@ -369,6 +384,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 if not hive:
                     from . import bees
                     if bees.foreign_plan_branch(env, path):
+                        not_started(env, path, 'its branch %s is held by work outside the Beekeeper' % bees.plan_worktree(env, path)[0])
                         continue
                     used = {r['colour'] for r in db.rows(conn, "SELECT colour FROM hives WHERE state != 'done'")}
                     colour = next((c for c in loop.AGENT_COLOURS if c not in used), None)
@@ -377,6 +393,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     hive = create(conn, env.name, path, pick['name'], colour)
                 claimed = conn.execute("UPDATE hives SET state='starting',claimed_at=? WHERE project=? AND plan_path=? AND state IN ('waiting','requeen')", (db.now(), env.name, path))
                 if claimed.rowcount != 1:
+                    not_started(env, path, 'the Hive is already claimed')
                     continue
                 existing_names = [a['name'] for a in runtime.list_agents(conn, env.name, 'all')]
                 number = 1
@@ -403,12 +420,8 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                         cwd = None
                     if not cwd:
                         conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
-                        if not bees.plan_worktree(env, path):
-                            questions = runtime.list_questions(conn, env.name, status='open', plan=path, item='worktree')
-                            if not questions:
-                                qid = db.add_question(conn, env.name, path, 'worktree', 'Which branch and worktree should this plan use?', 'Provide the branch on the first line and the worktree path on the second.')
-                                questions = [{'id': qid}]
-                            wait_for_answers(conn, env.name, path, [q['id'] for q in questions])
+                        named = bees.plan_worktree(env, path)
+                        not_started(env, path, 'worktree for branch %s could not be prepared (%s)' % named if named else 'no branch or worktree named in the plan or its state file')
                         continue
                 action = {'name': name, 'type': pick['name'], 'phase': 'queen', 'plan': path, 'package': '', 'cwd': cwd, 'prompt': prompt, 'class': cls}
                 st = {'names': existing_names, 'busy': [], 'plan_status': {sch.norm_plan(path): plan['status']}, 'by_path': {sch.norm_plan(path): plan}}
@@ -435,6 +448,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                          and not any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, p))]
             eligible = any(p['status'] in ('READY', 'IN_PROGRESS') and ((get(conn, env.name, p['path']) or {}).get('state') in (None, 'waiting', 'requeen')) for p in runtime.list_plans(conn, env.name))
             can_start = eligible and queen_count < limit and bool(sch.select_provider(providers, str(env.settings.get('queenClass', 'medium')), [], pool.free, prefer=preferred, conn=conn))
+            env.log('round done: %d Queen(s) started%s' % (result['projects'][env.name]['started'], ''.join('; ' + text for text in skipped[env.name])))
             faults.check_round(env, result['projects'][env.name]['started'], can_start)
             try:
                 views.write_views(conn, env.name)

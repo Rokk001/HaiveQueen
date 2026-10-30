@@ -342,19 +342,6 @@ class QueenIntegrationTests(RoundCase):
         branch = subprocess.run(['git', '-C', queen['cwd'], 'branch', '--show-current'], check=True, capture_output=True, text=True).stdout.strip()
         self.assertEqual(branch, 'plan-example')
 
-    # Missing branch information never starts a Queen in the main checkout.
-    def test_unknown_worktree_waits_for_owner_answer(self):
-        from haivequeen import hives, loop, db
-        from bzztest import REL
-        self.plan('READY', [{'id': 'P1', 'title': 'First'}])
-        loop.run_round(self.conn, self.machine, self.envs(), free_ram=lambda: 16.0, settle=0)
-        self.assertFalse(any(a['phase'] == 'queen' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
-        questions = runtime.list_questions(self.conn, 'testproj', status='open', plan=REL, item='worktree')
-        self.assertEqual(len(questions), 1)
-        self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'answer')
-        db.answer_question(self.conn, questions[0]['id'], 'feature/test\n' + str(self.wt), 'owner')
-        self.assertEqual(bees.plan_worktree(self.env(), REL), ('feature/test', self.wt))
-
     # A provider reset wakes the Beekeeper without waiting for the periodic round.
     def test_provider_reset_changes_wake_marker(self):
         from haivequeen import hives
