@@ -134,7 +134,7 @@ class FrameTest(unittest.TestCase):
 
     def test_without_queen_the_line_shows_the_state_in_german(self):
         """Every Hive state without a running Queen has its German words on the Queen line."""
-        cases = [('answer', 'wartet auf Antwort'), ('queenless', 'weisellos'), ('integration_wait', 'wartet auf Integration'),
+        cases = [('answer', 'wartet auf Antwort'), ('owner_check', 'wartet auf Owner-Prüfung'), ('queenless', 'weisellos'), ('integration_wait', 'wartet auf Integration'),
                  ('codex_wait', 'wartet auf Codex'), ('handoff', '\u00dcbergabe'), ('waiting', 'wartet auf Start'),
                  ('starting', 'wartet auf Start'), ('resting', 'ruht bis 2026-11-01 12:00')]
         for state, expected in cases:
