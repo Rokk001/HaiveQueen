@@ -98,8 +98,7 @@ class FullLoopTest(RoundCase):
     # Verify that a Queen starts and integrates her own plan.
     def test_plan_to_integrated(self):
         """READY plan: one Queen integrates her branch and the plan becomes DONE."""
-        round_kwargs = {"terminal": self.term, "free_ram": lambda: 16.0, "settle": 0, "poll": 0.2, "tries": 150,
-                        "brain_runner": lambda argv, prompt, cwd, timeout: (1, "", "no real brain in tests", False)}
+        round_kwargs = {"terminal": self.term, "free_ram": lambda: 16.0, "settle": 0, "poll": 0.2, "tries": 150}
         code = loop.run_loop(self.conn, self.machine, rounds=8, round_minutes=0.05, wait_seconds=0.3, round_kwargs=round_kwargs)
         self.assertEqual(code, 0)
         ran = self.log_file.read_text(encoding="utf-8").split() if self.log_file.is_file() else []

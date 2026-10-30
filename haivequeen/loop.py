@@ -9,13 +9,14 @@ The agent process itself is `haivequeen.agent_runner` (see docs/S13-S14-INTERFAC
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from . import brain, db, events, export, faults, header, inbox, reattach, routine, runstate, runtime, triage, usage, views
+from . import db, events, export, faults, header, inbox, reattach, routine, runstate, runtime, triage, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -24,7 +25,7 @@ from .terminal import TerminalError, get_terminal, pane_title
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent
 PHASES = ("work", "verify", "release", "integrate")
-TEMPORARY = re.compile(r"^(no worker slot|no free slot|no integrator slot|free RAM|STOP flag|run state)")   # a start rejected for one of these keeps its brain event
+TEMPORARY = re.compile(r"^(no worker slot|no free slot|no integrator slot|free RAM|STOP flag|run state)")   # a start rejected for one of these is tried again next round
 AGENT_NAMES = ["Ada", "Bea", "Cleo", "Dina", "Ella", "Fia", "Gina", "Hana", "Ida", "Juna", "Kira", "Lea", "Mia", "Nora", "Ola",
                "Pia", "Rita", "Sara", "Tara", "Uma", "Vera", "Wilma", "Yara", "Zoe"]   # short first names of the agents; the main agent is called Queen and is not in this list
 AGENT_COLOURS = ["4FA8FF", "C77DFF", "FF6FB5", "3DDCDC", "FF9F43", "3DDC97", "2B6CB0", "8A3FD1", "C2306F", "1E9C9C", "C26A10", "1E9B5F"]   # 6 hues at least 25 degrees apart, each light then dark (the first 6 agents differ in hue), none of the status colours
@@ -225,7 +226,7 @@ def is_test_runtime() -> bool:
 # ---- loop state (kv key loop-state, machine wide) ----
 
 def write_state(conn, status: str, since: datetime, next_at) -> None:
-    """Write the loop state for the dashboard and the pane header: status (brain, round, idle), since and the next round time."""
+    """Write the loop state for the dashboard and the pane header: status (round, idle), since and the next round time."""
     runtime.kv_set(conn, sch.GLOBAL, "loop-state", json.dumps({
         "status": status, "since": since.isoformat(timespec="seconds"),
         "nextAt": next_at.isoformat(timespec="seconds") if next_at else None}))
@@ -408,6 +409,16 @@ def launch_agent(env, terminal, window: str, spec: dict, settle: float = 3.0, po
     return pane_id
 
 
+def launch_headless(env, spec: dict) -> None:
+    """Start the runner of a Bee as its own process without a pane; its output goes to runner.log in the run folder and the runner sets the pid in the agent row."""
+    log = open(env.run_dir(spec["name"]) / "runner.log", "ab")
+    flags = {"creationflags": 0x00000008 | 0x00000200} if osplat.is_windows() else {"start_new_session": True}   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    try:
+        subprocess.Popen(runner_argv(env, spec), stdin=subprocess.DEVNULL, stdout=log, stderr=log, **flags)
+    finally:
+        log.close()
+
+
 # ---- round ----
 
 class Pool:
@@ -421,19 +432,6 @@ class Pool:
     def workers(self) -> int:
         """Free worker slots in total."""
         return sum(self.free.values())
-
-
-class ProjectRound:
-    """State of one project in one round: report lines, started count, names and busy packages."""
-
-    def __init__(self, env):
-        """Start empty."""
-        self.env = env
-        self.report = []
-        self.started = 0
-        self.names = []
-        self.busy = []
-        self.qs = []
 
 
 def ram_gb() -> float:
@@ -477,7 +475,7 @@ def hive_schedule_lock(timeout: float = 30.0):
 
 
 # Schedule one round of Hives across every registered project.
-def run_round(conn, machine: dict, envs=None, terminal=None, brain_answer=None, brain_runner=None, dry_run=False, plan_files=None,
+def run_round(conn, machine: dict, envs=None, terminal=None, dry_run=False, plan_files=None,
               out_file=None, settle: float = 3.0, poll: float = 2.0, tries: int = 20, free_ram=None, alive=None) -> dict:
     """Schedule one round of Hives across every registered project."""
     from . import hives
@@ -552,199 +550,6 @@ def routine_release_locks(env) -> None:
             env.log("package %s of %s unlocked, %d earlier failure(s) forgiven" % (pkg, plan, fails))
 
 
-def _project_round(env, pool, summary, terminal, brain_answer, brain_runner, dry_run, plan_files, out_file, settle, poll, tries,
-                   free_ram, alive, machine) -> dict:
-    """The round of one project: snapshot, routine, brain, validation and execution of the actions, triage, event hook."""
-    s = env.settings
-    conn = env.conn
-    pr = ProjectRound(env)
-    pilot = bool(s.get("pilot"))
-    if pilot:
-        plan_files = [s.get("pilotPlan", "")]
-    prows = summary["all_plans"]
-    by_path = {norm_plan(p["path"]): p for p in prows}
-    plan_status = {norm_plan(p["path"]): str(p["status"]) for p in prows}
-    use_rows = [p for p in prows if not plan_files or any(norm_plan(f) == norm_plan(p["path"]) or norm_plan(p["path"]).endswith(norm_plan(f)) for f in plan_files)]
-    startable = [{"path": p["path"], "status": p["status"]} for p in use_rows if p["status"] in ("READY", "IN_PROGRESS")]
-    others = [{"path": p["path"], "status": p["status"]} for p in use_rows if p["status"] not in ("READY", "IN_PROGRESS")]
-    if not dry_run:
-        routine.return_interrupted_rows(env)   # rows taken by an integrator that ended interrupted go back to waiting
-    qmap = routine.queue_rows(env)
-    all_rows = [dict(r) for r in qmap.values()]
-    queue = []
-    for r in qmap.values():
-        if re.match(r"^(ready|in Lauf|blockiert)", r["status"]):
-            q = {k: v for k, v in r.items() if k != "note"}
-            if r["status"] == "blockiert" and r["note"]:
-                q["status"] = "blockiert (" + r["note"] + ")"
-            q["status"] = q["status"][:140]
-            queue.append(q)
-    any_ready = any(q["status"].startswith("ready") for q in queue)
-    any_in_run = any(q["status"].startswith("in Lauf") for q in queue)
-    agents = [view(r) for r in env.agents("active")]
-    build_names = _build_names(env)
-    build_running = bool(build_names)
-    qs = routine.question_rows(env)
-    blocked = routine.blocked_tasks(agents)
-    can_start = (not pilot and not plan_files and any_ready and not any_in_run and pool.int_free > 0 and not build_running)
-    slots = {"freeByProvider": dict(pool.free), "integratorFree": pool.int_free, "workersMax": sum(p["slots"] for p in env.providers)}
-    snapshot = {"now": datetime.now().strftime("%Y-%m-%d %H:%M"), "project": env.name, "repo": str(env.code_repo), "workspace": str(env.workspace), "dryRun": dry_run,
-                "plans": startable, "notStartablePlans": others, "blockedTasks": [{"plan": b["Plan"], "package": b["Package"], "phase": b["Phase"], "error": b["Error"]} for b in blocked],
-                "agents": [{"name": a["name"], "type": a.get("type"), "plan": a["plan"], "package": a.get("package"), "phase": a.get("phase"), "status": a.get("status"),
-                            "finalFile": str(env.run_dir(a["name"]) / "final.txt").replace("\\", "/")} for a in agents],
-                "slots": slots, "freeRamGB": round(free_ram(), 2), "minFreeRamGB": _min_ram(env), "fullBuildRunning": build_running,
-                "questions": {"open": [q for q in qs if q["status"] == "OPEN"], "answered": [q for q in qs if q["status"] == "ANSWERED"]}}
-    if pilot:
-        snapshot["pilotMode"] = "true: only the packages of the pilot plan may be started; there is no integrator in this mode"
-    else:
-        snapshot["integration"] = {"rows": queue, "canStart": can_start}
-    build_block = pilot and build_running
-    if not dry_run and build_block:
-        env.log("round skipped (build process running: %s)" % ", ".join(build_names))
-        run_hook(env, summary)
-        return {"report": pr.report, "started": 0, "actions": 0}
-    # ---- routine (no language model) ----
-    free_copy = dict(pool.free)
-    free_copy.update({"workers": pool.workers(), "int": pool.int_free})
-    ctx = {"plans": startable, "queue": queue, "all_rows": all_rows, "questions": qs, "free": free_copy,
-           "can_start_integrator": bool(snapshot.get("integration", {}).get("canStart"))}
-    rt = routine.get_routine(env, ctx)
-    if not dry_run:
-        for fl in routine.set_handoff_flags(env, agents):
-            env.event("%s: context %s reached, HANDOFF requested" % (fl["Name"], sch.format_tokens(fl["Ctx"])))
-            env.log("handoff flag written for %s (context %s)" % (fl["Name"], fl["Ctx"]))
-    # ---- brain: only when an event needs judgement ----
-    answer = None
-    bres = None
-    trigger = ""
-    if rt["events"]:
-        trigger = ",".join(dict.fromkeys(e["type"] for e in rt["events"]))
-        if brain_answer is not None:
-            answer = brain_answer
-            bres = dict(brain.NO_ANSWER)
-        else:
-            delta = {"now": datetime.now().strftime("%Y-%m-%d %H:%M"), "project": env.name, "slots": slots, "freeRamGB": round(free_ram(), 2),
-                     "events": [{k: e[k] for k in ("type", "plan", "package", "agent", "text")} for e in rt["events"]]}
-            write_state(conn, "brain", datetime.now(), None)
-            bres = brain.ask(env, delta, any(e["type"] == "new_plan" for e in rt["events"]), runner=brain_runner)
-            answer = bres["answer"]
-            if bres["fail"]:
-                fail = bres["fail"]
-                env.log(fail)
-                env.event("Brain (%s): error - %s" % (trigger, fail[:120]), True)
-                if not dry_run or is_test_runtime():
-                    brain.record_call(env, trigger, bres, "Error: " + fail, True)
-                handled = routine.handled_map(env)
-                for ev in rt["events"]:
-                    n = int(handled.get("try:" + ev["key"], 0) or 0) + 1
-                    routine.set_handled(env, "try:" + ev["key"], str(n))
-                    if n >= 2:
-                        routine.set_handled(env, ev["key"])
-                answer = None
-        if answer is not None:
-            for ev in rt["events"]:
-                routine.set_handled(env, ev["key"])
-    acts = list(rt["actions"]) + (list(answer.get("actions") or []) if answer else [])
-    # ---- validate + enforce + execute ----
-    state = {"names": [str(a["name"]) for a in agents], "busy": [norm_plan(a["plan"]) + "|" + str(a.get("package")) for a in agents if a.get("status") in ACTIVE],
-             "qs": qs, "plan_status": plan_status, "by_path": by_path, "startable": startable, "blocked": blocked}
-    ctxs = {"env": env, "pool": pool, "dry": dry_run, "terminal": terminal, "settle": settle, "poll": poll, "tries": tries, "free_ram": free_ram,
-            "pilot": pilot, "plan_files": plan_files, "snapshot": snapshot, "rt_events": rt["events"], "state": state, "alive": alive,
-            "min_ram": _min_ram(env), "report": pr.report, "machine": machine}
-    can_start_any = (not pilot and runstate.starts_allowed(conn) and not stop_flag().exists() and pool.workers() > 0
-                     and free_ram() >= _min_ram(env) and not build_running)   # nothing held back this round: an idle round is then a fault
-    started = 0
-    for a in acts:
-        kind = str(a.get("action"))
-        if kind == "note":
-            pr.report.append("NOTE: %s" % a.get("text"))
-            if not dry_run:
-                env.log("NOTE %s" % a.get("text"))
-        elif kind == "ask_owner":
-            _do_ask_owner(ctxs, a)
-        elif kind == "start_agent":
-            started += _do_start(ctxs, a)
-        elif kind == "lock_package":
-            _do_lock(ctxs, a)
-        elif kind in ("stall_package", "stall_plan"):
-            _do_stall(ctxs, a)
-        elif kind == "plan_done":
-            _do_plan_done(ctxs, a)
-        else:
-            pr.report.append("REJECT unknown action '%s'" % kind)
-    if not dry_run and s.get("triage", True):
-        started += _start_triage(ctxs)
-    if not dry_run:
-        env.log("round done: %d action(s), %d agent(s) started" % (len(acts), started))
-        faults.check_round(env, started, can_start_any)
-    run_hook(env, summary)
-    if rt["events"] and answer is not None and (not dry_run or is_test_runtime()):
-        _brain_summary(ctxs, answer, trigger, bres, pr.report)
-    if dry_run and out_file:
-        Path(out_file).parent.mkdir(parents=True, exist_ok=True)
-        Path(out_file).write_text(json.dumps({"time": datetime.now().isoformat(), "snapshotSlots": slots, "freeRamGB": snapshot["freeRamGB"],
-                                              "integrationCanStart": snapshot.get("integration", {}).get("canStart"),
-                                              "brainAnswer": answer, "enforcement": pr.report}, indent=2), encoding="utf-8")
-        Path(out_file).with_suffix(".snapshot.json").write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
-    if not dry_run:
-        try:
-            views.write_views(conn, env.name)
-        except Exception as exc:   # a broken view path must not stop a round
-            env.log("views not written: %s" % exc)
-    return {"report": pr.report, "started": started, "actions": len(acts)}
-
-
-def _brain_summary(c, answer, trigger, bres, report) -> None:
-    """Record the brain call with a one-line summary of what the answer led to and show it as an event."""
-    env = c["env"]
-    parts = []
-    for x in answer.get("actions") or []:
-        k = x.get("action")
-        if k == "start_agent":
-            hit = any(ln.startswith("START " + str(x.get("name"))) for ln in report)
-            parts.append("%s %s" % (x.get("name"), "started" if hit else "rejected"))
-        elif k == "ask_owner":
-            parts.append("Question for %s" % env.settings.get("owner", "Owner"))
-        elif k == "plan_done":
-            parts.append("Plan done")
-    note = next((x for x in (answer.get("actions") or []) if x.get("action") == "note"), None)
-    if parts:
-        summ = "; ".join(parts)
-    elif note:
-        summ = "no action: " + " ".join(str(note.get("text")).split())[:110]
-    else:
-        summ = "no action"
-    if bres is not None:
-        brain.record_call(env, trigger, bres, summ, False)
-    env.event("Brain (%s): %s" % (trigger, summ))
-
-
-def _do_ask_owner(c, a) -> None:
-    """Action ask_owner: a question for the owner unless the item is already known or decided."""
-    env, st, report, dry = c["env"], c["state"], c["report"], c["dry"]
-    if not a.get("question") or not a.get("plan"):
-        report.append("REJECT ask_owner: missing plan/question")
-        return
-    if any(q["plan"] == a["plan"] and q["item"] == a.get("item") and q["status"] in ("OPEN", "ANSWERED", "TRIAGE") for q in st["qs"]):
-        report.append("SKIP ask_owner (already known): %s / %s" % (a["plan"], a.get("item")))
-        if not dry:
-            env.event("Question for %s not asked: %s / %s is already settled by a question of this item" % (env.settings.get("owner", "Owner"), a["plan"], a.get("item")))
-        return
-    src = routine.item_decided(routine.decided_items(env, st["qs"]), str(a["plan"]), str(a.get("item") or ""))
-    if src:
-        report.append("SKIP ask_owner (already decided in %s): %s / %s" % (src, a["plan"], a.get("item")))
-        if not dry:
-            env.log("skip ask_owner %s / %s: already decided in %s" % (a["plan"], a.get("item"), src))
-            env.event("Question for %s not asked: %s / %s is already settled by %s" % (env.settings.get("owner", "Owner"), a["plan"], a.get("item"), src))
-        return
-    report.append("ASK_OWNER: %s / %s: %s" % (a["plan"], a.get("item"), a["question"]))
-    if not dry:
-        qid = db.add_question(env.conn, env.name, str(a["plan"]), str(a.get("item") or ""), str(a["question"]), str(a.get("recommendation") or ""))
-        st["qs"].append({"id": "Q-%d" % qid, "plan": str(a["plan"]), "item": str(a.get("item") or ""), "status": "OPEN", "answer": ""})
-        env.log("ask_owner Q-%d %s / %s" % (qid, a["plan"], a.get("item")))
-        env.event("Question for %s: Q-%d (%s)" % (env.settings.get("owner", "Owner"), qid, a.get("item")))
-
-
 def _do_lock(c, a) -> None:
     """Action lock_package: record the open points of a locked package once (kv key lock:<plan>|<package>, package row locked)."""
     env, report = c["env"], c["report"]
@@ -765,32 +570,6 @@ def _do_lock(c, a) -> None:
     report.append("LOCK %s %s" % (a["plan"], a["package"]))
 
 
-def _do_stall(c, a) -> None:
-    """Action stall_package / stall_plan (progress guard): stop the package or plan and ask the owner once, with the last verify report.
-
-    The question goes straight to the owner (status open, never to the triage). The stop is the kv key stall:<plan>|<package> or
-    planstall:<plan> with the question id; routine_release_stalls removes it only when the owner answered.
-    """
-    env, report = c["env"], c["report"]
-    plan, pkg = str(a["plan"]), str(a.get("package") or "")
-    if pkg:
-        key, item = "stall:%s|%s" % (plan, pkg), "STALL-" + pkg
-        why = ("the last %d work runs ended without a new commit" if a.get("idle") else "the number of open requirements did not fall over the last %d verifies")
-        what = ("Package %s is stopped: %s, so no new agent is started for it. Last report (%s):\n%s"
-                % (pkg, why % int(env.settings.get("progressVerifies", 3)), a.get("agent"), a.get("text")))
-    else:
-        key, item = "planstall:" + plan, "STALL-PLAN"
-        what = ("Plan %s is stopped: agents ran for it during the last %s hours but no package of it was integrated, so no new agent is started."
-                % (plan, env.settings.get("planStallHours", 6)))
-    if not c["dry"] and runtime.kv_get(env.conn, env.name, key) is None:
-        qid = db.add_question(env.conn, env.name, plan, item, what + "\n\nHow should it continue (other approach, change the requirement, release the stop)?",
-                              "%s decides after seeing the report." % env.settings.get("owner", "Owner"))
-        runtime.kv_set(env.conn, env.name, key, str(qid))
-        env.log("%s of %s stopped by the progress guard, question Q-%d" % (pkg or "plan", plan, qid))
-        env.event("%s stopped (%s)" % ("Package " + pkg if pkg else "Plan " + os.path.basename(plan), env.settings.get("openMarker", "Open for Owner")), True)
-    report.append("STALL %s %s" % (plan, pkg or "(plan)"))
-
-
 def routine_release_stalls(env) -> None:
     """Lift a progress-guard stop only when the owner answered its question (an answer of the Queen or the coordinator does not count, and a
     restart of the Queen changes nothing). A released package starts counting its verifies anew, a released plan its hours."""
@@ -809,41 +588,6 @@ def routine_release_stalls(env) -> None:
                 runtime.kv_set(conn, env.name, "planstallrel:" + kv["key"][len(prefix):], db.now())
             runtime.kv_delete(conn, env.name, kv["key"])
             env.log("progress-guard stop %s lifted by the owner" % kv["key"])
-
-
-def _do_plan_done(c, a) -> None:
-    """Action plan_done (rule 11): IN_PROGRESS -> DONE only after every branch of the plan is integrated and the whole-plan verify ended with 'Offene Anforderungen: 0'."""
-    env, st, report = c["env"], c["state"], c["report"]
-    pk = norm_plan(str(a["plan"]))
-    why = None
-    if pk not in st["plan_status"]:
-        why = "plan file missing"
-    elif st["plan_status"][pk] != "IN_PROGRESS":
-        why = "plan is not IN_PROGRESS"
-    else:
-        agents = [view(r) for r in env.agents("active")]
-        open_rows = [r for r in routine.queue_rows(env).values() if re.match(r"^(ready|in Lauf|blockiert)", r["status"])
-                     and str(r["plan"]).lower().endswith(str(a["plan"]).replace("\\", "/").lower())]
-        ver = [x for x in agents if x["plan"] == a["plan"] and x.get("package") == "ALL" and x.get("phase") == "verify" and x.get("status") == "done"]
-        if open_rows:
-            why = "branches of this plan are still ready / in Lauf / blockiert in the integration queue"
-        elif not ver:
-            why = "no finished whole-plan verify agent (package ALL, phase verify)"
-        elif routine.verify_open_count(env, ver[-1]["name"]) != 0:
-            why = 'whole-plan verify did not end with "Offene Anforderungen: 0"'
-    if why:
-        report.append("REJECT plan_done %s: %s" % (a["plan"], why))
-        return
-    report.append("PLAN_DONE %s: IN_PROGRESS -> DONE" % a["plan"])
-    if not c["dry"]:
-        try:
-            runtime.set_plan_status(env.conn, env.name, str(st["by_path"][pk]["path"]), "DONE", str(env.workspace))
-            st["plan_status"][pk] = "DONE"
-        except runtime.CmdError as exc:
-            env.log("plan %s: status change failed: %s" % (a["plan"], exc))
-            return
-        env.log("plan %s: IN_PROGRESS -> DONE" % a["plan"])
-        env.event("Plan %s done (DONE)" % os.path.basename(str(a["plan"])))
 
 
 def _reject_reason(c, a):
@@ -996,10 +740,13 @@ def _do_start(c, a, forced_pick=None) -> int:
     if os.environ.get("BZZ_TEST_NOSTART"):   # tests only: no pane, the fake agent is marked running (this process is always alive)
         env.update_agent(nm, {"status": "running", "pid": os.getpid()})
     else:
-        term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
         spec = {"name": nm, "provider": prov, "protocol": protocol, "plan": plan, "package": pkg, "phase": phase, "cwd": str(a["cwd"]),
                 "prompt_file": str(pf), "person": ident["Person"], "model_long": sch.model_long(protocol, cm["Model"], cm["Effort"])}
-        launch_agent(env, term, env.settings.get("window", "HaiveQueen"), spec, c["settle"], c["poll"], c["tries"])
+        if phase == "bee":   # D3: a Bee has no pane of its own, it shows as a line in the frame of its Hive
+            launch_headless(env, spec)
+        else:
+            term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
+            launch_agent(env, term, env.settings.get("window", "HaiveQueen"), spec, c["settle"], c["poll"], c["tries"])
     env.log("start %s (%s, %s)" % (nm, prov, phase))
     env.event("%s started (%s)" % (nm, {"codex": "Codex", "claude": "Claude"}.get(prov, prov)))
     if phase != "integrate":
@@ -1015,42 +762,6 @@ def _do_start(c, a, forced_pick=None) -> int:
     if not os.environ.get("BZZ_TEST_NOSTART"):
         time.sleep(c["settle"])
     return 1
-
-
-def _start_triage(c) -> int:
-    """D5: every locked package with open points and no running triage agent gets a triage agent (class medium). Returns the number started."""
-    env, pool, st = c["env"], c["pool"], c["state"]
-    n = 0
-    for item in triage.locked_packages(env.conn, env.name):
-        if not runstate.starts_allowed(env.conn) or stop_flag().exists() or pool.workers() <= 0:
-            break
-        if routine.waiting_retry(env, [view(r) for r in env.agents("all")], item["plan"], item["id"], triage.TRIAGE_PHASE):
-            continue   # the last triage agent of this package was interrupted: its retry waits for its time
-        pick = sch.select_provider(env.providers, triage.TRIAGE_CLASS, [], pool.free, conn=env.conn)
-        if not pick:
-            continue
-        nm = routine.new_agent_name("%s-%s-triage" % (routine.plan_tag(env, item["plan"]), item["id"]), [view(r) for r in env.agents("all")], st["names"])
-        text = triage.triage_prompt(env.name, item["plan"], item["id"], item["points"], osplat.python_executable())
-        text = text.replace(" -I haivequeen/cli.py", ' -I "%s"' % (TOOLS_DIR / "haivequeen" / "cli.py"))
-        a = {"action": "start_agent", "name": nm, "type": pick["name"], "phase": "triage", "plan": item["plan"], "package": item["id"],
-             "cwd": str(env.workspace), "prompt": text, "class": triage.TRIAGE_CLASS, "bundle": []}
-        if (norm_plan(a["plan"]) + "|" + a["package"]) not in st["busy"]:
-            n += _do_start(c, a, pick)
-    for q in triage.questions_to_triage(env.conn, env.name):   # new questions of agents (bzz ask): triage before they reach the owner
-        if not runstate.starts_allowed(env.conn) or stop_flag().exists() or pool.workers() <= 0:
-            break
-        pick = sch.select_provider(env.providers, triage.TRIAGE_CLASS, [], pool.free, conn=env.conn)
-        if not pick:
-            continue
-        plan, pkg = str(q["plan_path"] or routine.QUEUE_PLAN_ID), triage.QUESTION_PKG % q["id"]
-        nm = routine.new_agent_name("%s-%s-triage" % (routine.plan_tag(env, plan), pkg), [view(r) for r in env.agents("all")], st["names"])
-        text = triage.question_prompt(env.conn, env.name, q, osplat.python_executable())
-        text = text.replace(" -I haivequeen/cli.py", ' -I "%s"' % (TOOLS_DIR / "haivequeen" / "cli.py"))
-        a = {"action": "start_agent", "name": nm, "type": pick["name"], "phase": "triage", "plan": plan, "package": pkg,
-             "cwd": str(env.workspace), "prompt": text, "class": triage.TRIAGE_CLASS, "bundle": []}
-        if (norm_plan(a["plan"]) + "|" + a["package"]) not in st["busy"]:
-            n += _do_start(c, a, pick)
-    return n
 
 
 # ---- orchestrator pane (QUEEN): fixed header and one line per event ----

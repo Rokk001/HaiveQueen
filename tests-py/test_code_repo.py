@@ -11,7 +11,7 @@ from unittest import mock
 import isolation
 from bzztest import REL, RoundCase, db, runtime
 from haivequeen import agent_runner as ar
-from haivequeen import brain, inbox, loop, routine
+from haivequeen import inbox, loop, routine
 from test_agent_runner import RunnerBase, claude_stream
 
 

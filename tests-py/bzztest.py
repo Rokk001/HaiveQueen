@@ -154,13 +154,13 @@ class RoundCase(unittest.TestCase):
         return [a["name"] for a in runtime.list_agents(self.conn, project, "all")]
 
     def round(self, answer=None, **kw):
-        """Run one round over all projects with a fake brain answer (no model call) and plenty of RAM."""
+        """Run one round over all projects with plenty of RAM; `answer` is ignored (the Beekeeper asks no model any more)."""
         kw.setdefault("free_ram", lambda: 16.0)
         kw.setdefault("settle", 0)
-        kw.setdefault("brain_runner", lambda argv, prompt, cwd, timeout: (1, "", "no real brain in tests", False))   # a real model is never called
+        kw.pop("brain_runner", None)
         from unittest import mock
         with mock.patch("haivequeen.bees.prepare_queen_worktree", return_value=str(self.wt)), mock.patch("haivequeen.bees.valid_queen_worktree", side_effect=lambda env, path: str(path) != str(env.code_repo)), mock.patch("haivequeen.bees.foreign_plan_branch", return_value=False):
-            return loop.run_round(self.conn, self.machine, self.envs(), brain_answer=answer, **kw)
+            return loop.run_round(self.conn, self.machine, self.envs(), **kw)
 
     def calls(self):
         """Number of brain calls recorded so far."""

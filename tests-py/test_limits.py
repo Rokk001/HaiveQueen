@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from haivequeen import cli as orch  # noqa: E402
 from haivequeen import agent_runner as ar  # noqa: E402
-from haivequeen import brain, dashboard, db, events, runtime  # noqa: E402
+from haivequeen import dashboard, db, events, runtime  # noqa: E402
 from haivequeen import platform as osplat  # noqa: E402
 from test_agent_runner import RunnerBase, claude_stream  # noqa: E402
 from test_dashboard import SYS  # noqa: E402
@@ -157,13 +157,6 @@ class CommandTimeoutTest(unittest.TestCase):
         self.assertTrue(res["TimedOut"])
         self.assertLess(time.monotonic() - t0, 30)
         self.assertTrue(wait_gone(self.pid_file), "the grandchild of the timed out command still runs")
-
-    def test_brain_timeout_ends_the_tree(self):
-        """The brain program that hangs is ended after its timeout with its grandchild and reported as timed out."""
-        code, out, err, timed_out = brain._run([sys.executable, str(self.script), str(self.pid_file)], "prompt", str(self.dir), 3)
-        self.assertTrue(timed_out)
-        self.assertTrue(wait_gone(self.pid_file), "the grandchild of the timed out brain still runs")
-
 
 class StallTest(RunnerBase):
     """A hanging agent (alive but silent) is ended after the stall limit."""

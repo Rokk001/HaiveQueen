@@ -7,7 +7,7 @@ import time
 import unittest
 
 from bzztest import REL, RoundCase, minutes_ago, provider, runtime
-from haivequeen import brain, db, export, loop, routine, runstate, triage
+from haivequeen import db, export, loop, routine, runstate, triage
 from haivequeen import platform as osplat
 from haivequeen import scheduler as sch
 from haivequeen.terminal.headless import Headless
@@ -143,7 +143,7 @@ class LoopTest(RoundCase):
                     self.finish(agent["name"])
                     runtime.upsert_agent(self.conn, "testproj", agent["name"], {"pid": None})
 
-        kw = {"free_ram": lambda: 16.0, "settle": 0, "brain_runner": lambda *a: (1, "", "", False)}
+        kw = {"free_ram": lambda: 16.0, "settle": 0}
         self.assertEqual(loop.run_loop(self.conn, self.machine, rounds=1, sleep=sleep, round_kwargs=kw), 0)
         self.assertEqual(seen, {"live": "running", "gone": "failed"})
         self.assertFalse(loop.lock_file().exists())
@@ -512,14 +512,6 @@ class BrainTest(RoundCase):
         self.round(brain_runner=self.runner)
         self.assertIsNone(self.argv)
         self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
-    def test_answer_parsing(self):
-        """JSON cut out of text; broken or action-less answers are errors."""
-        self.assertEqual(brain.parse_answer('x {"actions": []} y')[0], {"actions": []})
-        self.assertIn("no JSON", brain.parse_answer("nothing")[1])
-        self.assertIn("invalid", brain.parse_answer("{oops}")[1])
-        self.assertIn("actions", brain.parse_answer('{"a":1}')[1])
-
-
 def argv_index(argv, name):
     """Index of an argument in a command line."""
     return argv.index(name)
