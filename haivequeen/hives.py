@@ -165,11 +165,12 @@ def migration_targets(env):
 def migrate_once(conn, envs):
     """Migrate the specified plans once after resume, preserving all other plans."""
     if runtime.kv_get(conn, '*', 'hives-migration') != 'armed':
-        return True
+        return {}
     registered = {row['name'] for row in db.rows(conn, "SELECT name FROM projects")}
     loaded = {env.name for env in envs}
     missing = registered - loaded
     targets = {}
+    deferred = {}
     pending = [env for env in envs if runtime.kv_get(conn, env.name, 'hives-migrated') != 'done']
     for env in pending:
         runtime.sync_plans(conn, env.name, str(env.workspace))
@@ -178,10 +179,13 @@ def migrate_once(conn, envs):
             targets[env.name] = migration_targets(env)
             if targets[env.name] is None and legacy:
                 env.log('migration target list is missing or ambiguous')
-                return False
+                deferred[env.name] = 'migration target list missing or ambiguous'
+                continue
             if targets[env.name] is None:
                 targets[env.name] = []
     for env in pending:
+        if env.name in deferred:
+            continue
         for plan in runtime.list_plans(conn, env.name):
             if plan['path'] in targets.get(env.name, ()) and plan['status'] == 'IN_PROGRESS':
                 runtime.set_plan_status(conn, env.name, plan['path'], 'PAUSED', str(env.workspace))
@@ -189,9 +193,9 @@ def migrate_once(conn, envs):
             conn.execute("UPDATE packages SET locked=0,lock_reason=NULL WHERE project=?", (env.name,))
             conn.execute("DELETE FROM kv WHERE project=? AND (key LIKE 'stall:%' OR key LIKE 'planstall:%')", (env.name,))
             conn.execute("INSERT INTO kv(project,key,value,updated_at) VALUES(?, 'hives-migrated', 'done', ?) ON CONFLICT(project,key) DO UPDATE SET value='done',updated_at=excluded.updated_at", (env.name, db.now()))
-    if not missing:
+    if not missing and not deferred:
         runtime.kv_set(conn, '*', 'hives-migration', 'done')
-    return True
+    return deferred
 
 
 # Run one machine-wide scheduling round for Hives without a language model.
@@ -224,12 +228,12 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 env.log('round skipped (%s)' % result['skipped'])
                 loop.run_hook(env, loop._state_summary(env))
             return result
+    deferred = {}
     if not dry_run:
-        if not migrate_once(conn, envs):
-            result['skipped'] = 'migration target list missing or ambiguous'
-            return result
+        deferred = migrate_once(conn, envs)
         reap_integrations(conn, alive=alive)
         wake_due(conn, db.now())
+    envs = [env for env in envs if env.name not in deferred]
     for env in envs:
         runtime.sync_plans(conn, env.name, str(env.workspace))
         if not dry_run:
@@ -253,6 +257,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     preferred = str(machine.get('preferredProvider') or '')
     projects = sch.order_projects(envs)
     result['projects'] = {env.name: {'report': [], 'started': 0, 'actions': 0} for env in projects}
+    result['projects'].update({name: {'report': [reason], 'started': 0, 'actions': 0} for name, reason in deferred.items()})
     for existing_pass in (True, False):
         for env in projects:
             report = result["projects"][env.name]["report"]

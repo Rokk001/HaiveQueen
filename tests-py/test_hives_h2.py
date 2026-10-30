@@ -674,6 +674,34 @@ class QueenIntegrationTests(RoundCase):
         self.assertFalse(runtime.list_packages(self.conn, 'otherproject', rel)[0]['locked'])
         self.assertEqual(runtime.kv_get(self.conn, '*', 'hives-migration'), 'done')
 
+    # A missing migration list blocks only that project and preserves independent work.
+    def test_unclear_hq_migration_does_not_stop_other_project(self):
+        from haivequeen import runstate
+        self.add_project('hq')
+        rel = 'docs/plans/UNRELATED/UNRELATED-PLAN.md'
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}], project='hq', rel=rel)
+        self.agent('old-hq', project='hq', plan_path=rel, phase='work', status='done')
+        runtime.set_package(self.conn, 'hq', rel, 'P1', locked=True, reason='old lock')
+        self.plan('READY', [{'id': 'P1', 'title': 'Independent'}])
+        runstate.pause(self.conn)
+        runstate.resume(self.conn)
+        self.round()
+        self.assertEqual(runtime.kv_get(self.conn, '*', 'hives-migration'), 'armed')
+        self.assertTrue(runtime.list_packages(self.conn, 'hq', rel)[0]['locked'])
+        self.assertFalse(any(a['phase'] == 'queen' for a in runtime.list_agents(self.conn, 'hq', 'all')))
+        self.assertTrue(any(a['phase'] == 'queen' and a['status'] == 'running' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
+        for tag in ('OLD-ONE', 'OLD-TWO', 'OLD-THREE', 'OLD-FOUR'):
+            self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}], project='hq', rel='docs/plans/%s/%s-PLAN.md' % (tag, tag))
+        source = 'docs/plans/MIGRATE/MIGRATE-PLAN.md'
+        self.plan('DRAFT', [], project='hq', rel=source)
+        with (self.base / 'repo-hq' / source).open('a', encoding='utf-8') as plan:
+            plan.write('\n- D25 Migration: HaiveQueen plans in work (OLD-ONE, OLD-TWO, OLD-THREE, OLD-FOUR) stay paused.\n')
+        self.round()
+        rows = {row['path']: row['status'] for row in runtime.list_plans(self.conn, 'hq')}
+        for tag in ('OLD-ONE', 'OLD-TWO', 'OLD-THREE', 'OLD-FOUR'):
+            self.assertEqual(rows['docs/plans/%s/%s-PLAN.md' % (tag, tag)], 'PAUSED')
+        self.assertEqual(runtime.kv_get(self.conn, '*', 'hives-migration'), 'done')
+
     # Migration without a unique source leaves plans, locks and marker untouched.
     def test_missing_migration_list_does_not_change_state(self):
         from haivequeen import runstate
@@ -685,7 +713,8 @@ class QueenIntegrationTests(RoundCase):
         runstate.pause(self.conn)
         runstate.resume(self.conn)
         result = self.round()
-        self.assertEqual(result['skipped'], 'migration target list missing or ambiguous')
+        self.assertIsNone(result['skipped'])
+        self.assertEqual(result['projects']['hq']['report'], ['migration target list missing or ambiguous'])
         self.assertEqual(runtime.list_plans(self.conn, 'hq')[0]['status'], 'IN_PROGRESS')
         self.assertTrue(runtime.list_packages(self.conn, 'hq', rel)[0]['locked'])
         self.assertEqual(runtime.kv_get(self.conn, '*', 'hives-migration'), 'armed')
