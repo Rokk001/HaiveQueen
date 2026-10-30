@@ -130,7 +130,8 @@ class ProcessBeePaneTests(RoundCase):
     """A Queen gets her own pane; a Bee that runs as its own process gets none and shows only as a line in its Hive (A3, D3)."""
 
     def start(self, phase):
-        """Start one agent of this phase through the real start path with the pane and the headless launch recorded; return the two call lists."""
+        """Start one agent of this phase through the real start path with the pane, the Queen hand-over and the headless launch recorded; return the two call lists
+        (a Queen is handed to the sub-terminal of her Hive: see self.queens)."""
         import os
         from unittest import mock
         from haivequeen import scheduler as sch
@@ -138,16 +139,18 @@ class ProcessBeePaneTests(RoundCase):
         env = self.env()
         os.environ.pop("BZZ_TEST_NOSTART", None)
         panes, headless = [], []
+        self.queens = []
         action = {"name": "Ada", "type": "claude", "phase": phase, "plan": REL, "package": "P1" if phase == "bee" else "", "cwd": str(self.wt), "prompt": "task", "class": "medium"}
         state = {"names": [], "busy": [], "plan_status": {sch.norm_plan(REL): "IN_PROGRESS"}, "by_path": {sch.norm_plan(REL): {"path": REL}}}
         ctx = {"env": env, "state": state, "pool": loop.Pool({"claude": 5}, 0), "report": [], "dry": False, "terminal": None, "settle": 0, "poll": 0, "tries": 1}
-        with mock.patch.object(loop, "launch_agent", lambda *a, **k: panes.append(a[3]["name"])),                 mock.patch.object(loop, "launch_headless", lambda *a, **k: headless.append(a[1]["name"]), create=True):
+        with mock.patch.object(loop, "launch_agent", lambda *a, **k: panes.append(a[3]["name"])), mock.patch.object(loop, "start_queen", lambda *a, **k: self.queens.append(a[3]["name"])), mock.patch.object(loop, "launch_headless", lambda *a, **k: headless.append(a[1]["name"]), create=True):
             loop._do_start(ctx, action, forced_pick=sch.get_provider(env.providers, "claude"))
         return panes, headless
 
     def test_queen_gets_a_pane(self):
-        """The Queen is opened in a pane of the HaiveQueen window."""
-        self.assertEqual(self.start("queen"), (["Ada"], []))
+        """The Queen gets no pane of her own: she is handed to the sub-terminal of her Hive."""
+        self.assertEqual(self.start("queen"), ([], []))
+        self.assertEqual(self.queens, ["Ada"])
 
     def test_process_bee_gets_no_pane(self):
         """A Bee process is started without a pane."""
@@ -207,8 +210,10 @@ class QueenStartTests(RoundCase):
         self.assertNotIn("Queen started", text)
 
     def test_chief_pane_is_found_as_the_loop_pane(self):
-        """The title of the loop pane is recognised as the loop pane (it keeps the QUEEN word until the update worker knows the new one)."""
+        """The title of the loop pane is recognised as the loop pane (the BEEKEEPER title; the old QUEEN title is accepted as well)."""
         self.assertTrue(loop.is_beekeeper_title(loop.queen_pane_title("m", True)))
+        self.assertIn("BEEKEEPER", loop.queen_pane_title("m", True))
+        self.assertNotIn("QUEEN", loop.queen_pane_title("m", True))
 
 
 class RunnerCrashTests(RoundCase):

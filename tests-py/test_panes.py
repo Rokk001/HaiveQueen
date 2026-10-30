@@ -71,8 +71,9 @@ class PaneLayoutTest(RoundCase):
     # Verify the Queen and subsequent agent retain the pane layout.
     def test_first_agent_splits_dashboard_next_splits_first(self):
         """The first agent pane is a split of the dashboard pane (beside it); the second agent splits the first agent pane; all panes stay open."""
-        self.round(terminal=self.term, poll=0.2, tries=100)
-        first = next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")
+        spec1 = {"name": "DUMMY-P1-work", "person": "Max", "model_long": "Claude Sonnet 5.5 medium"}   # a Queen has no agent pane any more: she runs in her Hive pane
+        loop.launch_agent(self.envs()[0], self.term, "HaiveQueen", spec1, settle=0, poll=0.2, tries=100)
+        first = self.ag("DUMMY-P1-work")
         self.assertEqual(self.term.splits, [(self.dash, "horizontal")])
         self.assertEqual(first["status"], "running")
         spec = {"name": "DUMMY-P2-work", "person": "Zed", "model_long": "Claude Sonnet 5.5 medium"}

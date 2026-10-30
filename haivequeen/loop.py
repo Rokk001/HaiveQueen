@@ -143,7 +143,7 @@ def hold_pane_lock_until_exit(timeout: float = 120.0, poll: float = 0.1) -> bool
 
 
 def first_split_target(panes) -> str:
-    """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the Queen pane, else None."""
+    """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the Beekeeper pane, else None."""
     for marker in ("job: Dashboard", "| BEEKEEPER |", "| QUEEN |"):
         for pane in panes:
             if marker in pane.title:
@@ -157,12 +157,12 @@ def is_beekeeper_title(title: str) -> bool:
 
 
 def queen_pane_title(model: str, test: bool) -> str:
-    """Fixed title of the pane of the loop (the Beekeeper). It still says QUEEN: the self-update worker that is running while this version is installed checks for that title; the rename to BEEKEEPER follows in the next update."""
-    return pane_title("all projects", "QUEEN", "Queen", model, test)
+    """Fixed title of the pane of the loop (the Beekeeper); is_beekeeper_title also accepts the old QUEEN title of panes opened before the rename."""
+    return pane_title("all projects", "BEEKEEPER", "Beekeeper", model, test)
 
 
 def close_leftover_panes(term, window: str) -> list:
-    """Close the Queen and Overview panes a previous start left in `window` (the loop ended, the dashboard never does) and return their ids.
+    """Close the Beekeeper and Overview panes a previous start left in `window` (the loop ended, the dashboard never does) and return their ids.
     Without this a new start opens a second tab next to the old one. Agent panes are never touched: only these two fixed titles match."""
     closed = []
     for p in term.list_panes(window):
@@ -173,8 +173,8 @@ def close_leftover_panes(term, window: str) -> list:
 
 
 def open_session_panes(term, window: str, title: str, boot: list, dash=None) -> list:
-    """Open the Queen pane running `boot` and, when `dash` is given, the dashboard pane below it; return the pane ids. The caller holds pane.lock.
-    Old Queen and Overview panes go first. Panes of running agents that are still open keep their tab and the Queen joins it: a new tab would split the one window in two."""
+    """Open the Beekeeper pane running `boot` and, when `dash` is given, the dashboard pane below it; return the pane ids. The caller holds pane.lock.
+    Old Beekeeper and Overview panes go first. Panes of running agents that are still open keep their tab and the Beekeeper joins it: a new tab would split the one window in two."""
     close_leftover_panes(term, window)
     stay = [p for p in term.list_panes(window) if p.alive]
     if stay:
@@ -188,7 +188,7 @@ def open_session_panes(term, window: str, title: str, boot: list, dash=None) -> 
 
 
 def close_session_panes(conn, term, window: str) -> list:
-    """Close the Overview pane, every agent pane whose agent has ended and, last, the Queen pane of `window`; return the ids.
+    """Close the Overview pane, every agent pane whose agent has ended and, last, the Beekeeper pane of `window`; return the ids.
     A pane of an agent that still runs is never closed."""
     closed, queen = [], []
     for p in term.list_panes(window):
@@ -200,6 +200,12 @@ def close_session_panes(conn, term, window: str) -> list:
             closed.append(p.id)
         elif is_beekeeper_title(p.title):
             queen.append(p)
+        elif is_hive_title(p.title):   # the pane of a living Hive stays, one of a finished Hive goes
+            row = db.rows(conn, "SELECT plan_path,state FROM hives WHERE project=?", (parts[1],))
+            row = [r for r in row if Path(r["plan_path"]).stem == parts[3][len("job: "):]]
+            if not row or all(r["state"] == "done" for r in row):
+                term.close_pane(p.id)
+                closed.append(p.id)
         elif len(parts) >= 4 and parts[2].startswith("Agent ") and parts[3].startswith("job: "):
             agent = runtime.get_agent(conn, parts[1], parts[3][len("job: "):])
             if agent is None or agent["status"] not in runtime.ACTIVE_STATUSES:
@@ -413,6 +419,61 @@ def launch_agent(env, terminal, window: str, spec: dict, settle: float = 3.0, po
             env.log("pane of %s did not start within %d s, launching it again" % (spec["name"], int(poll * tries)))
             live = [p for p in terminal.list_panes(window) if p.alive]
             pane_id = open_pane(" (second launch)")
+    return pane_id
+
+
+def hive_pane_title(project: str, plan: str, test: bool) -> str:
+    """Title of the sub-terminal of one Hive: the generic pane title with who "Hive" and the plan file stem as job."""
+    return pane_title(project, "Hive", Path(plan).stem, "-", test)
+
+
+def is_hive_title(title: str) -> bool:
+    """True for the title of a Hive sub-terminal."""
+    parts = title.split(" | ")
+    return len(parts) >= 4 and parts[2] == "Hive" and parts[3].startswith("job: ")
+
+
+def hive_argv(env, plan: str) -> list:
+    """Command of the Hive sub-terminal: python -m haivequeen.hivepane for this project and plan (started through the same small bootstrap as the runner)."""
+    boot = "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.hivepane import main;sys.exit(main(sys.argv[2:]))"
+    return [osplat.python_executable(), "-c", boot, str(TOOLS_DIR), "--project", env.name, "--plan", plan] + forward_env_args()
+
+
+def ensure_hive_pane(env, terminal, window: str, plan: str) -> str:
+    """Return the id of the live pane of this Hive; open it when there is none (beside the newest Hive pane, the first one beside the dashboard).
+    A sub-terminal exists as long as its Hive lives, also when no Queen runs. Opening a pane never brings the window to the front."""
+    from . import hives
+    title = hive_pane_title(env.name, plan, is_test_runtime())
+    with pane_lock():
+        try:
+            live = [p for p in terminal.list_panes(window) if p.alive]
+        except TerminalError:
+            live = []
+        for p in live:
+            if p.title == title:
+                return p.id
+        hive_panes = [p for p in live if is_hive_title(p.title)]
+        row = hives.get(env.conn, env.name, plan) or {}
+        colour = row.get("colour") or env.colour
+        command = hive_argv(env, plan)
+        name = "%s__hive__%s" % (env.name, Path(plan).stem)
+        if not live:
+            env.log("pane of Hive %s: no live pane to split, opens the window" % Path(plan).stem)
+            return terminal.open_window(window, title, command, colour, name)
+        target = hive_panes[-1].id if hive_panes else first_split_target(live)
+        direction = "vertical" if len(hive_panes) % 2 == 0 and hive_panes else "horizontal"
+        env.log("pane of Hive %s: splits %s (%s)" % (Path(plan).stem, target or "newest", direction))
+        return terminal.split_pane(window, title, colour, command, direction, 0.5, target, name)
+
+
+def start_queen(env, terminal, window: str, spec: dict) -> str:
+    """Hand a new Queen to the sub-terminal of its Hive: write launch.json (the runner command) into the run folder, make sure the Hive pane
+    exists and point the agent row at it. The pane starts the runner; nothing waits for its pid here. Returns the pane id."""
+    folder = env.run_dir(spec["name"])
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "launch.json").write_text(json.dumps({"argv": runner_argv(env, spec)}), encoding="utf-8")
+    pane_id = ensure_hive_pane(env, terminal, window, spec["plan"])
+    env.update_agent(spec["name"], {"pane_id": pane_id, "paneClosed": False})
     return pane_id
 
 
@@ -751,6 +812,9 @@ def _do_start(c, a, forced_pick=None) -> int:
                 "prompt_file": str(pf), "person": ident["Person"], "model_long": sch.model_long(protocol, cm["Model"], cm["Effort"])}
         if phase == "bee":   # D3: a Bee has no pane of its own, it shows as a line in the frame of its Hive
             launch_headless(env, spec)
+        elif phase == "queen":   # a Queen runs inside the sub-terminal of its Hive, one after the other
+            term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
+            start_queen(env, term, env.settings.get("window", "HaiveQueen"), spec)
         else:
             term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
             launch_agent(env, term, env.settings.get("window", "HaiveQueen"), spec, c["settle"], c["poll"], c["tries"])
@@ -771,7 +835,7 @@ def _do_start(c, a, forced_pick=None) -> int:
     return 1
 
 
-# ---- orchestrator pane (QUEEN): fixed header and one line per event ----
+# ---- orchestrator pane (BEEKEEPER): fixed header and one line per event ----
 
 ESC = "\x1b"
 SGR = {"Cyan": "1;36", "Gray": "90", "White": "97", "Green": "32", "Red": "31", "Yellow": "33"}
@@ -925,7 +989,7 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui:
             lock_file().unlink()
         except OSError:
             pass
-        if stop_flag().exists():   # `bzz stop`: the loop has ended, so the Overview pane and the panes of ended agents go; the Queen pane last
+        if stop_flag().exists():   # `bzz stop`: the loop has ended, so the Overview pane and the panes of ended agents go; the Beekeeper pane last
             close_panes_after_stop(conn)
 
 
@@ -1021,7 +1085,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
 # ---- command line: bzz start / bzz stop ----
 
 def start_boot_command(args) -> list:
-    """Command line of the Queen pane: `start --foreground` with the terminal, --rounds and --round-minutes of this call (so a limited run ends after its rounds)."""
+    """Command line of the Beekeeper pane: `start --foreground` with the terminal, --rounds and --round-minutes of this call (so a limited run ends after its rounds)."""
     cmd = [osplat.python_executable(), str(TOOLS_DIR / "haivequeen" / "cli.py"), "start", "--foreground"]
     if args.terminal:
         cmd += ["--terminal", args.terminal]
