@@ -147,7 +147,7 @@ def ended_without_work(env, agent):
     if not cwd or not since or not Path(cwd).is_dir():
         return False
     try:
-        result = subprocess.run(['git', '-C', str(cwd), 'log', '-1', '--since=' + since, '--format=%H'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30)
+        result = subprocess.run(['git', '-C', str(cwd), 'log', '--all', '-1', '--since=' + since, '--format=%H'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30)
     except (OSError, subprocess.SubprocessError):
         return False
     return result.returncode == 0 and not result.stdout.strip()

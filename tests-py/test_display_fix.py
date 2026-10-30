@@ -207,5 +207,58 @@ class QueenOrderTest(PlacementCase):
         self.assertNotIn("Register your own branch with bzz ready, then", text)
 
 
+class QueenEndRuleTest(unittest.TestCase):
+    """A Queen ends only when the plan is integrated, only owner questions remain, or the Beekeeper asked for a handoff."""
+
+    def test_the_queen_order_names_the_three_ways_to_end(self):
+        """The Queen instructions say that she works through all open packages in one run and list the only three reasons to end."""
+        from haivequeen import bees
+        text = bees.queen_instructions("medium", 3, 3, 300000)
+        self.assertIn("You end only when", text)
+        for reason in ("integrated", "WAITING_FOR_OWNER", "HANDOFF"):
+            self.assertIn(reason, text[text.index("You end only when"):])
+        self.assertIn("never end after an intermediate step", text)
+        self.assertIn("wins over any rule", text[text.index("never end after an intermediate step"):])
+
+
+class EndedWithoutWorkTest(unittest.TestCase):
+    """K2 looks for new commits in the repository of the Queen, in every worktree and branch, not only in her start folder."""
+
+    def git(self, cwd, *args, date=None):
+        """Run git in `cwd` with a fixed identity and an optional commit date."""
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        if date:
+            env["GIT_COMMITTER_DATE"] = env["GIT_AUTHOR_DATE"] = date
+        import subprocess
+        subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True)
+
+    def test_a_commit_in_another_worktree_counts_as_work(self):
+        """The Queen started in the plan worktree; her commit in a second worktree of the same repository means she did work."""
+        with tempfile.TemporaryDirectory() as tmp:
+            main, other = Path(tmp) / "main", Path(tmp) / "other"
+            main.mkdir()
+            self.git(main, "init", "-q")
+            (main / "a.txt").write_text("a", encoding="utf-8")
+            self.git(main, "add", "a.txt")
+            self.git(main, "commit", "-q", "-m", "old", date="2020-01-01T00:00:00")
+            self.git(main, "worktree", "add", "-q", "-b", "work3", str(other))
+            (other / "b.txt").write_text("b", encoding="utf-8")
+            self.git(other, "add", "b.txt")
+            self.git(other, "commit", "-q", "-m", "new work")
+            run = Path(tmp) / "run"
+            run.mkdir()
+
+            class Env:
+                """Just enough of an environment: the run folder of an agent."""
+                def run_dir(self, name):
+                    return run
+
+            agent = {"name": "Ada", "cwd": str(main), "started_at": "2021-01-01T00:00:00"}
+            self.assertFalse(hives.ended_without_work(Env(), agent))
+            from datetime import datetime, timedelta
+            tomorrow = (datetime.now() + timedelta(days=1)).isoformat(timespec="seconds")
+            self.assertTrue(hives.ended_without_work(Env(), dict(agent, started_at=tomorrow)))   # nothing is newer than tomorrow
+
+
 if __name__ == "__main__":
     unittest.main()
