@@ -26,9 +26,9 @@ class QueenInstructionTests(unittest.TestCase):
         self.assertIn("never end silently", text)
 
     def test_owner_only_points_do_not_count_as_open(self):
-        """Points only the owner can check in the game, and points the owner set aside in a decision, are not counted; this wins over a project or Codex rule."""
+        """Points only the owner can check, and points the owner set aside in a decision, are not counted; this wins over a project or Codex rule."""
         text = self.text()
-        self.assertIn("only the owner can check in the game", text)
+        self.assertIn("only the owner can check", text)
         self.assertIn("owner has set aside", text)
         self.assertIn("wins over any project rule", text)
 
