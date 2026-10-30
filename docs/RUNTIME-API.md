@@ -31,7 +31,7 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 | `nofollow list` / `add` / `remove` | `--project [--key]` | array of keys / `{ok}` / `{deleted}`; keys are stored in lower case |
 | `build add` | `--project --jobs [--host] [--free-start-mb] [--free-min-mb] [--per-job-mb] [--duration-s]` | `{ok}` |
 | `build max-per-job` | `--project [--host]` | `{per_job_mb}` highest value of this host and project, or `null` |
-| `usage add` | `[--project --provider --model --tokens-in --tokens-out --kind --trigger --context --duration-s --actions --error --ts]` | `{ok}`; `kind` is for example `brain` or `agent` |
+| `usage add` | `[--project --provider --model --tokens-in --tokens-out --kind --trigger --context --duration-s --actions --error --ts]` | `{ok}`; `kind` describes the recorded usage |
 | `usage list` | `[--kind] [--project] [--since <iso>] [--limit N]` | rows oldest first (with `--limit`: the newest N) |
 | `plans sync` | `--project [--workspace] [--done id,id]` | `{plans, startable}`; reads the plan files (globs from the project settings) into `plans`/`packages`, keeps phase and lock, `startable` follows rule 11 and skips locked packages |
 | `plans list` | `[--project]` | plan rows |
@@ -44,10 +44,6 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 | `decisions list` | `[--project] [--plan] [--item] [--all]` | decision rows; only `active` ones unless `--all` (status values: `active`, `rule`, `superseded`) |
 | `decisions add` | `--project --source owner\|coordinator\|auto --text [--plan] [--item]` | `{ok, id}` |
 | `decisions update` | `<id> [--plan] [--item] [--status active\|rule\|superseded]` | `{ok, decision}` |
-| `triage list` | `--project` | locked packages with open points and no running triage agent (`phase` `triage`): `[{plan, id, title, lock_reason, points}]`; points are the lines of the lock reason (`item: text`, else `pN`) without a decision or open question |
-| `triage prompt` | `--project --plan --package [--python]` | `{prompt, points}`; prompt for the triage agent (class medium): technical points go to `triage decide`, game/balance points to `triage ask`, in doubt game/balance |
-| `triage decide` | `--project --plan --package --item --text --reason --source` | `{ok, id, unlocked, remaining}`; writes a decision with source `auto` (text carries reason and source) and unlocks the package after the last point |
-| `triage ask` | `--project --plan --package --item --question [--recommendation]` | `{ok, question_id, answered_by: owner, locked: true}`; the package stays locked, unlocking after `answer` is the routine's job |
 | `pause` / `resume` / `drain` | none | the run state `{state, since, running_agents}`; see "Run state" below |
 | `run-state` | none | `{state, since, running_agents}`; also settles a finished drain |
 | `starts-allowed` | none | `{allowed, state}`; the round asks this before every agent start |

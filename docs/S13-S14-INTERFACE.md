@@ -79,7 +79,7 @@ Environment: `BZZ_DATA_DIR` / `BZZ_CONFIG_DIR` as for every haivequeen process. 
 - Run folder `<runs-dir>/<name>/`: `events.jsonl` (raw stream), `stderr.txt`, `milestones.txt` (`colour<TAB>HH:MM text`), `final.txt` (final report), `rules.md` (Claude: rules of the phase), `build-samples.txt` (integrate and release), `HANDOFF` (flag file written once when the context reaches 300000 tokens; the scheduler's `Set-HandoffFlags` equivalent writes the same file).
 - Events: `warning` (exit code after a finished task, row update failures), `build` (build start), `rounds` (build measurement line), all with `agent`.
 - `kv` project `*`, key `usage-claude`: `{"saved", "fiveHour", "sevenDay"}` from `rate_limit_event`.
-- `build_measurements`: one row per integrate/release agent (jobs, free RAM at start and lowest, use per job, duration).
+- `build_measurements`: one row per measured integration (jobs, free RAM at start and lowest, use per job, duration).
 
 ## Build jobs
 
