@@ -976,7 +976,25 @@ def main(argv=None):
             os.environ[key] = value
     if a.wrap:
         return pane_wrap(a, [x for x in argv if x != "--wrap"])
-    return run_agent(a)
+    try:
+        return run_agent(a)
+    except Exception as exc:   # a runner that dies before its first row write must leave its reason behind, not vanish with its pane
+        import traceback
+        text = traceback.format_exc()
+        folder = (Path(a.runs_dir) if a.runs_dir else osplat.runs_dir()) / a.name
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "runner-error.txt").write_text(text, encoding="utf-8")
+            conn = db.connect(config.db_path())
+            try:
+                runtime.upsert_agent(conn, a.project, a.name,
+                                     {"status": "failed", "endedAt": db.now(), "exitCode": 98, "lastLine": short("runner error: " + str(exc))})
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        sys.stderr.write(text)
+        return 98
 
 
 if __name__ == "__main__":

@@ -172,5 +172,64 @@ class DeadBrainCodeTests(RoundCase):
         self.assertNotIn("brain", text.lower())
 
 
+class QueenStartTests(RoundCase):
+    """Queens start in a pane with a short female name; the Beekeeper is never called Queen (A2, A3, D1)."""
+
+    def test_runner_command_has_no_empty_argument(self):
+        """wt drops an empty argument such as --package "", so the runner died at once; the command never holds one."""
+        spec = {"name": "Ada", "provider": "claude", "protocol": "claude", "plan": REL, "package": "", "phase": "queen", "cwd": str(self.wt), "prompt_file": "p.md"}
+        argv = loop.runner_argv(self.env(), spec)
+        self.assertNotIn("", argv)
+        self.assertNotIn("--package", argv)
+
+    def test_queen_is_named_by_her_female_name(self):
+        """The agent row of a Queen carries her first name from the name list, not Queen-<n>."""
+        self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.round()
+        queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")
+        self.assertIn(queen["name"], loop.AGENT_NAMES)
+        self.assertEqual(queen["name"], queen["person"])
+
+    def test_second_queen_gets_another_name(self):
+        """Two Queens never share a name."""
+        self.plan("READY", [{"id": "P1", "title": "First"}], rel="docs/plans/dummy/DUMMY2-PLAN.md")
+        self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.round()
+        names = [a["name"] for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen"]
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_loop_start_names_the_beekeeper(self):
+        """The loop start line says Beekeeper, not Queen."""
+        loop.run_loop(self.conn, self.machine, rounds=1, sleep=lambda s: None, round_kwargs={"free_ram": lambda: 16.0, "settle": 0})
+        text = (runtime.mirror_dir("testproj") / runtime.MIRRORS["events"]).read_text(encoding="utf-8")
+        self.assertIn("Beekeeper started (round every", text)
+        self.assertNotIn("Queen started", text)
+
+    def test_chief_pane_is_titled_beekeeper(self):
+        """The pane of the loop is the Beekeeper's."""
+        title = loop.queen_pane_title("m", True)
+        self.assertIn("BEEKEEPER", title)
+        self.assertNotIn("QUEEN", title)
+
+
+class RunnerCrashTests(RoundCase):
+    """A runner that crashes before its first row write leaves its reason behind instead of vanishing with its pane."""
+
+    def test_crash_is_written_to_the_run_folder_and_the_row(self):
+        """The traceback goes to runner-error.txt and the agent row is failed with the reason."""
+        from unittest import mock
+        from haivequeen import agent_runner
+        self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
+        self.agent("Ada", phase="queen", status="starting")
+        runs = self.base / "data" / "runs" / "testproj"
+        argv = ["--project", "testproj", "--name", "Ada", "--provider", "claude", "--cwd", str(self.wt), "--prompt-file", "p.md", "--runs-dir", str(runs)]
+        with mock.patch.object(agent_runner, "run_agent", side_effect=ValueError("boom")):
+            self.assertNotEqual(agent_runner.main(argv), 0)
+        self.assertIn("boom", (runs / "Ada" / "runner-error.txt").read_text(encoding="utf-8"))
+        row = runtime.get_agent(self.conn, "testproj", "Ada")
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("boom", row["last_line"])
+
+
 if __name__ == "__main__":
     unittest.main()
