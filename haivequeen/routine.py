@@ -1084,11 +1084,15 @@ def get_routine(env, ctx: dict) -> dict:
                 vkey = "verify:" + st["Verify"]["name"]
                 # A verify that was handled while a dependency was open is put to the brain once more when all dependencies are done
                 # (nothing else wakes such a package).
+                vtext = final_tail(env, str(st["Verify"]["name"]))
                 if vkey in handled and k["depends"] and all(d in stages and stages[d]["Stage"] in ("verified", "stateDone") for d in k["depends"]):
                     vkey += ":deps"
+                    # The verify text may still say the dependency is missing: tell the brain that it is done now.
+                    vtext += "\n\nAll dependencies of package %s are done now (%s); the findings above may be older than that. " \
+                             "If the package is still incomplete, start its follow-up work." % (k["id"], ", ".join(k["depends"]))
                 if vkey not in handled:
                     events.append({"type": "verify_open", "key": vkey, "plan": rel, "package": k["id"],
-                                   "agent": str(st["Verify"]["name"]), "text": final_tail(env, str(st["Verify"]["name"]))})
+                                   "agent": str(st["Verify"]["name"]), "text": vtext})
         def deps_open(p):
             """True when a dependency of the package is not verified or done yet (such a package gets no verify)."""
             return any(d not in stages or stages[d]["Stage"] not in ("verified", "stateDone") for d in p["depends"])

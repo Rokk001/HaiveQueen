@@ -39,6 +39,19 @@ class DependencyRewakeTest(RoundCase):
         self.round(self.note)
         self.assertEqual(self.calls(), before + 1, "asked only once")
 
+    def test_the_question_says_the_dependencies_are_done(self):
+        """The repeated question tells the brain that the dependencies are done now, because the verify text may still say they are not."""
+        self.finish_p1()
+        prompts = []
+
+        def runner(argv, prompt, cwd, timeout):
+            """Record the brain prompt and answer nothing."""
+            prompts.append(prompt)
+            return 1, "", "no real brain in tests", False
+        self.round(brain_runner=runner)
+        self.assertTrue(prompts)
+        self.assertIn("All dependencies of package P2 are done now", prompts[0])
+
     def test_dependency_still_open_asks_nothing(self):
         """While P1 is not verified the handled verify of P2 stays quiet."""
         before = self.calls()
