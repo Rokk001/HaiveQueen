@@ -614,6 +614,66 @@ class QueenIntegrationTests(RoundCase):
         self.assertEqual(len(targets), 4)
         self.assertTrue(all(row['status'] == 'PAUSED' for row in targets))
 
+    # An unavailable registered project must still migrate when it becomes available.
+    def test_unavailable_hq_is_migrated_when_workspace_returns(self):
+        from haivequeen import runstate
+        hq = self.add_project('hq')
+        targets = ('OLD-ONE', 'OLD-TWO', 'OLD-THREE', 'OLD-FOUR')
+        for tag in targets:
+            rel = 'docs/plans/%s/%s-PLAN.md' % (tag, tag)
+            self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}], project='hq', rel=rel)
+            self.agent('old-' + tag, project='hq', plan_path=rel, phase='work', status='done')
+        source = 'docs/plans/MIGRATE/MIGRATE-PLAN.md'
+        self.plan('DRAFT', [], project='hq', rel=source)
+        with (hq / source).open('a', encoding='utf-8') as plan:
+            plan.write('\n- D25 Migration: HaiveQueen plans in work (OLD-ONE, OLD-TWO, OLD-THREE, OLD-FOUR) stay paused.\n')
+        self.conn.execute('UPDATE projects SET workspace=? WHERE name=?', (str(self.base / 'unavailable'), 'hq'))
+        runstate.pause(self.conn)
+        runstate.resume(self.conn)
+        self.round()
+        self.assertEqual(runtime.kv_get(self.conn, '*', 'hives-migration'), 'armed')
+        self.conn.execute('UPDATE projects SET workspace=? WHERE name=?', (str(hq), 'hq'))
+        self.round()
+        rows = {row['path']: row['status'] for row in runtime.list_plans(self.conn, 'hq')}
+        for tag in targets:
+            self.assertEqual(rows['docs/plans/%s/%s-PLAN.md' % (tag, tag)], 'PAUSED')
+        self.assertEqual(runtime.kv_get(self.conn, '*', 'hives-migration'), 'done')
+
+    # Available projects migrate only once while another registered workspace is unavailable.
+    def test_available_project_migration_is_not_repeated_while_hq_is_missing(self):
+        from haivequeen import runstate
+        from bzztest import REL
+        self.add_project('hq')
+        self.conn.execute('UPDATE projects SET workspace=? WHERE name=?', (str(self.base / 'unavailable'), 'hq'))
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
+        runtime.set_package(self.conn, 'testproj', REL, 'P1', locked=True, reason='old lock')
+        runstate.pause(self.conn)
+        runstate.resume(self.conn)
+        self.round()
+        self.assertFalse(runtime.list_packages(self.conn, 'testproj', REL)[0]['locked'])
+        self.assertEqual(runtime.kv_get(self.conn, '*', 'hives-migration'), 'armed')
+        runtime.set_package(self.conn, 'testproj', REL, 'P1', locked=True, reason='new lock')
+        self.round()
+        self.assertTrue(runtime.list_packages(self.conn, 'testproj', REL)[0]['locked'])
+
+    # A missing non-tool project also has its old locks lifted on its return.
+    def test_unavailable_other_project_receives_deferred_lock_migration(self):
+        from haivequeen import runstate
+        other = self.add_project('otherproject')
+        rel = 'docs/plans/OLD/OLD-PLAN.md'
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}], project='otherproject', rel=rel)
+        runtime.set_package(self.conn, 'otherproject', rel, 'P1', locked=True, reason='old lock')
+        self.conn.execute('UPDATE projects SET workspace=? WHERE name=?', (str(self.base / 'unavailable'), 'otherproject'))
+        runstate.pause(self.conn)
+        runstate.resume(self.conn)
+        self.round()
+        self.assertEqual(runtime.kv_get(self.conn, '*', 'hives-migration'), 'armed')
+        self.assertTrue(runtime.list_packages(self.conn, 'otherproject', rel)[0]['locked'])
+        self.conn.execute('UPDATE projects SET workspace=? WHERE name=?', (str(other), 'otherproject'))
+        self.round()
+        self.assertFalse(runtime.list_packages(self.conn, 'otherproject', rel)[0]['locked'])
+        self.assertEqual(runtime.kv_get(self.conn, '*', 'hives-migration'), 'done')
+
     # Migration without a unique source leaves plans, locks and marker untouched.
     def test_missing_migration_list_does_not_change_state(self):
         from haivequeen import runstate
