@@ -1,12 +1,12 @@
-"""Play test after integration: a Hive whose plan has points only the owner can check stays open in the state 'playtest' (HQ-DISPLAY K4)."""
+"""Owner check after integration: a Hive whose plan has points only the owner can check stays open in the state 'owner_check' (HQ-DISPLAY K4)."""
 from bzztest import REL, RoundCase
 from haivequeen import bees, db, hives, plans, runtime
 
 OTHER = "docs/plans/other/OTHER-PLAN.md"
 
 
-class PlaytestTests(RoundCase):
-    """The play test question keeps an integrated Hive open; the owner's answer closes the plan or sends the next Queen to fix exactly that."""
+class OwnerCheckTests(RoundCase):
+    """The owner check question keeps an integrated Hive open; the owner's answer closes the plan or sends the next Queen to fix exactly that."""
 
     def finish(self, name, final="", status="done", project="testproj"):
         """Simulate a finished runner, including its process exit."""
@@ -14,14 +14,14 @@ class PlaytestTests(RoundCase):
         runtime.upsert_agent(self.conn, project, name, {"pid": None})
 
     def integrated_hive_with_question(self):
-        """Start the Queen, mark her branch integrated, let her ask the play test question and end; return the question id."""
+        """Start the Queen, mark her branch integrated, let her ask the owner check question and end; return the question id."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         queen = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] in ("running", "starting")][0]
         ready = db.add_ready(self.conn, "testproj", "branch", "abc", REL, "")
         self.conn.execute("UPDATE hives SET ready_id=? WHERE project='testproj' AND plan_path=?", (ready["id"], REL))
         runtime.queue_upsert(self.conn, "testproj", "branch", status="integrated")
-        qid = db.add_question(self.conn, "testproj", REL, "playtest", "Please check the courtyard light in the game.", "")
+        qid = db.add_question(self.conn, "testproj", REL, "owner-check", "Please check the courtyard light.", "")
         self.finish(queen["name"], final="Integrated and deployed. WAITING_FOR_OWNER")
         self.round()
         return qid
@@ -35,10 +35,10 @@ class PlaytestTests(RoundCase):
         return [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen"]
 
     def test_open_question_keeps_the_hive_open(self):
-        """After integration the plan is not DONE while the play test question is open; the Hive waits in 'playtest' and no Queen starts."""
+        """After integration the plan is not DONE while the owner check question is open; the Hive waits in 'owner_check' and no Queen starts."""
         self.integrated_hive_with_question()
         self.assertNotEqual(self.status(), "DONE")
-        self.assertEqual(hives.get(self.conn, "testproj", REL)["state"], "playtest")
+        self.assertEqual(hives.get(self.conn, "testproj", REL)["state"], "owner_check")
         self.assertEqual(len(self.queens()), 1)
 
     def test_ok_answer_makes_the_plan_done(self):
@@ -60,8 +60,8 @@ class PlaytestTests(RoundCase):
         self.assertNotEqual(self.status(), "DONE")
         self.assertEqual(len(self.queens()), 2)
 
-    def test_playtest_does_not_count_against_the_hive_limit(self):
-        """A Hive waiting for the play test leaves its place to another plan."""
+    def test_owner_check_does_not_count_against_the_hive_limit(self):
+        """A Hive waiting for the owner check leaves its place to another plan."""
         self.machine["hives"] = 1
         self.integrated_hive_with_question()
         self.plan("READY", [{"id": "P1", "title": "Other"}], rel=OTHER, title="Other plan")
@@ -69,7 +69,7 @@ class PlaytestTests(RoundCase):
         self.assertTrue([a for a in runtime.list_agents(self.conn, "testproj", "all") if a["plan_path"] == OTHER and a["phase"] == "queen"])
 
     def test_queen_is_told_to_ask_for_the_play_test(self):
-        """The Queen instructions say how to ask for the play test after integration and deploy."""
+        """The Queen instructions say how to ask for the owner check after integration and deploy."""
         text = bees.queen_instructions("medium", 3, 3, 300000)
-        self.assertIn("--item playtest", text)
+        self.assertIn("--item owner-check", text)
         self.assertIn("after integration and deploy", text.lower())
