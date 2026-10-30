@@ -100,6 +100,45 @@ class UnfinishedEndTests(RoundCase):
         self.round()
         self.assertEqual(len(self.queens()), 2)
 
+    def ask(self, n):
+        """File `n` open owner questions for the dummy plan and return their ids."""
+        from haivequeen import db
+        return [db.add_question(self.conn, "testproj", REL, "item-%d" % i, "Question %d?" % i, "Recommendation") for i in range(n)]
+
+    def test_open_owner_questions_and_an_empty_final_report_wait_for_the_answer(self):
+        """A Queen that ends without a new commit while owner questions are open sends the Hive to 'answer' whatever her final text says; no new question is filed."""
+        ids = self.ask(3)
+        first = self.queen()
+        self.finish(first["name"], final="")
+        self.round()
+        self.assertEqual(len(self.queens()), 1)
+        hive = hives.get(self.conn, "testproj", REL)
+        self.assertEqual(hive["state"], "answer")
+        self.assertEqual(json.loads(hive["questions_json"]), ids)
+        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="open", plan=REL)), 3)
+
+    def test_a_provider_wait_does_not_hide_the_unfinished_end(self):
+        """The Queen asked for a Bee (Hive in codex_wait) and then ended without a commit while owner questions are open: no new Queen at once, the Hive waits for an answer."""
+        self.ask(2)
+        first = self.queen()
+        bees.wait_for_provider(self.conn, "testproj", REL, "codex")
+        self.finish(first["name"], final="")
+        self.round()
+        self.round()
+        self.assertEqual(len(self.queens()), 1)
+        self.assertEqual(hives.get(self.conn, "testproj", REL)["state"], "answer")
+
+    def test_a_new_answer_starts_the_next_queen_again(self):
+        """After an answer to one of the open questions the next Queen starts."""
+        from haivequeen import db
+        ids = self.ask(2)
+        first = self.queen()
+        self.finish(first["name"], final="")
+        self.round()
+        db.answer_question(self.conn, ids[0], "Count it as closed.", "owner")
+        self.round()
+        self.assertEqual(len(self.queens()), 2)
+
     def test_answer_starts_the_next_queen(self):
         """When the owner answers the automatic question, the Hive starts the next Queen."""
         from haivequeen import db
