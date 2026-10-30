@@ -798,10 +798,10 @@ def set_handoff_flags(env, agents: list) -> list:
 
     Returns [{Name, Ctx}] of the newly flagged agents.
     """
-    limit = int(env.settings.get("contextLimitTokens") or 300000)
     res = []
     for a in agents:
         ctx = a.get("ctxTokens")
+        limit = sch.context_limit(env.settings, env.providers, sch.row_provider(a), a.get("class"))   # the limit of the agent's model wins over the global one
         if a.get("status") in ACTIVE and ctx is not None and int(ctx) >= limit:
             f = env.run_dir(a["name"]) / "HANDOFF"
             if not f.exists():

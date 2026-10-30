@@ -96,7 +96,7 @@ Free Markdown below the header: the agents read it.
 
 ## Configuration
 
-Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedProviders`, provider `slots`, provider `classes`, and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. `escalateAfter` defaults to 3, and `contextLimitTokens` defaults to 300000. Project settings override machine settings except machine-wide settings. See `examples/config.example.toml` and `examples/project.example.toml`.
+Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedProviders`, provider `slots`, provider `classes`, and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. `escalateAfter` defaults to 3, and `contextLimitTokens` defaults to 300000: set it once in the machine config for all Apiaries; a project may override it, and a model entry under `[providers.classes]` may carry its own `contextLimitTokens` that wins for the Queens and Bees running with that model. Project settings override machine settings except machine-wide settings. See `examples/config.example.toml` and `examples/project.example.toml`.
 
 ## Inbox
 

@@ -297,5 +297,22 @@ class StallQuestionTests(RoundCase):
         self.assertEqual(json.loads(hives.get(self.conn, "testproj", REL)["questions_json"]), [real])
 
 
+class ApiaryWordTests(RoundCase):
+    """F11: CLI messages call a project an Apiary."""
+
+    def test_unknown_apiary_message(self):
+        """A Hive whose Apiary is not configured is reported as an unknown Apiary."""
+        import argparse
+        import contextlib
+        import io
+        from unittest import mock
+        from haivequeen import cli
+        with mock.patch.object(cli, "_resolve_hive", return_value={"project": "ghost", "plan_path": "x"}), contextlib.redirect_stdout(io.StringIO()) as buf:
+            code = cli.cmd_requeen(argparse.Namespace(hive="x", provider=None), self.conn)
+        self.assertEqual(code, 1)
+        self.assertIn("Apiary", buf.getvalue())
+        self.assertNotIn("project not found", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -530,7 +530,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 if configured_prompt:
                     integration['steps'] = sch.expand_template(str(configured_prompt), {**routine.base_values(env), 'plan': path})
                 from . import bees
-                prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), env.settings.get('contextLimitTokens', 300000))
+                prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls))
                 prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint'))} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)
                 prompt += ' Project integration configuration: ' + json.dumps(integration, ensure_ascii=False)
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
@@ -610,7 +610,8 @@ def ensure_hive_panes(conn, envs, terminal=None):
 def wake_marker(conn, envs):
     """Return a compact marker for agent exits, answers, inbox and reset deadlines."""
     from . import inbox
-    limits = {e.name: int(e.settings.get('contextLimitTokens', 300000)) for e in envs}
+    from . import scheduler as sch
+    envs_by_name = {e.name: e for e in envs}
     agents = []
     for row in runtime.list_agents(conn, None, 'active'):
         status = row.get('status')
@@ -618,7 +619,9 @@ def wake_marker(conn, envs):
             continue
         pid = row.get('pid')
         live = bool(pid and osplat.process_alive(pid))
-        context_reached = row.get('phase') == 'queen' and int(row.get('ctxTokens') or 0) >= limits.get(row['project'], 300000)
+        owner = envs_by_name.get(row['project'])
+        limit = sch.context_limit(owner.settings, owner.providers, sch.row_provider(row), row.get('class')) if owner else 300000
+        context_reached = row.get('phase') == 'queen' and int(row.get('ctxTokens') or 0) >= limit
         agents.append((row['id'], status, pid, live, context_reached))
     questions = tuple((r['id'], r['status']) for r in db.rows(conn, 'SELECT id,status FROM questions ORDER BY id'))
     hive_rows = tuple((r['project'], r['plan_path'], r['state'], r['reset_at'], r['requested_provider']) for r in db.rows(conn, 'SELECT project,plan_path,state,reset_at,requested_provider FROM hives ORDER BY project,plan_path'))
