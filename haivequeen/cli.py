@@ -91,10 +91,11 @@ def cmd_ask(args, conn) -> int:
     return 0
 
 
+# Store a note and preserve the calling agent identity.
 def cmd_note(args, conn) -> int:
     """Write a free-text note into the event history."""
     with db.transaction(conn):
-        eid = db.add_event(conn, args.project, "note", args.text)
+        eid = db.add_event(conn, args.project, "note", args.text, agent=os.environ.get("BZZ_AGENT"))
     out({"ok": True, "id": eid})
     return 0
 
@@ -249,11 +250,79 @@ def cmd_requeen(args, conn):
     return 0
 
 
+# Run a Bee or record its package attempt for the calling Queen.
+def cmd_bee(args, conn):
+    """Route and start a Bee, or record an attempt for escalation."""
+    from haivequeen import bees, scheduler
+    agent = os.environ.get("BZZ_AGENT")
+    queen = runtime.get_agent(conn, args.project, agent) if agent else None
+    if not queen or queen.get("phase") != "queen" or queen.get("status") not in ("running", "starting") or not _plan_matches(conn, args.project, queen.get("plan_path"), args.plan):
+        return fail("bee command requires the Queen of this Hive")
+    env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
+    if not env:
+        return fail("unknown project")
+    plan = queen["plan_path"]
+    if args.action == "wait":
+        provider = scheduler.get_provider(env.providers, args.provider)
+        if not provider or provider['name'] in env.settings.get('excludedProviders', []):
+            return fail("provider is unavailable or excluded")
+        from haivequeen import usage
+        windows = usage.limit_windows(conn, provider)
+        resets = [w['reset_epoch'] for w in windows if w['used_pct'] >= 100 and w.get('reset_epoch')]
+        reset_at = datetime.fromtimestamp(max(resets)).isoformat(timespec='seconds') if resets else None
+        bees.wait_for_provider(conn, args.project, plan, provider['name'], provider.get('protocol') == 'codex', reset_at)
+        out({"ok": True})
+        return 0
+    if args.action == "result":
+        if not args.attempt or not args.outcome:
+            return fail("result requires an attempt name and outcome")
+        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt)
+        next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
+                                     env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
+        out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls})
+        return 0
+    if not args.name or not args.task or not args.cwd:
+        return fail("start requires a Bee name, task and worktree")
+    try:
+        steps = json.loads(args.steps)
+        paths = json.loads(args.paths)
+        rules = json.loads(args.rules)
+        if not all(isinstance(x, list) and all(isinstance(v, str) for v in x) for x in (steps, paths, rules)) or not steps:
+            return fail("steps, paths and rules must be string lists and steps must not be empty")
+        started = bees.start_process(env, plan, args.package, args.name, args.cls, args.task, steps, paths, rules, cwd=args.cwd, no_subagents=args.no_subagents, parallel=args.parallel)
+    except (ValueError, TypeError) as exc:
+        return fail(str(exc))
+    if isinstance(started, dict):
+        out({"ok": True, "started": False, **started})
+        return 0
+    bees.ensure_attempts(conn)
+    assignment = conn.execute("SELECT provider FROM bee_assignments WHERE project=? AND plan_path=? AND package=?", (args.project, plan, args.package)).fetchone() if not started else None
+    out({"ok": bool(started), "started": bool(started), "kind": "process" if started else "waiting", "provider": assignment[0] if assignment else None})
+    return 0 if started else 1
+
+
 # Build the argument parser with all commands.
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all commands."""
     ap = argparse.ArgumentParser(prog="bzz")
     sub = ap.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("bee")
+    p.add_argument("action", choices=["start", "result", "wait"])
+    for field in ("project", "plan", "package", "class"):
+        p.add_argument("--" + field, required=True, dest="cls" if field == "class" else field)
+    p.add_argument("--name", default="")
+    p.add_argument("--provider", default="")
+    p.add_argument("--task", default="")
+    p.add_argument("--steps", default="[]")
+    p.add_argument("--paths", default="[]")
+    p.add_argument("--rules", default="[]")
+    p.add_argument("--cwd", default="")
+    p.add_argument("--outcome", choices=["failed", "interrupted", "succeeded"])
+    p.add_argument("--attempt", default="")
+    p.add_argument("--no-subagents", action="store_true")
+    p.add_argument("--parallel", action="store_true")
+    p.set_defaults(fn=cmd_bee)
 
     p = sub.add_parser("integration")
     p.add_argument("action", choices=["acquire", "release"])

@@ -955,7 +955,9 @@ def _do_start(c, a, forced_pick=None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     pf = run_dir / "prompt.md"
     hf = run_dir / "HANDOFF"
-    if phase == "queen":
+    if phase == "bee":
+        hdr = "You are a Bee. Follow only the task and rules provided below.\n\nTASK\n\n"
+    elif phase == "queen":
         rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"
         hdr = ("You are the Queen of this Hive. Work the plan, preserve its state, and use the project work rules (%s). "
                "Before integration follow the project's integration rules.\n\nTASK\n\n" % rules_doc)
@@ -975,6 +977,8 @@ def _do_start(c, a, forced_pick=None) -> int:
                    "wait for running Bees, finish your current step, record the handoff in the plan state and end." % hf)
     pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff, encoding="utf-8")
     ident = agent_identity(env.conn)
+    if phase == "bee":
+        ident["Person"] = str(a["name"])
     cls = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
     cm = sch.class_model(env.providers, prov, cls)
     bundle = [str(b) for b in a.get("bundle") or []]

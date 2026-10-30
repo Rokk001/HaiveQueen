@@ -937,7 +937,7 @@ class HiveRoundTests(RoundCase):
         self.round()
         original = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"]
         self.assertEqual(len(original), 1)
-        with patch.object(cli.config, "load_config", return_value=self.machine), patch.object(hives.osplat, "kill_process_tree", return_value=True), patch.object(loop, "ram_gb", return_value=16), contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(cli.config, "load_config", return_value=self.machine), patch.object(hives.osplat, "kill_process_tree", return_value=True), patch.object(loop, "ram_gb", return_value=16), patch("haivequeen.bees.valid_queen_worktree", return_value=True), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(cli.cmd_requeen(argparse.Namespace(hive=REL, provider=None), self.conn), 0)
         active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"]
         self.assertEqual(len(active), 1)
@@ -1396,7 +1396,9 @@ class HiveRoundTests(RoundCase):
             for row in runtime.list_agents(self.conn, "testproj", "active"):
                 if row["phase"] == "queen" and row["status"] in ("running", "starting"):
                     self.finish(row["name"], final="Handoff")
-        loop.run_loop(self.conn, self.machine, rounds=2, round_minutes=10, sleep=sleeper,
-                      round_kwargs={"free_ram": lambda: 16.0, "settle": 0})
+        from unittest.mock import patch
+        with patch("haivequeen.bees.prepare_queen_worktree", return_value=str(self.wt)), patch("haivequeen.bees.valid_queen_worktree", side_effect=lambda env, path: str(path) != str(env.code_repo)):
+            loop.run_loop(self.conn, self.machine, rounds=2, round_minutes=10, sleep=sleeper,
+                          round_kwargs={"free_ram": lambda: 16.0, "settle": 0})
         queens = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen"]
         self.assertEqual(len(queens), 2)

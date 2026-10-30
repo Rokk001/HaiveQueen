@@ -158,7 +158,9 @@ class RoundCase(unittest.TestCase):
         kw.setdefault("free_ram", lambda: 16.0)
         kw.setdefault("settle", 0)
         kw.setdefault("brain_runner", lambda argv, prompt, cwd, timeout: (1, "", "no real brain in tests", False))   # a real model is never called
-        return loop.run_round(self.conn, self.machine, self.envs(), brain_answer=answer, **kw)
+        from unittest import mock
+        with mock.patch("haivequeen.bees.prepare_queen_worktree", return_value=str(self.wt)), mock.patch("haivequeen.bees.valid_queen_worktree", side_effect=lambda env, path: str(path) != str(env.code_repo)), mock.patch("haivequeen.bees.foreign_plan_branch", return_value=False):
+            return loop.run_round(self.conn, self.machine, self.envs(), brain_answer=answer, **kw)
 
     def calls(self):
         """Number of brain calls recorded so far."""
