@@ -131,22 +131,61 @@ def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen
         conn.execute("UPDATE hives SET state='requeen',requested_provider=?,reset_at=NULL WHERE project=? AND plan_path=?", (provider, project, plan))
 
 
-# Pause the old tool plans and clear obsolete locks after the first resume.
+# Resolve the four named migration plans from the existing plan source.
+def migration_targets(env):
+    """Return uniquely named migration plan paths, or None when the source is unclear."""
+    import re
+    from pathlib import Path
+    rows = runtime.list_plans(env.conn, env.name)
+    pattern = re.compile(r'(?i)\b(?:HaiveQueen|HQ)\s+plans\s+in\s+work\s*\(([^)]*)\)')
+    lists = []
+    for row in rows:
+        try:
+            lines = (env.workspace / row['path']).read_text(encoding='utf-8-sig').splitlines()
+        except OSError:
+            return None
+        for line in lines:
+            if re.match(r'^\s*-\s*D25\b', line):
+                lists.extend(m.group(1) for m in pattern.finditer(line))
+    if len(lists) != 1:
+        return None
+    names = [name.strip().casefold() for name in lists[0].split(',')]
+    if len(names) != 4 or len(set(names)) != 4 or not all(names):
+        return None
+    targets = []
+    for name in names:
+        matches = [row['path'] for row in rows if re.sub(r'(?i)-plan$', '', Path(row['path']).stem).casefold() == name]
+        if len(matches) != 1:
+            return None
+        targets.append(matches[0])
+    return targets
+
+
+# Pause only the named tool plans and clear obsolete locks after the first resume.
 def migrate_once(conn, envs):
-    """Pause the old tool plans and clear obsolete locks after the first resume."""
+    """Migrate the specified plans once after resume, preserving all other plans."""
     if runtime.kv_get(conn, '*', 'hives-migration') != 'armed':
-        return
+        return True
+    targets = {}
     for env in envs:
         runtime.sync_plans(conn, env.name, str(env.workspace))
         if env.name.lower() in ('haivequeen', 'hq'):
-            for plan in runtime.list_plans(conn, env.name):
-                old_agent = conn.execute("SELECT 1 FROM agents WHERE project=? AND plan_path=? AND phase IN ('work','verify','release','integrate') LIMIT 1", (env.name, plan['path'])).fetchone()
-                if old_agent and plan['status'] == 'IN_PROGRESS':
-                    runtime.set_plan_status(conn, env.name, plan['path'], 'PAUSED', str(env.workspace))
+            legacy = conn.execute("SELECT 1 FROM agents WHERE project=? AND phase IN ('work','verify','release','integrate') LIMIT 1", (env.name,)).fetchone()
+            targets[env.name] = migration_targets(env)
+            if targets[env.name] is None and legacy:
+                env.log('migration target list is missing or ambiguous')
+                return False
+            if targets[env.name] is None:
+                targets[env.name] = []
+    for env in envs:
+        for plan in runtime.list_plans(conn, env.name):
+            if plan['path'] in targets.get(env.name, ()) and plan['status'] == 'IN_PROGRESS':
+                runtime.set_plan_status(conn, env.name, plan['path'], 'PAUSED', str(env.workspace))
         with db.transaction(conn):
             conn.execute("UPDATE packages SET locked=0,lock_reason=NULL WHERE project=?", (env.name,))
             conn.execute("DELETE FROM kv WHERE project=? AND (key LIKE 'stall:%' OR key LIKE 'planstall:%')", (env.name,))
     runtime.kv_set(conn, '*', 'hives-migration', 'done')
+    return True
 
 
 # Run one machine-wide scheduling round for Hives without a language model.
@@ -180,7 +219,9 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 loop.run_hook(env, loop._state_summary(env))
             return result
     if not dry_run:
-        migrate_once(conn, envs)
+        if not migrate_once(conn, envs):
+            result['skipped'] = 'migration target list missing or ambiguous'
+            return result
         reap_integrations(conn, alive=alive)
         wake_due(conn, db.now())
     for env in envs:
@@ -336,7 +377,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 integration = {key: env.settings.get(key) for key in ('integrationBranch', 'compileCheck', 'integratorInstructions', 'buildFlowDoc') if env.settings.get(key)}
                 configured_prompt = (env.settings.get('prompts') or {}).get('integrator')
                 if configured_prompt:
-                    integration['steps'] = sch.expand_template(str(configured_prompt), routine.base_values(env))
+                    integration['steps'] = sch.expand_template(str(configured_prompt), {**routine.base_values(env), 'plan': path})
                 from . import bees
                 prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), env.settings.get('contextLimitTokens', 300000))
                 prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint'))} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)

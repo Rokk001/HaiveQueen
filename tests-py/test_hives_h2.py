@@ -554,6 +554,82 @@ class QueenIntegrationTests(RoundCase):
             self.assertFalse(bees.start_process(self.env(), REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(self.wt)))
         self.assertIsNone(runtime.get_agent(self.conn, 'testproj', 'Ada'))
 
+    # The configured integration prompt receives this Hive's plan path.
+    def test_queen_integration_prompt_resolves_own_plan(self):
+        from bzztest import REL
+        self.machine['prompts'] = {'integrator': 'Integrate only {plan} in {project} on {integrationBranch}.'}
+        self.plan('READY', [{'id': 'P1', 'title': 'First'}])
+        self.round()
+        queen = next(a for a in runtime.list_agents(self.conn, 'testproj', 'all') if a['phase'] == 'queen')
+        prompt = (self.env().run_dir(queen['name']) / 'prompt.md').read_text(encoding='utf-8-sig')
+        self.assertIn('Integrate only %s in testproj on main.' % REL, prompt)
+        self.assertNotIn('{plan}', prompt)
+
+    # A replacement Queen receives a name different from her predecessor after a long rest.
+    def test_replacement_queen_does_not_reuse_predecessor_name_after_long_rest(self):
+        from haivequeen import hives
+        from bzztest import REL
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('old-queen', phase='queen', status='done', person='Ada', ended=180, pid=None)
+        self.round()
+        queen = next(a for a in runtime.list_agents(self.conn, 'testproj', 'all') if a['phase'] == 'queen' and a['status'] == 'running')
+        self.assertNotEqual(queen['person'], 'Ada')
+
+    # Migration pauses only the four plans explicitly listed by its source.
+    def test_migration_does_not_pause_unlisted_in_progress_plan(self):
+        from haivequeen import runstate
+        hq = self.add_project('hq')
+        targets = ('OLD-ONE', 'OLD-TWO', 'OLD-THREE', 'OLD-FOUR')
+        for tag in (*targets, 'UNRELATED'):
+            rel = 'docs/plans/%s/%s-PLAN.md' % (tag, tag)
+            self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}], project='hq', rel=rel)
+            self.agent('old-' + tag, project='hq', plan_path=rel, phase='work', status='done')
+        source = 'docs/plans/MIGRATE/MIGRATE-PLAN.md'
+        self.plan('DRAFT', [], project='hq', rel=source)
+        with (hq / source).open('a', encoding='utf-8') as plan:
+            plan.write('\n- D25 Migration: HaiveQueen plans in work (OLD-ONE, OLD-TWO, OLD-THREE, OLD-FOUR) stay paused.\n')
+        runstate.pause(self.conn)
+        runstate.resume(self.conn)
+        self.round()
+        rows = {row['path']: row['status'] for row in runtime.list_plans(self.conn, 'hq')}
+        for tag in targets:
+            self.assertEqual(rows['docs/plans/%s/%s-PLAN.md' % (tag, tag)], 'PAUSED')
+        self.assertEqual(rows['docs/plans/UNRELATED/UNRELATED-PLAN.md'], 'IN_PROGRESS')
+
+    # Explicit migration targets are paused even when old agent rows are absent.
+    def test_migration_uses_named_targets_without_agent_history(self):
+        from haivequeen import runstate
+        hq = self.add_project('hq')
+        for tag in ('OLD-ONE', 'OLD-TWO', 'OLD-THREE', 'OLD-FOUR'):
+            self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}], project='hq', rel='docs/plans/%s/%s-PLAN.md' % (tag, tag))
+        source = 'docs/plans/MIGRATE/MIGRATE-PLAN.md'
+        self.plan('DRAFT', [], project='hq', rel=source)
+        with (hq / source).open('a', encoding='utf-8') as plan:
+            plan.write('\n- D25 Migration: HaiveQueen plans in work (OLD-ONE, OLD-TWO, OLD-THREE, OLD-FOUR) stay paused.\n')
+        runstate.pause(self.conn)
+        runstate.resume(self.conn)
+        self.round()
+        targets = [row for row in runtime.list_plans(self.conn, 'hq') if '/OLD-' in row['path']]
+        self.assertEqual(len(targets), 4)
+        self.assertTrue(all(row['status'] == 'PAUSED' for row in targets))
+
+    # Migration without a unique source leaves plans, locks and marker untouched.
+    def test_missing_migration_list_does_not_change_state(self):
+        from haivequeen import runstate
+        self.add_project('hq')
+        rel = 'docs/plans/UNRELATED/UNRELATED-PLAN.md'
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}], project='hq', rel=rel)
+        self.agent('old', project='hq', plan_path=rel, phase='work', status='done')
+        runtime.set_package(self.conn, 'hq', rel, 'P1', locked=True, reason='old lock')
+        runstate.pause(self.conn)
+        runstate.resume(self.conn)
+        result = self.round()
+        self.assertEqual(result['skipped'], 'migration target list missing or ambiguous')
+        self.assertEqual(runtime.list_plans(self.conn, 'hq')[0]['status'], 'IN_PROGRESS')
+        self.assertTrue(runtime.list_packages(self.conn, 'hq', rel)[0]['locked'])
+        self.assertEqual(runtime.kv_get(self.conn, '*', 'hives-migration'), 'armed')
+
     # A Bee note identifies its Queen or its own process in the event history.
     def test_bee_note_keeps_agent_identity(self):
         from unittest import mock
