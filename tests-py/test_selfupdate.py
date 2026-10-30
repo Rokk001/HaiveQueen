@@ -428,6 +428,22 @@ class UpdateTest(SelfUpdateBase):
         self.assertEqual(git.head, OLD)
         self.assertEqual(git.words().count("start"), 2)
 
+    def test_failed_start_keeps_the_whole_error_text(self):
+        """The full output of the failed loop start reaches the note, the event log and the open question, not only its first characters."""
+        faults = self.stub_faults()
+        inner = FakeGit(self.conn, fail={"start": 1})
+        text = "Traceback " + "x" * 600 + " END-OF-ERROR"
+
+        def run(argv, cwd):
+            """Answer the loop start with a long error text, everything else like the scripted runner."""
+            code, out = inner(argv, cwd)
+            return (code, text) if "start" in argv else (code, out)
+        run.inner = inner
+        self.update(run)
+        self.assertIn("END-OF-ERROR", self.row()["note"])
+        self.assertIn("END-OF-ERROR", self.conn.execute("SELECT text FROM events WHERE kind='self-update' ORDER BY id DESC LIMIT 1").fetchone()[0])
+        self.assertIn("END-OF-ERROR", faults[0][2])
+
     def test_error_in_first_round_rolls_back(self):
         """An ERROR line of the rounds log written after the start is a failed first round."""
         faults = self.stub_faults()
