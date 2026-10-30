@@ -166,8 +166,12 @@ def migrate_once(conn, envs):
     """Migrate the specified plans once after resume, preserving all other plans."""
     if runtime.kv_get(conn, '*', 'hives-migration') != 'armed':
         return True
+    registered = {row['name'] for row in db.rows(conn, "SELECT name FROM projects")}
+    loaded = {env.name for env in envs}
+    missing = registered - loaded
     targets = {}
-    for env in envs:
+    pending = [env for env in envs if runtime.kv_get(conn, env.name, 'hives-migrated') != 'done']
+    for env in pending:
         runtime.sync_plans(conn, env.name, str(env.workspace))
         if env.name.lower() in ('haivequeen', 'hq'):
             legacy = conn.execute("SELECT 1 FROM agents WHERE project=? AND phase IN ('work','verify','release','integrate') LIMIT 1", (env.name,)).fetchone()
@@ -177,14 +181,16 @@ def migrate_once(conn, envs):
                 return False
             if targets[env.name] is None:
                 targets[env.name] = []
-    for env in envs:
+    for env in pending:
         for plan in runtime.list_plans(conn, env.name):
             if plan['path'] in targets.get(env.name, ()) and plan['status'] == 'IN_PROGRESS':
                 runtime.set_plan_status(conn, env.name, plan['path'], 'PAUSED', str(env.workspace))
         with db.transaction(conn):
             conn.execute("UPDATE packages SET locked=0,lock_reason=NULL WHERE project=?", (env.name,))
             conn.execute("DELETE FROM kv WHERE project=? AND (key LIKE 'stall:%' OR key LIKE 'planstall:%')", (env.name,))
-    runtime.kv_set(conn, '*', 'hives-migration', 'done')
+            conn.execute("INSERT INTO kv(project,key,value,updated_at) VALUES(?, 'hives-migrated', 'done', ?) ON CONFLICT(project,key) DO UPDATE SET value='done',updated_at=excluded.updated_at", (env.name, db.now()))
+    if not missing:
+        runtime.kv_set(conn, '*', 'hives-migration', 'done')
     return True
 
 
