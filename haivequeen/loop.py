@@ -144,15 +144,20 @@ def hold_pane_lock_until_exit(timeout: float = 120.0, poll: float = 0.1) -> bool
 
 def first_split_target(panes) -> str:
     """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the Queen pane, else None."""
-    for marker in ("job: Dashboard", "| QUEEN |"):
+    for marker in ("job: Dashboard", "| BEEKEEPER |", "| QUEEN |"):
         for pane in panes:
             if marker in pane.title:
                 return pane.id
     return None
 
 
+def is_beekeeper_title(title: str) -> bool:
+    """True for the title of the loop pane; panes opened before the rename carry the old QUEEN title and count as well."""
+    return "| all projects | BEEKEEPER |" in title or "| all projects | QUEEN |" in title
+
+
 def queen_pane_title(model: str, test: bool) -> str:
-    """Fixed title of the pane of the main agent (the Queen)."""
+    """Fixed title of the pane of the loop (the Beekeeper)."""
     return pane_title("all projects", "BEEKEEPER", "Beekeeper", model, test)
 
 
@@ -161,7 +166,7 @@ def close_leftover_panes(term, window: str) -> list:
     Without this a new start opens a second tab next to the old one. Agent panes are never touched: only these two fixed titles match."""
     closed = []
     for p in term.list_panes(window):
-        if p.alive and ("| all projects | QUEEN |" in p.title or "| all projects | Overview |" in p.title):
+        if p.alive and (is_beekeeper_title(p.title) or "| all projects | Overview |" in p.title):
             term.close_pane(p.id)
             closed.append(p.id)
     return closed
@@ -193,7 +198,7 @@ def close_session_panes(conn, term, window: str) -> list:
         if "| all projects | Overview |" in p.title:
             term.close_pane(p.id)
             closed.append(p.id)
-        elif "| all projects | QUEEN |" in p.title:
+        elif is_beekeeper_title(p.title):
             queen.append(p)
         elif len(parts) >= 4 and parts[2].startswith("Agent ") and parts[3].startswith("job: "):
             agent = runtime.get_agent(conn, parts[1], parts[3][len("job: "):])

@@ -119,9 +119,9 @@ def end_row(conn, row_id: int, new_commit: str, result: str, note: str) -> None:
 
 
 def first_round_problems(conn, since_event: int, panes=None) -> list:
-    """Problems seen after the start: an ERROR line in the rounds log or a 'vanished' line since `since_event`, not exactly one Queen tab.
+    """Problems seen after the start: an ERROR line in the rounds log or a 'vanished' line since `since_event`, not exactly one Beekeeper tab.
 
-    `panes` returns the list of live Queen pane ids, or None when the terminal cannot be read (that check is then skipped).
+    `panes` returns the list of live Beekeeper pane ids, or None when the terminal cannot be read (that check is then skipped).
     """
     problems = []
     for r in conn.execute("SELECT kind, text FROM events WHERE id>? ORDER BY id", (since_event,)):
@@ -132,19 +132,19 @@ def first_round_problems(conn, since_event: int, panes=None) -> list:
             problems.append("vanished: " + text[:200])
     ids = (panes or queen_panes)()
     if ids is not None and len(ids) != 1:
-        problems.append("%d Queen tabs instead of 1" % len(ids))
+        problems.append("%d Beekeeper tabs instead of 1" % len(ids))
     return problems
 
 
 def queen_panes():
-    """Ids of the live Queen panes of the configured window, or None when the terminal cannot be read."""
+    """Ids of the live Beekeeper panes of the configured window, or None when the terminal cannot be read."""
     from . import config
     from . import scheduler as sch
     from .terminal import get_terminal
     try:
         settings = sch.build_settings(config.load_config(), {})
         term = get_terminal(settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-        return [p.id for p in term.list_panes(settings.get("window", "HaiveQueen")) if p.alive and "| all projects | QUEEN |" in p.title]
+        return [p.id for p in term.list_panes(settings.get("window", "HaiveQueen")) if p.alive and loop.is_beekeeper_title(p.title)]
     except Exception:
         return None
 
