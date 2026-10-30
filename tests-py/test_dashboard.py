@@ -105,7 +105,7 @@ class DashboardTest(unittest.TestCase):
         with db.transaction(self.conn):
             self.conn.execute("UPDATE agents SET status='done', ended_at=? WHERE project='alpha'", (iso(1),))
         t = self.text(sysinfo=s, cfg={"buildJobs": {"coreShare": "1/2", "reserveMB": 1024}})
-        self.assertIn("Build jobs 6 of 12 cores (next build) | per job 900 MB | active: 3 cores", t)
+        self.assertIn("Build jobs 1 of 12 cores (next build) | per job 900 MB | active: 3 cores", t)   # the owner's rule: the next build always gets one job
         self.assertNotIn("Build jobs", self.text(cfg={}))
 
     def test_project_filter(self):
