@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 REAL_FOLDERS = [Path(os.environ[_v]) / "HaiveQueen" for _v in ("LOCALAPPDATA", "APPDATA") if os.environ.get(_v)]
-LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-update.lock")  # written by a running loop (STOP: set by a self-update), not by tests
+LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-update.lock", "hive-schedule.lock")  # written by a running loop (STOP: set by a self-update), not by tests
 
 
 def is_live(rel: Path) -> bool:
