@@ -1,11 +1,12 @@
 """Gap 3c: a real loop run (run_loop, several rounds) over a throw-away project, headless, with the real agent runner and a fake provider CLI.
 
-Plan READY -> work agent -> verify agent ("Offene Anforderungen: 0") -> release agent (registers the branch with bzz ready) -> integrator agent
-(dummy command: marks the queue row integrated). Nothing here touches the live runtime, a real model or a terminal.
+A READY plan starts one Queen in its plan worktree; the fake provider registers and integrates its branch.
+Nothing here touches the live runtime, a real model or a terminal.
 """
 import json
 import os
 import stat
+import subprocess
 import sys
 import unittest
 
@@ -70,6 +71,18 @@ class FullLoopTest(RoundCase):
         prov["args"] = []
         self.machine["providers"] = [prov]
         self.plan("READY", ONE)
+        with (self.repo / REL).open("a", encoding="utf-8") as plan:
+            plan.write("\n- Feature branch: feature/dummy, created from origin/main.\n")
+        # Create a real temporary repository for the plan's Queen worktree.
+        def git(*args):
+            """Run Git in the isolated project repository."""
+            return subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True)
+        git("init", "-b", "main")
+        (self.repo / "tracked.txt").write_text("start", encoding="utf-8")
+        git("add", "tracked.txt")
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial")
+        git("remote", "add", "origin", str(self.repo))
+        git("fetch", "origin", "main")
         self.seed()
         self.term = Headless(self.base / "panes")
 

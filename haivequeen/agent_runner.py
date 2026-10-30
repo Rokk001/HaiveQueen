@@ -669,10 +669,13 @@ class AgentRun:
 
 
 # Provide the agent with the supported reporting and integration commands.
-def report_prompt(prompt_file, project, agent_id):
-    """Return the prompt handed to the CLI: read the prompt file, plus the report commands (bzz done / ready / ask / note). It has no double quote."""
+def report_prompt(prompt_file, project, agent_id, phase=None):
+    """Return the CLI prompt with phase-specific reporting commands and no double quotes."""
     orch = "'%s' -I '%s'" % (osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py")
     text = ('Read the file "%s" completely and carry out exactly the task described there. Do nothing else.' % prompt_file)
+    if phase == "bee":
+        text += " Final report: %s done --agent %s --result <file>; step report: %s note --project %s --text <text>." % (orch, agent_id, orch, project)
+        return text.replace('"', "")
     text += (" Report only with these commands, never by editing a queue file or state table by hand (the handoff text in the state file of the plan stays your own file): "
              "final report: %s done --agent %s --result <file with your final report>; "
              "branch ready for integration: %s ready --project %s --branch <branch> --tip <commit> --plan <plan path> --note <text>; "
@@ -746,13 +749,22 @@ def run_agent(a, out=None):
 
     try:
         agent_row = runtime.get_agent(conn, a.project, a.name)
-        prompt = report_prompt(a.prompt_file, a.project, agent_row["id"] if agent_row else "?")
+        prompt = report_prompt(a.prompt_file, a.project, agent_row["id"] if agent_row else "?", a.phase)
         rules_file = run_dir / "rules.md"
         if protocol == "claude":
-            write_phase_rules(pcfg, workspace, a.phase, rules_file)
+            if a.phase == "bee":
+                rules_file.write_text("", encoding="utf-8")
+            else:
+                write_phase_rules(pcfg, workspace, a.phase, rules_file)
         vars_ = {"model": model, "effort": effort, "repo": pcfg.get("codeRepo") or workspace or a.cwd, "workspace": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
                  "claudeTools": pcfg.get("claudeTools") or cfg.get("claudeTools") or "", "rules": str(rules_file)}
         arg_list = build_args(prov, vars_)
+        if a.phase == "bee" and protocol == "claude":
+            if "--setting-sources" in arg_list:
+                i = arg_list.index("--setting-sources")
+                arg_list[i + 1] = ""
+            else:
+                arg_list.extend(["--setting-sources", ""])
     except Exception as exc:   # a broken rule file or argument template must show up as a failed agent at once, not as a vanished runner one round later
         run.last = short("runner error: " + str(exc))
         run.say(run.last, "Red")

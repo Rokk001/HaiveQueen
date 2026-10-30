@@ -93,7 +93,7 @@ def can_start_bee(conn, project, plan, own_process=False, context_limit=300000):
             flag = osplat.runs_dir() / project / agent['name'] / 'HANDOFF'
             if int(agent.get('ctxTokens') or 0) >= int(context_limit) or flag.exists():
                 return False
-    return bool(row and row['state'] not in ('handoff', 'queenless', 'resting', 'answer', 'integration_wait', 'done'))
+    return bool(row and row['state'] not in ('handoff', 'queenless', 'resting', 'answer', 'integration_wait', 'codex_wait', 'provider_wait', 'done'))
 
 
 # Return whether all independent Bee processes of the Hive have finished.
@@ -275,6 +275,14 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                         else:
                             conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, plan['path']))
                     hive = get(conn, env.name, plan['path'])
+                if hive and hive['state'] in ('codex_wait', 'provider_wait'):
+                    from . import bees
+                    wait = conn.execute('SELECT provider FROM bee_provider_wait WHERE project=? AND plan_path=?', (env.name, plan['path'])).fetchone()
+                    provider = sch.get_provider(env.providers, wait[0]) if wait else None
+                    limited = not provider or any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, provider))
+                    if not provider or not bees.provider_available(conn, env.name, plan['path'], provider['name'], pool.free.get(provider['name'], 0), limited):
+                        continue
+                    hive = get(conn, env.name, plan['path'])
                 if hive and hive['state'] in ('queenless', 'resting', 'answer', 'handoff'):
                     continue
                 qs = runtime.list_packages(conn, env.name, plan['path'])
@@ -307,6 +315,9 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     report.append('START Queen ' + path)
                     continue
                 if not hive:
+                    from . import bees
+                    if bees.foreign_plan_branch(env, path):
+                        continue
                     used = {r['colour'] for r in db.rows(conn, "SELECT colour FROM hives WHERE state != 'done'")}
                     colour = next((c for c in loop.AGENT_COLOURS if c not in used), None)
                     if colour is None:
@@ -326,9 +337,27 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 configured_prompt = (env.settings.get('prompts') or {}).get('integrator')
                 if configured_prompt:
                     integration['steps'] = sch.expand_template(str(configured_prompt), routine.base_values(env))
+                from . import bees
+                prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), env.settings.get('contextLimitTokens', 300000))
+                prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint'))} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)
                 prompt += ' Project integration configuration: ' + json.dumps(integration, ensure_ascii=False)
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
                 cwd = routine.pick_cwd(prior, str(env.code_repo), workspace=routine.other_workspace(env)) if prior else str(env.code_repo)
+                if bees.plan_worktree(env, path) or not bees.valid_queen_worktree(env, cwd):
+                    try:
+                        cwd = bees.prepare_queen_worktree(env, path)
+                    except (OSError, ValueError) as exc:
+                        env.log('cannot prepare Queen worktree: ' + str(exc))
+                        cwd = None
+                    if not cwd:
+                        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
+                        if not bees.plan_worktree(env, path):
+                            questions = runtime.list_questions(conn, env.name, status='open', plan=path, item='worktree')
+                            if not questions:
+                                qid = db.add_question(conn, env.name, path, 'worktree', 'Which branch and worktree should this plan use?', 'Provide the branch on the first line and the worktree path on the second.')
+                                questions = [{'id': qid}]
+                            wait_for_answers(conn, env.name, path, [q['id'] for q in questions])
+                        continue
                 action = {'name': name, 'type': pick['name'], 'phase': 'queen', 'plan': path, 'package': '', 'cwd': cwd, 'prompt': prompt, 'class': cls}
                 st = {'names': existing_names, 'busy': [], 'plan_status': {sch.norm_plan(path): plan['status']}, 'by_path': {sch.norm_plan(path): plan}}
                 ctx = {'env': env, 'state': st, 'pool': pool, 'report': report, 'dry': False, 'terminal': terminal, 'settle': settle, 'poll': poll, 'tries': tries}
@@ -382,7 +411,7 @@ def wake_marker(conn, envs):
     questions = tuple((r['id'], r['status']) for r in db.rows(conn, 'SELECT id,status FROM questions ORDER BY id'))
     hive_rows = tuple((r['project'], r['plan_path'], r['state'], r['reset_at'], r['requested_provider']) for r in db.rows(conn, 'SELECT project,plan_path,state,reset_at,requested_provider FROM hives ORDER BY project,plan_path'))
     places = tuple((r['id'], r['acquired'], r['owner_pid'], bool(r['owner_pid'] and osplat.process_alive(r['owner_pid']))) for r in db.rows(conn, 'SELECT id,acquired,owner_pid FROM hive_integration ORDER BY id'))
-    due = bool(conn.execute("SELECT 1 FROM hives WHERE state='resting' AND reset_at IS NOT NULL AND reset_at<=? LIMIT 1", (db.now(),)).fetchone())
+    due = bool(conn.execute("SELECT 1 FROM hives WHERE state IN ('resting','codex_wait','provider_wait') AND reset_at IS NOT NULL AND reset_at<=? LIMIT 1", (db.now(),)).fetchone())
     files = []
     for env in envs:
         folder = inbox.inbox_dir(env.workspace)

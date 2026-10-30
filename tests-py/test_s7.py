@@ -186,13 +186,13 @@ class S7Test(RoundCase):
         self.assertEqual(self.calls(), 0)
     # Verify a plan without an existing worktree receives worktree instructions.
     def test_plan_without_worktree_starts_queen(self):
-        """The Queen starts from the checkout and receives the worktree creation instruction."""
+        """The Queen starts in her own prepared worktree."""
         self.plan("IN_PROGRESS", P12)
         self.round()
         row = next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")
-        self.assertEqual(row["cwd"], str(self.repo))
+        self.assertEqual(row["cwd"], str(self.wt))
         prompt = (self.env().run_dir(row["name"]) / "prompt.md").read_text(encoding="utf-8")
-        self.assertIn("create the plan worktree and branch", prompt)
+        self.assertIn("plan worktree", prompt)
         self.assertEqual(self.calls(), 0)
     def test_v1_fix_last_count_line_decides(self):
         """Fix from v1: the LAST 'Offene Anforderungen' line decides, text after it does not matter."""
