@@ -262,5 +262,40 @@ class BeekeeperPaneTests(RoundCase):
         self.assertEqual(len(self.chief_ids(pane_title("all projects", "QUEEN", "Queen", "m", True))), 1)
 
 
+class StallQuestionTests(RoundCase):
+    """Owner questions of the removed stop rules (STALL-*) never block a Hive (E10)."""
+
+    def finish(self, name, final="", status="done", project="testproj"):
+        """Simulate a finished runner, including its process exit."""
+        super().finish(name, final=final, status=status, project=project)
+        runtime.upsert_agent(self.conn, project, name, {"pid": None})
+
+    def start_queen(self):
+        """Start the Queen of the dummy plan and return her agent row."""
+        self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.round()
+        return [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] in ("running", "starting")][0]
+
+    def test_only_stall_question_does_not_make_the_hive_wait(self):
+        """A Queen that ends with WAITING_FOR_OWNER while only a STALL question is open leaves the Hive waiting, not in 'answer'."""
+        from haivequeen import db
+        first = self.start_queen()
+        db.add_question(self.conn, "testproj", REL, "STALL-P1", "package stopped", "")
+        self.finish(first["name"], final="WAITING_FOR_OWNER")
+        self.round()
+        self.assertNotEqual(hives.get(self.conn, "testproj", REL)["state"], "answer")
+
+    def test_stall_question_is_not_in_the_wait_list(self):
+        """With a real and a STALL question open, the Hive waits only for the real one."""
+        import json
+        from haivequeen import db
+        first = self.start_queen()
+        real = db.add_question(self.conn, "testproj", REL, "P1", "Which?", "A")
+        db.add_question(self.conn, "testproj", REL, "STALL-P1", "package stopped", "")
+        self.finish(first["name"], final="WAITING_FOR_OWNER")
+        self.round()
+        self.assertEqual(json.loads(hives.get(self.conn, "testproj", REL)["questions_json"]), [real])
+
+
 if __name__ == "__main__":
     unittest.main()
