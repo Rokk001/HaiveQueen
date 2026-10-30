@@ -556,9 +556,10 @@ class HeadlessStartTest(RoundCase):
         self.assertEqual(row["status"], "running")
         self.assertTrue(row["pid"] and osplat.process_alive(row["pid"]))
         panes = self.term.list_panes("HaiveQueen")
-        self.assertEqual(len(panes), 1)
-        self.assertIn(row["pane_id"], [p.id for p in panes])
-        self.assertEqual(panes[0].title, "HaiveQueen TEST | testproj | Hive | job: DUMMY-PLAN | model: -")
+        self.assertEqual(sorted(p.title for p in panes), ["HaiveQueen TEST | testproj | Apiary | job: testproj | model: -",
+                                                          "HaiveQueen TEST | testproj | Hive | job: DUMMY-PLAN | model: -"])   # head pane of the Apiary and the Hive pane
+        hive = next(p for p in panes if " | Hive | " in p.title)
+        self.assertEqual(row["pane_id"], hive.id)
 
     def test_choose_slot(self):
         """The widest open pane is split side by side while both halves stay 40 columns wide, else the tallest top/bottom."""

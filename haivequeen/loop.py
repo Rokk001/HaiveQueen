@@ -200,6 +200,10 @@ def close_session_panes(conn, term, window: str) -> list:
             closed.append(p.id)
         elif is_beekeeper_title(p.title):
             queen.append(p)
+        elif is_apiary_title(p.title):   # the head pane of an Apiary goes with its last living Hive
+            if not conn.execute("SELECT 1 FROM hives WHERE project=? AND state!='done'", (parts[1],)).fetchone():
+                term.close_pane(p.id)
+                closed.append(p.id)
         elif is_hive_title(p.title):   # the pane of a living Hive stays, one of a finished Hive goes
             row = db.rows(conn, "SELECT plan_path,state FROM hives WHERE project=?", (parts[1],))
             row = [r for r in row if Path(r["plan_path"]).stem == parts[3][len("job: "):]]
@@ -422,6 +426,9 @@ def launch_agent(env, terminal, window: str, spec: dict, settle: float = 3.0, po
     return pane_id
 
 
+HIVE_BOOT = "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.hivepane import main;sys.exit(main(sys.argv[2:]))"   # bootstrap of the Hive and Apiary panes
+
+
 def hive_pane_title(project: str, plan: str, test: bool) -> str:
     """Title of the sub-terminal of one Hive: the generic pane title with who "Hive" and the plan file stem as job."""
     return pane_title(project, "Hive", Path(plan).stem, "-", test)
@@ -435,14 +442,55 @@ def is_hive_title(title: str) -> bool:
 
 def hive_argv(env, plan: str) -> list:
     """Command of the Hive sub-terminal: python -m haivequeen.hivepane for this project and plan (started through the same small bootstrap as the runner)."""
-    boot = "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.hivepane import main;sys.exit(main(sys.argv[2:]))"
-    return [osplat.python_executable(), "-c", boot, str(TOOLS_DIR), "--project", env.name, "--plan", plan] + forward_env_args()
+    return [osplat.python_executable(), "-c", HIVE_BOOT, str(TOOLS_DIR), "--project", env.name, "--plan", plan] + forward_env_args()
+
+
+def apiary_pane_title(project: str, test: bool) -> str:
+    """Title of the slim head pane of an Apiary (project): the generic pane title with who "Apiary"."""
+    return pane_title(project, "Apiary", project, "-", test)
+
+
+def is_apiary_title(title: str) -> bool:
+    """True for the title of the head pane of an Apiary."""
+    parts = title.split(" | ")
+    return len(parts) >= 4 and parts[2] == "Apiary" and parts[3].startswith("job: ")
+
+
+def apiary_argv(env) -> list:
+    """Command of the head pane of an Apiary: python -m haivequeen.hivepane --head for this project."""
+    return [osplat.python_executable(), "-c", HIVE_BOOT, str(TOOLS_DIR), "--project", env.name, "--head"] + forward_env_args()
+
+
+def _pane_order(pane) -> int:
+    """Creation number of a pane (the number after the last dot of its id), to put panes in the order they were opened."""
+    try:
+        return int(str(pane.id).rsplit(".", 1)[1])
+    except (IndexError, ValueError):
+        return 0
+
+
+def ensure_apiary_pane(env, terminal, window: str, live: list) -> str:
+    """Return the id of the live head pane of this Apiary; open it when there is none. `live` are the live panes of the window; the caller holds pane.lock.
+    The first block goes beside the dashboard (else the Beekeeper) pane, a further block below the last pane of the last block."""
+    title = apiary_pane_title(env.name, is_test_runtime())
+    for p in live:
+        if p.title == title:
+            return p.id
+    blocks = sorted([p for p in live if is_apiary_title(p.title) or is_hive_title(p.title)], key=_pane_order)
+    command = apiary_argv(env)
+    name = "%s__apiary" % env.name
+    if not live:
+        env.log("pane of Apiary %s: no live pane to split, opens the window" % env.name)
+        return terminal.open_window(window, title, command, env.colour, name)
+    target, direction = (blocks[-1].id, "vertical") if blocks else (first_split_target(live), "horizontal")
+    env.log("pane of Apiary %s: splits %s (%s)" % (env.name, target or "newest", direction))
+    return terminal.split_pane(window, title, env.colour, command, direction, 0.5, target, name)
 
 
 def ensure_hive_pane(env, terminal, window: str, plan: str) -> str:
-    """Return the id of the live pane of this Hive; open it when there is none (beside the newest Hive pane, the first one beside the dashboard).
-    A sub-terminal exists as long as its Hive lives, also when no Queen runs. Opening a pane never brings the window to the front."""
-    from . import hives
+    """Return the id of the live pane of this Hive; open it when there is none. The Apiary head pane comes first; the first Hive of an Apiary goes
+    below the head, each further one to the right of the previous Hive of that Apiary. A sub-terminal exists as long as its Hive lives, also when no
+    Queen runs. Opening a pane never brings the window to the front."""
     title = hive_pane_title(env.name, plan, is_test_runtime())
     with pane_lock():
         try:
@@ -452,18 +500,12 @@ def ensure_hive_pane(env, terminal, window: str, plan: str) -> str:
         for p in live:
             if p.title == title:
                 return p.id
-        hive_panes = [p for p in live if is_hive_title(p.title)]
-        row = hives.get(env.conn, env.name, plan) or {}
-        colour = row.get("colour") or env.colour
-        command = hive_argv(env, plan)
-        name = "%s__hive__%s" % (env.name, Path(plan).stem)
-        if not live:
-            env.log("pane of Hive %s: no live pane to split, opens the window" % Path(plan).stem)
-            return terminal.open_window(window, title, command, colour, name)
-        target = hive_panes[-1].id if hive_panes else first_split_target(live)
-        direction = "vertical" if len(hive_panes) % 2 == 0 and hive_panes else "horizontal"
-        env.log("pane of Hive %s: splits %s (%s)" % (Path(plan).stem, target or "newest", direction))
-        return terminal.split_pane(window, title, colour, command, direction, 0.5, target, name)
+        head = ensure_apiary_pane(env, terminal, window, live)
+        mine = sorted([p for p in live if is_hive_title(p.title) and p.title.split(" | ")[1] == title.split(" | ")[1]], key=_pane_order)
+        colour = env.colour   # the colour of the Apiary, shared by its head and all its Hives
+        target, direction = (mine[-1].id, "horizontal") if mine else (head, "vertical")
+        env.log("pane of Hive %s (Apiary %s): splits %s (%s)" % (Path(plan).stem, env.name, target, direction))
+        return terminal.split_pane(window, title, colour, hive_argv(env, plan), direction, 0.5, target, "%s__hive__%s" % (env.name, Path(plan).stem))
 
 
 def start_queen(env, terminal, window: str, spec: dict) -> str:
@@ -474,6 +516,8 @@ def start_queen(env, terminal, window: str, spec: dict) -> str:
     (folder / "launch.json").write_text(json.dumps({"argv": runner_argv(env, spec)}), encoding="utf-8")
     pane_id = ensure_hive_pane(env, terminal, window, spec["plan"])
     env.update_agent(spec["name"], {"pane_id": pane_id, "paneClosed": False})
+    from . import hivelayout
+    hivelayout.apply(terminal, window, env.conn, is_test_runtime())   # the Hive becomes big now that its Queen starts (best effort, never raises)
     return pane_id
 
 

@@ -1,13 +1,15 @@
 """Sub-terminal of one Hive (runs inside the pane the loop opens for the Hive, for as long as the Hive lives).
 
-  - A frame in the colour of the Hive stays at the top: "Hive: <project> | <plan>", "Queen: <name> | <model> | <runtime>" (without a running
-    Queen the state of the Hive in German) and one line per Bee. It is redrawn every second.
+  - A frame in the colour of the Apiary (project) stays at the top: "Hive: <plan>", "Queen: <name> | <model> | <runtime>" and one line per Bee
+    with a small progress bar. Without a running Queen only the name and the state of the Hive in German are drawn (small form). It is redrawn
+    every second.
   - Below the frame the output of the Queen runner appears. The Queens of the Hive run one after the other in this pane: the loop writes
     launch.json (the runner command) into the run folder of a new Queen, this process starts it and waits for it to end.
   - Keys: X dequeen, R requeen, C requeen with a provider (then the number of the provider); each needs a second press of the same key.
   - Nothing here raises or activates the terminal window.
 
 Usage: python -m haivequeen.hivepane --project P --plan PLAN-REL-PATH [--env NAME=VALUE ...]
+       python -m haivequeen.hivepane --project P --head   (the slim head pane of the Apiary)
 """
 import argparse
 import json
@@ -26,20 +28,38 @@ TOP, BOTTOM, SIDE = "┌", "└", "│"
 RULE = "─"
 
 
+def bar(step, cells=5):
+    """Small progress bar from a step like '2/5': "[##---]"; '' when the step is unknown."""
+    try:
+        n, m = (int(x) for x in str(step).split("/"))
+    except ValueError:
+        return ""
+    filled = max(0, min(cells, int(round(cells * n / m)))) if m > 0 else 0
+    return "[" + "#" * filled + "-" * (cells - filled) + "]"
+
+
+def head_lines(conn, project, width):
+    """The slim head pane of an Apiary (project): one line "Apiary <Name>" in the colour of the Apiary."""
+    return [[("Apiary %s" % project, header.project_colour_of(conn, project))]]
+
+
 def frame_lines(conn, project, plan, width, now=None, message=""):
     """Lines of the Hive frame for `width` columns: a list of lines, each a list of (text, colour) parts.
 
-    Hive line, Queen line (name, model and runtime, or the German state of the Hive), one line per Bee, the `message` of a pending
-    confirmation (if any) and the key hint. Everything is drawn in the colour of the Hive.
+    Big form (a Queen runs or starts): a box with "Hive: <plan>", the Queen line (name, model, runtime), one "Bee: <name> <task> <n/m> [bar]" line per Bee,
+    the `message` of a pending confirmation and the key hint. Small form (no Queen): only "Hive: <plan>" and the German state, nothing else
+    (plus the message while a confirmation waits). Everything is drawn in the colour of the Apiary.
     """
     now = now or datetime.now()
     width = max(10, width)
     inner = width - 4
+    col = header.project_colour_of(conn, project)
+    data = next(iter(hives.hive_data(conn, project, runtime.list_agents(conn, project, "active"), plan)), None) or {"queen": None, "bees": [], "state": ""}
     hive = hives.get(conn, project, plan) or {}
-    col = hive.get("colour") or "white"
-    data = next(iter(hives.hive_data(conn, project, runtime.list_agents(conn, project, "active"), plan)), None) or {"queen": None, "bees": []}
     queen = data["queen"]
-    if queen and queen.get("status") in ("running", "starting"):
+    running = bool(queen and queen.get("status") in ("running", "starting"))
+    name_line = "Hive: %s" % Path(plan).stem
+    if running:
         name = str(queen.get("person") or queen.get("name") or "-")
         if queen.get("status") == "starting":
             text = "Queen: %s | startet" % name
@@ -49,11 +69,17 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
             text = "Queen: %s | %s %s | %s" % (name, typ, queen.get("modelShort") or "", header.fmt_run((now - started).total_seconds()))
     else:
         text = "Queen: " + (hives.state_label(hive) or "-")
-    body = ["Hive: %s | %s" % (project, Path(plan).stem), text.replace("  ", " ")]
-    body += ["Bee: " + " ".join(str(bee[k]) for k in ("name", "task", "step") if bee[k]) for bee in data["bees"]]
+    text = text.replace("  ", " ")
+    if not running:
+        lines = [[(name_line[:width], col)], [(text[:width], col)]]
+        if message:
+            lines.append([(message[:width], "yellow")])
+        return lines
+    body = [name_line, text]
+    body += ["Bee: " + " ".join(x for x in (str(bee["name"]), str(bee["task"]), str(bee["step"]), bar(bee["step"])) if x) for bee in data["bees"]]
 
     def row(content, colour):
-        """One framed line: side bars in the Hive colour, the text cut at the pane edge."""
+        """One framed line: side bars in the colour of the Apiary, the text cut at the pane edge."""
         return [(SIDE + " ", col), (content[:inner].ljust(inner), colour), (" " + SIDE, col)]
 
     lines = [[(TOP + RULE * (width - 2) + "┐", col)]]
@@ -220,11 +246,35 @@ def run(project, plan, out=None, interval=1.0, max_ticks=None, keys=None):
     return ticks
 
 
+def run_head(project, out=None, interval=2.0, max_ticks=None):
+    """Draw the head pane of an Apiary ("Apiary <Name>") until the Apiary has no Hive that is not done any more; returns the number of redraws."""
+    import shutil
+    out = out or sys.stdout
+    conn = db.connect(config.db_path())
+    ticks = 0
+    while True:
+        ticks += 1
+        try:
+            if not conn.execute("SELECT 1 FROM hives WHERE project=? AND state!='done'", (project,)).fetchone():
+                break
+            width = max(10, shutil.get_terminal_size((120, 40)).columns)
+            out.write(header.ESC + "[2J" + header.ESC + "[H" + "".join(header.line_str(p) for p in head_lines(conn, project, width)[0:1]))
+            out.flush()
+        except Exception:
+            pass
+        if max_ticks is not None and ticks >= max_ticks:
+            break
+        time.sleep(interval)
+    conn.close()
+    return ticks
+
+
 def main(argv=None):
     """Command line entry: python -m haivequeen.hivepane --project P --plan PLAN [--env NAME=VALUE]."""
     p = argparse.ArgumentParser(prog="haivequeen.hivepane")
     p.add_argument("--project", required=True)
-    p.add_argument("--plan", required=True)
+    p.add_argument("--plan", default="")
+    p.add_argument("--head", action="store_true", help="draw the head pane of the Apiary instead of one Hive")
     p.add_argument("--env", action="append", default=[], metavar="NAME=VALUE", help="environment value to set before the run (test and folder overrides)")
     a = p.parse_args(argv)
     for pair in a.env:
@@ -236,7 +286,10 @@ def main(argv=None):
     except Exception:
         pass
     header.enable_vt()
-    run(a.project, a.plan)
+    if a.head:
+        run_head(a.project)
+    else:
+        run(a.project, a.plan)
     return 0
 
 

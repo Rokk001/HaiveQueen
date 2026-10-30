@@ -131,6 +131,11 @@ class Terminal(abc.ABC):
     def set_title(self, pane_id, title):
         """Set the title of a pane."""
 
+    def resize_pane(self, pane_id, axis, share):
+        """Resize a pane: `axis` "x" (width) or "y" (height), `share` the wanted part (0..1) of the window. Backends that cannot do this keep
+        the default, which raises TerminalError (the caller treats it as "not supported"); resizing never brings the window to the front."""
+        raise TerminalError("this terminal cannot resize panes")
+
 
 def check_direction(direction):
     """Validate a split direction and return it."""

@@ -78,6 +78,12 @@ class Tmux(Terminal):
             panes.append(PaneInfo(pane_id, title, int(pid or 0), dead.strip() != "1"))
         return panes
 
+    def resize_pane(self, pane_id, axis, share):
+        """Resize a pane to `share` (0..1) of the window width ("x") or height ("y"), in percent."""
+        if axis not in ("x", "y"):
+            raise TerminalError("axis must be 'x' or 'y': %r" % (axis,))
+        self._run("resize-pane", "-t", pane_id, "-" + axis, "%d%%" % max(1, min(99, int(round(float(share) * 100)))))
+
     def set_title(self, pane_id, title):
         """Set the pane title."""
         self._run("select-pane", "-t", pane_id, "-T", title)

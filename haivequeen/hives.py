@@ -522,6 +522,13 @@ def ensure_hive_panes(conn, envs, terminal=None):
                 loop.ensure_hive_pane(env, term, env.settings.get('window', 'HaiveQueen'), hive['plan_path'])
             except Exception as exc:
                 env.log('Hive pane of %s not opened: %s' % (hive['plan_path'], exc))
+    if envs:   # big Hives with a running Queen, small ones without; a backend that cannot resize is skipped
+        from . import hivelayout
+        try:
+            hivelayout.apply(terminal or get_terminal(envs[0].settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes')),
+                             envs[0].settings.get('window', 'HaiveQueen'), conn, loop.is_test_runtime())
+        except Exception:
+            pass
 
 
 # Summarize only changes that can make a waiting Hive runnable.

@@ -337,7 +337,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
                               + " ORDER BY id DESC LIMIT 1", pa).fetchone()
     return {
         "now": now, "project": project, "projects": scope, "colours": colours, "cfg": cfg, "sysinfo": sysinfo,
-        "run": runstate.get_state(conn), "hives": hive_count(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all),
+        "run": runstate.get_state(conn), "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all),
         "cu": window_usage(_kv(conn, "usage-claude"), now), "xu": window_usage(_kv(conn, "usage-codex"), now),
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
@@ -350,10 +350,12 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     }
 
 
-# Count the Hives that live (the Hives themselves are shown in their own sub-terminals).
-def hive_count(conn, project):
-    """Number of Hives that are not done, in the project filter."""
-    return conn.execute("SELECT COUNT(*) FROM hives WHERE state!='done'" + (" AND project=?" if project else ""), (project,) if project else ()).fetchone()[0]
+# Count the Hives that live per Apiary (the Hives themselves are shown in their own sub-terminals).
+def hive_counts(conn, project):
+    """List of (Apiary, number of its Hives that are not done) for the Apiaries with at least one, in the project filter."""
+    rows = conn.execute("SELECT project, COUNT(*) FROM hives WHERE state!='done'" + (" AND project=?" if project else "") + " GROUP BY project ORDER BY project",
+                        (project,) if project else ()).fetchall()
+    return [(r[0], r[1]) for r in rows]
 
 
 def self_update_line(su) -> list:
@@ -442,11 +444,13 @@ def build_lines(level, d, w, n_fin) -> list:
     if ask:
         sub = ask
     L.append([(run["state"], RUN_STATE_COLOUR[run["state"]]), ("  " + sub if sub else "", "gray"),
-              ("  project: %s" % (d["project"] or "all"), "gray"), ("  [P] pause/resume [D] drain [F] project", "darkgray")])
+              ("  Apiary: %s" % (d["project"] or "all"), "gray"), ("  [P] pause/resume [D] drain [F] Apiary", "darkgray")])
     o = d["orch"]
     L.append([("Beekeeper ", "cyan"), (o["status"], "gray")])
     if d['hives']:
-        head("HIVES %d" % d['hives'])
+        head("HIVES %d" % sum(n for _, n in d['hives']))
+        for apiary, n in d['hives']:
+            L.append([("%s: %d Hives" % (apiary, n), colours.get(apiary) or "white")])
     else:
         head("AGENTS %d" % len(d["agents"]), "cyan", "  %s  last round %s" % (now.strftime("%H:%M:%S"), d["last_round"]))
         if not d["agents"] and not d["blocked"] and not d["fin"]:

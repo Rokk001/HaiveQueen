@@ -47,11 +47,24 @@ class DashboardCountTest(unittest.TestCase):
         return dashboard.render(self.conn, width=100, height=100, now=datetime.now(), cfg={}, sysinfo=SYS, color=False)
 
     def test_only_the_number_of_hives_is_shown(self):
-        """'HIVES 2' is there, no Hive frame (plan, Queen name, box) and no Hive hint."""
+        """One line per Apiary ('alpha: 2 Hives'), no Hive frame (plan, Queen name, box) and no Hive hint."""
         text = self.text()
-        self.assertIn('HIVES 2', text)
+        self.assertIn('alpha: 2 Hives', text)
+        db.upsert_project(self.conn, 'beta', None, 'red', 0)
+        hives.create(self.conn, 'beta', 'C-PLAN.md', 'claude', 'blue')
+        self.conn.execute("UPDATE hives SET state='done' WHERE plan_path='B-PLAN.md'")
+        text = self.text()
+        self.assertIn('alpha: 1 Hives', text)
+        self.assertIn('beta: 1 Hives', text)
         for word in ('A-PLAN', 'B-PLAN', 'Ada', '\u250c', '[H]', '[X]', '[R]', '[C]'):
             self.assertNotIn(word, text)
+
+    def test_dashboard_says_apiary(self):
+        """The project filter is called Apiary on the dashboard."""
+        text = self.text()
+        self.assertIn('Apiary: all', text)
+        self.assertIn('[F] Apiary', text)
+        self.assertNotIn('project: all', text)
 
     def test_hive_keys_are_gone(self):
         """H, C, X and R change nothing; the selection state and its functions no longer exist."""
@@ -76,7 +89,7 @@ class FrameTest(unittest.TestCase):
         """One Hive with a Queen and a Bee that reported a step."""
         self.tmp = tempfile.TemporaryDirectory()
         self.conn = db.connect(Path(self.tmp.name) / 'db')
-        db.upsert_project(self.conn, 'ODP', None, 'cyan', 1)
+        db.upsert_project(self.conn, 'ODP', None, 'FF9F43', 1)   # the colour of the Apiary
         hives.create(self.conn, 'ODP', 'plans/AI-LEVELS-PLAN.md', 'claude', 'FF9F43')
         self.plan = 'plans/AI-LEVELS-PLAN.md'
 
@@ -103,18 +116,21 @@ class FrameTest(unittest.TestCase):
         db.add_event(self.conn, 'ODP', 'note', 'Bea H2: step 2/5 Build')
         text = plain(self.lines(now=datetime.now()))
         joined = "\n".join(text)
-        self.assertIn('Hive: ODP | AI-LEVELS-PLAN', joined)
+        self.assertIn('Hive: AI-LEVELS-PLAN', joined)
+        self.assertNotIn('ODP', joined)   # the Apiary is named by its head pane
         queen = next(t for t in text if 'Queen:' in t)
         self.assertIn('Queen: Ada', queen)
         self.assertIn('Son 5.5 med.', queen)
         self.assertRegex(queen, r'\d\d:\d\d')
-        self.assertIn('Bee: Bea Build 2/5', joined)
+        self.assertIn('Bee: Bea Build 2/5 [##---]', joined)
 
-    def test_every_line_has_the_hive_colour(self):
-        """The frame is drawn in the colour of the Hive."""
+    def test_every_line_has_the_apiary_colour(self):
+        """The frame is drawn in the colour of the Apiary (project colour), not in a colour of its own."""
         self.queen()
         colours = {c for parts in self.lines() for t, c in parts if t.strip(' \u2502\u250c\u2510\u2514\u2518\u2500')} - {'yellow', 'darkgray'}
         self.assertEqual(colours, {'FF9F43'})
+        self.conn.execute("UPDATE hives SET colour='123456'")
+        self.assertEqual({c for parts in self.lines() for t, c in parts if t.strip(' │┌┐└┘─')} - {'yellow', 'darkgray'}, {'FF9F43'})
 
     def test_without_queen_the_line_shows_the_state_in_german(self):
         """Every Hive state without a running Queen has its German words on the Queen line."""
@@ -135,6 +151,30 @@ class FrameTest(unittest.TestCase):
         self.assertIn('Bee: Cleo Draft 1/3', "\n".join(plain(self.lines())))
         db.add_event(self.conn, 'ODP', 'note', 'Cleo P1: step 3/3 Done', agent='Ada')
         self.assertNotIn('Cleo', "\n".join(plain(self.lines())))
+
+    def test_hive_without_queen_is_compact(self):
+        """A Hive without a running Queen draws only its name and its state: no box, no key hint, no Bee lines."""
+        self.conn.execute("UPDATE hives SET state='answer' WHERE plan_path=?", (self.plan,))
+        lines = plain(self.lines())
+        self.assertEqual(lines[0].strip(), 'Hive: AI-LEVELS-PLAN')
+        self.assertEqual(lines[1].strip(), 'Queen: wartet auf Antwort')
+        self.assertEqual(len(lines), 2)
+        self.queen()
+        self.assertGreater(len(self.lines()), 4)   # a running Queen: the big frame again
+        self.conn.execute("UPDATE agents SET status='done'")
+        self.assertEqual(len(self.lines()), 2)
+        self.assertEqual(len(self.lines(message='X nochmal')), 3)   # a pending confirmation still shows
+
+    def test_progress_bar(self):
+        """The Bee bar is built from n/m with five cells."""
+        self.assertEqual(hivepane.bar('1/5'), '[#----]')
+        self.assertEqual(hivepane.bar('5/5'), '[#####]')
+        self.assertEqual(hivepane.bar('2/3'), '[###--]')
+        self.assertEqual(hivepane.bar(''), '')
+
+    def test_head_of_an_apiary(self):
+        """The slim head pane of an Apiary says 'Apiary <Name>' in the Apiary colour."""
+        self.assertEqual(hivepane.head_lines(self.conn, 'ODP', 40), [[('Apiary ODP', 'FF9F43')]])
 
     def test_message_line_is_shown(self):
         """A pending confirmation text appears in the frame."""
@@ -234,10 +274,13 @@ class PaneOpenTest(RoundCase):
         self.chief = self.term.open_window("HaiveQueen", pane_title("all projects", "QUEEN", "Queen", "m", True), SLEEP, name="chief")
         self.argv = mock.patch("haivequeen.loop.hive_argv", return_value=SLEEP)
         self.argv.start()
+        self.head_argv = mock.patch("haivequeen.loop.apiary_argv", return_value=SLEEP)   # the real head pane ends at once when the Apiary has no Hive row
+        self.head_argv.start()
 
     def tearDown(self):
         """End every pane process."""
         self.argv.stop()
+        self.head_argv.stop()
         for p in self.term.list_panes("HaiveQueen"):
             if p.alive:
                 self.term.close_pane(p.id)
@@ -300,15 +343,43 @@ class PaneOpenTest(RoundCase):
             self.assertEqual(self.ag(name)["pane_id"], pane)
         self.assertEqual(len(self.hive_panes()), 1)
 
-    def test_split_target_is_the_last_hive_pane(self):
-        """The second Hive pane splits the first one, the first splits the chief pane."""
+    def test_placement_head_first_then_hives_to_the_right(self):
+        """Per Apiary: the head pane first (first block beside the Beekeeper pane), its Hives below the head and then each to the right of the
+        previous one; the head of a new Apiary splits below the last pane of the last block."""
         env = self.envs()[0]
         calls = []
         orig = self.term.split_pane
-        self.term.split_pane = lambda *a, **k: (calls.append(a[6] if len(a) > 6 else k.get("target")), orig(*a, **k))[1]
-        first = loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
-        loop.ensure_hive_pane(env, self.term, "HaiveQueen", "other/B-PLAN.md")
-        self.assertEqual(calls, [self.chief, first])
+        self.term.split_pane = lambda *a, **k: (calls.append((a[6], a[4])), orig(*a, **k))[1]
+        h1 = loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
+        head1 = next(p.id for p in self.term.list_panes("HaiveQueen") if loop.is_apiary_title(p.title))
+        h2 = loop.ensure_hive_pane(env, self.term, "HaiveQueen", "other/B-PLAN.md")
+        self.assertEqual(calls, [(self.chief, "horizontal"), (head1, "vertical"), (h1, "horizontal")])
+        env2 = self.env("testproj")
+        env2.name = "other"
+        h3 = loop.ensure_hive_pane(env2, self.term, "HaiveQueen", "x/C-PLAN.md")
+        head2 = next(p.id for p in self.term.list_panes("HaiveQueen") if loop.is_apiary_title(p.title) and p.id != head1)
+        self.assertEqual(calls[3], (h2, "vertical"))   # the new Apiary block goes below the last pane of the last block
+        self.assertEqual(calls[4], (head2, "vertical"))
+        self.assertEqual(len(self.hive_panes()), 3)
+        self.assertEqual(len([p for p in self.term.list_panes("HaiveQueen") if p.alive and loop.is_apiary_title(p.title)]), 2)
+        self.assertNotEqual(h3, h1)
+
+    def test_apiary_title(self):
+        """The head pane title is the generic title with who=Apiary."""
+        self.assertEqual(loop.apiary_pane_title("ODP", True), pane_title("ODP", "Apiary", "ODP", "-", True))
+        self.assertTrue(loop.is_apiary_title(loop.apiary_pane_title("ODP", False)))
+        self.assertFalse(loop.is_hive_title(loop.apiary_pane_title("ODP", False)))
+
+    def test_head_pane_goes_with_its_last_hive(self):
+        """close_session_panes closes the head of an Apiary without a living Hive and keeps the head of one with a living Hive."""
+        env = self.envs()[0]
+        hives.create(self.conn, "testproj", REL, "claude", "4FA8FF")
+        loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
+        loop.close_session_panes(self.conn, self.term, "HaiveQueen")
+        self.assertEqual(len([p for p in self.term.list_panes("HaiveQueen") if p.alive and loop.is_apiary_title(p.title)]), 1)
+        self.conn.execute("UPDATE hives SET state='done'")
+        loop.close_session_panes(self.conn, self.term, "HaiveQueen")
+        self.assertEqual([p for p in self.term.list_panes("HaiveQueen") if p.alive and (loop.is_apiary_title(p.title) or loop.is_hive_title(p.title))], [])
 
     def test_session_stop_keeps_living_hive_panes(self):
         """close_session_panes closes the Hive pane of a done Hive but not the pane of a living Hive."""
@@ -346,6 +417,87 @@ class PaneOpenTest(RoundCase):
         self.assertTrue((self.env().run_dir(queens[0]["name"]) / "launch.json").is_file())
         self.assertEqual(len(self.hive_panes()), 1)
         self.assertEqual(queens[0]["pane_id"], self.hive_panes()[0].id)
+
+
+class LayoutTest(RoundCase):
+    """Requirement 7: the wanted layout (big Hives with a running Queen, small ones without) is computed from the database and applied by resizing."""
+
+    def setUp(self):
+        """Two Apiaries: testproj with two Hives, other with one."""
+        super().setUp()
+        db.upsert_project(self.conn, "other", str(self.base / "repo-other"), "red", 0)
+        self.conn.execute("UPDATE projects SET colour='4FA8FF' WHERE name='testproj'")
+        hives.create(self.conn, "testproj", "a/A-PLAN.md", "claude", "red")
+        hives.create(self.conn, "testproj", "a/B-PLAN.md", "claude", "red")
+        hives.create(self.conn, "other", "c/C-PLAN.md", "claude", "red")
+
+    def test_blocks_and_big_small(self):
+        """Hives with a running or starting Queen are big, the others small; an Apiary with no working Hive is a small block."""
+        from haivequeen import hivelayout
+        self.agent("Ada", phase="queen", status="running", plan_path="a/A-PLAN.md", started=1)
+        blocks = hivelayout.compute(self.conn)
+        self.assertEqual([b["project"] for b in blocks], ["other", "testproj"])
+        other, test = blocks
+        self.assertEqual(test["colour"], "4FA8FF")
+        self.assertEqual([(h["plan"], h["big"]) for h in test["hives"]], [("a/A-PLAN.md", True), ("a/B-PLAN.md", False)])
+        self.assertGreater(test["weight"], other["weight"])
+        self.assertGreater(test["hives"][0]["width"], test["hives"][1]["width"])
+        self.assertEqual(other["hives"][0]["big"], False)
+
+    def test_done_hives_and_empty_apiaries_vanish(self):
+        """A done Hive is not part of the layout, an Apiary without a living Hive has no block."""
+        from haivequeen import hivelayout
+        self.conn.execute("UPDATE hives SET state='done' WHERE project='other'")
+        self.conn.execute("UPDATE hives SET state='done' WHERE plan_path='a/B-PLAN.md'")
+        blocks = hivelayout.compute(self.conn)
+        self.assertEqual([b["project"] for b in blocks], ["testproj"])
+        self.assertEqual([h["plan"] for h in blocks[0]["hives"]], ["a/A-PLAN.md"])
+
+    def test_shares(self):
+        """Height shares of the blocks and width shares of the Hives in a block add up to 1; the freed space goes to the working Hive."""
+        from haivequeen import hivelayout
+        self.agent("Ada", phase="queen", status="running", plan_path="a/A-PLAN.md", started=1)
+        blocks = hivelayout.compute(self.conn)
+        heights = hivelayout.height_shares(blocks)
+        self.assertAlmostEqual(sum(heights.values()), 1.0)
+        self.assertGreater(heights["testproj"], 0.5)
+        widths = hivelayout.width_shares(blocks[1])
+        self.assertAlmostEqual(sum(widths.values()), 1.0)
+        self.assertGreater(widths["a/A-PLAN.md"], widths["a/B-PLAN.md"])
+
+    def test_apply_resizes_through_the_backend_and_never_raises(self):
+        """apply sends the shares to the backend's resize_pane; a backend that cannot resize is skipped without an error."""
+        from haivequeen import hivelayout
+        calls = []
+
+        class Fake(Headless):
+            """Headless backend that records resizes."""
+
+            def resize_pane(self, pane_id, axis, share):
+                """Record the request."""
+                calls.append((pane_id, axis, round(share, 2)))
+
+        term = Fake(self.base / "panes")
+        ids = {}
+        for proj, plan in (("testproj", "a/A-PLAN.md"), ("testproj", "a/B-PLAN.md"), ("other", "c/C-PLAN.md")):
+            ids[plan] = term.split_pane("HaiveQueen", loop.hive_pane_title(proj, plan, True), "white", SLEEP, "horizontal", 0.5, None, "h%d" % len(ids))
+        try:
+            self.agent("Ada", phase="queen", status="running", plan_path="a/A-PLAN.md", started=1)
+            hivelayout.apply(term, "HaiveQueen", self.conn, True)
+            self.assertIn((ids["a/A-PLAN.md"], "x", 0.75), calls)
+            self.assertIn((ids["a/B-PLAN.md"], "x", 0.25), calls)
+            self.assertTrue(any(c[1] == "y" for c in calls))
+            hivelayout.apply(Headless(self.base / "panes"), "HaiveQueen", self.conn, True)   # a backend that cannot resize: no exception
+        finally:
+            for p in term.list_panes("HaiveQueen"):
+                if p.alive:
+                    term.close_pane(p.id)
+
+    def test_base_backend_cannot_resize(self):
+        """The default resize_pane of a backend raises TerminalError (wt: no way to resize without raising the window)."""
+        from haivequeen.terminal.base import TerminalError
+        with self.assertRaises(TerminalError):
+            Headless(self.base / "panes").resize_pane("W.0", "x", 0.5)
 
 
 class LaunchTest(RoundCase):

@@ -222,6 +222,14 @@ class TmuxStubTest(unittest.TestCase):
         self.assertEqual(self.calls[1], ["tmux", "select-pane", "-t", "%5", "-T", "T"])
         self.assertEqual(len(self.calls), 2)
 
+    def test_resize_pane_in_percent(self):
+        """resize_pane sets the width (x) or height (y) of a pane as a percentage of the window; a wrong axis is refused."""
+        self.term.resize_pane("%3", "x", 0.75)
+        self.term.resize_pane("%3", "y", 0.2)
+        self.assertEqual(self.calls, [["tmux", "resize-pane", "-t", "%3", "-x", "75%"], ["tmux", "resize-pane", "-t", "%3", "-y", "20%"]])
+        with self.assertRaises(TerminalError):
+            self.term.resize_pane("%3", "z", 0.5)
+
     def test_split_default_target_and_horizontal(self):
         """Without a target the session is addressed; horizontal is -h."""
         self.outputs = ["%1\n"]
