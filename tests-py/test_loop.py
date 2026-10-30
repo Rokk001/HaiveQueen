@@ -227,11 +227,11 @@ class LoopTest(RoundCase):
         """Header lines and word wrap."""
         self.assertEqual(loop.wrap_text("aaa bbb ccc", 7), ["aaa bbb", "ccc"])
         self.assertEqual(loop.wrap_text("abcdefghij", 4), ["abcd", "efgh", "ij"])
-        hl = loop.head_lines(80, brain.totals(self.conn), {"busy": True, "model": "Son 5.5 med.", "projects": ["a", "b"]})
+        hl = loop.head_lines(80, {"busy": True, "projects": ["a", "b"]})
         self.assertIn("Beekeeper", hl[0][0])
         self.assertIn("round running", hl[0][0])
         self.assertIn("Projects: a, b", hl[1][0])
-        hl = loop.head_lines(80, brain.totals(self.conn), {"run_state": "PAUSED", "model": "x"})
+        hl = loop.head_lines(80, {"run_state": "PAUSED"})
         self.assertIn("PAUSED", hl[0][0])
 
     def test_window_is_one_for_all(self):

@@ -264,6 +264,23 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         return bool(loop._do_start(ctx, action, forced_pick=pick))
 
 
+# Read the branch from the 'Plan: X; branch Y; baseline Z' line of the plan's state file next to it.
+def state_branch(env, plan):
+    """Return the branch named in the state file beside the plan (<name>-STATE.md, with a trailing -PLAN of the name dropped), or ''."""
+    import re
+    from pathlib import Path
+    stem = re.sub(r'-PLAN$', '', Path(plan).stem)
+    for name in (Path(plan).stem + '-STATE.md', stem + '-STATE.md'):
+        try:
+            text = (env.workspace / Path(plan).parent / name).read_text(encoding='utf-8-sig')
+        except OSError:
+            continue
+        found = re.search(r'(?m)^\s*Plan:[^\n]*?;\s*branch\s+([\w./-]+?)\s*;', text)
+        if found:
+            return found.group(1)
+    return ''
+
+
 # Resolve the plan's named branch and optional named worktree.
 def plan_worktree(env, plan):
     """Read an unambiguous branch and worktree from the plan's explicit rules."""
@@ -274,13 +291,17 @@ def plan_worktree(env, plan):
     feature = re.search(r'(?im)^\s*[-*]?\s*feature[ -]branch\s*:\s*`?([\w./-]+)`?', text)
     pair = re.search(r'(?im)\bworktree\s*`([^`]+)`\s*,?\s*branch\s*`([^`]+)`', text)
     reverse = re.search(r'(?im)(?<!sub-)\bbranch\s*`([^`]+)`\s+in\s+worktree\s*`([^`]+)`', text)
-    if feature:
-        branch = feature.group(1).rstrip('.')
+    git_line = re.search(r'(?im)^\s*[-*]?\s*git\s*:\s*branch\s*`([\w./-]+)`', text)
+    named = feature or git_line
+    if named:
+        branch = named.group(1).rstrip('.')
         worktree = pair.group(1) if pair and pair.group(2) == branch else (reverse.group(2) if reverse and reverse.group(1) == branch else None)
     elif pair:
         worktree, branch = pair.groups()
     elif reverse:
         branch, worktree = reverse.groups()
+    elif state_branch(env, plan):
+        branch, worktree = state_branch(env, plan), None
     else:
         answers = runtime.list_questions(env.conn, env.name, status='answered', plan=plan, item='worktree')
         if not answers:

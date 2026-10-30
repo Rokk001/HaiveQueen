@@ -71,6 +71,8 @@ def load_project(workspace) -> dict:
     """Load <workspace>/.haivequeen/project.toml, filling in defaults (name falls back to the folder name)."""
     ws = Path(workspace)
     data = _merge(DEFAULT_PROJECT, _load_toml(ws / ".haivequeen" / "project.toml"))
+    if data.get("repo") and not data.get("codeRepo"):   # project files written by the v1 migration name the code repo `repo`
+        data["codeRepo"] = data["repo"]
     if not data["name"]:
         data["name"] = ws.name
     return data
