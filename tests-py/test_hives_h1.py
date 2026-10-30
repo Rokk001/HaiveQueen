@@ -38,6 +38,14 @@ class HiveRoundTests(RoundCase):
         super().finish(name, final=final, status=status, project=project)
         runtime.upsert_agent(self.conn, project, name, {"pid": None})
 
+    # Provide the migration's explicit synthetic target list.
+    def migration_source(self):
+        """Write the migration target list into a separate draft plan."""
+        rel = 'docs/plans/MIGRATE/MIGRATE-PLAN.md'
+        self.plan('DRAFT', [], project='hq', rel=rel)
+        with (self.base / 'repo-hq' / rel).open('a', encoding='utf-8') as plan:
+            plan.write('\n- D25 Migration: HaiveQueen plans in work (OLD-ONE, OLD-TWO, OLD-THREE, OLD-FOUR) stay paused.\n')
+
     # One plan starts one Queen even when multiple packages are ready.
     def test_one_queen_for_a_plan_with_two_packages(self):
         """One plan starts one Queen even when multiple packages are ready."""
@@ -193,6 +201,7 @@ class HiveRoundTests(RoundCase):
         for tag in ("OLD-ONE", "OLD-TWO", "OLD-THREE", "OLD-FOUR"):
             self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}], project="hq", rel=f"docs/plans/{tag}/{tag}-PLAN.md")
             self.agent("old-" + tag, project="hq", plan_path=f"docs/plans/{tag}/{tag}-PLAN.md", phase="work", status="done")
+        self.migration_source()
         self.conn.execute("INSERT INTO questions (project,plan_path,item,question,status,created_at) VALUES (?,?,?,?,?,?)",
                           ("hq", "docs/plans/OLD-ONE/OLD-ONE-PLAN.md", "P1", "Which?", "open", "2026-01-01"))
         rel = "docs/plans/OLD-ONE/OLD-ONE-PLAN.md"
@@ -202,8 +211,9 @@ class HiveRoundTests(RoundCase):
         runstate.resume(self.conn)
         self.round()
         rows = runtime.list_plans(self.conn, "hq")
-        self.assertEqual(len(rows), 4)
-        self.assertTrue(all(row["status"] == "PAUSED" for row in rows))
+        targets = [row for row in rows if row["path"].split("/")[-1].startswith("OLD-")]
+        self.assertEqual(len(targets), 4)
+        self.assertTrue(all(row["status"] == "PAUSED" for row in targets))
         self.assertEqual(len(runtime.list_questions(self.conn, "hq", status="open")), 1)
         self.assertFalse(runtime.list_packages(self.conn, "hq", rel)[0]["locked"])
         self.assertIsNone(runtime.kv_get(self.conn, "hq", "stall:" + rel + "|P1"))
@@ -653,6 +663,9 @@ class HiveRoundTests(RoundCase):
         old = "docs/plans/OLD-ONE/OLD-ONE-PLAN.md"
         self.plan("IN_PROGRESS", [{"id": "P2", "title": "Second"}], project="hq", rel=old)
         self.agent("old-work", project="hq", plan_path=old, phase="work", status="done")
+        for tag in ("OLD-TWO", "OLD-THREE", "OLD-FOUR"):
+            self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}], project="hq", rel=f"docs/plans/{tag}/{tag}-PLAN.md")
+        self.migration_source()
         runstate.pause(self.conn)
         runstate.resume(self.conn)
         self.round()

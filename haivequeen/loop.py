@@ -272,8 +272,8 @@ def agent_task(env, plan: str, package: str, phase: str, prompt_file=None) -> st
     return "Plan %s, package %s" % (plan_short, package)
 
 
-def agent_identity(conn) -> dict:
-    """First name and colour for a new agent: the first free entry of the lists; free = not used by a running agent (any project) or one that ended within the last hour."""
+def agent_identity(conn, excluded_names=()) -> dict:
+    """Select an unused first name and colour, excluding the given predecessor names."""
     rows = []
     for a in runtime.list_agents(conn, None, "active"):
         recent = False
@@ -283,10 +283,13 @@ def agent_identity(conn) -> dict:
                 recent = (datetime.now() - ended).total_seconds() <= 3600
         if a.get("status") in ACTIVE or recent:
             rows.append(a)
-    used_n = [str(a.get("person")) for a in rows]
+    used_n = [str(a.get("person")) for a in rows] + list(excluded_names)
     used_c = [str(a.get("color")) for a in rows]
     run_c = [str(a.get("color")) for a in rows if a.get("status") in ACTIVE]
-    n = next((x for x in AGENT_NAMES if x not in used_n), AGENT_NAMES[len(rows) % len(AGENT_NAMES)])
+    running_names = {str(a.get("person")) for a in rows if a.get("status") in ACTIVE}
+    n = (next((x for x in AGENT_NAMES if x not in used_n), None)
+         or next((x for x in AGENT_NAMES if x not in running_names and x not in excluded_names), None)
+         or AGENT_NAMES[len(rows) % len(AGENT_NAMES)])
     # Colours of agents that ended within the last hour are given up first; a colour of a running agent repeats only with more running agents than colours (then the least used one).
     # The second shade of a hue is only taken when every hue is in use by a running agent: colours are compared by hue family (index modulo 6), not by exact value.
     run_hues = {AGENT_COLOURS.index(x) % 6 for x in run_c if x in AGENT_COLOURS}
@@ -976,7 +979,8 @@ def _do_start(c, a, forced_pick=None) -> int:
         handoff = ("After each completed step check %s. When it exists, do not start new Bees, "
                    "wait for running Bees, finish your current step, record the handoff in the plan state and end." % hf)
     pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff, encoding="utf-8")
-    ident = agent_identity(env.conn)
+    predecessors = [a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('phase') == 'queen' and a.get('plan_path') == plan and a.get('person')]
+    ident = agent_identity(env.conn, [predecessors[-1]['person']] if phase == 'queen' and predecessors else ())
     if phase == "bee":
         ident["Person"] = str(a["name"])
     cls = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
