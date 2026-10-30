@@ -96,6 +96,32 @@ def can_start_bee(conn, project, plan, own_process=False, context_limit=300000):
     return bool(row and row['state'] not in ('handoff', 'queenless', 'resting', 'answer', 'integration_wait', 'codex_wait', 'provider_wait', 'done'))
 
 
+# Return whether a Queen ended without a HANDOFF file and without a new commit in her worktree since she started (unknown counts as work).
+def ended_without_work(env, agent):
+    """Return whether a Queen ended without a HANDOFF file and without a new commit in her worktree since she started (unknown counts as work)."""
+    import subprocess
+    from pathlib import Path
+    if (env.run_dir(agent['name']) / 'HANDOFF').exists():
+        return False
+    cwd = agent.get('cwd')
+    since = str(agent.get('started_at') or '')[:19]
+    if not cwd or not since or not Path(cwd).is_dir():
+        return False
+    try:
+        result = subprocess.run(['git', '-C', str(cwd), 'log', '-1', '--since=' + since, '--format=%H'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and not result.stdout.strip()
+
+
+# File the automatic owner question for a Queen that ended without work and return its id.
+def ask_about_end(conn, env, plan, agent, final_report):
+    """File the automatic owner question for a Queen that ended without work and return its id; the question holds her last text."""
+    text = (final_report or '').strip() or 'no final text (status %s)' % agent.get('status')
+    question = 'Queen %s of this Hive ended without new work (no commit, no question). Her last text: %s How should the Hive continue?' % (agent['name'], text[:1500])
+    return db.add_question(conn, env.name, plan, 'queen-ended', question, 'Answer what blocks her, or say how she should count or decide it; then the next Queen starts.')
+
+
 # Return whether all independent Bee processes of the Hive have finished.
 def can_handoff(conn, project, plan):
     """Return whether all independent Bee processes of the Hive have finished."""
@@ -333,6 +359,8 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                         questions = runtime.list_questions(conn, env.name, status='open', plan=plan['path'])
                         if last and last.get('status') == 'done' and 'WAITING_FOR_OWNER' in final_report and questions:
                             wait_for_answers(conn, env.name, plan['path'], [q['id'] for q in questions])
+                        elif last and ended_without_work(env, last):
+                            wait_for_answers(conn, env.name, plan['path'], [ask_about_end(conn, env, plan['path'], last, final_report)])
                         else:
                             conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, plan['path']))
                     hive = get(conn, env.name, plan['path'])
