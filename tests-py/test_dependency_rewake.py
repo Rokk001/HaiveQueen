@@ -1,5 +1,4 @@
-"""Tests of the wake-up of a package whose last verify found open items while its dependency was not done yet: when the dependency is done
-later, the brain is asked once more about the verify (before, the first answer stayed 'handled' and the package never started again)."""
+"""Tests that the Queen receives plans with dependencies and no separate brain agent."""
 import unittest
 
 from bzztest import RoundCase, runtime
@@ -7,56 +6,39 @@ from bzztest import RoundCase, runtime
 PKGS = [{"id": "P1", "title": "first"}, {"id": "P2", "title": "second", "depends": ["P1"]}]
 
 
+# Verify package dependencies remain available to the Queen.
 class DependencyRewakeTest(RoundCase):
-    """P2 has a finished work and a verify with one open item; the event of that verify was handled while P1 was open."""
+    """A Queen handles a plan containing dependent packages."""
 
+    # Prepare a plan with one dependency.
     def setUp(self):
-        """Plan P1 (open) and P2 (verify with open item, event already handled)."""
+        """Create the dependent plan in the isolated runtime."""
         super().setUp()
         self.plan("IN_PROGRESS", PKGS)
-        self.agent("T-P1-work", package="P1", started=60, ended=55)
-        self.agent("T-P1-verify", type="codex", provider="codex", package="P1", phase="verify", started=50, ended=45)
-        self.finish("T-P1-verify", "- Item A: teilweise\nOffene Anforderungen: 1")
-        self.agent("T-P2-work", package="P2", started=40, ended=35)
-        self.agent("T-P2-verify", type="codex", provider="codex", package="P2", phase="verify", started=30, ended=25)
-        self.finish("T-P2-verify", "- Item B: teilweise\nOffene Anforderungen: 1")
-        runtime.handled_add(self.conn, "testproj", "verify:T-P2-verify", None)
-        runtime.handled_add(self.conn, "testproj", "verify:T-P1-verify", None)
-        self.note = self.brain_answer({"action": "note", "text": "nothing to start"})
 
-    def finish_p1(self):
-        """P1 is verified: a newer verify without open items."""
-        self.agent("T-P1-work-2", package="P1", started=20, ended=18)
-        self.agent("T-P1-verify-2", type="codex", provider="codex", package="P1", phase="verify", started=17, ended=15)
-        self.finish("T-P1-verify-2", "Alles erfuellt\nOffene Anforderungen: 0")
+    # Verify the scheduler starts one Queen without a separate decision agent.
+    def test_plan_starts_queen_without_brain(self):
+        """The Queen starts once and no brain call is made."""
+        self.round()
+        self.round()
+        self.assertEqual(self.calls(), 0)
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running"]
+        self.assertEqual([a["phase"] for a in active], ["queen"])
 
-    def test_dependency_done_asks_the_brain_once_more(self):
-        """With P1 verified the handled verify of P2 is put to the brain again, once."""
-        self.finish_p1()
-        before = self.calls()
-        self.round(self.note)
-        self.assertEqual(self.calls(), before + 1)
-        self.round(self.note)
-        self.assertEqual(self.calls(), before + 1, "asked only once")
+    # Verify dependencies are retained in the plan data.
+    def test_plan_retains_dependencies(self):
+        """The dependent package retains its prerequisite for the Queen."""
+        packages = {p["id"]: p for p in self.env().packages("docs/plans/dummy/DUMMY-PLAN.md")}
+        self.assertEqual(packages["P2"]["depends"], ["P1"])
 
-    def test_the_question_says_the_dependencies_are_done(self):
-        """The repeated question tells the brain that the dependencies are done now, because the verify text may still say they are not."""
-        self.finish_p1()
-        prompts = []
-
-        def runner(argv, prompt, cwd, timeout):
-            """Record the brain prompt and answer nothing."""
-            prompts.append(prompt)
-            return 1, "", "no real brain in tests", False
-        self.round(brain_runner=runner)
-        self.assertTrue(prompts)
-        self.assertIn("All dependencies of package P2 are done now", prompts[0])
-
-    def test_dependency_still_open_asks_nothing(self):
-        """While P1 is not verified the handled verify of P2 stays quiet."""
-        before = self.calls()
-        self.round(self.note)
-        self.assertEqual(self.calls(), before)
+    # Verify the full plan is supplied even while a dependency is incomplete.
+    def test_open_dependency_does_not_start_package_agent(self):
+        """The Queen receives the plan rather than a premature package agent."""
+        self.round()
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["phase"], "queen")
+        self.assertEqual(self.calls(), 0)
 
 
 if __name__ == "__main__":

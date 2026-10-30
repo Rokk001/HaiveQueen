@@ -20,40 +20,18 @@ class S7Test(RoundCase):
         runtime.sync_plans(self.conn, "testproj", str(self.repo))
         return next(p for p in runtime.list_plans(self.conn, "testproj") if p["path"] == REL)["status"]
 
-    def test_new_plan_and_routine_chain(self):
-        """A new READY plan costs exactly one brain call; the rest of the chain needs none."""
+    # Verify a READY plan becomes active with one Queen and no brain call.
+    def test_new_plan_starts_one_queen(self):
+        """A READY plan starts one Queen and stays stable across repeated rounds."""
         self.plan("READY", P12)
         self.round(self.start("DUMMY-P1-work"))
-        self.assertEqual(self.calls(), 1)
-        self.assertEqual(self.ag("DUMMY-P1-work")["status"], "running")
+        self.assertEqual(self.calls(), 0)
         self.assertEqual(self.plan_status(), "IN_PROGRESS")
-        self.round(self.start("DUMMY-P1-work"))
-        self.assertEqual(self.calls(), 1, "a handled event is not asked twice")
-        self.finish("DUMMY-P1-work")
-        self.round()
-        self.assertEqual(self.ag("DUMMY-P1-verify")["status"], "running")
-        self.assertEqual(self.ag("DUMMY-P1-verify")["provider"], "codex", "verify takes the other provider")
-        self.finish("DUMMY-P1-verify", "Alles geprueft.\nOffene Anforderungen: 0")
-        self.round()
-        self.assertEqual(self.ag("DUMMY-P2-work")["status"], "running")
-        self.finish("DUMMY-P2-work")
-        self.round()
-        self.assertEqual(self.ag("DUMMY-P2-verify")["status"], "running")
-        self.finish("DUMMY-P2-verify", "Offene Anforderungen: 0")
-        self.round()
-        self.assertEqual(self.ag("DUMMY-ALL-verify")["status"], "running")
-        self.finish("DUMMY-ALL-verify", "Offene Anforderungen: 0")
-        self.round()
-        self.assertEqual(self.ag("DUMMY-release")["status"], "running")
-        self.finish("DUMMY-release")
-        self.round()
-        self.assertEqual(self.plan_status(), "DONE")
-        self.assertEqual(self.calls(), 1, "the whole routine chain used no further brain call")
-        before = self.calls()
         for _ in range(12):
             self.round()
-        self.assertEqual(self.calls(), before, "quiet hour: zero brain calls")
-
+        active = [a for a in runtime.list_agents(self.conn, "testproj") if a["status"] == "running"]
+        self.assertEqual([a["phase"] for a in active], ["queen"])
+        self.assertEqual(self.calls(), 0)
     def triggers_setup(self):
         """A plan with a finished work and a finished verify that reported one open item."""
         self.plan("IN_PROGRESS", P12)
@@ -61,65 +39,53 @@ class S7Test(RoundCase):
         self.agent("T-P1-verify", type="codex", provider="codex", package="P1", phase="verify", started=10, ended=5)
         self.finish("T-P1-verify", "- Item A: teilweise\nOffene Anforderungen: 1")
 
-    def test_each_trigger_one_call(self):
-        """verify_open and agent_failed cost one call each; blocked rows and answered questions are handled by the routine."""
-        note = self.brain_answer({"action": "note", "text": "nothing to start"})
-        self.triggers_setup()
-        b = self.calls()
-        self.round(note)
-        self.assertEqual(self.calls(), b + 1)
-        self.round(note)
-        self.assertEqual(self.calls(), b + 1, "verify_open handled: no second call")
-        self.agent("T-P2-work", package="P2", status="failed", started=3, ended=2, last_line="test failure")
-        b = self.calls()
-        self.round(note)
-        self.assertEqual(self.calls(), b + 1, "agent_failed: exactly one call")
-        runtime.queue_upsert(self.conn, "testproj", "feature/dummy", "abc123def", REL, "blocked", "test conflict")
-        b = self.calls()
-        self.round(note)
-        self.assertEqual(self.calls(), b, "integration_blocked: handled by the routine (fix agent)")
-        runtime.queue_upsert(self.conn, "testproj", "feature/dummy", status="integrated")
+    # Verify legacy triggers do not call the removed brain.
+    def test_legacy_triggers_do_not_call_brain(self):
+        """Legacy verify, failure, blocked integration and owner answer cause no brain call."""
         from haivequeen import db
+        self.triggers_setup()
+        self.round()
+        self.agent("T-P2-work", package="P2", status="failed", started=3, ended=2, last_line="test failure")
+        self.round()
+        runtime.queue_upsert(self.conn, "testproj", "feature/dummy", "abc123def", REL, "blocked", "test conflict")
+        self.round()
         qid = db.add_question(self.conn, "testproj", REL, "X", "Which one?", "A")
         db.answer_question(self.conn, qid, "Take A.", "owner")
-        b = self.calls()
-        self.round(note)
-        self.assertEqual(self.calls(), b, "question_answered: handled by the routine (work agent)")
+        self.round()
+        self.assertEqual(self.calls(), 0)
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
 
-    def test_open_for_owner_without_triage(self):
-        """With triage off the lock text goes to the brain once (open_for_owner)."""
-        self.settings = None
-        self.machine["triage"] = False
+    # Verify a legacy lock does not invoke the removed triage or brain.
+    def test_legacy_lock_does_not_start_triage_or_brain(self):
+        """An old package lock leaves the running Queen in charge."""
         self.triggers_setup()
-        note = self.brain_answer({"action": "note", "text": "x"})
-        self.round(note)   # verify_open
-        b = self.calls()
+        self.round()
         runtime.kv_set(self.conn, "testproj", "lock:%s|P1" % REL, "Should the dummy do X or Y?")
-        self.round(note)
-        self.assertEqual(self.calls(), b + 1)
-
+        self.round()
+        self.assertEqual(self.calls(), 0)
+        self.assertFalse([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"])
+    # Verify a running Queen hands off and resumes on the same provider.
     def test_context_limit_handoff(self):
-        """310k context: HANDOFF flag, no brain call, agent not killed, then a -c2 agent continues with the same task."""
+        """At 310k the Queen receives HANDOFF, stays running and is replaced on the same provider."""
         self.plan("IN_PROGRESS", P12)
-        self.agent("C-P1-work", package="P1", status="running", pid=__import__("os").getpid(), started=30, ctxTokens=310000)
-        env = self.env()
-        d = env.run_dir("C-P1-work")
-        d.mkdir(parents=True)
-        (d / "prompt.md").write_text("Header\n\nTASK\n\nDo package P1 of the dummy plan.\n\nPrüfe nach jedem abgeschlossenen Arbeitsschritt, ob die Datei X existiert.", encoding="utf-8")
-        b = self.calls()
+        self.round()
+        first = next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")
+        runtime.upsert_agent(self.conn, "testproj", first["name"], {"ctxTokens": 310000})
+        d = self.env().run_dir(first["name"])
+        before = self.calls()
         self.round()
         self.assertTrue((d / "HANDOFF").exists())
-        self.assertEqual(self.calls(), b)
-        self.assertEqual(self.ag("C-P1-work")["status"], "running")
-        self.finish("C-P1-work")
+        self.assertEqual(self.calls(), before)
+        self.assertEqual(self.ag(first["name"])["status"], "running")
+        self.finish(first["name"], final="Handoff")
+        runtime.upsert_agent(self.conn, "testproj", first["name"], {"pid": None})
         self.round()
-        c2 = self.ag("C-P1-work-c2")
-        self.assertTrue(c2 and c2["status"] == "running")
-        text = (env.run_dir("C-P1-work-c2") / "prompt.md").read_text(encoding="utf-8")
-        self.assertIn("Do package P1", text)
-        self.assertIn("Handoff C-P1-work", text)
-        self.assertIn("HANDOFF", text)
-
+        second = next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")
+        self.assertNotEqual(second["name"], first["name"])
+        self.assertEqual(second["provider"], first["provider"])
+        self.assertEqual(second["plan_path"], first["plan_path"])
+        prompt = (self.env().run_dir(second["name"]) / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn("handoff", prompt.lower())
     def reset_rt(self):
         """Fresh state: plan P1, P2 plus an old row that gives the plan its worktree."""
         self.conn.execute("DELETE FROM agents")
@@ -132,51 +98,40 @@ class S7Test(RoundCase):
         self.plan("IN_PROGRESS", P12)
         self.agent("Z-ZZ-work", package="ZZ", started=60, ended=50)
 
-    def test_finished_packages_not_startable(self):
-        """Packages done in the table or the queue are never started."""
-        self.reset_rt()
-        for i in ("P1", "P2"):
-            runtime.set_package(self.conn, "testproj", REL, i, phase="done")
-        b = self.calls()
-        self.round()
-        self.assertFalse([n for n in self.names() if n.startswith(("DUMMY-P1", "DUMMY-P2"))])
-        self.assertEqual(self.calls(), b)
+    # Verify the Queen receives an existing completed package and its dependency.
+    def test_completed_packages_remain_in_plan(self):
+        """A completed P1 and its dependent P2 remain available to the Queen."""
         self.reset_rt()
         runtime.set_package(self.conn, "testproj", REL, "P1", phase="done")
         self.round()
-        self.assertIsNone(self.ag("DUMMY-P1-work"))
-        self.assertEqual(self.ag("DUMMY-P2-work")["status"], "running", "dependent P2 is startable")
-        self.reset_rt()
-        runtime.set_package(self.conn, "testproj", REL, "P1", phase="work")
-        self.round()
-        self.assertEqual(self.ag("DUMMY-P1-work")["status"], "running")
-        self.reset_rt()
-        runtime.queue_upsert(self.conn, "testproj", "feature/dummy", "abc123def", REL, "integrated", "Lauf 1: Paket ALL (Aggregat-Branch)")
-        self.round()
-        self.assertIsNone(self.ag("DUMMY-P1-work"))
-        self.assertIsNone(self.ag("DUMMY-P2-work"))
-        self.reset_rt()
-        runtime.queue_upsert(self.conn, "testproj", "feature/dummy", "abc123def", REL, "blocked", "2 checks red: Paket ALL")
-        self.round()
-        self.assertEqual(self.ag("DUMMY-P1-work")["status"], "running", "a blocked row does not count as done")
-
+        rows = runtime.list_agents(self.conn, "testproj")
+        self.assertEqual(len([a for a in rows if a["phase"] == "queen" and a["status"] == "running"]), 1)
+        self.assertFalse([a for a in rows if a["phase"] in ("work", "verify") and a["status"] == "running"])
+        self.assertEqual(next(p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "P1")["phase"], "done")
+        packages = {p["id"]: p for p in self.env().packages(REL)}
+        self.assertEqual(packages["P2"]["depends"], ["P1"])
+    # Verify known answers are reused when the Queen asks questions.
     def test_decided_questions_not_asked(self):
-        """ask_owner for an item with a decision or a known question is skipped; a new item is written."""
-        from haivequeen import db
+        """Known items remain closed and a new item reaches the owner."""
+        import argparse
+        import contextlib
+        import io
+        from haivequeen import cli, db
         self.reset_rt()
-        runtime.add_decision(self.conn, "testproj", "owner", "Dummy room: crystal bowl (M7): yes.", REL, "M7")
-        v9 = db.add_question(self.conn, "testproj", REL, "V9 Mood decay in the bath", "Decay?", "A")
+        runtime.add_decision(self.conn, "testproj", "owner", "M7: yes.", REL, "M7")
+        v9 = db.add_question(self.conn, "testproj", REL, "V9", "Decay?", "A")
         db.answer_question(self.conn, v9, "Yes.", "owner")
-        ask = lambda item: {"action": "ask_owner", "plan": REL, "item": item, "question": "q?", "recommendation": "r"}  # noqa: E731
-        self.agent("Z-ZZ-verify", type="codex", provider="codex", package="P1", phase="verify", status="failed", started=3, ended=2, last_line="x")
-        self.round(self.brain_answer(ask("M7"), ask("V9"), ask("M8 new item")))
-        qs = runtime.list_questions(self.conn, "testproj")
-        self.assertFalse([q for q in qs if q["item"].startswith("M7")])
-        self.assertEqual([q["question"] for q in qs if q["item"].startswith("V9")], ["Decay?"])
-        self.assertEqual(len([q for q in qs if q["item"] == "M8 new item"]), 1)
-
+        for item in ("M7", "V9", "M8 new item"):
+            args = argparse.Namespace(project="testproj", plan=REL, item=item, question="q?", recommendation="r")
+            with contextlib.redirect_stdout(io.StringIO()):
+                cli.cmd_ask(args, self.conn)
+        open_items = [q["item"] for q in runtime.list_questions(self.conn, "testproj", status="open")]
+        self.assertNotIn("M7", open_items)
+        self.assertNotIn("V9", open_items)
+        self.assertEqual(open_items.count("M8 new item"), 1)
+    # Verify the Queen resumes in the existing plan worktree.
     def test_answered_question_uses_worktree_of_its_package(self):
-        """A Q-package works in the existing worktree of the package the question belongs to, not in the newer workspace folder."""
+        """The Queen resumes in the existing plan worktree instead of the newer workspace."""
         from haivequeen import db
         self.reset_rt()
         self.plan("IN_PROGRESS", [{"id": "D3", "title": "item with worktree"}])
@@ -187,10 +142,11 @@ class S7Test(RoundCase):
         q = db.add_question(self.conn, "testproj", REL, "D3", "Which one?", "A")
         db.answer_question(self.conn, q, "yes, do it", "owner")
         self.round()
-        self.assertEqual(self.ag("DUMMY-Q-D3-work")["cwd"], str(pkg_wt))
+        self.assertEqual(next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")["cwd"], str(pkg_wt))
 
+    # Verify the Queen resumes in the existing plan worktree.
     def test_fix_and_plan_start_use_worktree_not_workspace(self):
-        """A fix agent for a blocked row and a package start work in the newest worktree of the plan, not in the newer workspace folder."""
+        """The Queen resumes the blocked plan in its existing worktree instead of the newer workspace."""
         self.reset_rt()
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         old_wt = self.base / "wt-old"
@@ -199,8 +155,7 @@ class S7Test(RoundCase):
         self.agent("Z-YY-work", package="YY", cwd=str(self.repo), started=40, ended=30)
         runtime.queue_upsert(self.conn, "testproj", "feature/dummy", "abc123def", REL, "blocked", "2 checks red: x")
         self.round()
-        self.assertEqual(self.ag("DUMMY-FIX-abc123d-work")["cwd"], str(old_wt))
-        self.assertEqual(self.ag("DUMMY-P1-work")["cwd"], str(old_wt))
+        self.assertEqual(next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")["cwd"], str(old_wt))
 
     def test_lock_text_with_decided_items_no_call(self):
         """An open-for-owner point naming only decided items causes no brain call."""
@@ -212,62 +167,33 @@ class S7Test(RoundCase):
         self.round(self.brain_answer({"action": "note", "text": "x"}))
         self.assertEqual(self.calls(), b)
 
-    def test_mechanical_rules(self):
-        """Freeze list, duplicate and implemented answers, fixes first, verify_open on finished packages, rule 5 (graphics go to codex)."""
+    # Verify existing decisions and answers stay available without legacy agents.
+    def test_answers_and_blocked_queue_do_not_start_legacy_agents(self):
+        """The Queen receives existing answers while blocked work creates no fix or question-run agent."""
         from haivequeen import db
         self.reset_rt()
         runtime.nofollow_add(self.conn, "testproj", "dummy-plan.md|p1")
-        self.round()
-        self.assertIsNone(self.ag("DUMMY-P1-work"), "frozen package is not started")
-        runtime.nofollow_remove(self.conn, "testproj", "dummy-plan.md|p1")
-        self.conn.execute("DELETE FROM agents")
-        self.conn.execute("DELETE FROM kv")
-        self.plan("IN_PROGRESS", [{"id": "D2", "title": "implemented item"}])
-        self.agent("Z-ZZ-work", package="ZZ", started=60, ended=50)
-        runtime.set_package(self.conn, "testproj", REL, "D2", phase="done")
-        for item, ans in (("D1", "already answered (ANSWERS.md). Duplicate question."), ("D2", "yes"), ("D3", "yes, do it")):
-            q = db.add_question(self.conn, "testproj", REL, item, "Which one?", "A")
-            db.answer_question(self.conn, q, ans, "owner")
-        b = self.calls()
-        self.round()
-        self.assertIsNone(self.ag("DUMMY-Q-D1-work"), "duplicate answer: no work agent")
-        self.assertIsNone(self.ag("DUMMY-Q-D2-work"), "item already implemented: no work agent")
-        self.assertEqual(self.ag("DUMMY-Q-D3-work")["status"], "running")
-        self.assertEqual(self.calls(), b)
-        self.reset_rt()
-        runtime.queue_upsert(self.conn, "testproj", "feature/dummy", "abc123def", REL, "blocked", "2 checks red: x")
-        b = self.calls()
-        self.round()
-        self.assertEqual(self.ag("DUMMY-FIX-abc123d-work")["status"], "running")
-        self.assertEqual(self.calls(), b)
-        self.reset_rt()
         runtime.set_package(self.conn, "testproj", REL, "P1", phase="done")
-        self.agent("V-P1-work", package="P1", started=20, ended=15)
-        self.agent("V-P1-verify", type="codex", provider="codex", package="P1", phase="verify", started=10, ended=5)
-        self.finish("V-P1-verify", "- Item A: teilweise\nOffene Anforderungen: 1")
-        b = self.calls()
-        self.round(self.brain_answer({"action": "note", "text": "x"}))
-        self.assertEqual(self.calls(), b)
-        self.assertIsNone(self.ag("DUMMY-P1-work-2"))
-        self.reset_rt()
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}, {"id": "P3", "title": "Blender models, textures assets", "depends": ["P9"]}])
-        self.agent("Z-ZZ-verify", type="codex", provider="codex", package="P1", phase="verify", status="failed", started=3, ended=2, last_line="x")
-        self.round(self.brain_answer({"action": "start_agent", "name": "DUMMY-P3-work", "type": "claude", "phase": "work", "plan": REL,
-                                      "package": "P3", "cwd": str(self.wt), "prompt": "Do P3.", "graphics": False}))
-        self.assertEqual(self.ag("DUMMY-P3-work")["type"], "codex", "a graphics package sent as Claude starts as Codex")
-
-    def test_v1_fix_plan_without_worktree(self):
-        """Fix from v1: a plan with a package table but no known worktree is asked once, then started by the routine in the main checkout."""
-        self.plan("IN_PROGRESS", P12)
-        note = self.brain_answer({"action": "note", "text": "ok"})
-        self.round(note)
-        self.assertIsNone(self.ag("DUMMY-P1-work"))
-        self.assertEqual(self.calls(), 1)
+        for item, answer in (("D1", "already answered"), ("D2", "yes"), ("D3", "yes, do it")):
+            qid = db.add_question(self.conn, "testproj", REL, item, "Which one?", "A")
+            db.answer_question(self.conn, qid, answer, "owner")
+        runtime.queue_upsert(self.conn, "testproj", "feature/dummy", "abc123def", REL, "blocked", "2 checks red: x")
         self.round()
-        row = self.ag("DUMMY-P1-work")
-        self.assertTrue(row and row["status"] == "running")
+        agents = runtime.list_agents(self.conn, "testproj")
+        self.assertEqual(len([a for a in agents if a["phase"] == "queen" and a["status"] == "running"]), 1)
+        self.assertFalse([a for a in agents if a["status"] == "running" and (a["package"].startswith("FIX-") or a["package"].startswith("Q-"))])
+        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="answered")), 3)
+        self.assertEqual(self.calls(), 0)
+    # Verify a plan without an existing worktree receives worktree instructions.
+    def test_plan_without_worktree_starts_queen(self):
+        """The Queen starts from the checkout and receives the worktree creation instruction."""
+        self.plan("IN_PROGRESS", P12)
+        self.round()
+        row = next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")
         self.assertEqual(row["cwd"], str(self.repo))
-
+        prompt = (self.env().run_dir(row["name"]) / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn("create the plan worktree and branch", prompt)
+        self.assertEqual(self.calls(), 0)
     def test_v1_fix_last_count_line_decides(self):
         """Fix from v1: the LAST 'Offene Anforderungen' line decides, text after it does not matter."""
         from haivequeen import routine
@@ -301,19 +227,18 @@ class S7Test(RoundCase):
         self.finish("F6", "│ Item A │ done │\nOffene Anforderungen: 0")
         self.assertTrue(routine.verify_zero(env, "F6"))
 
-    def test_v1_fix_verify_without_count_restarts(self):
-        """Fix from v1: a verify answer without any count line starts the verify again, at most 3 verifies per package."""
+    # Verify missing legacy verify counts do not start another verify agent.
+    def test_verify_without_count_goes_to_queen(self):
+        """Two old verify reports without counts are retained while one Queen starts."""
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         self.agent("W-P1-work", package="P1", started=40, ended=35)
         for i in (1, 2):
             self.agent("V%d-P1-verify" % i, type="codex", provider="codex", package="P1", phase="verify", started=30 - 10 * i, ended=25 - 10 * i)
             self.finish("V%d-P1-verify" % i, "no count here")
-        self.round(self.brain_answer({"action": "note", "text": "x"}))
-        self.assertTrue(self.ag("DUMMY-P1-verify"), "second verify without a count starts a third one")
-        self.finish("DUMMY-P1-verify", "still no count")
-        self.round(self.brain_answer({"action": "note", "text": "x"}))
-        self.assertIsNone(self.ag("DUMMY-P1-verify-2"), "at most 3 verifies per package")
-
+        self.round()
+        agents = runtime.list_agents(self.conn, "testproj")
+        self.assertEqual(len([a for a in agents if a["phase"] == "verify"]), 2)
+        self.assertEqual(len([a for a in agents if a["phase"] == "queen" and a["status"] == "running"]), 1)
 
 if __name__ == "__main__":
     unittest.main()

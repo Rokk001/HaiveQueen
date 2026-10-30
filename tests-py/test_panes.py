@@ -14,7 +14,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from bzztest import RoundCase
+from bzztest import RoundCase, runtime
 from haivequeen import loop
 from haivequeen.terminal import pane_title
 from haivequeen.terminal.headless import Headless
@@ -68,10 +68,11 @@ class PaneLayoutTest(RoundCase):
                 self.term.close_pane(p.id)
         super().tearDown()
 
+    # Verify the Queen and subsequent agent retain the pane layout.
     def test_first_agent_splits_dashboard_next_splits_first(self):
         """The first agent pane is a split of the dashboard pane (beside it); the second agent splits the first agent pane; all panes stay open."""
         self.round(terminal=self.term, poll=0.2, tries=100)
-        first = self.ag("DUMMY-P1-work")
+        first = next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")
         self.assertEqual(self.term.splits, [(self.dash, "horizontal")])
         self.assertEqual(first["status"], "running")
         spec = {"name": "DUMMY-P2-work", "person": "Zed", "model_long": "Claude Sonnet 5.5 medium"}

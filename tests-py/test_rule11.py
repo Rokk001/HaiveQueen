@@ -8,25 +8,20 @@ from haivequeen import scheduler as sch
 class Rule11Test(RoundCase):
     """Only READY or IN_PROGRESS plans may get an agent."""
 
+    # Verify that only eligible plan statuses start a Queen.
     def test_rule_11(self):
-        """A forced brain answer tries to start an agent in four plans (DRAFT, PAUSED, READY, no header); only the READY plan starts."""
-        actions = []
+        """Only the READY plan starts a Queen; DRAFT, PAUSED and missing status stay unchanged."""
         for stem, status in (("DRAFT", "DRAFT"), ("PAUSED", "PAUSED"), ("READY", "READY"), ("NOSTATUS", "")):
             write_plan(self.repo / "docs/plans/dummy" / ("%s-PLAN.md" % stem), status, [{"id": "P1", "title": "first"}], "Dummy plan " + stem)
-            actions.append({"action": "start_agent", "name": "R11-%s-work" % stem, "type": "claude", "phase": "work",
-                            "plan": "docs/plans/dummy/%s-PLAN.md" % stem, "package": "P1", "cwd": str(self.wt), "prompt": "Do package P1."})
-        self.round(self.brain_answer(*actions))
-        self.assertEqual(self.ag("R11-READY-work")["status"], "running")
-        log = self.log()
-        for k in ("DRAFT", "PAUSED", "NOSTATUS"):
-            self.assertIsNone(self.ag("R11-%s-work" % k))
-            self.assertRegex(log, r"(?s)R11-%s-work.*?rule 11" % k)
+        self.round()
+        queens = [a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen"]
+        self.assertEqual(len(queens), 1)
+        self.assertEqual(queens[0]["plan_path"], "docs/plans/dummy/READY-PLAN.md")
         runtime.sync_plans(self.conn, "testproj", str(self.repo))
         st = {p["path"]: p["status"] for p in runtime.list_plans(self.conn, "testproj")}
         self.assertEqual(st["docs/plans/dummy/READY-PLAN.md"], "IN_PROGRESS")
         self.assertIn('status = "IN_PROGRESS"', (self.repo / "docs/plans/dummy/READY-PLAN.md").read_text(encoding="utf-8"))
         self.assertEqual((st["docs/plans/dummy/DRAFT-PLAN.md"], st["docs/plans/dummy/PAUSED-PLAN.md"]), ("DRAFT", "PAUSED"))
-
 
 class RestartTest(RoundCase):
     """Follow-up tasks are found from the STATE after a restart of the loop."""
@@ -73,37 +68,27 @@ class FixesTest(RoundCase):
         self.assertIn("proj-dummy-r4-experience-arena-prison", text)
         self.assertNotIn("experience,", text)
 
-    def test_bundled_prompt_uses_slugs(self):
-        """A package started in the main checkout gets an own worktree with slug names."""
+    # Verify a Queen is instructed to create the plan worktree if absent.
+    def test_queen_receives_worktree_instruction(self):
+        """The Queen's task names the plan and its worktree creation rule."""
         self.agent("SEED-work", package="SEED", cwd=str(self.repo), started=30, ended=20)
         self.plan("IN_PROGRESS", [{"id": "R4 experience, arena", "title": "x"}])
         self.round()
-        name = [n for n in self.names() if n.startswith("DUMMY-") and n.endswith("-work")][0]
-        text = (self.env().run_dir(name) / "prompt.md").read_text(encoding="utf-8")
-        self.assertIn("dummy-r4-experience-arena", text)
-        self.assertIn("only lower-case letters, digits and hyphens", text)
+        queen = next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")
+        text = (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn("create the plan worktree and branch", text)
+        self.assertIn(REL, text.replace(chr(92), "/"))
 
-    def test_blocked_row_without_plan(self):
-        """A blocked queue row without a plan starts a fix agent with the row text as its task, once; an unknown plan is still skipped."""
+    # Verify external blocked queue rows remain untouched.
+    def test_blocked_row_without_hive_is_untouched(self):
+        """A blocked row without a Hive starts no fix agent and keeps its status."""
         self.plan("DONE", [{"id": "P1", "title": "first"}])
         runtime.queue_upsert(self.conn, "testproj", "chore/no-plan-fix", "feed1234abcd", "keiner", "blocked", "two checks red: fix the two checks")
         self.round()
-        fx = [a for a in runtime.list_agents(self.conn, "testproj") if a["package"] == "FIX-feed123"]
-        self.assertEqual(len(fx), 1)
-        self.assertEqual(fx[0]["phase"], "work")
-        prompt = (self.env().run_dir(fx[0]["name"]) / "prompt.md").read_text(encoding="utf-8")
-        self.assertIn("blockiert two checks red", prompt)
-        self.assertIn("fix the two checks", prompt)
-        self.assertIn("chore/no-plan-fix", prompt)
-        self.assertIn("fix-chore-no-plan-fix", prompt)
-        self.round()
-        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["package"] == "FIX-feed123"]), 1)
-        self.conn.execute("DELETE FROM agents")
-        self.conn.execute("DELETE FROM queue")
-        runtime.queue_upsert(self.conn, "testproj", "chore/other", "bad99999", "some/unknown/PLAN.md", "blocked", "x: y")
-        self.round()
         self.assertFalse([a for a in runtime.list_agents(self.conn, "testproj") if a["package"].startswith("FIX-")])
-
+        row = dict(self.conn.execute("SELECT * FROM queue WHERE project=? AND branch=?", ("testproj", "chore/no-plan-fix")).fetchone())
+        self.assertEqual(row["status"], "blocked")
+        self.assertEqual(row["note"], "two checks red: fix the two checks")
 
 if __name__ == "__main__":
     unittest.main()

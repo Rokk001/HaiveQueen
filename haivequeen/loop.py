@@ -456,54 +456,51 @@ def _state_summary(env, quiet=False) -> dict:
     return {"all_plans": prows, "plans": plans}
 
 
+# Serialize Hive scheduling between the loop and owner commands.
+@contextmanager
+def hive_schedule_lock(timeout: float = 30.0):
+    """Serialize Hive scheduling between the loop and owner commands."""
+    path = osplat.data_dir() / "hive-schedule.lock"
+    deadline = time.monotonic() + timeout
+    while _take_pid_lock(path, own_ok=False) != 0:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Hive scheduling is busy")
+        time.sleep(0.1)
+    try:
+        yield
+    finally:
+        if path.exists() and path.read_text(encoding="ascii").strip() == str(os.getpid()):
+            path.unlink()
+
+
+# Schedule one round of Hives across every registered project.
 def run_round(conn, machine: dict, envs=None, terminal=None, brain_answer=None, brain_runner=None, dry_run=False, plan_files=None,
               out_file=None, settle: float = 3.0, poll: float = 2.0, tries: int = 20, free_ram=None, alive=None) -> dict:
-    """One orchestrator round over all projects. Returns {skipped, projects: {name: {report, started, actions}}}.
-
-    A STOP flag, a pause or drain (D8) or low free RAM skips the starts (the event hooks still run). `brain_answer` (dict) replaces the brain call
-    (tests), `dry_run` changes nothing, `terminal` is the terminal backend (default from the settings), `free_ram()` returns the free RAM in GB.
-    With BZZ_TEST_NOSTART no pane is opened: the agent is marked running with the pid of this process.
-    """
+    """Schedule one round of Hives across every registered project."""
+    from . import hives
     envs = envs if envs is not None else sch.load_projects(conn, machine)
-    result = {"skipped": None, "projects": {}}
-    free_ram = free_ram or ram_gb
-    if not dry_run:
-        try:
-            usage.refresh_codex_usage(conn)
-        except Exception:
-            pass
-    for env in envs:
-        if not dry_run:
-            inbox.process_inbox(env)
-        routine_release_locks(env)
-        routine_release_stalls(env)
-    summaries = {env.name: _state_summary(env) for env in envs}
-    skip = None
-    if not dry_run:
-        if stop_flag().exists():
-            skip = "STOP"
-        elif not runstate.starts_allowed(conn):
-            skip = runstate.get_state(conn)["state"]
-        else:
-            low = [e for e in envs if free_ram() < _min_ram(e)]
-            if low:
-                skip = "free RAM %.2f GB is below the minimum %.2f GB" % (free_ram(), _min_ram(low[0]))
-    if skip:
-        result["skipped"] = skip
-        for env in envs:
-            env.log("round skipped (%s)" % skip)
-            run_hook(env, summaries[env.name])
-        return result
-    pool = _make_pool(conn, envs[0] if envs else None)
-    for env in sch.order_projects(envs):
-        if not dry_run:
-            routine.repair_stale_agents(env, alive=alive)
-            runtime.archive_agents(conn, env.name, 12)
-        result["projects"][env.name] = _project_round(env, pool, summaries[env.name], terminal, brain_answer, brain_runner, dry_run,
-                                                      plan_files, out_file, settle, poll, tries, free_ram, alive, machine)
-    if not dry_run or is_test_runtime():
-        write_state(conn, "idle", datetime.now(), None)
-    return result
+    with hive_schedule_lock():
+        if dry_run:
+            import sqlite3
+            snapshot = sqlite3.connect(":memory:", isolation_level=None)
+            snapshot.row_factory = sqlite3.Row
+            try:
+                conn.backup(snapshot)
+                copied = [sch.ProjectEnv(snapshot, e.name, e.workspace, e.settings, e.colour, e.priority, e.plan_globs, e.plan_exclude) for e in envs]
+                result = hives.schedule_round(snapshot, machine, copied, terminal=terminal, dry_run=True, free_ram=free_ram, alive=alive,
+                                              settle=settle, poll=poll, tries=tries, plan_files=plan_files)
+            finally:
+                snapshot.close()
+            if out_file:
+                Path(out_file).parent.mkdir(parents=True, exist_ok=True)
+                Path(out_file).write_text(json.dumps(result, indent=2), encoding="utf-8")
+                if envs:
+                    e = envs[-1]
+                    snapshot_view = {"project": e.name, "repo": str(e.code_repo), "workspace": str(e.workspace), "dryRun": True}
+                    Path(out_file).with_suffix(".snapshot.json").write_text(json.dumps(snapshot_view, indent=2), encoding="utf-8")
+            return result
+        return hives.schedule_round(conn, machine, envs, terminal=terminal, dry_run=False, free_ram=free_ram, alive=alive,
+                                    settle=settle, poll=poll, tries=tries, plan_files=plan_files)
 
 
 def _min_ram(env) -> float:
@@ -920,6 +917,7 @@ def _reject_reason(c, a):
     return why, pick
 
 
+# Action start_agent: validate, write the prompt and the agent row, open the pane. Returns 1 when an agent was started.
 def _do_start(c, a, forced_pick=None) -> int:
     """Action start_agent: validate, write the prompt and the agent row, open the pane. Returns 1 when an agent was started.
 
@@ -957,7 +955,11 @@ def _do_start(c, a, forced_pick=None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     pf = run_dir / "prompt.md"
     hf = run_dir / "HANDOFF"
-    if protocol == "claude":
+    if phase == "queen":
+        rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"
+        hdr = ("You are the Queen of this Hive. Work the plan, preserve its state, and use the project work rules (%s). "
+               "Before integration follow the project's integration rules.\n\nTASK\n\n" % rules_doc)
+    elif protocol == "claude":
         flow_doc = env.settings.get("buildFlowDoc", "")
         hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of AGENT-RULES.md and the rule sections you need) are "
                "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name%s only when your task "
@@ -968,6 +970,9 @@ def _do_start(c, a, forced_pick=None) -> int:
                "files it names). Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, TOOLS_DIR / "docs" / "AGENT-RULES.md", rules_doc))
     handoff = ("Prüfe nach jedem abgeschlossenen Arbeitsschritt, ob die Datei %s existiert. Wenn ja: schreib den Stand (erledigt, offen, nächster Schritt, "
                "Branch, Worktree) in die State-Datei des Plans unter 'Handoff %s' und beende dich." % (hf, nm))
+    if phase == "queen":
+        handoff = ("After each completed step check %s. When it exists, do not start new Bees, "
+                   "wait for running Bees, finish your current step, record the handoff in the plan state and end." % hf)
     pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff, encoding="utf-8")
     ident = agent_identity(env.conn)
     cls = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
@@ -1284,11 +1289,15 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         refresh()
         if rounds and done >= rounds:
             break
+        from . import hives
+        wake = hives.wake_marker(conn, envs)
         end = time.time() + minutes * 60
         while time.time() < end and not stop_flag().exists():
             sleep(wait_seconds)
             runstate.settle(conn)
             refresh()
+            if hives.wake_marker(conn, envs) != wake:
+                break
     stopped = stop_flag().exists()
     for env in envs:
         env.log("STOP found, loop ending" if stopped else "loop ending")

@@ -108,11 +108,12 @@ def interrupted_count(agents: list, plan: str, pkg: str, phase: str) -> int:
     return n
 
 
+# True when the retry after the interrupted end `a` may start now.
 def retry_due(env, agents: list, a: dict, now: datetime = None) -> bool:
     """True when the retry after the interrupted end `a` may start now.
 
     The time of the next try is stored in the agent row (retryAt), so a waiting retry survives a restart of the Queen. A rate limit has none
-    yet: it is due at once when a provider with room is left (the normal provider choice then skips the limited one), otherwise the later
+    yet: a Queen waits for her provider; for older phases a provider with room permits an immediate retry, otherwise the later
     reset time of the providers at their limit (15 minutes when none is known) is stored and waited for. API and connection errors wait 1, 2,
     4, 8 minutes, then 15, counted over the consecutive interrupted ends of the task; sleep and vanished processes are retried at once.
     """
@@ -125,7 +126,7 @@ def retry_due(env, agents: list, a: dict, now: datetime = None) -> bool:
     if kind == interrupt.RATE_LIMIT:
         wins = {p["name"]: usage.limit_windows(env.conn, p) for p in env.providers if p["slots"] > 0}
         limited = sch.row_provider(a)
-        if any(not any(w["used_pct"] >= 100 for w in ws) for n, ws in wins.items() if n != limited):
+        if a.get("phase") != "queen" and any(not any(w["used_pct"] >= 100 for w in ws) for n, ws in wins.items() if n != limited):
             return True   # another provider has room: the normal provider choice takes it at once
         # wait for the reset of the window of the limited provider that is at its limit (the later one when both are); 15 minutes when unknown
         resets = [w["reset_epoch"] for w in wins.get(limited, []) if w["used_pct"] >= 100 and w["reset_epoch"]]

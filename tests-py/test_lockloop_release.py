@@ -98,19 +98,15 @@ class LockLoopTest(RoundCase):
         self.round()
         self.assertEqual(routine.package_failures(env, routine.all_agents(env), REL, "K1"), 3)
 
-    def test_released_package_is_not_locked_again_in_the_same_round(self):
-        """After the triage decision the package is unlocked and stays unlocked in this and the next round; the verifies so far are forgiven."""
+    # Verify old verify failures no longer trigger a package lock or triage agent.
+    def test_old_verify_failures_do_not_lock_or_start_triage(self):
+        """Repeated rounds keep the package unlocked and do not start triage."""
         self.round()
-        self.assertTrue(self.locked())
-        tri = [a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"][0]
-        triage.decide(self.conn, "testproj", REL, "K1", "Layout", "split the file", "plan rule 3", "docs/plans")
-        self.finish(tri["name"])
+        self.assertFalse(self.locked())
+        self.assertFalse([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"])
         self.round()
-        self.assertFalse(self.locked(), "unlocked by the decision and not locked again in the same round")
-        self.assertEqual(runtime.kv_get(self.conn, "testproj", "lockrelv:%s|K1" % REL), "3")
-        self.round()
-        self.assertFalse(self.locked(), "still unlocked in the next round")
-
+        self.assertFalse(self.locked())
+        self.assertFalse([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"])
 
 class ReadyRefusalTest(RoundCase):
     """Only the release phase registers a branch as ready, and only after a whole-plan verify with 'Offene Anforderungen: 0'."""

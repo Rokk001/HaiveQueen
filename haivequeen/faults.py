@@ -69,14 +69,16 @@ def _check_terminal_crash(conn, now: datetime, reader) -> None:
             len(crashes), "y" if len(crashes) == 1 else "ies", max(crashes).isoformat(timespec="seconds")))
 
 
+# Detect non-interrupted agent faults without treating retries as failures.
 def _check_agents(env) -> None:
     """File runner_vanished / agent_no_result for agent rows that ended that way since the last look (the first look only records the rows)."""
     conn = env.conn
     raw = runtime.kv_get(conn, env.name, SEEN_KEY)
     seen = set(json.loads(raw)) if raw else set()
     first = raw is None
+    from . import interrupt
     for a in env.agents("all"):
-        if a.get("status") not in ("done", "failed") or not a.get("name"):
+        if a.get("status") not in ("done", "failed") or not a.get("name") or interrupt.is_interrupted(a):
             continue
         key = "%s|%s" % (a["name"], a.get("started_at") or "")
         if key in seen:

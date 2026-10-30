@@ -54,8 +54,9 @@ class SelectTest(unittest.TestCase):
         self.assertFalse(sch.capability_available(ps, ["images"]))
         self.assertTrue(sch.capability_available(sch.get_providers(settings(provider("G", 1, caps=("images",)))), ["images"]))
 
+    # A busy slot forwards at once; prefer and avoid behave as before; free slots count every running provider process.
     def test_busy_slot_forwards(self):
-        """A busy slot forwards at once; prefer and avoid behave as before; free slots count workers per provider only."""
+        """A busy slot forwards at once; prefer and avoid behave as before; free slots count every running provider process."""
         ps = [provider("A", 2), provider("B", 2)]
         self.assertEqual(self.pick(ps, free={"A": 0, "B": 2}), "B")
         self.assertEqual(self.pick(ps, free={"A": 0, "B": 0}), "none")
@@ -66,7 +67,7 @@ class SelectTest(unittest.TestCase):
         rows = [{"status": "running", "phase": "work", "type": "claude", "provider": "B"}, {"status": "starting", "phase": "work", "type": "claude"},
                 {"status": "running", "phase": "integrate", "type": "claude", "provider": "A"}, {"status": "done", "phase": "work", "provider": "A"}]
         f = sch.provider_free(sch.get_providers(settings(provider("A", 2), provider("B", 2), provider("claude", 2))), rows)
-        self.assertEqual((f["A"], f["B"], f["claude"]), (2, 1, 1))
+        self.assertEqual((f["A"], f["B"], f["claude"]), (1, 1, 1))
 
     def test_capability_only_and_fallback(self):
         """capability-only gets no normal package; fallback only when every preferred provider is full or at its limit."""
@@ -135,49 +136,46 @@ class ProviderRoundTest(RoundCase):
         """Set the provider list."""
         self.machine["providers"] = list(p)
 
+    # One Queen uses one provider slot for a plan with two packages.
     def test_dummy_single_slot(self):
-        """The dummy provider starts the package; its single slot is used up, the second package waits."""
+        """One Queen uses one provider slot for a plan with two packages."""
         self.prov(provider("dummy", 1))
         self.plan("IN_PROGRESS", [{"id": "W1", "title": "change the parser"}, {"id": "W2", "title": "change the lexer"}])
         self.round()
-        self.assertEqual(self.ag("DUMMY-W1-work")["status"], "running")
-        self.assertEqual(self.ag("DUMMY-W1-work")["provider"], "dummy")
-        self.assertIsNone(self.ag("DUMMY-W2-work"))
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["provider"], "dummy")
 
+    # A disabled provider is skipped when starting the plan's Queen.
     def test_slots_zero_and_forwarding(self):
-        """Slots 0 = off: the other provider takes the package; two providers start two packages in one round."""
+        """A disabled provider is skipped when starting the plan's Queen."""
         self.prov(provider("dummy", 0), provider("other", 1))
         self.plan("IN_PROGRESS", [{"id": "W1", "title": "change the parser"}, {"id": "W2", "title": "change the lexer"}])
         self.round()
-        self.assertEqual(self.ag("DUMMY-W1-work")["provider"], "other")
-        self.assertIsNone(self.ag("DUMMY-W2-work"))
-        self.reset()
-        self.prov(provider("dummy", 1), provider("other", 1))
-        self.round()
-        provs = sorted(a["provider"] for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "work" and a["status"] == "running")
-        self.assertEqual(provs, ["dummy", "other"])
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["provider"], "other")
 
+    # An image package does not change the provider chosen for the plan's Queen.
     def test_graphics_package(self):
-        """A graphics package goes to the provider with images (title rule or declared in the plan header); a normal one never to capability-only."""
+        """An image package does not change the provider chosen for the plan's Queen."""
         self.prov(provider("plain", 2), provider("gfx", 1, "capability-only", ("images",), proto="codex"))
         self.plan("IN_PROGRESS", [{"id": "G1", "title": "Blender models and textures"}, {"id": "W1", "title": "change the parser"}])
         self.round()
-        self.assertEqual((self.ag("DUMMY-G1-work")["provider"], self.ag("DUMMY-G1-work")["type"]), ("gfx", "codex"))
-        self.assertEqual(self.ag("DUMMY-W1-work")["provider"], "plain")
-        self.reset()
-        self.plan("IN_PROGRESS", [{"id": "G2", "title": "Draw the logo", "capability": "images"}, {"id": "W1", "title": "change the parser"}])
-        self.round()
-        self.assertEqual(self.ag("DUMMY-G2-work")["provider"], "gfx")
-        self.assertEqual(self.ag("DUMMY-W1-work")["provider"], "plain")
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["provider"], "plain")
 
+    # A missing image provider does not prevent the Queen starting the plan.
     def test_no_provider_with_capability(self):
-        """When no provider with images has slots the package stays and is reported once as a question."""
+        """A missing image provider does not prevent the Queen starting the plan."""
         self.prov(provider("plain", 2), provider("gfx", 0, "capability-only", ("images",), proto="codex"))
         self.plan("IN_PROGRESS", [{"id": "G1", "title": "Blender models and textures"}, {"id": "W1", "title": "change the parser"}])
         self.round()
-        self.round()
-        self.assertIsNone(self.ag("DUMMY-G1-work"))
-        self.assertEqual(len([q for q in runtime.list_questions(self.conn, "testproj") if q["item"] == "CAP-G1"]), 1)
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["provider"], "plain")
+        self.assertEqual(runtime.list_questions(self.conn, "testproj"), [])
 
 
 class ExampleConfigTest(unittest.TestCase):
