@@ -248,12 +248,12 @@ class LoopTest(RoundCase):
             self.assertEqual((self.base / "pane.lock").read_text(encoding="ascii").strip(), str(os.getpid()))
 
     def test_agent_names_and_queen_title(self):
-        """24 unique agent names, none is Queen, and the pane of the main agent is titled BEEKEEPER."""
-        self.assertEqual(len(loop.AGENT_NAMES), 24)
-        self.assertEqual(len(set(loop.AGENT_NAMES)), 24)
+        """At least 24 unique agent names, none is Queen, and the pane of the main agent is titled BEEKEEPER."""
+        self.assertGreaterEqual(len(loop.AGENT_NAMES), 24)
+        self.assertEqual(len(set(loop.AGENT_NAMES)), len(loop.AGENT_NAMES))
         self.assertNotIn("Queen", loop.AGENT_NAMES)
         self.assertEqual(loop.AGENT_NAMES[:3], ["Ada", "Bea", "Cleo"])
-        self.assertEqual(loop.AGENT_NAMES[-1], "Zoe")
+        self.assertEqual(loop.AGENT_NAMES[23], "Zoe")   # the first 24 names keep their order, later ones were added
         self.assertIn("| all projects | BEEKEEPER | job: Beekeeper |", loop.queen_pane_title("m", True))
 
 

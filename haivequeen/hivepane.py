@@ -47,7 +47,7 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
     """Lines of the Hive frame for `width` columns: a list of lines, each a list of (text, colour) parts.
 
     Big form (a Queen runs or starts): a box with "Hive: <plan>", the Queen line (name, model, runtime), one "Bee: <name> <task> <n/m> [bar]" line per Bee,
-    the `message` of a pending confirmation and the key hint. Small form (no Queen): only "Hive: <plan>" and the German state, nothing else
+    the `message` of a pending confirmation and the key hint. Small form (no Queen): the same box with only "Hive: <plan>" and the German state
     (plus the message while a confirmation waits). Everything is drawn in the colour of the Apiary.
     """
     now = now or datetime.now()
@@ -68,15 +68,11 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
             started = db.parse_time(queen.get("started_at"), now)
             text = "Queen: %s | %s %s | %s" % (name, typ, queen.get("modelShort") or "", header.fmt_run((now - started).total_seconds()))
     else:
-        text = "Queen: " + (hives.state_label(hive) or "-")
+        text = "Queen: " + (hives.state_label(hive) or "wartet auf Start")
     text = text.replace("  ", " ")
-    if not running:
-        lines = [[(name_line[:width], col)], [(text[:width], col)]]
-        if message:
-            lines.append([(message[:width], "yellow")])
-        return lines
     body = [name_line, text]
-    body += ["Bee: " + " ".join(x for x in (str(bee["name"]), str(bee["task"]), str(bee["step"]), bar(bee["step"])) if x) for bee in data["bees"]]
+    if running:
+        body += ["Bee: " + " ".join(x for x in (str(bee["name"]), str(bee["task"]), str(bee["step"]), bar(bee["step"])) if x) for bee in data["bees"]]
 
     def row(content, colour):
         """One framed line: side bars in the colour of the Apiary, the text cut at the pane edge."""
@@ -86,7 +82,8 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
     lines += [row(t, col) for t in body]
     if message:
         lines.append(row(message, "yellow"))
-    lines.append(row("[X] dequeen  [R] requeen  [C] requeen mit Anbieter", "darkgray"))
+    if running:
+        lines.append(row("[X] dequeen  [R] requeen  [C] requeen mit Anbieter", "darkgray"))
     lines.append([(BOTTOM + RULE * (width - 2) + "┘", col)])
     return lines
 
@@ -258,7 +255,7 @@ def run_head(project, out=None, interval=2.0, max_ticks=None):
             if not conn.execute("SELECT 1 FROM hives WHERE project=? AND state!='done'", (project,)).fetchone():
                 break
             width = max(10, shutil.get_terminal_size((120, 40)).columns)
-            out.write(header.ESC + "[2J" + header.ESC + "[H" + "".join(header.line_str(p) for p in head_lines(conn, project, width)[0:1]))
+            out.write(header.ESC + "[H" + "".join(header.line_str(p) for p in head_lines(conn, project, width)[0:1]) + header.ESC + "[K")   # overwrite, no screen clear: copies would pile up in the scrollback
             out.flush()
         except Exception:
             pass

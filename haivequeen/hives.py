@@ -210,7 +210,8 @@ def hive_data(conn, project, agents, plan=None):
     notes = db.rows(conn, "SELECT project,agent,text FROM events WHERE kind='note' ORDER BY id") if rows else []
     for hive in rows:
         active = [a for a in agents if a.get('project') == hive['project'] and a.get('plan_path') == hive['plan_path']]
-        hive['queen'] = next((a for a in active if a.get('phase') == 'queen'), None)
+        queens_of = [a for a in active if a.get('phase') == 'queen']
+        hive['queen'] = next((a for a in queens_of if a.get('status') in ('running', 'starting')), queens_of[-1] if queens_of else None)   # the running Queen, else the newest one
         bees = {str(a.get('person') or a.get('name')): {'name': str(a.get('person') or a.get('name')), 'task': a.get('task') or a.get('package') or '', 'step': ''} for a in active if a.get('phase') == 'bee'}
         queens = {a['name'] for a in active if a.get('phase') == 'queen'}
         packages = {r['id'] for r in db.rows(conn, "SELECT id FROM packages WHERE project=? AND plan_path=?", (hive['project'], hive['plan_path']))}
@@ -521,8 +522,11 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 existing_names = [a['name'] for a in runtime.list_agents(conn, env.name, 'all')]
                 predecessors = [a for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('phase') == 'queen' and a.get('person')]
                 name = loop.agent_identity(conn, [predecessors[-1]['person']] if predecessors else ())['Person']
-                if name in existing_names:   # an earlier agent of this project carried the name: take the next free one from the list
-                    name = next((n for n in loop.AGENT_NAMES if n not in existing_names), name)
+                row_key, k = name, 1
+                while row_key in existing_names:   # an earlier agent of this project carried the name: the row key gets a number, the Queen keeps her plain name
+                    k += 1
+                    row_key = '%s-%d' % (name, k)
+                name = row_key
                 questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
                 prompt = 'Work the entire plan %s. Read its state file, predecessor handoff, project rules, and all owner answers. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --fields using a JSON object with the absolute cwd. Work independent packages, answer the completeness question and integrate only when no requirements remain. Register your own branch with bzz ready, then use bzz integration acquire --project %s --plan %s. Use the returned buildJobs EnvVar and Jobs for the integration build. If it reports waiting for integration, write a handoff and end until restarted. After acquiring the place, abort any unfinished merge in the project integration checkout before integrating again. Release the integration place with bzz integration release --project %s --plan %s after integration. If only open owner questions remain, write a handoff and end your final report with WAITING_FOR_OWNER.' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name, env.name, path, env.name, path)
                 integration = {key: env.settings.get(key) for key in ('integrationBranch', 'compileCheck', 'integratorInstructions', 'buildFlowDoc') if env.settings.get(key)}

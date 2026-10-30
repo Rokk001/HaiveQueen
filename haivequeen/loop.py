@@ -27,7 +27,9 @@ TOOLS_DIR = Path(__file__).resolve().parent.parent
 PHASES = ("work", "verify", "release", "integrate")
 TEMPORARY = re.compile(r"^(no worker slot|no free slot|no integrator slot|free RAM|STOP flag|run state)")   # a start rejected for one of these is tried again next round
 AGENT_NAMES = ["Ada", "Bea", "Cleo", "Dina", "Ella", "Fia", "Gina", "Hana", "Ida", "Juna", "Kira", "Lea", "Mia", "Nora", "Ola",
-               "Pia", "Rita", "Sara", "Tara", "Uma", "Vera", "Wilma", "Yara", "Zoe"]   # short first names of the agents; the main agent is called Queen and is not in this list
+               "Pia", "Rita", "Sara", "Tara", "Uma", "Vera", "Wilma", "Yara", "Zoe",
+               "Anna", "Bella", "Clara", "Dora", "Eva", "Frida", "Greta", "Heidi", "Ines", "Jana", "Katja", "Lena", "Maja", "Nina", "Olga", "Paula",
+               "Rosa", "Sofia", "Tessa", "Ulla", "Vivi", "Wanda", "Xenia", "Zora"]   # short first names of the agents; the main agent is called Queen and is not in this list
 AGENT_COLOURS = ["4FA8FF", "C77DFF", "FF6FB5", "3DDCDC", "FF9F43", "3DDC97", "2B6CB0", "8A3FD1", "C2306F", "1E9C9C", "C26A10", "1E9B5F"]   # 6 hues at least 25 degrees apart, each light then dark (the first 6 agents differ in hue), none of the status colours
 FORWARD_ENV = ("BZZ_DATA_DIR", "BZZ_CONFIG_DIR", "BZZ_LOG_DIR", "BZZ_RUNTIME_OVERRIDE", "BZZ_HOST", "BZZ_FAKE_AGENT", "BZZ_SAMPLE_SEC")
 
@@ -305,7 +307,7 @@ def agent_identity(conn, excluded_names=()) -> dict:
     running_names = {str(a.get("person")) for a in rows if a.get("status") in ACTIVE}
     n = (next((x for x in AGENT_NAMES if x not in used_n), None)
          or next((x for x in AGENT_NAMES if x not in running_names and x not in excluded_names), None)
-         or AGENT_NAMES[len(rows) % len(AGENT_NAMES)])
+         or min(AGENT_NAMES, key=lambda x: sum(1 for a in rows if str(a.get("person")) == x and a.get("status") in ACTIVE)))   # all taken: the least used one
     # Colours of agents that ended within the last hour are given up first; a colour of a running agent repeats only with more running agents than colours (then the least used one).
     # The second shade of a hue is only taken when every hue is in use by a running agent: colours are compared by hue family (index modulo 6), not by exact value.
     run_hues = {AGENT_COLOURS.index(x) % 6 for x in run_c if x in AGENT_COLOURS}
@@ -461,6 +463,21 @@ def apiary_argv(env) -> list:
     return [osplat.python_executable(), "-c", HIVE_BOOT, str(TOOLS_DIR), "--project", env.name, "--head"] + forward_env_args()
 
 
+HIVE_BELOW_HEAD = 0.95   # share of the Apiary block that the first Hive pane takes below the slim head pane (the head keeps one or two lines)
+
+
+def hive_split_size(placed: int, total: int) -> float:
+    """Share the new Hive pane takes when it splits the last Hive pane, so that all Hive panes of the Apiary end up equally wide.
+
+    `placed` is the number of live Hive panes of the Apiary, `total` the number of living Hives. The first pane goes below the head; the next one
+    takes everything that is still to be placed except one share, so splits of 3/4, 2/3, 1/2 give four equal panes. A Hive beyond `total` is split in half.
+    """
+    if placed == 0:
+        return HIVE_BELOW_HEAD
+    remaining = total - placed
+    return remaining / (remaining + 1) if remaining >= 1 else 0.5
+
+
 def _pane_order(pane) -> int:
     """Creation number of a pane (the number after the last dot of its id), to put panes in the order they were opened."""
     try:
@@ -505,7 +522,8 @@ def ensure_hive_pane(env, terminal, window: str, plan: str) -> str:
         colour = env.colour   # the colour of the Apiary, shared by its head and all its Hives
         target, direction = (mine[-1].id, "horizontal") if mine else (head, "vertical")
         env.log("pane of Hive %s (Apiary %s): splits %s (%s)" % (Path(plan).stem, env.name, target, direction))
-        return terminal.split_pane(window, title, colour, hive_argv(env, plan), direction, 0.5, target, "%s__hive__%s" % (env.name, Path(plan).stem))
+        total = env.conn.execute("SELECT COUNT(*) FROM hives WHERE project=? AND state!='done'", (env.name,)).fetchone()[0]
+        return terminal.split_pane(window, title, colour, hive_argv(env, plan), direction, hive_split_size(len(mine), total), target, "%s__hive__%s" % (env.name, Path(plan).stem))
 
 
 def start_queen(env, terminal, window: str, spec: dict) -> str:
@@ -837,8 +855,9 @@ def _do_start(c, a, forced_pick=None) -> int:
     pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff, encoding="utf-8")
     predecessors = [a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('phase') == 'queen' and a.get('plan_path') == plan and a.get('person')]
     ident = agent_identity(env.conn, [predecessors[-1]['person']] if phase == 'queen' and predecessors else ())
-    if phase in ("bee", "queen"):   # a Bee and a Queen are named by their short female name (A2)
-        ident["Person"] = nm
+    if phase in ("bee", "queen"):   # a Bee and a Queen are named by their short female name (A2); the number of a repeated row key is not part of it
+        base = re.sub(r"-\d+$", "", nm)
+        ident["Person"] = base if base in AGENT_NAMES else nm
     cls = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
     cm = sch.class_model(env.providers, prov, cls)
     bundle = [str(b) for b in a.get("bundle") or []]
@@ -863,7 +882,7 @@ def _do_start(c, a, forced_pick=None) -> int:
             term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
             launch_agent(env, term, env.settings.get("window", "HaiveQueen"), spec, c["settle"], c["poll"], c["tries"])
     env.log("start %s (%s, %s)" % (nm, prov, phase))
-    env.event("%s started (%s)" % (nm, {"codex": "Codex", "claude": "Claude"}.get(prov, prov)))
+    env.event("%s started (%s)" % (ident["Person"] if phase in ("bee", "queen") else nm, {"codex": "Codex", "claude": "Claude"}.get(prov, prov)))
     if phase != "integrate":
         pk0 = norm_plan(plan)
         if st["plan_status"].get(pk0) == "READY":
