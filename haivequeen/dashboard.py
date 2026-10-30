@@ -18,7 +18,7 @@ if not __package__:   # started as a script: make the package importable
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from haivequeen import buildjobs, config, db, platform as osplat, runstate, runtime, usage  # noqa: E402
-from haivequeen import header, scheduler as sch  # noqa: E402
+from haivequeen import header, hives, loop, scheduler as sch  # noqa: E402
 
 FULL, LIGHT, LINE = "█", "░", "─"
 REFRESH_SECONDS = 5
@@ -342,7 +342,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
                               + " ORDER BY id DESC LIMIT 1", pa).fetchone()
     return {
         "now": now, "project": project, "projects": scope, "colours": colours, "cfg": cfg, "sysinfo": sysinfo,
-        "run": runstate.get_state(conn), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all),
+        "run": runstate.get_state(conn), "hives": hive_data(conn, project, agents), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all),
         "cu": window_usage(_kv(conn, "usage-claude"), now), "xu": window_usage(_kv(conn, "usage-codex"), now),
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
@@ -355,6 +355,43 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
                  "tin": sum(b["tokens_in"] or 0 for b in brain_today), "tout": sum(b["tokens_out"] or 0 for b in brain_today)},
         "last_round": (_parse_time(last_round[0]).strftime("%H:%M:%S") if last_round and _parse_time(last_round[0]) else "-"),
     }
+
+
+# Collect Hive data and the latest reported step for each Bee.
+def hive_data(conn, project, agents):
+    """Collect Hives, active Queens and Bee progress from their reports."""
+    where, args = ("WHERE project=? AND state!='done'", (project,)) if project else ("WHERE state!='done'", ())
+    rows = db.rows(conn, "SELECT * FROM hives " + where + " ORDER BY project,plan_path", args)
+    notes = db.rows(conn, "SELECT project,agent,text FROM events WHERE kind='note' ORDER BY id")
+    for hive in rows:
+        active = [a for a in agents if a.get('project') == hive['project'] and a.get('plan_path') == hive['plan_path']]
+        hive['queen'] = next((a for a in active if a.get('phase') == 'queen'), None)
+        bees = {str(a.get('person') or a.get('name')): {'name': str(a.get('person') or a.get('name')), 'task': a.get('task') or a.get('package') or '', 'step': ''} for a in active if a.get('phase') == 'bee'}
+        queens = {a['name'] for a in active if a.get('phase') == 'queen'}
+        packages = {r['id'] for r in db.rows(conn, "SELECT id FROM packages WHERE project=? AND plan_path=?", (hive['project'], hive['plan_path']))}
+        for note in notes:
+            if note['project'] != hive['project']:
+                continue
+            match = re.match(r"^([^ ]+) ([^:]+): step (\d+/\d+)\s*(.*)$", note['text'] or '')
+            if not match:
+                continue
+            name, package, step, task = match.groups()
+            if name in bees or (note['agent'] in queens and package in packages):
+                n, m = map(int, step.split('/'))
+                if n >= m:
+                    bees.pop(name, None)
+                else:
+                    bees[name] = {'name': name, 'task': task or package, 'step': step}
+        hive['bees'] = list(bees.values())
+    return rows
+
+
+# Select one Hive in the current project filter.
+def select_hive(conn, project, index):
+    """Select a Hive by its index for confirmed dashboard commands."""
+    rows = db.rows(conn, "SELECT project,plan_path FROM hives WHERE state!='done'" + (" AND project=?" if project else "") + " ORDER BY project,plan_path", (project,) if project else ())
+    _hive_control['selected'] = (rows[index % len(rows)]['project'], rows[index % len(rows)]['plan_path']) if rows else None
+    return _hive_control['selected']
 
 
 def self_update_line(su) -> list:
@@ -445,65 +482,86 @@ def build_lines(level, d, w, n_fin) -> list:
     L.append([(run["state"], RUN_STATE_COLOUR[run["state"]]), ("  " + sub if sub else "", "gray"),
               ("  project: %s" % (d["project"] or "all"), "gray"), ("  [P] pause/resume [D] drain [F] project", "darkgray")])
     o = d["orch"]
-    L.append([("Queen ", "cyan"), (o["status"], "gray"),
-              (" | brain calls today %d | context %s | in %s / out %s" % (o["calls"], fmt_tok(o["ctx"]), fmt_tok0(o["tin"]), fmt_tok0(o["tout"])), "gray")])
+    L.append([("Beekeeper ", "cyan"), (o["status"], "gray")])
+    if _hive_control["message"]:
+        L.append([(_hive_control["message"], "yellow")])
 
-    head("AGENTS %d" % len(d["agents"]), "cyan", "  %s  last round %s" % (now.strftime("%H:%M:%S"), d["last_round"]))
-    if not d["agents"] and not d["blocked"] and not d["fin"]:
-        L.append([("no agents", "darkgray")])
-    for b in d["blocked"]:
-        L.append([("BLOCKED %s: %s" % (b["name"], b["error"]), "red")])
+    if d['hives']:
+        head("HIVES %d" % len(d['hives']))
+        for hive in d['hives']:
+            col = hive['colour'] or 'white'
+            selected = (hive['project'], hive['plan_path']) == _hive_control['selected']
+            label = ("> " if selected else "") + hive['project'] + " | " + Path(hive['plan_path']).stem
+            L.append([(("┌ " + label + " " + LINE * max(1, w-len(label)-4) + "┐")[:w], col)])
+            queen = hive['queen']
+            state = {'resting': 'ruht', 'queenless': 'weisellos', 'integration_wait': 'wartet auf Integration', 'answer': 'wartet auf Antwort', 'codex_wait': 'wartet auf Codex'}.get(hive['state'], '')
+            if hive['state'] == 'resting' and hive.get('reset_at'):
+                state += ' ' + hive['reset_at'].replace('T', ' ')
+            ident = 'Queen ' + str(queen.get('person') or queen.get('name')) if queen else ''
+            body = ' | '.join(x for x in (ident, state) if x)
+            L.append([('│ ' + body[:max(0,w-4)].ljust(max(0,w-4)) + ' │', col)])
+            for bee in hive['bees']:
+                body = ' '.join(str(bee[k]) for k in ('name', 'task', 'step') if bee[k])
+                L.append([('│ ' + body[:max(0,w-4)].ljust(max(0,w-4)) + ' │', col)])
+            L.append([('└' + LINE * max(1,w-2) + '┘', col)])
+        L.append([('[H] Hive [C] provider [X] dequeen [R] requeen', 'darkgray')])
+    else:
+        head("AGENTS %d" % len(d["agents"]), "cyan", "  %s  last round %s" % (now.strftime("%H:%M:%S"), d["last_round"]))
+        if not d["agents"] and not d["blocked"] and not d["fin"]:
+            L.append([("no agents", "darkgray")])
+        for b in d["blocked"]:
+            L.append([("BLOCKED %s: %s" % (b["name"], b["error"]), "red")])
 
-    def agent(a):
-        """One agent in the three-line format of the pane header, with project name and colour (D4)."""
-        st = str(a["status"])
-        if st == "running" and a.get("stalledAt"):
-            st = "stalled"   # still running, but silent for longer than agentStallSeconds
-        start, end = _parse_time(a.get("started_at")), _parse_time(a.get("ended_at"))
-        rt = ""
-        if start:
-            secs = int(((end or now) - start).total_seconds())
-            rt = "%d:%02d:%02d" % (secs // 3600, secs % 3600 // 60, secs % 60) if secs >= 3600 else "%02d:%02d" % (secs // 60, secs % 60)
-        typ = {"claude": "Claude", "codex": "Codex"}.get(a.get("provider"), str(a.get("provider") or ""))
-        ms = model_short(a.get("provider"), a.get("model"), a.get("effort"))
-        pn = str(a.get("person") or "-").upper()
-        pcol = colours.get(a["project"]) or "white"
-        proj = a["project"] + " | "
-        tail = ((STATUS_SYMBOL.get(st, "‖") + " " + st + " " + rt).strip())
-        mid = "%s %s" % (typ, ms)
-        ident = str(a.get("name") or "")
-        own_line = False
-        room = w - len(proj + pn + " | " + " | " + mid + " | " + tail)
-        if len(ident) > room:
-            if room >= 20:
-                ident = ident[:room - 3] + "..."
-            else:
-                ident, own_line = "", True
-        left = "%s | %s | %s | " % (pn, ident, mid) if ident else "%s | %s | " % (pn, mid)
-        if len(proj) + len(left) + len(tail) > w:
-            tail = tail[:max(0, w - len(proj) - len(left) - 3)] + "..."
-        L.append([(proj, pcol), (left, a.get("color") or "FFFFFF"), (tail, STATUS_COLOUR.get(st, "darkgray"))])
-        if own_line:
-            full = str(a.get("name") or "")
-            L.append([(full if len(full) <= w else full[:w - 3] + "...", a.get("color") or "FFFFFF")])
-        task = a.get("task") or ("%s %s" % (Path(str(a.get("plan_path") or "")).name, a.get("package") or "")).strip()
-        task = re.sub(r"\s+", " ", ("%s %s" % (PHASE_SYMBOL.get(a.get("phase"), ""), task)).strip())
-        L.append([(task if len(task) <= w else task[:w - 3] + "...", "gray")])
-        ctx = a.get("ctxTokens")
-        over = ctx is not None and int(ctx) >= HANDOFF_CONTEXT
-        tl = ("▲ " if over else "") + token_line(ctx, a.get("tokens_in"), a.get("tokens_out"))
-        L.append([(tl if len(tl) <= w else tl[:w - 3] + "...", "red" if over else "white")])
+        def agent(a):
+            """One agent in the three-line format of the pane header, with project name and colour (D4)."""
+            st = str(a["status"])
+            if st == "running" and a.get("stalledAt"):
+                st = "stalled"   # still running, but silent for longer than agentStallSeconds
+            start, end = _parse_time(a.get("started_at")), _parse_time(a.get("ended_at"))
+            rt = ""
+            if start:
+                secs = int(((end or now) - start).total_seconds())
+                rt = "%d:%02d:%02d" % (secs // 3600, secs % 3600 // 60, secs % 60) if secs >= 3600 else "%02d:%02d" % (secs // 60, secs % 60)
+            typ = {"claude": "Claude", "codex": "Codex"}.get(a.get("provider"), str(a.get("provider") or ""))
+            ms = model_short(a.get("provider"), a.get("model"), a.get("effort"))
+            pn = str(a.get("person") or "-").upper()
+            pcol = colours.get(a["project"]) or "white"
+            proj = a["project"] + " | "
+            tail = ((STATUS_SYMBOL.get(st, "‖") + " " + st + " " + rt).strip())
+            mid = "%s %s" % (typ, ms)
+            ident = str(a.get("name") or "")
+            own_line = False
+            room = w - len(proj + pn + " | " + " | " + mid + " | " + tail)
+            if len(ident) > room:
+                if room >= 20:
+                    ident = ident[:room - 3] + "..."
+                else:
+                    ident, own_line = "", True
+            left = "%s | %s | %s | " % (pn, ident, mid) if ident else "%s | %s | " % (pn, mid)
+            if len(proj) + len(left) + len(tail) > w:
+                tail = tail[:max(0, w - len(proj) - len(left) - 3)] + "..."
+            L.append([(proj, pcol), (left, a.get("color") or "FFFFFF"), (tail, STATUS_COLOUR.get(st, "darkgray"))])
+            if own_line:
+                full = str(a.get("name") or "")
+                L.append([(full if len(full) <= w else full[:w - 3] + "...", a.get("color") or "FFFFFF")])
+            task = a.get("task") or ("%s %s" % (Path(str(a.get("plan_path") or "")).name, a.get("package") or "")).strip()
+            task = re.sub(r"\s+", " ", ("%s %s" % (PHASE_SYMBOL.get(a.get("phase"), ""), task)).strip())
+            L.append([(task if len(task) <= w else task[:w - 3] + "...", "gray")])
+            ctx = a.get("ctxTokens")
+            over = ctx is not None and int(ctx) >= HANDOFF_CONTEXT
+            tl = ("▲ " if over else "") + token_line(ctx, a.get("tokens_in"), a.get("tokens_out"))
+            L.append([(tl if len(tl) <= w else tl[:w - 3] + "...", "red" if over else "white")])
 
-    shown = d["agents"] + d["fin"][:n_fin]
-    head_done = False
-    for a in shown:
-        if not head_done and a["status"] not in ("running", "starting"):
-            L.append([("ended in the last hour", "darkgray")])
-            head_done = True
-        agent(a)
-    hidden = d["fin"][n_fin:]
-    if hidden:
-        L.append([("more ended: %d, of which failed: %d" % (len(hidden), sum(1 for a in hidden if a["status"] == "failed")), "darkgray")])
+        shown = d["agents"] + d["fin"][:n_fin]
+        head_done = False
+        for a in shown:
+            if not head_done and a["status"] not in ("running", "starting"):
+                L.append([("ended in the last hour", "darkgray")])
+                head_done = True
+            agent(a)
+        hidden = d["fin"][n_fin:]
+        if hidden:
+            L.append([("more ended: %d, of which failed: %d" % (len(hidden), sum(1 for a in hidden if a["status"] == "failed")), "darkgray")])
 
     head("◔ LIMITS")
     limit("Claude 5h", d["cu"]["FiveHour"])
@@ -647,6 +705,7 @@ class KeyReader:
 CONFIRM_SECONDS = 3.0   # P and D act only when the same key is pressed twice within this time (a stray key press changes nothing)
 KEY_SOURCE = "dashboard key"
 _confirm = {"key": "", "at": 0.0}
+_hive_control = {"selected": None, "provider": None, "message": ""}
 
 
 def pending_confirm(now=None) -> str:
@@ -659,6 +718,48 @@ def handle_key(conn, key, project, names, now=None):
     """Apply one key: P toggles pause/resume, D drains (or lifts a drain), both only on the second press within CONFIRM_SECONDS;
     F steps through the project filter. Returns the new filter."""
     now = time.monotonic() if now is None else now
+    if key == 'h':
+        rows = db.rows(conn, "SELECT project,plan_path FROM hives WHERE state!='done'" + (" AND project=?" if project else "") + " ORDER BY project,plan_path", (project,) if project else ())
+        keys = [(r['project'], r['plan_path']) for r in rows]
+        current = _hive_control['selected']
+        select_hive(conn, project, (keys.index(current) + 1) if current in keys else 0)
+        _hive_control['provider'] = None
+        _hive_control['message'] = ''
+        _confirm['key'] = ''
+        return project
+    if key == 'c':
+        providers = [None] + [p['name'] for p in config.load_config().get('providers', [])]
+        current = _hive_control['provider']
+        _hive_control['provider'] = providers[(providers.index(current) + 1) % len(providers)] if current in providers else None
+        _hive_control['message'] = 'Provider: ' + str(_hive_control['provider'] or 'current')
+        _confirm['key'] = ''
+        return project
+    if key in ('x', 'r'):
+        selected = _hive_control['selected'] or select_hive(conn, project, 0)
+        if not selected:
+            _hive_control['message'] = 'No Hive selected'
+            return project
+        if pending_confirm(now) != key:
+            _confirm['key'], _confirm['at'] = key, now
+            _hive_control['message'] = ('Dequeen' if key == 'x' else 'Requeen') + ' ' + selected[1] + ': press again to confirm'
+            return project
+        _confirm['key'] = ''
+        try:
+            machine = config.load_config()
+            env = next((e for e in sch.load_projects(conn, machine) if e.name == selected[0]), None)
+            with loop.hive_schedule_lock():
+                if key == 'x':
+                    hives.dequeen(conn, *selected)
+                else:
+                    providers = env.providers if env else machine.get('providers', [])
+                    queen_class = env.settings.get('queenClass', 'medium') if env else 'medium'
+                    hives.requeen(conn, *selected, provider=_hive_control['provider'], providers=providers, queen_class=queen_class, excluded=machine.get('excludedProviders', []))
+                    if env:
+                        hives.schedule_round(conn, machine, [env], plan_files=[selected[1]])
+            _hive_control['message'] = 'Done'
+        except (ValueError, OSError) as exc:
+            _hive_control['message'] = str(exc)
+        return project
     if key in ("p", "d"):
         if pending_confirm(now) != key:
             _confirm["key"], _confirm["at"] = key, now   # first press: only ask for the confirmation

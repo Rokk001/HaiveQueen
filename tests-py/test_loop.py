@@ -1,6 +1,7 @@
 """Tests of the multi-project loop (D1, D4), the pause and drain gate and re-attach (D8), the triage start (D5), the brain, the headless terminal start and the loop itself."""
 import json
 import os
+import re
 import sys
 import time
 import unittest
@@ -29,14 +30,16 @@ class MultiProjectTest(RoundCase):
             self.plan("IN_PROGRESS", ONE, project=name)
             self.agent("DUMMY-SEED-work", project=name, package="SEED", started=30, ended=20)
 
+    # Verify the Queen-based loop behavior.
     def test_priority_first(self):
         """The shared slot goes to the project with the higher priority; the other waits."""
         res = self.round()
-        self.assertEqual(self.ag("DUMMY-P1-work", "alpha")["status"], "running")
-        self.assertIsNone(self.ag("DUMMY-P1-work", "beta"))
+        self.assertEqual(next((a for a in runtime.list_agents(self.conn, "alpha") if a["phase"] == "queen" and a["status"] == "running"), None)["status"], "running")
+        self.assertIsNone(next((a for a in runtime.list_agents(self.conn, "beta") if a["phase"] == "queen" and a["status"] == "running"), None))
         self.assertEqual(res["projects"]["alpha"]["started"], 1)
         self.assertEqual(res["projects"]["beta"]["started"], 0)
 
+    # Verify the Queen-based loop behavior.
     def test_tie_by_oldest_waiting(self):
         """At equal priority the project with the older waiting package goes first."""
         self.conn.execute("UPDATE projects SET priority=0")
@@ -44,26 +47,28 @@ class MultiProjectTest(RoundCase):
         runtime.kv_set(self.conn, "beta", "wait:%s|P1" % REL, minutes_ago(90))
         runtime.kv_set(self.conn, "alpha", "wait:%s|P1" % REL, minutes_ago(10))
         self.round()
-        self.assertEqual(self.ag("DUMMY-P1-work", "beta")["status"], "running")
-        self.assertIsNone(self.ag("DUMMY-P1-work", "alpha"))
+        self.assertEqual(next((a for a in runtime.list_agents(self.conn, "beta") if a["phase"] == "queen" and a["status"] == "running"), None)["status"], "running")
+        self.assertIsNone(next((a for a in runtime.list_agents(self.conn, "alpha") if a["phase"] == "queen" and a["status"] == "running"), None))
         self.assertEqual(runtime.kv_get(self.conn, "beta", "wait:%s|P1" % REL), None, "the marker of a started package is cleared")
 
+    # Verify the Queen-based loop behavior.
     def test_same_names_in_two_projects(self):
         """Two slots: both projects start their package with the same agent name, rows stay separate."""
         self.machine["providers"] = [provider("claude", 2)]
         self.round()
-        self.assertEqual(self.ag("DUMMY-P1-work", "alpha")["status"], "running")
-        self.assertEqual(self.ag("DUMMY-P1-work", "beta")["status"], "running")
+        self.assertEqual(next((a for a in runtime.list_agents(self.conn, "alpha") if a["phase"] == "queen" and a["status"] == "running"), None)["status"], "running")
+        self.assertEqual(next((a for a in runtime.list_agents(self.conn, "beta") if a["phase"] == "queen" and a["status"] == "running"), None)["status"], "running")
         self.assertEqual(len(runtime.list_agents(self.conn, None, "active")), 4)
         # the slots count across projects: a third package of either project finds no free slot
         self.assertEqual(sch.provider_free(self.env("alpha").providers, [a for a in runtime.list_agents(self.conn, None, "active") if a["status"] == "running"])["claude"], 0)
 
+    # Verify the Queen-based loop behavior.
     def test_project_data_in_events_and_logs(self):
         """Every project writes its own log folder (D4: the project is visible everywhere)."""
         self.round()
         self.assertTrue((runtime.mirror_dir("alpha") / "ROUNDS.log").is_file())
         self.assertNotEqual(runtime.mirror_dir("alpha"), runtime.mirror_dir("beta"))
-        self.assertIn("start DUMMY-P1-work", self.log("alpha"))
+        self.assertTrue(any(a["phase"] == "queen" for a in runtime.list_agents(self.conn, "alpha")))
 
     def test_priority_from_project_toml(self):
         """The order uses the priority in project.toml, not the stale database column."""
@@ -80,28 +85,33 @@ class RunStateTest(RoundCase):
         self.plan("IN_PROGRESS", ONE)
         self.seed()
 
+    # Verify the Queen-based loop behavior.
     def test_pause_blocks_starts(self):
         """While paused the round starts nothing and says why; resume lifts it."""
         runstate.pause(self.conn)
         res = self.round()
         self.assertEqual(res["skipped"], "PAUSED")
-        self.assertIsNone(self.ag("DUMMY-P1-work"))
+        self.assertIsNone(next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None))
         self.assertIn("round skipped (PAUSED)", self.log())
         runstate.resume(self.conn)
         self.round()
-        self.assertEqual(self.ag("DUMMY-P1-work")["status"], "running")
+        self.assertEqual(next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None)["status"], "running")
 
+    # Verify the Queen-based loop behavior.
     def test_pause_keeps_running_agents(self):
         """A running agent is not touched by a pause; a drain reports drained once it has ended."""
         self.round()
         runstate.drain(self.conn)
         self.assertEqual(runstate.get_state(self.conn)["state"], "DRAINING")
         self.assertEqual(self.round()["skipped"], "DRAINING")
-        self.assertEqual(self.ag("DUMMY-P1-work")["status"], "running")
-        self.finish("DUMMY-P1-work")
+        self.assertEqual(next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None)["status"], "running")
+        queen = next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")
+        self.finish(queen["name"])
+        runtime.upsert_agent(self.conn, "testproj", queen["name"], {"pid": None})
         self.assertEqual(runstate.settle(self.conn)["state"], "DRAINED")
         self.assertEqual(len([e for e in runtime.list_events(self.conn, "*") if e["kind"] == "drained"]), 1)
 
+    # Verify the Queen-based loop behavior.
     def test_stop_flag_and_low_ram(self):
         """The STOP flag and low free RAM skip the round, too."""
         loop.stop_flag().parent.mkdir(parents=True, exist_ok=True)
@@ -110,12 +120,13 @@ class RunStateTest(RoundCase):
         loop.stop_flag().unlink()
         res = self.round(free_ram=lambda: 0.5)
         self.assertIn("free RAM", res["skipped"])
-        self.assertIsNone(self.ag("DUMMY-P1-work"))
+        self.assertIsNone(next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None))
 
 
 class LoopTest(RoundCase):
     """The loop: re-attach at the start, one lock, STOP, round errors."""
 
+    # Verify reattachment and complete any Queen started during the round.
     def test_reattach_and_end(self):
         """At the start a running agent with a living pid stays, one with a dead pid fails; the loop ends after the rounds and removes its lock."""
         self.plan("IN_PROGRESS", ONE)
@@ -127,6 +138,10 @@ class LoopTest(RoundCase):
             """While the loop waits for the running agent: note the statuses, then let the agent end."""
             seen.update(live=self.ag("LIVE-work")["status"], gone=self.ag("GONE-work")["status"])
             self.finish("LIVE-work")
+            for agent in runtime.list_agents(self.conn, "testproj", "active"):
+                if agent.get("phase") == "queen" and agent.get("status") in ("running", "starting"):
+                    self.finish(agent["name"])
+                    runtime.upsert_agent(self.conn, "testproj", agent["name"], {"pid": None})
 
         kw = {"free_ram": lambda: 16.0, "settle": 0, "brain_runner": lambda *a: (1, "", "", False)}
         self.assertEqual(loop.run_loop(self.conn, self.machine, rounds=1, sleep=sleep, round_kwargs=kw), 0)
@@ -213,7 +228,7 @@ class LoopTest(RoundCase):
         self.assertEqual(loop.wrap_text("aaa bbb ccc", 7), ["aaa bbb", "ccc"])
         self.assertEqual(loop.wrap_text("abcdefghij", 4), ["abcd", "efgh", "ij"])
         hl = loop.head_lines(80, brain.totals(self.conn), {"busy": True, "model": "Son 5.5 med.", "projects": ["a", "b"]})
-        self.assertIn("QUEEN", hl[0][0])
+        self.assertIn("Beekeeper", hl[0][0])
         self.assertIn("round running", hl[0][0])
         self.assertIn("Projects: a, b", hl[1][0])
         hl = loop.head_lines(80, brain.totals(self.conn), {"run_state": "PAUSED", "model": "x"})
@@ -243,7 +258,7 @@ class LoopTest(RoundCase):
 
 
 class TriageStartTest(RoundCase):
-    """D5: a lock starts a triage agent; its decisions unlock the package, a game question keeps it locked until the answer."""
+    """Old verify results, decisions and questions are handed to the Queen without triage."""
 
     def setUp(self):
         """A package with three finished work/verify pairs, each verify with open items."""
@@ -255,49 +270,38 @@ class TriageStartTest(RoundCase):
             self.agent("DUMMY-K1-verify" + n, type="codex", provider="codex", package="K1", phase="verify", started=t - 10, ended=t - 15)
             self.finish("DUMMY-K1-verify" + n, "Layout: split the file\nOffene Anforderungen: %d" % (3 - i))   # the count falls, so the progress guard does not stop the package
 
-    def test_lock_starts_triage_agent(self):
-        """The lock is recorded and a triage agent (class medium, phase triage) starts with the open points in its prompt."""
+    # Verify legacy failures do not start triage or lock the package.
+    def test_old_failures_start_queen_not_triage(self):
+        """Three old verify failures start a Queen without locking or triage."""
         self.round()
-        pkg = [p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1"][0]
-        self.assertTrue(pkg["locked"])
-        tri = [a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"]
-        self.assertEqual(len(tri), 1)
-        self.assertEqual((tri[0]["package"], tri[0]["class"], tri[0]["status"]), ("K1", "medium", "running"))
-        prompt = (self.env().run_dir(tri[0]["name"]) / "prompt.md").read_text(encoding="utf-8")
-        self.assertIn("Layout: split the file", prompt)
-        self.assertIn("triage decide", prompt)
-        self.assertIn("cli.py", prompt)
-        self.round()
-        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"]), 1, "no second triage agent while one runs")
+        pkg = next(p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1")
+        self.assertFalse(pkg["locked"])
+        agents = runtime.list_agents(self.conn, "testproj")
+        self.assertEqual(len([a for a in agents if a["phase"] == "queen" and a["status"] == "running"]), 1)
+        self.assertFalse([a for a in agents if a["phase"] == "triage"])
 
-    def test_decision_unlocks_and_work_resumes(self):
-        """A technical decision unlocks the package, the failures are forgiven and the package gets a work agent again."""
+    # Verify an existing technical decision remains available to the Queen.
+    def test_decision_is_preserved_without_triage(self):
+        """A recorded decision stays available and does not start a triage agent."""
+        runtime.add_decision(self.conn, "testproj", "auto", "split the file", REL, "Layout")
         self.round()
-        tri = [a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"][0]
-        triage.decide(self.conn, "testproj", REL, "K1", "Layout", "split the file", "plan rule 3", "docs/plans")
-        self.finish(tri["name"])
-        self.round()
-        self.assertFalse([p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1"][0]["locked"])
-        self.assertEqual(runtime.kv_get(self.conn, "testproj", "lockrel:%s|K1" % REL), "3")
-        self.assertIsNone(runtime.kv_get(self.conn, "testproj", "lock:%s|K1" % REL))
-        self.assertTrue([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "work" and a["status"] == "running" and a["package"] == "K1"])
+        self.assertTrue([d for d in runtime.list_decisions(self.conn, "testproj") if d["item"] == "Layout"])
+        self.assertFalse([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"])
 
-    def test_game_question_keeps_lock_until_answer(self):
-        """A game point goes to the owner; the package stays locked until the question is answered, then the routine unlocks it."""
+    # Verify an open owner question reaches the Queen and remains open.
+    def test_game_question_is_handed_to_queen(self):
+        """An open owner question appears in the Queen prompt without a triage agent."""
+        qid = db.add_question(self.conn, "testproj", REL, "Layout", "Split or not?", "split")
         self.round()
-        tri = [a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"][0]
-        res = triage.escalate(self.conn, "testproj", REL, "K1", "Layout", "Split or not?", "split")
-        self.finish(tri["name"])
-        self.round()
-        self.assertTrue([p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1"][0]["locked"])
-        self.assertFalse([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage" and a["status"] == "running"], "points with an open question need no triage")
-        db.answer_question(self.conn, res["question_id"], "split", "owner")
-        self.round()
-        self.assertFalse([p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1"][0]["locked"])
-
+        agents = runtime.list_agents(self.conn, "testproj")
+        queen = next(a for a in agents if a["phase"] == "queen" and a["status"] == "running")
+        prompt = (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn("Split or not?", prompt)
+        self.assertIn(qid, [q["id"] for q in runtime.list_questions(self.conn, "testproj", status="open")])
+        self.assertFalse([a for a in agents if a["phase"] == "triage"])
 
 class NoNextStepTest(RoundCase):
-    """A package whose verifies gave no count line is locked once the verify repeats are used up, instead of lying still."""
+    """Legacy verifies without counts do not create automatic package locks."""
 
     def setUp(self):
         """K1 has three finished work/verify pairs; no verify answer carries an 'Offene Anforderungen' line."""
@@ -309,13 +313,13 @@ class NoNextStepTest(RoundCase):
             self.agent("DUMMY-K1-verify" + n, type="codex", provider="codex", package="K1", phase="verify", started=t - 10, ended=t - 15)
             self.finish("DUMMY-K1-verify" + n, "Layout: split the file")
 
-    def test_package_without_next_step_is_locked(self):
-        """Each verify without a count line counts as one failure, so the round locks the package and starts no fourth verify."""
+    # Verify missing legacy verify counts do not trigger an automatic lock.
+    def test_missing_verify_count_does_not_lock(self):
+        """Old verify results without counts do not lock the package or start another verify."""
         self.round()
-        pkg = [p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1"][0]
-        self.assertTrue(pkg["locked"])
+        pkg = next(p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == "K1")
+        self.assertFalse(pkg["locked"])
         self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "verify" and a["package"] == "K1"]), 3)
-
 
 class LiveRunnerSurvivesTest(RoundCase):
     """The round check never marks a running agent whose runner process lives, however long it has been running."""
@@ -343,7 +347,7 @@ class LiveRunnerSurvivesTest(RoundCase):
 
 
 class LockResolvedTest(RoundCase):
-    """A decision or answer for item LOCK-<package> (owner, coordinator or auto) lifts the lock and forgives the failures; a closing decision ends the package."""
+    """Decisions and answers are retained without recreating old package locks."""
 
     def setUp(self):
         """K1 has three finished work/verify pairs with open items; K2 depends on K1."""
@@ -359,35 +363,37 @@ class LockResolvedTest(RoundCase):
         """The package row of the dummy plan."""
         return [p for p in runtime.list_packages(self.conn, "testproj", REL) if p["id"] == pid][0]
 
+    # Verify legacy failures do not lock the plan or start triage.
     def locked_round(self):
-        """Run the round that locks K1 and finish its triage agent."""
-        self.round()
-        self.assertTrue(self.pkg()["locked"])
-        for a in runtime.list_agents(self.conn, "testproj"):
-            if a["phase"] == "triage":
-                self.finish(a["name"])
-
-    def assert_released(self):
-        """After the next round the lock is gone, three failures are forgiven and K1 has a work agent again."""
+        """Start the Queen and verify the removed lock is not recreated."""
         self.round()
         self.assertFalse(self.pkg()["locked"])
-        self.assertEqual(runtime.kv_get(self.conn, "testproj", "lockrel:%s|K1" % REL), "3")
-        self.assertIsNone(runtime.kv_get(self.conn, "testproj", "lock:%s|K1" % REL))
-        self.assertTrue([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "work" and a["status"] == "running" and a["package"] == "K1"])
+        self.assertFalse([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "triage"])
 
+    # Verify the Queen continues without a package lock.
+    def assert_released(self):
+        """Another round retains one Queen and no old package lock."""
+        self.round()
+        self.assertFalse(self.pkg()["locked"])
+        self.assertIsNone(runtime.kv_get(self.conn, "testproj", "lock:%s|K1" % REL))
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
+
+    # Verify a decision from the given source remains recorded.
     def decision(self, source):
-        """Release by a decision of this source."""
+        """Retain a decision from the specified source."""
         self.locked_round()
         runtime.add_decision(self.conn, "testproj", source, "keep the layout", REL, "LOCK-K1")
         self.assert_released()
+        self.assertTrue(runtime.list_decisions(self.conn, "testproj", item="LOCK-K1"))
 
+    # Verify an answered question from the given source remains recorded.
     def answer(self, by):
-        """Release by a question with item LOCK-K1 answered by this source."""
+        """Retain an answer from the specified source."""
         self.locked_round()
         qid = db.add_question(self.conn, "testproj", REL, "LOCK-K1", "How to go on?", "retry")
         db.answer_question(self.conn, qid, "retry with the old layout", by)
         self.assert_released()
-
+        self.assertIn(qid, [q["id"] for q in runtime.list_questions(self.conn, "testproj", status="answered")])
     def test_decision_owner(self):
         """Decision by the owner."""
         self.decision("owner")
@@ -412,39 +418,43 @@ class LockResolvedTest(RoundCase):
         """Automatic answer."""
         self.answer("auto")
 
+    # Verify the legacy lock question is answered without recreating the lock.
     def test_answer_item_with_title(self):
-        """A question with item 'K1 Config values' whose text says the package is gesperrt lifts the lock once answered (not before)."""
+        """An answer to a legacy lock question is retained without recreating the lock."""
         self.locked_round()
         qid = db.add_question(self.conn, "testproj", REL, "K1 Config values: range", "Paket K1 ist gesperrt, weil die Pruefung einen offenen Punkt meldet.", "retry")
         self.assertIsNone(routine.lock_resolution(self.env(), REL, "K1"))
         db.answer_question(self.conn, qid, "siehe dort", "coordinator")
         self.assert_released()
 
+    # Verify an ordinary answered question remains answered without creating a lock.
     def test_answer_item_with_title_no_lock_question(self):
-        """An answered question about K1 that is no lock question does not lift the lock."""
+        """An answered item stays answered and does not create an old package lock."""
         self.locked_round()
         qid = db.add_question(self.conn, "testproj", REL, "K1 Colour", "Which colour should K1 have?", "blue")
         db.answer_question(self.conn, qid, "blue", "owner")
-        self.round()
-        self.assertTrue(self.pkg()["locked"])
+        self.assert_released()
+        self.assertIn(qid, [q["id"] for q in runtime.list_questions(self.conn, "testproj", status="answered")])
 
-    def test_open_question_keeps_lock(self):
-        """An unanswered question for LOCK-K1 does not lift the lock."""
+    # Verify an open owner question stays open without recreating a legacy lock.
+    def test_open_question_stays_open_without_lock(self):
+        """An open question stays open while no old lock is created."""
         self.locked_round()
-        db.add_question(self.conn, "testproj", REL, "LOCK-K1", "How to go on?", "retry")
+        qid = db.add_question(self.conn, "testproj", REL, "LOCK-K1", "How to go on?", "retry")
         self.round()
-        self.assertTrue(self.pkg()["locked"])
+        self.assertFalse(self.pkg()["locked"])
+        self.assertIn(qid, [q["id"] for q in runtime.list_questions(self.conn, "testproj", status="open")])
 
-    def test_closing_decision_marks_package_done(self):
-        """'K1 done, no further runs' ends K1: no work or verify run for it, the dependent package K2 starts."""
+    # Verify decisions do not start old package agents.
+    def test_closing_decision_does_not_start_package_agent(self):
+        """A decision is retained without starting a separate package agent."""
         self.locked_round()
         before = [a["name"] for a in runtime.list_agents(self.conn, "testproj") if a["package"] == "K1"]
         runtime.add_decision(self.conn, "testproj", "coordinator", "K1 erledigt, keine weiteren K1-Work- oder Verify-Laeufe", REL, "LOCK-K1")
         self.round()
         self.assertEqual([a["name"] for a in runtime.list_agents(self.conn, "testproj") if a["package"] == "K1"], before)
-        self.assertTrue([a for a in runtime.list_agents(self.conn, "testproj") if a["package"] == "K2" and a["phase"] == "work"])
+        self.assertTrue(runtime.list_decisions(self.conn, "testproj", item="LOCK-K1"))
         self.assertFalse(self.pkg()["locked"])
-
     def test_done_answer_on_item_with_title(self):
         """An answered question with item 'K1 Config values' that says erledigt closes K1 (done_decisions), a lock question without that word does not."""
         env = self.env()
@@ -486,31 +496,22 @@ class BrainTest(RoundCase):
         self.argv, self.prompt = argv, prompt
         return 0, self.STREAM, "", False
 
-    def test_brain_call_and_usage(self):
-        """Tokens, context, model and the answer come from the stream; the call is stored; Claude limits are remembered."""
-        res = self.round(brain_runner=self.runner)
-        self.assertIn("# EVENTS (JSON)", self.prompt)
-        self.assertIn("agent_failed", self.prompt)
-        self.assertEqual(self.argv[argv_index(self.argv, "--tools") + 1], "", "no tools without a new plan (rule 12)")
-        row = runtime.usage_list(self.conn, kind="brain")[-1]
-        self.assertEqual((row["tokens_in"], row["tokens_out"], row["context"], row["model"]), (150, 7, 60, "claude-sonnet-5-5"))   # stored as the model key, not the label
-        self.assertEqual((row["trigger"], row["error"], row["actions"]), ("agent_failed", 0, "no action: hi"))
-        self.assertEqual(sch.claude_usage(self.conn)["SevenDay"]["Pct"], 50)
-        self.assertEqual(brain.totals(self.conn)["Input"], 150)
-        self.assertTrue(res["projects"]["testproj"]["actions"] >= 1)
-        self.assertTrue(runtime.handled_get(self.conn, "testproj", "failed:F-P1-work"))
+    # Verify a failed legacy worker does not trigger a separate brain.
+    def test_failed_worker_starts_queen_without_brain(self):
+        """A failed legacy worker starts a Queen without invoking the brain runner."""
+        self.round(brain_runner=self.runner)
+        self.assertIsNone(self.argv)
+        self.assertEqual(runtime.usage_list(self.conn, kind="brain"), [])
+        queens = [a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]
+        self.assertEqual(len(queens), 1)
 
-    def test_brain_failure_counts_tries(self):
-        """A failed call is stored as an error, the event is asked again once, then it is dropped."""
-        bad = lambda argv, prompt, cwd, timeout: (1, "", "exit boom", False)  # noqa: E731
-        self.round(brain_runner=bad)
-        self.assertEqual(self.calls(), 1)
-        self.assertEqual(runtime.usage_list(self.conn, kind="brain")[-1]["error"], 1)
-        self.assertFalse(runtime.handled_get(self.conn, "testproj", "failed:F-P1-work"))
-        self.round(brain_runner=bad)
-        self.assertTrue(runtime.handled_get(self.conn, "testproj", "failed:F-P1-work"))
-        self.assertIn("brain failed", self.log())
-
+    # Verify repeated rounds do not invoke a separate brain or duplicate a Queen.
+    def test_repeated_rounds_do_not_call_brain(self):
+        """A running Queen is retained across rounds without a brain call."""
+        self.round(brain_runner=self.runner)
+        self.round(brain_runner=self.runner)
+        self.assertIsNone(self.argv)
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
     def test_answer_parsing(self):
         """JSON cut out of text; broken or action-less answers are errors."""
         self.assertEqual(brain.parse_answer('x {"actions": []} y')[0], {"actions": []})
@@ -550,16 +551,17 @@ class HeadlessStartTest(RoundCase):
                 self.term.close_pane(p.id)
         super().tearDown()
 
+    # Verify the Queen-based loop behavior.
     def test_start_through_terminal(self):
         """The agent row gets pane id and pid from the runner, the pane title carries project and agent name, the colour is the project colour."""
         self.round(terminal=self.term, poll=0.2, tries=100)
-        row = self.ag("DUMMY-P1-work")
+        row = next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None)
         self.assertEqual(row["status"], "running")
         self.assertTrue(row["pid"] and osplat.process_alive(row["pid"]))
         panes = self.term.list_panes("HaiveQueen")
         self.assertEqual(len(panes), 1)
         self.assertIn(row["pane_id"], [p.id for p in panes])
-        self.assertRegex(panes[0].title, r"^HaiveQueen TEST \| testproj \| Agent [A-Z]+ \| job: DUMMY-P1-work \| model: Claude Sonnet 5\.5 medium$")
+        self.assertRegex(panes[0].title, r"^HaiveQueen TEST \| testproj \| Agent [A-Z]+ \| job: " + re.escape(row["name"]) + r" \| model: Claude Sonnet 5\.5 medium$")
 
     def test_choose_slot(self):
         """The widest open pane is split side by side while both halves stay 40 columns wide, else the tallest top/bottom."""

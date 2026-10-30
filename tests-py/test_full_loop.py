@@ -1,11 +1,12 @@
 """Gap 3c: a real loop run (run_loop, several rounds) over a throw-away project, headless, with the real agent runner and a fake provider CLI.
 
-Plan READY -> work agent -> verify agent ("Offene Anforderungen: 0") -> release agent (registers the branch with bzz ready) -> integrator agent
-(dummy command: marks the queue row integrated). Nothing here touches the live runtime, a real model or a terminal.
+A READY plan starts one Queen in its plan worktree; the fake provider registers and integrates its branch.
+Nothing here touches the live runtime, a real model or a terminal.
 """
 import json
 import os
 import stat
+import subprocess
 import sys
 import unittest
 
@@ -16,34 +17,34 @@ from haivequeen.terminal.headless import Headless
 ONE = [{"id": "P1", "title": "first"}]
 
 # The fake provider CLI: finds the agent name in the prompt file, does what that kind of agent does and prints a Claude stream-json result.
-FAKE_CLI = r'''import json, os, re, sys
+FAKE_CLI = r'''import argparse, contextlib, io, json, os, sys
 sys.path.insert(0, os.environ["FAKE_TOOLS"])
-from haivequeen import config, db, runtime
-prompt = sys.argv[sys.argv.index("-p") + 1]
-text = open(re.search(r"Read the file (.+?) completely", prompt).group(1), encoding="utf-8-sig").read()
-name = re.search(r"You are the agent (\S+)", text).group(1)
+from haivequeen import cli, config, db, runtime
+name = os.environ["BZZ_AGENT"]
 conn = db.connect(config.db_path())
-result = "Done."
-if name.startswith("INTEGRATOR"):
-    for row in db.queue_rows(conn, "testproj"):
-        if row["status"] == "ready":
-            runtime.queue_upsert(conn, "testproj", row["branch"], status="integrated", note="dummy integration")
-    result = "Integrated."
-elif "verify" in name:
-    result = "All requirements checked.\nOffene Anforderungen: 0"
-elif name.endswith("-release"):
-    db.add_ready(conn, "testproj", "feature/dummy", "abc1234", os.environ["FAKE_PLAN"], "Kompiliertest: Exit 0")
-    result = "Released."
+plan = os.environ["FAKE_PLAN"]
+with contextlib.redirect_stdout(io.StringIO()):
+    ready = argparse.Namespace(project="testproj", branch="feature/dummy", tip="abc1234", plan=plan, note="")
+    if cli.cmd_ready(ready, conn) != 0:
+        raise RuntimeError("ready failed")
+    acquire = argparse.Namespace(action="acquire", project="testproj", plan=plan, owner_pid=None)
+    if cli.cmd_integration(acquire, conn) != 0:
+        raise RuntimeError("integration acquire failed")
+    runtime.queue_upsert(conn, "testproj", "feature/dummy", status="integrated")
+    acquire.action = "release"
+    if cli.cmd_integration(acquire, conn) != 0:
+        raise RuntimeError("integration release failed")
+conn.close()
 with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as f:
     f.write(name + "\n")
 for ev in ({"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens": 10, "output_tokens": 5}, "content": [{"type": "text", "text": "working"}]}},
-           {"type": "result", "is_error": False, "result": result, "usage": {"input_tokens": 10, "output_tokens": 5}}):
+           {"type": "result", "is_error": False, "result": "Integrated.", "usage": {"input_tokens": 10, "output_tokens": 5}}):
     print(json.dumps(ev))
 '''
 
 
 class FullLoopTest(RoundCase):
-    """One real run_loop over the phases of a plan."""
+    """One real run_loop with a Queen integrating a plan."""
 
     def setUp(self):
         """Fake CLI as the only provider, headless terminal, a READY plan with one package."""
@@ -70,6 +71,18 @@ class FullLoopTest(RoundCase):
         prov["args"] = []
         self.machine["providers"] = [prov]
         self.plan("READY", ONE)
+        with (self.repo / REL).open("a", encoding="utf-8") as plan:
+            plan.write("\n- Feature branch: feature/dummy, created from origin/main.\n")
+        # Create a real temporary repository for the plan's Queen worktree.
+        def git(*args):
+            """Run Git in the isolated project repository."""
+            return subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True)
+        git("init", "-b", "main")
+        (self.repo / "tracked.txt").write_text("start", encoding="utf-8")
+        git("add", "tracked.txt")
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial")
+        git("remote", "add", "origin", str(self.repo))
+        git("fetch", "origin", "main")
         self.seed()
         self.term = Headless(self.base / "panes")
 
@@ -82,19 +95,16 @@ class FullLoopTest(RoundCase):
             os.environ.pop(k, None)
         super().tearDown()
 
+    # Verify that a Queen starts and integrates her own plan.
     def test_plan_to_integrated(self):
-        """READY plan: work, verify, release and integrator agents run one after the other; the queue row ends 'integrated'."""
+        """READY plan: one Queen integrates her branch and the plan becomes DONE."""
         round_kwargs = {"terminal": self.term, "free_ram": lambda: 16.0, "settle": 0, "poll": 0.2, "tries": 150,
                         "brain_runner": lambda argv, prompt, cwd, timeout: (1, "", "no real brain in tests", False)}
         code = loop.run_loop(self.conn, self.machine, rounds=8, round_minutes=0.05, wait_seconds=0.3, round_kwargs=round_kwargs)
         self.assertEqual(code, 0)
         ran = self.log_file.read_text(encoding="utf-8").split() if self.log_file.is_file() else []
-        kinds = ["INTEGRATOR" if n.startswith("INTEGRATOR") else "verify" if "verify" in n else "release" if n.endswith("-release") else "work" for n in ran]
-        for k in ("work", "verify", "release", "INTEGRATOR"):
-            self.assertIn(k, kinds, "no %s agent ran; agents: %s\n%s" % (k, ran, self.log()))
-        self.assertLess(kinds.index("work"), kinds.index("verify"))
-        self.assertLess(kinds.index("verify"), kinds.index("release"))
-        self.assertLess(kinds.index("release"), kinds.index("INTEGRATOR"))
+        self.assertEqual(len(ran), 1, "the plan should have one Queen: %s\n%s" % (ran, self.log()))
+        self.assertEqual(runtime.list_plans(self.conn, "testproj")[0]["status"], "DONE")
         rows = [dict(r) for r in self.conn.execute("SELECT * FROM queue")]
         self.assertEqual([r["status"] for r in rows], ["integrated"], json.dumps(rows, default=str))
         left = [a["name"] for a in runtime.list_agents(self.conn, "testproj") if a["status"] in ("running", "starting")]

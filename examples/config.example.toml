@@ -1,5 +1,12 @@
 # Machine settings: %APPDATA%\HaiveQueen\config.toml
-slots = 2                 # agents running at the same time, shared by all projects
+slots = 2                 # agent processes shared by all projects
+hives = 2                 # maximum Hives with running Queens, machine-wide
+preferredProvider = ""    # preferred Queen provider, or empty
+excludedProviders = []    # provider names never used
+queenClass = "medium"     # project may override
+beesPerQueen = 3          # project may override
+escalateAfter = 3         # failures per class before escalation
+contextLimitTokens = 300000
 buildJobs = 0             # 0 = choose automatically
 ramReserveMb = 2048       # RAM that must stay free
 agentStallSeconds = 3600  # an agent that prints nothing for this long is marked as stalled, never ended (0 = off)

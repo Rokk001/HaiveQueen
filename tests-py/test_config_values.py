@@ -8,7 +8,7 @@ import os
 import unittest
 from datetime import datetime
 
-from bzztest import RoundCase
+from bzztest import REL, RoundCase
 from haivequeen import agent_runner as ar
 from haivequeen import interrupt, loop, routine, runstate
 from haivequeen import scheduler as sch
@@ -44,42 +44,53 @@ class SettingsDefaultsTest(unittest.TestCase):
         self.assertEqual(watch(400), [])
 
 
+# Verify the configured retry waits for Queens.
 class RetryWaitSettingsTest(RoundCase):
-    """The retry waits of the round come from the settings."""
+    """A Hive keeps its configured retry waits after interruption."""
 
     settings = {"retryWaitMinutes": [30], "rateLimitWaitMinutes": 7}
 
+    # Prepare one plan and its existing Hive.
     def setUp(self):
-        """Package R1 and one interrupted work agent."""
+        """Create an isolated plan and running Hive."""
+        from haivequeen import hives
         super().setUp()
         self.plan("IN_PROGRESS", [{"id": "R1", "title": "first task", "class": "medium"}])
+        hives.create(self.conn, "testproj", REL, "claude", "4FA8FF")
+        self.conn.execute("UPDATE hives SET state='running' WHERE project=? AND plan_path=?", ("testproj", REL))
 
+    # Record an interrupted Queen whose runner has ended.
     def interrupted(self, kind):
-        """A failed work agent of R1 that ended interrupted."""
-        self.agent("DUMMY-R1-work", package="R1", phase="work", status="failed", last_line="error: " + kind, type="claude", provider="claude",
+        """Create a failed Queen with the requested interruption kind."""
+        self.agent("QUEEN-1", package="", phase="queen", status="failed", last_line="error: " + kind, type="claude", provider="claude",
                    started=3, ended=1, interrupted=kind, retryAt="")
 
-    def wait_hours(self, name):
-        """Hours from now until the stored retry time of an agent row."""
-        at = routine.db.parse_time(self.ag(name).get("retryAt"))
+    # Return the remaining retry time of an interrupted Queen.
+    def wait_hours(self):
+        """Read the stored retry or provider-reset deadline."""
+        from haivequeen import hives
+        hive = hives.get(self.conn, "testproj", REL)
+        at = routine.db.parse_time(hive.get("reset_at") or self.ag("QUEEN-1").get("retryAt"))
         return None if at is None else (at - datetime.now()).total_seconds() / 3600
 
+    # Verify the configured connection retry delay.
     def test_connection_retry_waits_the_configured_minutes(self):
-        """The first retry after a connection end waits 30 minutes instead of 1."""
+        """The first connection retry uses the configured 30-minute wait."""
         self.interrupted(interrupt.CONNECTION)
         self.round()
-        self.assertEqual(self.names(), ["DUMMY-R1-work"])
-        self.assertAlmostEqual(self.wait_hours("DUMMY-R1-work"), 0.5, delta=0.02)
+        self.assertEqual(self.names(), ["QUEEN-1"])
+        self.assertAlmostEqual(self.wait_hours(), 0.5, delta=0.02)
 
+    # Verify the configured unknown-reset delay.
     def test_rate_limit_without_known_reset_waits_the_configured_minutes(self):
-        """No reset time is known and both providers are full: 7 minutes instead of 15."""
+        """An unknown provider reset uses the configured seven-minute wait."""
         unknown = [{"usedPercent": 100, "resetHours": None}] * 2
         f = self.base / "limits.json"
         f.write_text(json.dumps({n: {"usedPercent": 100, "resetHours": None, "windows": unknown} for n in ("claude", "codex")}), encoding="utf-8")
         os.environ["BZZ_PROVIDER_LIMITS_FILE"] = str(f)
         self.interrupted(interrupt.RATE_LIMIT)
         self.round()
-        self.assertAlmostEqual(self.wait_hours("DUMMY-R1-work"), 7 / 60, delta=0.02)
+        self.assertAlmostEqual(self.wait_hours(), 7 / 60, delta=0.02)
 
 
 class PauseKeptTest(RoundCase):

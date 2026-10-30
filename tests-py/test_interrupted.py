@@ -1,6 +1,4 @@
-"""Tests of R1 (interrupted agent ends wait and retry, never count as failure): the kinds of interruption are recognised from error events and
-stderr only, an interrupted end blocks and locks nothing and does not raise the class, and the task is tried again in the same phase after
-its wait (a rate limit goes to a provider with room, otherwise it waits for the reset)."""
+"""Tests of interrupted Queens, preserved retries and provider-limit waits."""
 import json
 import os
 import unittest
@@ -55,148 +53,117 @@ class ClassifyEndTest(unittest.TestCase):
         self.assertEqual([interrupt.backoff_minutes(n) for n in (1, 2, 3, 4, 5, 9)], [1, 2, 4, 8, 15, 15])
 
 
+# Verify interrupted Queen retries and provider limits.
 class InterruptedRetryTest(RoundCase):
-    """An interrupted end waits, blocks nothing and is retried in the same phase."""
+    """A Hive retries interrupted Queens without switching provider."""
 
+    # Prepare an existing Hive for each retry case.
     def setUp(self):
-        """Package R1 without dependencies."""
+        """Create the plan and its running Hive."""
+        from haivequeen import hives
         super().setUp()
         self.plan("IN_PROGRESS", [{"id": "R1", "title": "first task", "class": "medium"}])
+        hives.create(self.conn, "testproj", REL, "claude", "4FA8FF")
+        self.conn.execute("UPDATE hives SET state='running' WHERE project=? AND plan_path=?", ("testproj", REL))
 
-    def interrupted(self, name, phase="work", kind=interrupt.CONNECTION, retry="", provider="claude", started=30, ended=25, package="R1"):
-        """A failed agent row that ended interrupted."""
-        self.agent(name, package=package, phase=phase, status="failed", last_line="error: " + kind, type=provider, provider=provider,
-                   started=started, ended=ended, interrupted=kind, retryAt=retry)
+    # Record an interrupted Queen without a living runner.
+    def interrupted(self, name="QUEEN-1", kind=interrupt.CONNECTION, retry="", started=30, ended=25):
+        """Create one interrupted Queen history entry."""
+        self.agent(name, package="", phase="queen", status="failed", last_line="error: " + kind,
+                   type="claude", provider="claude", started=started, ended=ended, interrupted=kind, retryAt=retry)
 
+    # Configure isolated provider usage windows.
     def limits(self, **used):
-        """Provider limits for the test runtime: name=(used percent, hours to reset)."""
+        """Write test-only provider limits."""
         f = self.base / "limits.json"
         f.write_text(json.dumps({n: {"usedPercent": u, "resetHours": h} for n, (u, h) in used.items()}), encoding="utf-8")
         os.environ["BZZ_PROVIDER_LIMITS_FILE"] = str(f)
 
+    # Verify a future retry deadline blocks a new Queen.
     def test_waiting_retry_starts_nothing(self):
-        """Until its time no agent of any phase starts for the package, and the brain is not asked about the failure."""
-        self.interrupted("DUMMY-R1-work", retry=later(10))
+        """A Queen is not restarted before the stored retry time."""
+        self.interrupted(retry=later(10))
         self.round()
-        self.round()
-        self.assertEqual(self.names(), ["DUMMY-R1-work"])
+        self.assertEqual(self.names(), ["QUEEN-1"])
 
+    # Verify a due retry starts the same Hive and provider.
     def test_due_retry_starts_the_same_phase(self):
-        """After its time the next agent is a work agent, not a verify."""
-        self.interrupted("DUMMY-R1-work", retry=later(-1))
+        """A due retry starts another Queen on the same provider."""
+        self.interrupted(retry=later(-1))
         self.round()
-        self.assertEqual(self.ag("DUMMY-R1-work-2")["phase"], "work")
-        self.assertNotIn("DUMMY-R1-verify", self.names())
+        rows = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["phase"], rows[0]["provider"]), ("queen", "claude"))
 
+    # Verify retry deadlines survive an environment reload.
     def test_waiting_retry_survives_a_restart(self):
-        """The wait is stored in the database: new environments in a later round still hold it back, and release it when the time has come."""
-        self.interrupted("DUMMY-R1-work", retry=later(10))
+        """The persisted deadline is still respected in later rounds."""
+        self.interrupted(retry=later(10))
         self.round()
-        self.assertEqual(self.names(), ["DUMMY-R1-work"])
-        runtime.upsert_agent(self.conn, "testproj", "DUMMY-R1-work", {"retryAt": later(-1)})
+        self.assertEqual(self.names(), ["QUEEN-1"])
+        runtime.upsert_agent(self.conn, "testproj", "QUEEN-1", {"retryAt": later(-1)})
         self.round()
-        self.assertIn("DUMMY-R1-work-2", self.names())
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running"]), 1)
 
+    # Verify interruptions never increase package-failure counts.
     def test_interrupted_ends_are_no_failures(self):
-        """Three interrupted work ends: no failure counted, no block, no lock, the class stays."""
-        for n, name in enumerate(("DUMMY-R1-work", "DUMMY-R1-work-2", "DUMMY-R1-work-3")):
-            self.interrupted(name, kind=interrupt.API, retry=later(-1), started=90 - 20 * n, ended=85 - 20 * n)
+        """Repeated technical ends do not become package failures."""
+        for n in range(3):
+            self.interrupted("QUEEN-%d" % n, kind=interrupt.API, retry=later(-1), started=90 - 20*n, ended=85 - 20*n)
         env = self.env()
-        agents = routine.all_agents(env)
-        self.assertEqual(routine.package_failures(env, agents, REL, "R1"), 0)
-        self.assertEqual(routine.blocked_tasks(agents), [])
-        self.assertFalse(routine.package_locked(env, REL, "R1", agents))
-        self.assertEqual(routine.start_class(env, "work", REL, "R1", "medium"), "medium")
+        self.assertEqual(routine.package_failures(env, routine.all_agents(env), REL, "R1"), 0)
         self.round()
-        self.assertIn("DUMMY-R1-work-4", self.names())
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["class"], "medium")
 
-    def test_verify_is_retried_after_its_wait(self):
-        """A verify that ended interrupted is run again in the verify phase only after its wait."""
-        self.agent("DUMMY-R1-work", package="R1", started=60, ended=50)
-        self.interrupted("DUMMY-R1-verify", phase="verify", retry=later(10), started=45, ended=40)
-        self.round()
-        self.assertEqual(self.names(), ["DUMMY-R1-work", "DUMMY-R1-verify"])
-        runtime.upsert_agent(self.conn, "testproj", "DUMMY-R1-verify", {"retryAt": later(-1)})
-        self.round()
-        self.assertEqual(self.ag("DUMMY-R1-verify-2")["phase"], "verify")
-
-    def test_rate_limit_goes_to_the_provider_with_room(self):
-        """Claude is at its weekly limit: the retry after the rate limit is started at once, at Codex."""
+    # Verify a limit does not trigger an automatic provider change.
+    def test_rate_limit_rests_on_same_provider(self):
+        """A full provider rests even if another provider has room."""
+        from haivequeen import hives
         self.limits(claude=(100, 48), codex=(10, 48))
-        self.interrupted("DUMMY-R1-work", kind=interrupt.RATE_LIMIT)
+        self.interrupted(kind=interrupt.RATE_LIMIT)
         self.round()
-        self.assertEqual(self.ag("DUMMY-R1-work-2")["provider"], "codex")
+        hive = hives.get(self.conn, "testproj", REL)
+        self.assertEqual((hive["state"], hive["provider"]), ("resting", "claude"))
+        self.assertEqual(self.names(), ["QUEEN-1"])
 
-    def window_limits(self, claude, codex):
-        """Provider limits with usage windows: each argument is a list of (used percent, hours to reset or None) for the 5h and the weekly window."""
+    # Verify the later reset of two full windows is retained.
+    def test_rate_limit_waits_for_later_full_window(self):
+        """The reset deadline is the later full window of the Hive provider."""
+        from haivequeen import hives
         f = self.base / "limits.json"
-        weekly = lambda ws: ws[1][0]
-        f.write_text(json.dumps({
-            "claude": {"usedPercent": weekly(claude), "resetHours": claude[1][1], "windows": [{"usedPercent": u, "resetHours": h} for u, h in claude]},
-            "codex": {"usedPercent": weekly(codex), "resetHours": codex[1][1], "windows": [{"usedPercent": u, "resetHours": h} for u, h in codex]}}),
-            encoding="utf-8")
+        f.write_text(json.dumps({"claude": {"usedPercent": 100, "resetHours": 48,
+            "windows": [{"usedPercent": 100, "resetHours": 2}, {"usedPercent": 100, "resetHours": 48}]}}), encoding="utf-8")
         os.environ["BZZ_PROVIDER_LIMITS_FILE"] = str(f)
-
-    def wait_hours(self, name):
-        """Hours from now until the stored retry time of an agent row (None when none is stored)."""
-        at = routine.db.parse_time(self.ag(name).get("retryAt"))
-        return None if at is None else (at - datetime.now()).total_seconds() / 3600
-
-    def test_rate_limit_waits_for_the_window_at_its_limit(self):
-        """Both providers are full; only the 5h window of Claude is at its limit (reset in 3 h): the retry waits 3 hours, nothing starts."""
-        self.window_limits(claude=[(100, 3), (40, 100)], codex=[(100, 4), (100, 60)])
-        self.interrupted("DUMMY-R1-work", kind=interrupt.RATE_LIMIT)
+        self.interrupted(kind=interrupt.RATE_LIMIT)
         self.round()
-        self.assertEqual(self.names(), ["DUMMY-R1-work"])
-        self.assertAlmostEqual(self.wait_hours("DUMMY-R1-work"), 3, delta=0.1)
+        at = routine.db.parse_time(hives.get(self.conn, "testproj", REL)["reset_at"])
+        self.assertAlmostEqual((at - datetime.now()).total_seconds() / 3600, 48, delta=0.1)
 
-    def test_rate_limit_with_both_windows_at_limit_waits_for_the_later_reset(self):
-        """Both windows of the limited provider are at their limit (reset in 2 h and 48 h): the later reset counts."""
-        self.window_limits(claude=[(100, 2), (100, 48)], codex=[(100, 4), (100, 60)])
-        self.interrupted("DUMMY-R1-work", kind=interrupt.RATE_LIMIT)
-        self.round()
-        self.assertEqual(self.names(), ["DUMMY-R1-work"])
-        self.assertAlmostEqual(self.wait_hours("DUMMY-R1-work"), 48, delta=0.1)
-
+    # Verify the existing fallback when no reset time is known.
     def test_rate_limit_without_known_reset_waits_15_minutes(self):
-        """No reset time is known: 15 minutes."""
-        self.window_limits(claude=[(100, None), (100, None)], codex=[(100, None), (100, None)])
-        self.interrupted("DUMMY-R1-work", kind=interrupt.RATE_LIMIT)
+        """An unknown reset uses the existing fifteen-minute fallback."""
+        from haivequeen import hives
+        self.limits(claude=(100, None), codex=(10, 48))
+        self.interrupted(kind=interrupt.RATE_LIMIT)
         self.round()
-        self.assertEqual(self.names(), ["DUMMY-R1-work"])
-        self.assertAlmostEqual(self.wait_hours("DUMMY-R1-work"), 0.25, delta=0.02)
+        at = routine.db.parse_time(hives.get(self.conn, "testproj", REL)["reset_at"])
+        self.assertAlmostEqual((at - datetime.now()).total_seconds() / 3600, 0.25, delta=0.02)
 
 
+# Verify an old triage interruption does not start a new triage agent.
 class InterruptedTriageTest(RoundCase):
-    """A triage agent that ended interrupted is started again in the triage phase after its wait."""
+    """Triage agents are not restarted in the Hive flow."""
 
-    def setUp(self):
-        """A locked package K1 with open points (three work/verify pairs, falling counts) and its first triage agent."""
-        super().setUp()
-        self.plan("IN_PROGRESS", [{"id": "K1", "title": "stubborn task"}])
-        for i, n in enumerate(("", "-2", "-3")):
-            t = 60 - 20 * i
-            self.agent("DUMMY-K1-work" + n, package="K1", started=t, ended=t - 5)
-            self.agent("DUMMY-K1-verify" + n, type="codex", provider="codex", package="K1", phase="verify", started=t - 10, ended=t - 15)
-            self.finish("DUMMY-K1-verify" + n, "Layout: split the file\nOffene Anforderungen: %d" % (3 - i))
-        self.round()
-        self.triage = [a["name"] for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "triage"]
-
-    def triage_count(self):
-        """Number of triage agents so far."""
-        return len([a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "triage"])
-
+    # Verify that no replacement triage agent is launched.
     def test_interrupted_triage_waits_and_is_retried(self):
-        """The first triage agent was interrupted: no new one during the wait, a new one in the triage phase after it."""
-        self.assertEqual(len(self.triage), 1)
-        runtime.upsert_agent(self.conn, "testproj", self.triage[0], {"status": "failed", "ended_at": datetime.now().isoformat(timespec="seconds"),
-                                                                    "last_line": "error: connection", "interrupted": interrupt.CONNECTION,
-                                                                    "retryAt": later(10)})
+        """An old interrupted triage row does not start another triage agent."""
+        self.plan("IN_PROGRESS", [{"id": "K1", "title": "task"}])
+        self.agent("old-triage", phase="triage", status="failed", interrupted=interrupt.CONNECTION, started=30, ended=20)
         self.round()
-        self.assertEqual(self.triage_count(), 1)
-        runtime.upsert_agent(self.conn, "testproj", self.triage[0], {"retryAt": later(-1)})
-        self.round()
-        self.assertEqual(self.triage_count(), 2)
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running"]
+        self.assertTrue(all(a["phase"] != "triage" for a in active))
 
 
 class ClockJumpTest(unittest.TestCase):
@@ -278,13 +245,14 @@ class InterruptedIntegratorTest(RoundCase):
         routine.return_interrupted_rows(self.env())
         self.assertEqual(self.row_status(), "in Lauf")
 
+    # Verify the Queen receives the interrupted-merge recovery instruction.
     def test_next_integrator_aborts_an_unfinished_merge(self):
-        """The round gives the row back and starts the next integrator, whose prompt starts with aborting an unfinished merge."""
+        """The Queen is instructed to abort an unfinished merge before integrating."""
         self.integrator()
         self.round()
-        new = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "integrate" and a["name"] != "INTEGRATOR-1029-1000"]
+        new = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen" and a["status"] == "running"]
         self.assertEqual(len(new), 1)
-        self.assertIn("merge --abort", (self.env().run_dir(new[0]["name"]) / "prompt.md").read_text(encoding="utf-8"))
+        self.assertIn("abort any unfinished merge", (self.env().run_dir(new[0]["name"]) / "prompt.md").read_text(encoding="utf-8"))
 
 
 class RunnerEndTest(RunnerBase):

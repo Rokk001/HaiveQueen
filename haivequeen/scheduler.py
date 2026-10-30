@@ -40,16 +40,16 @@ DEFAULT_PROMPTS = {
 DEFAULT_SETTINGS = {
     "owner": "Owner",
     "openMarker": "Open for Owner",
-    "integratorSlots": 1,
+    "hives": 2,
+    "preferredProvider": "",
+    "excludedProviders": [],
+    "queenClass": "medium",
+    "beesPerQueen": 3,
     "roundMinutes": 5,
-    "escalateAfter": 2,
-    "progressVerifies": 3,   # a package whose open count does not fall over this many consecutive verifies is stopped (question to the owner)
-    "planStallHours": 6,     # a plan with agents running but no integrated package for this many hours is stopped (question to the owner)
+    "escalateAfter": 3,
     "clockJumpSeconds": 120,   # a wall clock jump above this many seconds during an agent run counts as laptop sleep
     "retryWaitMinutes": [1, 2, 4, 8, 15],   # wait before the n-th retry of consecutive interrupted ends (API, connection); the last value repeats
     "rateLimitWaitMinutes": 15,   # wait after a rate limit when no reset time of the limited provider is known
-    "minClass": {"verify": "medium", "integrate": "medium"},
-    "bundle": {"maxPackages": 3},
     "contextLimitTokens": 300000,
     "integrationBranch": "main",
     "compileCheck": "",
@@ -60,15 +60,11 @@ DEFAULT_SETTINGS = {
     "planSuffixRegex": "-?PLAN$",
     "buildProcessNames": [],
     "capabilityRules": [],
-    "triage": True,
     "window": "HaiveQueen",
     "terminal": "auto",
-    "brain": {"command": "claude", "model": "sonnet", "effort": "medium", "timeoutSeconds": 1500,
-              "args": ["--output-format", "stream-json", "--verbose", "--model", "{brainModel}", "--permission-mode", "auto",
-                       "--effort", "{brainEffort}", "--tools", "Read,Glob,Grep", "--add-dir", "{repo}",
-                       "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config"]},
+
 }
-MACHINE_ONLY = ("providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects", "window")   # window: the Queen, the dashboard and all agents share one terminal window
+MACHINE_ONLY = ("hives", "preferredProvider", "excludedProviders", "providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects", "window")   # window: the Queen, the dashboard and all agents share one terminal window
 
 
 def deep_merge(base: dict, over: dict) -> dict:
@@ -82,11 +78,14 @@ def deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
+# Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project.
 def build_settings(machine: dict, project_cfg: dict) -> dict:
     """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project."""
     merged = deep_merge(DEFAULT_SETTINGS, {k: v for k, v in machine.items() if k not in ("projects",)})
     over = {k: v for k, v in project_cfg.items() if k not in MACHINE_ONLY}
     merged = deep_merge(merged, over)
+    for key in ("progressVerifies", "planStallHours", "minClass", "bundle", "triage", "brain", "integratorSlots"):
+        merged.pop(key, None)
     if "minFreeRamGB" not in merged:
         merged["minFreeRamGB"] = float(machine.get("ramReserveMb", 2048)) / 1024.0
     return merged
@@ -181,11 +180,12 @@ def row_provider(row: dict) -> str:
     return str(row.get("provider") or row.get("type") or "")
 
 
+# Free slots per provider: subtract every running or starting agent process; never below 0.
 def provider_free(providers: list, rows: list) -> dict:
-    """Free slots per provider: its slots minus the running or starting workers of it (integrator agents use no slot); never below 0."""
+    """Free slots per provider: subtract every running or starting agent process; never below 0."""
     free = {}
     for p in providers:
-        used = sum(1 for r in rows if r.get("status") in ACTIVE and r.get("phase") != "integrate"
+        used = sum(1 for r in rows if r.get("status") in ACTIVE
                    and row_provider(r) == p["name"])
         free[p["name"]] = max(0, p["slots"] - used)
     return free

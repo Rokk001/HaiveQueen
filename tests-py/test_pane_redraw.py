@@ -111,16 +111,16 @@ class QueenHeaderRedrawTest(RoundCase):
     def test_header_once_events_scroll_below(self):
         """Several header redraws: one QUEEN line, events fill the rows below, nothing of the header in the scrollback."""
         scr = self.feed_queen(100, 30)
-        self.assertEqual(sum(1 for t in scr.lines() if t.startswith("◆ QUEEN")), 1)
-        self.assertFalse([t for t in scr.scrollback if "QUEEN" in t or "Projects:" in t])
-        self.assertTrue(scr.lines()[0].startswith("◆ QUEEN"))
+        self.assertEqual(sum(1 for t in scr.lines() if t.startswith("◆ Beekeeper")), 1)
+        self.assertFalse([t for t in scr.scrollback if "Beekeeper" in t or "Projects:" in t])
+        self.assertTrue(scr.lines()[0].startswith("◆ Beekeeper"))
         self.assertIn("12:00:39  event line 39", scr.lines())
 
     def test_narrow_pane_keeps_the_header_in_its_rows(self):
         """A 40-column pane: the long project line is cut, the header does not wrap into the event rows."""
         scr = self.feed_queen(40, 30)
-        self.assertEqual(sum(1 for t in scr.lines() if t.startswith("◆ QUEEN")), 1)
-        self.assertFalse([t for t in scr.scrollback if "QUEEN" in t or "Projects:" in t])
+        self.assertEqual(sum(1 for t in scr.lines() if t.startswith("◆ Beekeeper")), 1)
+        self.assertFalse([t for t in scr.scrollback if "Beekeeper" in t or "Projects:" in t])
 
 
 if __name__ == "__main__":

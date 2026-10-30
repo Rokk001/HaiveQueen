@@ -5,14 +5,12 @@ status = "READY"
 id = "P1"
 title = "Add the parser"
 class = "medium"
-agent = "claude"        # claude, codex or any provider name
 depends_on = []
 
 [[packages]]
 id = "P2"
 title = "Draw the icons"
 class = "light"
-agent = "claude"
 capability = "images"   # only providers with this capability may run it
 depends_on = ["P1"]
 
@@ -20,7 +18,6 @@ depends_on = ["P1"]
 id = "P3"
 title = "Final check of the whole plan"
 class = "heavy"
-agent = "codex"
 depends_on = ["all"]    # waits for every other package of this plan
 +++
 # Example plan

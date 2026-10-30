@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 6   # 6: table self_updates (CREATE TABLE IF NOT EXISTS in schema.sql, no column changes)
+SCHEMA_VERSION = 7   # 7: persistent Hive state and integration queue
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -111,6 +111,7 @@ def rebuild_queue_table(conn: sqlite3.Connection, schema_text: str) -> None:
     conn.execute("COMMIT")
 
 
+# Bring the database up to SCHEMA_VERSION (user_version pragma).
 def migrate(conn: sqlite3.Connection) -> None:
     """Bring the database up to SCHEMA_VERSION (user_version pragma)."""
     version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -124,6 +125,8 @@ def migrate(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_archived ON agents (project, archived)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_kind ON providers_usage (kind, ts)")
+        if version < 7:
+            conn.execute("INSERT OR IGNORE INTO kv(project,key,value,updated_at) VALUES ('*','hives-migration','pending',?)", (now(),))
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

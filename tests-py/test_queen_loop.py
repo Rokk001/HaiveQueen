@@ -61,14 +61,16 @@ class ReportTxtTest(RoundCase):
             (d / name).write_text("Offene Anforderungen: 9\n", encoding="utf-8")
         self.assertEqual(routine.verify_open_count(self.env(), "DUMMY-E1-verify"), -1)
 
-    def test_open_items_in_report_txt_are_followed_by_work_not_by_verify(self):
-        """The verify ended with a count of 2 in report.txt: the next agent of the package is a work agent, no second verify is started."""
+    # Verify the Queen takes over an old report with open items.
+    def test_open_items_in_report_txt_are_followed_by_queen(self):
+        """A legacy report with two open items is retained and the Queen starts without a second verify."""
         self.agent("DUMMY-E1-work", package="E1", started=30, ended=20)
         self.agent("DUMMY-E1-verify", package="E1", phase="verify", type="codex", provider="codex", started=15, ended=10)
         self.finish("DUMMY-E1-verify", INTRO)
         self.write_report("DUMMY-E1-verify", "Offene Anforderungen: 2\n")
         self.round()
-        self.assertIn("DUMMY-E1-work-2", self.names())
+        self.assertEqual(routine.verify_open_count(self.env(), "DUMMY-E1-verify"), 2)
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
         self.assertNotIn("DUMMY-E1-verify-2", self.names())
 
 
@@ -82,19 +84,25 @@ class DependencyVerifyTest(RoundCase):
         self.agent("DUMMY-D1-work", package="D1", started=40, ended=35)
         self.agent("DUMMY-D2-work", package="D2", started=30, ended=25)
 
-    def test_no_verify_while_a_dependency_is_not_verified(self):
-        """D1 is not verified yet: D1 gets its verify, D2 gets none."""
+    # Verify unfinished dependencies do not start separate verify agents.
+    def test_unverified_dependency_starts_only_queen(self):
+        """The Queen receives the plan when a dependency has no verify result."""
         self.round()
-        self.assertIn("DUMMY-D1-verify", self.names())
-        self.assertNotIn("DUMMY-D2-verify", self.names())
+        agents = runtime.list_agents(self.conn, "testproj")
+        self.assertEqual(len([a for a in agents if a["phase"] == "queen" and a["status"] == "running"]), 1)
+        self.assertFalse([a for a in agents if a["phase"] == "verify"])
+        packages = {p["id"]: p for p in self.env().packages(REL)}
+        self.assertEqual(packages["D2"]["depends"], ["D1"])
 
-    def test_verify_when_the_dependency_is_verified(self):
-        """D1 ended with 'Offene Anforderungen: 0': D2 gets its verify."""
+    # Verify a previous verify result does not start a separate agent.
+    def test_verified_dependency_starts_only_queen(self):
+        """A legacy verify result remains while the Queen owns the plan."""
         self.agent("DUMMY-D1-verify", package="D1", phase="verify", started=24, ended=20)
         self.finish("DUMMY-D1-verify", "Offene Anforderungen: 0")
         self.round()
-        self.assertIn("DUMMY-D2-verify", self.names())
-
+        agents = runtime.list_agents(self.conn, "testproj")
+        self.assertEqual(len([a for a in agents if a["phase"] == "queen" and a["status"] == "running"]), 1)
+        self.assertEqual([a["name"] for a in agents if a["phase"] == "verify"], ["DUMMY-D1-verify"])
 
 class VanishedEndsTest(RoundCase):
     """Window closed, killed, crashed or lost by a Queen restart: not a failure, no block, no lock, started again."""
@@ -131,12 +139,13 @@ class VanishedEndsTest(RoundCase):
         env = self.env()
         self.assertEqual(routine.package_failures(env, routine.all_agents(env), REL, "R1"), 0)
 
-    def test_vanished_work_is_started_again(self):
-        """After two vanished ends the next round starts a new work agent for the package."""
+    # Verify vanished legacy work is handed to the Queen.
+    def test_vanished_work_is_handed_to_queen(self):
+        """After two vanished work ends the plan starts a Queen."""
         self.vanished_work(1)
         self.vanished_work(2)
         self.round()
-        self.assertIn("DUMMY-R1-work-3", self.names())
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
 
 
 def git(cwd, *args):
@@ -167,35 +176,38 @@ class NewCommitTest(RoundCase):
         self.agent(name, package="C1", **f)
         routine.record_progress(self.env(), name, REL, "C1", str(self.wt))
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_work_without_new_commit_gets_work_not_verify(self):
-        """The work agent ended at the state it started with (like the P1 work that ended after 90 seconds): the next agent is work."""
+        """Without a new commit, the Queen takes over without a separate verify."""
         self.started("DUMMY-C1-work", started=30, ended=20)
         self.round()
-        self.assertIn("DUMMY-C1-work-2", self.names())
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
         self.assertNotIn("DUMMY-C1-verify", self.names())
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_work_with_new_commit_gets_verify(self):
-        """The work agent made a commit: the next agent is the verify."""
+        """A committed legacy worker is followed by a Queen, not a separate verify."""
         self.started("DUMMY-C1-work", started=30, ended=20)
         self.commit("two")
         self.round()
-        self.assertIn("DUMMY-C1-verify", self.names())
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
         self.assertNotIn("DUMMY-C1-work-2", self.names())
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_second_verify_needs_a_new_commit(self):
-        """The verify found open items, the next work agent ended without a commit: work again, no second verify on the same state."""
+        """After a legacy verify and work run the Queen takes over without a second verify."""
         self.started("DUMMY-C1-work", started=60, ended=50)
         self.commit("two")
         self.started("DUMMY-C1-verify", phase="verify", type="codex", provider="codex", started=45, ended=40)
         self.finish("DUMMY-C1-verify", "Offene Anforderungen: 2")
         self.started("DUMMY-C1-work-2", started=30, ended=20)
         self.round()
-        self.assertIn("DUMMY-C1-work-3", self.names())
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
         self.assertNotIn("DUMMY-C1-verify-2", self.names())
 
 
 class IdleWorkGuardTest(NewCommitTest):
-    """Work runs without a new commit count as no progress for the guard; after progressVerifies of them in a row the package is stopped."""
+    """Legacy work runs do not create automatic progress stops."""
 
     def idle(self, n, **f):
         """Finished work agent number n that started at the current state of the branch and ended without a commit."""
@@ -206,21 +218,23 @@ class IdleWorkGuardTest(NewCommitTest):
         """Open STALL question of package C1 (empty list when none)."""
         return [q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == "STALL-C1"]
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_three_idle_works_stop_the_package(self):
-        """Three work runs in a row without a new commit: a question to the owner and no fourth work agent."""
+        """Three work runs without a commit do not create a stop question or a fourth work agent."""
         for n in (1, 2, 3):
             self.idle(n)
         self.round()
-        self.assertEqual(len(self.stalls()), 1)
+        self.assertEqual(self.stalls(), [])
         self.assertNotIn("DUMMY-C1-work-4", self.names())
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_two_idle_works_do_not_stop_it(self):
-        """Two idle runs are fewer than progressVerifies: the next work agent starts."""
+        """Two idle work runs start a Queen and no stop question."""
         for n in (1, 2):
             self.idle(n)
         self.round()
         self.assertEqual(self.stalls(), [])
-        self.assertIn("DUMMY-C1-work-3", self.names())
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
 
     def test_interrupted_ends_do_not_count(self):
         """Two idle runs and an interrupted one between them: only two count, nothing is stopped."""
@@ -239,13 +253,14 @@ class IdleWorkGuardTest(NewCommitTest):
         self.round()
         self.assertEqual(self.stalls(), [])
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_streak_length_is_a_setting(self):
-        """With progressVerifies 2 two idle runs stop the package."""
+        """The removed progressVerifies setting does not stop two idle work runs."""
         self.machine["progressVerifies"] = 2
         for n in (1, 2):
             self.idle(n)
         self.round()
-        self.assertEqual(len(self.stalls()), 1)
+        self.assertEqual(self.stalls(), [])
 
 
 class ProgressGuardTest(RoundCase):
@@ -270,13 +285,12 @@ class ProgressGuardTest(RoundCase):
         """Open questions of the dummy plan with this item."""
         return [q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == item]
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_count_that_does_not_fall_stalls_the_package(self):
-        """Counts 4, 4, 5 over three verifies: a question with the last report, no new agent for the package."""
+        """Counts 4, 4, 5 do not produce a stop question or another work agent."""
         self.verifies([4, 4, 5])
         self.round()
-        qs = self.questions("STALL-S1")
-        self.assertEqual(len(qs), 1)
-        self.assertIn("Offene Anforderungen: 5", qs[0]["question"])
+        self.assertEqual(self.questions("STALL-S1"), [])
         self.assertNotIn("DUMMY-S1-work-4", self.names())
 
     def test_falling_count_does_not_stall(self):
@@ -285,29 +299,32 @@ class ProgressGuardTest(RoundCase):
         self.round()
         self.assertEqual(self.questions("STALL-S1"), [])
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_number_of_verifies_is_a_setting(self):
-        """With progressVerifies 2 two verifies are enough (counts 4, 4)."""
+        """The removed progressVerifies setting does not stop two verify results."""
         self.machine["progressVerifies"] = 2
         self.verifies([4, 4])
         self.round()
-        self.assertEqual(len(self.questions("STALL-S1")), 1)
+        self.assertEqual(self.questions("STALL-S1"), [])
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_restart_and_auto_answer_do_not_lift_the_stall(self):
         """A new round (like a Queen restart) and a Queen answer keep the stall; the answer of the owner lifts it and the package gets new attempts."""
         self.verifies([4, 4, 5])
         self.round()
-        qid = self.questions("STALL-S1")[0]["id"]
+        qid = db.add_question(self.conn, "testproj", REL, "STALL-S1", "Earlier question", "")
         self.round()
         db.answer_question(self.conn, qid, "go on", "auto")
         self.round()
         self.assertNotIn("DUMMY-S1-work-4", self.names(), "no new agent while stalled")
-        self.assertIsNotNone(runtime.kv_get(self.conn, "testproj", "stall:%s|S1" % REL))
+        self.assertIsNone(runtime.kv_get(self.conn, "testproj", "stall:%s|S1" % REL))
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_owner_answer_lifts_the_stall_once(self):
         """After the owner answered, the old verifies no longer count: the package is not stalled again in the next round."""
         self.verifies([4, 4, 5])
         self.round()
-        qid = [q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == "STALL-S1"][0]["id"]
+        qid = db.add_question(self.conn, "testproj", REL, "STALL-S1", "Earlier question", "")
         db.answer_question(self.conn, qid, "go on", "owner")
         self.round()
         self.assertIsNone(runtime.kv_get(self.conn, "testproj", "stall:%s|S1" % REL))
@@ -319,12 +336,13 @@ class ProgressGuardTest(RoundCase):
         self.agent("DUMMY-S1-work", package="S1", started=ago_first, ended=ago_first - 5)
         self.agent("DUMMY-S1-work-2", package="S1", started=ago_last, ended=ago_last - 5)
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_plan_without_integration_for_six_hours_is_stopped(self):
-        """Agents ran for 7 hours and nothing was integrated: question about the plan, no new agent."""
+        """Seven hours without integration does not stop the plan; a Queen starts."""
         self.plan_agents(420, 10)
         self.round()
-        self.assertEqual(len([q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == "STALL-PLAN"]), 1)
-        self.assertEqual(self.names(), ["DUMMY-S1-work", "DUMMY-S1-work-2"])
+        self.assertEqual([q for q in runtime.list_questions(self.conn, "testproj", "open") if q["item"] == "STALL-PLAN"], [])
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
 
     def test_plan_with_recent_integration_is_not_stopped(self):
         """A branch of the plan was integrated one hour ago: no stall."""
@@ -347,12 +365,13 @@ class ProgressGuardTest(RoundCase):
         self.round()
         self.assertEqual(self.questions("STALL-S1"), [])
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_verifies_after_the_start_of_the_guard_count(self):
-        """With the go-live time before the verifies the same history stops the package."""
+        """A historic guard start does not stop the package."""
         self.verifies([4, 4, 5])
         runtime.kv_set(self.conn, "*", "guard-since", (datetime.now() - timedelta(hours=5)).isoformat(timespec="seconds"))
         self.round()
-        self.assertEqual(len(self.questions("STALL-S1")), 1)
+        self.assertEqual(self.questions("STALL-S1"), [])
 
     def test_owner_answer_of_the_plan_stop_resets_the_count_of_its_packages(self):
         """The owner answered the stop of the plan: verifies from before that answer no longer count for any package of the plan."""
@@ -372,13 +391,14 @@ class ProgressGuardTest(RoundCase):
 
 
 class StartStateAndQuestionRunTest(NewCommitTest):
-    """A missing start state is no progress, and a question run of a package counts as running work of the package."""
+    """Legacy start states and running question work remain visible to the Queen."""
 
+    # Verify the plan is handled by a Queen without the old stop rules.
     def test_missing_start_state_is_no_progress(self):
-        """A work agent without a recorded start state (older row) in a git repository gets work again, not a verify."""
+        """A legacy work agent without a recorded start state is followed by a Queen, not a verify."""
         self.agent("DUMMY-C1-work", package="C1", started=30, ended=20)
         self.round()
-        self.assertIn("DUMMY-C1-work-2", self.names())
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"]), 1)
         self.assertNotIn("DUMMY-C1-verify", self.names())
 
     def test_no_verify_while_a_question_run_of_the_package_works(self):

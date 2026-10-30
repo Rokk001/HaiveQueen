@@ -210,6 +210,38 @@ def sampler_loop(path, process_names, stop, seconds):
             break
 
 
+
+# Measure Queen builds only while integration or a compiler process is active.
+def queen_build_monitor(project, plan, name, jobs, sample_file, process_names, stop, interval):
+    """Measure Queen builds only while integration or a compiler process is active."""
+    conn = db.connect(config.db_path())
+    started = None
+    start_free = None
+    try:
+        while True:
+            slot = conn.execute("SELECT acquired,build_jobs FROM hive_integration WHERE project=? AND plan_path=?", (project, plan)).fetchone()
+            active = bool(slot and slot[0]) or bool(process_names and osplat.count_processes(process_names))
+            if active:
+                if slot and slot[1]:
+                    jobs = int(slot[1])
+                if started is None:
+                    started = datetime.now()
+                    start_free = float(osplat.free_ram_mb())
+                    Path(sample_file).write_text("", encoding="utf-8")
+                    runtime.upsert_agent(conn, project, name, {"buildJobs": jobs})
+                sample_once(sample_file, process_names)
+            elif started is not None:
+                use = complete_build_measure(conn, project, name, jobs, start_free, sample_file, started)
+                runtime.upsert_agent(conn, project, name, {"buildUseMB": use, "buildJobs": None})
+                started = None
+            if stop.wait(min(float(interval), 1.0)):
+                break
+        if started is not None:
+            use = complete_build_measure(conn, project, name, jobs, start_free, sample_file, started)
+            runtime.upsert_agent(conn, project, name, {"buildUseMB": use, "buildJobs": None})
+    finally:
+        conn.close()
+
 def stall_watch(last_output, limit, on_stall, on_resume, stop):
     """Report an agent that printed nothing for `limit` seconds; `last_output[0]` is the monotonic time of its last line.
 
@@ -280,6 +312,8 @@ def write_phase_rules(pcfg, workspace, phase, out_file):
     parts, n = [], 0
     if rules:
         sel = rules.get(phase)
+        if sel is None and phase == "queen":
+            sel = rules.get("work")
         if sel is None and phase == "triage":
             sel = rules.get("verify")   # a triage agent only reads and decides, so it follows the verify rules unless project.toml names its own
         if sel is None:
@@ -373,9 +407,11 @@ def task_line(prompt_file):
     return short(cand[0], 300) if cand else ""
 
 
+# Track and report one agent run.
 class AgentRun:
     """State and behaviour of one agent run; `handle_event` parses the event stream of either CLI."""
 
+    # Initialize one tracked agent run.
     def __init__(self, conn, project, name, provider, protocol, cwd, run_dir, plan="", package="", phase="work",
                  out=None, queue_re=None, sessions=None):
         """Remember the run parameters; `out` is where pane text goes (default stdout)."""
@@ -388,6 +424,7 @@ class AgentRun:
         self.thread = ""
         self.tin, self.tout = (None, None) if protocol == "codex" else (0, 0)   # Codex reports its token totals only in the session log
         self.ctx = 0
+        self.context_limit = CONTEXT_LIMIT
         self.seen = set()
         self.last = ""
         self.final = ""
@@ -472,10 +509,11 @@ class AgentRun:
         except Exception:
             pass   # a failed write must not end the run
 
+    # Write the HANDOFF flag file when the current context reached the limit (the agent is never killed).
     def check_handoff(self):
         """Write the HANDOFF flag file when the current context reached the limit (the agent is never killed)."""
         flag = self.run_dir / "HANDOFF"
-        if self.ctx and self.ctx >= CONTEXT_LIMIT and not flag.exists():
+        if self.ctx and self.ctx >= self.context_limit and not flag.exists():
             try:
                 flag.write_text("context %d reached %s\n" % (self.ctx, datetime.now().isoformat()), encoding="utf-8")
             except OSError:
@@ -630,15 +668,20 @@ class AgentRun:
             pass
 
 
-def report_prompt(prompt_file, project, agent_id):
-    """Return the prompt handed to the CLI: read the prompt file, plus the report commands (bzz done / ready / ask / note). It has no double quote."""
+# Provide the agent with the supported reporting and integration commands.
+def report_prompt(prompt_file, project, agent_id, phase=None):
+    """Return the CLI prompt with phase-specific reporting commands and no double quotes."""
     orch = "'%s' -I '%s'" % (osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py")
     text = ('Read the file "%s" completely and carry out exactly the task described there. Do nothing else.' % prompt_file)
+    if phase == "bee":
+        text += " Final report: %s done --agent %s --result <file>; step report: %s note --project %s --text <text>." % (orch, agent_id, orch, project)
+        return text.replace('"', "")
     text += (" Report only with these commands, never by editing a queue file or state table by hand (the handoff text in the state file of the plan stays your own file): "
              "final report: %s done --agent %s --result <file with your final report>; "
              "branch ready for integration: %s ready --project %s --branch <branch> --tip <commit> --plan <plan path> --note <text>; "
              "question for the owner: %s ask --project %s --plan <plan path> --item <item> --question <question> --recommendation <recommendation>; "
-             "note: %s note --project %s --text <text>.") % (orch, agent_id, orch, project, orch, project, orch, project)
+             "integration place: %s integration acquire|release --project %s --plan <plan path>; "
+             "note: %s note --project %s --text <text>.") % (orch, agent_id, orch, project, orch, project, orch, project, orch, project)
     return text.replace('"', "")
 
 
@@ -649,6 +692,7 @@ def build_args(prov, vars_):
     return [sub(a) for a in prov["args"] + endpoint_args(prov)]
 
 
+# Run one agent as described by the parsed arguments; returns 0 (the status is in the agents table).
 def run_agent(a, out=None):
     """Run one agent as described by the parsed arguments; returns 0 (the status is in the agents table)."""
     try:
@@ -676,6 +720,7 @@ def run_agent(a, out=None):
     queue_name = pcfg.get("integrationStateFile")
     queue_re = re.escape(Path(str(queue_name)).stem) if queue_name else None
     run = AgentRun(conn, a.project, a.name, a.provider, protocol, a.cwd, run_dir, a.plan, a.package, a.phase, out, queue_re)
+    run.context_limit = int(scheduler.build_settings(cfg, pcfg).get("contextLimitTokens", CONTEXT_LIMIT))
     run.model = model_label(model)
     plan_short = re.sub(r"-?PLAN$", "", Path(a.plan).stem) if a.plan else ""
     task = task_text(conn, a.project, a.plan, a.package, a.phase, plan_short) or task_line(a.prompt_file)
@@ -704,13 +749,22 @@ def run_agent(a, out=None):
 
     try:
         agent_row = runtime.get_agent(conn, a.project, a.name)
-        prompt = report_prompt(a.prompt_file, a.project, agent_row["id"] if agent_row else "?")
+        prompt = report_prompt(a.prompt_file, a.project, agent_row["id"] if agent_row else "?", a.phase)
         rules_file = run_dir / "rules.md"
         if protocol == "claude":
-            write_phase_rules(pcfg, workspace, a.phase, rules_file)
+            if a.phase == "bee":
+                rules_file.write_text("", encoding="utf-8")
+            else:
+                write_phase_rules(pcfg, workspace, a.phase, rules_file)
         vars_ = {"model": model, "effort": effort, "repo": pcfg.get("codeRepo") or workspace or a.cwd, "workspace": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
                  "claudeTools": pcfg.get("claudeTools") or cfg.get("claudeTools") or "", "rules": str(rules_file)}
         arg_list = build_args(prov, vars_)
+        if a.phase == "bee" and protocol == "claude":
+            if "--setting-sources" in arg_list:
+                i = arg_list.index("--setting-sources")
+                arg_list[i + 1] = ""
+            else:
+                arg_list.extend(["--setting-sources", ""])
     except Exception as exc:   # a broken rule file or argument template must show up as a failed agent at once, not as a vanished runner one round later
         run.last = short("runner error: " + str(exc))
         run.say(run.last, "Red")
@@ -719,7 +773,7 @@ def run_agent(a, out=None):
 
     # Build jobs: an agent that builds (integrate, release) gets the job count of this machine as environment variable and its RAM use is measured while it runs.
     bj_raw = cfg.get("buildJobs")
-    bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release") else None
+    bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release", "queen") else None
     bj_jobs, bj_start_mb, samples, stop, sampler = 0, 0.0, run_dir / "build-samples.txt", threading.Event(), None
     env = with_bzz_on_path(dict(os.environ))   # the agent and everything it starts finds `bzz`, also without a PATH entry of the pip Scripts folder
     env["BZZ_AGENT"] = a.name   # tells `bzz ready` which agent calls it (only the release phase may register a branch as ready)
@@ -733,11 +787,16 @@ def run_agent(a, out=None):
             samples.unlink()
         except OSError:
             pass
-        sampler = threading.Thread(target=sampler_loop, daemon=True, args=(
-            samples, [str(x) for x in pcfg.get("buildProcessNames") or []], stop, float(os.environ.get("BZZ_SAMPLE_SEC") or 10)))
+        process_names = [str(x) for x in pcfg.get("buildProcessNames") or []]
+        if a.phase == "queen":
+            sampler = threading.Thread(target=queen_build_monitor, daemon=True, args=(
+                a.project, a.plan, a.name, bj_jobs, samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or 10)))
+        else:
+            sampler = threading.Thread(target=sampler_loop, daemon=True, args=(
+                samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or 10)))
+            runtime.upsert_agent(conn, a.project, a.name, {"buildJobs": bj_jobs})
+            run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
         sampler.start()
-        runtime.upsert_agent(conn, a.project, a.name, {"buildJobs": bj_jobs})
-        run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
 
     code = 0
     clock_jumps = []   # filled when the wall clock jumps by more than interrupt.JUMP_SECONDS during the run (laptop sleep)
@@ -794,8 +853,9 @@ def run_agent(a, out=None):
     if bj_jobs > 0:
         stop.set()
         sampler.join(timeout=5)
-        use = complete_build_measure(conn, a.project, a.name, bj_jobs, bj_start_mb, samples, started)
-        runtime.upsert_agent(conn, a.project, a.name, {"buildUseMB": use})
+        if a.phase != "queen":
+            use = complete_build_measure(conn, a.project, a.name, bj_jobs, bj_start_mb, samples, started)
+            runtime.upsert_agent(conn, a.project, a.name, {"buildUseMB": use})
 
     # Success is judged by the agent's own result event (claude: type result without error; codex: completed turn), not by the exit code: a failing plugin hook after the end must not fail the task.
     status = "done" if run.ok else "failed"

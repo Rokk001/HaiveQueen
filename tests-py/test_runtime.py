@@ -145,8 +145,9 @@ class RuntimeTest(unittest.TestCase):
         code, _ = self.orch("plans", "sync", "--project", "nowhere")
         self.assertEqual(code, 1)
 
+    # Verify that capability remains while the obsolete agent field is ignored.
     def test_package_capability_kept(self):
-        """A package with agent and capability keeps both in the table (the capability is not lost behind the agent)."""
+        """A package retains its capability and ignores its old agent field."""
         ws = self.base / "ws"
         (ws / "docs" / "plans").mkdir(parents=True)
         (ws / "docs" / "plans" / "cap.md").write_text(
@@ -154,7 +155,7 @@ class RuntimeTest(unittest.TestCase):
             '[[packages]]\nid = "G2"\ntitle = "Plain"\n+++\n# Cap\n', encoding="utf-8")
         self.ok("plans", "sync", "--project", "p", "--workspace", str(ws))
         pk = {r["id"]: r for r in self.ok("packages", "list", "--project", "p")}
-        self.assertEqual((pk["G1"]["agent_type"], pk["G1"]["capability"]), ("claude", "images"))
+        self.assertEqual((pk["G1"]["agent_type"], pk["G1"]["capability"]), ("", "images"))
         self.assertFalse(pk["G2"]["capability"])
         # a second sync keeps the value, a changed header replaces it
         (ws / "docs" / "plans" / "cap.md").write_text(
@@ -179,6 +180,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIn("capability", rows[0])
 
+    # Verify queue, directly opened questions and decisions.
     def test_queue_questions_decisions(self):
         """queue upsert changes rows in place, questions filter by item, decisions carry the item."""
         self.ok("queue", "upsert", "--project", "p", "--branch", "b", "--tip", "t1", "--plan", "x.md")
@@ -192,8 +194,6 @@ class RuntimeTest(unittest.TestCase):
         qid = self.ok("ask", "--project", "p", "--plan", "x.md", "--item", "I1", "--question", "Q?")["id"]
         q2 = self.ok("ask", "--project", "p", "--plan", "x.md", "--item", "I2", "--question", "Q2?")["id"]
         self.assertEqual(len(self.ok("questions", "--project", "p", "--item", "I1")), 1)
-        for n in (qid, q2):   # new questions wait for the triage; the triage agent releases them to the owner
-            self.ok("triage", "release", "--project", "p", "--question-id", str(n))
         self.ok("answer", str(qid), "yes", "--by", "owner")
         self.assertEqual(len(self.ok("questions", "--open")), 1)
         self.assertEqual(len(self.ok("questions", "--status", "answered")), 1)
