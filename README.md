@@ -9,57 +9,36 @@
   <img alt="Windows and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4?style=for-the-badge">
 </p>
 
-<p align="center"><b>Run many Claude Code and Codex agents in parallel, one fresh agent per task, without copying a single prompt.</b></p>
+<p align="center"><b>Run plans with Queens and parallel Bees without copying prompts.</b></p>
 
 ---
 
 ## Why
 
-Working through a big plan with AI coding agents means a lot of babysitting: paste the prompt, wait, `/clear`, paste the next one, check the result, repeat.
-With several agents at once it gets worse, and a supervising model that just watches burns tokens while it waits.
-
-**HaiveQueen** removes that loop. It reads your plans, builds the prompt for every task itself, starts a fresh agent for it and checks the result with a second, independent agent.
-A language model is only asked when something needs judgement; everything routine is plain Python.
+HaiveQueen runs plans with one Hive per plan. The Beekeeper is a program loop, not a model; each Hive has one Queen, and the Queen works the plan and starts Bees for independent work. Token economy is the first quality goal.
 
 ## Features
 
-- **Multi-project**: one loop serves many projects; a free slot goes to the project with the highest `priority`, ties to the oldest waiting package.
-- **Providers with weekly-limit balancing**: Claude Code, Codex CLI or any command you list; the scheduler picks the provider with the most weekly limit left.
-- **Local LLMs**: a provider entry can point at an OpenAI-compatible endpoint (for example LM Studio).
-- **One fresh agent per task**: own headless agent, own pane; work, then an independent verify, then release, then the integrator.
-- **Triage**: when a package is locked after repeated open points, a triage agent decides technical points itself and asks you only about game or design decisions.
-- **Pause and drain**: `P` pauses or resumes new starts, `D` lets running agents finish; a restart re-attaches to agents that are still alive.
-- **Build jobs**: parallel build jobs are chosen per machine from the cores and the free RAM, and measured per job.
-- **SQLite state**: one database holds agents, events, questions, decisions and the integration queue; Markdown views can be exported.
-- **Dashboard**: agents, usage limits, token use, RAM, builds, plans and open questions in one pane.
-- **Windows Terminal or tmux**: panes are opened with `wt` on Windows and `tmux` on Linux; a headless backend runs the tests.
+- **Hives and Queens**: one Queen per plan, in her own worktree and pane; a Hive keeps its provider and colour across Queen changes.
+- **Bees**: slim package tasks with only needed paths, numbered steps and rules; independent packages run in parallel up to the configured limit. Code-changing Bees use sub-branches and worktrees which the Queen merges locally.
+- **Providers and limits**: select a provider by free weekly limit, with machine-wide preference and exclusions. A Hive rests until reset when its provider is limited; only the owner may change its provider.
+- **Escalation**: package classes bind the work. Failed attempts persist per class; after the configured threshold the Queen selects the next offered class. Interruptions never count as failures. Image packages stay on Codex; after its highest class fails the owner is asked.
+- **Completeness and integration**: the Queen records evidence for every requirement, continues while any remain open and integrates her own branch. Only one integration per project runs at a time.
+- **Handoffs**: at the context limit no new Bees start; running Bees finish and a new Queen continues from the handoff. Open owner questions do not stop independent work.
+- **Dashboard**: coloured Hive frames show each Queen and compact Bee progress, waiting states, limits and questions.
+- **Pause and drain**: pause prevents new Queens and separate Bee processes; drain lets running Queens finish. Existing subagents continue.
+- **SQLite and panes**: state survives restarts; Windows Terminal, tmux and a headless backend are supported.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    PL[Plan<br/>READY] --> W[Work agent]
-    W --> V[Verify agent<br/>open requirements: 0]
-    V -->|open items| W
-    V --> R[Release agent<br/>merge, compile check, push]
-    R --> I[Integrator<br/>build, checks, deploy]
-    DB[(SQLite<br/>database)]
-    W <--> DB
-    V <--> DB
-    R <--> DB
-    I <--> DB
-    LOOP([Queen<br/>round loop, brain on events]) <--> DB
-```
-
-1. The **Queen** is the main instance: the round loop with its routine and the brain. Every round she syncs the plans of all projects into the database and applies the fixed transitions (work done, then verify, then release, then integrate).
-2. Only if something needs judgement does it become an **event**, and the brain (one fresh `claude -p` call) is asked once. Its answer is a validated JSON action.
-3. The agents she starts carry short female names (Ada, Bea, Cleo, ...), so the panes are easy to tell apart. A started agent writes its result to the plan's state, reports with `bzz done` / `bzz ready` / `bzz ask` and ends. The next round sees the new state.
+1. The Beekeeper reads READY and IN_PROGRESS plans, chooses an available provider offering the Queen class and starts one Hive per plan within the machine-wide limits. Existing Hives ready to resume take precedence over new plans.
+2. The Queen works a startable package herself and delegates independent packages to Bees, respecting dependencies, classes and the Bee limit. A higher-class package runs as a Bee even when it is not parallel. Image work goes to Codex; local providers are used when available. When neither the Hive provider nor a local provider offers the required or a higher class for a normal package, another configured provider can be used.
+3. Before integration the Queen answers the completeness question with evidence per requirement and `Offene Anforderungen: 0`. She merges the current integration branch into her branch, runs the project check, registers her branch and performs the project's integration steps under the per-project integration place. A waiting Hive hands off and resumes when its turn arrives.
+4. At a provider limit the Hive rests on that provider until reset. The owner may explicitly dequeen or requeen it. A Queen awaiting an answer hands off once independent work is finished; any answer can resume the Hive.
 
 ## Dashboard
 
-Rendered by the tool itself from a throw-away runtime with invented data (the script `scripts/make_dashboard_svg.py` converts the ANSI output to SVG, no screen capture).
-
-<p align="center"><img src="assets/dashboard.svg" alt="Dashboard with agents, limits, usage, system, plans and questions"></p>
+Each Hive has its own coloured frame with its plan and Queen. Bees appear as short lines with name, task and completed step count. Resting, queenless, integration, Codex and owner-answer waits are visible. Select a Hive to dequeen or requeen it; each action asks for confirmation.
 
 ## Quick start
 
@@ -83,16 +62,11 @@ bzz stop                              # no new agents; running agents finish the
 ```
 
 Put your machine settings (providers, slots) into `config.toml` (see `examples/config.example.toml`; folder: `%APPDATA%\HaiveQueen` on Windows, `~/.config/HaiveQueen` on Linux).
-The Queen, the dashboard and every agent share one terminal window; its name is the machine setting `window` (default `HaiveQueen`), a project cannot set its own.
+The Beekeeper, the dashboard and agent panes share one terminal window; its name is the machine setting `window` (default `HaiveQueen`), a project cannot set its own.
 
 ## How HaiveQueen develops itself
 
-HaiveQueen is developed with HaiveQueen. A project can keep its plans in one folder (its workspace) and its code in another git checkout, named by the setting `codeRepo` in `.haivequeen/project.toml`. Every package then works in its own worktree of the code checkout, on its own branch.
-
-1. An agent works in its worktree and runs the project's `compileCheck` until it exits 0. Only the release agent registers the branch with `bzz ready`, and only after the whole-plan verify ended with the count line `Offene Anforderungen: 0`; `bzz ready` from an agent in any other phase is refused (the fix of a blocked row may register its branch again). It never pushes.
-2. The integrator merges the ready branches, oldest first, into the integration branch of the code checkout, runs the test suite and pushes that branch. A branch that does not pass is set to `blocked`, and a fix is started for it.
-3. Then `self-update` runs. It stops the loop once the running agents have ended by themselves, fast-forwards the live checkout, restarts HaiveQueen and checks the first round. If that check fails, the live checkout is rolled back.
-4. Faults of its own operation (a stalled agent, a vanished runner, an agent that ended without a result, a terminal crash, a rollback) are never hidden: each one is filed as an open question for the owner.
+A Queen works in her plan worktree, checks completeness, merges the integration branch and runs the project check. She registers and integrates only her own ready row, runs the project integration steps and starts self-update. The Beekeeper serializes integrations per project. External windows acquire the same integration place before integrating.
 
 ## Plans
 
@@ -106,7 +80,6 @@ status = "READY"
 id = "P1"
 title = "Add the parser"
 class = "medium"        # light | medium | heavy: model and effort come from the provider
-agent = "claude"        # claude, codex or any provider name
 depends_on = []
 
 [[packages]]
@@ -121,18 +94,16 @@ Free Markdown below the header: the agents read it.
 
 ## Configuration
 
-`config.toml` (machine): `slots`, `buildJobs` (0 = automatic), `ramReserveMb`, `agentStallSeconds` (an agent that prints nothing for this long is only marked as stalled in its row, an event, the dashboard and `bzz status`, never ended or failed; default 3600, 0 = off), `[[providers]]` (name, protocol, command, args, slots, use = preferred | fallback | capability-only, classes, limit) and `[[projects]]`.
-
-`.haivequeen/project.toml` (per project): `name`, `colour`, `priority`, `planGlobs`, `planExclude` (globs removed from the planGlobs matches), `[views]` and the branch and build settings. See `examples/`.
+Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedProviders`, provider `slots`, provider `classes`, and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. `escalateAfter` defaults to 3, and `contextLimitTokens` defaults to 300000. Project settings override machine settings except machine-wide settings. See `examples/config.example.toml` and `examples/project.example.toml`.
 
 ## Inbox
 
-Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the owner, the coordinator, a script) can leave answers and decisions there as TOML files, and the Queen takes them over at the start of the next round. This works for every project and needs no command.
+Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the owner, the coordinator, a script) can leave answers and decisions there as TOML files, and the Beekeeper takes them over at the start of the next round. This works for every project and needs no command.
 
 - Only files that end in `.toml` (UTF-8) are read, oldest first. Write a file as `<name>.toml.tmp` and rename it when it is complete; other endings are ignored.
 - A file holds one or more `[[answer]]` tables (`question_id`, `text`, `by` = `owner` or `coordinator`) and `[[decision]]` tables (`text`, `source` = `owner` or `coordinator`, optional `plan` and `item`). See `examples/inbox.example.toml`.
 - A file may also hold `[[queue]]` tables, the orders to the integration queue: `branch`, `action` (`withdraw`, `mark_cleanup` or `requeue`), `reason` and an optional `tip` (full or abbreviated commit id; without it every row of the branch is meant). `withdraw` sets the ready or blocked row(s) of the branch to `withdrawn` (the note keeps the old status word and the reason), but only when the tip is contained in `origin/<integrationBranch>` (checked with `git merge-base --is-ancestor`) or the reason is exactly `ueberholt`; otherwise the whole file moves to `inbox/failed/`. `mark_cleanup` stores the mark `erledigt, Aufraeumen erlaubt: <reason>` for the branch (kv key `branch-cleanup:<branch>`); no row changes and nothing is deleted. `requeue` sets the newest ready or blocked row of the branch back to `ready` for the next integration run. A row that is in a run or already integrated is never touched.
-- The values are stored through the same functions as `bzz answer` and `bzz decisions add`: same checks, same events, and a package that was locked by the question is released in the same round.
+- The values are stored through the same functions as `bzz answer` and `bzz decisions add`: same checks, same events, and a Hive waiting for an answer can resume.
 - A file is taken over completely or not at all. It then moves to `inbox/done/<YYYYMMDD-HHMMSS>-<name>.toml`. An invalid file (parse error, unknown or already answered question, wrong value) moves to `inbox/failed/` with `<name>.error.txt` next to it that names the reason and the line, and a warning event is written.
 
 ## Command line
@@ -148,12 +119,14 @@ Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the
 | `bzz init <folder>`, `bzz register <folder>` | owner | create and register a project |
 | `bzz export`, `bzz views --project p` | owner | export the state, write the Markdown views |
 | `bzz import-legacy ...` | owner | import the state of version 1 (see `docs/MIGRATION-v1.md`) |
-| `bzz triage ...` | triage agent | list, decide or ask about the open points of a locked package |
+| `bzz dequeen <hive>` / `bzz requeen <hive> [provider]` | owner | leave a Hive queenless or start a new Queen, optionally on a different provider |
+| `bzz bee start`, `bzz bee result`, `bzz bee wait` | Queen | start a Bee, record an attempt or wait for its provider |
+| `bzz integration acquire` / `release` | Queen or external window | acquire or release the per-project integration place; external windows provide a stable owner process ID |
 | `bzz done`, `bzz ready`, `bzz ask`, `bzz note` | agents | final report, branch ready for integration, question, note (`docs/RUNTIME-API.md`) |
 
 ## FAQ
 
-**Does HaiveQueen call a model all the time?** No. A model is called only on events (new plan, open items, failure, question) and for triage.
+**Does HaiveQueen call a model all the time?** No. The Beekeeper runs without a model; Queens and their Bees use models for plan work.
 
 **Which agents can I use?** Claude Code and Codex CLI out of the box; any other command through the `providers` list.
 
