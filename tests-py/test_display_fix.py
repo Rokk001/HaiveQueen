@@ -191,5 +191,21 @@ class QueenNameTest(PlacementCase):
         self.assertEqual(loop.agent_identity(self.conn)["Person"], free)
 
 
+class QueenOrderTest(PlacementCase):
+    """The Queen order names the integration place first: the release worktree may only be recreated by the Queen who holds the place."""
+
+    def test_acquire_comes_before_the_release_worktree_the_compile_check_and_ready(self):
+        """Order in the Queen prompt: acquire, then the release worktree, then the compile check, then bzz ready, then her own integration and release."""
+        self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.round(terminal=self.term, poll=0.01, tries=1)
+        queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")
+        text = (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8")
+        marks = ["bzz integration acquire", "release worktree", "compile check", "bzz ready", "bzz integration release"]
+        at = [text.find(m) for m in marks]
+        self.assertNotIn(-1, at, dict(zip(marks, at)))
+        self.assertEqual(at, sorted(at), dict(zip(marks, at)))
+        self.assertNotIn("Register your own branch with bzz ready, then", text)
+
+
 if __name__ == "__main__":
     unittest.main()
