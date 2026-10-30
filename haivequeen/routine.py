@@ -1080,9 +1080,15 @@ def get_routine(env, ctx: dict) -> dict:
                     events.append({"type": "agent_failed", "key": "failed:" + ag["name"], "plan": rel, "package": k["id"], "agent": str(ag["name"]),
                                    "text": "Agent %s (%s) failed: %s" % (ag["name"], ag.get("phase"), ag.get("last_line"))})
             # A verify answer with open items for a package that is already finished creates no work task (the open items are only noted).
-            if st["Stage"] == "open" and k["id"] not in locked and k["id"] not in sdone and "verify:" + st["Verify"]["name"] not in handled:
-                events.append({"type": "verify_open", "key": "verify:" + st["Verify"]["name"], "plan": rel, "package": k["id"],
-                               "agent": str(st["Verify"]["name"]), "text": final_tail(env, str(st["Verify"]["name"]))})
+            if st["Stage"] == "open" and k["id"] not in locked and k["id"] not in sdone:
+                vkey = "verify:" + st["Verify"]["name"]
+                # A verify that was handled while a dependency was open is put to the brain once more when all dependencies are done
+                # (nothing else wakes such a package).
+                if vkey in handled and k["depends"] and all(d in stages and stages[d]["Stage"] in ("verified", "stateDone") for d in k["depends"]):
+                    vkey += ":deps"
+                if vkey not in handled:
+                    events.append({"type": "verify_open", "key": vkey, "plan": rel, "package": k["id"],
+                                   "agent": str(st["Verify"]["name"]), "text": final_tail(env, str(st["Verify"]["name"]))})
         def deps_open(p):
             """True when a dependency of the package is not verified or done yet (such a package gets no verify)."""
             return any(d not in stages or stages[d]["Stage"] not in ("verified", "stateDone") for d in p["depends"])
