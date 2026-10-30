@@ -487,7 +487,7 @@ def build_lines(level, d, w, n_fin) -> list:
             label = ("> " if selected else "") + hive['project'] + " | " + Path(hive['plan_path']).stem
             L.append([(("┌ " + label + " " + LINE * max(1, w-len(label)-4) + "┐")[:w], col)])
             queen = hive['queen']
-            state = {'resting': 'ruht', 'queenless': 'weisellos', 'integration_wait': 'wartet auf Integration', 'answer': 'wartet auf Antwort', 'codex_wait': 'wartet auf Codex'}.get(hive['state'], '')
+            state = {'resting': 'ruht', 'queenless': 'weisellos', 'integration_wait': 'wartet auf Integration', 'answer': 'wartet auf Antwort', 'playtest': 'wartet auf Spieltest', 'codex_wait': 'wartet auf Codex'}.get(hive['state'], '')
             if hive['state'] == 'resting' and hive.get('reset_at'):
                 state += ' ' + hive['reset_at'].replace('T', ' ')
             ident = 'Queen ' + str(queen.get('person') or queen.get('name')) if queen else ''

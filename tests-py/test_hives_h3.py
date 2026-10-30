@@ -34,7 +34,7 @@ class HiveDashboardTest(unittest.TestCase):
         self.assertIn('\x1b[91m', text)
         self.assertIn('\x1b[92m', text)
     def test_waiting_states(self):
-        for state, expected in [('resting', 'ruht'), ('queenless', 'weisellos'), ('integration_wait', 'wartet auf Integration'), ('answer', 'wartet auf Antwort'), ('codex_wait', 'wartet auf Codex')]:
+        for state, expected in [('resting', 'ruht'), ('queenless', 'weisellos'), ('integration_wait', 'wartet auf Integration'), ('answer', 'wartet auf Antwort'), ('playtest', 'wartet auf Spieltest'), ('codex_wait', 'wartet auf Codex')]:
             with self.subTest(state=state):
                 self.conn.execute('UPDATE hives SET state=?,reset_at=? WHERE plan_path=?', (state, '2026-11-01T12:00:00', 'A-PLAN.md'))
                 text = self.text()
