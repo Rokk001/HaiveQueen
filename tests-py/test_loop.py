@@ -254,7 +254,7 @@ class LoopTest(RoundCase):
         self.assertNotIn("Queen", loop.AGENT_NAMES)
         self.assertEqual(loop.AGENT_NAMES[:3], ["Ada", "Bea", "Cleo"])
         self.assertEqual(loop.AGENT_NAMES[-1], "Zoe")
-        self.assertIn("BEEKEEPER", loop.queen_pane_title("m", True))
+        self.assertIn("QUEEN", loop.queen_pane_title("m", True))
 
 
 class TriageStartTest(RoundCase):
