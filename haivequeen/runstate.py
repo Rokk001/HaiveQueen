@@ -28,11 +28,13 @@ def _write(conn, state: str, kind: str, text: str, source: str = "") -> None:
                  data={"state": state, "source": source} if source else {"state": state})
 
 
+# Count active agent processes, including runners finishing after a done report.
 def running_agents(conn) -> int:
-    """Count agents (all projects, not archived) that are starting or running."""
-    marks = ",".join("?" * len(ACTIVE))
-    return conn.execute(
-        f"SELECT COUNT(*) FROM agents WHERE archived=0 AND status IN ({marks})", ACTIVE).fetchone()[0]
+    """Count active agent processes, including runners finishing after a done report."""
+    from . import platform as osplat
+    rows = conn.execute("SELECT status,phase,pid FROM agents WHERE archived=0").fetchall()
+    return sum(1 for row in rows if row['status'] in ACTIVE or
+               (row['phase'] in ('queen', 'bee') and row['pid'] and osplat.process_alive(row['pid'])))
 
 
 def get_state(conn) -> dict:
@@ -42,12 +44,15 @@ def get_state(conn) -> dict:
     return {"state": rec["state"], "since": rec["since"], "running_agents": running_agents(conn)}
 
 
+# Move to a new state if the current one is allowed; an unchanged state writes nothing.
 def _transition(conn, allowed_from, new, kind, text, source: str = "") -> dict:
     """Move to a new state if the current one is allowed; an unchanged state writes nothing."""
     with db.transaction(conn):
         cur = _read(conn)["state"]
         if cur != new and (allowed_from is None or cur in allowed_from):
             _write(conn, new, kind, text, source)
+        if new == "RUNNING":
+            conn.execute("UPDATE kv SET value='armed',updated_at=? WHERE project=? AND key='hives-migration' AND value='pending'", (db.now(), GLOBAL_PROJECT))
     return settle(conn) if new == "DRAINING" else get_state(conn)
 
 
@@ -56,8 +61,9 @@ def pause(conn, source: str = "") -> dict:
     return _transition(conn, None, "PAUSED", "pause", "paused: no new agents are started", source)
 
 
+# Lift pause or drain and arm the one-time Hive migration.
 def resume(conn, source: str = "") -> dict:
-    """Lift pause or drain (from any state)."""
+    """Lift pause or drain and arm the one-time Hive migration."""
     return _transition(conn, None, "RUNNING", "resume", "resumed", source)
 
 

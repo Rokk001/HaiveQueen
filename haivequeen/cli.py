@@ -35,24 +35,59 @@ def cmd_done(args, conn) -> int:
     return 0
 
 
+# Compare a Hive plan with a relative or absolute plan path.
+def _plan_matches(conn, project, stored, supplied):
+    """Compare a Hive plan with a relative or absolute plan path."""
+    if not stored or not supplied:
+        return False
+    if os.path.normcase(os.path.normpath(str(stored))) == os.path.normcase(os.path.normpath(str(supplied))):
+        return True
+    project_row = conn.execute("SELECT workspace FROM projects WHERE name=?", (project,)).fetchone()
+    if not project_row or not project_row[0]:
+        return False
+    expected = os.path.normcase(os.path.normpath(os.path.join(project_row[0], stored)))
+    return expected == os.path.normcase(os.path.normpath(str(supplied)))
+
+
+# Register a branch as ready; a Queen may register only her own Hive plan.
 def cmd_ready(args, conn) -> int:
-    """Register a branch as ready in the integration queue; an agent (BZZ_AGENT set by the agent runner) is refused unless the release rules allow it."""
+    """Register a branch as ready; a Queen may register only her own Hive plan."""
     agent = os.environ.get("BZZ_AGENT")
     if agent:
-        from haivequeen import routine, scheduler as sch
-        env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
-        why = routine.ready_refusal(env, agent) if env is not None else ""
-        if why:
-            return fail("ready refused: " + why)
+        from haivequeen import hives, routine, scheduler as sch
+        row = runtime.get_agent(conn, args.project, agent)
+        if row and row.get("phase") == "queen":
+            plan = row.get("plan_path")
+            if not _plan_matches(conn, args.project, plan, args.plan) or hives.get(conn, args.project, plan) is None:
+                return fail("ready refused: branch does not belong to this Hive")
+            args.plan = plan
+        else:
+            env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
+            why = routine.ready_refusal(env, agent) if env is not None else ""
+            if why:
+                return fail("ready refused: " + why)
     res = db.add_ready(conn, args.project, args.branch, args.tip, args.plan, args.note)
+    if agent and row and row.get("phase") == "queen":
+        conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (res["id"], args.project, args.plan))
     out({"ok": True, **res})
     return 0
 
 
+# File a question for the owner.
 def cmd_ask(args, conn) -> int:
     """File a question for the owner."""
     from haivequeen import triage
-    out(triage.intake(conn, args.project, args.plan, args.item, args.question, args.recommendation))
+    open_questions = runtime.list_questions(conn, args.project, status="open", plan=args.plan, item=args.item)
+    if open_questions:
+        out({"ok": True, "id": open_questions[-1]["id"], "status": "open"})
+        return 0
+    known = triage._known_answer(conn, args.project, args.plan, args.item)
+    if known:
+        qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation, status="triage")
+        out(triage._close_with_reference(conn, qid, *known))
+    else:
+        qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation)
+        out({"ok": True, "id": qid, "status": "open"})
     return 0
 
 
@@ -145,10 +180,96 @@ def make_stub(name: str):
     return stub
 
 
+# Acquire or release the shared project integration place.
+def cmd_integration(args, conn):
+    """Acquire or release the shared project integration place."""
+    from haivequeen import hives
+    agent = os.environ.get("BZZ_AGENT")
+    row = runtime.get_agent(conn, args.project, agent) if agent else None
+    if agent and (not row or row.get("phase") != "queen" or not _plan_matches(conn, args.project, row.get("plan_path"), args.plan)):
+        return fail("integration refused: not this Hive's Queen")
+    if row:
+        args.plan = row['plan_path']
+    if args.action == "release":
+        hives.release_integration(conn, args.project, args.plan)
+        out({"ok": True})
+        return 0
+    owner_pid = (row.get("pid") if row else None) or getattr(args, "owner_pid", None)
+    if not owner_pid or int(owner_pid) <= 0:
+        return fail("external integration requires the window process ID via --owner-pid")
+    from haivequeen import buildjobs, scheduler
+    env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
+    job = buildjobs.plan_build(env) if env else None
+    if not hives.take_integration(conn, args.project, args.plan, owner_pid=owner_pid, build_jobs=job["Jobs"] if job else None):
+        if row:
+            conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
+        return fail("waiting for integration")
+    out({"ok": True, "buildJobs": job})
+    return 0
+
+
+# Resolve an owner-provided Hive name to exactly one project and plan.
+def _resolve_hive(conn, name):
+    """Resolve an owner-provided Hive name to exactly one project and plan."""
+    rows = db.rows(conn, "SELECT project,plan_path FROM hives WHERE plan_path=? OR project || ':' || plan_path=?", (name, name))
+    if len(rows) != 1:
+        raise ValueError("Hive not found or ambiguous")
+    return rows[0]
+
+
+# End the Queen and separate Bees of the chosen Hive.
+def cmd_dequeen(args, conn):
+    """End the Queen and separate Bees of the chosen Hive."""
+    from haivequeen import hives
+    try:
+        with loop.hive_schedule_lock():
+            row = _resolve_hive(conn, args.hive)
+            hives.dequeen(conn, row['project'], row['plan_path'])
+    except ValueError as exc:
+        return fail(str(exc))
+    out({'ok': True})
+    return 0
+
+
+# Request a replacement Queen with an optional provider.
+def cmd_requeen(args, conn):
+    """Request a replacement Queen with an optional provider."""
+    from haivequeen import hives, scheduler
+    try:
+        row = _resolve_hive(conn, args.hive)
+        machine = config.load_config()
+        env = next(e for e in scheduler.load_projects(conn, machine) if e.name == row['project'])
+        with loop.hive_schedule_lock():
+            hives.requeen(conn, row['project'], row['plan_path'], provider=args.provider, providers=env.providers,
+                          queen_class=env.settings.get('queenClass', 'medium'), excluded=machine.get('excludedProviders', []))
+            hives.schedule_round(conn, machine, [env], plan_files=[row['plan_path']])
+    except (ValueError, StopIteration) as exc:
+        return fail(str(exc) or 'project not found')
+    out({'ok': True})
+    return 0
+
+
+# Build the argument parser with all commands.
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all commands."""
     ap = argparse.ArgumentParser(prog="bzz")
     sub = ap.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("integration")
+    p.add_argument("action", choices=["acquire", "release"])
+    p.add_argument("--project", required=True)
+    p.add_argument("--plan", required=True)
+    p.add_argument("--owner-pid", type=int)
+    p.set_defaults(fn=cmd_integration)
+
+    p = sub.add_parser("dequeen")
+    p.add_argument("hive")
+    p.set_defaults(fn=cmd_dequeen)
+
+    p = sub.add_parser("requeen")
+    p.add_argument("hive")
+    p.add_argument("provider", nargs="?")
+    p.set_defaults(fn=cmd_requeen)
 
     p = sub.add_parser("done")
     p.add_argument("--agent", type=int, required=True)

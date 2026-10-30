@@ -170,3 +170,28 @@ CREATE INDEX IF NOT EXISTS idx_agents_project ON agents (project, status);
 CREATE INDEX IF NOT EXISTS idx_events_project ON events (project, id);
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions (project, status);
 CREATE INDEX IF NOT EXISTS idx_queue_project ON queue (project, status);
+
+-- Persistent Hive state and per-project integration order.
+CREATE TABLE IF NOT EXISTS hives (
+    project TEXT NOT NULL,
+    plan_path TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    colour TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'waiting',
+    reset_at TEXT,
+    questions_json TEXT,
+    requested_provider TEXT,
+    claimed_at TEXT,
+    ready_id INTEGER,
+    PRIMARY KEY (project, plan_path)
+);
+
+CREATE TABLE IF NOT EXISTS hive_integration (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project TEXT NOT NULL,
+    plan_path TEXT NOT NULL,
+    acquired INTEGER NOT NULL DEFAULT 0,
+    owner_pid INTEGER,
+    build_jobs INTEGER,
+    UNIQUE (project, plan_path)
+);

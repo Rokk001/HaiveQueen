@@ -75,16 +75,13 @@ class FaultsTest(RoundCase):
         self.check(started=0, can_start=False)
         self.assertEqual(self.faults_of(), [])
 
-    def test_runner_vanished_is_filed_for_a_new_row_only(self):
-        """An agent row failed with 'runner process vanished' is filed once; rows that existed at the first look are only recorded."""
-        self.agent("DUMMY-OLD-work", status="failed", started=60, ended=50, last_line=VANISHED)
+    # Verify vanished runners are retried without being counted as a task fault.
+    def test_runner_vanished_does_not_file_fault(self):
+        """An interrupted runner does not create a failure question."""
         self.check()
-        self.assertEqual(self.faults_of(), [])
         self.agent("DUMMY-NEW-work", status="failed", started=5, ended=1, last_line=VANISHED)
         self.check()
-        q = self.faults_of("runner_vanished")
-        self.assertEqual(len(q), 1)
-        self.assertIn("DUMMY-NEW-work", q[0]["question"])
+        self.assertEqual(self.faults_of("runner_vanished"), [])
 
     def test_agent_ending_without_result_is_filed(self):
         """A done or failed agent with an empty or missing final answer is filed as agent_no_result; one with a final answer is not."""
@@ -124,24 +121,25 @@ class FaultsTest(RoundCase):
         self.assertIn("Application Error", faults.WEVTUTIL[3])
         self.assertIn("/f:text", faults.WEVTUTIL)
 
+    # Verify non-interrupted faults remain detected by a real round.
     def test_round_runs_the_detection(self):
-        """A real round files the fault of a freshly vanished agent."""
+        """A real round files a new non-interrupted agent with no result."""
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         self.seed()
         self.round()
-        self.agent("DUMMY-V-work", status="failed", started=5, ended=1, last_line=VANISHED)
+        self.agent("DUMMY-V-work", status="failed", started=5, ended=1, last_line="exit 1")
         self.round()
-        self.assertEqual(len(self.faults_of("runner_vanished")), 1)
+        self.assertEqual(len(self.faults_of("agent_no_result")), 1)
 
-    def test_no_triage_agent_for_a_fault_question_of_plan_hq_faults(self):
-        """A fault question that waits for triage gets no triage agent, a normal question still does."""
+    # Verify no separate triage agent starts for any question.
+    def test_no_triage_agent_for_fault_or_normal_question(self):
+        """The Queen handles plan questions without launching triage agents."""
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        fq = db.add_question(self.conn, "testproj", faults.FAULT_PLAN, "no_start", "[no_start] x", "", status="triage")
-        nq = db.add_question(self.conn, "testproj", REL, "N1", "Which?", "A", status="triage")
-        self.assertEqual([q["id"] for q in triage.questions_to_triage(self.conn, "testproj")], [nq])
+        db.add_question(self.conn, "testproj", faults.FAULT_PLAN, "no_start", "[no_start] x", "", status="triage")
+        db.add_question(self.conn, "testproj", REL, "N1", "Which?", "A", status="triage")
         self.round()
-        self.assertIsNone(self.ag("DUMMY-QUESTION-%d-triage" % fq))
-        self.assertEqual(self.ag("DUMMY-QUESTION-%d-triage" % nq)["status"], "running")
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["status"] == "running"]
+        self.assertTrue(all(a["phase"] != "triage" for a in active))
 
     def test_no_work_agent_for_an_answered_fault_question(self):
         """An answered fault question starts no work agent."""

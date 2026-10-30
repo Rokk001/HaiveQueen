@@ -79,16 +79,13 @@ class CodeRepoSettingTest(CodeRepoCase):
         hist.append({"cwd": str(self.repo), "bundle": [], "package": "LOCK-P1"})
         self.assertEqual(routine.pick_cwd(hist, str(self.dev), "P1", str(self.repo)), str(self.wt))
 
-    def test_snapshot_and_brain_command(self):
-        """The brain snapshot names the code repo as `repo` and the workspace as `workspace`; {repo} and {workspace} of the brain arguments follow."""
+    # Verify that a dry-run snapshot retains separate code and workspace paths.
+    def test_snapshot_names_code_repo_and_workspace(self):
+        """The dry-run snapshot names the code repo and the workspace separately."""
         out = self.base / "out" / "dry.json"
         self.round(dry_run=True, out_file=str(out))
         snap = json.loads(out.with_suffix(".snapshot.json").read_text(encoding="utf-8"))
         self.assertEqual((snap["repo"], snap["workspace"]), (str(self.dev), str(self.repo)))
-        env = self.env()
-        env.settings["brain"] = dict(env.settings["brain"], args=["--add-dir", "{repo}", "--add-dir", "{workspace}"])
-        cmd = brain.brain_command(env)
-        self.assertEqual(cmd[-4:], ["--add-dir", str(self.dev), "--add-dir", str(self.repo)])
 
     def test_inbox_withdraw_checks_the_code_repo(self):
         """A withdraw order is checked against the git checkout of the code repo, not the workspace."""
@@ -221,45 +218,55 @@ class CodeRepoUnchangedTest(CodeRepoStartTest):
         self.assertEqual(seen, [str(self.repo)])
 
 
+# Verify Queen prompts preserve project rules and integration configuration.
 class RunnerAndHeaderTest(CodeRepoCase):
-    """Agent headers and the {repo}/{workspace} variables of the runner."""
+    """Queen headers and project integration inputs."""
 
-    def start_agent(self, name, protocol):
-        """Start one agent through a brain action and return its prompt text."""
+    # Start one Queen on the selected provider and read her prompt.
+    def start_agent(self, protocol):
+        """Return the prompt of the Queen started for the plan."""
+        self.machine["preferredProvider"] = protocol
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        self.round(self.brain_answer({"action": "start_agent", "name": name, "type": protocol, "phase": "work", "plan": REL, "package": "P1",
-                                      "cwd": str(self.wt), "prompt": "Do package P1."}))
-        return self.prompt_of(name)
+        self.round()
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]
+        self.assertEqual(len(active), 1)
+        return self.prompt_of(active[0]["name"])
 
+    # Verify a Queen receives the plan and project rules.
     def test_claude_header_without_build_flow_doc(self):
-        """An empty buildFlowDoc leaves out the whole 'e.g.' part of the Claude header; a set one is named."""
-        text = self.start_agent("H-1-work", "claude")
-        self.assertIn("read other files they name only when your task needs them", text)
-        self.assertNotIn("(e.g.", text)
+        """The Queen prompt identifies her role and absolute plan path."""
+        text = self.start_agent("claude")
+        self.assertIn("Queen of this Hive", text)
+        self.assertIn(self.plan_name(), text)
 
+    # Verify configured integration instructions reach the Queen.
     def test_claude_header_names_build_flow_doc(self):
-        """With a buildFlowDoc the header names it."""
+        """A configured build flow document is included in the Queen task."""
         self.set_code('buildFlowDoc = "FLOW.md"\n')
-        self.assertIn("they name (e.g. FLOW.md) only when", self.start_agent("H-2-work", "claude"))
+        self.assertIn("FLOW.md", self.start_agent("claude"))
 
+    # Verify the workspace rule path reaches a Codex Queen.
     def test_codex_header_names_workspace_rules(self):
-        """With a code repo the Codex header names AGENTS.md of the workspace instead of CLAUDE.md."""
-        text = self.start_agent("H-3-work", "codex")
-        self.assertIn("(%s and the files it names)" % (self.repo / "AGENTS.md"), text)
-        self.assertNotIn("CLAUDE.md", text)
+        """A code-repo project identifies its workspace rules."""
+        text = self.start_agent("codex")
+        self.assertIn(str(self.repo / "AGENTS.md"), text)
 
 
+# Verify the default project rule file remains available to Codex Queens.
 class CodeRepoCodexUnchangedTest(CodeRepoCase):
-    """Without a code repo the Codex header still names CLAUDE.md."""
+    """A project without a separate code repo uses its normal rules."""
 
     with_code = False
 
+    # Verify the project rule file is named in the Queen prompt.
     def test_codex_header_names_claude_md(self):
-        """The Codex header of a project without codeRepo is unchanged."""
+        """The Queen prompt identifies CLAUDE.md for a normal workspace."""
+        self.machine["preferredProvider"] = "codex"
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        self.round(self.brain_answer({"action": "start_agent", "name": "H-4-work", "type": "codex", "phase": "work", "plan": REL, "package": "P1",
-                                      "cwd": str(self.wt), "prompt": "Do package P1."}))
-        self.assertIn("(CLAUDE.md and the files it names)", self.prompt_of("H-4-work"))
+        self.round()
+        active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]
+        self.assertEqual(len(active), 1)
+        self.assertIn("CLAUDE.md", self.prompt_of(active[0]["name"]))
 
 
 class RunnerVariablesTest(RunnerBase):

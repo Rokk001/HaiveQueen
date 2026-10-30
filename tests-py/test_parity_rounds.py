@@ -22,17 +22,16 @@ class ParityRoundsTest(RoundCase):
         self.assertTrue(str(config.db_path()).startswith(str(self.base)))
         self.assertTrue(str(config.data_dir()).startswith(str(self.base)))
 
-    def test_bundle_leaves_a_second_agent(self):
-        """Next to the bundle of three light packages a second work agent starts: the medium package or the remaining light one."""
+    # Verify packages of one plan share one Queen without automatic work agents.
+    def test_multiple_packages_start_one_queen(self):
+        """A plan with light and medium packages starts one Queen and no package agent."""
         self.seed()
         self.plan("IN_PROGRESS", [pk("L1", "first small", cls="light"), pk("L2", "second small", cls="light"), pk("L3", "third small", cls="light"),
                                   pk("L4", "fourth small", cls="light"), pk("M1", "medium task", cls="medium"), pk("L5", "needs L1", "L1", "light")])
         self.round()
         rows = runtime.list_agents(self.conn, "testproj", "active")
-        others = [r for r in rows if r["phase"] == "work" and len(json.loads(r.get("bundle_json") or "[]")) <= 1]
-        self.assertTrue([r for r in others if (r["package"] == "M1" and r["class"] == "medium") or (r["package"] == "L4" and r["class"] == "light")],
-                        [(r["package"], r["class"]) for r in others])
-
+        self.assertEqual(len([r for r in rows if r["phase"] == "queen" and r["status"] == "running"]), 1)
+        self.assertFalse([r for r in rows if r["phase"] == "work" and r["status"] == "running"])
     def test_medium_class_effort(self):
         """The medium class of Claude is Sonnet at effort medium."""
         cm = sch.class_model(self.env().providers, "claude", "medium")

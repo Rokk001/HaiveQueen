@@ -82,6 +82,7 @@ def _depends(value):
     return [str(v).strip() for v in value if str(v).strip()]
 
 
+# Parse plan text with TOML front matter into a Plan; no header means DRAFT without packages.
 def parse_plan_text(text, path=""):
     """Parse plan text with TOML front matter into a Plan; no header means DRAFT without packages."""
     header, body = split_front_matter(text)
@@ -95,7 +96,7 @@ def parse_plan_text(text, path=""):
                 id=str(row["id"]).strip(),
                 title=str(row.get("title", "")),
                 cls=normalize_class(row.get("class")),
-                agent=str(row.get("agent", "")),
+                agent="",
                 capability=str(row.get("capability", "")),
                 depends_on=_depends(row.get("depends_on")),
             ))
