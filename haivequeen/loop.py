@@ -153,7 +153,7 @@ def first_split_target(panes) -> str:
 
 def queen_pane_title(model: str, test: bool) -> str:
     """Fixed title of the pane of the main agent (the Queen)."""
-    return pane_title("all projects", "QUEEN", "Queen", model, test)
+    return pane_title("all projects", "BEEKEEPER", "Beekeeper", model, test)
 
 
 def close_leftover_panes(term, window: str) -> list:
@@ -319,10 +319,12 @@ def runner_argv(env, spec: dict) -> list:
     The run folder is <data>/runs/<project>/<name> (--runs-dir = <data>/runs/<project>), the folder the routine reads final.txt from.
     """
     boot = "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.agent_runner import main;sys.exit(main(sys.argv[2:]))"
-    return [osplat.python_executable(), "-c", boot, str(TOOLS_DIR),
-            "--project", env.name, "--name", spec["name"], "--provider", spec["provider"], "--protocol", spec["protocol"],
-            "--plan", spec["plan"], "--package", spec["package"], "--phase", spec["phase"], "--cwd", spec["cwd"],
-            "--prompt-file", spec["prompt_file"], "--runs-dir", str(env.run_dir(spec["name"]).parent)] + forward_env_args()
+    options = ["--project", env.name, "--name", spec["name"], "--provider", spec["provider"], "--protocol", spec["protocol"],
+               "--plan", spec["plan"], "--package", spec["package"], "--phase", spec["phase"], "--cwd", spec["cwd"],
+               "--prompt-file", spec["prompt_file"], "--runs-dir", str(env.run_dir(spec["name"]).parent)]
+    # Windows Terminal drops an empty argument (a Queen has no package), which made the runner fail at once; the runner defaults them, so they are left out.
+    pairs = [options[i:i + 2] for i in range(0, len(options), 2)]
+    return [osplat.python_executable(), "-c", boot, str(TOOLS_DIR)] + [a for pair in pairs if pair[1] != "" for a in pair] + forward_env_args()
 
 
 def alive_agent_pane(row: dict, alive=None) -> bool:
@@ -725,8 +727,8 @@ def _do_start(c, a, forced_pick=None) -> int:
     pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff, encoding="utf-8")
     predecessors = [a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('phase') == 'queen' and a.get('plan_path') == plan and a.get('person')]
     ident = agent_identity(env.conn, [predecessors[-1]['person']] if phase == 'queen' and predecessors else ())
-    if phase == "bee":
-        ident["Person"] = str(a["name"])
+    if phase in ("bee", "queen"):   # a Bee and a Queen are named by their short female name (A2)
+        ident["Person"] = nm
     cls = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
     cm = sch.class_model(env.providers, prov, cls)
     bundle = [str(b) for b in a.get("bundle") or []]
@@ -954,7 +956,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         if res["kept"] or res["failed"]:
             env.log("restart: re-attached %d running agent(s), %d gone" % (len(res["kept"]), len(res["failed"])))
         env.log("loop started (roundMinutes=%s)" % minutes)
-        env.event("Queen started (round every %s minutes)" % minutes)
+        env.event("Beekeeper started (round every %s minutes)" % minutes)
     if pane:
         pane.out.write("%s[2J%s[3J%s[H" % (ESC, ESC, ESC))
         pane.draw_head(state)

@@ -396,10 +396,10 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     not_started(env, path, 'the Hive is already claimed')
                     continue
                 existing_names = [a['name'] for a in runtime.list_agents(conn, env.name, 'all')]
-                number = 1
-                while 'Queen-%s' % number in existing_names:
-                    number += 1
-                name = 'Queen-%s' % number
+                predecessors = [a for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('phase') == 'queen' and a.get('person')]
+                name = loop.agent_identity(conn, [predecessors[-1]['person']] if predecessors else ())['Person']
+                if name in existing_names:   # an earlier agent of this project carried the name: take the next free one from the list
+                    name = next((n for n in loop.AGENT_NAMES if n not in existing_names), name)
                 questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage')]
                 prompt = 'Work the entire plan %s. Read its state file, predecessor handoff, project rules, and all owner answers. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --fields using a JSON object with the absolute cwd. Work independent packages, answer the completeness question and integrate only when no requirements remain. Register your own branch with bzz ready, then use bzz integration acquire --project %s --plan %s. Use the returned buildJobs EnvVar and Jobs for the integration build. If it reports waiting for integration, write a handoff and end until restarted. After acquiring the place, abort any unfinished merge in the project integration checkout before integrating again. Release the integration place with bzz integration release --project %s --plan %s after integration. If only open owner questions remain, write a handoff and end your final report with WAITING_FOR_OWNER.' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name, env.name, path, env.name, path)
                 integration = {key: env.settings.get(key) for key in ('integrationBranch', 'compileCheck', 'integratorInstructions', 'buildFlowDoc') if env.settings.get(key)}
