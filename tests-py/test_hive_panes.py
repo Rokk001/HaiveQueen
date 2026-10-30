@@ -153,17 +153,17 @@ class FrameTest(unittest.TestCase):
         self.assertNotIn('Cleo', "\n".join(plain(self.lines())))
 
     def test_hive_without_queen_is_compact(self):
-        """A Hive without a running Queen draws only its name and its state: no box, no key hint, no Bee lines."""
+        """A Hive without a running Queen draws a small frame with only its name and its state: no key hint, no Bee lines."""
         self.conn.execute("UPDATE hives SET state='answer' WHERE plan_path=?", (self.plan,))
         lines = plain(self.lines())
-        self.assertEqual(lines[0].strip(), 'Hive: AI-LEVELS-PLAN')
-        self.assertEqual(lines[1].strip(), 'Queen: wartet auf Antwort')
-        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[1][2:].strip(' │'), 'Hive: AI-LEVELS-PLAN')
+        self.assertEqual(lines[2][2:].strip(' │'), 'Queen: wartet auf Antwort')
+        self.assertEqual(len(lines), 4)
         self.queen()
         self.assertGreater(len(self.lines()), 4)   # a running Queen: the big frame again
         self.conn.execute("UPDATE agents SET status='done'")
-        self.assertEqual(len(self.lines()), 2)
-        self.assertEqual(len(self.lines(message='X nochmal')), 3)   # a pending confirmation still shows
+        self.assertEqual(len(self.lines()), 4)
+        self.assertEqual(len(self.lines(message='X nochmal')), 5)   # a pending confirmation still shows
 
     def test_progress_bar(self):
         """The Bee bar is built from n/m with five cells."""
