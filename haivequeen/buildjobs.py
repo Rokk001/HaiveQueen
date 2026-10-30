@@ -117,7 +117,7 @@ def plan_build(env, free_mb: float = None, cores: int = None) -> dict:
         return None
     free = float(osplat.free_ram_mb() if free_mb is None else free_mb)
     calc = job_count(bj, cores or osplat.logical_cores(), free, stored_per_job(env.conn, env.name))
-    calc.update({"EnvVar": bj["EnvVar"], "FreeMB": free})
+    calc.update({"Jobs": 1, "Why": "rule: one job", "EnvVar": bj["EnvVar"], "FreeMB": free})   # the owner's rule is --parallel 1, whatever cores and RAM allow
     return calc
 
 

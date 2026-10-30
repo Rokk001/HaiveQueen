@@ -207,6 +207,29 @@ class QueenOrderTest(PlacementCase):
         self.assertNotIn("Register your own branch with bzz ready, then", text)
 
 
+class OneBuildJobTest(unittest.TestCase):
+    """The owner's rule is one build job (--parallel 1): the value that bzz integration acquire hands out is always 1."""
+
+    def test_the_planned_build_always_gets_one_job(self):
+        """Whatever the cores, the free RAM and the measured use per job say, plan_build returns one job."""
+        from haivequeen import buildjobs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = db.connect(Path(tmp) / "db")
+
+            class Env:
+                """Just enough of a project environment for plan_build."""
+                name = "ODP"
+                settings = {"buildJobs": {"envVar": "BUILD_MP_JOBS", "perJobMB": 300}}
+
+            Env.conn = conn
+            for cores, free in ((12, 32000), (6, 4096), (2, 100000)):
+                plan = buildjobs.plan_build(Env, free_mb=free, cores=cores)
+                self.assertEqual(plan["Jobs"], 1, (cores, free))
+                self.assertEqual(plan["EnvVar"], "BUILD_MP_JOBS")
+            conn.close()
+
+
 class QueenEndRuleTest(unittest.TestCase):
     """A Queen ends only when the plan is integrated, only owner questions remain, or the Beekeeper asked for a handoff."""
 

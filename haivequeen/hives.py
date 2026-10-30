@@ -455,11 +455,17 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                         questions = [q for q in runtime.list_questions(conn, env.name, status='open', plan=plan['path']) if not str(q['item']).upper().startswith('STALL-')]   # stop-rule questions never block a Hive
                         if last and last.get('status') == 'done' and 'WAITING_FOR_OWNER' in final_report and questions:
                             wait_for_answers(conn, env.name, plan['path'], [q['id'] for q in questions])
-                        elif last and ended_without_work(env, last):
-                            wait_for_answers(conn, env.name, plan['path'], [ask_about_end(conn, env, plan['path'], last, final_report)])
+                        elif last and ended_without_work(env, last):   # open owner questions are the reason; her final text does not matter, only without any a question is filed
+                            wait_for_answers(conn, env.name, plan['path'], [q['id'] for q in questions] or [ask_about_end(conn, env, plan['path'], last, final_report)])
                         else:
                             conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, plan['path']))
                     hive = get(conn, env.name, plan['path'])
+                if hive and hive['state'] in ('codex_wait', 'provider_wait') and history and not dry_run:   # the Queen asked for a Bee and ended: with owner questions open and no new commit the Hive waits for an answer, it does not start the next Queen
+                    open_questions = [q['id'] for q in runtime.list_questions(conn, env.name, status='open', plan=plan['path']) if not str(q['item']).upper().startswith('STALL-')]
+                    if open_questions and ended_without_work(env, history[-1]):
+                        wait_for_answers(conn, env.name, plan['path'], open_questions)
+                        not_started(env, plan['path'], 'Hive state "answer" (questions %s)' % ', '.join(str(i) for i in open_questions))
+                        continue
                 if hive and hive['state'] in ('codex_wait', 'provider_wait'):
                     from . import bees
                     wait = conn.execute('SELECT provider FROM bee_provider_wait WHERE project=? AND plan_path=?', (env.name, plan['path'])).fetchone()
