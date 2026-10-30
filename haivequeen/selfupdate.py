@@ -225,7 +225,7 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
         def restart():
             """Start the loop through the live code; (True, '') when `start` answered with exit 0."""
             code, out = run([osplat.python_executable(), "-m", "haivequeen", "start", "--keep-pause"], live)
-            return code == 0, out.strip()[:300]
+            return code == 0, out.strip()
 
         for argv in (["fetch", "origin"], ["merge", "--ff-only", "origin/v2"]):
             code, out = run(["git", "-C", str(live)] + argv, live)

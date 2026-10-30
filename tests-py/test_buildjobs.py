@@ -65,7 +65,7 @@ class BuildJobsTest(RoundCase):
         env.settings["buildJobs"] = {"envVar": "BUILD_JOBS", "fixed": 4}
         self.assertEqual(bj.jobs_line(env, [{"status": "running", "buildJobs": 4}], 5, cores=8),
                          "Build jobs 4 of 8 cores (running) | per job 1000 MB | active: 5 cores")
-        self.assertEqual(bj.jobs_line(env, [], 0, cores=8), "Build jobs 4 of 8 cores (next build) | per job 1000 MB")
+        self.assertEqual(bj.jobs_line(env, [], 0, cores=8), "Build jobs 1 of 8 cores (next build) | per job 1000 MB")   # the owner's rule: the next build always gets one job
         self.assertTrue(bj.jobs_line(env, [], 3, cores=8).endswith("| active: 3 cores"))
         self.assertIsNone(bj.jobs_line(type("E", (), {"settings": {}, "conn": self.conn, "name": "testproj"})(), []))
 

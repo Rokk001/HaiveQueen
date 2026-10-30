@@ -245,8 +245,7 @@ def build_jobs_line(conn, cfg, projects, agents, sysinfo) -> str:
     if running:
         text = "Build jobs %s of %d cores (running)" % (running[0]["buildJobs"], cores)
     else:
-        jobs = buildjobs.job_count(settings, cores, sysinfo["free_mb"], per)["Jobs"]
-        text = "Build jobs %d of %d cores (next build)" % (jobs, cores)
+        text = "Build jobs 1 of %d cores (next build)" % cores   # the owner's rule: one job, the same value bzz integration acquire hands out
     text += " | per job " + ("%.0f MB" % per if per else "not measured yet")
     if sysinfo.get("compiler_count") is not None and (running or sysinfo["compiler_count"] > 0):
         text += " | active: %d cores" % sysinfo["compiler_count"]

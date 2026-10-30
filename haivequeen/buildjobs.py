@@ -136,8 +136,7 @@ def jobs_line(env, agents: list, compiler_count: int = None, cores: int = None, 
     if run:
         txt = "Build jobs %s of %d cores (running)" % (run["buildJobs"], n_cores)
     else:
-        free = float(osplat.free_ram_mb() if free_mb is None else free_mb)
-        txt = "Build jobs %d of %d cores (next build)" % (job_count(bj, n_cores, free, per)["Jobs"], n_cores)
+        txt = "Build jobs 1 of %d cores (next build)" % n_cores   # the owner's rule: one job, the same value bzz integration acquire hands out
     txt += " | per job " + ("%.0f MB" % per if per is not None else "not measured yet")
     if compiler_count is None:
         compiler_count = osplat.count_processes(env.settings.get("buildProcessNames") or [])
