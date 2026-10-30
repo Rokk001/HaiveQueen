@@ -1,3 +1,5 @@
+> Historical interface snapshot: phase and brain references below describe the former implementation, not the current Hive runtime.
+
 # Interface between the loop (S13) and the agent process (S14)
 
 The loop starts every agent through the terminal interface (`haivequeen.terminal`). The pane runs

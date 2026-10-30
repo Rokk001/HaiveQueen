@@ -114,7 +114,7 @@ Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the
 | `bzz pause` / `bzz resume` / `bzz drain` | owner | pause new starts, resume, or let the running agents finish |
 | `bzz status [--project p] [--json]` | owner | "X / Y integrated (%)" and a task / agent / status table per project |
 | `bzz questions [--open]`, `bzz answer <id> "<text>" --by owner` | owner | read and answer questions of the agents |
-| `bzz queue [upsert]` | owner, integrator | the integration queue |
+| `bzz queue [upsert]` | owner, Queen | the integration queue |
 | `bzz decisions list [--all]`, `bzz decisions update <id> --status active\|rule\|superseded` | owner | decisions; the list shows only `active` ones unless `--all` |
 | `bzz init <folder>`, `bzz register <folder>` | owner | create and register a project |
 | `bzz export`, `bzz views --project p` | owner | export the state, write the Markdown views |
