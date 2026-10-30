@@ -130,7 +130,8 @@ class ProcessBeePaneTests(RoundCase):
     """A Queen gets her own pane; a Bee that runs as its own process gets none and shows only as a line in its Hive (A3, D3)."""
 
     def start(self, phase):
-        """Start one agent of this phase through the real start path with the pane and the headless launch recorded; return the two call lists."""
+        """Start one agent of this phase through the real start path with the pane, the Queen hand-over and the headless launch recorded; return the two call lists
+        (a Queen is handed to the sub-terminal of her Hive: see self.queens)."""
         import os
         from unittest import mock
         from haivequeen import scheduler as sch
@@ -138,16 +139,18 @@ class ProcessBeePaneTests(RoundCase):
         env = self.env()
         os.environ.pop("BZZ_TEST_NOSTART", None)
         panes, headless = [], []
+        self.queens = []
         action = {"name": "Ada", "type": "claude", "phase": phase, "plan": REL, "package": "P1" if phase == "bee" else "", "cwd": str(self.wt), "prompt": "task", "class": "medium"}
         state = {"names": [], "busy": [], "plan_status": {sch.norm_plan(REL): "IN_PROGRESS"}, "by_path": {sch.norm_plan(REL): {"path": REL}}}
         ctx = {"env": env, "state": state, "pool": loop.Pool({"claude": 5}, 0), "report": [], "dry": False, "terminal": None, "settle": 0, "poll": 0, "tries": 1}
-        with mock.patch.object(loop, "launch_agent", lambda *a, **k: panes.append(a[3]["name"])),                 mock.patch.object(loop, "launch_headless", lambda *a, **k: headless.append(a[1]["name"]), create=True):
+        with mock.patch.object(loop, "launch_agent", lambda *a, **k: panes.append(a[3]["name"])), mock.patch.object(loop, "start_queen", lambda *a, **k: self.queens.append(a[3]["name"])), mock.patch.object(loop, "launch_headless", lambda *a, **k: headless.append(a[1]["name"]), create=True):
             loop._do_start(ctx, action, forced_pick=sch.get_provider(env.providers, "claude"))
         return panes, headless
 
     def test_queen_gets_a_pane(self):
-        """The Queen is opened in a pane of the HaiveQueen window."""
-        self.assertEqual(self.start("queen"), (["Ada"], []))
+        """The Queen gets no pane of her own: she is handed to the sub-terminal of her Hive."""
+        self.assertEqual(self.start("queen"), ([], []))
+        self.assertEqual(self.queens, ["Ada"])
 
     def test_process_bee_gets_no_pane(self):
         """A Bee process is started without a pane."""
@@ -207,8 +210,10 @@ class QueenStartTests(RoundCase):
         self.assertNotIn("Queen started", text)
 
     def test_chief_pane_is_found_as_the_loop_pane(self):
-        """The title of the loop pane is recognised as the loop pane (it keeps the QUEEN word until the update worker knows the new one)."""
+        """The title of the loop pane is recognised as the loop pane (the BEEKEEPER title; the old QUEEN title is accepted as well)."""
         self.assertTrue(loop.is_beekeeper_title(loop.queen_pane_title("m", True)))
+        self.assertIn("BEEKEEPER", loop.queen_pane_title("m", True))
+        self.assertNotIn("QUEEN", loop.queen_pane_title("m", True))
 
 
 class RunnerCrashTests(RoundCase):
@@ -255,6 +260,58 @@ class BeekeeperPaneTests(RoundCase):
         """A pane opened before the update still carries the QUEEN title and counts."""
         from haivequeen.terminal import pane_title
         self.assertEqual(len(self.chief_ids(pane_title("all projects", "QUEEN", "Queen", "m", True))), 1)
+
+
+class StallQuestionTests(RoundCase):
+    """Owner questions of the removed stop rules (STALL-*) never block a Hive (E10)."""
+
+    def finish(self, name, final="", status="done", project="testproj"):
+        """Simulate a finished runner, including its process exit."""
+        super().finish(name, final=final, status=status, project=project)
+        runtime.upsert_agent(self.conn, project, name, {"pid": None})
+
+    def start_queen(self):
+        """Start the Queen of the dummy plan and return her agent row."""
+        self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.round()
+        return [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] in ("running", "starting")][0]
+
+    def test_only_stall_question_does_not_make_the_hive_wait(self):
+        """A Queen that ends with WAITING_FOR_OWNER while only a STALL question is open leaves the Hive waiting, not in 'answer'."""
+        from haivequeen import db
+        first = self.start_queen()
+        db.add_question(self.conn, "testproj", REL, "STALL-P1", "package stopped", "")
+        self.finish(first["name"], final="WAITING_FOR_OWNER")
+        self.round()
+        self.assertNotEqual(hives.get(self.conn, "testproj", REL)["state"], "answer")
+
+    def test_stall_question_is_not_in_the_wait_list(self):
+        """With a real and a STALL question open, the Hive waits only for the real one."""
+        import json
+        from haivequeen import db
+        first = self.start_queen()
+        real = db.add_question(self.conn, "testproj", REL, "P1", "Which?", "A")
+        db.add_question(self.conn, "testproj", REL, "STALL-P1", "package stopped", "")
+        self.finish(first["name"], final="WAITING_FOR_OWNER")
+        self.round()
+        self.assertEqual(json.loads(hives.get(self.conn, "testproj", REL)["questions_json"]), [real])
+
+
+class ApiaryWordTests(RoundCase):
+    """F11: CLI messages call a project an Apiary."""
+
+    def test_unknown_apiary_message(self):
+        """A Hive whose Apiary is not configured is reported as an unknown Apiary."""
+        import argparse
+        import contextlib
+        import io
+        from unittest import mock
+        from haivequeen import cli
+        with mock.patch.object(cli, "_resolve_hive", return_value={"project": "ghost", "plan_path": "x"}), contextlib.redirect_stdout(io.StringIO()) as buf:
+            code = cli.cmd_requeen(argparse.Namespace(hive="x", provider=None), self.conn)
+        self.assertEqual(code, 1)
+        self.assertIn("Apiary", buf.getvalue())
+        self.assertNotIn("project not found", buf.getvalue())
 
 
 if __name__ == "__main__":

@@ -245,7 +245,7 @@ def cmd_requeen(args, conn):
                           queen_class=env.settings.get('queenClass', 'medium'), excluded=machine.get('excludedProviders', []))
             hives.schedule_round(conn, machine, [env], plan_files=[row['plan_path']])
     except (ValueError, StopIteration) as exc:
-        return fail(str(exc) or 'project not found')
+        return fail(str(exc) or 'Apiary not found')
     out({'ok': True})
     return 0
 
@@ -260,7 +260,7 @@ def cmd_bee(args, conn):
         return fail("bee command requires the Queen of this Hive")
     env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
     if not env:
-        return fail("unknown project")
+        return fail("unknown Apiary")
     plan = queen["plan_path"]
     if args.action == "wait":
         provider = scheduler.get_provider(env.providers, args.provider)

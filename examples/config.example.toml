@@ -6,8 +6,8 @@ excludedProviders = []    # provider names never used
 queenClass = "medium"     # project may override
 beesPerQueen = 3          # project may override
 escalateAfter = 3         # failures per class before escalation
-contextLimitTokens = 300000
-buildJobs = 0             # 0 = choose automatically
+contextLimitTokens = 300000   # context size at which a Queen or Bee is asked to hand off; valid for all Apiaries, a project.toml or a model entry under [providers.classes] may set its own
+buildJobs = 0            # 0 = choose automatically
 ramReserveMb = 2048       # RAM that must stay free
 agentStallSeconds = 3600  # an agent that prints nothing for this long is marked as stalled, never ended (0 = off)
 exportDir = "%LOCALAPPDATA%\\HaiveQueen\\exports"
@@ -29,7 +29,7 @@ use = "preferred"
 limit = { source = "claude" }
 [providers.classes]
 light = { model = "claude-haiku-5-5", effort = "medium" }
-medium = { model = "claude-sonnet-5-5", effort = "medium" }
+medium = { model = "claude-sonnet-5-5", effort = "medium" }   # optional per model: add contextLimitTokens = 200000 inside the braces to override the global value
 heavy = { model = "claude-opus-5-5", effort = "medium" }
 
 [[providers]]

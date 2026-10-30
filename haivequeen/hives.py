@@ -1,5 +1,7 @@
 """Persistent Hive state and project integration order."""
 import json
+import os
+import re
 from . import db, runtime
 from . import platform as osplat
 
@@ -192,6 +194,52 @@ def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen
         dequeen(conn, project, plan, stop=stop)
     with db.transaction(conn):
         conn.execute("UPDATE hives SET state='requeen',requested_provider=?,reset_at=NULL WHERE project=? AND plan_path=?", (provider, project, plan))
+
+
+# Collect Hives, their Queen and the latest reported step of each Bee (shown in the frame of the Hive pane).
+def hive_data(conn, project, agents, plan=None):
+    """Collect Hives, active Queens and Bee progress from their reports; `project` and `plan` narrow the Hives (None = all)."""
+    where, args = ["state!='done'"], []
+    if project:
+        where.append("project=?")
+        args.append(project)
+    if plan:
+        where.append("plan_path=?")
+        args.append(plan)
+    rows = db.rows(conn, "SELECT * FROM hives WHERE " + " AND ".join(where) + " ORDER BY project,plan_path", args)
+    notes = db.rows(conn, "SELECT project,agent,text FROM events WHERE kind='note' ORDER BY id") if rows else []
+    for hive in rows:
+        active = [a for a in agents if a.get('project') == hive['project'] and a.get('plan_path') == hive['plan_path']]
+        hive['queen'] = next((a for a in active if a.get('phase') == 'queen'), None)
+        bees = {str(a.get('person') or a.get('name')): {'name': str(a.get('person') or a.get('name')), 'task': a.get('task') or a.get('package') or '', 'step': ''} for a in active if a.get('phase') == 'bee'}
+        queens = {a['name'] for a in active if a.get('phase') == 'queen'}
+        packages = {r['id'] for r in db.rows(conn, "SELECT id FROM packages WHERE project=? AND plan_path=?", (hive['project'], hive['plan_path']))}
+        for note in notes:
+            if note['project'] != hive['project']:
+                continue
+            match = re.match(r"^([^ ]+) ([^:]+): step (\d+/\d+)\s*(.*)$", note['text'] or '')
+            if not match:
+                continue
+            name, package, step, task = match.groups()
+            if name in bees or (note['agent'] in queens and package in packages):
+                n, m = map(int, step.split('/'))
+                if n >= m:
+                    bees.pop(name, None)
+                else:
+                    bees[name] = {'name': name, 'task': task or package, 'step': step}
+        hive['bees'] = list(bees.values())
+    return rows
+
+
+# German words for the state of a Hive that has no running Queen.
+def state_label(hive):
+    """German words for the state of a Hive without a running Queen ('' for a running one)."""
+    state = hive.get('state')
+    if state == 'resting':
+        return 'ruht bis ' + str(hive.get('reset_at') or '?').replace('T', ' ')[:16]
+    return {'queenless': 'weisellos', 'integration_wait': 'wartet auf Integration', 'answer': 'wartet auf Antwort', 'owner_check': 'wartet auf Owner-Prüfung', 'codex_wait': 'wartet auf Codex',
+            'provider_wait': 'wartet auf Codex', 'handoff': 'Übergabe', 'waiting': 'wartet auf Start', 'starting': 'wartet auf Start',
+            'requeen': 'wartet auf Start'}.get(state, '')
 
 
 # Resolve the four named migration plans from the existing plan source.
@@ -403,7 +451,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     else:
                         final = env.run_dir(last['name']) / 'final.txt' if last else None
                         final_report = final.read_text(encoding='utf-8-sig') if final and final.is_file() else ''
-                        questions = runtime.list_questions(conn, env.name, status='open', plan=plan['path'])
+                        questions = [q for q in runtime.list_questions(conn, env.name, status='open', plan=plan['path']) if not str(q['item']).upper().startswith('STALL-')]   # stop-rule questions never block a Hive
                         if last and last.get('status') == 'done' and 'WAITING_FOR_OWNER' in final_report and questions:
                             wait_for_answers(conn, env.name, plan['path'], [q['id'] for q in questions])
                         elif last and ended_without_work(env, last):
@@ -475,14 +523,14 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 name = loop.agent_identity(conn, [predecessors[-1]['person']] if predecessors else ())['Person']
                 if name in existing_names:   # an earlier agent of this project carried the name: take the next free one from the list
                     name = next((n for n in loop.AGENT_NAMES if n not in existing_names), name)
-                questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage')]
+                questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
                 prompt = 'Work the entire plan %s. Read its state file, predecessor handoff, project rules, and all owner answers. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --fields using a JSON object with the absolute cwd. Work independent packages, answer the completeness question and integrate only when no requirements remain. Register your own branch with bzz ready, then use bzz integration acquire --project %s --plan %s. Use the returned buildJobs EnvVar and Jobs for the integration build. If it reports waiting for integration, write a handoff and end until restarted. After acquiring the place, abort any unfinished merge in the project integration checkout before integrating again. Release the integration place with bzz integration release --project %s --plan %s after integration. If only open owner questions remain, write a handoff and end your final report with WAITING_FOR_OWNER.' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name, env.name, path, env.name, path)
                 integration = {key: env.settings.get(key) for key in ('integrationBranch', 'compileCheck', 'integratorInstructions', 'buildFlowDoc') if env.settings.get(key)}
                 configured_prompt = (env.settings.get('prompts') or {}).get('integrator')
                 if configured_prompt:
                     integration['steps'] = sch.expand_template(str(configured_prompt), {**routine.base_values(env), 'plan': path})
                 from . import bees
-                prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), env.settings.get('contextLimitTokens', 300000))
+                prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls))
                 prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint'))} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)
                 prompt += ' Project integration configuration: ' + json.dumps(integration, ensure_ascii=False)
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
@@ -517,6 +565,8 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     started += 1
             result['projects'][env.name]['started'] += started
             result['projects'][env.name]['actions'] += started
+    if not dry_run and not os.environ.get('BZZ_TEST_NOSTART'):
+        ensure_hive_panes(conn, projects, terminal)
     if not dry_run:
         for env in projects:
             providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and not p.get('endpoint')
@@ -535,11 +585,33 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     return result
 
 
+# Make sure every living Hive has its sub-terminal, also when no Queen runs.
+def ensure_hive_panes(conn, envs, terminal=None):
+    """Open the sub-terminal of every Hive that is not done and has none; a terminal problem is logged and never stops the round."""
+    from . import loop
+    from .terminal import get_terminal
+    for env in envs:
+        for hive in db.rows(conn, "SELECT plan_path FROM hives WHERE project=? AND state!='done'", (env.name,)):
+            try:
+                term = terminal or get_terminal(env.settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes'))
+                loop.ensure_hive_pane(env, term, env.settings.get('window', 'HaiveQueen'), hive['plan_path'])
+            except Exception as exc:
+                env.log('Hive pane of %s not opened: %s' % (hive['plan_path'], exc))
+    if envs:   # big Hives with a running Queen, small ones without; a backend that cannot resize is skipped
+        from . import hivelayout
+        try:
+            hivelayout.apply(terminal or get_terminal(envs[0].settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes')),
+                             envs[0].settings.get('window', 'HaiveQueen'), conn, loop.is_test_runtime())
+        except Exception:
+            pass
+
+
 # Summarize only changes that can make a waiting Hive runnable.
 def wake_marker(conn, envs):
     """Return a compact marker for agent exits, answers, inbox and reset deadlines."""
     from . import inbox
-    limits = {e.name: int(e.settings.get('contextLimitTokens', 300000)) for e in envs}
+    from . import scheduler as sch
+    envs_by_name = {e.name: e for e in envs}
     agents = []
     for row in runtime.list_agents(conn, None, 'active'):
         status = row.get('status')
@@ -547,7 +619,9 @@ def wake_marker(conn, envs):
             continue
         pid = row.get('pid')
         live = bool(pid and osplat.process_alive(pid))
-        context_reached = row.get('phase') == 'queen' and int(row.get('ctxTokens') or 0) >= limits.get(row['project'], 300000)
+        owner = envs_by_name.get(row['project'])
+        limit = sch.context_limit(owner.settings, owner.providers, sch.row_provider(row), row.get('class')) if owner else 300000
+        context_reached = row.get('phase') == 'queen' and int(row.get('ctxTokens') or 0) >= limit
         agents.append((row['id'], status, pid, live, context_reached))
     questions = tuple((r['id'], r['status']) for r in db.rows(conn, 'SELECT id,status FROM questions ORDER BY id'))
     hive_rows = tuple((r['project'], r['plan_path'], r['state'], r['reset_at'], r['requested_provider']) for r in db.rows(conn, 'SELECT project,plan_path,state,reset_at,requested_provider FROM hives ORDER BY project,plan_path'))

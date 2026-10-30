@@ -248,13 +248,13 @@ class LoopTest(RoundCase):
             self.assertEqual((self.base / "pane.lock").read_text(encoding="ascii").strip(), str(os.getpid()))
 
     def test_agent_names_and_queen_title(self):
-        """24 unique agent names, none is Queen, and the pane of the main agent is titled QUEEN."""
+        """24 unique agent names, none is Queen, and the pane of the main agent is titled BEEKEEPER."""
         self.assertEqual(len(loop.AGENT_NAMES), 24)
         self.assertEqual(len(set(loop.AGENT_NAMES)), 24)
         self.assertNotIn("Queen", loop.AGENT_NAMES)
         self.assertEqual(loop.AGENT_NAMES[:3], ["Ada", "Bea", "Cleo"])
         self.assertEqual(loop.AGENT_NAMES[-1], "Zoe")
-        self.assertIn("QUEEN", loop.queen_pane_title("m", True))
+        self.assertIn("| all projects | BEEKEEPER | job: Beekeeper |", loop.queen_pane_title("m", True))
 
 
 class TriageStartTest(RoundCase):
@@ -545,15 +545,21 @@ class HeadlessStartTest(RoundCase):
 
     # Verify the Queen-based loop behavior.
     def test_start_through_terminal(self):
-        """The agent row gets pane id and pid from the runner, the pane title carries project and agent name, the colour is the project colour."""
+        """The Queen runs inside the sub-terminal of her Hive: the real hivepane process starts the runner from launch.json, the row gets the pane id of the
+        Hive pane and the pid from the runner, and the pane title carries project and plan."""
         self.round(terminal=self.term, poll=0.2, tries=100)
-        row = next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None)
+        deadline = time.time() + 40
+        row = None
+        while row is None and time.time() < deadline:
+            row = next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None)
+            time.sleep(0.3)
         self.assertEqual(row["status"], "running")
         self.assertTrue(row["pid"] and osplat.process_alive(row["pid"]))
         panes = self.term.list_panes("HaiveQueen")
-        self.assertEqual(len(panes), 1)
-        self.assertIn(row["pane_id"], [p.id for p in panes])
-        self.assertRegex(panes[0].title, r"^HaiveQueen TEST \| testproj \| Agent [A-Z]+ \| job: " + re.escape(row["name"]) + r" \| model: Claude Sonnet 5\.5 medium$")
+        self.assertEqual(sorted(p.title for p in panes), ["HaiveQueen TEST | testproj | Apiary | job: testproj | model: -",
+                                                          "HaiveQueen TEST | testproj | Hive | job: DUMMY-PLAN | model: -"])   # head pane of the Apiary and the Hive pane
+        hive = next(p for p in panes if " | Hive | " in p.title)
+        self.assertEqual(row["pane_id"], hive.id)
 
     def test_choose_slot(self):
         """The widest open pane is split side by side while both halves stay 40 columns wide, else the tallest top/bottom."""

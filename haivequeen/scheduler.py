@@ -175,6 +175,13 @@ def get_provider(providers: list, name: str):
     return None
 
 
+def context_limit(settings: dict, providers: list, provider, cls) -> int:
+    """Return the context size at which an agent of that provider and class is asked to hand off: the contextLimitTokens of its model entry
+    under [providers.classes], else the global contextLimitTokens (project.toml over config.toml), else 300000."""
+    entry = ((get_provider(providers, provider) or {}).get("classes") or {}).get(cls) or {}
+    return int(entry.get("contextLimitTokens") or settings.get("contextLimitTokens") or 300000)
+
+
 def row_provider(row: dict) -> str:
     """Provider name of an agent row: the field provider, for old rows the field type."""
     return str(row.get("provider") or row.get("type") or "")

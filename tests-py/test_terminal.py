@@ -104,9 +104,9 @@ class WtArgsTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_open_window(self):
-        """The window is opened as a named new-tab with fixed title and tab colour."""
+        """The window is opened as a named new-tab with the fixed visible title HaiveQueen (never the pane's own name) and tab colour."""
         subs = self.term.open_window_args("W1", "T 1", ["py", "-c", "x"], colour="#112233")
-        self.assertEqual(subs, [["-w", "W1", "new-tab", "-p", "PowerShell", "--title", "T 1",
+        self.assertEqual(subs, [["-w", "W1", "new-tab", "-p", "PowerShell", "--title", "HaiveQueen",
                                  "--suppressApplicationTitle", "--tabColor", "#112233", "py", "-c", "x"]])
 
     def test_split_with_target(self):
@@ -115,6 +115,14 @@ class WtArgsTest(unittest.TestCase):
         self.assertEqual(subs[0], ["-w", "W1", "focus-pane", "-t", "2"])
         self.assertEqual(subs[1][:6], ["split-pane", "-p", "PowerShell", "-V", "-s", "0.7"])
         self.assertIn("--suppressApplicationTitle", subs[1])
+
+    def test_visible_title_is_always_haivequeen(self):
+        """Every wt pane and tab shows the constant title HaiveQueen, so the window title never names a project, agent or Queen."""
+        for subs in (self.term.open_window_args("W1", "HaiveQueen | p | Hive | job: X | model: -", ["py"]),
+                     self.term.split_pane_args("W1", "HaiveQueen | p | Agent ANNA | job: x | model: m", ["py"], target="1")):
+            sub = subs[-1]
+            self.assertEqual(sub[sub.index("--title") + 1], "HaiveQueen")
+            self.assertNotIn("Hive", " ".join(sub[:sub.index("py")]).replace("--suppressApplicationTitle", ""))
 
     def test_split_vertical(self):
         """Vertical means -H (below)."""
@@ -137,10 +145,11 @@ class WtArgsTest(unittest.TestCase):
         self.assertEqual(pane, "W9.0")
         line = popen.call_args[0][0]
         self.assertIn("-w W9 new-tab", line)
-        self.assertIn("Title\\; one", line)
+        self.assertNotIn("; one", line.replace("\;", ""))   # the visible title is the constant one, the title with the semicolon is not on the line
+        self.assertIn("--title HaiveQueen ", line)
         self.assertIn("print(1)\\;print(2)", line)
         self.assertIn("_panerun.py", line)
-        self.assertNotIn("; one", line.replace("\\;", ""))
+        self.assertEqual([r["title"] for r in self.term.registry.records()], ["Title; one"])   # the lookup title stays in the register
         with mock.patch.object(wt.subprocess, "Popen"):
             second = self.term.split_pane("W9", "T2", None, ["py"], "vertical", 0.4, target="W9.0", name="p1")
         self.assertEqual(second, "W9.1")
@@ -212,6 +221,14 @@ class TmuxStubTest(unittest.TestCase):
                                          "-P", "-F", "#{pane_id}", "echo 'x;y'"])
         self.assertEqual(self.calls[1], ["tmux", "select-pane", "-t", "%5", "-T", "T"])
         self.assertEqual(len(self.calls), 2)
+
+    def test_resize_pane_in_percent(self):
+        """resize_pane sets the width (x) or height (y) of a pane as a percentage of the window; a wrong axis is refused."""
+        self.term.resize_pane("%3", "x", 0.75)
+        self.term.resize_pane("%3", "y", 0.2)
+        self.assertEqual(self.calls, [["tmux", "resize-pane", "-t", "%3", "-x", "75%"], ["tmux", "resize-pane", "-t", "%3", "-y", "20%"]])
+        with self.assertRaises(TerminalError):
+            self.term.resize_pane("%3", "z", 0.5)
 
     def test_split_default_target_and_horizontal(self):
         """Without a target the session is addressed; horizontal is -h."""

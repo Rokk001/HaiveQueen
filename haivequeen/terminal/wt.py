@@ -3,8 +3,8 @@
 A named window (`-w <name>`) is addressed by every call. Panes are numbered in creation order, as
 Windows Terminal does. Each command runs behind a small launcher (_panerun.py) that writes a pid
 file into runs/<pane>/; closing a pane ends the command's process tree, the launcher then exits 0
-and the terminal closes the pane itself. The visible title of a pane is fixed at creation
-(`--suppressApplicationTitle`); Windows Terminal has no command to change it later.
+and the terminal closes the pane itself. The visible title of every pane is the constant "HaiveQueen"
+(`--suppressApplicationTitle`); the descriptive title is kept in the pane record, where the loop and the self-update find the pane.
 """
 import json
 import os
@@ -18,6 +18,7 @@ from .base import (PaneInfo, PaneRegistry, Terminal, TerminalError, check_direct
                    safe_name)
 
 LAUNCHER = str(Path(__file__).with_name("_panerun.py"))
+VISIBLE_TITLE = "HaiveQueen"   # what Windows Terminal shows for every pane and tab, so the window title never names a project, agent or Queen
 
 
 def wt_quote(arg):
@@ -65,17 +66,17 @@ class WindowsTerminal(Terminal):
         return [sys.executable, "-I", LAUNCHER, str(pidfile)] + [str(a) for a in command]
 
     def open_window_args(self, window, title, command, colour=None):
-        """Return the wt sub-commands that open the named window with its first pane."""
+        """Return the wt sub-commands that open the named window with its first pane (visible title: VISIBLE_TITLE; `title` only goes to the register)."""
         sub = ["-w", window, "new-tab"]
         if self.profile:
             sub += ["-p", self.profile]
-        sub += ["--title", title, "--suppressApplicationTitle"]
+        sub += ["--title", VISIBLE_TITLE, "--suppressApplicationTitle"]
         if colour:
             sub += ["--tabColor", colour]
         return [sub + list(command)]
 
     def split_pane_args(self, window, title, command, direction="horizontal", size=0.5, target=None):
-        """Return the wt sub-commands that split a pane (the target pane, else the focused one)."""
+        """Return the wt sub-commands that split a pane (the target pane, else the focused one); the visible title is VISIBLE_TITLE, `title` only goes to the register."""
         check_direction(direction)
         size = check_size(size)
         subs = []
@@ -88,7 +89,7 @@ class WindowsTerminal(Terminal):
             first += ["-p", self.profile]
         # wt: -V puts the new pane beside the old one, -H below it
         first += ["-V" if direction == "horizontal" else "-H", "-s", "%g" % size]
-        first += ["--title", title, "--suppressApplicationTitle"]
+        first += ["--title", VISIBLE_TITLE, "--suppressApplicationTitle"]
         subs.append(first + list(command))
         return subs
 

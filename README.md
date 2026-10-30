@@ -25,7 +25,7 @@ HaiveQueen runs plans with one Hive per plan. The Beekeeper is a program loop, n
 - **Escalation**: package classes bind the work. Failed attempts persist per class; after the configured threshold the Queen selects the next offered class. Interruptions never count as failures. Image packages stay on Codex; after its highest class fails the owner is asked.
 - **Completeness and integration**: the Queen records evidence for every requirement, continues while any remain open and integrates her own branch. Only one integration per project runs at a time.
 - **Handoffs**: at the context limit no new Bees start; running Bees finish and a new Queen continues from the handoff. Open owner questions do not stop independent work.
-- **Dashboard**: coloured Hive frames show each Queen and compact Bee progress, waiting states, limits and questions.
+- **Display**: the Beekeeper pane counts the Hives per Apiary and shows limits and questions; every Hive has its own pane with its Queen, Bee progress and waiting state.
 - **Pause and drain**: pause prevents new Queens and separate Bee processes; drain lets running Queens finish. Existing subagents continue.
 - **SQLite and panes**: state survives restarts; Windows Terminal, tmux and a headless backend are supported.
 
@@ -38,7 +38,9 @@ HaiveQueen runs plans with one Hive per plan. The Beekeeper is a program loop, n
 
 ## Dashboard
 
-Each Hive has its own coloured frame with its plan and Queen. Bees appear as short lines with name, task and completed step count. Resting, queenless, integration, Codex and owner-answer waits are visible. Select a Hive to dequeen or requeen it; each action asks for confirmation.
+Words: an **Apiary** is a project, a **Hive** is one plan, the **Queen** is the main agent of a Hive, a **Bee** is a helper agent of a Queen, the **Beekeeper** is the managing loop.
+
+The window title is always `HaiveQueen`. The left pane is the Beekeeper: one line `<Apiary>: <n> Hives` per Apiary, then limits, usage and system. On the right every Apiary has a block, the blocks one below the other: a narrow head pane `Apiary <name>` and below it its Hives as own terminals side by side, all in the colour of the Apiary. A Hive pane lives as long as the Hive does; its Queens run one after the other in it. Its head shows `Hive: <plan>` and `Queen: <name>` with model and run time (without a Queen the state of the Hive, for example `wartet auf Antwort`), then one line per Bee with task, step and a small progress bar. A Hive without a running Queen shrinks to its name and state. In a Hive pane press X (dequeen), R (requeen) or C then a provider number (requeen with that provider); each asks for the same key a second time to confirm. `bzz dequeen` and `bzz requeen` stay available.
 
 ## Quick start
 
@@ -94,7 +96,7 @@ Free Markdown below the header: the agents read it.
 
 ## Configuration
 
-Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedProviders`, provider `slots`, provider `classes`, and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. `escalateAfter` defaults to 3, and `contextLimitTokens` defaults to 300000. Project settings override machine settings except machine-wide settings. See `examples/config.example.toml` and `examples/project.example.toml`.
+Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedProviders`, provider `slots`, provider `classes`, and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. `escalateAfter` defaults to 3, and `contextLimitTokens` defaults to 300000: set it once in the machine config for all Apiaries; a project may override it, and a model entry under `[providers.classes]` may carry its own `contextLimitTokens` that wins for the Queens and Bees running with that model. Project settings override machine settings except machine-wide settings. See `examples/config.example.toml` and `examples/project.example.toml`.
 
 ## Inbox
 
