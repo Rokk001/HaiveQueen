@@ -206,11 +206,9 @@ class QueenStartTests(RoundCase):
         self.assertIn("Beekeeper started (round every", text)
         self.assertNotIn("Queen started", text)
 
-    def test_chief_pane_is_titled_beekeeper(self):
-        """The pane of the loop is the Beekeeper's."""
-        title = loop.queen_pane_title("m", True)
-        self.assertIn("BEEKEEPER", title)
-        self.assertNotIn("QUEEN", title)
+    def test_chief_pane_is_found_as_the_loop_pane(self):
+        """The title of the loop pane is recognised as the loop pane (it keeps the QUEEN word until the update worker knows the new one)."""
+        self.assertTrue(loop.is_beekeeper_title(loop.queen_pane_title("m", True)))
 
 
 class RunnerCrashTests(RoundCase):

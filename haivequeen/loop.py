@@ -157,8 +157,8 @@ def is_beekeeper_title(title: str) -> bool:
 
 
 def queen_pane_title(model: str, test: bool) -> str:
-    """Fixed title of the pane of the loop (the Beekeeper)."""
-    return pane_title("all projects", "BEEKEEPER", "Beekeeper", model, test)
+    """Fixed title of the pane of the loop (the Beekeeper). It still says QUEEN: the self-update worker that is running while this version is installed checks for that title; the rename to BEEKEEPER follows in the next update."""
+    return pane_title("all projects", "QUEEN", "Queen", model, test)
 
 
 def close_leftover_panes(term, window: str) -> list:
