@@ -125,5 +125,52 @@ class HeaderTests(unittest.TestCase):
         self.assertIn("PAUSED", self.text({"run_state": "PAUSED"}))
 
 
+class ProcessBeePaneTests(RoundCase):
+    """A Queen gets her own pane; a Bee that runs as its own process gets none and shows only as a line in its Hive (A3, D3)."""
+
+    def start(self, phase):
+        """Start one agent of this phase through the real start path with the pane and the headless launch recorded; return the two call lists."""
+        import os
+        from unittest import mock
+        from haivequeen import scheduler as sch
+        self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
+        env = self.env()
+        os.environ.pop("BZZ_TEST_NOSTART", None)
+        panes, headless = [], []
+        action = {"name": "Ada", "type": "claude", "phase": phase, "plan": REL, "package": "P1" if phase == "bee" else "", "cwd": str(self.wt), "prompt": "task", "class": "medium"}
+        state = {"names": [], "busy": [], "plan_status": {sch.norm_plan(REL): "IN_PROGRESS"}, "by_path": {sch.norm_plan(REL): {"path": REL}}}
+        ctx = {"env": env, "state": state, "pool": loop.Pool({"claude": 5}, 0), "report": [], "dry": False, "terminal": None, "settle": 0, "poll": 0, "tries": 1}
+        with mock.patch.object(loop, "launch_agent", lambda *a, **k: panes.append(a[3]["name"])),                 mock.patch.object(loop, "launch_headless", lambda *a, **k: headless.append(a[1]["name"]), create=True):
+            loop._do_start(ctx, action, forced_pick=sch.get_provider(env.providers, "claude"))
+        return panes, headless
+
+    def test_queen_gets_a_pane(self):
+        """The Queen is opened in a pane of the HaiveQueen window."""
+        self.assertEqual(self.start("queen"), (["Ada"], []))
+
+    def test_process_bee_gets_no_pane(self):
+        """A Bee process is started without a pane."""
+        self.assertEqual(self.start("bee"), ([], ["Ada"]))
+
+
+class DeadBrainCodeTests(RoundCase):
+    """The Beekeeper calls no language model, so the brain and triage code of the old round is gone (D18, A10)."""
+
+    def test_old_round_code_is_gone(self):
+        """No old per-project round, no triage start, no brain module."""
+        self.assertFalse(hasattr(loop, "_project_round"))
+        self.assertFalse(hasattr(loop, "_start_triage"))
+        self.assertFalse((Path(loop.__file__).parent / "brain.py").exists())
+
+    def test_dashboard_shows_no_brain_text(self):
+        """Even a stored 'brain' loop state shows no 'brain call running' and the dashboard has no brain statistic."""
+        from datetime import datetime
+        from haivequeen import dashboard
+        runtime.kv_set(self.conn, "*", "loop-state", '{"status": "brain", "since": "2026-10-30T15:00:00"}')
+        sysinfo = {"cores": 4, "free_mb": 4000, "total_mb": 8000, "host": "test", "compiler_count": None}
+        text = dashboard.render(self.conn, width=100, height=60, now=datetime.now(), cfg={}, sysinfo=sysinfo, color=False)
+        self.assertNotIn("brain", text.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

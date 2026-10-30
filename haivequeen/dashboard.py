@@ -326,15 +326,10 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         counts[p["status"]] = counts.get(p["status"], 0) + 1
         if p["status"] == "DRAFT":
             drafts.append(re.sub(r"-?PLAN$", "", Path(p["path"]).stem))
-    brain = db.rows(conn, "SELECT * FROM providers_usage WHERE kind='brain'" + (" AND project=?" if project else "") + " ORDER BY ts", pa)
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    brain_today = [b for b in brain if (_parse_time(b["ts"]) or day) >= day and not b.get("error")]
-    last_call = next((b for b in reversed(brain) if b.get("tokens_in") is not None), None)
     loop = _kv(conn, "loop-state") or {}
     since = _parse_time(loop.get("since")) if isinstance(loop, dict) else None
-    if isinstance(loop, dict) and loop.get("status") == "brain":
-        orch_status = "brain call running"
-    elif since:
+    if since:
         orch_status = "idle since " + since.strftime("%H:%M")
     else:
         orch_status = "idle"
@@ -350,9 +345,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "triage": conn.execute("SELECT COUNT(*) FROM questions WHERE status='triage'" + (" AND project=?" if project else ""), pa).fetchone()[0],
         "bj": build_jobs_line(conn, cfg, scope, all_rows, sysinfo), "host": host,
         "selfupdate": db.last_self_update(conn),
-        "orch": {"status": orch_status, "calls": len(brain_today), "model": (last_call or {}).get("model"),
-                 "ctx": (last_call or {}).get("context"),
-                 "tin": sum(b["tokens_in"] or 0 for b in brain_today), "tout": sum(b["tokens_out"] or 0 for b in brain_today)},
+        "orch": {"status": orch_status},
         "last_round": (_parse_time(last_round[0]).strftime("%H:%M:%S") if last_round and _parse_time(last_round[0]) else "-"),
     }
 
