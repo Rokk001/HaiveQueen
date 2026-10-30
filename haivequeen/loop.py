@@ -1108,7 +1108,7 @@ def head_lines(width: int, tot: dict, ui: dict) -> list:
         state = "idle since %s, ◔ next round %s" % (ui["since"].strftime("%H:%M"), ui["next_at"].strftime("%H:%M"))
     else:
         state = "starting"
-    for ln in wrap_text("◆ QUEEN | Claude %s | %s" % (ui.get("model", ""), state), width):
+    for ln in wrap_text("◆ Beekeeper | Claude %s | %s" % (ui.get("model", ""), state), width):
         res.append((ln, "White"))
     res.append(("Projects: " + (", ".join(ui.get("projects") or []) or "none") + ". Decides only on events, the routine runs without a brain", "Gray"))
     lc = tot.get("LastCall")
