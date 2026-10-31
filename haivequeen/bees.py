@@ -43,23 +43,50 @@ def requires_bee(queen_class, package_class, parallel, codex_without_subagents):
     return scheduler.class_index(package_class) > scheduler.class_index(queen_class) or (parallel and not codex_without_subagents)
 
 
-# Create the persistent per-package and class attempt table.
+# Create persistent package completion and per-class attempt tables.
 def ensure_attempts(conn):
-    """Create persistent failure counters if absent."""
+    """Create persistent completion and failure records if absent."""
     conn.execute('CREATE TABLE IF NOT EXISTS bee_attempts (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(project,plan_path,package,class))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_attempt_reports (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, attempt TEXT NOT NULL, PRIMARY KEY(project,plan_path,package,attempt))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_assignments (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, provider TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
+    conn.execute('CREATE TABLE IF NOT EXISTS bee_completed (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
 
 
-# Count a failed attempt, ignoring technical interruptions.
+# Record successful or failed attempts, ignoring technical interruptions.
 def record_attempt(conn, project, plan, package, cls, outcome, attempt=None):
-    """Record one unsolved attempt and ignore interrupted ends."""
+    """Persist completion or count one unsolved attempt, ignoring interruptions."""
     ensure_attempts(conn)
+    if outcome == 'succeeded':
+        conn.execute('INSERT OR IGNORE INTO bee_completed VALUES(?,?,?)', (project, plan, package))
     if outcome == 'failed':
         with db.transaction(conn):
             if attempt and conn.execute('INSERT OR IGNORE INTO bee_attempt_reports(project,plan_path,package,attempt) VALUES(?,?,?,?)', (project, plan, package, attempt)).rowcount == 0:
                 return
             conn.execute('INSERT INTO bee_attempts(project,plan_path,package,class,failures) VALUES(?,?,?,?,1) ON CONFLICT(project,plan_path,package,class) DO UPDATE SET failures=failures+1', (project, plan, package, cls))
+
+
+# Check whether any successful attempt completed a package.
+def package_done(conn, project, plan, package):
+    """Return whether the package has a persisted successful attempt."""
+    ensure_attempts(conn)
+    return conn.execute('SELECT 1 FROM bee_completed WHERE project=? AND plan_path=? AND package=?', (project, plan, package)).fetchone() is not None
+
+
+# Refuse a start when a declared dependency is missing or unfinished.
+def check_dependencies(env, plan, package):
+    """Raise the logged reason for the first unsatisfied package dependency."""
+    packages = env.packages(plan)
+    ids = {p['id'] for p in packages}
+    row = next((p for p in packages if p['id'] == package), None)
+    if not row:
+        return
+    for dep in row['depends']:
+        reason = ('not in plan' if dep not in ids else
+                  'not done' if not package_done(env.conn, env.name, plan, dep) else None)
+        if reason:
+            message = 'dependency %s of package %s %s' % (dep, package, reason)
+            env.log(message)
+            raise ValueError(message)
 
 
 # Read failures for one package and class.
@@ -93,7 +120,7 @@ def bee_prompt(name, package, task, steps, paths, rules):
 def queen_instructions(queen_class, bee_limit, threshold, context_limit):
     """Return Queen task instructions for the configured classes and limits."""
     return ('''Your class is %s. Keep token use economical. Follow package dependencies: work one startable package yourself and run only independent packages with no shared files as subagents, at most %s Bees. A single package at your class or lower you work yourself; a higher class, including heavy, always goes to a Bee even alone. A Codex Queen may do an image package herself. If Codex exec cannot start subagents, work your class or lower sequentially and use separate Bee processes for higher classes and escalation.
-Give every Bee a short female name. A Bee gets only its package task, numbered steps, needed paths and rules, never the whole plan or CLAUDE.md. Code Bees work on their own worktree and sub-branch and you merge locally. Each reports every step via bzz note. Use bzz bee start with the project, plan, package, class, name, task, numbered steps, paths, rules and the Bee worktree. Set --parallel only for packages independent of the package you work. When it returns subagent, start the Bee as your native subagent without another process. A Codex Queen without subagents supplies --no-subagents and works the returned queen task herself. Record each outcome with bzz bee result, a unique attempt name, the class that attempted it and outcome failed, interrupted or succeeded; for your own tries use your Queen class. When only a package waiting on a provider remains, use bzz bee wait with that provider, write a handoff and end. Prefer a free local provider offering the class; otherwise use your own provider. Codex is only for images or escalation, unless it is your own provider or another provider is needed because neither your provider nor the local model offers the required or a higher class. Images always use Codex; if unavailable ask the owner once when no eligible provider exists, otherwise continue independent work while waiting. Excluded providers are never used.
+Give every Bee a short female name. A Bee gets only its package task, numbered steps, needed paths and rules, never the whole plan or CLAUDE.md. Code Bees work on their own worktree and sub-branch and you merge locally. Each reports every step via bzz note. Use bzz bee start with the project, plan, package, class, name, task, numbered steps, paths, rules and the Bee worktree. Set --parallel only for packages independent of the package you work. When it returns subagent, start the Bee as your native subagent without another process. A Codex Queen without subagents supplies --no-subagents and works the returned queen task herself. Record each outcome with bzz bee result, a unique attempt name, the class that attempted it and outcome failed, interrupted or succeeded; for your own tries use your Queen class. Before starting a dependent package, record a succeeded result once for any dependency completed before success recording was available, using the state file as evidence. If a dependency is not in the plan, ask the owner with bzz ask. When only a package waiting on a provider remains, use bzz bee wait with that provider, write a handoff and end. Prefer a free local provider offering the class; otherwise use your own provider. Codex is only for images or escalation, unless it is your own provider or another provider is needed because neither your provider nor the local model offers the required or a higher class. Images always use Codex; if unavailable ask the owner once when no eligible provider exists, otherwise continue independent work while waiting. Excluded providers are never used.
 Count failed attempts per package and class persistently: an attempt is a Bee ending unsolved or with required tests red, or your own finished try that did not solve the package. Incompleteness by itself is never a reason to escalate. After %s failed attempts escalate to the next higher offered class; start the counter at zero in the new class. Never count an interruption, API or usage limit as failure. For image packages escalate only through Codex classes; after failures at the highest Codex class ask the owner. For other packages ask the owner after the same threshold at the highest available class. When a provider is busy or limited wait for it, never silently change it. Read each Bee result and start a replacement for the remaining package after a context handoff.
 Never measure your context yourself: the token numbers of bzz agents and bzz usage are summed over all steps (Codex counts the whole context again at every step) and are far above the real context size. The Beekeeper watches your current context and writes the file HANDOFF in your run folder when it reaches %s; only when that file exists, start no new Bees, let running Bees finish, finish your current step, write a handoff and end. If only unanswered owner questions remain, continue independent work first, then handoff and wait for an answer. Preserve dependencies, branch, state and completed steps.
 Triage every question yourself. Technical questions are decided by the agent itself: decide, record the decision in the state file and go on. Only game, balance and design questions go to the owner with bzz ask; in doubt treat it as an owner question. A product question pauses only that item; all independent work continues.
@@ -179,6 +206,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
     from pathlib import Path
     from . import hives, loop, routine, usage
     with loop.hive_schedule_lock():
+        check_dependencies(env, plan, package)
         hive = hives.get(env.conn, env.name, plan)
         if not hive or not hives.can_start_bee(env.conn, env.name, plan, False, env.settings.get('contextLimitTokens', 300000)):
             return False
