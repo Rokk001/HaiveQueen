@@ -410,8 +410,9 @@ class QueenIntegrationTests(RoundCase):
             self.assertEqual((result['kind'], result['cwd']), ('subagent', str(first)))
             result = bees.start_process(env, REL, 'P1', 'Bea', 'medium', 'task', ['one'], [], [], cwd=str(other), parallel=True)
             self.assertEqual(result['cwd'], str(first))
-            for i in range(3):
-                bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'try-%s' % i)
+            for i in range(4):
+                bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'try-%s' % i,
+                                    open_requirements=['unfinished'], error='test failed')
             result = bees.start_process(env, REL, 'P1', 'Cora', 'heavy', 'task', ['one'], [], [], cwd=str(other), parallel=True)
             self.assertEqual(result['cwd'], str(first))
         self.assertEqual((first / 'uncommitted.txt').read_text(encoding='utf-8'), 'keep')
