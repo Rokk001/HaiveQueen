@@ -58,6 +58,13 @@ class PaneRegistry:
         tmp.write_text(json.dumps(record), encoding="utf-8")
         os.replace(str(tmp), str(target))
 
+    def discard(self, name):
+        """Delete the record of a pane that never started, so its number is free again (wt numbers only the panes it made)."""
+        try:
+            (self.folder(name) / "pane.json").unlink()
+        except OSError:
+            pass
+
     def records(self):
         """Return all pane records as dicts (each with its `name`)."""
         out = []
@@ -109,6 +116,7 @@ class Terminal(abc.ABC):
     """
 
     name = ""
+    trace = None   # optional sink (a callable taking one text line) for a backend to report each call of its terminal program
 
     @abc.abstractmethod
     def open_window(self, window, title, command, colour=None, name=None):

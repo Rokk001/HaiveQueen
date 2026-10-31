@@ -306,6 +306,21 @@ class PaneOpenTest(RoundCase):
         self.assertNotEqual(first, second)
         self.assertEqual(len(self.hive_panes()), 2)
 
+    def test_wt_calls_of_a_hive_split_go_to_the_round_log(self):
+        """The terminal reports its calls (Apiary head and Hive split) into the log of the Apiary, so a pane that never starts leaves a trace."""
+        env = self.envs()[0]
+        loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
+        self.term.trace("wt X | exit=1 | stderr='ERROR from wt'")
+        row = env.conn.execute("SELECT kind, project FROM events WHERE text LIKE 'wt X |%'").fetchone()
+        self.assertEqual((row["kind"], row["project"]), ("wt-call", env.name))   # not kind rounds: a self-update must not read wt's own ERROR text as a failed round
+
+    def test_trace_sink_writes_one_event_per_project(self):
+        """The sink of the session start writes the same line as an event of kind wt-call for every project it is given."""
+        env = self.envs()[0]
+        loop.wt_trace_sink(env.conn, [env.name, "other"])("wt Y | exit=0")
+        rows = env.conn.execute("SELECT project, kind FROM events WHERE text='wt Y | exit=0' ORDER BY project").fetchall()
+        self.assertEqual([(r["project"], r["kind"]) for r in rows], sorted([(env.name, "wt-call"), ("other", "wt-call")]))
+
     def test_dead_pane_is_opened_again(self):
         """When the pane was closed while the Hive lives, the next call opens it again."""
         env = self.envs()[0]

@@ -486,6 +486,16 @@ def _pane_order(pane) -> int:
         return 0
 
 
+def wt_trace_sink(conn, projects: list):
+    """Return the sink for the trace of a terminal: it writes each line as an event of kind wt-call (and into ROUNDS.log) for every project in `projects`.
+    The kind is not "rounds" on purpose: the self-update reads an ERROR in a rounds event as a failed round, and wt's own text may contain that word."""
+    def sink(text: str) -> None:
+        """Write one trace line for each project."""
+        for name in projects:
+            runtime.append_event(conn, name, text, kind="wt-call", mirror="rounds")
+    return sink
+
+
 def ensure_apiary_pane(env, terminal, window: str, live: list) -> str:
     """Return the id of the live head pane of this Apiary; open it when there is none. `live` are the live panes of the window; the caller holds pane.lock.
     The first block goes beside the dashboard (else the Beekeeper) pane, a further block below the last pane of the last block."""
@@ -517,6 +527,7 @@ def ensure_hive_pane(env, terminal, window: str, plan: str) -> str:
         for p in live:
             if p.title == title:
                 return p.id
+        terminal.trace = wt_trace_sink(env.conn, [env.name])   # every wt call of this split (head and Hive) leaves one line in the log
         head = ensure_apiary_pane(env, terminal, window, live)
         mine = sorted([p for p in live if is_hive_title(p.title) and p.title.split(" | ")[1] == title.split(" | ")[1]], key=_pane_order)
         colour = env.colour   # the colour of the Apiary, shared by its head and all its Hives
@@ -1185,6 +1196,7 @@ def cmd_start(args, conn) -> int:
     settings = sch.build_settings(machine, {})
     term = get_terminal(args.terminal or settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
     window = settings.get("window", "HaiveQueen")
+    term.trace = wt_trace_sink(conn, [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY name")])   # the session start leaves one line per wt call
     boot = start_boot_command(args)
     title = queen_pane_title(sch.model_long("claude", "claude-sonnet-5-5", "medium"), is_test_runtime())
     with pane_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first
