@@ -52,13 +52,29 @@ class ForegroundTest(unittest.TestCase):
 
     def test_timeout_does_not_change_foreground(self):
         """No terminal activation within three seconds leaves the window untouched."""
-        user, kernel = self.api([1, 1])
+        user, kernel = self.api(None)
+        user.GetForegroundWindow.return_value = 1
         with mock.patch.object(osplat, "is_windows", return_value=True), mock.patch.object(osplat.ctypes, "windll", create=True) as dll, \
                 mock.patch.object(osplat.time, "monotonic", side_effect=[0, 3]):
             dll.user32, dll.kernel32 = user, kernel
             with osplat.keep_foreground():
                 pass
         user.SetForegroundWindow.assert_not_called()
+
+    # Verify slow pane starts remain covered by the foreground guard.
+    def test_slow_launch_restores_foreground(self):
+        """A terminal taking focus after a slow launch still restores the editor."""
+        import time
+        focus = [1]
+        user, kernel = self.api(None)
+        user.GetForegroundWindow.side_effect = lambda: focus[0]
+        with mock.patch.object(osplat, "is_windows", return_value=True), mock.patch.object(osplat.ctypes, "windll", create=True) as dll:
+            dll.user32, dll.kernel32 = user, kernel
+            with osplat.keep_foreground():
+                time.sleep(3.2)
+                focus[0] = 2
+                time.sleep(0.2)
+        user.SetForegroundWindow.assert_called_with(1)
 
     def test_non_windows_is_noop(self):
         """Other platforms run the body without accessing Windows APIs."""

@@ -52,9 +52,10 @@ def keep_foreground():
     original = user.GetForegroundWindow()
     cls, title = window_info(original) if original else ("", "")
     skip = not original or (cls == "CASCADIA_HOSTING_WINDOW_CLASS" and (title.startswith("HaiveQueen |") or title.startswith("HaiveQueen TEST |")))
+    finished = threading.Event()
     def restore():
-        """Wait at most three seconds for the terminal, then restore the saved window."""
-        deadline = time.monotonic() + 3.0
+        """Watch the whole launch and up to three seconds afterwards for a focus change."""
+        deadline = None
         while True:
             current = user.GetForegroundWindow()
             if current != original and current and window_info(current)[0] == "CASCADIA_HOSTING_WINDOW_CLASS":
@@ -68,8 +69,11 @@ def keep_foreground():
                     if attached:
                         user.AttachThreadInput(caller_thread, current_thread, False)
                 break
-            if time.monotonic() >= deadline:
-                break
+            if finished.is_set():
+                if deadline is None:
+                    deadline = time.monotonic() + 3.0
+                elif time.monotonic() >= deadline:
+                    break
             time.sleep(0.05)
 
     worker = None
@@ -80,6 +84,7 @@ def keep_foreground():
         yield
     finally:
         if worker:
+            finished.set()
             worker.join()
 
 
