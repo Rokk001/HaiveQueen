@@ -31,9 +31,10 @@ class FaultsTest(RoundCase):
         super().setUp()
         self.add_project("HaiveQueen")
 
+    # Read all fault reports, including those awaiting automatic checks.
     def faults_of(self, kind=None):
         """Fault questions of the fault project (optionally of one kind)."""
-        return runtime.list_questions(self.conn, "HaiveQueen", None, faults.FAULT_PLAN, kind)
+        return db.rows(self.conn, "SELECT * FROM questions WHERE project=? AND plan_path=?" + (" AND item=?" if kind else "") + " ORDER BY id", ("HaiveQueen", faults.FAULT_PLAN, kind) if kind else ("HaiveQueen", faults.FAULT_PLAN))
 
     def check(self, started=1, can_start=True, log="", now=None):
         """One fault check of the dummy project; `log` is the text the event log reader returns."""
@@ -142,12 +143,13 @@ class FaultsTest(RoundCase):
         active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["status"] == "running"]
         self.assertTrue(all(a["phase"] != "triage" for a in active))
 
+    # Ensure an answered fault does not start a work agent.
     def test_no_work_agent_for_an_answered_fault_question(self):
         """An answered fault question starts no work agent."""
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         self.seed()
         qid = faults.file_fault(self.conn, "testproj", "no_start", "x")
-        db.answer_question(self.conn, qid, "looked at it", "owner")
+        db.answer_question(self.conn, qid, "looked at it", "coordinator")
         before = set(self.names())
         self.round()
         self.assertFalse([n for n in set(self.names()) - before if "NO" in n.upper() and "Q-" in n.upper()])
@@ -246,6 +248,74 @@ class FaultsTest(RoundCase):
         with patch("haivequeen.hives.migrate_once", return_value={"testproj": "deferred"}), patch("haivequeen.faults.check_round") as check:
             self.round()
             self.assertTrue(any(call.args[0].name == "testproj" and call.args[1:] == (0, False) for call in check.call_args_list))
+
+    # Pending fault reports are checked privately before they reach the owner.
+    def test_pending_fault_is_hidden_until_observation_expires(self):
+        """Unresolved faults become open with evidence after an hour, not before."""
+        from haivequeen import views, dashboard, cli
+        from unittest.mock import patch
+        import argparse
+        qid = faults.file_fault(self.conn, "HaiveQueen", "no_start", "Apiary testproj: no starts")
+        self.assertIsNone(faults.file_fault(self.conn, "HaiveQueen", "no_start", "duplicate"))
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00' WHERE id=?", (qid,))
+        self.conn.commit()
+        self.check(started=0, now=datetime(2026, 10, 29, 10, 59))
+        self.assertEqual(runtime.list_questions(self.conn, "HaiveQueen", "open"), [])
+        self.assertEqual(runtime.list_questions(self.conn, "HaiveQueen"), [])
+        self.assertEqual(db.open_questions(self.conn, "HaiveQueen", only_open=True), [])
+        with patch("haivequeen.cli.out") as output:
+            cli.cmd_questions(argparse.Namespace(project="HaiveQueen", open=False, status=None, plan=None, item=None), self.conn)
+            output.assert_called_once_with([])
+        self.assertEqual(dashboard.collect(self.conn, "HaiveQueen", cfg={}, sysinfo={"host": "test", "cores": 1, "free_mb": 1024, "total_mb": 2048, "compiler_count": 0})["qs"], [])
+        self.assertNotIn("no starts", views.render_questions(self.conn, "HaiveQueen"))
+        self.check(started=0, now=datetime(2026, 10, 29, 11, 0))
+        self.assertEqual(runtime.list_questions(self.conn, "HaiveQueen", "open")[0]["id"], qid)
+        self.assertTrue(any("remains open" in e["text"] for e in runtime.list_events(self.conn, "HaiveQueen", kind="note")))
+
+    # A recovered pending fault is answered without first becoming an open question.
+    def test_pending_recovery_resolves_without_owner_question(self):
+        """Two later starts resolve the report while it remains hidden from open questions."""
+        qid = faults.file_fault(self.conn, "HaiveQueen", "no_start", "Apiary testproj: no starts")
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00' WHERE id=?", (qid,))
+        self.conn.commit()
+        self.check(now=datetime(2026, 10, 29, 10, 30))
+        self.assertEqual(runtime.list_questions(self.conn, "HaiveQueen"), [])
+        self.check(now=datetime(2026, 10, 29, 10, 31))
+        q = self.faults_of("no_start")[0]
+        self.assertEqual((q["status"], q["answered_by"]), ("answered", "coordinator"))
+        self.assertEqual(runtime.list_questions(self.conn, "HaiveQueen", "open"), [])
+        self.assertFalse(any(e["kind"] == "question" and str(qid) in str(e["data_json"]) for e in runtime.list_events(self.conn, "HaiveQueen")))
+
+    # Legacy fault wording is checked alongside current Apiary wording.
+    def test_legacy_project_wording_is_resolved(self):
+        """Later runs and starts resolve older project-labelled reports."""
+        for kind in ("runner_vanished", "agent_no_result"):
+            db.add_question(self.conn, "HaiveQueen", faults.FAULT_PLAN, kind, "Agent DUMMY-A-work of project testproj: ended.", "")
+        db.add_question(self.conn, "HaiveQueen", faults.FAULT_PLAN, "no_start", "Project testproj: no starts.", "")
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00'")
+        self.conn.commit()
+        self.agent("DUMMY-A-work", status="done", ended_at="2026-10-29T10:40:00")
+        self.check(now=datetime(2026, 10, 29, 10, 50))
+        self.check(now=datetime(2026, 10, 29, 10, 51))
+        self.assertTrue(all(q["status"] == "answered" for q in self.faults_of()))
+
+    # Unmatched old reports cannot remain hidden after the observation window.
+    def test_unmatched_pending_faults_open_without_stealing_other_projects(self):
+        """Unknown or deleted project reports open with evidence; known projects keep their own check."""
+        self.add_project("other")
+        qids = []
+        for text in ("unrecognized old report", "Project removed: no starts", "Project other: no starts"):
+            qids.append(db.add_question(self.conn, "HaiveQueen", faults.FAULT_PLAN, "no_start", text, "", status="fault_check"))
+        for text in ("Agent old of project removed: ended", "Agent old of Apiary other: ended"):
+            qids.append(db.add_question(self.conn, "HaiveQueen", faults.FAULT_PLAN, "agent_no_result", text, "", status="fault_check"))
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00'")
+        self.conn.commit()
+        self.check(started=0, now=datetime(2026, 10, 29, 11, 0))
+        rows = {q["id"]: q for q in self.faults_of()}
+        self.assertEqual([rows[qid]["status"] for qid in qids], ["open", "open", "fault_check", "open", "fault_check"])
+        notes = runtime.list_events(self.conn, "HaiveQueen", kind="note")
+        for qid in (qids[0], qids[1], qids[3]):
+            self.assertTrue(any("Fault question %s remains open" % qid in e["text"] for e in notes))
 
     # Verify the Queen is directed to exhaust technical alternatives before asking.
     def test_queen_prompt_requires_technical_alternatives(self):
