@@ -6,6 +6,8 @@ claudeTools = "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop"
 planGlobs = ["docs/plans/*.md"]
 planExclude = []                  # globs (same syntax as planGlobs) removed from the matches, e.g. ["docs/plans/archive/**", "docs/plans/*-STATE.md"]
 buildProcessNames = ["cl.exe"]    # compiler processes counted in the "active cores" display; empty = no display
+ignoredBuildOutput = []           # ignored build output that may be removed with an integrated worktree
+protectedWorktrees = []           # additional worktree paths that must never be removed
 
 [views]                           # generated read-only Markdown views; empty = none
 queue = ""

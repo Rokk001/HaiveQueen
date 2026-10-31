@@ -701,12 +701,19 @@ def hive_schedule_lock(timeout: float = 30.0):
         _hive_schedule_guard.release()
 
 
-# Schedule one round of Hives across every registered project.
+# Clean integrated worktrees and schedule one round of Hives across every registered project.
 def run_round(conn, machine: dict, envs=None, terminal=None, dry_run=False, plan_files=None,
               out_file=None, settle: float = 3.0, poll: float = 2.0, tries: int = 20, free_ram=None, alive=None) -> dict:
-    """Schedule one round of Hives across every registered project."""
+    """Clean integrated worktrees and schedule one round across registered projects."""
     from . import hives
     envs = envs if envs is not None else sch.load_projects(conn, machine)
+    if not dry_run:
+        from . import worktrees
+        for env in envs:
+            try:
+                env.log('Worktree cleanup: ' + json.dumps(worktrees.prune(env), ensure_ascii=False))
+            except Exception as exc:
+                env.log('Worktree cleanup failed: ' + str(exc))
     with hive_schedule_lock():
         if dry_run:
             import sqlite3

@@ -56,6 +56,8 @@ DEFAULT_SETTINGS = {
     "buildFlowDoc": "",
     "integratorInstructions": "",
     "worktreePrefix": "wt",
+    "ignoredBuildOutput": [],
+    "protectedWorktrees": [],
     "planStandaloneRegex": "",
     "planSuffixRegex": "-?PLAN$",
     "buildProcessNames": [],
