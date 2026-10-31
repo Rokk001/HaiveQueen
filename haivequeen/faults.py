@@ -9,7 +9,7 @@ import json
 import re
 from datetime import datetime, timedelta
 
-from . import db, runtime
+from . import db, runtime, scheduler
 from . import platform as osplat
 
 FAULT_PLAN = "HQ-FAULTS"          # plan_path of every fault question
@@ -47,13 +47,13 @@ def parse_terminal_crashes(text: str, since: datetime) -> list:
     return found
 
 
-def read_event_log() -> str:
-    """Text of the newest Application Error entries ('' when wevtutil is missing or fails)."""
+def read_event_log() -> str | None:
+    """Text of the newest Application Error entries, or None when the read fails."""
     try:
         code, out, _err, _timed_out = osplat.run_with_timeout(WEVTUTIL, 30)
     except OSError:
-        return ""
-    return out.decode("utf-8", "replace") if code == 0 else ""
+        return None
+    return out.decode("utf-8", "replace") if code == 0 else None
 
 
 def _check_terminal_crash(conn, now: datetime, reader) -> None:
@@ -63,7 +63,7 @@ def _check_terminal_crash(conn, now: datetime, reader) -> None:
         return
     runtime.kv_set(conn, FAULT_PROJECT, EVENTLOG_KEY, now.isoformat(timespec="seconds"))
     since = datetime.fromisoformat(last) if last else now - timedelta(days=1)
-    crashes = parse_terminal_crashes(reader(), since)
+    crashes = parse_terminal_crashes(reader() or "", since)
     if crashes:
         file_fault(conn, FAULT_PROJECT, "terminal_crash", "Windows Terminal crashed (%d new entr%s in the Application event log, newest %s)." % (
             len(crashes), "y" if len(crashes) == 1 else "ies", max(crashes).isoformat(timespec="seconds")))
@@ -112,11 +112,62 @@ def _check_idle(env, started: int, can_start: bool) -> None:
         file_fault(conn, FAULT_PROJECT, "no_start", "Apiary %s: %d rounds in a row with startable packages and no agent started." % (env.name, n))
 
 
+# Resolve open fault reports only when subsequent observations establish recovery.
+def _resolve_open(env, started: int, now: datetime, reader) -> None:
+    """Check open reports against later rounds, agent results and loop or event-log evidence."""
+    conn = env.conn
+    key = "faults-start-rounds"
+    history = json.loads(runtime.kv_get(conn, env.name, key) or "[]")
+    history = (history + [[now.isoformat(timespec="seconds"), started > 0]])[-2:]
+    runtime.kv_set(conn, env.name, key, json.dumps(history))
+    questions = runtime.list_questions(conn, FAULT_PROJECT, "open", FAULT_PLAN)
+    terminal = [q for q in questions if q["item"] == "terminal_crash"]
+    log = reader() if terminal else ""
+    for q in questions:
+        created = db.parse_time(q["created_at"])
+        if created is None or created > now:
+            continue
+        kind, answer = q["item"], None
+        text = q["question"] or ""
+        if kind == "terminal_crash":
+            crashes = [t for t in parse_terminal_crashes(log or "", created) if t <= created + timedelta(minutes=60)]
+            confirmed_key = "fault-confirmed-%s" % q["id"]
+            if crashes and not runtime.kv_get(conn, FAULT_PROJECT, confirmed_key):
+                evidence = max(crashes).isoformat()
+                runtime.kv_set(conn, FAULT_PROJECT, confirmed_key, evidence)
+                db.add_event(conn, FAULT_PROJECT, "note", "Fault question %s confirmed by Windows Terminal crash at %s." % (q["id"], evidence), data={"question_id": q["id"]})
+            if now - created >= timedelta(minutes=60) and log is not None and not crashes and not runtime.kv_get(conn, FAULT_PROJECT, confirmed_key):
+                answer = "No later Windows Terminal crash in the Application log during the 60 minutes after the question."
+        elif kind == "no_start" and ("Apiary %s:" % env.name) in text:
+            if len(history) == 2 and all(ok and db.parse_time(t) > created for t, ok in history):
+                answer = "The last two rounds of Apiary %s both started agents (%s and %s)." % (env.name, history[0][0], history[1][0])
+        elif kind in ("runner_vanished", "agent_no_result"):
+            match = re.search(r"Agent (.+?) of Apiary (.+?):", text)
+            if match and match.group(2) == env.name:
+                agents = env.agents("all")
+                original = next((a for a in agents if a.get("name") == match.group(1)), None)
+                for a in agents:
+                    same_work = a.get("name") == match.group(1) or (original and original.get("package") and a.get("plan_path") == original.get("plan_path") and a.get("package") == original.get("package") and a.get("phase") == original.get("phase"))
+                    ended = db.parse_time(a.get("ended_at"))
+                    result = env.run_dir(a["name"]) / "final.txt"
+                    if same_work and a.get("status") == "done" and ended and ended > created and result.is_file() and result.stat().st_size:
+                        answer = "Later run %s finished with a result at %s." % (a["name"], a["ended_at"])
+                        break
+        elif kind == "loop_vanished":
+            start = db.parse_time(runtime.kv_get(conn, scheduler.GLOBAL, "loop-started-at"))
+            end = db.parse_time(runtime.kv_get(conn, scheduler.GLOBAL, "loop-unexpected-end-at"))
+            if start and end and start >= end and start >= created and now - start >= timedelta(minutes=60):
+                answer = "Loop restarted at %s after unexpected end %s and has run for at least 60 minutes." % (start.isoformat(), end.isoformat())
+        if answer:
+            db.answer_question(conn, q["id"], answer, "auto")
+
+
 def check_round(env, started: int, can_start: bool, now: datetime = None, reader=None) -> None:
     """Fault detection of one project round (called at the end of the round routine; never raises, a broken check must not stop a round)."""
     if not _project_known(env.conn, FAULT_PROJECT):
         return
     try:
+        _resolve_open(env, started, now or datetime.now(), reader or read_event_log)
         _check_idle(env, started, can_start)
         _check_agents(env)
         _check_terminal_crash(env.conn, now or datetime.now(), reader or read_event_log)
