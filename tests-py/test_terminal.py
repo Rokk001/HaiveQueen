@@ -209,6 +209,22 @@ class WtArgsTest(unittest.TestCase):
         self.assertNotIn("focus-pane", seen[1])
         self.assertIn("pane.pid=yes", seen[1])
 
+    def test_wt_is_started_without_the_session_of_the_calling_pane(self):
+        """The Beekeeper runs inside a wt pane: wt.exe must not inherit that pane's WT_* variables or its console, else it may treat the call as coming from the pane."""
+        seen = {}
+
+        def popen(line, **kw):
+            """Record how wt.exe is started."""
+            seen.update(kw)
+            return mock.Mock(poll=mock.Mock(return_value=0))
+        with mock.patch.dict("os.environ", {"WT_SESSION": "abc", "WT_PROFILE_ID": "{x}", "KEEP_ME": "1"}), \
+                mock.patch.object(wt.subprocess, "Popen", side_effect=popen):
+            self.term.open_window("W3", "T", ["py"], name="e0")
+        self.assertEqual([k for k in seen["env"] if k.startswith("WT_")], [])
+        self.assertEqual(seen["env"].get("KEEP_ME"), "1")
+        if sys.platform == "win32":
+            self.assertEqual(seen["creationflags"] & 0x208, 0x208)   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+
     def test_reopened_window_numbers_from_zero(self):
         """A window that is opened again starts at pane 0; the records of the old window are retired, not reused."""
         with mock.patch.object(wt.subprocess, "Popen"):

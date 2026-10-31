@@ -111,7 +111,10 @@ class WindowsTerminal(Terminal):
         line = wt_quote(self.exe()) + " " + wt_commandline(subs_builder(self.wrapped(pidfile, command)))
         time.sleep(self.settle)
         with open(folder / "wt.out", "wb") as out, open(folder / "wt.err", "wb") as err:
-            proc = subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=out, stderr=err, close_fds=True)
+            # the Beekeeper itself runs in a wt pane: wt.exe gets neither that pane's WT_* variables nor its console
+            env = {k: v for k, v in os.environ.items() if not k.startswith("WT_")}
+            flags = {"creationflags": 0x00000008 | 0x00000200} if sys.platform == "win32" else {}   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            proc = subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=out, stderr=err, close_fds=True, env=env, **flags)
         pids = self._wait_pids(pidfile)
         self._trace_call(pane_id, what, line, proc, pids, folder)
         if pids is None and self.start_timeout > 0:
