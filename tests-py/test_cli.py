@@ -56,6 +56,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual((q[0]["branch"], q[0]["status"]), ("b", "ready"))
         self.assertEqual(self.run_orch("note", "--project", "p", "--text", "hello")[0], 0)
 
+    # Check that listing a branch returns no other queue rows.
     def test_queue_branch_filter(self):
         """queue --branch returns only the matching branch row."""
         for branch in ("feature/a", "feature/b"):

@@ -63,6 +63,7 @@ class DashboardTest(unittest.TestCase):
         args.update(kw)
         return dashboard.render(self.conn, **args)
 
+    # Check that the dashboard retains sections and omits the removed weekly rows.
     def test_sections_and_projects(self):
         """All sections show; both projects appear in agent rows; texts are English."""
         t = self.text()
@@ -75,6 +76,7 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("Total Input 2k / Output 100", t)
         self.assertIn("Total Input 120k / Output 3k", t)
 
+    # Check that Codex 5-hour usage remains visible without a weekly row.
     def test_codex_limits_from_session_logs(self):
         """Invented Codex session logs in a temp home: the dashboard writes kv usage-codex and shows percent and reset instead of n/a."""
         home = Path(self.tmp.name) / "home"
@@ -186,8 +188,10 @@ class DashboardTest(unittest.TestCase):
                 "startedAt": iso(i * 10), "endedAt": iso(i), "lastLine": "boom"})
         self.assertIn("BLOCKED fail-2: boom", self.text())
 
+    # Check that only two recent newest failures without a later run are blocked.
     def test_blocked_requires_recent_two_failed_runs_and_no_newer_run(self):
         """Only a nonarchived task with two newest identical failures ending within 12h is blocked."""
+        # Add one invented run for a task package.
         def add(name, status, minutes_ago, package, line="boom", ended=True):
             runtime.upsert_agent(self.conn, "alpha", name, {"plan": "p.md", "package": package, "phase": "work",
                 "status": status, "startedAt": iso(minutes_ago + 1), "endedAt": iso(minutes_ago) if ended else None, "lastLine": line})
@@ -211,6 +215,7 @@ class DashboardTest(unittest.TestCase):
         self.assertNotIn("later-done-2", got)
         self.assertNotIn("later-running-2", got)
 
+    # Check quota, reset, slot, model and scheduler marker display for providers.
     def test_provider_limits_show_weekly_share_slots_model_and_next(self):
         """Provider rows show weekly quota and reset, free slots and medium models; only the scheduler choice is marked next."""
         providers = []

@@ -208,6 +208,7 @@ def window_usage(raw, now):
     return res
 
 
+# Return recent tasks whose two newest runs failed with the same final line.
 def blocked_tasks(agents, now=None) -> list:
     """Tasks with two newest nonarchived failed runs matching in error, recent within 12h, and no later run."""
     now = now or datetime.now()
@@ -296,6 +297,7 @@ def usage_models(conn, agents_all, today) -> list:
     return out
 
 
+# Collect dashboard data, including recent blocked tasks and provider limit rows.
 def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     """Read everything the dashboard shows from the database (and the system values passed in `sysinfo`).
 
@@ -355,6 +357,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     }
 
 
+# Build weekly provider usage and slot rows and mark the next medium provider.
 def provider_lines(conn, cfg, agents) -> list:
     """Build the provider weekly quota and slot rows, marking the scheduler's next medium provider."""
     providers = sch.get_providers(cfg or {})
@@ -466,6 +469,7 @@ def _total_ram_mb() -> int:
 
 # ---- building the lines ----
 
+# Render logical dashboard rows, including provider limits and remaining shares.
 def build_lines(level, d, w, n_fin) -> list:
     """Build all logical lines for one detail level (0 = every model, 1 = models active today, 3 = at most two)
     with the newest `n_fin` ended agents; `d` is the result of collect()."""

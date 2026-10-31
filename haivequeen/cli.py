@@ -135,6 +135,7 @@ def cmd_answer(args, conn) -> int:
     return 0
 
 
+# List queue rows, optionally filtered to one branch, or update a branch row.
 def cmd_queue(args, conn) -> int:
     """List the integration queue as JSON, or (action upsert) change or add the row of a branch."""
     if args.action == "upsert":
