@@ -363,6 +363,8 @@ def provider_lines(conn, cfg, agents) -> list:
     rows = []
     for provider in providers:
         source = provider["limit"]
+        used_slots = sum(1 for agent in agents if agent.get("status") in sch.ACTIVE
+                         and sch.row_provider(agent) == provider["name"])
         used, hours, reset_at = None, None, None
         if source in ("claude", "codex"):
             limits_path = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
@@ -386,7 +388,7 @@ def provider_lines(conn, cfg, agents) -> list:
             ratio = remaining_quota / remaining_week if remaining_week else float("inf")
         rows.append({"name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
                      "has_limit": source in ("claude", "codex"),
-                     "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
+                     "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
                      "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),
                      "next": provider is next_provider})
     return rows
@@ -566,7 +568,7 @@ def build_lines(level, d, w, n_fin) -> list:
         limit("Codex 5h", d["xu"]["FiveHour"])
     for p in d["provider_limits"]:
         model = str(p["model"] or "no medium model")
-        slots = "%d/%d" % (p["total_slots"] - p["slots"], p["total_slots"])
+        slots = "%d/%d" % (p["used_slots"], p["total_slots"])
         marker = "  ◀ nächster" if p["next"] else ""
         if not p["has_limit"]:
             L.append([("%s kein Limit  slots %s  %s%s" % (p["name"], slots, model, marker), "")])

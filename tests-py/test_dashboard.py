@@ -228,12 +228,13 @@ class DashboardTest(unittest.TestCase):
             "no-reset-provider": {"usedPercent": 33}}), encoding="utf-8")
         with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(limits)}):
             rows = dashboard.provider_lines(self.conn, {"providers": providers}, [])
-            lines = dashboard.build_lines(0, {"now": NOW, "project": None, "colours": {}, "run": runstate.get_state(self.conn),
+            data = {"now": NOW, "project": None, "colours": {}, "run": runstate.get_state(self.conn),
                 "hives": [], "agents": [], "fin": [], "blocked": [], "provider_limits": rows,
                 "cu": {"FiveHour": None, "SevenDay": None}, "xu": {"FiveHour": None, "SevenDay": None},
                 "usage": [], "counts": {}, "drafts": [], "status": [], "qs": [], "triage": 0,
                 "round_errors": [], "selfupdate": None, "bj": None, "orch": {"status": "idle"},
-                "sysinfo": dict(SYS), "host": "h1", "last_round": "-"}, 120, 0)
+                "sysinfo": dict(SYS), "host": "h1", "last_round": "-"}
+            lines = dashboard.build_lines(0, data, 120, 0)
         for got, want in zip([r["ratio"] for r in rows[:3]], [1.0, 0.7, 0.35]):
             self.assertAlmostEqual(got, want)
         self.assertEqual([r["next"] for r in rows], [True, False, False, False, False, False, False])
@@ -256,7 +257,13 @@ class DashboardTest(unittest.TestCase):
         no_reset_line = next(line for line in lines if any(text.startswith("no-reset-provider used 33%") for text, _ in line))
         self.assertEqual(no_reset_line, [("no-reset-provider used 33%, reset unbekannt  Quota unbekannt  slots 0/2  no-reset-provider-model", "")])
         exhausted = [{"provider": name, "status": "running"} for name in ("green-provider", "yellow-provider", "red-provider", "unknown-provider", "no-reset-provider", "lmstudio", "local") for _ in range(2)]
-        self.assertFalse(any(row["next"] for row in dashboard.provider_lines(self.conn, {"providers": providers}, exhausted)))
+        exhausted.extend([{"provider": "green-provider", "status": "starting"}])
+        with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(limits)}):
+            exhausted_rows = dashboard.provider_lines(self.conn, {"providers": providers}, exhausted)
+        self.assertFalse(any(row["next"] for row in exhausted_rows))
+        self.assertEqual(exhausted_rows[0]["used_slots"], 3)
+        overfull_lines = dashboard.build_lines(0, dict(data, provider_limits=exhausted_rows), 120, 0)
+        self.assertIn("slots 3/2", "\n".join("".join(text for text, _ in line) for line in overfull_lines))
 
 
 if __name__ == "__main__":
