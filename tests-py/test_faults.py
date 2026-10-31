@@ -159,7 +159,6 @@ class FaultsTest(RoundCase):
         self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00'")
         self.conn.commit()
         self.agent("DUMMY-A-work", status="done", started_at="2026-10-29T10:30:00", ended_at="2026-10-29T10:40:00")
-        self.finish("DUMMY-A-work", final="Done.")
         self.check(now=datetime(2026, 10, 29, 11, 0))
         self.assertEqual(self.faults_of("no_start")[0]["status"], "open")
         self.check(now=datetime(2026, 10, 29, 11, 1))
@@ -214,6 +213,38 @@ class FaultsTest(RoundCase):
         self.conn.commit()
         self.check(now=datetime(2026, 10, 29, 12, 0))
         self.assertTrue(all(q["status"] == "open" for q in self.faults_of()))
+
+    # Open reports retain coordinator-visible observations after an hour.
+    def test_unresolved_faults_record_evidence_once(self):
+        """Each unresolved kind stays open and records its observed recovery state."""
+        kinds = ("no_start", "runner_vanished", "agent_no_result", "terminal_crash",
+                 "loop_vanished", "self_update_rollback", "self_update_pane")
+        for kind in kinds:
+            faults.file_fault(self.conn, "HaiveQueen", kind,
+                              "Agent DUMMY-A-work of Apiary testproj: failed. Apiary testproj:")
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00'")
+        self.conn.commit()
+        runtime.kv_set(self.conn, "HaiveQueen", faults.EVENTLOG_KEY, "2026-10-29T11:00:00")
+        self.check(started=0, now=datetime(2026, 10, 29, 11, 0), log=CRASH_LOG)
+        self.check(started=0, now=datetime(2026, 10, 29, 11, 1), log=CRASH_LOG)
+        events = runtime.list_events(self.conn, "HaiveQueen", kind="note")
+        for q in self.faults_of():
+            self.assertEqual(q["status"], "open")
+            notes = [e for e in events if "Fault question %s remains open" % q["id"] in e["text"]]
+            self.assertEqual(len(notes), 1, q["item"])
+            self.assertIn(q["item"], notes[0]["text"])
+
+    # Skipped and deferred rounds still check fault questions without starting work.
+    def test_skipped_and_deferred_rounds_check_faults(self):
+        """Low RAM and deferred migration do not skip fault checking."""
+        from unittest.mock import patch
+        from haivequeen import hives
+        with patch("haivequeen.faults.check_round") as check:
+            self.round(free_ram=lambda: 0.0)
+            self.assertTrue(any(call.args[0].name == "testproj" and call.args[1:] == (0, False) for call in check.call_args_list))
+        with patch("haivequeen.hives.migrate_once", return_value={"testproj": "deferred"}), patch("haivequeen.faults.check_round") as check:
+            self.round()
+            self.assertTrue(any(call.args[0].name == "testproj" and call.args[1:] == (0, False) for call in check.call_args_list))
 
     # Verify the Queen is directed to exhaust technical alternatives before asking.
     def test_queen_prompt_requires_technical_alternatives(self):

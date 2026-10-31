@@ -127,39 +127,49 @@ def _resolve_open(env, started: int, now: datetime, reader) -> None:
         created = db.parse_time(q["created_at"])
         if created is None or created > now:
             continue
-        kind, answer = q["item"], None
+        kind, answer, evidence = q["item"], None, None
         text = q["question"] or ""
         if kind == "terminal_crash":
             crashes = [t for t in parse_terminal_crashes(log or "", created) if t <= created + timedelta(minutes=60)]
             confirmed_key = "fault-confirmed-%s" % q["id"]
             if crashes and not runtime.kv_get(conn, FAULT_PROJECT, confirmed_key):
-                evidence = max(crashes).isoformat()
-                runtime.kv_set(conn, FAULT_PROJECT, confirmed_key, evidence)
-                db.add_event(conn, FAULT_PROJECT, "note", "Fault question %s confirmed by Windows Terminal crash at %s." % (q["id"], evidence), data={"question_id": q["id"]})
+                crash_time = max(crashes).isoformat()
+                runtime.kv_set(conn, FAULT_PROJECT, confirmed_key, crash_time)
+                runtime.append_event(conn, FAULT_PROJECT, "Fault question %s confirmed by Windows Terminal crash at %s." % (q["id"], crash_time), kind="note", data={"question_id": q["id"]}, mirror="none")
+            evidence = "Application log: %s" % ("read failed" if log is None else "confirmed crash at " + runtime.kv_get(conn, FAULT_PROJECT, confirmed_key) if runtime.kv_get(conn, FAULT_PROJECT, confirmed_key) else "no later crash found")
             if now - created >= timedelta(minutes=60) and log is not None and not crashes and not runtime.kv_get(conn, FAULT_PROJECT, confirmed_key):
                 answer = "No later Windows Terminal crash in the Application log during the 60 minutes after the question."
         elif kind == "no_start" and ("Apiary %s:" % env.name) in text:
+            evidence = "Last rounds of Apiary %s: %s" % (env.name, history)
             if len(history) == 2 and all(ok and db.parse_time(t) > created for t, ok in history):
                 answer = "The last two rounds of Apiary %s both started agents (%s and %s)." % (env.name, history[0][0], history[1][0])
         elif kind in ("runner_vanished", "agent_no_result"):
             match = re.search(r"Agent (.+?) of Apiary (.+?):", text)
             if match and match.group(2) == env.name:
                 agents = env.agents("all")
+                evidence = "No later done run found for agent %s of Apiary %s." % (match.group(1), env.name)
                 original = next((a for a in agents if a.get("name") == match.group(1)), None)
                 for a in agents:
                     same_work = a.get("name") == match.group(1) or (original and original.get("package") and a.get("plan_path") == original.get("plan_path") and a.get("package") == original.get("package") and a.get("phase") == original.get("phase"))
                     ended = db.parse_time(a.get("ended_at"))
-                    result = env.run_dir(a["name"]) / "final.txt"
-                    if same_work and a.get("status") == "done" and ended and ended > created and result.is_file() and result.stat().st_size:
-                        answer = "Later run %s finished with a result at %s." % (a["name"], a["ended_at"])
+                    if same_work and a.get("status") == "done" and ended and ended > created:
+                        answer = "Later run %s finished with status done at %s." % (a["name"], a["ended_at"])
                         break
         elif kind == "loop_vanished":
             start = db.parse_time(runtime.kv_get(conn, scheduler.GLOBAL, "loop-started-at"))
             end = db.parse_time(runtime.kv_get(conn, scheduler.GLOBAL, "loop-unexpected-end-at"))
+            evidence = "Loop start: %s; latest unexpected end: %s." % (start, end)
             if start and end and start >= end and start >= created and now - start >= timedelta(minutes=60):
                 answer = "Loop restarted at %s after unexpected end %s and has run for at least 60 minutes." % (start.isoformat(), end.isoformat())
+        elif kind in ("self_update_rollback", "self_update_pane"):
+            evidence = "Self-update fault requires review: %s" % text
         if answer:
             db.answer_question(conn, q["id"], answer, "auto")
+        elif evidence and now - created >= timedelta(minutes=60):
+            evidence_key = "fault-evidence-%s" % q["id"]
+            if not runtime.kv_get(conn, FAULT_PROJECT, evidence_key):
+                runtime.append_event(conn, FAULT_PROJECT, "Fault question %s remains open (%s): %s" % (q["id"], kind, evidence), kind="note", data={"question_id": q["id"]}, mirror="none")
+                runtime.kv_set(conn, FAULT_PROJECT, evidence_key, "1")
 
 
 def check_round(env, started: int, can_start: bool, now: datetime = None, reader=None) -> None:
