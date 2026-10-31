@@ -393,6 +393,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
             pass
         for env in envs:
             inbox.process_inbox(env)
+            loop.repair_closed_panes(env, terminal)
     if not dry_run:
         if loop.stop_flag().exists():
             result['skipped'] = 'STOP'
@@ -421,7 +422,6 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     for env in envs:
         runtime.sync_plans(conn, env.name, str(env.workspace))
         if not dry_run:
-            loop.repair_closed_panes(env, terminal)
             routine.repair_stale_agents(env, alive=alive)
             runtime.archive_agents(conn, env.name, 12)
     all_active = runtime.list_agents(conn, None, 'active')

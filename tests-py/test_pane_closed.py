@@ -93,6 +93,16 @@ class RoundClosureTest(RoundCase):
         self.assertEqual(row["interrupted"], "vanished")
         self.assertEqual(row["status"], "failed")
 
+    # Detect a closed pane even when a round cannot start agents.
+    def test_closed_pane_during_skipped_round(self):
+        """A low-memory round still records a closed running pane."""
+        terminal = SimpleNamespace(list_panes=lambda window: [PaneInfo("dead", "", 123, False)])
+        self.agent("running", status="running", pane_id="dead", paneClosed=False, pid=999, started=1)
+        self.round(terminal=terminal, alive=lambda pid: True, free_ram=lambda: 0)
+        row = self.ag("running")
+        self.assertTrue(row["paneClosed"])
+        self.assertEqual(row["interrupted"], "vanished")
+
     # A dry round preserves the closure flag.
     def test_dry_round_does_not_mark_closed(self):
         """A dry round preserves the closure flag."""
