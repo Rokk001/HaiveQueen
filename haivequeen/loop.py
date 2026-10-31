@@ -174,18 +174,38 @@ def close_leftover_panes(term, window: str) -> list:
     return closed
 
 
-def open_session_panes(term, window: str, title: str, boot: list, dash=None) -> list:
+def close_idle_hive_panes(conn, term, window: str) -> list:
+    """Close the Hive and Apiary head panes in which no agent runs and return the ids, so a start builds the whole display again in the right order.
+    A pane that holds a running or starting agent stays, and with it the head of its Apiary. The panes of living Hives are opened again by the next round."""
+    busy = {a.get("pane_id") for a in runtime.list_agents(conn, None, "active") if a.get("status") in ("running", "starting") and a.get("pane_id")}
+    panes = [p for p in term.list_panes(window) if p.alive]
+    kept = {p.title.split(" | ")[1] for p in panes if is_hive_title(p.title) and p.id in busy}
+    closed = []
+    for p in panes:
+        if (is_hive_title(p.title) and p.id not in busy) or (is_apiary_title(p.title) and p.title.split(" | ")[1] not in kept):
+            term.close_pane(p.id)
+            closed.append(p.id)
+    return closed
+
+
+def open_session_panes(term, window: str, title: str, boot: list, dash=None, head=None) -> list:
     """Open the Beekeeper pane running `boot` and, when `dash` is given, the dashboard pane below it; return the pane ids. The caller holds pane.lock.
-    Old Beekeeper and Overview panes go first. Panes of running agents that are still open keep their tab and the Beekeeper joins it: a new tab would split the one window in two."""
+    Old Beekeeper and Overview panes go first. Panes of running agents that are still open keep their tab and the Beekeeper joins it: a new tab would split the one window in two.
+    `head` is (title, command, name) of the first Apiary head: in a fresh window it is split off the Beekeeper to the right before the dashboard goes below the Beekeeper,
+    so Beekeeper and dashboard stand in the left column and the Apiary block fills the right side."""
     close_leftover_panes(term, window)
     stay = [p for p in term.list_panes(window) if p.alive]
     if stay:
         panes = [term.split_pane(window, title, "white", boot, "horizontal", 0.5, stay[0].id, "chief")]
     else:
         panes = [term.open_window(window, title, boot, "white", "chief")]
+        if head is not None:
+            head_id = term.split_pane(window, head[0], "white", head[1], "horizontal", APIARY_SIDE_SHARE, panes[0], head[2])
     if dash is not None:
         panes.append(term.split_pane(window, pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime()), "white", dash,
                                      "vertical", 0.8, panes[0], "dashboard"))
+    if not stay and head is not None:
+        panes.append(head_id)
     return panes
 
 
@@ -460,9 +480,15 @@ def is_apiary_title(title: str) -> bool:
 
 def apiary_argv(env) -> list:
     """Command of the head pane of an Apiary: python -m haivequeen.hivepane --head for this project."""
-    return [osplat.python_executable(), "-c", HIVE_BOOT, str(TOOLS_DIR), "--project", env.name, "--head"] + forward_env_args()
+    return apiary_argv_of(env.name)
 
 
+def apiary_argv_of(project: str) -> list:
+    """Command of the head pane of the Apiary named `project` (the session start has no environment object yet)."""
+    return [osplat.python_executable(), "-c", HIVE_BOOT, str(TOOLS_DIR), "--project", project, "--head"] + forward_env_args()
+
+
+APIARY_SIDE_SHARE = 0.6   # share of the window width the Apiary block takes right of the Beekeeper and dashboard column
 HIVE_BELOW_HEAD = 0.9   # share of the Apiary block that the first Hive pane takes below the slim head pane; wt makes no pane at 0.95 of a tall head (checked live: 0.9 and 0.85 work)
 
 
@@ -1214,7 +1240,13 @@ def cmd_start(args, conn) -> int:
             dash = None
             if importlib.util.find_spec("haivequeen.dashboard") is not None:
                 dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
-            panes = open_session_panes(term, window, title, boot, dash)
+            try:
+                close_idle_hive_panes(conn, term, window)
+            except TerminalError:
+                pass
+            first = conn.execute("SELECT project FROM hives WHERE state!='done' ORDER BY project LIMIT 1").fetchone()
+            head = (apiary_pane_title(first["project"], is_test_runtime()), apiary_argv_of(first["project"]), "%s__apiary" % first["project"]) if first else None
+            panes = open_session_panes(term, window, title, boot, dash, head)
         except Exception:
             start_pending_file().unlink()
             raise

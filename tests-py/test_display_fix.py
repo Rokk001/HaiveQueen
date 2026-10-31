@@ -285,3 +285,98 @@ class EndedWithoutWorkTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WrapAndLayoutTest(FrameCase):
+    """Narrow Hive panes wrap the head lines instead of cutting them; the session start puts the first Apiary head right of the Beekeeper before the dashboard goes below it."""
+
+    def test_head_lines_wrap_in_a_narrow_pane(self):
+        """At 20 columns the whole Hive line and the whole Queen line are still readable, on more than one row."""
+        self.conn.execute("UPDATE hives SET state='answer' WHERE plan_path=?", (self.plan,))
+        rows = [t[2:-2].strip() for t in plain(hivepane.frame_lines(self.conn, 'ODP', self.plan, 20))[1:-1]]
+        self.assertTrue(all(len(t) <= 16 for t in rows))
+        joined = "".join(t.replace(" ", "") for t in rows)
+        self.assertIn("Hive:AI-LEVELS-PLAN", joined)
+        self.assertGreater(len(rows), 2)
+
+    def test_session_start_opens_the_head_before_the_dashboard(self):
+        """Without panes the window gets the Beekeeper, the first Apiary head split off it to the right, and then the dashboard split off the Beekeeper downwards, so the Apiary block fills the right side."""
+        calls = []
+
+        class Term:
+            """Records the pane calls of the session start."""
+
+            def list_panes(self, window):
+                """No pane is open."""
+                return []
+
+            def open_window(self, window, title, command, colour=None, name=None):
+                """Open the window with the Beekeeper pane."""
+                calls.append(("open", name))
+                return "W.0"
+
+            def split_pane(self, window, title, colour, command, direction="horizontal", size=0.5, target=None, name=None):
+                """Record a split."""
+                calls.append(("split", name, direction, size, target))
+                return "W.%d" % len(calls)
+        loop.open_session_panes(Term(), "W", "T", SLEEP, SLEEP, head=("H", SLEEP, "ODP__apiary"))
+        self.assertEqual(calls[0], ("open", "chief"))
+        self.assertEqual(calls[1][:3], ("split", "ODP__apiary", "horizontal"))
+        self.assertEqual(calls[1][4], "W.0")
+        self.assertEqual(calls[2][:3], ("split", "dashboard", "vertical"))
+        self.assertEqual(calls[2][4], "W.0")
+
+    def test_pane_of_a_hive_without_a_running_queen_replays_no_old_text(self):
+        """The text of an ended Queen (hours old) is not drawn again into the pane when the pane is redrawn."""
+        import io
+        from unittest import mock
+
+        class NoKeys:
+            """Key reader without keys."""
+
+            def __enter__(self):
+                """Nothing to set up."""
+                return self
+
+            def __exit__(self, *exc):
+                """Nothing to restore."""
+
+            def get(self, timeout):
+                """No key pressed."""
+                return None
+        self.queen('Old', 'done')
+        conn = self.conn
+
+        class Keep:
+            """The test connection, which the pane may not close."""
+
+            def __getattr__(self, name):
+                """Everything but close goes to the real connection."""
+                return getattr(conn, name)
+
+            def close(self):
+                """Keep the connection open for the test."""
+        with mock.patch.object(hivepane.header, 'read_milestones', return_value=['old text']) as read,                 mock.patch.object(hivepane.db, 'connect', return_value=Keep()):
+            hivepane.run('ODP', self.plan, out=io.StringIO(), interval=0, max_ticks=1, keys=NoKeys())
+        read.assert_not_called()
+
+    def test_start_closes_idle_hive_panes_and_keeps_the_one_with_a_running_agent(self):
+        """Hive panes without a running agent and the head of an Apiary without a busy Hive pane are closed at a start; a Hive pane with a running Queen and its head stay."""
+        runtime.upsert_agent(self.conn, 'ODP', 'Dina', {'plan': self.plan, 'phase': 'queen', 'status': 'running', 'pane_id': 'W.5'})
+        titles = {'W.2': loop.apiary_pane_title('ODP', False), 'W.5': loop.hive_pane_title('ODP', self.plan, False),
+                  'W.6': loop.hive_pane_title('ODP', 'plans/OTHER.md', False), 'W.7': loop.apiary_pane_title('XYZ', False),
+                  'W.8': loop.hive_pane_title('XYZ', 'plans/X.md', False)}
+        closed = []
+
+        class Term:
+            """Lists the panes and records which are closed."""
+
+            def list_panes(self, window):
+                """All panes are alive."""
+                from haivequeen.terminal import PaneInfo
+                return [PaneInfo(i, t, 1, True) for i, t in titles.items()]
+
+            def close_pane(self, pane_id):
+                """Record the closed pane."""
+                closed.append(pane_id)
+        self.assertEqual(sorted(loop.close_idle_hive_panes(self.conn, Term(), 'W')), ['W.6', 'W.7', 'W.8'])
