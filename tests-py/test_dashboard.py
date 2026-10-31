@@ -216,6 +216,7 @@ class DashboardTest(unittest.TestCase):
         providers = []
         for name, use, source in (("green-provider", "preferred", "codex"), ("yellow-provider", "fallback", "codex"),
                                   ("red-provider", "fallback", "codex"), ("unknown-provider", "fallback", "claude"),
+                                  ("no-reset-provider", "fallback", "codex"),
                                   ("lmstudio", "fallback", ""),
                                   ("local", "fallback", "")):
             providers.append({"name": name, "protocol": "codex", "use": use, "slots": 2, "limit": source,
@@ -223,7 +224,8 @@ class DashboardTest(unittest.TestCase):
         limits = Path(self.tmp.name) / "limits.json"
         limits.write_text(json.dumps({"green-provider": {"usedPercent": 50, "resetHours": 84},
             "yellow-provider": {"usedPercent": 80, "resetHours": 48},
-            "red-provider": {"usedPercent": 95, "resetHours": 24}}), encoding="utf-8")
+            "red-provider": {"usedPercent": 95, "resetHours": 24},
+            "no-reset-provider": {"usedPercent": 33}}), encoding="utf-8")
         with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(limits)}):
             rows = dashboard.provider_lines(self.conn, {"providers": providers}, [])
             lines = dashboard.build_lines(0, {"now": NOW, "project": None, "colours": {}, "run": runstate.get_state(self.conn),
@@ -234,23 +236,26 @@ class DashboardTest(unittest.TestCase):
                 "sysinfo": dict(SYS), "host": "h1", "last_round": "-"}, 120, 0)
         for got, want in zip([r["ratio"] for r in rows[:3]], [1.0, 0.7, 0.35]):
             self.assertAlmostEqual(got, want)
-        self.assertEqual([r["next"] for r in rows], [True, False, False, False, False, False])
-        self.assertFalse(rows[4]["has_limit"])
-        self.assertIsNone(rows[4]["ratio"])
+        self.assertEqual([r["next"] for r in rows], [True, False, False, False, False, False, False])
+        self.assertFalse(rows[5]["has_limit"])
+        self.assertIsNone(rows[5]["ratio"])
         flat = "\n".join("".join(text for text, _ in row) for row in lines)
-        self.assertIn("used 50%, reset 84.0h", flat)
+        self.assertRegex(flat, r"reset \d{2}\.\d{2}\. \d{2}:\d{2}")
         self.assertIn("Quota 1.00× (50.0%/50.0%)", flat)
         self.assertIn("slots 0/2  green-provider-model  ◀ nächster", flat)
         self.assertIn("lmstudio kein Limit  slots 0/2  lmstudio-model", flat)
         self.assertIn("local kein Limit  slots 0/2  local-model", flat)
-        self.assertIn("unknown-provider unbekannt  slots 0/2  unknown-provider-model", flat)
-        quota_colours = [next(colour for text, colour in line if "Quota " in text) for line in lines if any("Quota " in text for text, _ in line)]
+        self.assertIn("unknown-provider used unbekannt, reset unbekannt  Quota unbekannt  slots 0/2  unknown-provider-model", flat)
+        self.assertIn("no-reset-provider used 33%, reset unbekannt  Quota unbekannt  slots 0/2  no-reset-provider-model", flat)
+        quota_colours = [colour for line in lines for text, colour in line if "Quota " in text and colour]
         self.assertEqual(quota_colours, ["green", "yellow", "red"])
         local_line = next(line for line in lines if any(text.startswith("local kein Limit") for text, _ in line))
         self.assertEqual(local_line, [("local kein Limit  slots 0/2  local-model", "")])
-        unknown_line = next(line for line in lines if any(text.startswith("unknown-provider unbekannt") for text, _ in line))
-        self.assertEqual(unknown_line, [("unknown-provider unbekannt  slots 0/2  unknown-provider-model", "")])
-        exhausted = [{"provider": name, "status": "running"} for name in ("green-provider", "yellow-provider", "red-provider", "unknown-provider", "lmstudio", "local") for _ in range(2)]
+        unknown_line = next(line for line in lines if any(text.startswith("unknown-provider used unbekannt") for text, _ in line))
+        self.assertEqual(unknown_line, [("unknown-provider used unbekannt, reset unbekannt  Quota unbekannt  slots 0/2  unknown-provider-model", "")])
+        no_reset_line = next(line for line in lines if any(text.startswith("no-reset-provider used 33%") for text, _ in line))
+        self.assertEqual(no_reset_line, [("no-reset-provider used 33%, reset unbekannt  Quota unbekannt  slots 0/2  no-reset-provider-model", "")])
+        exhausted = [{"provider": name, "status": "running"} for name in ("green-provider", "yellow-provider", "red-provider", "unknown-provider", "no-reset-provider", "lmstudio", "local") for _ in range(2)]
         self.assertFalse(any(row["next"] for row in dashboard.provider_lines(self.conn, {"providers": providers}, exhausted)))
 
 

@@ -363,25 +363,28 @@ def provider_lines(conn, cfg, agents) -> list:
     rows = []
     for provider in providers:
         source = provider["limit"]
-        used, hours = None, None
+        used, hours, reset_at = None, None, None
         if source in ("claude", "codex"):
             limits_path = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
             if limits_path and Path(limits_path).is_file():
                 entry = json.loads(Path(limits_path).read_text(encoding="utf-8-sig")).get(provider["name"]) or {}
                 if entry.get("usedPercent") is not None:
                     used, hours = float(entry["usedPercent"]), entry.get("resetHours")
+                    if hours is not None:
+                        reset_at = time.time() + float(hours) * 3600
             elif not os.environ.get("BZZ_RUNTIME_OVERRIDE"):
                 window = (sch.claude_usage(conn) if source == "claude" else sch.codex_usage()).get("SevenDay")
                 if window and window.get("Pct") is not None:
                     used = float(window["Pct"])
                     if window.get("At"):
-                        hours = max(0.0, (float(window["At"]) - time.time()) / 3600)
+                        reset_at = float(window["At"])
+                        hours = max(0.0, (reset_at - time.time()) / 3600)
         ratio = None
         if used is not None and hours is not None:
             remaining_week = max(0.0, float(hours)) / 168.0
             remaining_quota = max(0.0, 100.0 - used) / 100.0
             ratio = remaining_quota / remaining_week if remaining_week else float("inf")
-        rows.append({"name": provider["name"], "used_pct": used, "hours": hours, "ratio": ratio,
+        rows.append({"name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
                      "has_limit": source in ("claude", "codex"),
                      "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
                      "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),
@@ -568,14 +571,19 @@ def build_lines(level, d, w, n_fin) -> list:
         if not p["has_limit"]:
             L.append([("%s kein Limit  slots %s  %s%s" % (p["name"], slots, model, marker), "")])
         elif p["used_pct"] is None or p["hours"] is None:
-            L.append([("%s unbekannt  slots %s  %s%s" % (p["name"], slots, model, marker), "")])
+            used = "unbekannt" if p["used_pct"] is None else "%.0f%%" % p["used_pct"]
+            reset = sch.format_reset_time(p["reset_at"]) if p["reset_at"] else "unbekannt"
+            quota = "unbekannt" if p["ratio"] is None else "%.2f×" % p["ratio"]
+            L.append([("%s used %s, reset %s  Quota %s  slots %s  %s%s" %
+                       (p["name"], used, reset or "unbekannt", quota, slots, model, marker), "")])
         else:
             col = "green" if p["ratio"] >= 1 else "yellow" if p["ratio"] >= 0.7 else "red"
             quota = p["ratio"]
             remaining_week = max(0.0, p["hours"]) / 168.0
             remaining_quota = max(0.0, 100.0 - p["used_pct"]) / 100.0
-            L.append([(p["name"] + " ", "gray"), ("used %.0f%%, reset %.1fh  Quota %.2f× (%.1f%%/%.1f%%)  slots %s  %s%s" %
-                      (p["used_pct"], p["hours"], quota, remaining_quota * 100.0, remaining_week * 100.0,
+            reset = sch.format_reset_time(p["reset_at"])
+            L.append([(p["name"] + " ", "gray"), ("used %.0f%%, reset %s  Quota %.2f× (%.1f%%/%.1f%%)  slots %s  %s%s" %
+                      (p["used_pct"], reset or "unbekannt", quota, remaining_quota * 100.0, remaining_week * 100.0,
                        slots, model, marker), col)])
 
     head("Σ USAGE")
