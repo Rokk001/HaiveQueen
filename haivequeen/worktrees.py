@@ -129,6 +129,7 @@ def _target_size(target):
     if not target.is_dir():
         raise OSError('link target is missing')
     count = size = 0
+    # Propagate traversal failures so the worktree is kept.
     def error(exc):
         """Propagate traversal failures so the worktree is kept."""
         raise exc
@@ -152,6 +153,7 @@ def _link_targets(path):
     import os
     from pathlib import Path
     targets = []
+    # Propagate traversal failures so the worktree is kept.
     def error(exc):
         """Propagate traversal failures so the worktree is kept."""
         raise exc
@@ -314,12 +316,14 @@ def _process_busy(path):
     from ctypes import wintypes
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     ntdll = ctypes.WinDLL('ntdll')
+    # Describe a Windows process snapshot entry.
     class Entry(ctypes.Structure):
         _fields_ = [('size', wintypes.DWORD), ('usage', wintypes.DWORD),
                     ('pid', wintypes.DWORD), ('heap', ctypes.c_size_t),
                     ('module', wintypes.DWORD), ('threads', wintypes.DWORD),
                     ('parent', wintypes.DWORD), ('priority', ctypes.c_long),
                     ('flags', wintypes.DWORD), ('exe', wintypes.WCHAR * 260)]
+    # Describe Windows process basic information.
     class Basic(ctypes.Structure):
         _fields_ = [('reserved', ctypes.c_void_p), ('peb', ctypes.c_void_p),
                     ('reserved2', ctypes.c_void_p * 2), ('pid', ctypes.c_size_t),
@@ -337,6 +341,7 @@ def _process_busy(path):
     snapshot = kernel.CreateToolhelp32Snapshot(2, 0)
     if snapshot == ctypes.c_void_p(-1).value:
         return None
+    # Read exact bytes from a process or reject inaccessible memory.
     def read(handle, address, size):
         """Read exact bytes from a process or reject inaccessible memory."""
         buffer = ctypes.create_string_buffer(size)

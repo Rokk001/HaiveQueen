@@ -9,9 +9,11 @@ from unittest import mock
 from haivequeen import worktrees
 
 
+# Check process working-directory protection.
 class ProcessDirectoryTests(unittest.TestCase):
     """Check process working-directory protection."""
 
+    # A separate process using a directory prevents its cleanup.
     def test_other_process_directory_is_busy(self):
         """A separate process using a directory prevents its cleanup."""
         import sys
@@ -24,11 +26,13 @@ class ProcessDirectoryTests(unittest.TestCase):
                 child.terminate()
                 child.wait(timeout=5)
 
+    # No new agent can start while a candidate is being removed.
     def test_cleanup_holds_agent_scheduling_lock(self):
         """No new agent can start while a candidate is being removed."""
         from contextlib import contextmanager
         held = []
         @contextmanager
+        # Track whether cleanup holds the scheduler lock.
         def scheduling_lock():
             """Track whether cleanup holds the scheduler lock."""
             held.append(True)
@@ -36,6 +40,7 @@ class ProcessDirectoryTests(unittest.TestCase):
                 yield
             finally:
                 held.pop()
+        # Assert the scheduler is locked while cleanup runs.
         def check(*args):
             """Assert the scheduler is locked while cleanup runs."""
             self.assertTrue(held)
@@ -46,12 +51,14 @@ class ProcessDirectoryTests(unittest.TestCase):
              mock.patch.object(worktrees, '_prune_with_checker', side_effect=check):
             worktrees.prune(None)
 
+    # Concurrent cleanup calls must not manipulate the same links together.
     def test_cleanup_calls_are_serialized(self):
         """Concurrent cleanup calls must not manipulate the same links together."""
         import threading
         entered = threading.Event()
         release = threading.Event()
         overlap = threading.Event()
+        # Hold the first cleanup until the second has attempted to start.
         def run_cleanup(*args):
             """Hold the first cleanup until the second has attempted to start."""
             if entered.is_set():
@@ -76,14 +83,17 @@ class ProcessDirectoryTests(unittest.TestCase):
                 second.join(5)
             self.assertFalse(first.is_alive() or second.is_alive())
 
+    # A process using a directory prevents its cleanup.
     def test_current_process_directory_is_busy(self):
         """A process using a directory prevents its cleanup."""
         self.assertTrue(worktrees._process_busy(str(Path.cwd())))
 
 
+# Exercise cleanup against a temporary repository and remote.
 class CleanupTests(unittest.TestCase):
     """Exercise cleanup against a temporary repository and remote."""
 
+    # Create an integrated branch in a linked worktree.
     def setUp(self):
         """Create an integrated branch in a linked worktree."""
         self.tmp = tempfile.TemporaryDirectory()
@@ -113,10 +123,12 @@ class CleanupTests(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
+    # Run Git in one of the temporary folders.
     def git(self, folder, *args):
         """Run Git in one of the temporary folders."""
         return subprocess.run(['git', '-C', str(folder), *args], check=True, capture_output=True, text=True)
 
+    # An integrated clean worktree is removed but its branch remains.
     def test_integrated_clean_worktree_is_removed_without_its_branch(self):
         """An integrated clean worktree is removed but its branch remains."""
         result = worktrees.prune(self.env)
@@ -124,6 +136,7 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(self.linked.exists())
         self.git(self.repo, 'show-ref', '--verify', 'refs/heads/integrated')
 
+    # Untracked and ignored files protect data by default.
     def test_untracked_and_ignored_files_are_kept(self):
         """Untracked and ignored files protect data by default."""
         (self.linked / 'new').write_text('data', encoding='utf-8')
@@ -134,6 +147,7 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
         self.assertTrue((self.linked / 'ignored' / 'data').exists())
 
+    # Locks and configured protected paths prevent removal.
     def test_locked_and_protected_worktrees_are_kept(self):
         """Locks and configured protected paths prevent removal."""
         self.git(self.repo, 'worktree', 'lock', str(self.linked))
@@ -142,12 +156,14 @@ class CleanupTests(unittest.TestCase):
         self.env.settings['protectedWorktrees'] = [str(self.linked)]
         self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
+    # Dry runs list candidates without removing them.
     def test_dry_run_keeps_the_folder(self):
         """Dry runs list candidates without removing them."""
         result = worktrees.prune(self.env, dry=True)
         self.assertIn(str(self.linked), result['removed'])
         self.assertTrue(self.linked.exists())
 
+    # A commit absent from the fetched integration branch is never removed.
     def test_unintegrated_commit_is_kept(self):
         """A commit absent from the fetched integration branch is never removed."""
         (self.linked / 'new').write_text('unmerged', encoding='utf-8')
@@ -156,12 +172,14 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
         self.assertTrue(self.linked.exists())
 
+    # Every outstanding integration queue state protects its branch.
     def test_queue_states_block_cleanup(self):
         """Every outstanding integration queue state protects its branch."""
         for state in ('ready', 'in_run', 'blocked'):
             with self.subTest(state=state), mock.patch('haivequeen.worktrees.db.queue_rows', return_value=[{'branch': 'integrated', 'status': state}]):
                 self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
+    # A Queen or Bee using the worktree protects it.
     def test_running_agent_blocks_cleanup(self):
         """A Queen or Bee using the worktree protects it."""
         for phase in ('queen', 'bee'):
@@ -169,16 +187,19 @@ class CleanupTests(unittest.TestCase):
                 self.agents = [{'status': 'running', 'phase': phase, 'cwd': str(self.linked), 'name': 'agent'}]
                 self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
+    # A detached HEAD is eligible when its commit is integrated.
     def test_detached_integrated_worktree_can_be_removed(self):
         """A detached HEAD is eligible when its commit is integrated."""
         self.git(self.linked, 'checkout', '--detach')
         self.assertIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
+    # The configured workspace remains even when it is a linked worktree.
     def test_workspace_is_protected(self):
         """The configured workspace remains even when it is a linked worktree."""
         self.env.workspace = self.linked
         self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
+    # Only explicitly configured ignored output may be discarded.
     def test_allowed_ignored_output_can_be_removed(self):
         """Only explicitly configured ignored output may be discarded."""
         (self.linked / 'ignored').mkdir()
@@ -186,6 +207,7 @@ class CleanupTests(unittest.TestCase):
         self.env.settings['ignoredBuildOutput'] = ['ignored/']
         self.assertIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
+    # A separate process with a working directory inside the worktree protects it.
     def test_process_working_directory_blocks_cleanup(self):
         """A separate process with a working directory inside the worktree protects it."""
         import sys
@@ -196,6 +218,7 @@ class CleanupTests(unittest.TestCase):
             child.stdin.close()
             child.wait(timeout=10)
 
+    # Removing an allowed ignored link leaves its external target complete.
     def test_ignored_link_target_survives_cleanup(self):
         """Removing an allowed ignored link leaves its external target complete."""
         target = self.repo.parent / 'target'
@@ -210,6 +233,7 @@ class CleanupTests(unittest.TestCase):
         self.assertIn(str(self.linked), worktrees.prune(self.env)['removed'])
         self.assertEqual(data.read_text(encoding='utf-8'), 'keep')
 
+    # Git inventory identifies the linked branch and its commit.
     def test_inventory_contains_linked_branch(self):
         """Git inventory identifies the linked branch and its commit."""
         records = worktrees.list_worktrees(self.repo)
@@ -217,22 +241,26 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(entry['branch'], 'integrated')
         self.assertEqual(entry['HEAD'], self.git(self.linked, 'rev-parse', 'HEAD').stdout.strip())
 
+    # The repository checks accept a clean integrated worktree.
     def test_candidate_checks_clean_integrated_branch(self):
         """The repository checks accept a clean integrated worktree."""
         entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
         self.assertEqual(worktrees._candidate_reason(self.env, entry, False, []), '')
 
+    # A failed fetch cannot authorize removal using a stale remote ref.
     def test_fetch_failure_keeps_candidate(self):
         """A failed fetch cannot authorize removal using a stale remote ref."""
         self.git(self.repo, 'remote', 'set-url', 'origin', str(self.repo.parent / 'missing'))
         self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
         self.assertTrue(self.linked.exists())
 
+    # Changes to a tracked file protect the worktree.
     def test_tracked_change_is_kept(self):
         """Changes to a tracked file protect the worktree."""
         (self.linked / 'file').write_text('changed', encoding='utf-8')
         self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
+    # Target verification counts files and their total bytes recursively.
     def test_link_target_fingerprint_counts_files_and_bytes(self):
         """Target verification counts files and their total bytes recursively."""
         target = self.repo.parent / 'target'
@@ -241,6 +269,7 @@ class CleanupTests(unittest.TestCase):
         (target / 'nested' / 'two').write_bytes(b'12')
         self.assertEqual(worktrees._target_size(target), (2, 5))
 
+    # Repository checks reject queued branches and untracked data.
     def test_candidate_checks_queue_and_untracked_data(self):
         """Repository checks reject queued branches and untracked data."""
         entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
@@ -249,6 +278,7 @@ class CleanupTests(unittest.TestCase):
         (self.linked / 'new').write_text('data', encoding='utf-8')
         self.assertTrue(worktrees._candidate_reason(self.env, entry, False, []))
 
+    # An active native Bee's assigned worktree is protected even without an agent row.
     def test_native_bee_assignment_protects_worktree(self):
         """An active native Bee's assigned worktree is protected even without an agent row."""
         import sqlite3
@@ -263,6 +293,7 @@ class CleanupTests(unittest.TestCase):
         entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
         self.assertTrue(worktrees._candidate_reason(self.env, entry, False, []))
 
+    # Both active agent states protect their current worktree.
     def test_starting_and_running_agents_protect_worktree(self):
         """Both active agent states protect their current worktree."""
         entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
@@ -272,6 +303,7 @@ class CleanupTests(unittest.TestCase):
                     self.agents = [{'status': status, 'phase': phase, 'cwd': str(self.linked)}]
                     self.assertTrue(worktrees._candidate_reason(self.env, entry, False, []))
 
+    # Projects protect all ignored files unless they opt into build output.
     def test_project_cleanup_settings_default_empty(self):
         """Projects protect all ignored files unless they opt into build output."""
         from haivequeen import scheduler
@@ -279,6 +311,7 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(settings['ignoredBuildOutput'], [])
         self.assertEqual(settings['protectedWorktrees'], [])
 
+    # A configured cache directory also covers nested Python cache files.
     def test_nested_python_cache_matches_allowed_output(self):
         """A configured cache directory also covers nested Python cache files."""
         self.git(self.repo, 'config', 'core.excludesFile', str(self.repo.parent / 'global-ignore'))
@@ -288,6 +321,7 @@ class CleanupTests(unittest.TestCase):
         (cache / 'file.pyc').write_bytes(b'x')
         self.assertEqual(worktrees._ignored_blocker(self.linked, ['__pycache__/']), '')
 
+    # The cleanup command accepts project selection and a dry run.
     def test_worktrees_prune_command_accepts_project_and_dry_run(self):
         """The cleanup command accepts project selection and a dry run."""
         from haivequeen import cli
@@ -296,6 +330,7 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(args.dry_run)
 
 
+    # Git can remove ignored build output without a force option.
     def test_git_remove_handles_ignored_output_without_force(self):
         """Git can remove ignored build output without a force option."""
         (self.linked / 'ignored').mkdir()
@@ -305,12 +340,14 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(self.linked.exists())
 
 
+    # Once all checks pass, removing a worktree leaves its branch intact.
     def test_candidate_removal_keeps_branch(self):
         """Once all checks pass, removing a worktree leaves its branch intact."""
         result = worktrees._prune_candidates(self.env, worktrees.list_worktrees(self.repo), [], lambda path: False, False)
         self.assertIn(str(self.linked), result['removed'])
         self.git(self.repo, 'show-ref', '--verify', 'refs/heads/integrated')
 
+    # Git removal never receives a force option.
     def test_candidate_removal_does_not_use_force(self):
         """Git removal never receives a force option."""
         real_git = worktrees._git
@@ -322,12 +359,14 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn('--force', removals[0])
         self.assertNotIn('-f', removals[0])
 
+    # Unknown process state must never authorize removal.
     def test_unknown_process_state_keeps_candidate(self):
         """Unknown process state must never authorize removal."""
         result = worktrees._prune_candidates(self.env, worktrees.list_worktrees(self.repo), [], lambda path: None, False)
         self.assertNotIn(str(self.linked), result['removed'])
         self.assertTrue(self.linked.exists())
 
+    # A failed fetch prevents cleanup even when the local remote ref exists.
     def test_cleanup_fetch_failure_keeps_candidate(self):
         """A failed fetch prevents cleanup even when the local remote ref exists."""
         self.git(self.repo, 'remote', 'set-url', 'origin', str(self.repo.parent / 'missing'))
@@ -335,6 +374,7 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn(str(self.linked), result['removed'])
         self.assertTrue(self.linked.exists())
 
+    # A stale tracking ref cannot authorize removal after the remote branch changed.
     def test_cleanup_uses_fetched_tip_when_tracking_ref_is_stale(self):
         """A stale tracking ref cannot authorize removal after the remote branch changed."""
         base = self.git(self.repo, 'rev-parse', 'HEAD').stdout.strip()
@@ -349,9 +389,11 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn(str(self.linked), result['removed'])
         self.assertTrue(self.linked.exists())
 
+    # A different remote tip after fetching prevents removal.
     def test_cleanup_keeps_candidates_if_remote_tip_changes_during_fetch(self):
         """A different remote tip after fetching prevents removal."""
         real_git = worktrees._git
+        # Simulate a concurrent integration-branch update.
         def changed_remote(repo, *args):
             """Simulate a concurrent integration-branch update."""
             if args[:1] == ('ls-remote',):
@@ -362,12 +404,14 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn(str(self.linked), result['removed'])
         self.assertTrue(self.linked.exists())
 
+    # The public cleanup runs the verified candidate checks.
     def test_public_cleanup_uses_process_checker(self):
         """The public cleanup runs the verified candidate checks."""
         with mock.patch.object(worktrees, '_process_busy', create=True, return_value=False):
             result = worktrees.prune(self.env)
         self.assertIn(str(self.linked), result['removed'])
 
+    # The CLI prints all cleanup lists without removing the candidate in a dry run.
     def test_command_dry_run_prints_three_lists(self):
         """The CLI prints all cleanup lists without removing the candidate in a dry run."""
         import contextlib
@@ -386,24 +430,28 @@ class CleanupTests(unittest.TestCase):
         self.assertIn(str(self.linked), result['removed'])
         self.assertTrue(self.linked.exists())
 
+    # An integrated candidate is removed after fetch and process verification.
     def test_cleanup_with_verified_process_state_removes_candidate(self):
         """An integrated candidate is removed after fetch and process verification."""
         result = worktrees._prune_with_checker(self.env, lambda path: False, False)
         self.assertIn(str(self.linked), result['removed'])
         self.assertFalse(self.linked.exists())
 
+    # A dry run lists an eligible worktree without removing it.
     def test_verified_dry_run_keeps_worktree(self):
         """A dry run lists an eligible worktree without removing it."""
         result = worktrees._prune_with_checker(self.env, lambda path: False, True)
         self.assertIn(str(self.linked), result['removed'])
         self.assertTrue(self.linked.exists())
 
+    # An integrated detached worktree is eligible for cleanup.
     def test_verified_detached_head_can_be_removed(self):
         """An integrated detached worktree is eligible for cleanup."""
         self.git(self.linked, 'checkout', '--detach')
         result = worktrees._prune_with_checker(self.env, lambda path: False, False)
         self.assertIn(str(self.linked), result['removed'])
 
+    # Explicitly allowed ignored output does not protect the worktree.
     def test_verified_ignored_build_output_can_be_removed(self):
         """Explicitly allowed ignored output does not protect the worktree."""
         (self.linked / 'ignored').mkdir()
@@ -412,6 +460,7 @@ class CleanupTests(unittest.TestCase):
         result = worktrees._prune_with_checker(self.env, lambda path: False, False)
         self.assertIn(str(self.linked), result['removed'])
 
+    # Ignored files remain protected when no build-output setting allows them.
     def test_verified_ignored_data_is_kept_by_default(self):
         """Ignored files remain protected when no build-output setting allows them."""
         (self.linked / 'ignored').mkdir()
@@ -420,6 +469,7 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn(str(self.linked), result['removed'])
         self.assertTrue((self.linked / 'ignored' / 'data').exists())
 
+    # Tracked changes and Git locks independently prevent cleanup.
     def test_verified_dirty_and_locked_candidates_are_kept(self):
         """Tracked changes and Git locks independently prevent cleanup."""
         (self.linked / 'file').write_text('changed', encoding='utf-8')
@@ -428,12 +478,14 @@ class CleanupTests(unittest.TestCase):
         self.git(self.repo, 'worktree', 'lock', str(self.linked))
         self.assertNotIn(str(self.linked), worktrees._prune_with_checker(self.env, lambda path: False, False)['removed'])
 
+    # Ready, running and blocked queue rows independently prevent cleanup.
     def test_verified_queue_states_are_kept(self):
         """Ready, running and blocked queue rows independently prevent cleanup."""
         for state in ('ready', 'in_run', 'blocked'):
             with self.subTest(state=state), mock.patch('haivequeen.worktrees.db.queue_rows', return_value=[{'branch': 'integrated', 'status': state}]):
                 self.assertNotIn(str(self.linked), worktrees._prune_with_checker(self.env, lambda path: False, False)['removed'])
 
+    # Configured release worktrees and the workspace cannot be removed.
     def test_verified_protected_worktree_and_workspace_are_kept(self):
         """Configured release worktrees and the workspace cannot be removed."""
         self.env.settings['protectedWorktrees'] = [str(self.linked)]
@@ -442,6 +494,7 @@ class CleanupTests(unittest.TestCase):
         self.env.workspace = self.linked
         self.assertNotIn(str(self.linked), worktrees._prune_with_checker(self.env, lambda path: False, False)['removed'])
 
+    # The Git main worktree and configured code checkout are protected.
     def test_git_main_worktree_and_code_repo_are_kept(self):
         """The Git main worktree and configured code checkout are protected."""
         records = worktrees.list_worktrees(self.repo)
@@ -449,6 +502,7 @@ class CleanupTests(unittest.TestCase):
         self.env.code_repo = self.linked
         self.assertTrue(worktrees._candidate_reason(self.env, records[1], False, []))
 
+    # An ignored junction must be removed as a link without changing its target.
     def test_junction_removal_preserves_external_target(self):
         """An ignored junction must be removed as a link without changing its target."""
         import os
@@ -466,11 +520,13 @@ class CleanupTests(unittest.TestCase):
         self.assertIn(str(self.linked), result['removed'])
         self.assertEqual((target / 'marker').read_text(encoding='utf-8'), 'keep')
 
+    # Link checks work without pathlib's Python 3.12 junction method.
     def test_link_checks_do_not_require_python_312_path_api(self):
         """Link checks work without pathlib's Python 3.12 junction method."""
         with mock.patch.object(Path, 'is_junction', create=True, side_effect=AssertionError('Python 3.11 has no is_junction')):
             self.assertEqual(worktrees._link_targets(self.linked), [])
 
+    # A failed Git removal leaves the junction and its target in place.
     def test_failed_removal_restores_junction(self):
         """A failed Git removal leaves the junction and its target in place."""
         import os
@@ -486,6 +542,7 @@ class CleanupTests(unittest.TestCase):
             self.skipTest('Cannot create a junction')
         self.env.settings['ignoredBuildOutput'] = ['ignored/']
         real_git = worktrees._git
+        # Simulate a failure only for the removal command.
         def fail_remove(repo, *args):
             """Simulate a failure only for the removal command."""
             if args[:2] == ('worktree', 'remove'):
@@ -498,9 +555,11 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual((target / 'marker').read_text(encoding='utf-8'), 'keep')
 
 
+# Check automatic cleanup at the round boundary.
 class CleanupSchedulingTests(unittest.TestCase):
     """Check automatic cleanup at the round boundary."""
 
+    # A normal round checks old worktrees for every project.
     def test_round_calls_cleanup_for_each_project(self):
         """A normal round checks old worktrees for every project."""
         from haivequeen import hives, loop
@@ -510,6 +569,7 @@ class CleanupSchedulingTests(unittest.TestCase):
             loop.run_round(None, {}, envs=[env])
         prune.assert_called_once_with(env)
 
+    # Releasing the integration place triggers a cleanup afterwards.
     def test_release_runs_cleanup_after_releasing_place(self):
         """Releasing the integration place triggers a cleanup afterwards."""
         import os
@@ -528,8 +588,8 @@ class CleanupSchedulingTests(unittest.TestCase):
 
 
 
+    # A missing link target cannot be treated as verified complete.
     def test_target_fingerprint_rejects_missing_target(self):
         """A missing link target cannot be treated as verified complete."""
         with self.assertRaises(OSError):
             worktrees._target_size(Path(tempfile.gettempdir()) / 'definitely-missing-worktree-target-17ef8')
-
