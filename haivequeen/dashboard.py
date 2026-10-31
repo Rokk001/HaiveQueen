@@ -208,20 +208,24 @@ def window_usage(raw, now):
     return res
 
 
-def blocked_tasks(agents) -> list:
-    """Tasks (plan|package|phase) whose last two starts failed with the same error: blocked, never restarted."""
+def blocked_tasks(agents, now=None) -> list:
+    """Tasks with two newest nonarchived failed runs matching in error, recent within 12h, and no later run."""
+    now = now or datetime.now()
     groups = {}
     for a in agents:
-        if a["status"] == "failed":
-            groups.setdefault((a.get("plan_path"), a.get("package"), a.get("phase")), []).append(a)
+        if not a.get("archived"):
+            groups.setdefault((a.get("project"), a.get("plan_path"), a.get("package"), a.get("phase")), []).append(a)
     res = []
     for rows in groups.values():
         rows.sort(key=lambda r: r.get("started_at") or "")
         if len(rows) < 2:
             continue
         a, b = rows[-1], rows[-2]
+        ended = _parse_time(a.get("ended_at"))
         last = str(a.get("last_line") or "")
-        if last == str(b.get("last_line") or "") and not last.startswith("pane never started"):
+        if (a.get("status") == b.get("status") == "failed" and ended
+                and timedelta(0) <= now - ended <= timedelta(hours=12)
+                and last == str(b.get("last_line") or "") and not last.startswith("pane never started")):
             res.append({"name": a.get("name") or "", "error": last, "project": a["project"]})
     return res
 
@@ -336,7 +340,8 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
                               + " ORDER BY id DESC LIMIT 1", pa).fetchone()
     return {
         "now": now, "project": project, "projects": scope, "colours": colours, "cfg": cfg, "sysinfo": sysinfo,
-        "run": runstate.get_state(conn), "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all),
+        "run": runstate.get_state(conn), "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all, now),
+        "provider_limits": provider_lines(conn, cfg, agents_all),
         "cu": window_usage(_kv(conn, "usage-claude"), now), "xu": window_usage(_kv(conn, "usage-codex"), now),
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
@@ -348,6 +353,27 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "round_errors": round_errors(conn, project, now),
         "last_round": (_parse_time(last_round[0]).strftime("%H:%M:%S") if last_round and _parse_time(last_round[0]) else "-"),
     }
+
+
+def provider_lines(conn, cfg, agents) -> list:
+    """Build the provider weekly quota and slot rows, marking the scheduler's next medium provider."""
+    providers = sch.get_providers(cfg or {})
+    free = sch.provider_free(providers, agents)
+    next_provider = sch.select_provider(providers, "medium", [], free, conn=conn)
+    rows = []
+    for provider in providers:
+        local = provider["name"].lower() == "local" or provider["protocol"] == "local"
+        limit = sch.provider_limit(provider, conn)
+        hours = limit["Hours"]
+        remaining_week = max(0.0, hours) / 168.0
+        remaining_quota = limit["FreePct"] / 100.0
+        ratio = remaining_quota / remaining_week if remaining_week else float("inf")
+        rows.append({"name": provider["name"], "used_pct": None if local else 100.0 - limit["FreePct"],
+                     "hours": None if local else hours, "ratio": None if local else ratio,
+                     "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
+                     "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),
+                     "next": provider is next_provider, "local": local})
+    return rows
 
 
 # The failed rounds of the last day (the Beekeeper has no pane of its own, so its errors show here).
@@ -524,6 +550,16 @@ def build_lines(level, d, w, n_fin) -> list:
     if d["xu"]["FiveHour"]:
         limit("Codex 5h", d["xu"]["FiveHour"])
     limit("Codex 7d", d["xu"]["SevenDay"])
+    for p in d["provider_limits"]:
+        model = str(p["model"] or "no medium model")
+        suffix = " NEXT" if p["next"] else ""
+        if p["local"]:
+            L.append([(p["name"] + " ", "gray"), ("local  slots %d/%d  %s%s" % (p["slots"], p["total_slots"], model, suffix), "white")])
+        else:
+            col = "green" if p["ratio"] >= 1 else "yellow" if p["ratio"] >= 0.7 else "red"
+            L.append([(p["name"] + " ", "gray"), ("used %.0f%%, reset %.1fh  quota %.1f%%/week %.1f%% (%.2fx)  slots %d/%d  %s%s" %
+                      (p["used_pct"], p["hours"], 100.0 - p["used_pct"], max(0.0, p["hours"]) / 168.0 * 100.0,
+                       p["ratio"], p["slots"], p["total_slots"], model, suffix), col)])
 
     head("Σ USAGE")
     models = [m for m in d["usage"] if level == 0 or (m["Today"] and m["Today"][0] > 0) or m["Plans"]]

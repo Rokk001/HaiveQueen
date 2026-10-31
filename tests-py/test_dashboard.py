@@ -184,6 +184,60 @@ class DashboardTest(unittest.TestCase):
                 "startedAt": iso(i * 10), "endedAt": iso(i), "lastLine": "boom"})
         self.assertIn("BLOCKED fail-2: boom", self.text())
 
+    def test_blocked_requires_recent_two_failed_runs_and_no_newer_run(self):
+        """Only a nonarchived task with two newest identical failures ending within 12h is blocked."""
+        def add(name, status, minutes_ago, package, line="boom"):
+            runtime.upsert_agent(self.conn, "alpha", name, {"plan": "p.md", "package": package, "phase": "work",
+                "status": status, "startedAt": iso(minutes_ago + 1), "endedAt": iso(minutes_ago), "lastLine": line})
+        add("recent-1", "failed", 30, "recent")
+        add("recent-2", "failed", 10, "recent")
+        add("old-1", "failed", 60 * 13, "old")
+        add("old-2", "failed", 60 * 12 + 1, "old")
+        add("archived-1", "failed", 20, "archived")
+        add("archived-2", "failed", 10, "archived")
+        self.conn.execute("UPDATE agents SET archived=1 WHERE name LIKE 'archived-%'")
+        add("later-done-1", "failed", 20, "later")
+        add("later-done-2", "failed", 10, "later")
+        add("later-done-3", "done", 5, "later")
+        got = {row["name"] for row in dashboard.blocked_tasks(runtime.list_agents(self.conn, scope="all"), NOW)}
+        self.assertIn("recent-2", got)
+        self.assertNotIn("old-2", got)
+        self.assertNotIn("archived-2", got)
+        self.assertNotIn("later-done-2", got)
+
+    def test_provider_limits_show_weekly_share_slots_model_and_next(self):
+        """Provider rows show weekly quota and reset, free slots and medium models; only the scheduler choice is marked next."""
+        providers = []
+        for name, use in (("green-provider", "preferred"), ("yellow-provider", "fallback"), ("red-provider", "fallback"), ("local", "fallback")):
+            providers.append({"name": name, "protocol": "codex", "use": use, "slots": 2, "limit": "none",
+                "classes": {"medium": {"model": name + "-model"}}})
+        limits = Path(self.tmp.name) / "limits.json"
+        limits.write_text(json.dumps({"green-provider": {"usedPercent": 50, "resetHours": 84},
+            "yellow-provider": {"usedPercent": 80, "resetHours": 48},
+            "red-provider": {"usedPercent": 95, "resetHours": 24}}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(limits)}):
+            rows = dashboard.provider_lines(self.conn, {"providers": providers}, [])
+            lines = dashboard.build_lines(0, {"now": NOW, "project": None, "colours": {}, "run": runstate.get_state(self.conn),
+                "hives": [], "agents": [], "fin": [], "blocked": [], "provider_limits": rows,
+                "cu": {"FiveHour": None, "SevenDay": None}, "xu": {"FiveHour": None, "SevenDay": None},
+                "usage": [], "counts": {}, "drafts": [], "status": [], "qs": [], "triage": 0,
+                "round_errors": [], "selfupdate": None, "bj": None, "orch": {"status": "idle"},
+                "sysinfo": dict(SYS), "host": "h1", "last_round": "-"}, 120, 0)
+        for got, want in zip([r["ratio"] for r in rows[:3]], [1.0, 0.7, 0.35]):
+            self.assertAlmostEqual(got, want)
+        self.assertEqual([r["next"] for r in rows], [True, False, False, False])
+        self.assertTrue(rows[3]["local"])
+        flat = "\n".join("".join(text for text, _ in row) for row in lines)
+        self.assertIn("used 50%, reset 84.0h", flat)
+        self.assertIn("slots 2/2  green-provider-model NEXT", flat)
+        self.assertIn("local  slots 2/2  local-model", flat)
+        quota_colours = [next(colour for text, colour in line if "used " in text) for line in lines if any("used " in text for text, _ in line)]
+        self.assertEqual(quota_colours, ["green", "yellow", "red"])
+        local_line = next(line for line in lines if any("local  slots" in text for text, _ in line))
+        self.assertEqual(local_line[-1][1], "white")
+        exhausted = [{"provider": name, "status": "running"} for name in ("green-provider", "yellow-provider", "red-provider", "local") for _ in range(2)]
+        self.assertFalse(any(row["next"] for row in dashboard.provider_lines(self.conn, {"providers": providers}, exhausted)))
+
 
 if __name__ == "__main__":
     unittest.main()
