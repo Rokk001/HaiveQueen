@@ -118,3 +118,7 @@ class TechnicalEndTests(RoundCase):
         bees.record_attempt(self.conn, "testproj", REL, "P1", "medium", "failed", "a", error="same error")
         bees.record_attempt(self.conn, "testproj", REL, "P1", "medium", "failed", "b", error="same error")
         self.assertEqual(bees.failure_count(self.conn, "testproj", REL, "P1", "medium"), 1)
+    def test_prompt_uses_process_bee_name_for_attempt(self):
+        """Process Bee results can be matched to their agent after a crash."""
+        from haivequeen import bees
+        self.assertIn('exact Bee name as the attempt name', bees.queen_instructions('medium', 3, 3, 300000))
