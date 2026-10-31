@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import textwrap
 import time
 from datetime import datetime
 from pathlib import Path
@@ -75,13 +76,17 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
         body += ["Bee: " + " ".join(x for x in (str(bee["name"]), str(bee["task"]), str(bee["step"]), bar(bee["step"])) if x) for bee in data["bees"]]
 
     def row(content, colour):
-        """One framed line: side bars in the colour of the Apiary, the text cut at the pane edge."""
+        """One framed line: side bars in the colour of the Apiary; the text is already wrapped to the pane width."""
         return [(SIDE + " ", col), (content[:inner].ljust(inner), colour), (" " + SIDE, col)]
 
+    def wrapped(content):
+        """The text cut into rows of the pane's width (a long name is broken, nothing is lost)."""
+        return textwrap.wrap(content, inner, break_long_words=True, subsequent_indent="  ") or [""]
+
     lines = [[(TOP + RULE * (width - 2) + "┐", col)]]
-    lines += [row(t, col) for t in body]
+    lines += [row(r, col) for t in body for r in wrapped(t)]
     if message:
-        lines.append(row(message, "yellow"))
+        lines += [row(r, "yellow") for r in wrapped(message)]
     if running:
         lines.append(row("[X] dequeen  [R] requeen  [C] requeen mit Anbieter", "darkgray"))
     lines.append([(BOTTOM + RULE * (width - 2) + "┘", col)])
@@ -213,7 +218,7 @@ def run(project, plan, out=None, interval=1.0, max_ticks=None, keys=None):
                     last, last_text = key, None
                     rows = runtime.list_agents(conn, project, "all")
                     newest = [a for a in rows if a.get("plan_path") == plan and a.get("phase") == "queen"]
-                    ms = (osplat.runs_dir() / project / newest[-1]["name"] / "milestones.txt") if newest else None
+                    ms = (osplat.runs_dir() / project / newest[-1]["name"] / "milestones.txt") if newest and newest[-1].get("status") in ("running", "starting") else None   # an ended Queen's old text is not replayed
                     out.write(header.render(lines, width, height, header.read_milestones(ms) if ms else [], True))
                 else:
                     text = header.render(lines, width, height, [], False)
