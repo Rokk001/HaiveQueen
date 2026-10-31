@@ -168,6 +168,12 @@ def _resolve_open(env, started: int, now: datetime, reader) -> None:
                 answer = "Loop restarted at %s after unexpected end %s and has run for at least 60 minutes." % (start.isoformat(), end.isoformat())
         elif kind in ("self_update_rollback", "self_update_pane"):
             evidence = "Self-update fault requires review: %s" % text
+        if not answer and not evidence and q["status"] == "fault_check" and kind in KINDS + ("loop_vanished",) and now - created >= timedelta(minutes=60):
+            owner = (re.search(r"Agent .+? of (?:Apiary|project) (.+?):", text) if kind in ("runner_vanished", "agent_no_result")
+                     else re.search(r"(?:Apiary|Project) (.+?):", text) if kind == "no_start" else None)
+            project = owner.group(1) if owner else None
+            if not project or project == env.name or not _project_known(conn, project):
+                evidence = "Could not match the report to a registered project and recovery check: %s" % text
         if answer:
             db.answer_question(conn, q["id"], answer, "coordinator")
         elif evidence and (confirmed or now - created >= timedelta(minutes=60)):

@@ -298,6 +298,24 @@ class FaultsTest(RoundCase):
         self.check(now=datetime(2026, 10, 29, 10, 51))
         self.assertTrue(all(q["status"] == "answered" for q in self.faults_of()))
 
+    # Unmatched old reports cannot remain hidden after the observation window.
+    def test_unmatched_pending_faults_open_without_stealing_other_projects(self):
+        """Unknown or deleted project reports open with evidence; known projects keep their own check."""
+        self.add_project("other")
+        qids = []
+        for text in ("unrecognized old report", "Project removed: no starts", "Project other: no starts"):
+            qids.append(db.add_question(self.conn, "HaiveQueen", faults.FAULT_PLAN, "no_start", text, "", status="fault_check"))
+        for text in ("Agent old of project removed: ended", "Agent old of Apiary other: ended"):
+            qids.append(db.add_question(self.conn, "HaiveQueen", faults.FAULT_PLAN, "agent_no_result", text, "", status="fault_check"))
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00'")
+        self.conn.commit()
+        self.check(started=0, now=datetime(2026, 10, 29, 11, 0))
+        rows = {q["id"]: q for q in self.faults_of()}
+        self.assertEqual([rows[qid]["status"] for qid in qids], ["open", "open", "fault_check", "open", "fault_check"])
+        notes = runtime.list_events(self.conn, "HaiveQueen", kind="note")
+        for qid in (qids[0], qids[1], qids[3]):
+            self.assertTrue(any("Fault question %s remains open" % qid in e["text"] for e in notes))
+
     # Verify the Queen is directed to exhaust technical alternatives before asking.
     def test_queen_prompt_requires_technical_alternatives(self):
         """Technical owner questions need two approaches and an explanation."""
