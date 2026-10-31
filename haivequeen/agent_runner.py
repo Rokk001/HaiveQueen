@@ -696,7 +696,7 @@ def build_args(prov, vars_):
     return [sub(a) for a in prov["args"] + endpoint_args(prov)]
 
 
-# Run one agent as described by the parsed arguments; returns 0 (the status is in the agents table).
+# Run one agent, rejecting empty Claude tool arguments before starting its CLI.
 def run_agent(a, out=None):
     """Run one agent as described by the parsed arguments; returns 0 (the status is in the agents table)."""
     try:
@@ -769,7 +769,9 @@ def run_agent(a, out=None):
             else:
                 write_phase_rules(pcfg, workspace, a.phase, rules_file)
         vars_ = {"model": model, "effort": effort, "repo": pcfg.get("codeRepo") or workspace or a.cwd, "workspace": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
-                 "claudeTools": pcfg.get("claudeTools") or cfg.get("claudeTools") or "", "rules": str(rules_file)}
+                 "claudeTools": pcfg.get("claudeTools", cfg.get("claudeTools", "")), "rules": str(rules_file)}
+        if protocol == "claude" and not str(vars_["claudeTools"] or "").strip():
+            raise ValueError("claudeTools missing")
         arg_list = build_args(prov, vars_)
         if a.phase == "bee" and protocol == "claude":
             if "--setting-sources" in arg_list:
@@ -777,6 +779,10 @@ def run_agent(a, out=None):
                 arg_list[i + 1] = ""
             else:
                 arg_list.extend(["--setting-sources", ""])
+        if protocol == "claude" and "--tools" in arg_list:
+            tools_index = arg_list.index("--tools") + 1
+            if tools_index == len(arg_list) or not arg_list[tools_index].strip():
+                raise ValueError("claudeTools missing")
     except Exception as exc:   # a broken rule file or argument template must show up as a failed agent at once, not as a vanished runner one round later
         run.last = short("runner error: " + str(exc))
         run.say(run.last, "Red")
@@ -933,8 +939,9 @@ def complete_build_measure(conn, project, name, jobs, start_free_mb, sample_file
     return use
 
 
+# Run the child, mark its pane closing before and after the delay, and exit 0 even if the child failed.
 def pane_wrap(a, argv):
-    """Pane wrapper: run the agent as a CHILD process, then keep the pane for the close delay and exit 0 (also when the child failed or was ended)."""
+    """Run the child, mark its pane closing before and after the delay, and exit 0 even if the child failed."""
     try:
         cfg = config.load_config()
         delay = int(cfg.get("paneCloseDelaySeconds", 30))
@@ -944,20 +951,36 @@ def pane_wrap(a, argv):
         print("pane closes in 30 s")
         time.sleep(30)
         return 0
+    # Log wrapper failures to the pane and the runtime event log.
+    def log_error(text):
+        """Log wrapper failures to the pane and the runtime event log."""
+        print(text, file=sys.stderr)
+        try:
+            runtime.append_event(conn, a.project, text, kind="warning", agent=a.name, mirror="rounds")
+        except Exception as exc:
+            print("pane error logging failed: %s" % exc, file=sys.stderr)
+
+    # Write the closure flag, logging a failed write so the later attempt can retry it.
+    def mark_closed():
+        """Write the closure flag, logging a failed write so the later attempt can retry it."""
+        try:
+            runtime.upsert_agent(conn, a.project, a.name, {"paneClosed": True}, create=False)
+        except Exception as exc:
+            log_error("paneClosed write failed: %s" % exc)
+
     try:
         subprocess.run([osplat.python_executable(), "-m", "haivequeen.agent_runner"] + argv, env=child_env())
     finally:
+        mark_closed()
         print("pane closes in %d s" % delay)
         time.sleep(delay)
-        try:
-            runtime.upsert_agent(conn, a.project, a.name, {"paneClosed": True}, create=False)
-        except Exception:
-            pass
+        mark_closed()
         try:
             from . import loop   # imported here: loop imports this module
             loop.hold_pane_lock_until_exit()   # the pane closes while no other pane command runs; the lock ends with this process
-        except Exception:
-            pass
+        except Exception as exc:
+            log_error("pane lock failed: %s" % exc)
+        conn.close()
     return 0
 
 

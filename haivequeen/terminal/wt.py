@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 
+from .. import platform as osplat
 from . import _proc
 from .base import (PaneInfo, PaneRegistry, Terminal, TerminalError, check_direction, check_size,
                    safe_name)
@@ -40,6 +41,7 @@ def pane_number(pane_id):
     return pane_id.rsplit(".", 1)[1]
 
 
+# Windows Terminal through wt.exe (path override
 class WindowsTerminal(Terminal):
     """Windows Terminal through wt.exe (path override: environment variable BZZ_WT_EXE)."""
 
@@ -94,6 +96,7 @@ class WindowsTerminal(Terminal):
         subs.append(first + list(command))
         return subs
 
+    # Start wt.exe with the built sub-commands, record the pane and wait for its pid file.
     def _launch(self, window, subs_builder, title, command, name, pane_id_index, what="call", after=None):
         """Start wt.exe with the built sub-commands, record the pane and wait for its pid file.
 
@@ -112,13 +115,14 @@ class WindowsTerminal(Terminal):
                                          "title": title, "pid": 0, "pidfile": str(pidfile), "after": after})
         line = wt_quote(self.exe()) + " " + wt_commandline(subs_builder(self.wrapped(pidfile, command)))
         time.sleep(self.settle)
-        with open(folder / "wt.out", "wb") as out, open(folder / "wt.err", "wb") as err:
-            # the Beekeeper itself runs in a wt pane: wt.exe gets neither that pane's WT_* variables nor its console
-            env = {k: v for k, v in os.environ.items() if not k.startswith("WT_")}
-            flags = {"creationflags": 0x00000008 | 0x00000200} if sys.platform == "win32" else {}   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-            proc = subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=out, stderr=err, close_fds=True, env=env, **flags)
-        pids = self._wait_pids(pidfile)
-        self._trace_call(pane_id, what, line, proc, pids, folder)
+        with osplat.keep_foreground():
+            with open(folder / "wt.out", "wb") as out, open(folder / "wt.err", "wb") as err:
+                # the Beekeeper itself runs in a wt pane: wt.exe gets neither that pane's WT_* variables nor its console
+                env = {k: v for k, v in os.environ.items() if not k.startswith("WT_")}
+                flags = {"creationflags": 0x00000008 | 0x00000200} if sys.platform == "win32" else {}   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+                proc = subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=out, stderr=err, close_fds=True, env=env, **flags)
+            pids = self._wait_pids(pidfile)
+            self._trace_call(pane_id, what, line, proc, pids, folder)
         if pids is None and self.start_timeout > 0:
             self.registry.discard(folder_name)   # wt made no pane: its number must not count for the next focus-pane target
             raise TerminalError("pane %s did not start within %s s" % (pane_id, self.start_timeout))
