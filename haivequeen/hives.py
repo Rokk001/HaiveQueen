@@ -603,7 +603,9 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                                 ended = float('inf')
                             final_report = queen_final_text(env.run_dir(last['name']), started, final_report, ended)
                         questions = [q for q in runtime.list_questions(conn, env.name, status='open', plan=plan['path']) if not str(q['item']).upper().startswith('STALL-')]   # stop-rule questions never block a Hive
-                        if last and last.get('status') == 'done' and 'WAITING_FOR_OWNER' in final_report and questions:
+                        if last and interrupt.kind_of(last) == interrupt.VANISHED:
+                            conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, plan['path']))
+                        elif last and last.get('status') == 'done' and 'WAITING_FOR_OWNER' in final_report and questions:
                             wait_for_answers(conn, env.name, plan['path'], [q['id'] for q in questions])
                         elif last and not interrupt.is_interrupted(last) and ended_without_work(env, last):   # open owner questions are the reason; her final text does not matter, only without any a question is filed
                             wait_for_answers(conn, env.name, plan['path'], [q['id'] for q in questions] or [ask_about_end(conn, env, plan['path'], last, final_report)])

@@ -42,8 +42,10 @@ class TechnicalEndTests(RoundCase):
         """Only a vanished Bee's recorded result is removed from its class."""
         from haivequeen import bees
         self.agent("Bea", phase="bee", package="P1", status="failed", last_line="runner process vanished", **{"class": "medium"})
-        bees.record_attempt(self.conn, "testproj", REL, "P1", "medium", "failed", "Bea")
-        bees.record_attempt(self.conn, "testproj", REL, "P1", "medium", "failed", "Real")
+        bees.ensure_attempts(self.conn)
+        self.conn.execute("INSERT INTO bee_attempts VALUES (?,?,?,?,?)", ("testproj", REL, "P1", "medium", 2))
+        for name in ("Bea", "Real"):
+            self.conn.execute("INSERT INTO bee_attempt_reports VALUES (?,?,?,?)", ("testproj", REL, "P1", name))
         hives.repair_technical_ends(self.conn, "testproj")
         hives.repair_technical_ends(self.conn, "testproj")
         self.assertEqual(bees.failure_count(self.conn, "testproj", REL, "P1", "medium"), 1)
@@ -88,10 +90,25 @@ class TechnicalEndTests(RoundCase):
         from haivequeen import bees
         self.agent("Bea", phase="bee", package="P1", status="failed", last_line="runner process vanished", **{"class": "medium"})
         bees.ensure_attempts(self.conn)
-        self.conn.execute("CREATE TABLE bee_attempt_signals (project TEXT, plan_path TEXT, package TEXT, class TEXT, attempt TEXT, open_requirements TEXT, error TEXT, counted INTEGER)")
         self.conn.execute("INSERT INTO bee_attempts VALUES (?,?,?,?,?)", ("testproj", REL, "P1", "medium", 1))
         self.conn.execute("INSERT INTO bee_attempt_reports VALUES (?,?,?,?)", ("testproj", REL, "P1", "Bea"))
         self.conn.execute("INSERT INTO bee_attempt_signals VALUES (?,?,?,?,?,?,?,?)", ("testproj", REL, "P1", "medium", "Bea", "[]", "", 0))
         hives.repair_technical_ends(self.conn, "testproj")
         self.assertEqual(bees.failure_count(self.conn, "testproj", REL, "P1", "medium"), 1)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM bee_attempt_signals").fetchone()[0], 0)
+    def test_technical_end_precedes_owner_wait_report(self):
+        """A technical end does not park the Hive on an old owner-wait report."""
+        self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.round()
+        queen = next(a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running")
+        db.add_question(self.conn, "testproj", REL, "P1", "Question?", "")
+        self.finish(queen["name"], final="WAITING_FOR_OWNER", status="done")
+        runtime.upsert_agent(self.conn, "testproj", queen["name"], {"last_line": "pane never started", "pid": None})
+        self.round()
+        self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]), 1)
+    def test_restart_marks_unlaunched_starting_queen(self):
+        """A Queen lost during startup is interrupted on Beekeeper restart."""
+        self.agent("Ada", phase="queen", status="starting", pid=None)
+        reattach.reattach(self.conn, "testproj", lambda pid: False)
+        self.assertEqual(self.ag("Ada")["status"], "failed")
+        self.assertEqual(self.ag("Ada").get("interrupted"), "vanished")

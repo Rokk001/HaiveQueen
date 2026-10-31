@@ -8,7 +8,7 @@ def reattach(conn, project, pid_alive) -> dict:
     """Check running agent rows of a project; pid_alive(pid) -> bool. Returns {kept, failed} (agent names)."""
     kept, failed = [], []
     with db.transaction(conn):
-        for r in conn.execute("SELECT id, name, pid FROM agents WHERE project=? AND archived=0 AND status='running' "
+        for r in conn.execute("SELECT id, name, pid FROM agents WHERE project=? AND archived=0 AND (status='running' OR (status='starting' AND phase IN ('queen','bee'))) "
                               "ORDER BY id", (project,)).fetchall():
             label = r["name"] or str(r["id"])
             if r["pid"] and pid_alive(r["pid"]):
