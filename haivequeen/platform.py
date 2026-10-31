@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from datetime import datetime
 
 APP = "HaiveQueen"
 STILL_ACTIVE = 259
@@ -208,6 +209,31 @@ def process_alive(pid) -> bool:
     except (OSError, AttributeError):
         return False
 
+
+# Return a Windows process creation time, or None when it cannot be verified.
+def process_start_time(pid):
+    """Return the local creation time of a Windows process, or None."""
+    if not is_windows():
+        return None
+    try:
+        from ctypes import wintypes
+        kernel = ctypes.windll.kernel32
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        handle = kernel.OpenProcess(0x1000, False, int(pid))
+        if not handle:
+            return None
+        try:
+            created, exited, kernel_time, user_time = (wintypes.FILETIME() for _ in range(4))
+            if not kernel.GetProcessTimes(ctypes.c_void_p(handle), ctypes.byref(created),
+                                          ctypes.byref(exited), ctypes.byref(kernel_time),
+                                          ctypes.byref(user_time)):
+                return None
+            ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+            return datetime.fromtimestamp(ticks / 10000000 - 11644473600)
+        finally:
+            kernel.CloseHandle(ctypes.c_void_p(handle))
+    except (OSError, AttributeError, TypeError, ValueError, OverflowError):
+        return None
 
 def _win_kill_tree(pid: int) -> bool:
     """Windows: taskkill /PID <pid> /T /F; True when the process is gone afterwards."""

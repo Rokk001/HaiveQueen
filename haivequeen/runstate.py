@@ -1,5 +1,6 @@
 """Machine-wide run state (D8): RUNNING, PAUSED, DRAINING, DRAINED, stored in the kv table."""
 import json
+from datetime import timedelta
 
 from . import db
 
@@ -32,9 +33,17 @@ def _write(conn, state: str, kind: str, text: str, source: str = "") -> None:
 def running_agents(conn) -> int:
     """Count active agent processes, including runners finishing after a done report."""
     from . import platform as osplat
-    rows = conn.execute("SELECT status,phase,pid FROM agents WHERE archived=0").fetchall()
-    return sum(1 for row in rows if row['status'] in ACTIVE or
-               (row['phase'] in ('queen', 'bee') and row['pid'] and osplat.process_alive(row['pid'])))
+    rows = conn.execute("SELECT status,phase,pid,ended_at FROM agents WHERE archived=0").fetchall()
+    count = 0
+    for row in rows:
+        if row['status'] in ACTIVE:
+            count += 1
+        elif row['phase'] in ('queen', 'bee') and row['pid'] and osplat.process_alive(row['pid']):
+            ended = db.parse_time(row['ended_at'])
+            started = osplat.process_start_time(row['pid']) if ended else None
+            if not started or started <= ended + timedelta(seconds=1):
+                count += 1
+    return count
 
 
 def get_state(conn) -> dict:

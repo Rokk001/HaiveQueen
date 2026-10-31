@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from contextlib import contextmanager
@@ -657,21 +658,47 @@ def _state_summary(env, quiet=False) -> dict:
     return {"all_plans": prows, "plans": plans}
 
 
+# Track failed releases and serialize threads before recovering a lock owned by this process.
+_hive_schedule_guard = threading.Lock()
+_abandoned_hive_locks = set()
+
+
 # Serialize Hive scheduling between the loop and owner commands.
 @contextmanager
 def hive_schedule_lock(timeout: float = 30.0):
-    """Serialize Hive scheduling between the loop and owner commands."""
+    """Serialize Hive scheduling and recover an owned lock after a failed release."""
     path = osplat.data_dir() / "hive-schedule.lock"
     deadline = time.monotonic() + timeout
-    while _take_pid_lock(path, own_ok=False) != 0:
-        if time.monotonic() >= deadline:
-            raise TimeoutError("Hive scheduling is busy")
-        time.sleep(0.1)
+    if not _hive_schedule_guard.acquire(timeout=max(0.0, timeout)):
+        raise TimeoutError("Hive scheduling is busy")
     try:
-        yield
+        while True:
+            if path in _abandoned_hive_locks:
+                try:
+                    if path.read_text(encoding="ascii").strip() == str(os.getpid()):
+                        path.unlink()
+                    _abandoned_hive_locks.discard(path)
+                except FileNotFoundError:
+                    _abandoned_hive_locks.discard(path)
+                except OSError:
+                    pass
+            if _take_pid_lock(path, own_ok=False) == 0:
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Hive scheduling is busy")
+            time.sleep(0.1)
+        try:
+            yield
+        finally:
+            try:
+                if path.exists() and path.read_text(encoding="ascii").strip() == str(os.getpid()):
+                    path.unlink()
+                _abandoned_hive_locks.discard(path)
+            except OSError:
+                _abandoned_hive_locks.add(path)
+                raise
     finally:
-        if path.exists() and path.read_text(encoding="ascii").strip() == str(os.getpid()):
-            path.unlink()
+        _hive_schedule_guard.release()
 
 
 # Schedule one round of Hives across every registered project.

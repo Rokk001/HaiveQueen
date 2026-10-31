@@ -90,5 +90,21 @@ class RunStateTest(unittest.TestCase):
         self.assertEqual(orch("resume")["state"], "RUNNING")
 
 
+    # A reused PID must not block draining, while a still-running runner remains protected.
+    def test_reused_pid_does_not_block_drain(self):
+        """Ignore only a process proven to have started after the agent ended."""
+        from unittest import mock
+        from haivequeen import platform as osplat
+        from datetime import datetime
+        db.add_agent(self.conn, "p", name="A", phase="queen", status="done", pid=123,
+                     ended_at="2026-01-01T12:00:00")
+        with mock.patch.object(osplat, "process_alive", return_value=True), \
+             mock.patch.object(osplat, "process_start_time", create=True) as started:
+            started.return_value = datetime(2026, 1, 1, 12, 10)
+            self.assertEqual(runstate.running_agents(self.conn), 0)
+            started.return_value = datetime(2026, 1, 1, 11, 59)
+            self.assertEqual(runstate.running_agents(self.conn), 1)
+            started.return_value = None
+            self.assertEqual(runstate.running_agents(self.conn), 1)
 if __name__ == "__main__":
     unittest.main()
