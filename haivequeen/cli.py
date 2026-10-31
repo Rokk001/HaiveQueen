@@ -276,7 +276,13 @@ def cmd_bee(args, conn):
     if args.action == "result":
         if not args.attempt or not args.outcome:
             return fail("result requires an attempt name and outcome")
-        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt)
+        try:
+            requirements = json.loads(args.open_requirements)
+            if not isinstance(requirements, list) or not all(isinstance(item, str) for item in requirements):
+                return fail("open requirements must be a JSON string list")
+        except ValueError as exc:
+            return fail(str(exc))
+        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error)
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
         out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls})
@@ -320,6 +326,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cwd", default="")
     p.add_argument("--outcome", choices=["failed", "interrupted", "succeeded"])
     p.add_argument("--attempt", default="")
+    p.add_argument("--open-requirements", default="[]")
+    p.add_argument("--error", default="")
     p.add_argument("--no-subagents", action="store_true")
     p.add_argument("--parallel", action="store_true")
     p.set_defaults(fn=cmd_bee)
