@@ -614,7 +614,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     hive = get(conn, env.name, plan['path'])
                 if hive and hive['state'] in ('codex_wait', 'provider_wait') and history and not dry_run:   # the Queen asked for a Bee and ended: with owner questions open and no new commit the Hive waits for an answer, it does not start the next Queen
                     open_questions = [q['id'] for q in runtime.list_questions(conn, env.name, status='open', plan=plan['path']) if not str(q['item']).upper().startswith('STALL-')]
-                    if open_questions and ended_without_work(env, history[-1]):
+                    if open_questions and not interrupt.is_interrupted(history[-1]) and ended_without_work(env, history[-1]):
                         wait_for_answers(conn, env.name, plan['path'], open_questions)
                         not_started(env, plan['path'], 'Hive state "answer" (questions %s)' % ', '.join(str(i) for i in open_questions))
                         continue

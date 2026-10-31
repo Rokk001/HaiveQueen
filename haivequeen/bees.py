@@ -61,13 +61,11 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
     with db.transaction(conn):
         if attempt and conn.execute('INSERT OR IGNORE INTO bee_attempt_reports(project,plan_path,package,attempt) VALUES(?,?,?,?)', (project, plan, package, attempt)).rowcount == 0:
             return
-        counted = False
-        if open_requirements is not None:
-            previous = conn.execute('SELECT open_requirements,error FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND class=? ORDER BY rowid DESC LIMIT 1', (project, plan, package, cls)).fetchone()
-            counted = bool(outcome == 'failed' and previous and (set(open_requirements) & set(json.loads(previous[0])) or error and error == previous[1]))
         if attempt:
+            previous = conn.execute('SELECT open_requirements,error FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND class=? ORDER BY rowid DESC LIMIT 1', (project, plan, package, cls)).fetchone()
+            counted = bool(outcome == 'failed' and previous and (set(open_requirements or []) & set(json.loads(previous[0])) or error and error == previous[1]))
             conn.execute('INSERT INTO bee_attempt_signals VALUES(?,?,?,?,?,?,?,?)', (project, plan, package, cls, attempt, json.dumps(open_requirements or []), error, int(counted)))
-        if counted:
+        if attempt and counted:
             conn.execute('INSERT INTO bee_attempts(project,plan_path,package,class,failures) VALUES(?,?,?,?,1) ON CONFLICT(project,plan_path,package,class) DO UPDATE SET failures=failures+1', (project, plan, package, cls))
 
 

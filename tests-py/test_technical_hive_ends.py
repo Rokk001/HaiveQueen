@@ -112,3 +112,9 @@ class TechnicalEndTests(RoundCase):
         reattach.reattach(self.conn, "testproj", lambda pid: False)
         self.assertEqual(self.ag("Ada")["status"], "failed")
         self.assertEqual(self.ag("Ada").get("interrupted"), "vanished")
+    def test_repeated_error_without_requirement_list_counts(self):
+        """Error signal remains independent of the requirement signal."""
+        from haivequeen import bees
+        bees.record_attempt(self.conn, "testproj", REL, "P1", "medium", "failed", "a", error="same error")
+        bees.record_attempt(self.conn, "testproj", REL, "P1", "medium", "failed", "b", error="same error")
+        self.assertEqual(bees.failure_count(self.conn, "testproj", REL, "P1", "medium"), 1)
