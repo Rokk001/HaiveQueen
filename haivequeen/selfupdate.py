@@ -18,6 +18,7 @@ from . import platform as osplat
 
 PROJECT = "HaiveQueen"
 FAULT_KIND = "self_update_rollback"
+PANE_FAULT_KIND = "self_update_pane"   # first-round problems (a pane that did not start): the new code stays live
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
@@ -127,9 +128,9 @@ def first_round_problems(conn, since_event: int, panes=None) -> list:
     for r in conn.execute("SELECT kind, text FROM events WHERE id>? ORDER BY id", (since_event,)):
         text = r["text"] or ""
         if r["kind"] == "rounds" and "ERROR" in text:
-            problems.append("ERROR in ROUNDS.log: " + text[:200])
+            problems.append("ERROR in ROUNDS.log: " + text)
         if "vanished" in text:
-            problems.append("vanished: " + text[:200])
+            problems.append("vanished: " + text)
     ids = (panes or queen_panes)()
     if ids is not None and len(ids) != 1:
         problems.append("%d Beekeeper tabs instead of 1" % len(ids))
@@ -163,10 +164,10 @@ def wait_first_round(conn, started_after: str, sleep, poll: float, timeout: floa
     return False
 
 
-def file_fault_rollback(conn, text: str) -> None:
-    """File the rollback as an open question of project HaiveQueen (file_fault of haivequeen.faults, imported only here)."""
+def file_fault_rollback(conn, text: str, kind: str = FAULT_KIND) -> None:
+    """File the rollback (or, with kind self_update_pane, the pane problems of a kept update) as an open question of project HaiveQueen (file_fault of haivequeen.faults, imported only here)."""
     from haivequeen.faults import file_fault
-    file_fault(conn, PROJECT, FAULT_KIND, text)
+    file_fault(conn, PROJECT, kind, text)
 
 
 def changed_files(live, old: str, new: str, run) -> list:
@@ -236,6 +237,7 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
                 return {"result": result, "note": note, "old": old, "new": old}
         new = run(["git", "-C", str(live), "rev-parse", "HEAD"], live)[1].strip()
         failure = ""
+        pane_problems = ""
         if new != old:
             code, out = run(["git", "-C", str(live), "push", "origin", "main"], live)
             if code != 0:
@@ -254,14 +256,19 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
                 failure = "no finished first round within %d s" % round_timeout
             else:
                 found = first_round_problems(conn, since_event, panes)
-                if found:
-                    failure = "; ".join(found)
+                pane_problems = "; ".join(found)   # the loop runs: pane problems are reported, never rolled back
         if failure and new != old:
             result, note = rollback(conn, live, old, new, failure, run, restart)
         elif failure:
             result, note = "failed", failure
         else:
             result, note = "ok", ("updated to %s" % new[:12] if new != old else "already current at %s" % new[:12])
+            if pane_problems:
+                note += "; kept despite first round problems: " + pane_problems
+                try:
+                    file_fault_rollback(conn, "The self-update to %s is live; its first round had problems: %s" % (new[:12], pane_problems), PANE_FAULT_KIND)
+                except Exception as exc:   # the question is a report: failing to file it must not hide the result
+                    note += "; question not filed: %s" % exc
         end_row(conn, row_id, new, result, note)
         return {"result": result, "note": note, "old": old, "new": new}
     finally:

@@ -444,8 +444,8 @@ class UpdateTest(SelfUpdateBase):
         self.assertIn("END-OF-ERROR", self.conn.execute("SELECT text FROM events WHERE kind='self-update' ORDER BY id DESC LIMIT 1").fetchone()[0])
         self.assertIn("END-OF-ERROR", faults[0][2])
 
-    def test_error_in_first_round_rolls_back(self):
-        """An ERROR line of the rounds log written after the start is a failed first round."""
+    def test_error_in_first_round_keeps_the_new_code(self):
+        """An ERROR line of the rounds log written after the start (a pane that did not start) is no reason for a rollback: result ok, the whole text is logged and filed."""
         faults = self.stub_faults()
         inner = FakeGit(self.conn)
 
@@ -453,15 +453,20 @@ class UpdateTest(SelfUpdateBase):
             """After the start of the new loop a round error is logged."""
             res = inner(argv, cwd)
             if inner.calls[-1][0] == "start" and inner.words().count("start") == 1:
-                db.add_event(self.conn, "ODP", "rounds", "ROUND ERROR boom")
+                db.add_event(self.conn, "ODP", "rounds", "ROUND ERROR pane HaiveQueen.3 did not start within 20 s " + "x" * 300 + " END-OF-ERROR")
             return res
         run.inner = inner
         res = self.update(run)
-        self.assertEqual(res["result"], "rollback")
-        self.assertIn("ERROR in ROUNDS.log", faults[0][2])
+        self.assertEqual(res["result"], "ok")
+        self.assertNotIn("reset --keep", inner.words())
+        self.assertEqual(inner.head, NEW)
+        self.assertEqual(faults[0][:2], ("HaiveQueen", "self_update_pane"))
+        self.assertIn("END-OF-ERROR", faults[0][2])
+        self.assertIn("END-OF-ERROR", self.row()["note"])
+        self.assertIn("END-OF-ERROR", self.conn.execute("SELECT text FROM events WHERE kind='self-update' ORDER BY id DESC LIMIT 1").fetchone()[0])
 
-    def test_vanished_in_first_round_rolls_back(self):
-        """A 'vanished' line after the start is a failed first round."""
+    def test_vanished_in_first_round_keeps_the_new_code(self):
+        """A 'vanished' line after the start is reported, not rolled back."""
         self.stub_faults()
         inner = FakeGit(self.conn)
 
@@ -472,17 +477,18 @@ class UpdateTest(SelfUpdateBase):
                 db.add_event(self.conn, "ODP", "note", "Ada: runner process vanished (ended by executor or crashed), marked failed")
             return res
         run.inner = inner
-        self.assertEqual(self.update(run)["result"], "rollback")
+        self.assertEqual(self.update(run)["result"], "ok")
 
     def test_old_error_lines_do_not_count(self):
         """An ERROR line from before the update is no reason for a rollback."""
         db.add_event(self.conn, "ODP", "rounds", "ROUND ERROR long ago")
         self.assertEqual(self.update(FakeGit(self.conn))["result"], "ok")
 
-    def test_wrong_tab_count_rolls_back(self):
-        """Two Queen tabs after the start make the first round fail."""
-        self.stub_faults()
-        self.assertEqual(self.update(FakeGit(self.conn), panes=lambda: ["a", "b"])["result"], "rollback")
+    def test_wrong_tab_count_keeps_the_new_code(self):
+        """Two Beekeeper tabs after the start are reported, not rolled back."""
+        faults = self.stub_faults()
+        self.assertEqual(self.update(FakeGit(self.conn), panes=lambda: ["a", "b"])["result"], "ok")
+        self.assertEqual(faults[0][1], "self_update_pane")
 
     def test_unreadable_terminal_skips_the_tab_check(self):
         """When the terminal cannot be read the tab check is skipped and the update stays ok."""
