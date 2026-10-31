@@ -208,6 +208,7 @@ def window_usage(raw, now):
     return res
 
 
+# Return recent tasks whose two newest runs failed with the same final line.
 def blocked_tasks(agents, now=None) -> list:
     """Tasks with two newest nonarchived failed runs matching in error, recent within 12h, and no later run."""
     now = now or datetime.now()
@@ -296,6 +297,7 @@ def usage_models(conn, agents_all, today) -> list:
     return out
 
 
+# Collect dashboard data, including recent blocked tasks and provider limit rows.
 def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     """Read everything the dashboard shows from the database (and the system values passed in `sysinfo`).
 
@@ -355,6 +357,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     }
 
 
+# Build weekly provider usage and slot rows and mark the next medium provider.
 def provider_lines(conn, cfg, agents) -> list:
     """Build the provider weekly quota and slot rows, marking the scheduler's next medium provider."""
     providers = sch.get_providers(cfg or {})
@@ -363,6 +366,8 @@ def provider_lines(conn, cfg, agents) -> list:
     rows = []
     for provider in providers:
         source = provider["limit"]
+        used_slots = sum(1 for agent in agents if agent.get("status") in sch.ACTIVE
+                         and sch.row_provider(agent) == provider["name"])
         used, hours, reset_at = None, None, None
         if source in ("claude", "codex"):
             limits_path = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
@@ -386,7 +391,7 @@ def provider_lines(conn, cfg, agents) -> list:
             ratio = remaining_quota / remaining_week if remaining_week else float("inf")
         rows.append({"name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
                      "has_limit": source in ("claude", "codex"),
-                     "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
+                     "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
                      "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),
                      "next": provider is next_provider})
     return rows
@@ -464,6 +469,7 @@ def _total_ram_mb() -> int:
 
 # ---- building the lines ----
 
+# Render logical dashboard rows, including provider limits and remaining shares.
 def build_lines(level, d, w, n_fin) -> list:
     """Build all logical lines for one detail level (0 = every model, 1 = models active today, 3 = at most two)
     with the newest `n_fin` ended agents; `d` is the result of collect()."""
@@ -566,7 +572,7 @@ def build_lines(level, d, w, n_fin) -> list:
         limit("Codex 5h", d["xu"]["FiveHour"])
     for p in d["provider_limits"]:
         model = str(p["model"] or "no medium model")
-        slots = "%d/%d" % (p["total_slots"] - p["slots"], p["total_slots"])
+        slots = "%d/%d" % (p["used_slots"], p["total_slots"])
         marker = "  ◀ nächster" if p["next"] else ""
         if not p["has_limit"]:
             L.append([("%s kein Limit  slots %s  %s%s" % (p["name"], slots, model, marker), "")])

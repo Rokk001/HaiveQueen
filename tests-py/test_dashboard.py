@@ -63,6 +63,7 @@ class DashboardTest(unittest.TestCase):
         args.update(kw)
         return dashboard.render(self.conn, **args)
 
+    # Check that the dashboard retains sections and omits the removed weekly rows.
     def test_sections_and_projects(self):
         """All sections show; both projects appear in agent rows; texts are English."""
         t = self.text()
@@ -75,6 +76,7 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("Total Input 2k / Output 100", t)
         self.assertIn("Total Input 120k / Output 3k", t)
 
+    # Check that Codex 5-hour usage remains visible without a weekly row.
     def test_codex_limits_from_session_logs(self):
         """Invented Codex session logs in a temp home: the dashboard writes kv usage-codex and shows percent and reset instead of n/a."""
         home = Path(self.tmp.name) / "home"
@@ -186,8 +188,10 @@ class DashboardTest(unittest.TestCase):
                 "startedAt": iso(i * 10), "endedAt": iso(i), "lastLine": "boom"})
         self.assertIn("BLOCKED fail-2: boom", self.text())
 
+    # Check that only two recent newest failures without a later run are blocked.
     def test_blocked_requires_recent_two_failed_runs_and_no_newer_run(self):
         """Only a nonarchived task with two newest identical failures ending within 12h is blocked."""
+        # Add one invented run for a task package.
         def add(name, status, minutes_ago, package, line="boom", ended=True):
             runtime.upsert_agent(self.conn, "alpha", name, {"plan": "p.md", "package": package, "phase": "work",
                 "status": status, "startedAt": iso(minutes_ago + 1), "endedAt": iso(minutes_ago) if ended else None, "lastLine": line})
@@ -211,6 +215,7 @@ class DashboardTest(unittest.TestCase):
         self.assertNotIn("later-done-2", got)
         self.assertNotIn("later-running-2", got)
 
+    # Check quota, reset, slot, model and scheduler marker display for providers.
     def test_provider_limits_show_weekly_share_slots_model_and_next(self):
         """Provider rows show weekly quota and reset, free slots and medium models; only the scheduler choice is marked next."""
         providers = []
@@ -228,12 +233,13 @@ class DashboardTest(unittest.TestCase):
             "no-reset-provider": {"usedPercent": 33}}), encoding="utf-8")
         with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(limits)}):
             rows = dashboard.provider_lines(self.conn, {"providers": providers}, [])
-            lines = dashboard.build_lines(0, {"now": NOW, "project": None, "colours": {}, "run": runstate.get_state(self.conn),
+            data = {"now": NOW, "project": None, "colours": {}, "run": runstate.get_state(self.conn),
                 "hives": [], "agents": [], "fin": [], "blocked": [], "provider_limits": rows,
                 "cu": {"FiveHour": None, "SevenDay": None}, "xu": {"FiveHour": None, "SevenDay": None},
                 "usage": [], "counts": {}, "drafts": [], "status": [], "qs": [], "triage": 0,
                 "round_errors": [], "selfupdate": None, "bj": None, "orch": {"status": "idle"},
-                "sysinfo": dict(SYS), "host": "h1", "last_round": "-"}, 120, 0)
+                "sysinfo": dict(SYS), "host": "h1", "last_round": "-"}
+            lines = dashboard.build_lines(0, data, 120, 0)
         for got, want in zip([r["ratio"] for r in rows[:3]], [1.0, 0.7, 0.35]):
             self.assertAlmostEqual(got, want)
         self.assertEqual([r["next"] for r in rows], [True, False, False, False, False, False, False])
@@ -256,7 +262,13 @@ class DashboardTest(unittest.TestCase):
         no_reset_line = next(line for line in lines if any(text.startswith("no-reset-provider used 33%") for text, _ in line))
         self.assertEqual(no_reset_line, [("no-reset-provider used 33%, reset unbekannt  Quota unbekannt  slots 0/2  no-reset-provider-model", "")])
         exhausted = [{"provider": name, "status": "running"} for name in ("green-provider", "yellow-provider", "red-provider", "unknown-provider", "no-reset-provider", "lmstudio", "local") for _ in range(2)]
-        self.assertFalse(any(row["next"] for row in dashboard.provider_lines(self.conn, {"providers": providers}, exhausted)))
+        exhausted.extend([{"provider": "green-provider", "status": "starting"}])
+        with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(limits)}):
+            exhausted_rows = dashboard.provider_lines(self.conn, {"providers": providers}, exhausted)
+        self.assertFalse(any(row["next"] for row in exhausted_rows))
+        self.assertEqual(exhausted_rows[0]["used_slots"], 3)
+        overfull_lines = dashboard.build_lines(0, dict(data, provider_limits=exhausted_rows), 120, 0)
+        self.assertIn("slots 3/2", "\n".join("".join(text for text, _ in line) for line in overfull_lines))
 
 
 if __name__ == "__main__":
