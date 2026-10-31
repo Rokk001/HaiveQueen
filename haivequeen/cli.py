@@ -142,7 +142,10 @@ def cmd_queue(args, conn) -> int:
             return fail("queue upsert needs --project and --branch", 2)
         return runtime_cli.run(lambda a, c: runtime.queue_upsert(
             c, a.project, a.branch, a.tip, a.plan, a.status, a.note, a.run))(args, conn)
-    out(db.queue_rows(conn, args.project))
+    rows = db.queue_rows(conn, args.project)
+    if args.branch:
+        rows = [row for row in rows if row["branch"] == args.branch]
+    out(rows)
     return 0
 
 

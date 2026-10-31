@@ -67,8 +67,10 @@ class DashboardTest(unittest.TestCase):
         """All sections show; both projects appear in agent rows; texts are English."""
         t = self.text()
         for s in ("AGENTS 1", "LIMITS", "USAGE", "SYSTEM", "PLANS", "QUESTIONS", "RUNNING", "alpha | ANN", "beta | ",
-                  "ended in the last hour", "Claude 5h", " 42%", " 90%", "open: 1  beta#", "draft: NEW"):
+                  "ended in the last hour", "Claude 5h", " 42%", "open: 1  beta#", "draft: NEW"):
             self.assertIn(s, t)
+        self.assertNotIn("Claude 7d", t)
+        self.assertNotIn("Codex 7d", t)
         self.assertIn("▲ Context 310k", t)
         self.assertIn("Total Input 2k / Output 100", t)
         self.assertIn("Total Input 120k / Output 3k", t)
@@ -84,7 +86,7 @@ class DashboardTest(unittest.TestCase):
         line = json.dumps({"payload": {"rate_limits": rl}}, separators=(",", ":"))
         (day / "rollout-a.jsonl").write_text('{"x":1}\n' + line + "\n", encoding="utf-8")
         before = self.text()
-        self.assertIn("n/a", before)
+        self.assertNotIn("Codex 7d", before)
         env = {k: v for k, v in os.environ.items() if k != "BZZ_DATA_DIR"}
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(usage, "home_dir", return_value=home):
             usage._codex_refresh.clear()
@@ -92,8 +94,8 @@ class DashboardTest(unittest.TestCase):
         self.assertIsNotNone(runtime.kv_get(self.conn, "*", "usage-codex"))
         codex_line = [x for x in out.split("\n") if "Codex" in x and "5h" in x][0]
         self.assertIn("37%", codex_line)
-        self.assertNotIn("n/a", codex_line)
-        self.assertIn("64%", [x for x in out.split("\n") if "Codex" in x and "7d" in x][0])
+        self.assertNotIn("Codex 7d", out)
+        self.assertNotIn("64%", out)
 
     def test_build_jobs_line(self):
         """The build-jobs line shows jobs, cores, per-job use and the active cores of a running build."""
@@ -183,6 +185,73 @@ class DashboardTest(unittest.TestCase):
                 "plan": "p.md", "package": "X", "phase": "work", "status": "failed",
                 "startedAt": iso(i * 10), "endedAt": iso(i), "lastLine": "boom"})
         self.assertIn("BLOCKED fail-2: boom", self.text())
+
+    def test_blocked_requires_recent_two_failed_runs_and_no_newer_run(self):
+        """Only a nonarchived task with two newest identical failures ending within 12h is blocked."""
+        def add(name, status, minutes_ago, package, line="boom", ended=True):
+            runtime.upsert_agent(self.conn, "alpha", name, {"plan": "p.md", "package": package, "phase": "work",
+                "status": status, "startedAt": iso(minutes_ago + 1), "endedAt": iso(minutes_ago) if ended else None, "lastLine": line})
+        add("recent-1", "failed", 30, "recent")
+        add("recent-2", "failed", 10, "recent")
+        add("old-1", "failed", 60 * 13, "old")
+        add("old-2", "failed", 60 * 12 + 1, "old")
+        add("archived-1", "failed", 20, "archived")
+        add("archived-2", "failed", 10, "archived")
+        self.conn.execute("UPDATE agents SET archived=1 WHERE name LIKE 'archived-%'")
+        add("later-done-1", "failed", 20, "later")
+        add("later-done-2", "failed", 10, "later")
+        add("later-done-3", "done", 5, "later")
+        add("later-running-1", "failed", 20, "running")
+        add("later-running-2", "failed", 10, "running")
+        add("later-running-3", "running", 5, "running", ended=False)
+        got = {row["name"] for row in dashboard.blocked_tasks(runtime.list_agents(self.conn, scope="all"), NOW)}
+        self.assertIn("recent-2", got)
+        self.assertNotIn("old-2", got)
+        self.assertNotIn("archived-2", got)
+        self.assertNotIn("later-done-2", got)
+        self.assertNotIn("later-running-2", got)
+
+    def test_provider_limits_show_weekly_share_slots_model_and_next(self):
+        """Provider rows show weekly quota and reset, free slots and medium models; only the scheduler choice is marked next."""
+        providers = []
+        for name, use, source in (("green-provider", "preferred", "codex"), ("yellow-provider", "fallback", "codex"),
+                                  ("red-provider", "fallback", "codex"), ("unknown-provider", "fallback", "claude"),
+                                  ("lmstudio", "fallback", ""),
+                                  ("local", "fallback", "")):
+            providers.append({"name": name, "protocol": "codex", "use": use, "slots": 2, "limit": source,
+                "classes": {"medium": {"model": name + "-model"}}})
+        limits = Path(self.tmp.name) / "limits.json"
+        limits.write_text(json.dumps({"green-provider": {"usedPercent": 50, "resetHours": 84},
+            "yellow-provider": {"usedPercent": 80, "resetHours": 48},
+            "red-provider": {"usedPercent": 95, "resetHours": 24}}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(limits)}):
+            rows = dashboard.provider_lines(self.conn, {"providers": providers}, [])
+            lines = dashboard.build_lines(0, {"now": NOW, "project": None, "colours": {}, "run": runstate.get_state(self.conn),
+                "hives": [], "agents": [], "fin": [], "blocked": [], "provider_limits": rows,
+                "cu": {"FiveHour": None, "SevenDay": None}, "xu": {"FiveHour": None, "SevenDay": None},
+                "usage": [], "counts": {}, "drafts": [], "status": [], "qs": [], "triage": 0,
+                "round_errors": [], "selfupdate": None, "bj": None, "orch": {"status": "idle"},
+                "sysinfo": dict(SYS), "host": "h1", "last_round": "-"}, 120, 0)
+        for got, want in zip([r["ratio"] for r in rows[:3]], [1.0, 0.7, 0.35]):
+            self.assertAlmostEqual(got, want)
+        self.assertEqual([r["next"] for r in rows], [True, False, False, False, False, False])
+        self.assertFalse(rows[4]["has_limit"])
+        self.assertIsNone(rows[4]["ratio"])
+        flat = "\n".join("".join(text for text, _ in row) for row in lines)
+        self.assertIn("used 50%, reset 84.0h", flat)
+        self.assertIn("Quota 1.00× (50.0%/50.0%)", flat)
+        self.assertIn("slots 0/2  green-provider-model  ◀ nächster", flat)
+        self.assertIn("lmstudio kein Limit  slots 0/2  lmstudio-model", flat)
+        self.assertIn("local kein Limit  slots 0/2  local-model", flat)
+        self.assertIn("unknown-provider unbekannt  slots 0/2  unknown-provider-model", flat)
+        quota_colours = [next(colour for text, colour in line if "Quota " in text) for line in lines if any("Quota " in text for text, _ in line)]
+        self.assertEqual(quota_colours, ["green", "yellow", "red"])
+        local_line = next(line for line in lines if any(text.startswith("local kein Limit") for text, _ in line))
+        self.assertEqual(local_line, [("local kein Limit  slots 0/2  local-model", "")])
+        unknown_line = next(line for line in lines if any(text.startswith("unknown-provider unbekannt") for text, _ in line))
+        self.assertEqual(unknown_line, [("unknown-provider unbekannt  slots 0/2  unknown-provider-model", "")])
+        exhausted = [{"provider": name, "status": "running"} for name in ("green-provider", "yellow-provider", "red-provider", "unknown-provider", "lmstudio", "local") for _ in range(2)]
+        self.assertFalse(any(row["next"] for row in dashboard.provider_lines(self.conn, {"providers": providers}, exhausted)))
 
 
 if __name__ == "__main__":

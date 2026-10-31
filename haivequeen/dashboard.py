@@ -208,20 +208,24 @@ def window_usage(raw, now):
     return res
 
 
-def blocked_tasks(agents) -> list:
-    """Tasks (plan|package|phase) whose last two starts failed with the same error: blocked, never restarted."""
+def blocked_tasks(agents, now=None) -> list:
+    """Tasks with two newest nonarchived failed runs matching in error, recent within 12h, and no later run."""
+    now = now or datetime.now()
     groups = {}
     for a in agents:
-        if a["status"] == "failed":
-            groups.setdefault((a.get("plan_path"), a.get("package"), a.get("phase")), []).append(a)
+        if not a.get("archived"):
+            groups.setdefault((a.get("project"), a.get("plan_path"), a.get("package"), a.get("phase")), []).append(a)
     res = []
     for rows in groups.values():
         rows.sort(key=lambda r: r.get("started_at") or "")
         if len(rows) < 2:
             continue
         a, b = rows[-1], rows[-2]
+        ended = _parse_time(a.get("ended_at"))
         last = str(a.get("last_line") or "")
-        if last == str(b.get("last_line") or "") and not last.startswith("pane never started"):
+        if (a.get("status") == b.get("status") == "failed" and ended
+                and timedelta(0) <= now - ended <= timedelta(hours=12)
+                and last == str(b.get("last_line") or "") and not last.startswith("pane never started")):
             res.append({"name": a.get("name") or "", "error": last, "project": a["project"]})
     return res
 
@@ -336,7 +340,8 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
                               + " ORDER BY id DESC LIMIT 1", pa).fetchone()
     return {
         "now": now, "project": project, "projects": scope, "colours": colours, "cfg": cfg, "sysinfo": sysinfo,
-        "run": runstate.get_state(conn), "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all),
+        "run": runstate.get_state(conn), "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all, now),
+        "provider_limits": provider_lines(conn, cfg, agents_all),
         "cu": window_usage(_kv(conn, "usage-claude"), now), "xu": window_usage(_kv(conn, "usage-codex"), now),
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
@@ -348,6 +353,40 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "round_errors": round_errors(conn, project, now),
         "last_round": (_parse_time(last_round[0]).strftime("%H:%M:%S") if last_round and _parse_time(last_round[0]) else "-"),
     }
+
+
+def provider_lines(conn, cfg, agents) -> list:
+    """Build the provider weekly quota and slot rows, marking the scheduler's next medium provider."""
+    providers = sch.get_providers(cfg or {})
+    free = sch.provider_free(providers, agents)
+    next_provider = sch.select_provider(providers, "medium", [], free, conn=conn)
+    rows = []
+    for provider in providers:
+        source = provider["limit"]
+        used, hours = None, None
+        if source in ("claude", "codex"):
+            limits_path = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
+            if limits_path and Path(limits_path).is_file():
+                entry = json.loads(Path(limits_path).read_text(encoding="utf-8-sig")).get(provider["name"]) or {}
+                if entry.get("usedPercent") is not None:
+                    used, hours = float(entry["usedPercent"]), entry.get("resetHours")
+            elif not os.environ.get("BZZ_RUNTIME_OVERRIDE"):
+                window = (sch.claude_usage(conn) if source == "claude" else sch.codex_usage()).get("SevenDay")
+                if window and window.get("Pct") is not None:
+                    used = float(window["Pct"])
+                    if window.get("At"):
+                        hours = max(0.0, (float(window["At"]) - time.time()) / 3600)
+        ratio = None
+        if used is not None and hours is not None:
+            remaining_week = max(0.0, float(hours)) / 168.0
+            remaining_quota = max(0.0, 100.0 - used) / 100.0
+            ratio = remaining_quota / remaining_week if remaining_week else float("inf")
+        rows.append({"name": provider["name"], "used_pct": used, "hours": hours, "ratio": ratio,
+                     "has_limit": source in ("claude", "codex"),
+                     "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
+                     "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),
+                     "next": provider is next_provider})
+    return rows
 
 
 # The failed rounds of the last day (the Beekeeper has no pane of its own, so its errors show here).
@@ -520,10 +559,24 @@ def build_lines(level, d, w, n_fin) -> list:
 
     head("◔ LIMITS")
     limit("Claude 5h", d["cu"]["FiveHour"])
-    limit("Claude 7d", d["cu"]["SevenDay"])
     if d["xu"]["FiveHour"]:
         limit("Codex 5h", d["xu"]["FiveHour"])
-    limit("Codex 7d", d["xu"]["SevenDay"])
+    for p in d["provider_limits"]:
+        model = str(p["model"] or "no medium model")
+        slots = "%d/%d" % (p["total_slots"] - p["slots"], p["total_slots"])
+        marker = "  ◀ nächster" if p["next"] else ""
+        if not p["has_limit"]:
+            L.append([("%s kein Limit  slots %s  %s%s" % (p["name"], slots, model, marker), "")])
+        elif p["used_pct"] is None or p["hours"] is None:
+            L.append([("%s unbekannt  slots %s  %s%s" % (p["name"], slots, model, marker), "")])
+        else:
+            col = "green" if p["ratio"] >= 1 else "yellow" if p["ratio"] >= 0.7 else "red"
+            quota = p["ratio"]
+            remaining_week = max(0.0, p["hours"]) / 168.0
+            remaining_quota = max(0.0, 100.0 - p["used_pct"]) / 100.0
+            L.append([(p["name"] + " ", "gray"), ("used %.0f%%, reset %.1fh  Quota %.2f× (%.1f%%/%.1f%%)  slots %s  %s%s" %
+                      (p["used_pct"], p["hours"], quota, remaining_quota * 100.0, remaining_week * 100.0,
+                       slots, model, marker), col)])
 
     head("Σ USAGE")
     models = [m for m in d["usage"] if level == 0 or (m["Today"] and m["Today"][0] > 0) or m["Plans"]]
