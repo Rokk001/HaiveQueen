@@ -36,6 +36,7 @@ def snapshot_real(bases=None) -> dict:
 REAL_BEFORE = snapshot_real()
 ROOT = Path(tempfile.mkdtemp(prefix="hq-tests-appdata-"))
 REDIRECTED = {"LOCALAPPDATA": ROOT / "local", "APPDATA": ROOT / "roaming", "XDG_DATA_HOME": ROOT / "local", "XDG_CONFIG_HOME": ROOT / "roaming"}
+ORIGINAL = {_var: os.environ.get(_var) for _var in REDIRECTED}  # real values for read-only live-loop checks
 for _var, _path in REDIRECTED.items():
     _path.mkdir(parents=True, exist_ok=True)
     os.environ[_var] = str(_path)

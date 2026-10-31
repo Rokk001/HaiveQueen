@@ -11,7 +11,9 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from bzztest import RoundCase, runtime
@@ -237,16 +239,65 @@ class PaneLockTest(RoundCase):
         self.assertFalse((loop.osplat.runs_dir() / "_panes").exists(), "no pane was opened")
 
 
+# Real Windows Terminal in the test runtime (opt in with BZZ_REAL_WT=1
 class RealWindowsTerminalCloseTest(RoundCase):
     """Real Windows Terminal in the test runtime (opt in with BZZ_REAL_WT=1: the test opens, resizes, moves and closes a real window of the Windows
     Terminal process it runs in, and a crash of that process ends every window and shell in it).
     Covers: restart, new agents in the same tab, resize and move with live headers and dashboard, several panes closed one after another."""
 
+    # The real data folder of the user
+    def real_data_dir(self):
+        """The real data folder of the user: BZZ_DATA_DIR and the folder variables as they were before the test runtime replaced them."""
+        import isolation
+        env = dict(os.environ)
+        for var, value in isolation.ORIGINAL.items():
+            if value is None:
+                env.pop(var, None)
+            else:
+                env[var] = value
+        if self.saved.get("BZZ_DATA_DIR") is None:
+            env.pop("BZZ_DATA_DIR", None)
+        else:
+            env["BZZ_DATA_DIR"] = self.saved["BZZ_DATA_DIR"]
+        return loop.osplat.data_dir(env=env)
+
+    # Process id in `data_dir`/loop.lock when that process lives, else 0.
+    def live_loop_pid(self, data_dir):
+        """Process id in `data_dir`/loop.lock when that process lives, else 0."""
+        try:
+            pid = int((Path(data_dir) / "loop.lock").read_text(encoding="ascii").strip())
+        except (OSError, ValueError):
+            return 0
+        return pid if loop.osplat.process_alive(pid) else 0
+
+    # Skip unless Windows, wt.exe and the opt-in variable are there, and no live loop owns the real data folder (its windows would be disturbed);
     def require_real_wt(self):
-        """Skip unless Windows, wt.exe and the opt-in variable are there."""
+        """Skip unless Windows, wt.exe and the opt-in variable are there, and no live loop owns the real data folder (its windows would be disturbed);
+        then remember the open Windows Terminal windows and close every new one after the test."""
         import shutil
         if sys.platform != "win32" or not shutil.which("wt.exe") or not os.environ.get("BZZ_REAL_WT"):
             self.skipTest("opt in with BZZ_REAL_WT=1 (opens, resizes and closes a real Windows Terminal window)")
+        pid = self.live_loop_pid(self.real_data_dir())
+        if pid:
+            self.skipTest("a live HaiveQueen loop (pid %d) runs in the real data folder: the real terminal tests would disturb its windows" % pid)
+        known = self.window_handles()
+        self.addCleanup(self.close_new_windows, known)
+
+    # Close only test-owned panes and check that no new Terminal window remains.
+    def close_new_windows(self, known):
+        """Close only test-owned panes and check that no new Terminal window remains."""
+        from haivequeen.terminal import wt
+        term = wt.WindowsTerminal(str(self.base / "panes"), start_timeout=0, settle=0)
+        window = "HQTEST%d" % os.getpid()
+        for pane in term.list_panes(window):
+            if pane.alive:
+                term.close_pane(pane.id)
+        deadline = time.time() + 15
+        left = [h for h in self.window_handles().split(",") if h and h not in known.split(",")]
+        while left and time.time() < deadline:
+            time.sleep(0.5)
+            left = [h for h in self.window_handles().split(",") if h and h not in known.split(",")]
+        self.assertEqual(left, [], "the test left Windows Terminal windows open")
 
     def window_handles(self):
         """Native window handles of all Windows Terminal windows, comma separated."""
@@ -364,6 +415,76 @@ class RealWindowsTerminalCloseTest(RoundCase):
             for p in term.list_panes(window):
                 if p.alive:
                     term.close_pane(p.id)
+
+    # Splitting a terminal pane restores the helper window as the foreground window.
+    def test_split_restores_helper_window_foreground(self):
+        """Splitting a terminal pane restores the helper window as the foreground window."""
+        import ctypes
+        import tkinter
+        from haivequeen.terminal import wt
+        self.require_real_wt()
+        term = wt.WindowsTerminal(str(self.base / "panes"), start_timeout=30, settle=0)
+        window = "HQTEST%d" % os.getpid()
+        helper = tkinter.Tk()
+        helper.title("Foreground helper")
+        helper.update()
+        try:
+            first = term.open_window(window, "HaiveQueen | test", SLEEP)
+            helper.lift()
+            helper.focus_force()
+            helper.update()
+            user = ctypes.windll.user32
+            user.GetForegroundWindow.restype = ctypes.wintypes.HWND
+            user.GetAncestor.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.UINT]
+            user.GetAncestor.restype = ctypes.wintypes.HWND
+            expected = user.GetAncestor(helper.winfo_id(), 2)
+            self.assertEqual(user.GetForegroundWindow(), expected, "helper window did not take foreground")
+            term.split_pane(window, "HaiveQueen | test", "white", SLEEP, target=first)
+            self.assertEqual(user.GetForegroundWindow(), expected)
+        finally:
+            helper.destroy()
+            for pane in term.list_panes(window):
+                if pane.alive:
+                    term.close_pane(pane.id)
+
+    # A loop.lock naming the current (living) pid in the real data folder makes require_real_wt skip, before any window is looked at.
+    def test_live_lock_in_real_data_folder_skips_the_real_tests(self):
+        """A loop.lock naming the current (living) pid in the real data folder makes require_real_wt skip, before any window is looked at."""
+        real = self.base / "real-data"
+        real.mkdir()
+        (real / "loop.lock").write_text(str(os.getpid()), encoding="ascii")
+        before = dict(self.saved)
+        with unittest.mock.patch.dict(self.saved, {"BZZ_DATA_DIR": str(real)}), unittest.mock.patch.dict(os.environ, {"BZZ_REAL_WT": "1"}), \
+                unittest.mock.patch("shutil.which", return_value="wt.exe"), unittest.mock.patch.object(sys, "platform", "win32"):
+            with self.assertRaises(unittest.SkipTest) as ctx:
+                self.require_real_wt()
+        self.assertIn("live HaiveQueen loop", str(ctx.exception))
+        self.assertEqual(self.saved, before, "tearDown would put the fake data folder into the environment of the next (real) test")
+        self.assertEqual(self.live_loop_pid(self.base / "nothing"), 0)
+
+    # Without BZZ_DATA_DIR the guard looks at the real %LOCALAPPDATA% / $XDG_DATA_HOME that isolation.py replaced, not at the temp folder.
+    def test_live_lock_below_the_real_localappdata_skips_the_real_tests(self):
+        """Without BZZ_DATA_DIR the guard looks at the real %LOCALAPPDATA% / $XDG_DATA_HOME that isolation.py replaced, not at the temp folder."""
+        import isolation
+        real = self.base / "real-local"
+        (real / "HaiveQueen").mkdir(parents=True)
+        (real / "HaiveQueen" / "loop.lock").write_text(str(os.getpid()), encoding="ascii")
+        before = dict(self.saved)
+        with unittest.mock.patch.dict(self.saved, {"BZZ_DATA_DIR": None}), \
+                unittest.mock.patch.dict(isolation.ORIGINAL, {"LOCALAPPDATA": str(real), "XDG_DATA_HOME": str(real)}), \
+                unittest.mock.patch.dict(os.environ, {"BZZ_REAL_WT": "1"}), unittest.mock.patch("shutil.which", return_value="wt.exe"), \
+                unittest.mock.patch.object(sys, "platform", "win32"):
+            self.assertEqual(self.real_data_dir(), real / "HaiveQueen")
+            with self.assertRaises(unittest.SkipTest) as ctx:
+                self.require_real_wt()
+        self.assertIn("live HaiveQueen loop", str(ctx.exception))
+        self.assertEqual(self.saved, before, "tearDown would put the fake data folder into the environment of the next (real) test")
+
+    # A lock with a dead pid is no live loop.
+    def test_stale_lock_does_not_skip(self):
+        """A lock with a dead pid is no live loop."""
+        (self.base / "loop.lock").write_text("999999999", encoding="ascii")
+        self.assertEqual(self.live_loop_pid(self.base), 0)
 
 
 def wait_dead(pid, seconds=30):

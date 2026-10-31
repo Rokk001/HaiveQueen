@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 from haivequeen import db  # noqa: E402
 
 
+# Test cli behavior.
 class CliTest(unittest.TestCase):
     """Runs haivequeen/cli.py with BZZ_* folders pointing into a temp folder."""
 
@@ -55,6 +56,15 @@ class CliTest(unittest.TestCase):
         q = json.loads(self.run_orch("queue")[1])
         self.assertEqual((q[0]["branch"], q[0]["status"]), ("b", "ready"))
         self.assertEqual(self.run_orch("note", "--project", "p", "--text", "hello")[0], 0)
+
+    # Check that listing a branch returns no other queue rows.
+    def test_queue_branch_filter(self):
+        """queue --branch returns only the matching branch row."""
+        for branch in ("feature/a", "feature/b"):
+            self.assertEqual(self.run_orch("ready", "--project", "p", "--branch", branch,
+                                           "--tip", "abc", "--plan", "x.md", "--note", "n")[0], 0)
+        rows = json.loads(self.run_orch("queue", "--project", "p", "--branch", "feature/b")[1])
+        self.assertEqual([row["branch"] for row in rows], ["feature/b"])
 
     def test_done(self):
         """done reads the result file and marks the agent done."""

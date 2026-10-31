@@ -135,6 +135,7 @@ def cmd_answer(args, conn) -> int:
     return 0
 
 
+# List queue rows, optionally filtered to one branch, or update a branch row.
 def cmd_queue(args, conn) -> int:
     """List the integration queue as JSON, or (action upsert) change or add the row of a branch."""
     if args.action == "upsert":
@@ -142,7 +143,10 @@ def cmd_queue(args, conn) -> int:
             return fail("queue upsert needs --project and --branch", 2)
         return runtime_cli.run(lambda a, c: runtime.queue_upsert(
             c, a.project, a.branch, a.tip, a.plan, a.status, a.note, a.run))(args, conn)
-    out(db.queue_rows(conn, args.project))
+    rows = db.queue_rows(conn, args.project)
+    if args.branch:
+        rows = [row for row in rows if row["branch"] == args.branch]
+    out(rows)
     return 0
 
 
