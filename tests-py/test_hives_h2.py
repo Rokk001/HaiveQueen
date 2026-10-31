@@ -776,6 +776,7 @@ class BeeRunnerTests(RunnerBase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.runs / 'Ada' / 'HANDOFF').exists())
 
+# Verify that only repeated package failure signals count.
 class AttemptSignalTests(unittest.TestCase):
     # Check repeated requirements and errors count only once per attempt.
     def test_signals_and_no_signal(self):
