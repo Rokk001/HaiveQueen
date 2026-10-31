@@ -580,6 +580,8 @@ class AgentRun:
                     continue
                 if c.get("type") == "text" and c.get("text"):
                     self.last = short(c["text"])
+                    if self.phase == "queen" and str(c["text"]).strip():
+                        self.final = str(c["text"])
                     self.say(str(c["text"]), "White")
                 elif c.get("type") == "tool_use":
                     self.last = "tool: " + str(c.get("name"))
@@ -612,7 +614,9 @@ class AgentRun:
             if u:
                 self.tin = int(u.get("input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
                 self.tout = int(u.get("output_tokens") or 0)
-            self.final = str(e.get("result") or "")
+            result = str(e.get("result") or "")
+            if self.phase != "queen" or result.strip():
+                self.final = result
             self.ok = not e.get("is_error")
             if e.get("is_error"):
                 self.api_errors.append(self.final)
@@ -739,6 +743,14 @@ def run_agent(a, out=None):
                                 "task": (prev or {}).get("task") or task}):
         out.write("agent %s not started: the agent row could not be written, row set to failed\n" % a.name)   # the model is never called
         return 0
+    if a.phase == "queen":
+        from . import hives
+        plan_path = Path(a.plan) if a.plan else None
+        state_paths = []
+        if plan_path and not plan_path.is_absolute():
+            names = (plan_path.stem + '-STATE.md', re.sub(r'-PLAN$', '', plan_path.stem) + '-STATE.md')
+            state_paths = [Path(base) / plan_path.parent / name for base in (a.cwd, workspace) if base for name in names]
+        hives.save_worktree_state(a.cwd, run_dir, state_paths)
     # The header is drawn by haivequeen.header (own process in this pane); this process only prints milestones below it.
     run.ms_file.write_text("", encoding="utf-8")
     header_proc = None
@@ -869,13 +881,16 @@ def run_agent(a, out=None):
         if not re.match(r"^(error|runner error)", run.last):
             run.last = "no result event, exit %s %s" % (code, err_txt)
         run.last = short(run.last)
+    if a.phase == "queen":
+        from . import hives
+        run.final = hives.queen_final_text(run_dir, started.timestamp(), run.final)
     final_file.write_text(run.final, encoding="utf-8", newline="")
     # An end caused by sleep, network, API error or a vanished process is marked interrupted: it is no failure and is tried again after a wait.
     err_text = err_file.read_text(encoding="utf-8", errors="replace") if err_file.is_file() else ""
     kind = interrupt.classify_end(status == "failed", run.api_errors, err_text, bool(clock_jumps), run.last)
     run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx,
                          "interrupted": kind, "retryAt": ""})
-    if run.final and short(run.final, 1500) != short(run.last_said, 1500):
+    if run.final and (a.phase == "queen" or short(run.final, 1500) != short(run.last_said, 1500)):
         run.say("Final message: " + run.final, "Green" if status == "done" else "Red")
     run.say("End: %s (exit %s), total input %s / output %s. The section closes after the close delay." % (status, code, header.fmt_tok(run.tin), header.fmt_tok(run.tout)),
             "Green" if status == "done" else "Red")

@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import subprocess
 from . import db, runtime
 from . import platform as osplat
 
@@ -135,9 +136,64 @@ def reopen_after_owner_check(conn, project, plan):
         conn.execute("DELETE FROM hive_integration WHERE project=? AND plan_path=?", (project, plan))
 
 
-# Return whether a Queen ended without a HANDOFF file and without a new commit in her worktree since she started (unknown counts as work).
+# Capture the contents of Git-visible files for comparison at the Queen's end.
+def worktree_state(cwd, excluded=None):
+    """Return hashes of tracked and non-ignored untracked files, excluding the plan state."""
+    import hashlib
+    import subprocess
+    from pathlib import Path
+    root = Path(cwd)
+    result = subprocess.run(['git', '-C', str(root), 'ls-files', '-co', '--exclude-standard', '-z'], capture_output=True, check=True, timeout=30)
+    state = {}
+    exclusions = excluded if isinstance(excluded, list) else [excluded] if excluded else []
+    exclusions = {Path(p).resolve() for p in exclusions}
+    for raw in result.stdout.split(b'\0'):
+        if not raw:
+            continue
+        name = os.fsdecode(raw)
+        path = root / name
+        if path.resolve() in exclusions:
+            continue
+        if path.is_symlink():
+            state[name] = 'link:' + os.readlink(path)
+        elif path.is_file():
+            state[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        elif path.exists():
+            raise OSError('cannot read worktree entry: ' + name)
+        else:
+            state[name] = None
+    return state
+
+
+# Persist the Queen's starting worktree state in her run folder.
+def save_worktree_state(cwd, run_dir, excluded=None):
+    """Save a snapshot when the worktree is readable; otherwise retain the commit fallback."""
+    from pathlib import Path
+    try:
+        state = worktree_state(cwd, excluded)
+        exclusions = excluded if isinstance(excluded, list) else [excluded] if excluded else []
+        (Path(run_dir) / 'worktree-start.json').write_text(json.dumps({'cwd': str(Path(cwd).resolve()), 'excluded': [str(p) for p in exclusions], 'files': state}), encoding='utf-8')
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return
+
+
+# Select the newest report written during the run, falling back to the final message.
+def queen_final_text(run_dir, started, message='', ended=float('inf')):
+    """Return the Queen's report or her last non-empty message."""
+    from pathlib import Path
+    excluded = {'final.txt', 'stderr.txt', 'runner-error.txt', 'milestones.txt', 'build-samples.txt', 'prompt.md', 'rules.md'}
+    try:
+        reports = [p for p in Path(run_dir).iterdir() if p.is_file() and p.suffix.lower() in ('.md', '.txt') and p.name.lower() not in excluded and started <= p.stat().st_mtime < ended]
+        if reports:
+            return max(reports, key=lambda p: (p.stat().st_mtime_ns, p.name)).read_text(encoding='utf-8-sig', errors='replace')
+    except OSError:
+        pass
+    return message
+
+
+# Return whether the Queen ended without a handoff, new commit or changed worktree (unknown counts as work).
 def ended_without_work(env, agent):
-    """Return whether a Queen ended without a HANDOFF file and without a new commit in her worktree since she started (unknown counts as work)."""
+    """Return whether the Queen ended without a handoff, new commit or changed worktree."""
     import subprocess
     from pathlib import Path
     if (env.run_dir(agent['name']) / 'HANDOFF').exists():
@@ -150,14 +206,25 @@ def ended_without_work(env, agent):
         result = subprocess.run(['git', '-C', str(cwd), 'log', '--all', '-1', '--since=' + since, '--format=%H'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30)
     except (OSError, subprocess.SubprocessError):
         return False
-    return result.returncode == 0 and not result.stdout.strip()
+    if result.returncode != 0 or result.stdout.strip():
+        return False
+    snapshot = env.run_dir(agent['name']) / 'worktree-start.json'
+    if not snapshot.is_file():
+        return True
+    try:
+        state = json.loads(snapshot.read_text(encoding='utf-8'))
+        if Path(cwd).resolve() != Path(state['cwd']).resolve():
+            return False
+        return worktree_state(cwd, state.get('excluded')) == state['files']
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return False
 
 
 # File the automatic owner question for a Queen that ended without work and return its id.
 def ask_about_end(conn, env, plan, agent, final_report):
     """File the automatic owner question for a Queen that ended without work and return its id; the question holds her last text."""
     text = (final_report or '').strip() or 'no final text (status %s)' % agent.get('status')
-    question = 'Queen %s of this Hive ended without new work (no commit, no question). Her last text: %s How should the Hive continue?' % (agent['name'], text[:1500])
+    question = 'Queen %s of this Hive ended without new work (no commit, no changed file, no question). Her last text: %s How should the Hive continue?' % (agent['name'], text[:1500])
     return db.add_question(conn, env.name, plan, 'queen-ended', question, 'Answer what blocks her, or say how she should count or decide it; then the next Queen starts.')
 
 
@@ -452,6 +519,16 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     else:
                         final = env.run_dir(last['name']) / 'final.txt' if last else None
                         final_report = final.read_text(encoding='utf-8-sig') if final and final.is_file() else ''
+                        if last:
+                            try:
+                                started = datetime.fromisoformat(last['started_at']).timestamp()
+                            except (ValueError, TypeError, KeyError):
+                                started = float('inf')
+                            try:
+                                ended = datetime.fromisoformat(last['ended_at']).timestamp() + 1
+                            except (ValueError, TypeError, KeyError):
+                                ended = float('inf')
+                            final_report = queen_final_text(env.run_dir(last['name']), started, final_report, ended)
                         questions = [q for q in runtime.list_questions(conn, env.name, status='open', plan=plan['path']) if not str(q['item']).upper().startswith('STALL-')]   # stop-rule questions never block a Hive
                         if last and last.get('status') == 'done' and 'WAITING_FOR_OWNER' in final_report and questions:
                             wait_for_answers(conn, env.name, plan['path'], [q['id'] for q in questions])
