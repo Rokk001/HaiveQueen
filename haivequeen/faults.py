@@ -166,7 +166,7 @@ def _resolve_open(env, started: int, now: datetime, reader) -> None:
         elif kind in ("self_update_rollback", "self_update_pane"):
             evidence = "Self-update fault requires review: %s" % text
         if answer:
-            db.answer_question(conn, q["id"], answer, "auto")
+            db.answer_question(conn, q["id"], answer, "coordinator")
         elif evidence and now - created >= timedelta(minutes=60):
             evidence_key = "fault-evidence-%s" % q["id"]
             if not runtime.kv_get(conn, FAULT_PROJECT, evidence_key):

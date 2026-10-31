@@ -164,7 +164,7 @@ class FaultsTest(RoundCase):
         self.check(now=datetime(2026, 10, 29, 11, 1))
         for kind in ("no_start", "runner_vanished", "agent_no_result"):
             q = self.faults_of(kind)[0]
-            self.assertEqual((q["status"], q["answered_by"]), ("answered", "auto"))
+            self.assertEqual((q["status"], q["answered_by"]), ("answered", "coordinator"))
             self.assertTrue(q["answer"])
 
     # A crash entry after the question confirms the fault; absence only resolves after an hour.
