@@ -14,7 +14,7 @@ def reattach(conn, project, pid_alive) -> dict:
             if r["pid"] and pid_alive(r["pid"]):
                 kept.append(label)
                 continue
-            conn.execute("UPDATE agents SET status='failed', ended_at=?, last_line=? WHERE id=?",
+            conn.execute("UPDATE agents SET status='failed', ended_at=?, last_line=?, extra_json=json_set(COALESCE(extra_json, '{}'), '$.interrupted', 'vanished') WHERE id=?",
                          (db.now(), REASON, r["id"]))
             db.add_event(conn, project, "failed", REASON, agent=label, data={"reason": "reattach"})
             failed.append(label)

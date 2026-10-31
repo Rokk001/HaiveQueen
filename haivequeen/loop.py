@@ -1151,6 +1151,8 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
 
     for env in envs:
         res = reattach.reattach(conn, env.name, osplat.process_alive)
+        from . import hives
+        hives.repair_technical_ends(conn, env.name)
         if res["kept"] or res["failed"]:
             env.log("restart: re-attached %d running agent(s), %d gone" % (len(res["kept"]), len(res["failed"])))
         env.log("loop started (roundMinutes=%s)" % minutes)
