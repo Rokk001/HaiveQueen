@@ -47,6 +47,7 @@ def parse_terminal_crashes(text: str, since: datetime) -> list:
     return found
 
 
+# Read recent Application Error entries from the Windows event log.
 def read_event_log() -> str | None:
     """Text of the newest Application Error entries, or None when the read fails."""
     try:
@@ -56,6 +57,7 @@ def read_event_log() -> str | None:
     return out.decode("utf-8", "replace") if code == 0 else None
 
 
+# File new Windows Terminal crashes from the event log.
 def _check_terminal_crash(conn, now: datetime, reader) -> None:
     """Read the event log at most every 10 minutes and file terminal_crash for a new WindowsTerminal.exe crash entry."""
     last = runtime.kv_get(conn, FAULT_PROJECT, EVENTLOG_KEY)
@@ -164,7 +166,7 @@ def _resolve_open(env, started: int, now: datetime, reader) -> None:
         elif kind in ("self_update_rollback", "self_update_pane"):
             evidence = "Self-update fault requires review: %s" % text
         if answer:
-            db.answer_question(conn, q["id"], answer, "auto")
+            db.answer_question(conn, q["id"], answer, "coordinator")
         elif evidence and now - created >= timedelta(minutes=60):
             evidence_key = "fault-evidence-%s" % q["id"]
             if not runtime.kv_get(conn, FAULT_PROJECT, evidence_key):
@@ -172,6 +174,7 @@ def _resolve_open(env, started: int, now: datetime, reader) -> None:
                 runtime.kv_set(conn, FAULT_PROJECT, evidence_key, "1")
 
 
+# Check and resolve fault reports for one project round.
 def check_round(env, started: int, can_start: bool, now: datetime = None, reader=None) -> None:
     """Fault detection of one project round (called at the end of the round routine; never raises, a broken check must not stop a round)."""
     if not _project_known(env.conn, FAULT_PROJECT):
