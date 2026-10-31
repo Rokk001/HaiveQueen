@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 if not __package__:   # started as a script: make the package importable
@@ -345,8 +345,18 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "bj": build_jobs_line(conn, cfg, scope, all_rows, sysinfo), "host": host,
         "selfupdate": db.last_self_update(conn),
         "orch": {"status": orch_status},
+        "round_errors": round_errors(conn, project, now),
         "last_round": (_parse_time(last_round[0]).strftime("%H:%M:%S") if last_round and _parse_time(last_round[0]) else "-"),
     }
+
+
+# The failed rounds of the last day (the Beekeeper has no pane of its own, so its errors show here).
+def round_errors(conn, project, now) -> list:
+    """The newest three round errors of the last 24 hours as dicts {ts, project, text}, newest first; `project` filters to one project."""
+    since = (now - timedelta(hours=24)).isoformat(timespec="seconds")
+    rows = conn.execute("SELECT ts, project, text FROM events WHERE kind='rounds' AND text LIKE '%ERROR%' AND ts>=?"
+                        + (" AND project=?" if project else "") + " ORDER BY id DESC LIMIT 3", (since, project) if project else (since,)).fetchall()
+    return [{"ts": r[0], "project": r[1], "text": r[2]} for r in rows]
 
 
 # Count the Hives that live per Apiary (the Hives themselves are shown in their own sub-terminals).
@@ -583,6 +593,12 @@ def build_lines(level, d, w, n_fin) -> list:
         L.append([("open: %d  %s" % (len(d["qs"]), ", ".join("%s#%s" % (q["project"], q["id"]) for q in d["qs"])), "yellow")])
     if d["triage"]:
         L.append([("in triage: %d" % d["triage"], "gray")])
+    if d["round_errors"]:
+        head("! ROUND ERRORS", "red")
+        for e in d["round_errors"]:
+            when = _parse_time(e["ts"])
+            L.append([((when.strftime("%H:%M") if when else "--:--") + " ", "gray"), (e["project"], colours.get(e["project"]) or "white"),
+                      (" " + e["text"], "red")])
     return L
 
 

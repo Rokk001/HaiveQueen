@@ -79,8 +79,8 @@ class SelfUpdateBase(unittest.TestCase):
         self.live = Path(self.tmp.name) / "live"
 
     def update(self, git, **kw):
-        """run_update with the scripted runner, no real sleeping, a living new loop and one Queen tab."""
-        args = dict(live=self.live, run=git, sleep=lambda s: time.sleep(0.005), poll=0.01, round_timeout=2.0, panes=lambda: ["p1"],
+        """run_update with the scripted runner, no real sleeping, a living new loop."""
+        args = dict(live=self.live, run=git, sleep=lambda s: time.sleep(0.005), poll=0.01, round_timeout=2.0,
                     loop_pid=lambda: 4242 if getattr(git, "inner", git).started else 0)
         args.update(kw)
         return selfupdate.run_update(self.conn, **args)
@@ -235,7 +235,7 @@ class WaitTest(SelfUpdateBase):
             git.conn = conn
             try:
                 out["res"] = selfupdate.run_update(conn, live=self.live, run=git, sleep=lambda s: time.sleep(0.005), poll=0.01, round_timeout=5.0,
-                                                   alive=lambda pid: pid in living, panes=lambda: ["p1"], loop_pid=lambda: 4242 if git.started else 0)
+                                                   alive=lambda pid: pid in living, loop_pid=lambda: 4242 if git.started else 0)
             finally:
                 conn.close()
 
@@ -274,7 +274,7 @@ class WaitTest(SelfUpdateBase):
                 git.conn = conn
                 try:
                     selfupdate.run_update(conn, live=self.live, run=git, sleep=lambda s: time.sleep(0.005), poll=0.01, round_timeout=5.0,
-                                          alive=lambda pid: pid in living, panes=lambda: ["p1"], loop_pid=lambda: 4242 if git.started else 0)
+                                          alive=lambda pid: pid in living, loop_pid=lambda: 4242 if git.started else 0)
                 finally:
                     conn.close()
             t = threading.Thread(target=work)
@@ -484,15 +484,13 @@ class UpdateTest(SelfUpdateBase):
         db.add_event(self.conn, "ODP", "rounds", "ROUND ERROR long ago")
         self.assertEqual(self.update(FakeGit(self.conn))["result"], "ok")
 
-    def test_wrong_tab_count_keeps_the_new_code(self):
-        """Two Beekeeper tabs after the start are reported, not rolled back."""
-        faults = self.stub_faults()
-        self.assertEqual(self.update(FakeGit(self.conn), panes=lambda: ["a", "b"])["result"], "ok")
-        self.assertEqual(faults[0][1], "self_update_pane")
-
-    def test_unreadable_terminal_skips_the_tab_check(self):
-        """When the terminal cannot be read the tab check is skipped and the update stays ok."""
-        self.assertEqual(self.update(FakeGit(self.conn), panes=lambda: None)["result"], "ok")
+    def test_the_start_does_not_count_beekeeper_tabs(self):
+        """The loop has no pane of its own: the first-round check neither asks the terminal nor takes a `panes` argument."""
+        import inspect
+        self.assertNotIn("panes", inspect.signature(selfupdate.first_round_problems).parameters)
+        self.assertNotIn("panes", inspect.signature(selfupdate.run_update).parameters)
+        self.assertFalse(hasattr(selfupdate, "queen_panes"))
+        self.assertEqual(self.update(FakeGit(self.conn))["result"], "ok")
 
     def test_no_finished_round_rolls_back(self):
         """A loop that never finishes its first round within the time limit is rolled back."""

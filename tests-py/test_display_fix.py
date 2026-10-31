@@ -299,8 +299,8 @@ class WrapAndLayoutTest(FrameCase):
         self.assertIn("Hive:AI-LEVELS-PLAN", joined)
         self.assertGreater(len(rows), 2)
 
-    def test_session_start_opens_the_head_before_the_dashboard(self):
-        """Without panes the window gets the Beekeeper, the first Apiary head split off it to the right, and then the dashboard split off the Beekeeper downwards, so the Apiary block fills the right side."""
+    def test_session_start_opens_the_dashboard_and_the_head_right_of_it(self):
+        """Without panes the window gets the dashboard as its first pane and the first Apiary head split off it to the right; there is no Beekeeper pane."""
         calls = []
 
         class Term:
@@ -311,7 +311,7 @@ class WrapAndLayoutTest(FrameCase):
                 return []
 
             def open_window(self, window, title, command, colour=None, name=None):
-                """Open the window with the Beekeeper pane."""
+                """Open the window with the dashboard pane."""
                 calls.append(("open", name))
                 return "W.0"
 
@@ -319,12 +319,47 @@ class WrapAndLayoutTest(FrameCase):
                 """Record a split."""
                 calls.append(("split", name, direction, size, target))
                 return "W.%d" % len(calls)
-        loop.open_session_panes(Term(), "W", "T", SLEEP, SLEEP, head=("H", SLEEP, "ODP__apiary"))
-        self.assertEqual(calls[0], ("open", "chief"))
+        panes = loop.open_session_panes(Term(), "W", SLEEP, head=("H", SLEEP, "ODP__apiary"))
+        self.assertEqual(calls[0], ("open", "dashboard"))
         self.assertEqual(calls[1][:3], ("split", "ODP__apiary", "horizontal"))
         self.assertEqual(calls[1][4], "W.0")
-        self.assertEqual(calls[2][:3], ("split", "dashboard", "vertical"))
-        self.assertEqual(calls[2][4], "W.0")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(panes, ["W.0", "W.2"])
+
+    def test_window_start_runs_the_loop_without_a_pane(self):
+        """`bzz start` opens the dashboard (and the head), starts the loop as a detached process with its output in a file, and opens no Beekeeper pane."""
+        import argparse
+        import contextlib
+        import io
+        from unittest import mock
+        opened, spawned = [], []
+
+        class Term:
+            """Records the pane calls and shows no pane."""
+            trace = None
+
+            def list_panes(self, window):
+                """No pane is open."""
+                return []
+
+            def open_window(self, window, title, command, colour=None, name=None):
+                """Record the window."""
+                opened.append((title, name))
+                return "W.0"
+
+            def split_pane(self, window, title, colour, command, direction="horizontal", size=0.5, target=None, name=None):
+                """Record a split."""
+                opened.append((title, name))
+                return "W.1"
+        args = argparse.Namespace(foreground=False, terminal="headless", rounds=0, round_minutes=0)
+        self.addCleanup(lambda: loop.start_pending_file().unlink(missing_ok=True))   # the real loop removes the pending marker; the mocked one cannot
+        with mock.patch.object(loop, "get_terminal", return_value=Term()), mock.patch.object(loop, "loop_running", return_value=0), \
+                mock.patch.object(loop, "spawn_detached", side_effect=lambda argv, log: spawned.append((argv, log))), contextlib.redirect_stdout(io.StringIO()):
+            loop.cmd_start(args, self.conn)
+        self.assertEqual(len(spawned), 1)
+        self.assertIn("--foreground", spawned[0][0])
+        self.assertTrue(all("BEEKEEPER" not in title for title, _ in opened))
+        self.assertEqual(opened[0][1], "dashboard")
 
     def test_pane_of_a_hive_without_a_running_queen_replays_no_old_text(self):
         """The text of an ended Queen (hours old) is not drawn again into the pane when the pane is redrawn."""
@@ -393,3 +428,75 @@ class WrapAndLayoutTest(FrameCase):
         self.assertNotRegex(inspect.getsource(runtime), r"f\"project \{project\} has no workspace")
         self.assertNotRegex(inspect.getsource(triage), r"not active in \{project\}")
         self.assertIn('"[Apiary %s] %s"', inspect.getsource(loop.Pane))
+
+
+class HiveShareByQueenTest(PlacementCase):
+    """F9: a Hive without a running Queen gets a narrow share from the start; when a Queen starts in it, its pane is built again with a larger share as long as no agent runs in it."""
+
+    OTHER = "other/B-PLAN.md"
+
+    def two_hives(self):
+        """Two living Hives of the project and its environment."""
+        hives.create(self.conn, "testproj", REL, "claude", "4FA8FF")
+        hives.create(self.conn, "testproj", self.OTHER, "claude", "4FA8FF")
+        return self.envs()[0]
+
+    def queen_of(self, plan, status="starting"):
+        """The Queen row of a Hive."""
+        return self.agent("Ada", phase="queen", status=status, plan_path=plan)
+
+    def start(self, env, plan):
+        """Start the Queen Ada of the Hive `plan` through start_queen and return its pane id."""
+        from unittest import mock
+        with mock.patch.object(loop, "runner_argv", return_value=SLEEP):
+            return loop.start_queen(env, self.term, "HaiveQueen", {"name": "Ada", "plan": plan})
+
+    def test_a_hive_without_queen_gets_the_narrow_share(self):
+        """Hive B (no Queen) beside Hive A that has a Queen takes a quarter of the width; beside a Hive without Queen it takes half."""
+        env = self.two_hives()
+        loop.ensure_hive_pane(env, self.term, "HaiveQueen", self.OTHER)
+        loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
+        self.assertEqual(self.calls[-1][2], 0.5)
+        self.term_reset()
+        self.queen_of(self.OTHER)
+        loop.ensure_hive_pane(env, self.term, "HaiveQueen", self.OTHER)
+        loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
+        self.assertEqual(self.calls[-1][2], 0.25)
+
+    def term_reset(self):
+        """Close the Hive and Apiary panes of the project so the next placement starts clean."""
+        for p in self.term.list_panes("HaiveQueen"):
+            if p.alive and (loop.is_hive_title(p.title) or loop.is_apiary_title(p.title)):
+                self.term.close_pane(p.id)
+        self.calls.clear()
+
+    def test_a_starting_queen_gets_her_pane_built_again_larger(self):
+        """The pane of Hive A was built without a Queen; when Ada starts there and no agent runs in it, the pane is closed and built again with 3/4 of the space."""
+        env = self.two_hives()
+        loop.ensure_hive_pane(env, self.term, "HaiveQueen", self.OTHER)
+        old = loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
+        self.queen_of(REL)
+        new = self.start(env, REL)
+        self.assertNotEqual(new, old)
+        self.assertNotIn(old, [p.id for p in self.term.list_panes("HaiveQueen") if p.alive])
+        self.assertEqual(self.calls[-1][2], 0.75)
+        self.assertEqual(runtime.get_agent(self.conn, "testproj", "Ada")["pane_id"], new)
+
+    def test_a_pane_with_a_running_agent_keeps_its_size(self):
+        """While an agent runs in the pane it is not closed, whatever the Queen start wants."""
+        env = self.two_hives()
+        loop.ensure_hive_pane(env, self.term, "HaiveQueen", self.OTHER)
+        old = loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
+        self.agent("Bea", phase="bee", status="running", plan_path=REL, pane_id=old)
+        self.queen_of(REL)
+        before = len(self.calls)
+        self.assertEqual(self.start(env, REL), old)
+        self.assertEqual(len(self.calls), before)
+
+    def test_a_pane_built_with_its_queen_is_not_built_again(self):
+        """A second Queen start in a pane that was already built large leaves it alone."""
+        env = self.two_hives()
+        self.queen_of(REL)
+        loop.ensure_hive_pane(env, self.term, "HaiveQueen", self.OTHER)
+        first = self.start(env, REL)
+        self.assertEqual(self.start(env, REL), first)

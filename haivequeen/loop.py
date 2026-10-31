@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from . import db, events, export, faults, header, inbox, reattach, routine, runstate, runtime, triage, usage, views
+from . import db, events, export, faults, header, hivelayout, inbox, reattach, routine, runstate, runtime, triage, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -188,24 +188,20 @@ def close_idle_hive_panes(conn, term, window: str) -> list:
     return closed
 
 
-def open_session_panes(term, window: str, title: str, boot: list, dash=None, head=None) -> list:
-    """Open the Beekeeper pane running `boot` and, when `dash` is given, the dashboard pane below it; return the pane ids. The caller holds pane.lock.
-    Old Beekeeper and Overview panes go first. Panes of running agents that are still open keep their tab and the Beekeeper joins it: a new tab would split the one window in two.
-    `head` is (title, command, name) of the first Apiary head: in a fresh window it is split off the Beekeeper to the right before the dashboard goes below the Beekeeper,
-    so Beekeeper and dashboard stand in the left column and the Apiary block fills the right side."""
+def open_session_panes(term, window: str, dash: list, head=None) -> list:
+    """Open the dashboard pane running `dash` and, in a fresh window, the first Apiary head to its right; return the pane ids. The caller holds pane.lock.
+    The Beekeeper has no pane: the loop runs as a detached process and the dashboard is the only overview. Old Beekeeper and Overview panes go first.
+    Panes of running agents that are still open keep their tab and the dashboard joins it: a new tab would split the one window in two.
+    `head` is (title, command, name) of the first Apiary head: in a fresh window it is split off the dashboard to the right, so the dashboard
+    stands in the left column and the Apiary block fills the right side."""
     close_leftover_panes(term, window)
     stay = [p for p in term.list_panes(window) if p.alive]
+    title = pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime())
     if stay:
-        panes = [term.split_pane(window, title, "white", boot, "horizontal", 0.5, stay[0].id, "chief")]
-    else:
-        panes = [term.open_window(window, title, boot, "white", "chief")]
-        if head is not None:
-            head_id = term.split_pane(window, head[0], "white", head[1], "horizontal", APIARY_SIDE_SHARE, panes[0], head[2])
-    if dash is not None:
-        panes.append(term.split_pane(window, pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime()), "white", dash,
-                                     "vertical", 0.8, panes[0], "dashboard"))
-    if not stay and head is not None:
-        panes.append(head_id)
+        return [term.split_pane(window, title, "white", dash, "horizontal", 0.5, stay[0].id, "dashboard")]
+    panes = [term.open_window(window, title, dash, "white", "dashboard")]
+    if head is not None:
+        panes.append(term.split_pane(window, head[0], "white", head[1], "horizontal", APIARY_SIDE_SHARE, panes[0], head[2]))
     return panes
 
 
@@ -504,6 +500,12 @@ def hive_split_size(placed: int, total: int) -> float:
     return remaining / (remaining + 1) if remaining >= 1 else 0.5
 
 
+def weighted_split_size(prev_width: int, rest_width: int) -> float:
+    """Share the new Hive pane takes when it splits the last Hive pane, from the relative widths: `prev_width` is the Hive of the pane that is split,
+    `rest_width` the sum of the Hives that still have no pane (the new one included). With equal widths this is the same as hive_split_size."""
+    return rest_width / float(rest_width + prev_width)
+
+
 def _pane_order(pane) -> int:
     """Creation number of a pane (the number after the last dot of its id), to put panes in the order they were opened."""
     try:
@@ -559,19 +561,46 @@ def ensure_hive_pane(env, terminal, window: str, plan: str) -> str:
         colour = env.colour   # the colour of the Apiary, shared by its head and all its Hives
         target, direction = (mine[-1].id, "horizontal") if mine else (head, "vertical")
         env.log("pane of Hive %s (Apiary %s): splits %s (%s)" % (Path(plan).stem, env.name, target, direction))
-        total = env.conn.execute("SELECT COUNT(*) FROM hives WHERE project=? AND state!='done'", (env.name,)).fetchone()[0]
-        return terminal.split_pane(window, title, colour, hive_argv(env, plan), direction, hive_split_size(len(mine), total), target, "%s__hive__%s" % (env.name, Path(plan).stem))
+        living = [r["plan_path"] for r in db.rows(env.conn, "SELECT plan_path FROM hives WHERE project=? AND state!='done' ORDER BY plan_path", (env.name,))]
+        live_titles = {p.title for p in live}
+        width = lambda plan_path: hivelayout.width_of(env.conn, env.name, plan_path)   # noqa: E731
+        if not mine:
+            size = HIVE_BELOW_HEAD
+        else:
+            prev = next((r for r in living if hive_pane_title(env.name, r, is_test_runtime()) == mine[-1].title), None)
+            rest = [r for r in living if hive_pane_title(env.name, r, is_test_runtime()) not in live_titles or r == plan]
+            size = weighted_split_size(width(prev) if prev else hivelayout.SMALL_WIDTH, max(sum(width(r) for r in rest), hivelayout.SMALL_WIDTH))
+        pane_id = terminal.split_pane(window, title, colour, hive_argv(env, plan), direction, size, target, "%s__hive__%s" % (env.name, Path(plan).stem))
+        if width(plan) == hivelayout.BIG_WIDTH:   # built large: a later Queen start leaves this pane alone
+            runtime.kv_set(env.conn, env.name, "hive-big-" + Path(plan).stem, pane_id)
+        return pane_id
+
+
+def rebuild_small_hive_pane(env, terminal, window: str, plan: str) -> None:
+    """Close the pane of a Hive that was built without a Queen (narrow) when no agent runs in it, so ensure_hive_pane builds it again with the larger share.
+    A pane that was built large, or that holds a running or starting agent, stays as it is."""
+    title = hive_pane_title(env.name, plan, is_test_runtime())
+    with pane_lock():
+        try:
+            pane = next((p for p in terminal.list_panes(window) if p.alive and p.title == title), None)
+        except TerminalError:
+            return
+        if pane is None or runtime.kv_get(env.conn, env.name, "hive-big-" + Path(plan).stem) == pane.id:
+            return
+        if any(a.get("pane_id") == pane.id and a.get("status") in ("running", "starting") for a in runtime.list_agents(env.conn, env.name, "active")):
+            return
+        terminal.close_pane(pane.id)
 
 
 def start_queen(env, terminal, window: str, spec: dict) -> str:
-    """Hand a new Queen to the sub-terminal of its Hive: write launch.json (the runner command) into the run folder, make sure the Hive pane
-    exists and point the agent row at it. The pane starts the runner; nothing waits for its pid here. Returns the pane id."""
+    """Hand a new Queen to the sub-terminal of its Hive: make sure the Hive pane exists (a narrow pane without agent is built again larger), write
+    launch.json (the runner command) into the run folder and point the agent row at the pane. The pane starts the runner; nothing waits for its pid here. Returns the pane id."""
     folder = env.run_dir(spec["name"])
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "launch.json").write_text(json.dumps({"argv": runner_argv(env, spec)}), encoding="utf-8")
+    rebuild_small_hive_pane(env, terminal, window, spec["plan"])
     pane_id = ensure_hive_pane(env, terminal, window, spec["plan"])
+    (folder / "launch.json").write_text(json.dumps({"argv": runner_argv(env, spec)}), encoding="utf-8")   # written after the pane exists: an old pane must not pick it up
     env.update_agent(spec["name"], {"pane_id": pane_id, "paneClosed": False})
-    from . import hivelayout
     hivelayout.apply(terminal, window, env.conn, is_test_runtime())   # the Hive becomes big now that its Queen starts (best effort, never raises)
     return pane_id
 
@@ -1198,8 +1227,16 @@ def start_boot_command(args) -> list:
     return cmd
 
 
+def spawn_detached(argv: list, log: Path) -> None:
+    """Start `argv` as a process of its own without a console or pane; its output is appended to the file `log`."""
+    log.parent.mkdir(parents=True, exist_ok=True)
+    flags = {"creationflags": 0x00000008 | 0x00000200} if osplat.is_windows() else {"start_new_session": True}   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    with open(log, "ab") as out:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, **flags)
+
+
 def cmd_start(args, conn) -> int:
-    """`bzz start`: run the loop in this process (--foreground) or open the orchestrator window whose first pane runs it."""
+    """`bzz start`: run the loop in this process (--foreground) or open the orchestrator window (dashboard and Apiary head) and start the loop as a detached process."""
     from . import config
     machine = config.load_config()
     pid = loop_running()
@@ -1224,7 +1261,6 @@ def cmd_start(args, conn) -> int:
     window = settings.get("window", "HaiveQueen")
     term.trace = wt_trace_sink(conn, [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY name")])   # the session start leaves one line per wt call
     boot = start_boot_command(args)
-    title = queen_pane_title(sch.model_long("claude", "claude-sonnet-5-5", "medium"), is_test_runtime())
     with pane_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first
         pid = loop_running()
         if pid:
@@ -1236,17 +1272,15 @@ def cmd_start(args, conn) -> int:
         start_pending_file().parent.mkdir(parents=True, exist_ok=True)
         start_pending_file().write_text(str(os.getpid()), encoding="ascii")
         try:
-            import importlib.util
-            dash = None
-            if importlib.util.find_spec("haivequeen.dashboard") is not None:
-                dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
+            dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
             try:
                 close_idle_hive_panes(conn, term, window)
             except TerminalError:
                 pass
             first = conn.execute("SELECT project FROM hives WHERE state!='done' ORDER BY project LIMIT 1").fetchone()
             head = (apiary_pane_title(first["project"], is_test_runtime()), apiary_argv_of(first["project"]), "%s__apiary" % first["project"]) if first else None
-            panes = open_session_panes(term, window, title, boot, dash, head)
+            panes = open_session_panes(term, window, dash, head)
+            spawn_detached(boot, osplat.runs_dir() / "beekeeper.log")   # the loop has no pane: its output goes to this file, round errors show in the dashboard
         except Exception:
             start_pending_file().unlink()
             raise

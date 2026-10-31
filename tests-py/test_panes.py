@@ -301,14 +301,13 @@ class RealWindowsTerminalCloseTest(RoundCase):
         term = wt.WindowsTerminal(str(self.base / "panes"), start_timeout=30, settle=2.0)
         before = self.window_handles()
         started = datetime.datetime.now() - datetime.timedelta(seconds=2)
-        qtitle = pane_title("all projects", "QUEEN", "Queen", "m", True)
         names = ["A-head-%d" % i for i in range(3)]
         for name in names:
             self.agent(name, status="running", started=20)
         try:
             with loop.pane_lock():
-                panes = loop.open_session_panes(term, window, qtitle, SLEEP, self.dash_command())
-            spots = [(panes[1], "horizontal"), (None, "vertical"), (panes[1], "vertical")]   # beside the dashboard, below the first agent, below the dashboard: no pane gets too small to split
+                panes = loop.open_session_panes(term, window, self.dash_command())
+            spots = [(panes[0], "horizontal"), (None, "vertical"), (panes[0], "vertical")]   # beside the dashboard, below the first agent, below the dashboard: no pane gets too small to split
             for name, (target, direction) in zip(names, spots):
                 target = target or panes[-1]
                 panes.append(term.split_pane(window, pane_title("testproj", "Agent PIA", name, "m", True), "white", self.head_command(name), direction, 0.5,
@@ -337,16 +336,15 @@ class RealWindowsTerminalCloseTest(RoundCase):
         term = wt.WindowsTerminal(str(self.base / "panes"), start_timeout=30, settle=2.0)
         tabs_before = self.tab_count()
         started = datetime.datetime.now() - datetime.timedelta(seconds=2)
-        qtitle = pane_title("all projects", "QUEEN", "Queen", "m", True)
         try:
             with loop.pane_lock():
-                first = loop.open_session_panes(term, window, qtitle, SLEEP, SLEEP)
+                first = loop.open_session_panes(term, window, SLEEP)
             agents = []
             self.agent("A-run", status="running", started=20)
-            agents.append(term.split_pane(window, pane_title("testproj", "Agent PIA", "A-run", "m", True), "white", SLEEP, "horizontal", 0.5, first[1], "testproj__A-run"))
+            agents.append(term.split_pane(window, pane_title("testproj", "Agent PIA", "A-run", "m", True), "white", SLEEP, "horizontal", 0.5, first[0], "testproj__A-run"))
             self.assertEqual(self.tab_count(), tabs_before + 1)
             with loop.pane_lock():   # restart: the agent pane is still open
-                second = loop.open_session_panes(term, window, qtitle, SLEEP, SLEEP)
+                second = loop.open_session_panes(term, window, SLEEP)
             self.assertEqual(self.tab_count(), tabs_before + 1, "the restart opened a second tab")
             for i in range(2):
                 name = "A-new-%d" % i
