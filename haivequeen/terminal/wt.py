@@ -93,8 +93,12 @@ class WindowsTerminal(Terminal):
         subs.append(first + list(command))
         return subs
 
-    def _launch(self, window, subs_builder, title, command, name, pane_id_index):
-        """Start wt.exe with the built sub-commands, record the pane and wait for its pid file."""
+    def _launch(self, window, subs_builder, title, command, name, pane_id_index, what="call"):
+        """Start wt.exe with the built sub-commands, record the pane and wait for its pid file.
+
+        wt's own output goes to wt.out and wt.err in the pane folder; with a trace sink one line says what was called and what came of it.
+        `what` names the call for that line (open-window, or split with target, direction and size).
+        """
         pane_id = "%s.%d" % (window, pane_id_index)
         folder_name = safe_name(name or "%s-%d" % (window, pane_id_index))
         folder = self.registry.folder(folder_name)
@@ -106,12 +110,29 @@ class WindowsTerminal(Terminal):
                                          "title": title, "pid": 0, "pidfile": str(pidfile)})
         line = wt_quote(self.exe()) + " " + wt_commandline(subs_builder(self.wrapped(pidfile, command)))
         time.sleep(self.settle)
-        subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, close_fds=True)
+        with open(folder / "wt.out", "wb") as out, open(folder / "wt.err", "wb") as err:
+            proc = subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=out, stderr=err, close_fds=True)
         pids = self._wait_pids(pidfile)
+        self._trace_call(pane_id, what, line, proc, pids, folder)
         if pids is None and self.start_timeout > 0:
+            self.registry.discard(folder_name)   # wt made no pane: its number must not count for the next focus-pane target
             raise TerminalError("pane %s did not start within %s s" % (pane_id, self.start_timeout))
         return pane_id
+
+    def _trace_call(self, pane_id, what, line, proc, pids, folder):
+        """Give the trace sink one line about a wt call: pane, what, the whole command line, exit code (running while wt.exe still lives), stdout, stderr, pane.pid."""
+        if self.trace is None:
+            return
+        try:
+            code = proc.poll()
+            text = {}
+            for key in ("out", "err"):
+                text[key] = (folder / ("wt." + key)).read_bytes().decode("utf-8", "replace").strip()
+            self.trace("wt %s %s | %s | exit=%s | stdout=%r | stderr=%r | pane.pid=%s" % (
+                pane_id, what, line, "running" if code is None else code, text["out"], text["err"],
+                "no after %s s" % self.start_timeout if pids is None else "yes %s/%s" % pids))
+        except Exception:   # the trace is a help for diagnosis: it never breaks a pane start
+            pass
 
     def _wait_pids(self, pidfile):
         """Wait for the launcher's pid file; return (launcher pid, command pid) or None."""
@@ -135,7 +156,7 @@ class WindowsTerminal(Terminal):
         self.registry.retire(window)
         index = self.registry.next_index(window)
         return self._launch(window, lambda wrapped: self.open_window_args(window, title, wrapped, colour),
-                            title, command, name, index)
+                            title, command, name, index, "open-window")
 
     def split_pane(self, window, title, colour, command, direction="horizontal", size=0.5,
                    target=None, name=None):
@@ -147,7 +168,7 @@ class WindowsTerminal(Terminal):
             target = pane_number(str(target))
         return self._launch(window,
                             lambda wrapped: self.split_pane_args(window, title, wrapped, direction, size, target),
-                            title, command, name, index)
+                            title, command, name, index, "split target=%s direction=%s size=%g" % (target, direction, size))
 
     def _pids(self, rec):
         """Return (launcher pid, command pid) of a record, reading the pid file when it is there."""

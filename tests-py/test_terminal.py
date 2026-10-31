@@ -157,6 +157,35 @@ class WtArgsTest(unittest.TestCase):
         self.assertEqual([i.id for i in infos], ["W9.0", "W9.1"])
         self.assertFalse(any(i.alive for i in infos))
 
+    def test_every_wt_call_is_traced(self):
+        """With a trace sink every wt call writes one line: the whole command line, target number, direction, size, exit code, stdout, stderr and whether pane.pid appeared."""
+        seen = []
+        self.term.trace = seen.append
+
+        def popen(line, **kw):
+            """Stand in for wt.exe: write to the redirected output files and report exit code 1."""
+            kw["stdout"].write(b"some out")
+            kw["stderr"].write(b"no such pane")
+            return mock.Mock(poll=mock.Mock(return_value=1))
+        with mock.patch.object(wt.subprocess, "Popen", side_effect=popen):
+            self.term.open_window("W7", "T", ["py"], name="t0")
+            self.term.split_pane("W7", "T", None, ["py"], "vertical", 0.4, target="W7.0", name="t1")
+        self.assertEqual(len(seen), 2)
+        self.assertIn("open-window", seen[0])
+        split = seen[1]
+        for part in ("split target=0 direction=vertical size=0.4", "focus-pane -t 0", "split-pane", "exit=1", "some out", "no such pane", "pane.pid=no"):
+            self.assertIn(part, split)
+
+    def test_a_pane_that_never_starts_gives_its_number_back(self):
+        """wt numbers only the panes it really made: a split whose pane never started must not use up a number, else every later focus-pane target is wrong."""
+        term = wt.WindowsTerminal(self.tmp.name, start_timeout=0.3, settle=0)
+        term.registry.save("first", {"id": "W8.0", "window": "W8", "index": 0, "title": "T", "pid": 0, "pidfile": ""})
+        for _ in range(3):   # three rounds, each one split fails
+            with mock.patch.object(wt.subprocess, "Popen"), self.assertRaises(TerminalError):
+                term.split_pane("W8", "T", None, ["py"], "vertical", 0.5, target="W8.0", name="hive")
+        self.assertEqual(term.registry.next_index("W8"), 1)
+        self.assertEqual([r["id"] for r in term.registry.records()], ["W8.0"])
+
     def test_reopened_window_numbers_from_zero(self):
         """A window that is opened again starts at pane 0; the records of the old window are retired, not reused."""
         with mock.patch.object(wt.subprocess, "Popen"):
