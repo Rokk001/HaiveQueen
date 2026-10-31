@@ -49,6 +49,7 @@ def ensure_attempts(conn):
     conn.execute('CREATE TABLE IF NOT EXISTS bee_attempts (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(project,plan_path,package,class))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_attempt_reports (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, attempt TEXT NOT NULL, PRIMARY KEY(project,plan_path,package,attempt))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_assignments (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, provider TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
+    conn.execute('CREATE TABLE IF NOT EXISTS bee_worktrees (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, cwd TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
 
 
 # Count a failed attempt, ignoring technical interruptions.
@@ -250,9 +251,25 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         provider, selected_class = route
         env.conn.execute('INSERT INTO bee_assignments(project,plan_path,package,class,provider) VALUES(?,?,?,?,?) ON CONFLICT(project,plan_path,package) DO UPDATE SET class=excluded.class,provider=excluded.provider', (env.name, plan, package, selected_class, provider))
         pick = scheduler.get_provider(env.providers, provider)
+        saved = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+        if saved:
+            cwd = saved[0]
+        else:
+            for previous in reversed(runtime.list_agents(env.conn, env.name, 'all')):
+                previous_cwd = previous.get('cwd')
+                if (previous.get('plan_path') == plan and previous.get('package') == package and
+                        previous.get('phase') == 'bee' and previous_cwd and
+                        valid_bee_worktree(env, previous_cwd, queen.get('cwd'))):
+                    cwd = previous_cwd
+                    break
         if provider == hive['provider'] and not pick.get('endpoint'):
             if not no_subagents or pick.get('protocol') != 'codex':
-                return {'kind': 'subagent', 'provider': provider, 'class': selected_class}
+                if cwd:
+                    if Path(cwd).exists() and not valid_bee_worktree(env, cwd, queen.get('cwd')):
+                        return False
+                    env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(Path(cwd).absolute())))
+                    cwd = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()[0]
+                return {'kind': 'subagent', 'provider': provider, 'class': selected_class, 'cwd': cwd}
         if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
             return False
         path = Path(cwd or '')
@@ -262,7 +279,10 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'IN_PROGRESS'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
         ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'terminal': terminal, 'settle': 0, 'poll': 2, 'tries': 20}
         action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules), 'class': selected_class}
-        return bool(loop._do_start(ctx, action, forced_pick=pick))
+        if not loop._do_start(ctx, action, forced_pick=pick):
+            return False
+        env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
+        return {'kind': 'process', 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute())}
 
 
 # Read the branch from the 'Plan: X; branch Y; baseline Z' line of the plan's state file next to it.

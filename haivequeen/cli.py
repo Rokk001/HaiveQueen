@@ -293,7 +293,7 @@ def cmd_bee(args, conn):
     except (ValueError, TypeError) as exc:
         return fail(str(exc))
     if isinstance(started, dict):
-        out({"ok": True, "started": False, **started})
+        out({"ok": True, "started": started.get("kind") == "process", **started})
         return 0
     bees.ensure_attempts(conn)
     assignment = conn.execute("SELECT provider FROM bee_assignments WHERE project=? AND plan_path=? AND package=?", (args.project, plan, args.package)).fetchone() if not started else None
