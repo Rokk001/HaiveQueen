@@ -362,17 +362,30 @@ def provider_lines(conn, cfg, agents) -> list:
     next_provider = sch.select_provider(providers, "medium", [], free, conn=conn)
     rows = []
     for provider in providers:
-        local = provider["name"].lower() == "local" or provider["protocol"] == "local"
-        limit = sch.provider_limit(provider, conn)
-        hours = limit["Hours"]
-        remaining_week = max(0.0, hours) / 168.0
-        remaining_quota = limit["FreePct"] / 100.0
-        ratio = remaining_quota / remaining_week if remaining_week else float("inf")
-        rows.append({"name": provider["name"], "used_pct": None if local else 100.0 - limit["FreePct"],
-                     "hours": None if local else hours, "ratio": None if local else ratio,
+        source = provider["limit"]
+        used, hours = None, None
+        if source in ("claude", "codex"):
+            limits_path = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
+            if limits_path and Path(limits_path).is_file():
+                entry = json.loads(Path(limits_path).read_text(encoding="utf-8-sig")).get(provider["name"]) or {}
+                if entry.get("usedPercent") is not None:
+                    used, hours = float(entry["usedPercent"]), entry.get("resetHours")
+            elif not os.environ.get("BZZ_RUNTIME_OVERRIDE"):
+                window = (sch.claude_usage(conn) if source == "claude" else sch.codex_usage()).get("SevenDay")
+                if window and window.get("Pct") is not None:
+                    used = float(window["Pct"])
+                    if window.get("At"):
+                        hours = max(0.0, (float(window["At"]) - time.time()) / 3600)
+        ratio = None
+        if used is not None and hours is not None:
+            remaining_week = max(0.0, float(hours)) / 168.0
+            remaining_quota = max(0.0, 100.0 - used) / 100.0
+            ratio = remaining_quota / remaining_week if remaining_week else float("inf")
+        rows.append({"name": provider["name"], "used_pct": used, "hours": hours, "ratio": ratio,
+                     "has_limit": source in ("claude", "codex"),
                      "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
                      "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),
-                     "next": provider is next_provider, "local": local})
+                     "next": provider is next_provider})
     return rows
 
 
@@ -546,20 +559,24 @@ def build_lines(level, d, w, n_fin) -> list:
 
     head("◔ LIMITS")
     limit("Claude 5h", d["cu"]["FiveHour"])
-    limit("Claude 7d", d["cu"]["SevenDay"])
     if d["xu"]["FiveHour"]:
         limit("Codex 5h", d["xu"]["FiveHour"])
-    limit("Codex 7d", d["xu"]["SevenDay"])
     for p in d["provider_limits"]:
         model = str(p["model"] or "no medium model")
-        suffix = " NEXT" if p["next"] else ""
-        if p["local"]:
-            L.append([(p["name"] + " ", "gray"), ("local  slots %d/%d  %s%s" % (p["slots"], p["total_slots"], model, suffix), "white")])
+        slots = "%d/%d" % (p["total_slots"] - p["slots"], p["total_slots"])
+        marker = "  ◀ nächster" if p["next"] else ""
+        if not p["has_limit"]:
+            L.append([("%s kein Limit  slots %s  %s%s" % (p["name"], slots, model, marker), "")])
+        elif p["used_pct"] is None or p["hours"] is None:
+            L.append([("%s unbekannt  slots %s  %s%s" % (p["name"], slots, model, marker), "")])
         else:
             col = "green" if p["ratio"] >= 1 else "yellow" if p["ratio"] >= 0.7 else "red"
-            L.append([(p["name"] + " ", "gray"), ("used %.0f%%, reset %.1fh  quota %.1f%%/week %.1f%% (%.2fx)  slots %d/%d  %s%s" %
-                      (p["used_pct"], p["hours"], 100.0 - p["used_pct"], max(0.0, p["hours"]) / 168.0 * 100.0,
-                       p["ratio"], p["slots"], p["total_slots"], model, suffix), col)])
+            quota = p["ratio"]
+            remaining_week = max(0.0, p["hours"]) / 168.0
+            remaining_quota = max(0.0, 100.0 - p["used_pct"]) / 100.0
+            L.append([(p["name"] + " ", "gray"), ("used %.0f%%, reset %.1fh  Quota %.2f× (%.1f%%/%.1f%%)  slots %s  %s%s" %
+                      (p["used_pct"], p["hours"], quota, remaining_quota * 100.0, remaining_week * 100.0,
+                       slots, model, marker), col)])
 
     head("Σ USAGE")
     models = [m for m in d["usage"] if level == 0 or (m["Today"] and m["Today"][0] > 0) or m["Plans"]]
