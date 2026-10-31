@@ -280,11 +280,13 @@ class RealWindowsTerminalCloseTest(RoundCase):
         self.addCleanup(self.close_new_windows, known)
 
     def close_new_windows(self, known):
-        """Close every Windows Terminal window that is not in `known` (UI Automation WindowPattern.Close) and assert that none is left."""
-        self.powershell(
-            "Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes; $known=@('%s'.Split(',')); $r=[System.Windows.Automation.AutomationElement]::RootElement; "
-            "$ws=$r.FindAll('Children',(New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty,'CASCADIA_HOSTING_WINDOW_CLASS'))); "
-            "foreach($x in $ws){ if($known -notcontains [string]$x.Current.NativeWindowHandle){ try { $x.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch {} } }" % known)
+        """Close only test-owned panes and check that no new Terminal window remains."""
+        from haivequeen.terminal import wt
+        term = wt.WindowsTerminal(str(self.base / "panes"), start_timeout=0, settle=0)
+        window = "HQTEST%d" % os.getpid()
+        for pane in term.list_panes(window):
+            if pane.alive:
+                term.close_pane(pane.id)
         deadline = time.time() + 15
         left = [h for h in self.window_handles().split(",") if h and h not in known.split(",")]
         while left and time.time() < deadline:
