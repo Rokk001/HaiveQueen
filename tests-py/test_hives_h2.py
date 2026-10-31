@@ -93,7 +93,7 @@ class BeePolicyTests(unittest.TestCase):
     # Check prompt instructs dependencies and higher classes.
     def test_prompt_instructs_dependencies_and_higher_classes(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
-        for word in ('dependenc', 'heavy', 'local', 'image', 'escalat', '3', 'handoff'):
+        for word in ('dependenc', 'heavy', 'local', 'image', 'escalat', '3', 'handoff', 'returned cwd'):
             self.assertIn(word, prompt)
 
     # A repeated report of the same attempt does not increment its failure count.
