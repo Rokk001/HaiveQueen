@@ -181,9 +181,9 @@ def make_stub(name: str):
     return stub
 
 
-# Acquire or release the shared project integration place.
+# Acquire or release the shared integration place and clean worktrees after release.
 def cmd_integration(args, conn):
-    """Acquire or release the shared project integration place."""
+    """Acquire or release the integration place, cleaning worktrees after release."""
     from haivequeen import hives
     agent = os.environ.get("BZZ_AGENT")
     row = runtime.get_agent(conn, args.project, agent) if agent else None
@@ -193,6 +193,13 @@ def cmd_integration(args, conn):
         args.plan = row['plan_path']
     if args.action == "release":
         hives.release_integration(conn, args.project, args.plan)
+        from haivequeen import scheduler, worktrees
+        env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
+        if env:
+            try:
+                env.log('Worktree cleanup: ' + json.dumps(worktrees.prune(env), ensure_ascii=False))
+            except Exception as exc:
+                env.log('Worktree cleanup failed: ' + str(exc))
         out({"ok": True})
         return 0
     owner_pid = (row.get("pid") if row else None) or getattr(args, "owner_pid", None)
@@ -405,6 +412,8 @@ def build_parser() -> argparse.ArgumentParser:
     legacy.register(sub)
     loop.register(sub)
     selfupdate.register(sub)
+    from haivequeen import worktrees
+    worktrees.register(sub)
 
     for name in STUBS:
         p = sub.add_parser(name)
