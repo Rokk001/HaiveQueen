@@ -239,11 +239,13 @@ class PaneLockTest(RoundCase):
         self.assertFalse((loop.osplat.runs_dir() / "_panes").exists(), "no pane was opened")
 
 
+# Real Windows Terminal in the test runtime (opt in with BZZ_REAL_WT=1
 class RealWindowsTerminalCloseTest(RoundCase):
     """Real Windows Terminal in the test runtime (opt in with BZZ_REAL_WT=1: the test opens, resizes, moves and closes a real window of the Windows
     Terminal process it runs in, and a crash of that process ends every window and shell in it).
     Covers: restart, new agents in the same tab, resize and move with live headers and dashboard, several panes closed one after another."""
 
+    # The real data folder of the user
     def real_data_dir(self):
         """The real data folder of the user: BZZ_DATA_DIR and the folder variables as they were before the test runtime replaced them."""
         import isolation
@@ -259,6 +261,7 @@ class RealWindowsTerminalCloseTest(RoundCase):
             env["BZZ_DATA_DIR"] = self.saved["BZZ_DATA_DIR"]
         return loop.osplat.data_dir(env=env)
 
+    # Process id in `data_dir`/loop.lock when that process lives, else 0.
     def live_loop_pid(self, data_dir):
         """Process id in `data_dir`/loop.lock when that process lives, else 0."""
         try:
@@ -267,6 +270,7 @@ class RealWindowsTerminalCloseTest(RoundCase):
             return 0
         return pid if loop.osplat.process_alive(pid) else 0
 
+    # Skip unless Windows, wt.exe and the opt-in variable are there, and no live loop owns the real data folder (its windows would be disturbed);
     def require_real_wt(self):
         """Skip unless Windows, wt.exe and the opt-in variable are there, and no live loop owns the real data folder (its windows would be disturbed);
         then remember the open Windows Terminal windows and close every new one after the test."""
@@ -279,6 +283,7 @@ class RealWindowsTerminalCloseTest(RoundCase):
         known = self.window_handles()
         self.addCleanup(self.close_new_windows, known)
 
+    # Close only test-owned panes and check that no new Terminal window remains.
     def close_new_windows(self, known):
         """Close only test-owned panes and check that no new Terminal window remains."""
         from haivequeen.terminal import wt
@@ -411,6 +416,7 @@ class RealWindowsTerminalCloseTest(RoundCase):
                 if p.alive:
                     term.close_pane(p.id)
 
+    # Splitting a terminal pane restores the helper window as the foreground window.
     def test_split_restores_helper_window_foreground(self):
         """Splitting a terminal pane restores the helper window as the foreground window."""
         import ctypes
@@ -441,6 +447,7 @@ class RealWindowsTerminalCloseTest(RoundCase):
                 if pane.alive:
                     term.close_pane(pane.id)
 
+    # A loop.lock naming the current (living) pid in the real data folder makes require_real_wt skip, before any window is looked at.
     def test_live_lock_in_real_data_folder_skips_the_real_tests(self):
         """A loop.lock naming the current (living) pid in the real data folder makes require_real_wt skip, before any window is looked at."""
         real = self.base / "real-data"
@@ -455,6 +462,7 @@ class RealWindowsTerminalCloseTest(RoundCase):
         self.assertEqual(self.saved, before, "tearDown would put the fake data folder into the environment of the next (real) test")
         self.assertEqual(self.live_loop_pid(self.base / "nothing"), 0)
 
+    # Without BZZ_DATA_DIR the guard looks at the real %LOCALAPPDATA% / $XDG_DATA_HOME that isolation.py replaced, not at the temp folder.
     def test_live_lock_below_the_real_localappdata_skips_the_real_tests(self):
         """Without BZZ_DATA_DIR the guard looks at the real %LOCALAPPDATA% / $XDG_DATA_HOME that isolation.py replaced, not at the temp folder."""
         import isolation
@@ -472,6 +480,7 @@ class RealWindowsTerminalCloseTest(RoundCase):
         self.assertIn("live HaiveQueen loop", str(ctx.exception))
         self.assertEqual(self.saved, before, "tearDown would put the fake data folder into the environment of the next (real) test")
 
+    # A lock with a dead pid is no live loop.
     def test_stale_lock_does_not_skip(self):
         """A lock with a dead pid is no live loop."""
         (self.base / "loop.lock").write_text("999999999", encoding="ascii")

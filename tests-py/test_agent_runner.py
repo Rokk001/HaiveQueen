@@ -287,6 +287,7 @@ class RunnerBase(unittest.TestCase):
         return json.loads((self.base / "record.json").read_text(encoding="utf-8"))
 
 
+# A full run with a fake Claude stream.
 class ClaudeRunTest(RunnerBase):
     """A full run with a fake Claude stream."""
 

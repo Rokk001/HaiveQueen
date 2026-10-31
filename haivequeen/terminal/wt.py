@@ -41,6 +41,7 @@ def pane_number(pane_id):
     return pane_id.rsplit(".", 1)[1]
 
 
+# Windows Terminal through wt.exe (path override
 class WindowsTerminal(Terminal):
     """Windows Terminal through wt.exe (path override: environment variable BZZ_WT_EXE)."""
 
@@ -95,6 +96,7 @@ class WindowsTerminal(Terminal):
         subs.append(first + list(command))
         return subs
 
+    # Start wt.exe with the built sub-commands, record the pane and wait for its pid file.
     def _launch(self, window, subs_builder, title, command, name, pane_id_index, what="call", after=None):
         """Start wt.exe with the built sub-commands, record the pane and wait for its pid file.
 

@@ -939,6 +939,7 @@ def complete_build_measure(conn, project, name, jobs, start_free_mb, sample_file
     return use
 
 
+# Run the child, mark its pane closing before and after the delay, and exit 0 even if the child failed.
 def pane_wrap(a, argv):
     """Run the child, mark its pane closing before and after the delay, and exit 0 even if the child failed."""
     try:
@@ -950,6 +951,7 @@ def pane_wrap(a, argv):
         print("pane closes in 30 s")
         time.sleep(30)
         return 0
+    # Log wrapper failures to the pane and the runtime event log.
     def log_error(text):
         """Log wrapper failures to the pane and the runtime event log."""
         print(text, file=sys.stderr)
@@ -958,6 +960,7 @@ def pane_wrap(a, argv):
         except Exception as exc:
             print("pane error logging failed: %s" % exc, file=sys.stderr)
 
+    # Write the closure flag, logging a failed write so the later attempt can retry it.
     def mark_closed():
         """Write the closure flag, logging a failed write so the later attempt can retry it."""
         try:

@@ -22,6 +22,7 @@ APP = "HaiveQueen"
 STILL_ACTIVE = 259
 
 
+# Restore the user's foreground window after Windows Terminal activates itself.
 @contextlib.contextmanager
 def keep_foreground():
     """Restore the user's foreground window after Windows Terminal activates itself."""
@@ -41,6 +42,7 @@ def keep_foreground():
     user.BringWindowToTop.argtypes = [wintypes.HWND]
     user.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
 
+    # Read the class and title of a native window.
     def window_info(hwnd):
         """Read the class and title of a native window."""
         cls = ctypes.create_unicode_buffer(256)
@@ -53,6 +55,7 @@ def keep_foreground():
     cls, title = window_info(original) if original else ("", "")
     skip = not original or (cls == "CASCADIA_HOSTING_WINDOW_CLASS" and (title.startswith("HaiveQueen |") or title.startswith("HaiveQueen TEST |")))
     finished = threading.Event()
+    # Watch the whole launch and up to three seconds afterwards for a focus change.
     def restore():
         """Watch the whole launch and up to three seconds afterwards for a focus change."""
         deadline = None

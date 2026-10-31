@@ -5,9 +5,11 @@ from unittest import mock
 from haivequeen import platform as osplat
 
 
+# Exercise foreground restoration with fake Windows APIs.
 class ForegroundTest(unittest.TestCase):
     """Exercise foreground restoration with fake Windows APIs."""
 
+    # Build fake Windows APIs and record their calls.
     def api(self, foreground, title="Editor"):
         """Build fake Windows APIs and record their calls."""
         user = mock.Mock()
@@ -17,9 +19,11 @@ class ForegroundTest(unittest.TestCase):
         user.GetWindowThreadProcessId.return_value = 50
         user.AttachThreadInput.return_value = 1
 
+        # Set the fake window class.
         def name(hwnd, buf, size):
             buf.value = "CASCADIA_HOSTING_WINDOW_CLASS" if hwnd == 2 or title.startswith("HaiveQueen") else "EditorClass"
 
+        # Set the fake window title.
         def text(hwnd, buf, size):
             buf.value = title if hwnd == 1 else "Terminal"
 
@@ -27,6 +31,7 @@ class ForegroundTest(unittest.TestCase):
         user.GetWindowTextW.side_effect = text
         return user, kernel
 
+    # The caller attaches input before restoring the saved window and detaches afterwards.
     def test_restores_after_terminal_takes_focus(self):
         """The caller attaches input before restoring the saved window and detaches afterwards."""
         user, kernel = self.api([1, 2])
@@ -39,6 +44,7 @@ class ForegroundTest(unittest.TestCase):
         self.assertLess(calls.index(mock.call.SetForegroundWindow(1)), calls.index(mock.call.BringWindowToTop(1)))
         self.assertLess(calls.index(mock.call.BringWindowToTop(1)), calls.index(mock.call.AttachThreadInput(40, 50, False)))
 
+    # A missing window or an already foreground HaiveQueen window needs no restoration.
     def test_skips_empty_and_haivequeen_foreground(self):
         """A missing window or an already foreground HaiveQueen window needs no restoration."""
         for handle, title in [(0, ""), (1, "HaiveQueen | test")]:
@@ -50,6 +56,7 @@ class ForegroundTest(unittest.TestCase):
             user.SetForegroundWindow.assert_not_called()
             user.AttachThreadInput.assert_not_called()
 
+    # No terminal activation within three seconds leaves the window untouched.
     def test_timeout_does_not_change_foreground(self):
         """No terminal activation within three seconds leaves the window untouched."""
         user, kernel = self.api(None)
@@ -76,12 +83,14 @@ class ForegroundTest(unittest.TestCase):
                 time.sleep(0.2)
         user.SetForegroundWindow.assert_called_with(1)
 
+    # Other platforms run the body without accessing Windows APIs.
     def test_non_windows_is_noop(self):
         """Other platforms run the body without accessing Windows APIs."""
         with mock.patch.object(osplat, "is_windows", return_value=False):
             with osplat.keep_foreground():
                 pass
 
+    # The terminal command and its pid wait both run inside the foreground guard.
     def test_launch_wraps_process_and_pid_wait(self):
         """The terminal command and its pid wait both run inside the foreground guard."""
         import contextlib
@@ -89,6 +98,7 @@ class ForegroundTest(unittest.TestCase):
         from haivequeen.terminal import wt
         calls = []
 
+        # Record the guard around the terminal operation.
         @contextlib.contextmanager
         def guard():
             """Record the guard around the terminal operation."""

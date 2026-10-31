@@ -123,6 +123,7 @@ class RunStateTest(RoundCase):
         self.assertIsNone(next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None))
 
 
+# The loop
 class LoopTest(RoundCase):
     """The loop: re-attach at the start, one lock, STOP, round errors."""
 

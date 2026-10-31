@@ -6,18 +6,22 @@ from bzztest import RoundCase, runtime
 from haivequeen import faults, loop, runstate
 
 
+# Exercise loop ownership, crash reporting and guarded wait updates.
 class LoopEndTest(RoundCase):
     """Exercise loop ownership, crash reporting and guarded wait updates."""
 
+    # Register the fault owner in the isolated runtime.
     def setUp(self):
         """Register the fault owner in the isolated runtime."""
         super().setUp()
         self.add_project("HaiveQueen")
 
+    # Return the loop faults in this test database.
     def questions(self):
         """Return the loop faults in this test database."""
         return runtime.list_questions(self.conn, "HaiveQueen", None, faults.FAULT_PLAN, "loop_vanished")
 
+    # A dead loop with no STOP and no clean end files one fault on takeover.
     def test_stale_lock_files_one_fault(self):
         """A dead loop with no STOP and no clean end files one fault on takeover."""
         loop.lock_file().parent.mkdir(parents=True, exist_ok=True)
@@ -32,6 +36,7 @@ class LoopEndTest(RoundCase):
         self.assertIn(text, self.log("HaiveQueen"))
         self.assertTrue(any(text in e["text"] for e in runtime.list_events(self.conn, "HaiveQueen")))
 
+    # A boot after the last loop heartbeat explains the stale lock.
     def test_system_restart_does_not_report_a_vanished_loop(self):
         """A boot after the last loop heartbeat explains the stale lock."""
         loop.lock_file().parent.mkdir(parents=True, exist_ok=True)
@@ -41,6 +46,7 @@ class LoopEndTest(RoundCase):
             loop.run_loop(self.conn, self.machine)
         self.assertEqual(self.questions(), [])
 
+    # A clean loop records ended and restarting, even with its old lock, files nothing.
     def test_clean_end_and_restart_no_fault(self):
         """A clean loop records ended and restarting, even with its old lock, files nothing."""
         with patch.object(loop, "run_round"), patch.object(loop, "daily_export"):
@@ -51,6 +57,7 @@ class LoopEndTest(RoundCase):
         self.assertEqual(self.questions(), [])
         self.assertFalse(loop.lock_file().exists())
 
+    # An initial refresh exception is logged, filed and re-raised after releasing the lock.
     def test_refresh_crash_file_and_lock_cleanup(self):
         """An initial refresh exception is logged, filed and re-raised after releasing the lock."""
         with patch.object(loop, "run_round"), patch.object(loop, "daily_export"), \
@@ -70,10 +77,12 @@ class LoopEndTest(RoundCase):
         self.assertFalse(loop.lock_file().exists())
         self.assertNotEqual(loop.read_state(self.conn)["status"], "ended")
 
+    # Both wait operations log transient failures and the loop can still end cleanly.
     def test_wait_failures_do_not_stop_loop(self):
         """Both wait operations log transient failures and the loop can still end cleanly."""
         calls = []
 
+        # Request STOP after entering the round wait.
         def sleep(_seconds):
             """Request STOP after entering the round wait."""
             calls.append(True)

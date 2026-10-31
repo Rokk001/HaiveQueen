@@ -260,6 +260,7 @@ def is_test_runtime() -> bool:
 
 # ---- loop state (kv key loop-state, machine wide) ----
 
+# Write the loop state for the dashboard and pane header.
 def write_state(conn, status: str, since: datetime, next_at) -> None:
     """Write the loop state for the dashboard and pane header."""
     runtime.kv_set(conn, sch.GLOBAL, "loop-state", json.dumps({
@@ -347,6 +348,7 @@ def forward_env_args() -> list:
     return out
 
 
+# Command line of the agent process. Arguments are documented in docs/S13-S14-INTERFACE.md.
 def runner_argv(env, spec: dict) -> list:
     """Command line of the agent process. Arguments are documented in docs/S13-S14-INTERFACE.md.
 
@@ -702,6 +704,7 @@ def run_round(conn, machine: dict, envs=None, terminal=None, dry_run=False, plan
                                     settle=settle, poll=poll, tries=tries, plan_files=plan_files)
 
 
+# Record dead panes and interrupt any agent still marked running.
 def repair_closed_panes(env, terminal=None) -> None:
     """Record dead panes and interrupt any agent still marked running."""
     from . import interrupt
@@ -1138,6 +1141,7 @@ def report_loop_failure(conn, text: str) -> None:
     faults.file_fault(conn, "HaiveQueen", "loop_vanished", text)
 
 
+# Run rounds until the STOP flag exists (or `rounds` rounds are done), then wait for the running agents and end.
 def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui: bool = False, out=None, sleep=time.sleep,
              wait_seconds: float = 2.0, round_kwargs: dict = None) -> int:
     """Run rounds until the STOP flag exists (or `rounds` rounds are done), then wait for the running agents and end.
@@ -1211,6 +1215,7 @@ def daily_export(envs) -> None:
             env.log("EXPORT ERROR %s" % exc)
 
 
+# The loop body (see run_loop).
 def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds, round_kwargs) -> int:
     """The loop body (see run_loop)."""
     envs = sch.load_projects(conn, machine)
@@ -1218,6 +1223,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
     state = {"since": datetime.now(), "next_at": None, "busy": False, "projects": [e.name for e in envs]}
     pane = Pane(conn, envs, out) if ui else None
 
+    # Update the header values from the stored state and redraw.
     def refresh() -> None:
         """Update the header values from the stored state and redraw."""
         runtime.kv_set(conn, sch.GLOBAL, "loop-heartbeat", datetime.now().isoformat(timespec="seconds"))
@@ -1227,6 +1233,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
             pane.show_new_events()
             pane.maybe_head(state)
 
+    # Settle and redraw during waits without letting a transient failure stop the loop.
     def wait_refresh() -> None:
         """Settle and redraw during waits without letting a transient failure stop the loop."""
         for action in (lambda: runstate.settle(conn), refresh):
