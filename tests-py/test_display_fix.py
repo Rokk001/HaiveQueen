@@ -380,3 +380,16 @@ class WrapAndLayoutTest(FrameCase):
                 """Record the closed pane."""
                 closed.append(pane_id)
         self.assertEqual(sorted(loop.close_idle_hive_panes(self.conn, Term(), 'W')), ['W.6', 'W.7', 'W.8'])
+
+    def test_no_word_project_in_the_texts_the_owner_reads(self):
+        """The Beekeeper header, the log lines of the pane and the fault and error texts say Apiary, never project."""
+        import inspect
+        from haivequeen import faults, runtime, triage
+        import datetime
+        header = " ".join(t for t, _ in loop.head_lines(80, {"projects": ["a", "b"], "since": datetime.datetime.now(), "next_at": None, "busy": False}))
+        self.assertNotIn("Project", header)
+        for fn in (faults._check_agents, faults._check_idle):
+            self.assertNotRegex(inspect.getsource(fn), r"\"[^\"]*[Pp]roject %s")
+        self.assertNotRegex(inspect.getsource(runtime), r"f\"project \{project\} has no workspace")
+        self.assertNotRegex(inspect.getsource(triage), r"not active in \{project\}")
+        self.assertIn('"[Apiary %s] %s"', inspect.getsource(loop.Pane))

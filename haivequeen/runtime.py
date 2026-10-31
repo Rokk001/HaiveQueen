@@ -312,7 +312,7 @@ def _workspace(conn, project, override=None) -> Path:
         return Path(override)
     row = conn.execute("SELECT workspace FROM projects WHERE name=?", (project,)).fetchone()
     if row is None or not row[0]:
-        raise CmdError(f"project {project} has no workspace (register it or pass --workspace)")
+        raise CmdError(f"Apiary {project} has no workspace (register it or pass --workspace)")
     return Path(row[0])
 
 

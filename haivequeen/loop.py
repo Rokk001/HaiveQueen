@@ -982,7 +982,7 @@ def head_lines(width: int, ui: dict) -> list:
         state = "starting"
     for ln in wrap_text("◆ Beekeeper | %s" % state, width):
         res.append((ln, "White"))
-    res.append(("Projects: " + (", ".join(ui.get("projects") or []) or "none"), "Gray"))
+    res.append(("Apiaries: " + (", ".join(ui.get("projects") or []) or "none"), "Gray"))
     return res
 
 
@@ -1055,7 +1055,7 @@ class Pane:
                 if len(p) < 3:
                     continue
                 first = True
-                for part in wrap_text("[%s] %s" % (env.name, p[2]), self.width() - 7):
+                for part in wrap_text("[Apiary %s] %s" % (env.name, p[2]), self.width() - 7):
                     self.out.write("%s[%sm%s%s%s[0m\n" % (ESC, "31" if p[1] == "E" else "97", (p[0] + "  ") if first else "       ", part, ESC))
                     first = False
             self.pos[env.name] = len(lines)

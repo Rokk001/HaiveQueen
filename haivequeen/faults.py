@@ -92,7 +92,7 @@ def _check_agents(env) -> None:
         else:
             kind, what = "agent_no_result", "it ended (%s) without a final result" % a["status"]
         if not first:
-            file_fault(conn, FAULT_PROJECT, kind, "Agent %s of project %s: %s." % (a["name"], env.name, what))
+            file_fault(conn, FAULT_PROJECT, kind, "Agent %s of Apiary %s: %s." % (a["name"], env.name, what))
     runtime.kv_set(conn, env.name, SEEN_KEY, json.dumps(sorted(seen)[-500:]))
 
 
@@ -109,7 +109,7 @@ def _check_idle(env, started: int, can_start: bool) -> None:
     n = int(runtime.kv_get(conn, env.name, IDLE_KEY) or 0) + 1 if stuck else 0
     runtime.kv_set(conn, env.name, IDLE_KEY, str(n))
     if n >= IDLE_ROUNDS:
-        file_fault(conn, FAULT_PROJECT, "no_start", "Project %s: %d rounds in a row with startable packages and no agent started." % (env.name, n))
+        file_fault(conn, FAULT_PROJECT, "no_start", "Apiary %s: %d rounds in a row with startable packages and no agent started." % (env.name, n))
 
 
 def check_round(env, started: int, can_start: bool, now: datetime = None, reader=None) -> None:

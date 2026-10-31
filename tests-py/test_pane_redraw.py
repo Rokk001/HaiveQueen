@@ -112,7 +112,7 @@ class QueenHeaderRedrawTest(RoundCase):
         """Several header redraws: one QUEEN line, events fill the rows below, nothing of the header in the scrollback."""
         scr = self.feed_queen(100, 30)
         self.assertEqual(sum(1 for t in scr.lines() if t.startswith("◆ Beekeeper")), 1)
-        self.assertFalse([t for t in scr.scrollback if "Beekeeper" in t or "Projects:" in t])
+        self.assertFalse([t for t in scr.scrollback if "Beekeeper" in t or "Apiaries:" in t])
         self.assertTrue(scr.lines()[0].startswith("◆ Beekeeper"))
         self.assertIn("12:00:39  event line 39", scr.lines())
 
@@ -120,7 +120,7 @@ class QueenHeaderRedrawTest(RoundCase):
         """A 40-column pane: the long project line is cut, the header does not wrap into the event rows."""
         scr = self.feed_queen(40, 30)
         self.assertEqual(sum(1 for t in scr.lines() if t.startswith("◆ Beekeeper")), 1)
-        self.assertFalse([t for t in scr.scrollback if "Beekeeper" in t or "Projects:" in t])
+        self.assertFalse([t for t in scr.scrollback if "Beekeeper" in t or "Apiaries:" in t])
 
 
 if __name__ == "__main__":

@@ -122,7 +122,7 @@ class HeaderTests(unittest.TestCase):
         """The header still shows the Beekeeper, its state and its projects."""
         text = self.text({"busy": True, "projects": ["a", "b"]})
         self.assertIn("Beekeeper | round running", text)
-        self.assertIn("Projects: a, b", text)
+        self.assertIn("Apiaries: a, b", text)
         self.assertIn("PAUSED", self.text({"run_state": "PAUSED"}))
 
 

@@ -175,7 +175,7 @@ def close_by_reference(conn, project, qid, kind, ref_id, reason) -> dict:
         ref = next((q for q in runtime.list_questions(conn, project, "answered") if q["id"] == ref_id), None)
         text = ref["answer"] if ref else None
     if ref is None:
-        raise CmdError(f"{kind} {ref_id} is unknown or not active in {project}")
+        raise CmdError(f"{kind} {ref_id} is unknown or not active in Apiary {project}")
     return _close_with_reference(conn, qid, kind, ref_id, "%s; %s" % (reason, text or ""))
 
 
