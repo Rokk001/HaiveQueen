@@ -3,7 +3,7 @@
 `file_fault` is the only place that creates these questions. Their plan_path is the fixed text `HQ-FAULTS` (there is no plan file); the round starts
 no triage and no work agent for them, the coordinator reads them. `check_round` detects the fault kinds in the round routine of the loop:
 no_start (startable packages and 0 starts for 2 rounds in a row), runner_vanished, agent_no_result, terminal_crash (Windows Terminal crash in the
-Application event log, read at most every 10 minutes) and self_update_rollback and self_update_pane (filed by the self-update through `file_fault`).
+Application event log, read at most every 10 minutes), loop_vanished (unexpected loop end), self_update_rollback and self_update_pane.
 """
 import json
 import re
@@ -14,7 +14,7 @@ from . import platform as osplat
 
 FAULT_PLAN = "HQ-FAULTS"          # plan_path of every fault question
 FAULT_PROJECT = "HaiveQueen"      # project that owns the fault questions
-KINDS = ("no_start", "runner_vanished", "agent_no_result", "terminal_crash", "self_update_rollback", "self_update_pane")
+KINDS = ("no_start", "runner_vanished", "agent_no_result", "terminal_crash", "self_update_rollback", "self_update_pane", "loop_vanished")
 IDLE_ROUNDS = 2                   # rounds with startable packages and no start before no_start is filed
 EVENTLOG_INTERVAL = 600           # seconds between two reads of the event log
 WEVTUTIL = ["wevtutil", "qe", "Application", "/q:*[System[Provider[@Name='Application Error']]]", "/c:20", "/rd:true", "/f:text"]

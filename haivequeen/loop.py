@@ -6,14 +6,16 @@ validates every action (rules 11 and others) and starts agents through the termi
 a lock starts a triage agent (D5), and at the start running agents are re-attached by process id.
 The agent process itself is `haivequeen.agent_runner` (see docs/S13-S14-INTERFACE.md).
 """
+import faulthandler
 import json
 import os
 import re
 import subprocess
 import sys
 import time
+import traceback
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import db, events, export, faults, header, hivelayout, inbox, reattach, routine, runstate, runtime, triage, usage, views
@@ -259,7 +261,7 @@ def is_test_runtime() -> bool:
 # ---- loop state (kv key loop-state, machine wide) ----
 
 def write_state(conn, status: str, since: datetime, next_at) -> None:
-    """Write the loop state for the dashboard and the pane header: status (round, idle), since and the next round time."""
+    """Write the loop state for the dashboard and pane header."""
     runtime.kv_set(conn, sch.GLOBAL, "loop-state", json.dumps({
         "status": status, "since": since.isoformat(timespec="seconds"),
         "nextAt": next_at.isoformat(timespec="seconds") if next_at else None}))
@@ -357,7 +359,7 @@ def runner_argv(env, spec: dict) -> list:
                "--prompt-file", spec["prompt_file"], "--runs-dir", str(env.run_dir(spec["name"]).parent)]
     # Windows Terminal drops an empty argument (a Queen has no package), which made the runner fail at once; the runner defaults them, so they are left out.
     pairs = [options[i:i + 2] for i in range(0, len(options), 2)]
-    return [osplat.python_executable(), "-c", boot, str(TOOLS_DIR)] + [a for pair in pairs if pair[1] != "" for a in pair] + forward_env_args()
+    return [osplat.python_executable(), "-c", boot, str(TOOLS_DIR), "--wrap"] + [a for pair in pairs if pair[1] != "" for a in pair] + forward_env_args()
 
 
 def alive_agent_pane(row: dict, alive=None) -> bool:
@@ -698,6 +700,27 @@ def run_round(conn, machine: dict, envs=None, terminal=None, dry_run=False, plan
             return result
         return hives.schedule_round(conn, machine, envs, terminal=terminal, dry_run=False, free_ram=free_ram, alive=alive,
                                     settle=settle, poll=poll, tries=tries, plan_files=plan_files)
+
+
+def repair_closed_panes(env, terminal=None) -> None:
+    """Record dead panes and interrupt any agent still marked running."""
+    from . import interrupt
+    rows = [a for a in env.agents("active") if a.get("pane_id") and not a.get("paneClosed")]
+    if not rows:
+        return
+    term = terminal or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
+    try:
+        panes = {p.id: p for p in term.list_panes(env.settings.get("window", "HaiveQueen"))}
+    except TerminalError as exc:
+        env.log("pane closure check failed: %s" % exc)
+        return
+    for row in rows:
+        pane = panes.get(row["pane_id"])
+        if pane is not None and not pane.alive:
+            fields = {"paneClosed": True}
+            if row.get("status") in ACTIVE:
+                fields.update(status="failed", ended_at=db.now(), last_line="runner process vanished (pane closed)", interrupted=interrupt.VANISHED)
+            env.update_agent(row["name"], fields)
 
 
 def _min_ram(env) -> float:
@@ -1096,6 +1119,25 @@ def active_count(conn) -> int:
     return runstate.running_agents(conn)
 
 
+# Return the Windows boot time to distinguish a restart from a loop failure.
+def system_boot_time():
+    """Return the system boot time on Windows, or None elsewhere."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    ctypes.windll.kernel32.GetTickCount64.restype = ctypes.c_ulonglong
+    return datetime.now() - timedelta(milliseconds=ctypes.windll.kernel32.GetTickCount64())
+
+
+# Log an unexpected loop end and file its deduplicated fault.
+def report_loop_failure(conn, text: str) -> None:
+    """Log an unexpected loop end, emit an error event and file its deduplicated fault."""
+    runtime.append_event(conn, "HaiveQueen", text, mirror="rounds", error=True)
+    runtime.append_event(conn, "HaiveQueen", text, mirror="events", error=True)
+    runtime.kv_set(conn, sch.GLOBAL, "loop-unexpected-end-at", datetime.now().isoformat(timespec="seconds"))
+    faults.file_fault(conn, "HaiveQueen", "loop_vanished", text)
+
+
 def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui: bool = False, out=None, sleep=time.sleep,
              wait_seconds: float = 2.0, round_kwargs: dict = None) -> int:
     """Run rounds until the STOP flag exists (or `rounds` rounds are done), then wait for the running agents and end.
@@ -1103,6 +1145,17 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui:
     Only one loop runs at a time: with a living lock the call ends at once. At the start running agents are re-attached by process id (D8): living
     ones stay running, vanished ones fail by the existing rules. `round_kwargs` go to run_round (tests). Returns the exit code.
     """
+    vanished = None
+    try:
+        pid = int(lock_file().read_text(encoding="ascii").strip())
+        last = read_state(conn) or {}
+        heartbeat = db.parse_time(runtime.kv_get(conn, sch.GLOBAL, "loop-heartbeat") or last.get("since") or "")
+        boot = system_boot_time()
+        restarted = boot is not None and heartbeat is not None and boot > heartbeat
+        if not restarted and not osplat.process_alive(pid) and not stop_flag().exists() and last.get("status") != "ended":
+            vanished = "Loop ended unexpectedly (pid %d, last state %s since %s)" % (pid, last.get("status"), last.get("since"))
+    except (OSError, ValueError):
+        pass
     other = _take_pid_lock(lock_file(), own_ok=True)   # atomic: of two loops started at the same moment exactly one runs
     if other:
         print("Another orchestrator loop runs (pid %d): this one ends." % other)
@@ -1111,9 +1164,33 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui:
         start_pending_file().unlink()
     except OSError:
         pass
+    crash = None
+    handler_enabled = faulthandler.is_enabled()
     try:
-        return _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds, round_kwargs or {})
+        crash_path = osplat.data_dir() / ("crash-%s.txt" % datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
+        crash = crash_path.open("a", encoding="utf-8")
+        faulthandler.enable(file=crash)
+        if vanished:
+            crash.write(vanished + "\n")
+            crash.flush()
+            report_loop_failure(conn, vanished)
+        runtime.kv_set(conn, sch.GLOBAL, "loop-started-at", datetime.now().isoformat(timespec="seconds"))
+        try:
+            result = _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds, round_kwargs or {})
+        except Exception:
+            text = traceback.format_exc()
+            crash.write(text)
+            crash.flush()
+            report_loop_failure(conn, "Loop ended unexpectedly\n" + text)
+            raise
+        write_state(conn, "ended", datetime.now(), None)
+        return result
     finally:
+        if crash:
+            faulthandler.disable()
+            if handler_enabled:
+                faulthandler.enable()
+            crash.close()
         try:
             lock_file().unlink()
         except OSError:
@@ -1143,11 +1220,22 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
 
     def refresh() -> None:
         """Update the header values from the stored state and redraw."""
+        runtime.kv_set(conn, sch.GLOBAL, "loop-heartbeat", datetime.now().isoformat(timespec="seconds"))
         rs = runstate.get_state(conn)["state"]
         state.update(stop=stop_flag().exists(), run_state=rs)
         if pane:
             pane.show_new_events()
             pane.maybe_head(state)
+
+    def wait_refresh() -> None:
+        """Settle and redraw during waits without letting a transient failure stop the loop."""
+        for action in (lambda: runstate.settle(conn), refresh):
+            try:
+                action()
+            except Exception as exc:
+                for env in envs:
+                    env.log("ROUND ERROR %s" % exc)
+                    env.event("Round error: %s" % exc, True)
 
     for env in envs:
         res = reattach.reattach(conn, env.name, osplat.process_alive)
@@ -1184,8 +1272,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         end = time.time() + minutes * 60
         while time.time() < end and not stop_flag().exists():
             sleep(wait_seconds)
-            runstate.settle(conn)
-            refresh()
+            wait_refresh()
             if hives.wake_marker(conn, envs) != wake:
                 break
     stopped = stop_flag().exists()
@@ -1200,8 +1287,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         sleep(wait_seconds)
         for env in envs:   # a row whose runner process is gone must not hold the stopped loop open
             routine.repair_stale_agents(env)
-        runstate.settle(conn)
-        refresh()
+        wait_refresh()
     for env in envs:
         env.log("loop ended")
         env.event("Loop ended: all agents are done")

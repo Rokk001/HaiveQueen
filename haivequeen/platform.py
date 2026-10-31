@@ -3,6 +3,7 @@
 Inside the package use `from haivequeen import platform as osplat`; the standard module `platform`
 is not affected because imports in this package are absolute.
 """
+import contextlib
 import csv
 import ctypes
 import io
@@ -13,11 +14,74 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 APP = "HaiveQueen"
 STILL_ACTIVE = 259
+
+
+@contextlib.contextmanager
+def keep_foreground():
+    """Restore the user's foreground window after Windows Terminal activates itself."""
+    if not is_windows():
+        yield
+        return
+    from ctypes import wintypes
+    user = ctypes.windll.user32
+    kernel = ctypes.windll.kernel32
+    kernel.GetCurrentThreadId.restype = wintypes.DWORD
+    user.GetForegroundWindow.restype = wintypes.HWND
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+    user.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user.BringWindowToTop.argtypes = [wintypes.HWND]
+    user.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+
+    def window_info(hwnd):
+        """Read the class and title of a native window."""
+        cls = ctypes.create_unicode_buffer(256)
+        title = ctypes.create_unicode_buffer(512)
+        user.GetClassNameW(hwnd, cls, len(cls))
+        user.GetWindowTextW(hwnd, title, len(title))
+        return cls.value, title.value
+
+    original = user.GetForegroundWindow()
+    cls, title = window_info(original) if original else ("", "")
+    skip = not original or (cls == "CASCADIA_HOSTING_WINDOW_CLASS" and (title.startswith("HaiveQueen |") or title.startswith("HaiveQueen TEST |")))
+    def restore():
+        """Wait at most three seconds for the terminal, then restore the saved window."""
+        deadline = time.monotonic() + 3.0
+        while True:
+            current = user.GetForegroundWindow()
+            if current != original and current and window_info(current)[0] == "CASCADIA_HOSTING_WINDOW_CLASS":
+                current_thread = user.GetWindowThreadProcessId(current, None)
+                caller_thread = kernel.GetCurrentThreadId()
+                attached = user.AttachThreadInput(caller_thread, current_thread, True)
+                try:
+                    user.SetForegroundWindow(original)
+                    user.BringWindowToTop(original)
+                finally:
+                    if attached:
+                        user.AttachThreadInput(caller_thread, current_thread, False)
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+
+    worker = None
+    if not skip:
+        worker = threading.Thread(target=restore)
+        worker.start()
+    try:
+        yield
+    finally:
+        if worker:
+            worker.join()
+
 
 
 def is_windows() -> bool:

@@ -148,7 +148,7 @@ class LoopTest(RoundCase):
         self.assertEqual(seen, {"live": "running", "gone": "failed"})
         self.assertFalse(loop.lock_file().exists())
         self.assertIn("loop started", self.log())
-        self.assertEqual(loop.read_state(self.conn)["status"], "idle")
+        self.assertEqual(loop.read_state(self.conn)["status"], "ended")
 
     def test_second_loop_refused(self):
         """With a living lock a second loop ends at once."""

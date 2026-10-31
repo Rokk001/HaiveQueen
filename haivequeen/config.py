@@ -8,6 +8,7 @@ APP = "HaiveQueen"
 
 DEFAULT_CONFIG = {
     "providers": [],
+    "claudeTools": "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop",
     "slots": 2,
     "weeklyLimitSources": [],
     "buildJobs": 0,

@@ -290,6 +290,49 @@ class RunnerBase(unittest.TestCase):
 class ClaudeRunTest(RunnerBase):
     """A full run with a fake Claude stream."""
 
+    # Verify the project default reaches the Claude CLI.
+    def test_default_claude_tools_reach_cli(self):
+        """A project without claudeTools passes the default tool list to Claude."""
+        cfg = self.base / "cfg" / "config.toml"
+        cfg.write_text(cfg.read_text(encoding="utf-8").replace(
+            "args = ['--model'", "args = ['--tools', '{claudeTools}', '--model'", 1), encoding="utf-8")
+        self.prepare("TOOLS-DEFAULT")
+        r = self.run_runner("TOOLS-DEFAULT", "claude", claude_stream())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.row("TOOLS-DEFAULT")["status"], "done")
+        argv = self.record()["argv"]
+        self.assertEqual(argv[argv.index("--tools") + 1],
+                         "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop")
+
+    # Verify machine settings apply when the project has no tool setting.
+    def test_machine_claude_tools_reach_cli(self):
+        """Machine tool settings override the default when absent from the project."""
+        cfg = self.base / "cfg" / "config.toml"
+        cfg.write_text("claudeTools = 'Read,Glob'\n" + cfg.read_text(encoding="utf-8").replace(
+            "args = ['--model'", "args = ['--tools', '{claudeTools}', '--model'", 1), encoding="utf-8")
+        self.prepare("TOOLS-MACHINE")
+        self.run_runner("TOOLS-MACHINE", "claude", claude_stream())
+        argv = self.record()["argv"]
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read,Glob")
+
+    # Verify an empty tool argument fails without starting Claude.
+    def test_empty_claude_tools_fail_without_cli_start(self):
+        """An empty expanded tools argument fails before the Claude CLI is started."""
+        cfg = self.base / "cfg" / "config.toml"
+        cfg.write_text(cfg.read_text(encoding="utf-8").replace(
+            "args = ['--model'", "args = ['--tools', '{claudeTools}', '--model'", 1), encoding="utf-8")
+        (self.ws / ".haivequeen").mkdir()
+        (self.ws / ".haivequeen" / "project.toml").write_text("claudeTools = ''\n", encoding="utf-8")
+        self.prepare("TOOLS-EMPTY")
+        r = self.run_runner("TOOLS-EMPTY", "claude", claude_stream())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        row = self.row("TOOLS-EMPTY")
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["last_line"], "runner error: claudeTools missing")
+        self.assertEqual(row["exit_code"], 99)
+        self.assertTrue(row["ended_at"])
+        self.assertFalse((self.base / "record.json").exists())
+
     def test_claude_done(self):
         """Tokens, context, milestones, final report, usage windows and the report prompt of a finished Claude agent."""
         self.prepare("A-1")

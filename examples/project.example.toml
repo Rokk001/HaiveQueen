@@ -2,6 +2,7 @@
 name = "example"
 colour = "cyan"
 priority = 0                      # higher gets a free slot first
+claudeTools = "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop"
 planGlobs = ["docs/plans/*.md"]
 planExclude = []                  # globs (same syntax as planGlobs) removed from the matches, e.g. ["docs/plans/archive/**", "docs/plans/*-STATE.md"]
 buildProcessNames = ["cl.exe"]    # compiler processes counted in the "active cores" display; empty = no display
