@@ -18,6 +18,7 @@ from .base import (PaneInfo, PaneRegistry, Terminal, TerminalError, check_direct
                    safe_name)
 
 LAUNCHER = str(Path(__file__).with_name("_panerun.py"))
+SHARE_FALLBACKS = (0.9, 0.75, 0.5)   # smaller shares tried when wt makes no pane: it refuses a split that leaves the old pane too few lines (0.95 of a tall pane)
 VISIBLE_TITLE = "HaiveQueen"   # what Windows Terminal shows for every pane and tab, so the window title never names a project, agent or Queen
 
 
@@ -166,16 +167,22 @@ class WindowsTerminal(Terminal):
                    target=None, name=None):
         """Split a pane of the named window; `colour` has no effect (wt colours tabs, not panes)."""
         check_direction(direction)
-        check_size(size)
+        size = check_size(size)
         if target is not None and "." in str(target):
             target = pane_number(str(target))
-        try:
-            return self._split(window, title, command, direction, size, target, name)
-        except TerminalError:
-            if target is None:
-                raise
-            # no pane came of the split with focus-pane: once more on the pane wt has focused (the one it made last); the trace shows both calls
-            return self._split(window, title, command, direction, size, None, name)
+        shares = [size] + [s for s in SHARE_FALLBACKS if s < size]
+        for share in shares:
+            try:
+                return self._split(window, title, command, direction, share, target, name)
+            except TerminalError:
+                if target is not None and share == size:
+                    # no pane came of the split with focus-pane: once more on the pane wt has focused (the one it made last); the trace shows both calls
+                    try:
+                        return self._split(window, title, command, direction, share, None, name)
+                    except TerminalError:
+                        pass
+                if share == shares[-1]:
+                    raise
 
     def wt_order(self, window):
         """Creation numbers of the panes of `window` in the order wt counts them for focus-pane (depth first through the split tree).

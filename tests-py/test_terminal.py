@@ -230,6 +230,25 @@ class WtArgsTest(unittest.TestCase):
         self.assertIn("focus-pane -t 0 ; split-pane", lines[2])
         self.assertIn("focus-pane -t 1 ; split-pane", lines[3])
 
+    def test_split_that_leaves_too_little_room_is_tried_with_a_smaller_share(self):
+        """wt silently makes no pane when the old pane would keep too few lines (0.95 of a tall head pane); the split is tried again with a smaller share until a pane comes."""
+        import re
+        term = wt.WindowsTerminal(self.tmp.name, start_timeout=0.2, settle=0)
+        sizes = []
+
+        def popen(line, **kw):
+            """Stand in for wt.exe: shares above 0.9 make no pane, smaller ones do (the launcher writes its pid file)."""
+            share = float(re.search(r"-s (\S+)", line).group(1))
+            sizes.append(share)
+            if share <= 0.9:
+                Path(re.search(r"_panerun\.py (\S+)", line).group(1)).write_text("111 222", encoding="ascii")
+            return mock.Mock(poll=mock.Mock(return_value=0))
+        term.registry.save("first", {"id": "W11.0", "window": "W11", "index": 0, "title": "T", "pid": 0, "pidfile": ""})
+        with mock.patch.object(wt.subprocess, "Popen", side_effect=popen):
+            pane = term.split_pane("W11", "T", None, ["py"], "vertical", 0.95, target="W11.0", name="hive")
+        self.assertEqual(pane, "W11.1")
+        self.assertEqual(sizes[-1], 0.9)
+
     def test_wt_is_started_without_the_session_of_the_calling_pane(self):
         """The Beekeeper runs inside a wt pane: wt.exe must not inherit that pane's WT_* variables or its console, else it may treat the call as coming from the pane."""
         seen = {}

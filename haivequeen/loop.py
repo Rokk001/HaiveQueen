@@ -463,7 +463,7 @@ def apiary_argv(env) -> list:
     return [osplat.python_executable(), "-c", HIVE_BOOT, str(TOOLS_DIR), "--project", env.name, "--head"] + forward_env_args()
 
 
-HIVE_BELOW_HEAD = 0.95   # share of the Apiary block that the first Hive pane takes below the slim head pane (the head keeps one or two lines)
+HIVE_BELOW_HEAD = 0.9   # share of the Apiary block that the first Hive pane takes below the slim head pane; wt makes no pane at 0.95 of a tall head (checked live: 0.9 and 0.85 work)
 
 
 def hive_split_size(placed: int, total: int) -> float:
