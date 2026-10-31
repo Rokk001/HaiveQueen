@@ -23,6 +23,7 @@ def iso(minutes_ago):
     return (NOW - timedelta(minutes=minutes_ago)).isoformat(timespec="seconds")
 
 
+# Test dashboard behavior.
 class DashboardTest(unittest.TestCase):
     """Render with two invented projects."""
 

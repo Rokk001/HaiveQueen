@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 from haivequeen import db  # noqa: E402
 
 
+# Test cli behavior.
 class CliTest(unittest.TestCase):
     """Runs haivequeen/cli.py with BZZ_* folders pointing into a temp folder."""
 

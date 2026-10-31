@@ -22,6 +22,7 @@ CRASH_LOG = """Event[0]:
 VANISHED = "runner process vanished (ended by executor or crashed)"
 
 
+# Test faults behavior.
 class FaultsTest(RoundCase):
     """Rounds on the dummy project with a registered project HaiveQueen that owns the fault questions."""
 
