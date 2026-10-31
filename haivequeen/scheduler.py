@@ -509,7 +509,7 @@ class ProjectEnv:
                         "capability": str(p["capability"] or "")})
         for r in res:
             if r["depends_all"]:
-                r["depends"] = [x["id"] for x in res if x["id"] != r["id"]]
+                r["depends"] += [x["id"] for x in res if x["id"] != r["id"] and x["id"] not in r["depends"]]
         return res
 
 
