@@ -1,4 +1,5 @@
 """Tests of the terminal backends: factory, quoting, titles, wt and tmux command lines, headless for real."""
+import os
 import subprocess
 import sys
 import tempfile
@@ -208,6 +209,26 @@ class WtArgsTest(unittest.TestCase):
         self.assertIn("target=None", seen[1])
         self.assertNotIn("focus-pane", seen[1])
         self.assertIn("pane.pid=yes", seen[1])
+
+    def test_focus_pane_target_is_the_number_wt_counts_in_tree_order(self):
+        """wt counts panes through the split tree, not in creation order: the pane split off pane 0 last sits at 1, so the pane made third is wt's number 1."""
+        import re
+        term = wt.WindowsTerminal(self.tmp.name, start_timeout=0.3, settle=0)
+        lines = []
+
+        def popen(line, **kw):
+            """Stand in for wt.exe: record the line and let the launcher write a pid file of a living process."""
+            lines.append(line)
+            Path(re.search(r"_panerun\.py (\S+)", line).group(1)).write_text("%d %d" % (os.getpid(), os.getpid()), encoding="ascii")
+            return mock.Mock(poll=mock.Mock(return_value=0))
+        with mock.patch.object(wt.subprocess, "Popen", side_effect=popen):
+            chief = term.open_window("W10", "T", ["py"], None, "chief")
+            term.split_pane("W10", "T", None, ["py"], "vertical", 0.8, target=chief, name="dash")
+            head = term.split_pane("W10", "T", None, ["py"], "horizontal", 0.5, target=chief, name="head")
+            term.split_pane("W10", "T", None, ["py"], "vertical", 0.5, target=head, name="hive")
+        self.assertEqual(head, "W10.2")
+        self.assertIn("focus-pane -t 0 ; split-pane", lines[2])
+        self.assertIn("focus-pane -t 1 ; split-pane", lines[3])
 
     def test_wt_is_started_without_the_session_of_the_calling_pane(self):
         """The Beekeeper runs inside a wt pane: wt.exe must not inherit that pane's WT_* variables or its console, else it may treat the call as coming from the pane."""

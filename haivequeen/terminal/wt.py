@@ -93,11 +93,12 @@ class WindowsTerminal(Terminal):
         subs.append(first + list(command))
         return subs
 
-    def _launch(self, window, subs_builder, title, command, name, pane_id_index, what="call"):
+    def _launch(self, window, subs_builder, title, command, name, pane_id_index, what="call", after=None):
         """Start wt.exe with the built sub-commands, record the pane and wait for its pid file.
 
         wt's own output goes to wt.out and wt.err in the pane folder; with a trace sink one line says what was called and what came of it.
         `what` names the call for that line (open-window, or split with target, direction and size).
+        `after` is the creation number of the pane this one was split off; it is kept in the record to rebuild wt's pane order.
         """
         pane_id = "%s.%d" % (window, pane_id_index)
         folder_name = safe_name(name or "%s-%d" % (window, pane_id_index))
@@ -107,7 +108,7 @@ class WindowsTerminal(Terminal):
         if pidfile.exists():
             pidfile.unlink()
         self.registry.save(folder_name, {"id": pane_id, "window": window, "index": pane_id_index,
-                                         "title": title, "pid": 0, "pidfile": str(pidfile)})
+                                         "title": title, "pid": 0, "pidfile": str(pidfile), "after": after})
         line = wt_quote(self.exe()) + " " + wt_commandline(subs_builder(self.wrapped(pidfile, command)))
         time.sleep(self.settle)
         with open(folder / "wt.out", "wb") as out, open(folder / "wt.err", "wb") as err:
@@ -176,12 +177,42 @@ class WindowsTerminal(Terminal):
             # no pane came of the split with focus-pane: once more on the pane wt has focused (the one it made last); the trace shows both calls
             return self._split(window, title, command, direction, size, None, name)
 
+    def wt_order(self, window):
+        """Creation numbers of the panes of `window` in the order wt counts them for focus-pane (depth first through the split tree).
+
+        A split pane sits right behind the pane it was split off (or, split off the focused pane, behind the pane made last); panes whose launcher has ended are left out.
+        """
+        order, last = [], None
+        for rec in sorted((r for r in self.registry.records() if r.get("window") == window), key=lambda r: r.get("index", -1)):
+            after = rec.get("after") if rec.get("after") is not None else last
+            if after in order:
+                order.insert(order.index(after) + 1, rec["index"])
+            else:
+                order.append(rec["index"])
+            last = rec["index"]
+        gone = {r["index"] for r in self.registry.records() if r.get("window") == window and not self._launcher_alive(r)}
+        return [n for n in order if n not in gone]
+
+    def _launcher_alive(self, rec):
+        """False only when the record has a launcher pid that no longer runs (records without a pid count as alive)."""
+        launcher, _command = self._pids(rec)
+        return not launcher or _proc.pid_alive(launcher)
+
     def _split(self, window, title, command, direction, size, target, name):
-        """One split call of wt with the next free pane number; `target` None splits the focused pane."""
+        """One split call of wt with the next free pane number; `target` None splits the focused pane.
+
+        `target` is a creation number; wt's focus-pane counts in tree order, so it is translated first (a target that is gone splits the focused pane).
+        """
         index = self.registry.next_index(window)
+        after, wt_target = None, None
+        if target is not None:
+            order = self.wt_order(window)
+            after = int(target)
+            wt_target = order.index(after) if after in order else None
         return self._launch(window,
-                            lambda wrapped: self.split_pane_args(window, title, wrapped, direction, size, target),
-                            title, command, name, index, "split target=%s direction=%s size=%g" % (target, direction, size))
+                            lambda wrapped: self.split_pane_args(window, title, wrapped, direction, size, wt_target),
+                            title, command, name, index,
+                            "split target=%s direction=%s size=%g wt-index=%s" % (target, direction, size, wt_target), after)
 
     def _pids(self, rec):
         """Return (launcher pid, command pid) of a record, reading the pid file when it is there."""
