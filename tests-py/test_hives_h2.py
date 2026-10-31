@@ -74,7 +74,8 @@ class BeePolicyTests(unittest.TestCase):
             path = str(Path(directory) / 'attempts.sqlite')
             conn = sqlite3.connect(path)
             bees.ensure_attempts(conn)
-            bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'failed')
+            bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'failed', 'baseline', ['open'])
+            bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'failed', 'attempt', ['open'])
             bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'interrupted')
             conn.close()
             conn = sqlite3.connect(path)
@@ -100,8 +101,9 @@ class BeePolicyTests(unittest.TestCase):
     def test_repeated_attempt_report_is_counted_once(self):
         import sqlite3
         conn = sqlite3.connect(':memory:')
-        bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'failed', 'bee-1')
-        bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'failed', 'bee-1')
+        bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'failed', 'baseline', ['open'])
+        bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'failed', 'bee-1', ['open'])
+        bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'failed', 'bee-1', ['open'])
         self.assertEqual(bees.failure_count(conn, 'p', 'plan', 'P1', 'medium'), 1)
         conn.close()
 
@@ -110,11 +112,11 @@ class BeePolicyTests(unittest.TestCase):
         import sqlite3
         conn = sqlite3.connect(':memory:')
         bees.ensure_attempts(conn)
-        for _ in range(3):
-            bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'failed')
+        for i in range(4):
+            bees.record_attempt(conn, 'p', 'plan', 'P1', 'medium', 'failed', 'medium-%s' % i, ['open'])
         self.assertEqual(bees.next_attempt(conn, 'p', 'plan', 'P1', 'medium', self.providers, [], 3), 'heavy')
-        for _ in range(3):
-            bees.record_attempt(conn, 'p', 'plan', 'P1', 'heavy', 'failed')
+        for i in range(4):
+            bees.record_attempt(conn, 'p', 'plan', 'P1', 'heavy', 'failed', 'heavy-%s' % i, ['open'])
         self.assertIsNone(bees.next_attempt(conn, 'p', 'plan', 'P1', 'heavy', self.providers, [], 3))
         conn.close()
 
@@ -292,9 +294,8 @@ class QueenIntegrationTests(RoundCase):
         from bzztest import REL
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'heavy'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
-        for _ in range(3):
-            bees.report_attempt(self.env(), REL, 'P1', 'heavy', 'failed')
-        bees.report_attempt(self.env(), REL, 'P1', 'heavy', 'failed')
+        for i in range(5):
+            bees.report_attempt(self.env(), REL, 'P1', 'heavy', 'failed', 'attempt-%s' % i, ['open'])
         questions = runtime.list_questions(self.conn, 'testproj', status='open', plan=REL, item='P1')
         self.assertEqual(len(questions), 1)
 
@@ -417,8 +418,8 @@ class QueenIntegrationTests(RoundCase):
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
         env = self.env()
-        for i in range(3):
-            bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'queen-%s' % i)
+        for i in range(4):
+            bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'queen-%s' % i, ['open'])
         result = bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [])
         self.assertEqual((result['kind'], result['class']), ('subagent', 'heavy'))
 
@@ -451,8 +452,8 @@ class QueenIntegrationTests(RoundCase):
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
         env = self.env()
-        for i in range(3):
-            bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'attempt-%s' % i)
+        for i in range(4):
+            bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'attempt-%s' % i, ['open'])
         bee_wt = self.base / 'bee-wt'
         bee_wt.mkdir()
         with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
@@ -523,8 +524,8 @@ class QueenIntegrationTests(RoundCase):
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'Image', 'class': 'medium', 'capability': 'images'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         env = self.env()
-        for i in range(3):
-            bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'attempt-%s' % i)
+        for i in range(4):
+            bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'attempt-%s' % i, ['open'])
         self.assertEqual(len(runtime.list_questions(self.conn, 'testproj', status='open', plan=REL, item='P1')), 1)
         self.assertIsNone(bees.next_attempt(self.conn, 'testproj', REL, 'P1', 'medium', bees.escalation_providers(env, REL, 'P1'), [], 3))
 
@@ -774,3 +775,50 @@ class BeeRunnerTests(RunnerBase):
         result = self.run_runner('Ada', 'claude', claude_stream(ctx_big=True), phase='bee')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.runs / 'Ada' / 'HANDOFF').exists())
+
+class AttemptSignalTests(unittest.TestCase):
+    # Check repeated requirements and errors count only once per attempt.
+    def test_signals_and_no_signal(self):
+        import sqlite3
+        conn = sqlite3.connect(':memory:')
+        bees.record_attempt(conn, 'p', 'plan', 'P', 'medium', 'failed', 'a', ['one'], 'error 1')
+        self.assertEqual(bees.failure_count(conn, 'p', 'plan', 'P', 'medium'), 0)
+        bees.record_attempt(conn, 'p', 'plan', 'P', 'medium', 'failed', 'b', ['one'], 'error 1')
+        self.assertEqual(bees.failure_count(conn, 'p', 'plan', 'P', 'medium'), 1)
+        bees.record_attempt(conn, 'p', 'plan', 'P', 'medium', 'failed', 'c', ['two'], 'error 2')
+        self.assertEqual(bees.failure_count(conn, 'p', 'plan', 'P', 'medium'), 1)
+        bees.record_attempt(conn, 'p', 'plan', 'P', 'medium', 'failed', 'd', ['three'], 'error 2')
+        self.assertEqual(bees.failure_count(conn, 'p', 'plan', 'P', 'medium'), 2)
+        bees.record_attempt(conn, 'p', 'plan', 'P', 'medium', 'failed', 'd', ['three'], 'error 2')
+        self.assertEqual(bees.failure_count(conn, 'p', 'plan', 'P', 'medium'), 2)
+
+    # Escalation and interruptions do not carry signals into another attempt.
+    def test_class_reset_and_interruption(self):
+        import sqlite3
+        conn = sqlite3.connect(':memory:')
+        bees.record_attempt(conn, 'p', 'plan', 'P', 'medium', 'failed', 'a', ['one'], 'error')
+        bees.record_attempt(conn, 'p', 'plan', 'P', 'medium', 'interrupted', 'b', ['one'], 'error')
+        bees.record_attempt(conn, 'p', 'plan', 'P', 'heavy', 'failed', 'c', ['one'], 'error')
+        self.assertEqual(bees.failure_count(conn, 'p', 'plan', 'P', 'medium'), 0)
+        self.assertEqual(bees.failure_count(conn, 'p', 'plan', 'P', 'heavy'), 0)
+        bees.record_attempt(conn, 'p', 'plan', 'P', 'heavy', 'failed', 'd', ['one'], '')
+        self.assertEqual(bees.failure_count(conn, 'p', 'plan', 'P', 'heavy'), 1)
+
+    # The Queen is instructed to check both concrete signals.
+    def test_prompt_names_signals(self):
+        prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
+        self.assertIn('previous attempt', prompt)
+        self.assertIn('same last error', prompt)
+        self.assertIn('open requirements', prompt)
+    # A replacement Queen retries a vanished Bee at the same class and provider.
+    def test_prompt_retries_vanished_bee(self):
+        prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
+        for text in ('after a queen restart', 'bee process vanished', 'same class and provider', 'interruption is never a failure'):
+            self.assertIn(text, prompt)
+    # Missing signal data does not turn an unsolved outcome into a failure.
+    def test_missing_signals_do_not_count(self):
+        import sqlite3
+        conn = sqlite3.connect(':memory:')
+        bees.record_attempt(conn, 'p', 'plan', 'P', 'medium', 'failed', 'old')
+        self.assertEqual(bees.failure_count(conn, 'p', 'plan', 'P', 'medium'), 0)
+        self.assertEqual(conn.execute('SELECT class,counted FROM bee_attempt_signals WHERE attempt=?', ('old',)).fetchone(), ('medium', 0))
