@@ -186,6 +186,29 @@ class WtArgsTest(unittest.TestCase):
         self.assertEqual(term.registry.next_index("W8"), 1)
         self.assertEqual([r["id"] for r in term.registry.records()], ["W8.0"])
 
+    def test_split_that_gets_no_pane_is_tried_once_more_on_the_focused_pane(self):
+        """When wt makes no pane for a split with focus-pane, the same split is tried once without focus-pane (on the pane wt has focused); both calls are traced."""
+        import re
+        term = wt.WindowsTerminal(self.tmp.name, start_timeout=0.3, settle=0)
+        seen = []
+        term.trace = seen.append
+        term.registry.save("first", {"id": "W9.0", "window": "W9", "index": 0, "title": "T", "pid": 0, "pidfile": ""})
+
+        def popen(line, **kw):
+            """Stand in for wt.exe: a split with focus-pane makes no pane, one without it does (the launcher writes its pid file)."""
+            if "focus-pane" not in line:
+                Path(re.search(r"_panerun\.py (\S+)", line).group(1)).write_text("111 222", encoding="ascii")
+            return mock.Mock(poll=mock.Mock(return_value=0))
+        with mock.patch.object(wt.subprocess, "Popen", side_effect=popen):
+            pane = term.split_pane("W9", "T", None, ["py"], "vertical", 0.5, target="W9.0", name="hive")
+        self.assertEqual(pane, "W9.1")
+        self.assertEqual(len(seen), 2)
+        self.assertIn("focus-pane -t 0", seen[0])
+        self.assertIn("pane.pid=no", seen[0])
+        self.assertIn("target=None", seen[1])
+        self.assertNotIn("focus-pane", seen[1])
+        self.assertIn("pane.pid=yes", seen[1])
+
     def test_reopened_window_numbers_from_zero(self):
         """A window that is opened again starts at pane 0; the records of the old window are retired, not reused."""
         with mock.patch.object(wt.subprocess, "Popen"):

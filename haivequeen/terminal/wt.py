@@ -163,9 +163,19 @@ class WindowsTerminal(Terminal):
         """Split a pane of the named window; `colour` has no effect (wt colours tabs, not panes)."""
         check_direction(direction)
         check_size(size)
-        index = self.registry.next_index(window)
         if target is not None and "." in str(target):
             target = pane_number(str(target))
+        try:
+            return self._split(window, title, command, direction, size, target, name)
+        except TerminalError:
+            if target is None:
+                raise
+            # no pane came of the split with focus-pane: once more on the pane wt has focused (the one it made last); the trace shows both calls
+            return self._split(window, title, command, direction, size, None, name)
+
+    def _split(self, window, title, command, direction, size, target, name):
+        """One split call of wt with the next free pane number; `target` None splits the focused pane."""
+        index = self.registry.next_index(window)
         return self._launch(window,
                             lambda wrapped: self.split_pane_args(window, title, wrapped, direction, size, target),
                             title, command, name, index, "split target=%s direction=%s size=%g" % (target, direction, size))
