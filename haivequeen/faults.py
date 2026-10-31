@@ -1,7 +1,7 @@
-"""Own-operation faults of the loop, filed as open questions of the tool project (one per fault kind and day, no duplicates).
+"""Own-operation faults of the loop, checked before opening questions (one per fault kind and day, no duplicates).
 
 `file_fault` is the only place that creates these questions. Their plan_path is the fixed text `HQ-FAULTS` (there is no plan file); the round starts
-no triage and no work agent for them, the coordinator reads them. `check_round` detects the fault kinds in the round routine of the loop:
+no triage and no work agent for them. Confirmed or unresolved faults are opened for the coordinator. `check_round` detects the fault kinds:
 no_start (startable packages and 0 starts for 2 rounds in a row), runner_vanished, agent_no_result, terminal_crash (Windows Terminal crash in the
 Application event log, read at most every 10 minutes) and self_update_rollback and self_update_pane (filed by the self-update through `file_fault`).
 """
@@ -21,13 +21,14 @@ WEVTUTIL = ["wevtutil", "qe", "Application", "/q:*[System[Provider[@Name='Applic
 SEEN_KEY, IDLE_KEY, EVENTLOG_KEY = "faults-seen", "faults-idle-rounds", "faults-eventlog"
 
 
+# File one fault for automatic checking or immediate review when confirmed.
 def file_fault(conn, project, kind, text):
-    """File one fault as an open question of `project` unless this kind was already filed today; returns the question id or None for a duplicate."""
+    """File one fault for automatic checking, or immediately open a confirmed self-update fault; deduplicate by kind and day."""
     today = db.now()[:10]
-    for q in runtime.list_questions(conn, project, None, FAULT_PLAN, kind):
+    for q in db.rows(conn, "SELECT * FROM questions WHERE project=? AND plan_path=? AND item=?", (project, FAULT_PLAN, kind)):
         if str(q["created_at"])[:10] == today:
             return None
-    return db.add_question(conn, project, FAULT_PLAN, kind, "[%s] %s" % (kind, text), "")
+    return db.add_question(conn, project, FAULT_PLAN, kind, "[%s] %s" % (kind, text), "", status="open" if kind in ("self_update_rollback", "self_update_pane") else "fault_check")
 
 
 def _project_known(conn, project) -> bool:
@@ -122,14 +123,15 @@ def _resolve_open(env, started: int, now: datetime, reader) -> None:
     history = json.loads(runtime.kv_get(conn, env.name, key) or "[]")
     history = (history + [[now.isoformat(timespec="seconds"), started > 0]])[-2:]
     runtime.kv_set(conn, env.name, key, json.dumps(history))
-    questions = runtime.list_questions(conn, FAULT_PROJECT, "open", FAULT_PLAN)
+    questions = (runtime.list_questions(conn, FAULT_PROJECT, "open", FAULT_PLAN) +
+                 runtime.list_questions(conn, FAULT_PROJECT, "fault_check", FAULT_PLAN))
     terminal = [q for q in questions if q["item"] == "terminal_crash"]
     log = reader() if terminal else ""
     for q in questions:
         created = db.parse_time(q["created_at"])
         if created is None or created > now:
             continue
-        kind, answer, evidence = q["item"], None, None
+        kind, answer, evidence, confirmed = q["item"], None, None, False
         text = q["question"] or ""
         if kind == "terminal_crash":
             crashes = [t for t in parse_terminal_crashes(log or "", created) if t <= created + timedelta(minutes=60)]
@@ -138,15 +140,16 @@ def _resolve_open(env, started: int, now: datetime, reader) -> None:
                 crash_time = max(crashes).isoformat()
                 runtime.kv_set(conn, FAULT_PROJECT, confirmed_key, crash_time)
                 runtime.append_event(conn, FAULT_PROJECT, "Fault question %s confirmed by Windows Terminal crash at %s." % (q["id"], crash_time), kind="note", data={"question_id": q["id"]}, mirror="none")
+            confirmed = bool(runtime.kv_get(conn, FAULT_PROJECT, confirmed_key))
             evidence = "Application log: %s" % ("read failed" if log is None else "confirmed crash at " + runtime.kv_get(conn, FAULT_PROJECT, confirmed_key) if runtime.kv_get(conn, FAULT_PROJECT, confirmed_key) else "no later crash found")
             if now - created >= timedelta(minutes=60) and log is not None and not crashes and not runtime.kv_get(conn, FAULT_PROJECT, confirmed_key):
                 answer = "No later Windows Terminal crash in the Application log during the 60 minutes after the question."
-        elif kind == "no_start" and ("Apiary %s:" % env.name) in text:
+        elif kind == "no_start" and any(("%s %s:" % (label, env.name)) in text for label in ("Apiary", "Project")):
             evidence = "Last rounds of Apiary %s: %s" % (env.name, history)
             if len(history) == 2 and all(ok and db.parse_time(t) > created for t, ok in history):
                 answer = "The last two rounds of Apiary %s both started agents (%s and %s)." % (env.name, history[0][0], history[1][0])
         elif kind in ("runner_vanished", "agent_no_result"):
-            match = re.search(r"Agent (.+?) of Apiary (.+?):", text)
+            match = re.search(r"Agent (.+?) of (?:Apiary|project) (.+?):", text)
             if match and match.group(2) == env.name:
                 agents = env.agents("all")
                 evidence = "No later done run found for agent %s of Apiary %s." % (match.group(1), env.name)
@@ -167,11 +170,15 @@ def _resolve_open(env, started: int, now: datetime, reader) -> None:
             evidence = "Self-update fault requires review: %s" % text
         if answer:
             db.answer_question(conn, q["id"], answer, "coordinator")
-        elif evidence and now - created >= timedelta(minutes=60):
+        elif evidence and (confirmed or now - created >= timedelta(minutes=60)):
             evidence_key = "fault-evidence-%s" % q["id"]
             if not runtime.kv_get(conn, FAULT_PROJECT, evidence_key):
                 runtime.append_event(conn, FAULT_PROJECT, "Fault question %s remains open (%s): %s" % (q["id"], kind, evidence), kind="note", data={"question_id": q["id"]}, mirror="none")
                 runtime.kv_set(conn, FAULT_PROJECT, evidence_key, "1")
+            if q["status"] == "fault_check":
+                with db.transaction(conn):
+                    conn.execute("UPDATE questions SET status='open' WHERE id=? AND status='fault_check'", (q["id"],))
+                    db.add_event(conn, FAULT_PROJECT, "question", q["question"], data={"question_id": q["id"]})
 
 
 # Check and resolve fault reports for one project round.
