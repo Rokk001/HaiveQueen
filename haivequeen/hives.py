@@ -405,6 +405,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
         if result['skipped']:
             for env in envs:
                 env.log('round skipped (%s)' % result['skipped'])
+                faults.check_round(env, 0, False)
                 loop.run_hook(env, loop._state_summary(env))
             return result
     deferred = {}
@@ -412,6 +413,10 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
         deferred = migrate_once(conn, envs)
         reap_integrations(conn, alive=alive)
         wake_due(conn, db.now())
+    if not dry_run:
+        for env in envs:
+            if env.name in deferred:
+                faults.check_round(env, 0, False)
     envs = [env for env in envs if env.name not in deferred]
     for env in envs:
         runtime.sync_plans(conn, env.name, str(env.workspace))

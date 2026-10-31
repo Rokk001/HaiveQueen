@@ -151,6 +151,110 @@ class FaultsTest(RoundCase):
         self.round()
         self.assertFalse([n for n in set(self.names()) - before if "NO" in n.upper() and "Q-" in n.upper()])
 
+    # Check each fault against later evidence without starting an agent.
+    def test_open_faults_are_resolved_only_with_evidence(self):
+        """Later successful starts and runs close their matching fault questions."""
+        for kind in ("no_start", "runner_vanished", "agent_no_result"):
+            faults.file_fault(self.conn, "HaiveQueen", kind, "Agent DUMMY-A-work of Apiary testproj: failed. Apiary testproj:")
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00'")
+        self.conn.commit()
+        self.agent("DUMMY-A-work", status="done", started_at="2026-10-29T10:30:00", ended_at="2026-10-29T10:40:00")
+        self.check(now=datetime(2026, 10, 29, 11, 0))
+        self.assertEqual(self.faults_of("no_start")[0]["status"], "open")
+        self.check(now=datetime(2026, 10, 29, 11, 1))
+        for kind in ("no_start", "runner_vanished", "agent_no_result"):
+            q = self.faults_of(kind)[0]
+            self.assertEqual((q["status"], q["answered_by"]), ("answered", "auto"))
+            self.assertTrue(q["answer"])
+
+    # A crash entry after the question confirms the fault; absence only resolves after an hour.
+    def test_terminal_fault_waits_and_distinguishes_new_crash(self):
+        """A new crash remains open; otherwise the hour of observation resolves it."""
+        qid = faults.file_fault(self.conn, "HaiveQueen", "terminal_crash", "check")
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00' WHERE id=?", (qid,))
+        self.conn.commit()
+        self.check(now=datetime(2026, 10, 29, 10, 59), log=CRASH_LOG)
+        self.assertEqual(self.faults_of("terminal_crash")[0]["status"], "open")
+        self.check(now=datetime(2026, 10, 29, 11, 0))
+        self.assertEqual(self.faults_of("terminal_crash")[0]["status"], "open")
+        self.check(now=datetime(2026, 10, 29, 11, 1))
+        self.assertEqual(self.faults_of("terminal_crash")[0]["status"], "open")
+        db.answer_question(self.conn, qid, "reviewed", "owner")
+        qid = db.add_question(self.conn, "HaiveQueen", faults.FAULT_PLAN, "terminal_crash", "check again", "")
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T11:01:00' WHERE id=?", (qid,))
+        self.conn.commit()
+        self.check(now=datetime(2026, 10, 29, 12, 1))
+        self.assertEqual(self.faults_of("terminal_crash")[-1]["status"], "answered")
+
+    # A restart must run continuously for an hour after the latest unexpected end.
+    def test_loop_vanished_requires_continuous_runtime(self):
+        """A later unexpected end resets the recovery observation."""
+        from haivequeen import scheduler
+        qid = faults.file_fault(self.conn, "HaiveQueen", "loop_vanished", "unexpected end")
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00' WHERE id=?", (qid,))
+        self.conn.commit()
+        runtime.kv_set(self.conn, scheduler.GLOBAL, "loop-unexpected-end-at", "2026-10-29T09:59:00")
+        runtime.kv_set(self.conn, scheduler.GLOBAL, "loop-started-at", "2026-10-29T10:01:00")
+        self.check(now=datetime(2026, 10, 29, 11, 0))
+        self.assertEqual(self.faults_of("loop_vanished")[0]["status"], "open")
+        runtime.kv_set(self.conn, scheduler.GLOBAL, "loop-unexpected-end-at", "2026-10-29T10:50:00")
+        self.check(now=datetime(2026, 10, 29, 11, 1))
+        self.assertEqual(self.faults_of("loop_vanished")[0]["status"], "open")
+        runtime.kv_set(self.conn, scheduler.GLOBAL, "loop-started-at", "2026-10-29T11:02:00")
+        self.check(now=datetime(2026, 10, 29, 12, 2))
+        self.assertEqual(self.faults_of("loop_vanished")[0]["status"], "answered")
+
+    # Never automatically close verified self-update faults.
+    def test_self_update_faults_stay_open(self):
+        """Rollback and pane failures are real regardless of elapsed time."""
+        for kind in ("self_update_rollback", "self_update_pane"):
+            faults.file_fault(self.conn, "HaiveQueen", kind, "real")
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00'")
+        self.conn.commit()
+        self.check(now=datetime(2026, 10, 29, 12, 0))
+        self.assertTrue(all(q["status"] == "open" for q in self.faults_of()))
+
+    # Open reports retain coordinator-visible observations after an hour.
+    def test_unresolved_faults_record_evidence_once(self):
+        """Each unresolved kind stays open and records its observed recovery state."""
+        kinds = ("no_start", "runner_vanished", "agent_no_result", "terminal_crash",
+                 "loop_vanished", "self_update_rollback", "self_update_pane")
+        for kind in kinds:
+            faults.file_fault(self.conn, "HaiveQueen", kind,
+                              "Agent DUMMY-A-work of Apiary testproj: failed. Apiary testproj:")
+        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00'")
+        self.conn.commit()
+        runtime.kv_set(self.conn, "HaiveQueen", faults.EVENTLOG_KEY, "2026-10-29T11:00:00")
+        self.check(started=0, now=datetime(2026, 10, 29, 11, 0), log=CRASH_LOG)
+        self.check(started=0, now=datetime(2026, 10, 29, 11, 1), log=CRASH_LOG)
+        events = runtime.list_events(self.conn, "HaiveQueen", kind="note")
+        for q in self.faults_of():
+            self.assertEqual(q["status"], "open")
+            notes = [e for e in events if "Fault question %s remains open" % q["id"] in e["text"]]
+            self.assertEqual(len(notes), 1, q["item"])
+            self.assertIn(q["item"], notes[0]["text"])
+
+    # Skipped and deferred rounds still check fault questions without starting work.
+    def test_skipped_and_deferred_rounds_check_faults(self):
+        """Low RAM and deferred migration do not skip fault checking."""
+        from unittest.mock import patch
+        from haivequeen import hives
+        with patch("haivequeen.faults.check_round") as check:
+            self.round(free_ram=lambda: 0.0)
+            self.assertTrue(any(call.args[0].name == "testproj" and call.args[1:] == (0, False) for call in check.call_args_list))
+        with patch("haivequeen.hives.migrate_once", return_value={"testproj": "deferred"}), patch("haivequeen.faults.check_round") as check:
+            self.round()
+            self.assertTrue(any(call.args[0].name == "testproj" and call.args[1:] == (0, False) for call in check.call_args_list))
+
+    # Verify the Queen is directed to exhaust technical alternatives before asking.
+    def test_queen_prompt_requires_technical_alternatives(self):
+        """Technical owner questions need two approaches and an explanation."""
+        from haivequeen import bees
+        prompt = bees.queen_instructions("standard", 2, 2, 100)
+        self.assertIn("at least two technical", prompt)
+        self.assertIn("without owner action or elevation", prompt)
+        self.assertIn("why no alternative", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
