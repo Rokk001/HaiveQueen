@@ -18,8 +18,9 @@ class LoopEndTest(RoundCase):
 
     # Return the loop faults in this test database.
     def questions(self):
-        """Return the loop faults in this test database."""
-        return runtime.list_questions(self.conn, "HaiveQueen", None, faults.FAULT_PLAN, "loop_vanished")
+        """Return pending and visible loop faults in this test database."""
+        return (runtime.list_questions(self.conn, "HaiveQueen", "fault_check", faults.FAULT_PLAN, "loop_vanished") +
+                runtime.list_questions(self.conn, "HaiveQueen", "open", faults.FAULT_PLAN, "loop_vanished"))
 
     # A dead loop with no STOP and no clean end files one fault on takeover.
     def test_stale_lock_files_one_fault(self):
@@ -31,6 +32,7 @@ class LoopEndTest(RoundCase):
             loop.run_loop(self.conn, self.machine)
             loop.run_loop(self.conn, self.machine)
         self.assertEqual(len(self.questions()), 1)
+        self.assertEqual(self.questions()[0]["status"], "fault_check")
         text = "Loop ended unexpectedly (pid 2000000000, last state idle since 2026-01-01T00:00:00)"
         self.assertIn(text, self.questions()[0]["question"])
         self.assertIn(text, self.log("HaiveQueen"))
