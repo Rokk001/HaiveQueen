@@ -233,3 +233,26 @@ class MixedTimeTest(unittest.TestCase):
         rows = dashboard.usage_models(conn, [agent], datetime(2026, 10, 28, 0, 0, 0))
         self.assertEqual([r["Label"] for r in rows], ["Sonnet 5.5"])
         self.assertEqual(rows[0]["Plans"], (130, 8))
+
+
+class RoundErrorTest(DashboardTest):
+    """A failed round shows in the dashboard (the Beekeeper has no pane of its own any more)."""
+
+    def add(self, text, minutes_ago, kind="rounds"):
+        """An event of the project alpha written `minutes_ago` minutes before NOW."""
+        with db.transaction(self.conn):
+            self.conn.execute("INSERT INTO events (ts, project, kind, text) VALUES (?,?,?,?)", (iso(minutes_ago), "alpha", kind, text))
+
+    def test_recent_round_errors_are_listed(self):
+        """A section ROUND ERRORS names the error text and the time of a round error of the last day; an older one and other lines do not appear."""
+        self.add("ROUND ERROR boom in plan scan", 5)
+        self.add("ROUND ERROR long ago", 60 * 30)
+        self.add("start Ada (claude, queen)", 4)
+        t = self.text()
+        self.assertIn("ROUND ERRORS", t)
+        self.assertIn("boom in plan scan", t)
+        self.assertNotIn("long ago", t)
+
+    def test_no_section_without_errors(self):
+        """Without a round error the section is not drawn."""
+        self.assertNotIn("ROUND ERRORS", self.text())

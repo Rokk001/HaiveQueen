@@ -230,7 +230,7 @@ class LoopTest(RoundCase):
         hl = loop.head_lines(80, {"busy": True, "projects": ["a", "b"]})
         self.assertIn("Beekeeper", hl[0][0])
         self.assertIn("round running", hl[0][0])
-        self.assertIn("Projects: a, b", hl[1][0])
+        self.assertIn("Apiaries: a, b", hl[1][0])
         hl = loop.head_lines(80, {"run_state": "PAUSED"})
         self.assertIn("PAUSED", hl[0][0])
 

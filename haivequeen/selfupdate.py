@@ -119,11 +119,8 @@ def end_row(conn, row_id: int, new_commit: str, result: str, note: str) -> None:
         db.add_event(conn, runstate.GLOBAL_PROJECT, "self-update", "self-update %s: %s" % (result, note), data={"result": result, "id": row_id})
 
 
-def first_round_problems(conn, since_event: int, panes=None) -> list:
-    """Problems seen after the start: an ERROR line in the rounds log or a 'vanished' line since `since_event`, not exactly one Beekeeper tab.
-
-    `panes` returns the list of live Beekeeper pane ids, or None when the terminal cannot be read (that check is then skipped).
-    """
+def first_round_problems(conn, since_event: int) -> list:
+    """Problems seen after the start: an ERROR line in the rounds log or a 'vanished' line since `since_event`."""
     problems = []
     for r in conn.execute("SELECT kind, text FROM events WHERE id>? ORDER BY id", (since_event,)):
         text = r["text"] or ""
@@ -131,23 +128,7 @@ def first_round_problems(conn, since_event: int, panes=None) -> list:
             problems.append("ERROR in ROUNDS.log: " + text)
         if "vanished" in text:
             problems.append("vanished: " + text)
-    ids = (panes or queen_panes)()
-    if ids is not None and len(ids) != 1:
-        problems.append("%d Beekeeper tabs instead of 1" % len(ids))
     return problems
-
-
-def queen_panes():
-    """Ids of the live Beekeeper panes of the configured window, or None when the terminal cannot be read."""
-    from . import config
-    from . import scheduler as sch
-    from .terminal import get_terminal
-    try:
-        settings = sch.build_settings(config.load_config(), {})
-        term = get_terminal(settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-        return [p.id for p in term.list_panes(settings.get("window", "HaiveQueen")) if p.alive and loop.is_beekeeper_title(p.title)]
-    except Exception:
-        return None
 
 
 def wait_first_round(conn, started_after: str, sleep, poll: float, timeout: float, loop_pid=None) -> bool:
@@ -203,11 +184,11 @@ def rollback(conn, live, old: str, new: str, why: str, run, restart) -> tuple:
 # ---- the update ----
 
 def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, poll: float = 5.0, round_timeout: float = 1800.0,
-               panes=None, loop_pid=None) -> dict:
+               loop_pid=None) -> dict:
     """Do one self-update of the live folder and return {"result", "note", "old", "new"} (also written to self_updates).
 
     Takes the lock (a second run ends at once with result "locked" and no row), writes STOP, waits for loop and agents, updates and checks the
-    first round. Injectable parts (`run`, `sleep`, `alive`, `panes`, `loop_pid`) serve the tests, which never touch the real flag, lock or agents.
+    first round. Injectable parts (`run`, `sleep`, `alive`, `loop_pid`) serve the tests, which never touch the real flag, lock or agents.
     """
     live = Path(live or live_folder())
     holder = loop._take_pid_lock(lock_path(), own_ok=False, wait=0.5)
@@ -255,7 +236,7 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
             elif not wait_first_round(conn, began, sleep, poll, round_timeout, loop_pid):
                 failure = "no finished first round within %d s" % round_timeout
             else:
-                found = first_round_problems(conn, since_event, panes)
+                found = first_round_problems(conn, since_event)
                 pane_problems = "; ".join(found)   # the loop runs: pane problems are reported, never rolled back
         if failure and new != old:
             result, note = rollback(conn, live, old, new, failure, run, restart)

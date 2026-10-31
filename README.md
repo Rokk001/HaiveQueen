@@ -25,7 +25,7 @@ HaiveQueen runs plans with one Hive per plan. The Beekeeper is a program loop, n
 - **Escalation**: package classes bind the work. Failed attempts persist per class; after the configured threshold the Queen selects the next offered class. Interruptions never count as failures. Image packages stay on Codex; after its highest class fails the owner is asked.
 - **Completeness and integration**: the Queen records evidence for every requirement, continues while any remain open and integrates her own branch. Only one integration per project runs at a time.
 - **Handoffs**: at the context limit no new Bees start; running Bees finish and a new Queen continues from the handoff. Open owner questions do not stop independent work.
-- **Display**: the Beekeeper pane counts the Hives per Apiary and shows limits and questions; every Hive has its own pane with its Queen, Bee progress and waiting state.
+- **Display**: the dashboard counts the Hives per Apiary and shows limits, questions and failed rounds (the Beekeeper loop has no pane of its own); every Hive has its own pane with its Queen, Bee progress and waiting state.
 - **Pause and drain**: pause prevents new Queens and separate Bee processes; drain lets running Queens finish. Existing subagents continue.
 - **SQLite and panes**: state survives restarts; Windows Terminal, tmux and a headless backend are supported.
 
@@ -40,7 +40,7 @@ HaiveQueen runs plans with one Hive per plan. The Beekeeper is a program loop, n
 
 Words: an **Apiary** is a project, a **Hive** is one plan, the **Queen** is the main agent of a Hive, a **Bee** is a helper agent of a Queen, the **Beekeeper** is the managing loop.
 
-The window title is always `HaiveQueen`. The left pane is the Beekeeper: one line `<Apiary>: <n> Hives` per Apiary, then limits, usage and system. On the right every Apiary has a block, the blocks one below the other: a narrow head pane `Apiary <name>` and below it its Hives as own terminals side by side, all in the colour of the Apiary. A Hive pane lives as long as the Hive does; its Queens run one after the other in it. Its head shows `Hive: <plan>` and `Queen: <name>` with model and run time (without a Queen the state of the Hive, for example `wartet auf Antwort`), then one line per Bee with task, step and a small progress bar. A Hive without a running Queen shrinks to its name and state. In a Hive pane press X (dequeen), R (requeen) or C then a provider number (requeen with that provider); each asks for the same key a second time to confirm. `bzz dequeen` and `bzz requeen` stay available.
+The window title is always `HaiveQueen`. The left pane is the dashboard, the only overview: one line `<Apiary>: <n> Hives` per Apiary, then limits, usage, system and, when a round failed, the round errors. The Beekeeper loop runs without a pane (its output goes to `beekeeper.log` in the data folder). On the right every Apiary has a block, the blocks one below the other: a narrow head pane `Apiary <name>` and below it its Hives as own terminals side by side, all in the colour of the Apiary. A Hive pane lives as long as the Hive does; its Queens run one after the other in it. Its head shows `Hive: <plan>` and `Queen: <name>` with model and run time (without a Queen the state of the Hive, for example `wartet auf Antwort`), then one line per Bee with task, step and a small progress bar. A Hive without a running Queen shrinks to its name and state and is opened narrow from the start; when a Queen starts in it and no agent runs in its pane yet, the pane is built again larger, while an agent runs it keeps its size. In a Hive pane press X (dequeen), R (requeen) or C then a provider number (requeen with that provider); each asks for the same key a second time to confirm. `bzz dequeen` and `bzz requeen` stay available.
 
 ## Quick start
 
@@ -64,7 +64,7 @@ bzz stop                              # no new agents; running agents finish the
 ```
 
 Put your machine settings (providers, slots) into `config.toml` (see `examples/config.example.toml`; folder: `%APPDATA%\HaiveQueen` on Windows, `~/.config/HaiveQueen` on Linux).
-The Beekeeper, the dashboard and agent panes share one terminal window; its name is the machine setting `window` (default `HaiveQueen`), a project cannot set its own.
+The dashboard and agent panes share one terminal window; its name is the machine setting `window` (default `HaiveQueen`), a project cannot set its own.
 
 ## How HaiveQueen develops itself
 

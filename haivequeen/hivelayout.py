@@ -9,6 +9,12 @@ HEAD_HEIGHT, BIG_HEIGHT, SMALL_HEIGHT = 1, 6, 1   # relative heights: the slim A
 BIG_WIDTH, SMALL_WIDTH = 3, 1                       # relative widths of Hives side by side
 
 
+def width_of(conn, project, plan):
+    """Relative width (BIG_WIDTH or SMALL_WIDTH) a Hive gets: big while a Queen of it runs or starts, small otherwise."""
+    row = conn.execute("SELECT 1 FROM agents WHERE archived=0 AND phase='queen' AND status IN ('running','starting') AND project=? AND plan_path=? LIMIT 1", (project, plan)).fetchone()
+    return BIG_WIDTH if row else SMALL_WIDTH
+
+
 def compute(conn):
     """Layout blocks, one per Apiary that has a Hive which is not done (sorted by project name).
 

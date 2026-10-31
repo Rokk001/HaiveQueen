@@ -122,7 +122,7 @@ class HeaderTests(unittest.TestCase):
         """The header still shows the Beekeeper, its state and its projects."""
         text = self.text({"busy": True, "projects": ["a", "b"]})
         self.assertIn("Beekeeper | round running", text)
-        self.assertIn("Projects: a, b", text)
+        self.assertIn("Apiaries: a, b", text)
         self.assertIn("PAUSED", self.text({"run_state": "PAUSED"}))
 
 
@@ -233,33 +233,6 @@ class RunnerCrashTests(RoundCase):
         row = runtime.get_agent(self.conn, "testproj", "Ada")
         self.assertEqual(row["status"], "failed")
         self.assertIn("boom", row["last_line"])
-
-
-class BeekeeperPaneTests(RoundCase):
-    """The pane of the loop is found by its Beekeeper title (the self-update counts it), and panes opened with the old QUEEN title still count."""
-
-    def chief_ids(self, title):
-        """Ids the self-update finds for a window whose first pane has this title."""
-        from unittest import mock
-        from haivequeen import selfupdate
-        from haivequeen.terminal.headless import Headless
-        term = Headless(self.base / "panes")
-        term.open_window("HaiveQueen", title, [sys.executable, "-c", "import time;time.sleep(30)"], name="chief")
-        try:
-            with mock.patch("haivequeen.terminal.get_terminal", return_value=term), mock.patch.object(config, "load_config", return_value=self.machine):
-                return selfupdate.queen_panes()
-        finally:
-            for p in term.list_panes("HaiveQueen"):
-                term.close_pane(p.id)
-
-    def test_new_title_is_found(self):
-        """The Beekeeper pane counts as the one loop pane."""
-        self.assertEqual(len(self.chief_ids(loop.queen_pane_title("m", True))), 1)
-
-    def test_old_title_is_still_found(self):
-        """A pane opened before the update still carries the QUEEN title and counts."""
-        from haivequeen.terminal import pane_title
-        self.assertEqual(len(self.chief_ids(pane_title("all projects", "QUEEN", "Queen", "m", True))), 1)
 
 
 class StallQuestionTests(RoundCase):
