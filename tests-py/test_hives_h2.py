@@ -93,7 +93,7 @@ class BeePolicyTests(unittest.TestCase):
     # Check prompt instructs dependencies and higher classes.
     def test_prompt_instructs_dependencies_and_higher_classes(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
-        for word in ('dependenc', 'heavy', 'local', 'image', 'escalat', '3', 'handoff'):
+        for word in ('dependenc', 'heavy', 'local', 'image', 'escalat', '3', 'handoff', 'returned cwd'):
             self.assertIn(word, prompt)
 
     # A repeated report of the same attempt does not increment its failure count.
@@ -384,6 +384,69 @@ class QueenIntegrationTests(RoundCase):
         result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], parallel=True)
         self.assertEqual(result['kind'], 'subagent')
         self.assertFalse(any(a['phase'] == 'bee' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
+
+    # Reuse the first package worktree across native retries and escalation.
+    def test_bee_attempts_reuse_package_worktree(self):
+        import subprocess
+        from unittest import mock
+        from haivequeen import hives
+        from bzztest import REL
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        env = self.env()
+        first = self.base / 'first'
+        other = self.base / 'other'
+        def git(*args):
+            """Run Git against the temporary project repository."""
+            subprocess.run(['git', '-C', str(self.repo), *args], check=True, capture_output=True)
+        git('init', '-b', 'main')
+        git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'initial')
+        git('worktree', 'add', '-b', 'package-p1', str(first))
+        (first / 'uncommitted.txt').write_text('keep', encoding='utf-8')
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
+            result = bees.start_process(env, REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], cwd=str(first), parallel=True)
+            self.assertEqual((result['kind'], result['cwd']), ('subagent', str(first)))
+            result = bees.start_process(env, REL, 'P1', 'Bea', 'medium', 'task', ['one'], [], [], cwd=str(other), parallel=True)
+            self.assertEqual(result['cwd'], str(first))
+            for i in range(3):
+                bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'try-%s' % i)
+            result = bees.start_process(env, REL, 'P1', 'Cora', 'heavy', 'task', ['one'], [], [], cwd=str(other), parallel=True)
+            self.assertEqual(result['cwd'], str(first))
+        self.assertEqual((first / 'uncommitted.txt').read_text(encoding='utf-8'), 'keep')
+
+    # Existing Bee history retains a package worktree after upgrading.
+    def test_retry_recovers_existing_bee_worktree_from_history(self):
+        from unittest import mock
+        from haivequeen import hives
+        from bzztest import REL
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        first = self.base / 'first'
+        first.mkdir()
+        self.agent('old', phase='bee', package='P1', status='done', cwd=str(first))
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
+            result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], cwd=str(self.base / 'other'), parallel=True)
+        self.assertEqual(result['cwd'], str(first))
+
+    # A process retry receives and reports the first attempt's worktree.
+    def test_process_bee_retry_uses_existing_worktree(self):
+        from unittest import mock
+        from haivequeen import hives
+        from bzztest import REL
+        self.add_local_provider()
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'heavy'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        first = self.base / 'first'
+        first.mkdir()
+        other = self.base / 'other'
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), mock.patch('haivequeen.loop._do_start', return_value=True) as start:
+            bees.start_process(self.env(), REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(first))
+            result = bees.start_process(self.env(), REL, 'P1', 'Bea', 'heavy', 'task', ['one'], [], [], cwd=str(other))
+        self.assertEqual(result['cwd'], str(first))
+        self.assertEqual(start.call_args.args[1]['cwd'], str(first))
 
     # A Codex Queen without subagents works her own class even with no extra slot.
     def test_codex_queen_fallback_does_not_need_an_extra_slot(self):
