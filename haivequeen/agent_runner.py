@@ -129,6 +129,55 @@ def class_model(prov, cls):
 
 # ---------------------------------------------------------------- command classification
 
+# Find check scripts in command position, ignoring filenames used as data.
+def executed_check_scripts(cmd, wrapped=False):
+    """Return invoked check filenames, unwrapping one PowerShell command string."""
+    tokens = re.findall(r'''"[^"]*"|'[^']*'|\#[^\r\n]*|&&|\|\||[;&|\n]|[^\s;&|]+''', cmd)
+    segments, current = [], []
+    for token in tokens + [';']:
+        if token.startswith('#'):
+            continue
+        if token in (';', '&', '&&', '|', '||', '\n'):
+            if current:
+                segments.append(current)
+                current = []
+        else:
+            current.append(token[1:-1] if token[:1] in ('"', "'") and token[-1:] == token[:1] else token)
+    checks = []
+    for words in segments:
+        if words[0] == '.':
+            words = words[1:]
+        if not words:
+            continue
+        executable = re.split(r'[/\\]', words[0])[-1]
+        index = 0
+        if re.fullmatch(r'(?:python(?:\d+(?:\.\d+)*)?|py|pwsh|powershell)(?:\.exe)?', executable, re.I):
+            index = 1
+            while index < len(words) and words[index].startswith('-'):
+                flag = words[index].lower()
+                if words[index] in ('-h', '--help', '--help-env', '--help-xoptions', '--help-all', '-V', '--version'):
+                    index = len(words)
+                    break
+                if flag in ('-c', '-m', '-command', '-encodedcommand'):
+                    if not wrapped and re.fullmatch(r'(?:pwsh|powershell)(?:\.exe)?', executable, re.I) and flag in ('-c', '-command') and index + 1 < len(words):
+                        tail = words[index + 1:]
+                        command = tail[0] if len(tail) == 1 else ' '.join('"%s"' % word if re.search(r'\s', word) else word for word in tail)
+                        checks.extend(executed_check_scripts(command, wrapped=True))
+                    index = len(words)
+                    break
+                takes_value = words[index] in ('-X', '-W') or flag in ('--check-hash-based-pycs', '-executionpolicy', '-version', '-inputformat', '-outputformat')
+                index += 2 if takes_value else 1
+                if flag in ('--', '-file'):
+                    break
+        if index >= len(words):
+            continue
+        name = re.split(r'[/\\]', words[index])[-1]
+        if re.fullmatch(r'(?:check[\w-]*\.(?:py|ps1)|compile-check-changed\.ps1)', name, re.I):
+            checks.append(name)
+    return checks
+
+
+# Classify requested operations while treating read and search arguments as data.
 def classify_cmd(cmd, queue_re=None):
     """Recognise a milestone command (commit, push, compile test, check, ready line, file write); returns {kind, label} or None.
 
@@ -140,11 +189,11 @@ def classify_cmd(cmd, queue_re=None):
         return {"kind": "commit", "label": ("Commit: " + short(m.group(1), 100)) if m else "Commit"}
     if re.search(r"git\s+push", cmd):
         return {"kind": "push", "label": "Push"}
-    if "compile-check-changed" in cmd:
+    checks = executed_check_scripts(cmd)
+    if any(name.lower() == 'compile-check-changed.ps1' for name in checks):
         return {"kind": "check", "label": "Compile test"}
-    m = re.search(r"(check[\w\-]*\.(py|ps1))", cmd)
-    if m:
-        return {"kind": "check", "label": "Check " + m.group(1)}
+    if checks:
+        return {"kind": "check", "label": "Check " + checks[0]}
     if re.search(r"(?:bzz|cli.py)[\"']?\s+ready(\s|$)", cmd):
         return {"kind": "ready", "label": "ready line registered"}
     if queue_re and re.search(queue_re, cmd) and re.search(r">>|Add-Content|Out-File|Set-Content", cmd):
@@ -580,6 +629,8 @@ class AgentRun:
                     continue
                 if c.get("type") == "text" and c.get("text"):
                     self.last = short(c["text"])
+                    if self.phase == "queen" and str(c["text"]).strip():
+                        self.final = str(c["text"])
                     self.say(str(c["text"]), "White")
                 elif c.get("type") == "tool_use":
                     self.last = "tool: " + str(c.get("name"))
@@ -612,7 +663,9 @@ class AgentRun:
             if u:
                 self.tin = int(u.get("input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
                 self.tout = int(u.get("output_tokens") or 0)
-            self.final = str(e.get("result") or "")
+            result = str(e.get("result") or "")
+            if self.phase != "queen" or result.strip():
+                self.final = result
             self.ok = not e.get("is_error")
             if e.get("is_error"):
                 self.api_errors.append(self.final)
@@ -692,7 +745,7 @@ def build_args(prov, vars_):
     return [sub(a) for a in prov["args"] + endpoint_args(prov)]
 
 
-# Run one agent as described by the parsed arguments; returns 0 (the status is in the agents table).
+# Run one agent, rejecting empty Claude tool arguments before starting its CLI.
 def run_agent(a, out=None):
     """Run one agent as described by the parsed arguments; returns 0 (the status is in the agents table)."""
     try:
@@ -726,19 +779,28 @@ def run_agent(a, out=None):
     task = task_text(conn, a.project, a.plan, a.package, a.phase, plan_short) or task_line(a.prompt_file)
     events_file, err_file, final_file = run_dir / "events.jsonl", run_dir / "stderr.txt", run_dir / "final.txt"
 
-    if prev and prev.get("pid") and int(prev["pid"]) != os.getpid() and osplat.process_alive(int(prev["pid"])):
+    from . import agent_process
+    if prev and prev.get("pid") and int(prev["pid"]) != os.getpid() and agent_process.is_live(prev):
         out.write("agent %s already runs (pid %s), this second pane ends\n" % (a.name, prev["pid"]))   # a relaunched pane must never start the task twice
         return 0
     size = shutil.get_terminal_size((120, 40))
     started = run.started
     if not run.set_agent_retry({"type": protocol, "provider": a.provider, "model": model, "effort": effort, "plan": a.plan,
                                 "package": a.package, "phase": a.phase, "cwd": a.cwd, "status": "running",
-                                "startedAt": started.isoformat(), "endedAt": None, "pid": os.getpid(), "tokensIn": run.tin,
+                                "startedAt": started.isoformat(), "endedAt": None, "pid": os.getpid(), "processIdentity": osplat.process_identity(os.getpid()), "tokensIn": run.tin,
                                 "tokensOut": run.tout, "lastLine": "starting", "paneCols": size.columns, "paneRows": size.lines,
                                 "modelShort": (prev or {}).get("modelShort") or model_short(protocol, model, effort),
                                 "task": (prev or {}).get("task") or task}):
         out.write("agent %s not started: the agent row could not be written, row set to failed\n" % a.name)   # the model is never called
         return 0
+    if a.phase == "queen":
+        from . import hives
+        plan_path = Path(a.plan) if a.plan else None
+        state_paths = []
+        if plan_path and not plan_path.is_absolute():
+            names = (plan_path.stem + '-STATE.md', re.sub(r'-PLAN$', '', plan_path.stem) + '-STATE.md')
+            state_paths = [Path(base) / plan_path.parent / name for base in (a.cwd, workspace) if base for name in names]
+        hives.save_worktree_state(a.cwd, run_dir, state_paths)
     # The header is drawn by haivequeen.header (own process in this pane); this process only prints milestones below it.
     run.ms_file.write_text("", encoding="utf-8")
     header_proc = None
@@ -757,7 +819,9 @@ def run_agent(a, out=None):
             else:
                 write_phase_rules(pcfg, workspace, a.phase, rules_file)
         vars_ = {"model": model, "effort": effort, "repo": pcfg.get("codeRepo") or workspace or a.cwd, "workspace": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
-                 "claudeTools": pcfg.get("claudeTools") or cfg.get("claudeTools") or "", "rules": str(rules_file)}
+                 "claudeTools": pcfg.get("claudeTools", cfg.get("claudeTools", "")), "rules": str(rules_file)}
+        if protocol == "claude" and not str(vars_["claudeTools"] or "").strip():
+            raise ValueError("claudeTools missing")
         arg_list = build_args(prov, vars_)
         if a.phase == "bee" and protocol == "claude":
             if "--setting-sources" in arg_list:
@@ -765,6 +829,10 @@ def run_agent(a, out=None):
                 arg_list[i + 1] = ""
             else:
                 arg_list.extend(["--setting-sources", ""])
+        if protocol == "claude" and "--tools" in arg_list:
+            tools_index = arg_list.index("--tools") + 1
+            if tools_index == len(arg_list) or not arg_list[tools_index].strip():
+                raise ValueError("claudeTools missing")
     except Exception as exc:   # a broken rule file or argument template must show up as a failed agent at once, not as a vanished runner one round later
         run.last = short("runner error: " + str(exc))
         run.say(run.last, "Red")
@@ -869,13 +937,16 @@ def run_agent(a, out=None):
         if not re.match(r"^(error|runner error)", run.last):
             run.last = "no result event, exit %s %s" % (code, err_txt)
         run.last = short(run.last)
+    if a.phase == "queen":
+        from . import hives
+        run.final = hives.queen_final_text(run_dir, started.timestamp(), run.final)
     final_file.write_text(run.final, encoding="utf-8", newline="")
     # An end caused by sleep, network, API error or a vanished process is marked interrupted: it is no failure and is tried again after a wait.
     err_text = err_file.read_text(encoding="utf-8", errors="replace") if err_file.is_file() else ""
     kind = interrupt.classify_end(status == "failed", run.api_errors, err_text, bool(clock_jumps), run.last)
     run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx,
                          "interrupted": kind, "retryAt": ""})
-    if run.final and short(run.final, 1500) != short(run.last_said, 1500):
+    if run.final and (a.phase == "queen" or short(run.final, 1500) != short(run.last_said, 1500)):
         run.say("Final message: " + run.final, "Green" if status == "done" else "Red")
     run.say("End: %s (exit %s), total input %s / output %s. The section closes after the close delay." % (status, code, header.fmt_tok(run.tin), header.fmt_tok(run.tout)),
             "Green" if status == "done" else "Red")
@@ -918,8 +989,9 @@ def complete_build_measure(conn, project, name, jobs, start_free_mb, sample_file
     return use
 
 
+# Run the child, mark its pane closing before and after the delay, and exit 0 even if the child failed.
 def pane_wrap(a, argv):
-    """Pane wrapper: run the agent as a CHILD process, then keep the pane for the close delay and exit 0 (also when the child failed or was ended)."""
+    """Run the child, mark its pane closing before and after the delay, and exit 0 even if the child failed."""
     try:
         cfg = config.load_config()
         delay = int(cfg.get("paneCloseDelaySeconds", 30))
@@ -929,20 +1001,36 @@ def pane_wrap(a, argv):
         print("pane closes in 30 s")
         time.sleep(30)
         return 0
+    # Log wrapper failures to the pane and the runtime event log.
+    def log_error(text):
+        """Log wrapper failures to the pane and the runtime event log."""
+        print(text, file=sys.stderr)
+        try:
+            runtime.append_event(conn, a.project, text, kind="warning", agent=a.name, mirror="rounds")
+        except Exception as exc:
+            print("pane error logging failed: %s" % exc, file=sys.stderr)
+
+    # Write the closure flag, logging a failed write so the later attempt can retry it.
+    def mark_closed():
+        """Write the closure flag, logging a failed write so the later attempt can retry it."""
+        try:
+            runtime.upsert_agent(conn, a.project, a.name, {"paneClosed": True}, create=False)
+        except Exception as exc:
+            log_error("paneClosed write failed: %s" % exc)
+
     try:
         subprocess.run([osplat.python_executable(), "-m", "haivequeen.agent_runner"] + argv, env=child_env())
     finally:
+        mark_closed()
         print("pane closes in %d s" % delay)
         time.sleep(delay)
-        try:
-            runtime.upsert_agent(conn, a.project, a.name, {"paneClosed": True}, create=False)
-        except Exception:
-            pass
+        mark_closed()
         try:
             from . import loop   # imported here: loop imports this module
             loop.hold_pane_lock_until_exit()   # the pane closes while no other pane command runs; the lock ends with this process
-        except Exception:
-            pass
+        except Exception as exc:
+            log_error("pane lock failed: %s" % exc)
+        conn.close()
     return 0
 
 

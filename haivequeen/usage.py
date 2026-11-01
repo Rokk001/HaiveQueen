@@ -12,6 +12,7 @@ Python has none.
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -24,6 +25,7 @@ from haivequeen import runtime
 
 GLOBAL_PROJECT = "*"        # kv project value for machine-wide state
 CLAUDE_USAGE_KEY = "usage-claude"
+CLAUDE_CHECK_KEY = "usage-claude-last-check"
 CACHE_VERSION = 1
 DAY_ZERO = date(2020, 1, 1).toordinal()
 CHUNK = 4 << 20
@@ -712,6 +714,94 @@ def get_usage_table(conn=None, cache_dir=None, project=None, claude_dir=None, co
 
 # ---------------------------------------------------------------- 5h / 7d windows and weekly limits
 
+# Read the canonical quota snapshot without exposing malformed cached data.
+def _claude_snapshot(conn, project=GLOBAL_PROJECT):
+    """Return the saved quota object, or an empty object when unavailable."""
+    try:
+        value = json.loads(runtime.kv_get(conn, project, CLAUDE_USAGE_KEY) or '{}')
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+# Expose a failed authoritative refresh independently of retained historical percentages.
+def claude_refresh_failed(conn, project=GLOBAL_PROJECT):
+    """Return whether current Claude quota could not be verified."""
+    return bool(_claude_snapshot(conn, project).get('refresh_error'))
+
+
+# Fetch bounded metadata from the configured CLI without starting a model turn.
+def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=60):
+    """Refresh global Claude quota; return True only for a verified new snapshot."""
+    if run is None and (os.environ.get('BZZ_DATA_DIR') or os.environ.get('BZZ_RUNTIME_OVERRIDE')):
+        return False
+    provider = next((p for p in providers if (p.get('limit', {}).get('source') if isinstance(p.get('limit'), dict) else p.get('limit')) == 'claude'), None)
+    if provider is None:
+        return False
+    old = _claude_snapshot(conn)
+    now = datetime.now(timezone.utc)
+    try:
+        checked = datetime.fromisoformat(runtime.kv_get(conn, GLOBAL_PROJECT, CLAUDE_CHECK_KEY) or old.get('checked_at') or '').astimezone(timezone.utc)
+        if not force and 0 <= (now - checked).total_seconds() < min_interval:
+            return False
+    except (ValueError, TypeError):
+        pass
+    checked_at = now.isoformat()
+    try:
+        executable = shutil.which(str(provider.get('command') or 'claude'))
+        if not executable:
+            raise ValueError('missing CLI')
+        argv = [executable, '-p', '/usage', '--output-format', 'stream-json', '--verbose',
+                '--no-session-persistence', '--setting-sources', '', '--settings', '{"disableAllHooks":true}',
+                '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--tools', '']
+        child_env = dict(os.environ)
+        child_env.pop('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', None)
+        kwargs = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.PIPE, 'stderr': subprocess.DEVNULL,
+                  'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'timeout': 20, 'env': child_env}
+        if osplat.is_windows():
+            kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        result = (run or subprocess.run)(argv, **kwargs)
+        if result.returncode != 0:
+            raise ValueError('CLI failed')
+        events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+        results = [event for event in events if isinstance(event, dict) and event.get('type') == 'result']
+        final = results[-1] if results else {}
+        if (final.get('subtype') != 'success' or final.get('is_error') is not False
+                or type(final.get('num_turns')) is not int or final['num_turns'] != 0
+                or type(final.get('total_cost_usd')) not in (int, float) or final['total_cost_usd'] != 0):
+            raise ValueError('not metadata only')
+        reports = [event.get('usage_report') for event in events if isinstance(event, dict) and event.get('type') == 'assistant' and isinstance(event.get('usage_report'), dict)]
+        limits = (reports[-1].get('rate_limits') or {}).get('limits') if reports else None
+        if not isinstance(limits, list):
+            raise ValueError('missing quotas')
+        value = {'saved': checked_at, 'checked_at': checked_at, 'source': 'claude-cli:/usage', 'fiveHour': None, 'sevenDay': None}
+        for row in limits:
+            if not isinstance(row, dict) or row.get('kind') not in ('session', 'weekly_all'):
+                continue
+            if isinstance(row['percent'], bool):
+                raise ValueError('invalid percentage')
+            percent = float(row['percent'])
+            reset = None
+            if row['resets_at'] is not None:
+                reset_at = datetime.fromisoformat(row['resets_at'])
+                if reset_at.tzinfo is None:
+                    raise ValueError('ambiguous reset time')
+                reset = int(reset_at.timestamp())
+            if not 0 <= percent <= 100:
+                raise ValueError('invalid percentage')
+            value['fiveHour' if row['kind'] == 'session' else 'sevenDay'] = {'utilization': percent / 100, 'resetsAt': reset}
+        if value['fiveHour'] is None and value['sevenDay'] is None:
+            raise ValueError('missing global quotas')
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        value = {**old, 'checked_at': checked_at, 'refresh_error': 'Claude usage refresh failed'}
+        runtime.kv_set(conn, GLOBAL_PROJECT, CLAUDE_USAGE_KEY, json.dumps(value))
+        runtime.kv_set(conn, GLOBAL_PROJECT, CLAUDE_CHECK_KEY, checked_at)
+        return False
+    runtime.kv_set(conn, GLOBAL_PROJECT, CLAUDE_USAGE_KEY, json.dumps(value))
+    runtime.kv_set(conn, GLOBAL_PROJECT, CLAUDE_CHECK_KEY, checked_at)
+    return True
+
+
 def save_claude_usage(conn, event, project: str = GLOBAL_PROJECT) -> bool:
     """Remember the newest Claude usage windows of a rate_limit_event in kv (key usage-claude); False if none."""
     info = event.get("rate_limit_info") if isinstance(event, dict) else None
@@ -724,10 +814,16 @@ def save_claude_usage(conn, event, project: str = GLOBAL_PROJECT) -> bool:
     return True
 
 
+# Format verified percentages without inventing an unknown reset time.
 def _claude_window(w, with_at: bool, now: int):
-    """Return the display dict of one saved Claude window: pct and reset, or a 'new window' marker."""
+    """Return a verified percentage with its known reset, an empty reset, or a new-window marker."""
     if not w:
         return None
+    if w.get("resetsAt") is None:
+        out = {"pct": round(100 * float(w["utilization"])), "reset": ""}
+        if with_at:
+            out["at"] = None
+        return out
     if int(w["resetsAt"]) > now:
         out = {"pct": round(100 * float(w["utilization"])), "reset": format_reset_time(w["resetsAt"])}
         if with_at:
@@ -736,6 +832,7 @@ def _claude_window(w, with_at: bool, now: int):
     return {"pct": None, "reset": "new window"}
 
 
+# Hide historical quota readings after an unsuccessful authoritative refresh.
 def get_claude_usage(conn, project: str = GLOBAL_PROJECT) -> dict:
     """Return Claude's 5h/7d usage {five_hour, seven_day} each {pct, reset[, at]} or None when unknown.
 
@@ -747,6 +844,8 @@ def get_claude_usage(conn, project: str = GLOBAL_PROJECT) -> dict:
         if not raw or not raw.strip():
             return res
         j = json.loads(raw)
+        if j.get("refresh_error"):
+            return res
         now = int(datetime.now(timezone.utc).timestamp())
         res["five_hour"] = _claude_window(j.get("fiveHour"), False, now)
         res["seven_day"] = _claude_window(j.get("sevenDay"), True, now)
@@ -833,6 +932,7 @@ def format_usage(u) -> str:
     return f"{u['pct']}% (until {u['reset']})"
 
 
+# Treat an unverified Claude quota as unavailable while retaining unknown usage.
 def get_provider_limit(conn, provider: dict, project: str = GLOBAL_PROJECT, read_pc=None, codex_dir=None) -> dict:
     """Return the weekly limit of a provider as {used_pct, free_pct, hours, reset_epoch}.
 
@@ -852,6 +952,8 @@ def get_provider_limit(conn, provider: dict, project: str = GLOBAL_PROJECT, read
         t = json.loads(Path(lf).read_text(encoding="utf-8-sig"))
         if name in t:
             used, hours = t[name].get("usedPercent"), t[name].get("resetHours")
+    elif source == "claude" and claude_refresh_failed(conn, project):
+        return {"used_pct": None, "free_pct": 0.0, "hours": 168.0, "reset_epoch": None}
     elif read_pc and source in ("claude", "codex"):
         u = (get_claude_usage(conn, project) if source == "claude" else get_codex_usage(codex_dir))["seven_day"]
         if u and u.get("pct") is not None:
@@ -865,6 +967,7 @@ def get_provider_limit(conn, provider: dict, project: str = GLOBAL_PROJECT, read
             "hours": float(hours) if hours is not None else 168.0, "reset_epoch": at}
 
 
+# Block provider starts when Claude quota refresh fails without inventing usage.
 def limit_windows(conn, provider: dict, project: str = GLOBAL_PROJECT, read_pc=None, codex_dir=None) -> list:
     """Usage windows of a provider as the LIMITS display has them: [{used_pct, reset_epoch}] for the 5h and the weekly window (reset_epoch None
     when unknown); windows that already reset are left out. Tests: an entry of BZZ_PROVIDER_LIMITS_FILE may carry "windows": [{"usedPercent",
@@ -883,14 +986,16 @@ def limit_windows(conn, provider: dict, project: str = GLOBAL_PROJECT, read_pc=N
         for w in wins:
             hours = w.get("resetHours")
             out.append({"used_pct": float(w["usedPercent"]), "reset_epoch": now + float(hours) * 3600 if hours is not None else None})
+    elif source == "claude" and claude_refresh_failed(conn, project):
+        return [{"used_pct": 100, "reset_epoch": None, "unknown": True}]
     elif read_pc and source == "claude":
         try:
             j = json.loads(runtime.kv_get(conn, project, CLAUDE_USAGE_KEY) or "{}")
         except ValueError:
             j = {}
         for w in (j.get("fiveHour"), j.get("sevenDay")):
-            if w and int(w["resetsAt"]) > now:
-                out.append({"used_pct": 100 * float(w["utilization"]), "reset_epoch": int(w["resetsAt"])})
+            if w and (w.get("resetsAt") is None or int(w["resetsAt"]) > now):
+                out.append({"used_pct": 100 * float(w["utilization"]), "reset_epoch": int(w["resetsAt"]) if w.get("resetsAt") is not None else None})
     elif read_pc and source == "codex":
         for w in (get_codex_usage(codex_dir) or {}).values():
             if w and w.get("pct") is not None:

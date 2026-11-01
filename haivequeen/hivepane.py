@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, db, header, hives, runstate, runtime
+from . import agent_process, config, db, header, hives, runstate, runtime
 from . import platform as osplat
 
 CONFIRM_SECONDS = 3.0   # a command runs only when its key is pressed twice within this time
@@ -59,10 +59,10 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
     width = max(1, width)
     inner = width - 4
     col = header.project_colour_of(conn, project)
-    data = next(iter(hives.hive_data(conn, project, runtime.list_agents(conn, project, "active"), plan, include_done=True)), None) or {"queen": None, "bees": [], "state": ""}
     hive = hives.get(conn, project, plan) or {}
+    data = next(iter(hives.hive_data(conn, project, runtime.list_agents(conn, project, "active"), plan, include_done=True)), None) or {"queen": None, "bees": [], "state": "", **hive}
     queen = data["queen"]
-    running = bool(queen and (queen.get("status") in ("running", "starting") or (queen.get("pid") and osplat.process_alive(queen["pid"]))))
+    running = bool(queen and agent_process.counts(queen))
     name_line = "Hive: %s" % Path(plan).stem
     if running:
         name = str(queen.get("person") or queen.get("name") or "-")
@@ -73,7 +73,7 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
             started = db.parse_time(queen.get("started_at"), now)
             text = "Queen: %s | %s %s | %s" % (name, typ, queen.get("modelShort") or "", header.fmt_run((now - started).total_seconds()))
     else:
-        state = hives.state_label(hive)
+        state = hives.state_label(data)
         queue = conn.execute("SELECT status,note FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (project, plan)).fetchone()
         if queue and queue['status'] == 'blocked' and queue['note']:
             state = "blockiert: " + ' '.join(queue['note'].split())

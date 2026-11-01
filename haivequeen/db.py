@@ -229,8 +229,9 @@ def add_ready(conn, project, branch, tip, plan_path, note) -> dict:
     return {"id": qid, "status": "ready"}
 
 
+# File a question with its initial status and event.
 def add_question(conn, project, plan_path, item, question, recommendation, status="open") -> int:
-    """Insert a question and return its id. Status 'open' is a question for the owner; 'triage' waits for the triage of new questions first."""
+    """Insert a question and return its id. Status 'open' is visible; 'triage' and 'fault_check' wait for checks."""
     with transaction(conn):
         qid = conn.execute(
             "INSERT INTO questions (project, plan_path, item, question, recommendation, status, created_at) "
@@ -240,19 +241,20 @@ def add_question(conn, project, plan_path, item, question, recommendation, statu
         if status == "open":
             add_event(conn, project, "question", question, data={"question_id": qid})
         else:
-            add_event(conn, project, "note", "question %d waits for triage" % qid, data={"question_id": qid})
+            add_event(conn, project, "note", "question %d waits for %s" % (qid, "fault checking" if status == "fault_check" else "triage"), data={"question_id": qid})
     return qid
 
 
+# Record an answer and its decision for an eligible question.
 def answer_question(conn, qid: int, text: str, by: str) -> dict:
-    """Answer an open question and log it as a decision; raises KeyError if unknown or already answered."""
+    """Answer an open question, or a pending fault by the coordinator, and log the decision."""
     if by not in ("owner", "coordinator", "auto"):
         raise ValueError("answered_by must be owner, coordinator or auto")
     with transaction(conn):
         row = conn.execute("SELECT * FROM questions WHERE id=?", (qid,)).fetchone()
         if row is None:
             raise KeyError(f"unknown question {qid}")
-        if row["status"] != "open":
+        if row["status"] != "open" and not (row["status"] == "fault_check" and by == "coordinator"):
             raise KeyError(f"question {qid} is already answered")
         conn.execute(
             "UPDATE questions SET status='answered', answer=?, answered_by=?, answered_at=? WHERE id=?",

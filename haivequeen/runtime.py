@@ -445,9 +445,12 @@ def queue_upsert(conn, project, branch, tip=None, plan=None, status=None, note=N
         return dict(conn.execute("SELECT * FROM queue WHERE id=?", (qid,)).fetchone())
 
 
+# List visible questions, or explicitly select a particular status.
 def list_questions(conn, project=None, status=None, plan=None, item=None) -> list:
-    """List questions filtered by project, status (open/answered), plan and item, oldest first."""
+    """List visible questions, or explicitly select a status, filtered by project, plan and item."""
     sql, args = "SELECT * FROM questions WHERE 1=1", []
+    if not status:
+        sql += " AND status != 'fault_check'"
     for col, val in (("project", project), ("status", status), ("plan_path", plan), ("item", item)):
         if val:
             sql += f" AND {col}=?"

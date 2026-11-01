@@ -123,6 +123,7 @@ class RunStateTest(RoundCase):
         self.assertIsNone(next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None))
 
 
+# The loop
 class LoopTest(RoundCase):
     """The loop: re-attach at the start, one lock, STOP, round errors."""
 
@@ -130,7 +131,7 @@ class LoopTest(RoundCase):
     def test_reattach_and_end(self):
         """At the start a running agent with a living pid stays, one with a dead pid fails; the loop ends after the rounds and removes its lock."""
         self.plan("IN_PROGRESS", ONE)
-        self.agent("LIVE-work", package="P1", status="running", pid=os.getpid(), started=5)
+        self.agent("LIVE-work", package="P1", status="running", pid=os.getpid(), started=5, processIdentity=osplat.process_identity(os.getpid()))
         self.agent("GONE-work", package="P2", status="running", pid=2000000000, started=5)
         seen = {}
 
@@ -148,7 +149,7 @@ class LoopTest(RoundCase):
         self.assertEqual(seen, {"live": "running", "gone": "failed"})
         self.assertFalse(loop.lock_file().exists())
         self.assertIn("loop started", self.log())
-        self.assertEqual(loop.read_state(self.conn)["status"], "idle")
+        self.assertEqual(loop.read_state(self.conn)["status"], "ended")
 
     def test_second_loop_refused(self):
         """With a living lock a second loop ends at once."""
@@ -333,7 +334,7 @@ class LiveRunnerSurvivesTest(RoundCase):
         try:
             started = datetime.now() - timedelta(minutes=6)
             runtime.upsert_agent(self.conn, "testproj", "DUMMY-T-triage", {"type": "claude", "provider": "claude", "plan": REL, "package": "P1", "phase": "triage",
-                                                                         "status": "running", "startedAt": started.isoformat(), "pid": proc.pid})
+                                                                         "status": "running", "startedAt": started.isoformat(), "pid": proc.pid, "processIdentity": osplat.process_identity(proc.pid)})
             env = self.env()
             routine.repair_stale_agents(env, now=datetime.now() + timedelta(minutes=6))
             self.assertEqual(runtime.get_agent(self.conn, "testproj", "DUMMY-T-triage")["status"], "running")
@@ -556,8 +557,9 @@ class HeadlessStartTest(RoundCase):
         self.assertEqual(row["status"], "running")
         self.assertTrue(row["pid"] and osplat.process_alive(row["pid"]))
         panes = self.term.list_panes("HaiveQueen")
-        self.assertEqual(sorted(p.title for p in panes), ["HaiveQueen TEST | testproj | Apiary | job: testproj | model: -",
-                                                          "HaiveQueen TEST | testproj | Hive | job: DUMMY-PLAN | model: -"])   # head pane of the Apiary and the Hive pane
+        self.assertEqual(sorted(p.title for p in panes), ["Dashboard",
+                                                          "HaiveQueen TEST | testproj | Apiary | job: testproj | model: -",
+                                                          "HaiveQueen TEST | testproj | Hive | job: DUMMY-PLAN | model: -"])   # overview, head pane of the Apiary and the Hive pane
         hive = next(p for p in panes if " | Hive | " in p.title)
         self.assertEqual(row["pane_id"], hive.id)
 

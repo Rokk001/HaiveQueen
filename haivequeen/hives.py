@@ -2,7 +2,8 @@
 import json
 import os
 import re
-from . import db, runtime
+import subprocess
+from . import db, runtime, agent_process, interrupt
 from . import platform as osplat
 
 
@@ -99,7 +100,14 @@ def can_start_bee(conn, project, plan, own_process=False, context_limit=300000):
 
 
 # Answers of the owner that mean the owner check is fine.
-OWNER_CHECK_OK = {'ok', 'okay', 'passt', 'gut', 'alles ok', 'alles gut', 'passt so', 'in ordnung', 'ja'}
+OWNER_CHECK_OK = {'ok', 'okay', 'passt', 'gut', 'alles ok', 'alles gut', 'passt so', 'in ordnung', 'ja', 'ist ok'}
+
+
+# Normalize only the affirmative phrases recognized for an owner check.
+def owner_check_ok(answer):
+    """Return whether the owner's exact normalized answer accepts the check."""
+    normalized = ' '.join(re.sub(r'[^\w ]', '', str(answer or '').lower()).split())
+    return normalized in OWNER_CHECK_OK
 
 
 # Return the owner check step of an integrated Hive: ('wait', ids) while the owner has not answered, ('fix',) when his answer says something is not right, None when there is no owner check or he said ok.
@@ -113,9 +121,84 @@ def owner_check_step(conn, project, plan):
     if last['status'] in ('open', 'triage'):
         return ('wait', [q['id'] for q in asked if q['status'] in ('open', 'triage')])
     if last['status'] == 'answered':
-        answer = ' '.join(re.sub(r'[^\w ]', '', str(last['answer'] or '').lower()).split())
-        return None if answer in OWNER_CHECK_OK else ('fix',)
+        return None if owner_check_ok(last['answer']) else ('fix',)
     return None
+
+
+# Find exact integration evidence without treating an older branch tip as completion.
+def integrated_ready(conn, env, hive):
+    """Recover a missing ready link only from the named branch's integrated tip."""
+    plan = hive['plan_path']
+    row = conn.execute("SELECT * FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (env.name, plan)).fetchone()
+    if not row or row['status'] != 'integrated':
+        return None
+    if str(row['id']) == runtime.kv_get(conn, env.name, 'hive-rejected-ready:' + plan):
+        return None
+    rejected = runtime.list_questions(conn, env.name, status='answered', plan=plan, item='owner-check-answered')
+    if rejected and not owner_check_ok(rejected[-1].get('answer')) and str(rejected[-1].get('answered_at') or '') >= str(row['updated_at'] or ''):
+        return None
+    if hive.get('ready_id'):
+        return dict(row) if row['id'] == hive['ready_id'] else None
+    from . import bees
+    named = bees.plan_worktree(env, plan)
+    if not named or row['branch'] != named[0] or not re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or ''):
+        return None
+    try:
+        result = subprocess.run(['git', '-C', str(env.code_repo), 'rev-parse', '--verify', 'refs/heads/' + named[0]],
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    tip = result.stdout.strip()
+    return dict(row) if result.returncode == 0 and tip and tip.startswith(row['tip']) else None
+
+
+# Close persisted Hive scheduling state after authoritative plan completion.
+def finish_hive(conn, project, plan):
+    """Retire the Hive and only its obsolete automatic end questions."""
+    for question in runtime.list_questions(conn, project, status='open', plan=plan, item='queen-ended'):
+        db.answer_question(conn, question['id'], 'lifted: plan completion confirmed', 'auto')
+    with db.transaction(conn):
+        conn.execute("DELETE FROM hive_integration WHERE project=? AND plan_path=?", (project, plan))
+        conn.execute("UPDATE hives SET state='done',questions_json=NULL,claimed_at=NULL,reset_at=NULL WHERE project=? AND plan_path=?", (project, plan))
+    runtime.kv_set(conn, project, 'hive-blocker:' + plan, '')
+
+
+# Reconcile authoritative completion before start gates without touching active agents.
+def reconcile_completed(conn, env, alive=None, plan_files=None):
+    """Retire completed idle Hives and preserve every genuine owner blocker."""
+    from . import scheduler as sch
+    runtime.sync_plans(conn, env.name, str(env.workspace))
+    agents = runtime.list_agents(conn, env.name, 'active')
+    for plan in runtime.list_plans(conn, env.name):
+        if plan_files and not any(sch.norm_plan(plan['path']).endswith(sch.norm_plan(f)) for f in plan_files):
+            continue
+        hive = get(conn, env.name, plan['path'])
+        if not hive or hive['state'] == 'done':
+            continue
+        if any(a.get('plan_path') == plan['path'] and a.get('phase') in ('queen', 'bee') and agent_process.counts(a, alive) for a in agents):
+            continue
+        if plan['status'] == 'DONE':
+            finish_hive(conn, env.name, plan['path'])
+            continue
+        if plan['status'] not in ('READY', 'IN_PROGRESS'):
+            continue
+        integrated = integrated_ready(conn, env, hive)
+        if not integrated:
+            continue
+        step = owner_check_step(conn, env.name, plan['path'])
+        if step and step[0] == 'wait':
+            wait_for_owner_check(conn, env.name, plan['path'], step[1])
+        elif step and step[0] == 'fix':
+            runtime.kv_set(conn, env.name, 'hive-rejected-ready:' + plan['path'], str(integrated['id']))
+            reopen_after_owner_check(conn, env.name, plan['path'])
+        else:
+            questions = [q['id'] for q in runtime.list_questions(conn, env.name, plan=plan['path'])
+                         if q['status'] in ('open', 'triage') and q['item'] != 'queen-ended' and not str(q['item']).upper().startswith('STALL-')]
+            if questions:
+                wait_for_answers(conn, env.name, plan['path'], questions)
+                continue
+            runtime.set_plan_status(conn, env.name, plan['path'], 'DONE', str(env.workspace))
+            finish_hive(conn, env.name, plan['path'])
 
 
 # Park an integrated Hive until the owner has answered the owner check question; no Queen runs and no integration place is held.
@@ -135,9 +218,135 @@ def reopen_after_owner_check(conn, project, plan):
         conn.execute("DELETE FROM hive_integration WHERE project=? AND plan_path=?", (project, plan))
 
 
-# Return whether a Queen ended without a HANDOFF file and without a new commit in her worktree since she started (unknown counts as work).
+# Repair historical technical ends and lift their automatic Queen questions.
+def repair_technical_ends(conn, project):
+    """Mark vanished agents and release questions caused solely by their technical end."""
+    from . import interrupt
+    agents = runtime.list_agents(conn, project, 'all')
+    technical = {}
+    for agent in agents:
+        if agent.get('status') not in ('done', 'failed') or not interrupt.VANISHED_RE.match(str(agent.get('last_line') or '')):
+            continue
+        technical[(agent.get('plan_path'), agent.get('name'))] = agent
+        if not agent.get('interrupted'):
+            conn.execute("UPDATE agents SET extra_json=json_set(COALESCE(extra_json, '{}'), '$.interrupted', ?) WHERE id=?", (interrupt.VANISHED, agent['id']))
+    # Older reports need the Bee row for the class; newer reports carry it themselves.
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bee_attempt_reports'").fetchone():
+        conn.execute('CREATE TABLE IF NOT EXISTS bee_technical_repairs (project TEXT, plan_path TEXT, package TEXT, attempt TEXT, PRIMARY KEY(project,plan_path,package,attempt))')
+        has_signals = bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bee_attempt_signals'").fetchone())
+        for (plan, name), agent in technical.items():
+            if agent.get('phase') != 'bee' or not agent.get('class') or not agent.get('package'):
+                continue
+            key = (project, plan, agent['package'], name)
+            with db.transaction(conn):
+                report = conn.execute('SELECT 1 FROM bee_attempt_reports WHERE project=? AND plan_path=? AND package=? AND attempt=?', key).fetchone()
+                if not report or not conn.execute('INSERT OR IGNORE INTO bee_technical_repairs VALUES(?,?,?,?)', key).rowcount:
+                    continue
+                signal = conn.execute('SELECT class,counted FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND attempt=?', key).fetchone() if has_signals else None
+                cls, counted = (signal[0], signal[1]) if signal else (agent['class'], 1)
+                if signal:
+                    conn.execute('DELETE FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND attempt=?', key)
+                if counted:
+                    conn.execute('UPDATE bee_attempts SET failures=MAX(0,failures-1) WHERE project=? AND plan_path=? AND package=? AND class=?',
+                                 (project, plan, agent['package'], cls))
+    for hive in db.rows(conn, "SELECT * FROM hives WHERE project=? AND state='answer'", (project,)):
+        ids = json.loads(hive['questions_json'] or '[]')
+        for question in runtime.list_questions(conn, project, status='open', plan=hive['plan_path']):
+            if question['id'] not in ids or question['item'] != 'queen-ended':
+                continue
+            match = re.match(r'^Queen (.+?) of this Hive ended without new work \(no commit, no changed file, no question\)\.', question['question'])
+            agent = technical.get((hive['plan_path'], match.group(1))) if match else None
+            if agent and agent.get('phase') == 'queen':
+                db.answer_question(conn, question['id'], 'lifted: only a technical end (window closed, killed, crashed)', 'auto')
+        remaining = [q for q in runtime.list_questions(conn, project, status='open', plan=hive['plan_path']) if q['id'] in ids]
+        if ids and not remaining:
+            conn.execute("UPDATE hives SET state='waiting',questions_json=NULL WHERE project=? AND plan_path=?", (project, hive['plan_path']))
+
+
+# Report repeated vanished process starts while leaving retries enabled.
+def technical_start_faults(conn, project):
+    """File one no-start fault per Hive or Bee package after three consecutive technical ends."""
+    groups = {}
+    for agent in runtime.list_agents(conn, project, 'all'):
+        if agent.get('phase') not in ('queen', 'bee'):
+            continue
+        key = (agent.get('plan_path'), agent.get('phase'), agent.get('package') if agent.get('phase') == 'bee' else '')
+        groups.setdefault(key, []).append(agent)
+    for (plan, phase, package), history in groups.items():
+        count = 0
+        for agent in reversed(history):
+            line = str(agent.get('last_line') or '')
+            if agent.get('status') not in ('failed', 'done') or not interrupt.VANISHED_RE.match(line):
+                break
+            if phase == 'queen' and not line.startswith('pane never started'):
+                break
+            count += 1
+        if count < 3:
+            continue
+        marker = '%s | %s | %s | %s' % (project, plan, phase, package or '')
+        existing = runtime.list_questions(conn, 'HaiveQueen', plan='HQ-FAULTS', item='no_start')
+        if not any(marker in q['question'] for q in existing):
+            db.add_question(conn, 'HaiveQueen', 'HQ-FAULTS', 'no_start', '[no_start] Three consecutive technical ends: ' + marker, '')
+
+
+# Capture the contents of Git-visible files for comparison at the Queen's end.
+def worktree_state(cwd, excluded=None):
+    """Return hashes of tracked and non-ignored untracked files, excluding the plan state."""
+    import hashlib
+    import subprocess
+    from pathlib import Path
+    root = Path(cwd)
+    result = subprocess.run(['git', '-C', str(root), 'ls-files', '-co', '--exclude-standard', '-z'], capture_output=True, check=True, timeout=30)
+    state = {}
+    exclusions = excluded if isinstance(excluded, list) else [excluded] if excluded else []
+    exclusions = {Path(p).resolve() for p in exclusions}
+    for raw in result.stdout.split(b'\0'):
+        if not raw:
+            continue
+        name = os.fsdecode(raw)
+        path = root / name
+        if path.resolve() in exclusions:
+            continue
+        if path.is_symlink():
+            state[name] = 'link:' + os.readlink(path)
+        elif path.is_file():
+            state[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        elif path.exists():
+            raise OSError('cannot read worktree entry: ' + name)
+        else:
+            state[name] = None
+    return state
+
+
+# Persist the Queen's starting worktree state in her run folder.
+def save_worktree_state(cwd, run_dir, excluded=None):
+    """Save a snapshot when the worktree is readable; otherwise retain the commit fallback."""
+    from pathlib import Path
+    try:
+        state = worktree_state(cwd, excluded)
+        exclusions = excluded if isinstance(excluded, list) else [excluded] if excluded else []
+        (Path(run_dir) / 'worktree-start.json').write_text(json.dumps({'cwd': str(Path(cwd).resolve()), 'excluded': [str(p) for p in exclusions], 'files': state}), encoding='utf-8')
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return
+
+
+# Select the newest report written during the run, falling back to the final message.
+def queen_final_text(run_dir, started, message='', ended=float('inf')):
+    """Return the Queen's report or her last non-empty message."""
+    from pathlib import Path
+    excluded = {'final.txt', 'stderr.txt', 'runner-error.txt', 'milestones.txt', 'build-samples.txt', 'prompt.md', 'rules.md'}
+    try:
+        reports = [p for p in Path(run_dir).iterdir() if p.is_file() and p.suffix.lower() in ('.md', '.txt') and p.name.lower() not in excluded and started <= p.stat().st_mtime < ended]
+        if reports:
+            return max(reports, key=lambda p: (p.stat().st_mtime_ns, p.name)).read_text(encoding='utf-8-sig', errors='replace')
+    except OSError:
+        pass
+    return message
+
+
+# Return whether the Queen ended without a handoff, new commit or changed worktree (unknown counts as work).
 def ended_without_work(env, agent):
-    """Return whether a Queen ended without a HANDOFF file and without a new commit in her worktree since she started (unknown counts as work)."""
+    """Return whether the Queen ended without a handoff, new commit or changed worktree."""
     import subprocess
     from pathlib import Path
     if (env.run_dir(agent['name']) / 'HANDOFF').exists():
@@ -150,21 +359,32 @@ def ended_without_work(env, agent):
         result = subprocess.run(['git', '-C', str(cwd), 'log', '--all', '-1', '--since=' + since, '--format=%H'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30)
     except (OSError, subprocess.SubprocessError):
         return False
-    return result.returncode == 0 and not result.stdout.strip()
+    if result.returncode != 0 or result.stdout.strip():
+        return False
+    snapshot = env.run_dir(agent['name']) / 'worktree-start.json'
+    if not snapshot.is_file():
+        return True
+    try:
+        state = json.loads(snapshot.read_text(encoding='utf-8'))
+        if Path(cwd).resolve() != Path(state['cwd']).resolve():
+            return False
+        return worktree_state(cwd, state.get('excluded')) == state['files']
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return False
 
 
 # File the automatic owner question for a Queen that ended without work and return its id.
 def ask_about_end(conn, env, plan, agent, final_report):
     """File the automatic owner question for a Queen that ended without work and return its id; the question holds her last text."""
     text = (final_report or '').strip() or 'no final text (status %s)' % agent.get('status')
-    question = 'Queen %s of this Hive ended without new work (no commit, no question). Her last text: %s How should the Hive continue?' % (agent['name'], text[:1500])
+    question = 'Queen %s of this Hive ended without new work (no commit, no changed file, no question). Her last text: %s How should the Hive continue?' % (agent['name'], text[:1500])
     return db.add_question(conn, env.name, plan, 'queen-ended', question, 'Answer what blocks her, or say how she should count or decide it; then the next Queen starts.')
 
 
 # Return whether all independent Bee processes of the Hive have finished.
 def can_handoff(conn, project, plan):
     """Return whether all independent Bee processes of the Hive have finished."""
-    return not any(a.get('plan_path') == plan and a.get('phase') == 'bee' and (a.get('status') in ('running', 'starting') or (a.get('pid') and osplat.process_alive(a['pid']))) for a in runtime.list_agents(conn, project, 'active'))
+    return not any(a.get('plan_path') == plan and a.get('phase') == 'bee' and agent_process.counts(a) for a in runtime.list_agents(conn, project, 'active'))
 
 
 # End this Hive's Queen and own-process Bees, leaving it queenless.
@@ -173,7 +393,7 @@ def dequeen(conn, project, plan, stop=None):
     if get(conn, project, plan) is None:
         raise ValueError('unknown Hive')
     stop = stop or osplat.kill_process_tree
-    rows = [a for a in runtime.list_agents(conn, project, 'active') if a.get('plan_path') == plan and a.get('phase') in ('queen', 'bee') and (a.get('status') in ('running', 'starting') or (a.get('pid') and osplat.process_alive(a['pid'])))]
+    rows = [a for a in runtime.list_agents(conn, project, 'active') if a.get('plan_path') == plan and a.get('phase') in ('queen', 'bee') and agent_process.counts(a)]
     for row in rows:
         if row.get('pid') and stop(row['pid']) is False:
             raise ValueError('could not end Hive process')
@@ -190,7 +410,7 @@ def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen
         raise ValueError('unknown Hive')
     if provider and (provider in excluded or providers is not None and not any(p['name'] == provider and not p.get('endpoint') and p.get('classes', {}).get(queen_class, {}).get('model') for p in providers)):
         raise ValueError('provider does not offer the Queen class')
-    if any(a.get('plan_path') == plan and a.get('phase') == 'queen' and (a.get('status') in ('running', 'starting') or (a.get('pid') and osplat.process_alive(a['pid']))) for a in runtime.list_agents(conn, project, 'active')):
+    if any(a.get('plan_path') == plan and a.get('phase') == 'queen' and agent_process.counts(a) for a in runtime.list_agents(conn, project, 'active')):
         dequeen(conn, project, plan, stop=stop)
     with db.transaction(conn):
         conn.execute("UPDATE hives SET state='requeen',requested_provider=?,reset_at=NULL WHERE project=? AND plan_path=?", (provider, project, plan))
@@ -252,13 +472,47 @@ def hive_data(conn, project, agents, plan=None, include_done=False):
                 else:
                     bees[name] = {'name': name, 'task': task or package, 'step': step}
         hive['bees'] = list(bees.values())
+        hive['blocker'] = runtime.kv_get(conn, hive['project'], 'hive-blocker:' + hive['plan_path'])
+        hive['pending_questions'] = [q['id'] for q in runtime.list_questions(conn, hive['project'], plan=hive['plan_path']) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
     return rows
+
+
+# Translate recorded scheduler blockers into the pane's existing German presentation.
+def blocker_label(reason):
+    """Show the actual start blocker without exposing internal scheduling phrases."""
+    if reason.startswith('Hive limit '):
+        return 'Hive-Limit ' + reason.split()[2] + ' erreicht'
+    if reason.startswith('free RAM '):
+        return 'Zu wenig freier Arbeitsspeicher: ' + reason.split(' is below')[0][9:]
+    if reason.startswith('no provider with a free slot'):
+        return 'Kein freier Anbieter mit verf\u00fcgbarem Queen-Modell'
+    if reason.startswith('waiting for a free slot or limit of provider '):
+        return 'Anbieter belegt oder Kontingent ersch\u00f6pft: ' + reason.rsplit(' ', 1)[-1]
+    return {'STOP': 'HaiveQueen gestoppt', 'PAUSED': 'HaiveQueen pausiert',
+            'DRAINING': 'HaiveQueen wird angehalten', 'DRAINED': 'HaiveQueen angehalten',
+            'waiting for the integration place': 'wartet auf Integration',
+            'handing off, Bee processes are still running': '\u00dcbergabe: Bees laufen noch',
+            'retry after an interrupted Queen is not due yet': 'Wartezeit nach unterbrochener Queen',
+            'no branch or worktree named in the plan or its state file': 'Plan-Branch oder Arbeitsverzeichnis fehlt',
+            'the Hive is already claimed': 'Start bereits reserviert'}.get(reason,
+            'Plan-Branch wird bereits anderweitig bearbeitet' if reason.startswith('its branch ') else
+            'Plan-Arbeitsverzeichnis konnte nicht vorbereitet werden' if reason.startswith('worktree for branch ') else reason)
 
 
 # German words for the state of a Hive that has no running Queen.
 def state_label(hive):
-    """German words for the state of a Hive without a running Queen ('' for a running one)."""
+    """Describe the persisted Hive state, actual start blocker and pending questions."""
     state = hive.get('state')
+    questions = hive.get('pending_questions') or []
+    question_suffix = ' (#' + ', #'.join(map(str, questions)) + ')' if questions else ''
+    if state in ('answer', 'owner_check') and questions:
+        return ('wartet auf Owner-Pr\u00fcfung' if state == 'owner_check' else 'wartet auf Antwort') + ' (#' + ', #'.join(map(str, questions)) + ')'
+    if hive.get('blocker') and state in ('running', 'waiting', 'starting', 'requeen', 'codex_wait', 'provider_wait', 'integration_wait'):
+        return blocker_label(hive['blocker']) + question_suffix
+    if state == 'running':
+        return 'keine aktive Queen' + ('; offene Fragen #' + ', #'.join(map(str, questions)) if questions else '')
+    if state == 'done':
+        return 'abgeschlossen'
     if state == 'resting':
         return 'ruht bis ' + str(hive.get('reset_at') or '?').replace('T', ' ')[:16]
     return {'queenless': 'weisellos', 'integration_wait': 'wartet auf Integration', 'answer': 'wartet auf Antwort', 'owner_check': 'wartet auf Owner-Prüfung', 'codex_wait': 'wartet auf Codex',
@@ -343,12 +597,15 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     free_ram = free_ram or loop.ram_gb
     result = {'skipped': None, 'projects': {}}
     if not dry_run:
+        for env in envs:
+            reconcile_completed(conn, env, alive=alive, plan_files=plan_files)
         try:
             usage.refresh_codex_usage(conn)
         except Exception:
             pass
         for env in envs:
             inbox.process_inbox(env)
+            loop.repair_closed_panes(env, terminal)
     if not dry_run:
         if loop.stop_flag().exists():
             result['skipped'] = 'STOP'
@@ -362,7 +619,13 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
             if result['skipped'] != 'STOP' and not os.environ.get('BZZ_TEST_NOSTART'):
                 ensure_hive_panes(conn, envs, terminal)
             for env in envs:
+                agents = runtime.list_agents(conn, env.name, 'active')
+                for hive in db.rows(conn, "SELECT plan_path FROM hives WHERE project=? AND state!='done'", (env.name,)):
+                    if not any(a.get('plan_path') == hive['plan_path'] and a.get('phase') in ('queen', 'bee')
+                               and agent_process.counts(a, alive) for a in agents):
+                        runtime.kv_set(conn, env.name, 'hive-blocker:' + hive['plan_path'], result['skipped'])
                 env.log('round skipped (%s)' % result['skipped'])
+                faults.check_round(env, 0, False)
                 loop.run_hook(env, loop._state_summary(env))
             return result
     deferred = {}
@@ -370,11 +633,17 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
         deferred = migrate_once(conn, envs)
         reap_integrations(conn, alive=alive)
         wake_due(conn, db.now())
+    if not dry_run:
+        for env in envs:
+            if env.name in deferred:
+                faults.check_round(env, 0, False)
     envs = [env for env in envs if env.name not in deferred]
     for env in envs:
         runtime.sync_plans(conn, env.name, str(env.workspace))
         if not dry_run:
             routine.repair_stale_agents(env, alive=alive)
+            repair_technical_ends(conn, env.name)
+            technical_start_faults(conn, env.name)
             runtime.archive_agents(conn, env.name, 12)
     all_active = runtime.list_agents(conn, None, 'active')
     is_alive = alive or osplat.process_alive
@@ -383,7 +652,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     # Count an agent until its runner has actually exited.
     def process_running(row):
         """Count an agent until its runner has actually exited."""
-        return row.get('status') in ('running', 'starting') or bool(row.get('pid') and is_alive(row['pid']))
+        return agent_process.counts(row, is_alive)
 
     processes = [{**a, 'status': 'running'} for a in all_active if process_running(a)]
     free = sch.provider_free(envs[0].providers if envs else [], processes)
@@ -403,6 +672,8 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     def not_started(env, path, reason):
         """Remember why a plan got no Queen this round."""
         skipped[env.name].append('%s not started: %s' % (Path(path).stem, reason))
+        if not dry_run:
+            runtime.kv_set(conn, env.name, 'hive-blocker:' + path, reason)
 
     for existing_pass in (True, False):
         for env in projects:
@@ -411,29 +682,15 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
             rows = runtime.list_plans(conn, env.name)
             ordered = []
             for plan in rows:
-                if plan['status'] not in ('READY', 'IN_PROGRESS'):
-                    continue
                 if plan_files and not any(sch.norm_plan(plan['path']).endswith(sch.norm_plan(f)) for f in plan_files):
                     continue
                 hive = get(conn, env.name, plan['path'])
                 if bool(hive) != existing_pass:
                     continue
-                if hive and hive.get("ready_id") and conn.execute("SELECT 1 FROM queue WHERE id=? AND project=? AND plan_path=? AND status='integrated'", (hive["ready_id"], env.name, plan['path'])).fetchone():
-                    step = owner_check_step(conn, env.name, plan['path'])
-                    if step and step[0] == 'wait':
-                        if not dry_run:
-                            wait_for_owner_check(conn, env.name, plan['path'], step[1])
-                        continue
-                    if step and step[0] == 'fix':
-                        if not dry_run:
-                            reopen_after_owner_check(conn, env.name, plan['path'])
-                            hive = get(conn, env.name, plan['path'])
-                    else:
-                        if not dry_run:
-                            runtime.set_plan_status(conn, env.name, plan['path'], 'DONE', str(env.workspace))
-                            release_integration(conn, env.name, plan['path'])
-                            conn.execute("UPDATE hives SET state='done' WHERE project=? AND plan_path=?", (env.name, plan['path']))
-                        continue
+                if plan['status'] not in ('READY', 'IN_PROGRESS') or (hive and hive['state'] == 'done'):
+                    continue
+                if dry_run and hive and integrated_ready(conn, env, hive):
+                    continue
                 if hive and hive['state'] == 'starting':
                     claimed = db.parse_time(hive.get('claimed_at'))
                     if claimed and (datetime.now() - claimed).total_seconds() < 120:
@@ -451,6 +708,8 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 history = [a for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == plan['path'] and a.get('phase') == 'queen']
                 running = [a for a in history if not a.get('archived') and process_running(a)]
                 if running:
+                    if not dry_run:
+                        runtime.kv_set(conn, env.name, 'hive-blocker:' + plan['path'], '')
                     flagged = routine.set_handoff_flags(env, [routine.view(a) for a in running]) if not dry_run else []
                     if flagged and hive:
                         context_limit(conn, env.name, plan['path'])
@@ -479,17 +738,29 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     else:
                         final = env.run_dir(last['name']) / 'final.txt' if last else None
                         final_report = final.read_text(encoding='utf-8-sig') if final and final.is_file() else ''
+                        if last:
+                            try:
+                                report_started = datetime.fromisoformat(last['started_at']).timestamp()
+                            except (ValueError, TypeError, KeyError):
+                                report_started = float('inf')
+                            try:
+                                ended = datetime.fromisoformat(last['ended_at']).timestamp() + 1
+                            except (ValueError, TypeError, KeyError):
+                                ended = float('inf')
+                            final_report = queen_final_text(env.run_dir(last['name']), report_started, final_report, ended)
                         questions = [q for q in runtime.list_questions(conn, env.name, status='open', plan=plan['path']) if not str(q['item']).upper().startswith('STALL-')]   # stop-rule questions never block a Hive
-                        if last and last.get('status') == 'done' and 'WAITING_FOR_OWNER' in final_report and questions:
+                        if last and interrupt.kind_of(last) == interrupt.VANISHED:
+                            conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, plan['path']))
+                        elif last and last.get('status') == 'done' and 'WAITING_FOR_OWNER' in final_report and questions:
                             wait_for_answers(conn, env.name, plan['path'], [q['id'] for q in questions])
-                        elif last and ended_without_work(env, last):   # open owner questions are the reason; her final text does not matter, only without any a question is filed
+                        elif last and not interrupt.is_interrupted(last) and ended_without_work(env, last):   # open owner questions are the reason; her final text does not matter, only without any a question is filed
                             wait_for_answers(conn, env.name, plan['path'], [q['id'] for q in questions] or [ask_about_end(conn, env, plan['path'], last, final_report)])
                         else:
                             conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, plan['path']))
                     hive = get(conn, env.name, plan['path'])
                 if hive and hive['state'] in ('codex_wait', 'provider_wait') and history and not dry_run:   # the Queen asked for a Bee and ended: with owner questions open and no new commit the Hive waits for an answer, it does not start the next Queen
                     open_questions = [q['id'] for q in runtime.list_questions(conn, env.name, status='open', plan=plan['path']) if not str(q['item']).upper().startswith('STALL-')]
-                    if open_questions and ended_without_work(env, history[-1]):
+                    if open_questions and not interrupt.is_interrupted(history[-1]) and ended_without_work(env, history[-1]):
                         wait_for_answers(conn, env.name, plan['path'], open_questions)
                         not_started(env, plan['path'], 'Hive state "answer" (questions %s)' % ', '.join(str(i) for i in open_questions))
                         continue
@@ -521,6 +792,9 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                              and not any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, p))]
                 cls = str(env.settings.get('queenClass', 'medium'))
                 if hive:
+                    history = [a for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('phase') == 'queen']
+                    if history and interrupt.kind_of(history[-1]) == interrupt.VANISHED and history[-1].get('class'):
+                        cls = history[-1]['class']
                     requested = hive.get('requested_provider') or hive['provider']
                     providers = [p for p in providers if p['name'] == requested]
                     pick = sch.select_provider(providers, cls, [], pool.free, prefer=requested, conn=conn)
@@ -594,6 +868,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                 if not count:
                     conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
                 if count:
+                    runtime.kv_set(conn, env.name, 'hive-blocker:' + path, '')
                     for package in runtime.list_packages(conn, env.name, path):
                         runtime.kv_delete(conn, env.name, "wait:%s|%s" % (path, package["id"]))
                     env.update_agent(name, {'color': hive['colour']})
@@ -726,7 +1001,7 @@ def wake_marker(conn, envs):
         if status not in ('running', 'starting') and not (row.get('phase') in ('queen', 'bee') and row.get('pid')):
             continue
         pid = row.get('pid')
-        live = bool(pid and osplat.process_alive(pid))
+        live = agent_process.is_live(row)
         owner = envs_by_name.get(row['project'])
         limit = sch.context_limit(owner.settings, owner.providers, sch.row_provider(row), row.get('class')) if owner else 300000
         context_reached = row.get('phase') == 'queen' and int(row.get('ctxTokens') or 0) >= limit

@@ -135,6 +135,7 @@ def cmd_answer(args, conn) -> int:
     return 0
 
 
+# List queue rows, optionally filtered to one branch, or update a branch row.
 def cmd_queue(args, conn) -> int:
     """List the integration queue as JSON, or (action upsert) change or add the row of a branch."""
     if args.action == "upsert":
@@ -142,7 +143,10 @@ def cmd_queue(args, conn) -> int:
             return fail("queue upsert needs --project and --branch", 2)
         return runtime_cli.run(lambda a, c: runtime.queue_upsert(
             c, a.project, a.branch, a.tip, a.plan, a.status, a.note, a.run))(args, conn)
-    out(db.queue_rows(conn, args.project))
+    rows = db.queue_rows(conn, args.project)
+    if args.branch:
+        rows = [row for row in rows if row["branch"] == args.branch]
+    out(rows)
     return 0
 
 
@@ -181,9 +185,9 @@ def make_stub(name: str):
     return stub
 
 
-# Acquire or release the shared project integration place.
+# Acquire or release the shared integration place and clean worktrees after release.
 def cmd_integration(args, conn):
-    """Acquire or release the shared project integration place."""
+    """Acquire or release the integration place, cleaning worktrees after release."""
     from haivequeen import hives
     agent = os.environ.get("BZZ_AGENT")
     row = runtime.get_agent(conn, args.project, agent) if agent else None
@@ -193,6 +197,13 @@ def cmd_integration(args, conn):
         args.plan = row['plan_path']
     if args.action == "release":
         hives.release_integration(conn, args.project, args.plan)
+        from haivequeen import scheduler, worktrees
+        env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
+        if env:
+            try:
+                env.log('Worktree cleanup: ' + json.dumps(worktrees.prune(env), ensure_ascii=False))
+            except Exception as exc:
+                env.log('Worktree cleanup failed: ' + str(exc))
         out({"ok": True})
         return 0
     owner_pid = (row.get("pid") if row else None) or getattr(args, "owner_pid", None)
@@ -276,7 +287,13 @@ def cmd_bee(args, conn):
     if args.action == "result":
         if not args.attempt or not args.outcome:
             return fail("result requires an attempt name and outcome")
-        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt)
+        try:
+            requirements = json.loads(args.open_requirements)
+            if not isinstance(requirements, list) or not all(isinstance(item, str) for item in requirements):
+                return fail("open requirements must be a JSON string list")
+        except ValueError as exc:
+            return fail(str(exc))
+        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error)
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
         out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls})
@@ -293,7 +310,7 @@ def cmd_bee(args, conn):
     except (ValueError, TypeError) as exc:
         return fail(str(exc))
     if isinstance(started, dict):
-        out({"ok": True, "started": False, **started})
+        out({"ok": True, "started": started.get("kind") == "process", **started})
         return 0
     bees.ensure_attempts(conn)
     assignment = conn.execute("SELECT provider FROM bee_assignments WHERE project=? AND plan_path=? AND package=?", (args.project, plan, args.package)).fetchone() if not started else None
@@ -332,6 +349,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cwd", default="")
     p.add_argument("--outcome", choices=["failed", "interrupted", "succeeded"])
     p.add_argument("--attempt", default="")
+    p.add_argument("--open-requirements", default="[]")
+    p.add_argument("--error", default="")
     p.add_argument("--no-subagents", action="store_true")
     p.add_argument("--parallel", action="store_true")
     p.set_defaults(fn=cmd_bee)
@@ -417,6 +436,8 @@ def build_parser() -> argparse.ArgumentParser:
     legacy.register(sub)
     loop.register(sub)
     selfupdate.register(sub)
+    from haivequeen import worktrees
+    worktrees.register(sub)
 
     for name in STUBS:
         p = sub.add_parser(name)
@@ -425,6 +446,7 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+# Run the CLI and optionally keep a shortcut's result visible on the desktop.
 def main(argv=None) -> int:
     """Entry point: parse arguments, open the database, run the command."""
     for stream in (sys.stdout, sys.stdin):
@@ -435,11 +457,23 @@ def main(argv=None) -> int:
         return fail("unexpected arguments: " + " ".join(extra), 2)
     if args.command in STUBS:
         return args.fn(args, None)
-    conn = db.connect(config.db_path())
+    conn = None
+    desktop = getattr(args, "desktop", False)
     try:
-        return args.fn(args, conn)
+        conn = db.connect(config.db_path())
+        code = args.fn(args, conn)
+    except Exception as exc:
+        if not desktop:
+            raise
+        args.desktop_result = {"ok": False, "error": str(exc)}
+        code = fail(str(exc))
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
+    if desktop:
+        from haivequeen.desktop import show_result
+        show_result(args.command, args.desktop_result)
+    return code
 
 
 if __name__ == "__main__":

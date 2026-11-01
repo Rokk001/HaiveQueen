@@ -39,6 +39,7 @@ def render_queue(conn, project) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Render visible open and answered questions for a project.
 def render_questions(conn, project) -> str:
     """Render open and answered questions of a project."""
     qs = db.open_questions(conn, project)
@@ -49,7 +50,7 @@ def render_questions(conn, project) -> str:
     lines += ["", "## Answered", ""]
     lines += _table(["Id", "Plan", "Item", "Question", "Answer", "By", "Answered"],
                     [(q["id"], q["plan_path"], q["item"], q["question"], q["answer"], q["answered_by"],
-                      q["answered_at"]) for q in qs if q["status"] != "open"])
+                      q["answered_at"]) for q in qs if q["status"] not in ("open", "fault_check")])
     return "\n".join(lines) + "\n"
 
 

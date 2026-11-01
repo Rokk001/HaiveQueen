@@ -56,6 +56,8 @@ DEFAULT_SETTINGS = {
     "buildFlowDoc": "",
     "integratorInstructions": "",
     "worktreePrefix": "wt",
+    "ignoredBuildOutput": [],
+    "protectedWorktrees": [],
     "planStandaloneRegex": "",
     "planSuffixRegex": "-?PLAN$",
     "buildProcessNames": [],
@@ -217,6 +219,7 @@ def save_claude_usage(conn, event: dict) -> None:
         {"saved": datetime.now().isoformat(timespec="seconds"), "fiveHour": w.get("five_hour"), "sevenDay": w.get("seven_day")}))
 
 
+# Read verified Claude windows for the dashboard and provider ranking.
 def claude_usage(conn) -> dict:
     """Return {FiveHour, SevenDay} of Claude from the newest kv row usage-claude (any project); each is None, {Pct, Reset, At} or a reset marker."""
     res = {"FiveHour": None, "SevenDay": None}
@@ -225,11 +228,15 @@ def claude_usage(conn) -> dict:
         if row is None or not str(row[0]).strip():
             return res
         j = json.loads(row[0])
+        if j.get("refresh_error"):
+            return res
         now = time.time()
         for key, win in (("FiveHour", j.get("fiveHour")), ("SevenDay", j.get("sevenDay"))):
             if not win:
                 continue
-            if int(win.get("resetsAt", 0)) > now:
+            if win.get("resetsAt") is None:
+                res[key] = {"Pct": round(100 * float(win["utilization"])), "Reset": "", "At": None}
+            elif int(win.get("resetsAt", 0)) > now:
                 res[key] = {"Pct": round(100 * float(win["utilization"])), "Reset": format_reset_time(win["resetsAt"]),
                             "At": int(win["resetsAt"])}
             else:
@@ -269,6 +276,7 @@ def codex_usage(sessions_dir=None) -> dict:
     return res
 
 
+# Do not rank a provider using a quota reading whose refresh failed.
 def provider_limit(provider: dict, conn=None, limits=None) -> dict:
     """Weekly limit of a provider as {FreePct, Hours}: 100 minus the used percent and the hours until the reset.
 
@@ -286,6 +294,10 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
         if entry:
             used, hours = entry.get("usedPercent"), entry.get("resetHours")
     elif not os.environ.get("BZZ_RUNTIME_OVERRIDE") and provider["limit"] in ("claude", "codex"):
+        if provider["limit"] == "claude" and conn is not None:
+            from . import usage
+            if usage.claude_refresh_failed(conn):
+                return {"FreePct": 0.0, "Hours": 168.0}
         u = (claude_usage(conn)["SevenDay"] if provider["limit"] == "claude" and conn is not None
              else codex_usage()["SevenDay"] if provider["limit"] == "codex" else None)
         if u and u.get("Pct") is not None:
@@ -509,7 +521,7 @@ class ProjectEnv:
                         "capability": str(p["capability"] or "")})
         for r in res:
             if r["depends_all"]:
-                r["depends"] = [x["id"] for x in res if x["id"] != r["id"]]
+                r["depends"] += [x["id"] for x in res if x["id"] != r["id"] and x["id"] not in r["depends"]]
         return res
 
 

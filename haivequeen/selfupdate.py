@@ -88,9 +88,10 @@ def busy_agents(conn, alive=None, now=None) -> list:
     now = now or time.time()
     marks = ",".join("?" * len(runstate.ACTIVE))
     busy = []
-    for r in conn.execute("SELECT name, pid, started_at FROM agents WHERE archived=0 AND status IN (%s)" % marks, runstate.ACTIVE):
+    from . import agent_process
+    for r in conn.execute("SELECT name, status, pid, started_at, ended_at, extra_json FROM agents WHERE archived=0 AND status IN (%s)" % marks, runstate.ACTIVE):
         if r["pid"]:
-            if alive(r["pid"]):
+            if agent_process.is_live(r, alive):
                 busy.append(r["name"])
             continue
         started = db.parse_time(r["started_at"])

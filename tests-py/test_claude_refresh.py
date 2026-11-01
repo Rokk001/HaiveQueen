@@ -1,0 +1,188 @@
+"""Isolated regressions for authoritative Claude CLI quota refreshes."""
+import json
+import os
+import subprocess
+from datetime import datetime, timedelta, timezone
+from unittest import mock
+from bzztest import RoundCase
+from haivequeen import runtime, usage
+
+
+# Exercise metadata without real provider processes or authentication access.
+class ClaudeRefreshTests(RoundCase):
+    """Only zero-turn injected metadata may update the temporary cache."""
+
+    # Seed a stale snapshot for refresh and failure tests.
+    def seed(self):
+        """Store old session twenty-percent and weekly ninety-percent readings."""
+        self.reset = datetime.now(timezone.utc) + timedelta(days=1)
+        runtime.kv_set(self.conn, '*', 'usage-claude', json.dumps({'saved': '2026-01-01T00:00:00+00:00',
+            'fiveHour': {'utilization': 0.2, 'resetsAt': int(self.reset.timestamp())},
+            'sevenDay': {'utilization': 0.9, 'resetsAt': int(self.reset.timestamp())}}))
+
+    # Build the proven top-level assistant report and a metadata-only final result.
+    def response(self, rows=None, **result):
+        """Return a synthetic CompletedProcess for the injected subprocess runner."""
+        if rows is None:
+            rows = [{'kind': 'weekly_all', 'percent': 100, 'resets_at': self.reset.isoformat(), 'is_active': False}]
+        events = [{'type': 'assistant', 'usage_report': {'rate_limits': {'limits': rows}}},
+                  {'type': 'result', 'subtype': 'success', 'is_error': False, 'num_turns': 0, 'total_cost_usd': 0, **result}]
+        return subprocess.CompletedProcess([], 0, '\n'.join(json.dumps(e) for e in events), '')
+
+    # Inject the process boundary and resolve only a fake executable.
+    def refresh(self, run=None, **kwargs):
+        """Call refresh with the configured Claude provider in the temporary runtime."""
+        with mock.patch('haivequeen.usage.shutil.which', return_value='/fake/claude'):
+            return usage.refresh_claude_usage(self.conn, [{'command': 'claude', 'limit': {'source': 'claude'}}],
+                                              run=run or mock.Mock(return_value=self.response()), **kwargs)
+
+    # A current global reading replaces stale data even when is_active is false.
+    def test_stale_ninety_becomes_current_hundred(self):
+        """Missing session quota remains unknown rather than copying the old value."""
+        self.seed()
+        self.assertTrue(self.refresh())
+        raw = json.loads(runtime.kv_get(self.conn, '*', 'usage-claude'))
+        self.assertEqual(raw['sevenDay']['utilization'], 1)
+        self.assertIsNone(raw['fiveHour'])
+        self.assertIn('checked_at', raw)
+        self.assertIn('source', raw)
+        self.assertEqual(usage.get_claude_usage(self.conn)['seven_day']['pct'], 100)
+
+    # Session exhaustion is independent of weekly and scoped percentages.
+    def test_session_blocks_and_scoped_weekly_is_ignored(self):
+        """A scoped weekly value never fabricates the missing account-wide window."""
+        self.seed()
+        rows = [{'kind': 'session', 'percent': 100, 'resets_at': self.reset.isoformat()},
+                {'kind': 'weekly_scoped', 'percent': 1, 'resets_at': self.reset.isoformat()}]
+        self.assertTrue(self.refresh(run=mock.Mock(return_value=self.response(rows))))
+        self.assertIsNone(usage.get_claude_usage(self.conn)['seven_day'])
+        self.assertEqual(usage.limit_windows(self.conn, {'limit': 'claude'}, read_pc=True)[0]['used_pct'], 100)
+
+    # Model turns, cost and unsuccessful completion invalidate the response.
+    def test_only_zero_turn_zero_cost_success_is_accepted(self):
+        """Metadata guards cannot be bypassed by an otherwise valid quota report."""
+        self.seed()
+        for result in ({'num_turns': 1}, {'num_turns': False}, {'total_cost_usd': 0.01}, {'total_cost_usd': False}, {'subtype': 'error'}, {'is_error': True}):
+            with self.subTest(result=result):
+                self.assertFalse(self.refresh(run=mock.Mock(return_value=self.response(**result)), force=True))
+                self.assertTrue(usage.claude_refresh_failed(self.conn))
+                self.assertIsNone(usage.get_claude_usage(self.conn)['seven_day'])
+
+    # Failures preserve historical raw data without displaying it or allowing starts.
+    def test_transport_and_invalid_report_fail_closed(self):
+        """Timeout, JSON, exit, empty-report and percentage errors stay generic."""
+        self.seed()
+        runners = [mock.Mock(side_effect=subprocess.TimeoutExpired('claude', 20)),
+                   mock.Mock(return_value=subprocess.CompletedProcess([], 0, 'not JSON SECRET', 'SECRET')),
+                   mock.Mock(return_value=subprocess.CompletedProcess([], 1, '', 'SECRET')),
+                   mock.Mock(return_value=self.response([])),
+                   mock.Mock(return_value=self.response([{'kind': 'weekly_all', 'percent': -1, 'resets_at': self.reset.isoformat()}]))]
+        for runner in runners:
+            with self.subTest(runner=runner):
+                self.assertFalse(self.refresh(run=runner, force=True))
+                raw = runtime.kv_get(self.conn, '*', 'usage-claude')
+                self.assertNotIn('SECRET', raw)
+                self.assertEqual(json.loads(raw)['sevenDay']['utilization'], 0.9)
+                self.assertIsNone(usage.get_claude_usage(self.conn)['seven_day'])
+                limit = usage.get_provider_limit(self.conn, {'limit': 'claude'}, read_pc=True)
+                self.assertEqual((limit['used_pct'], limit['free_pct']), (None, 0))
+                self.assertEqual(usage.limit_windows(self.conn, {'limit': 'claude'}, read_pc=True),
+                                 [{'used_pct': 100, 'reset_epoch': None, 'unknown': True}])
+
+    # Shared cache timestamps throttle callers and retries can clear failure state.
+    def test_throttle_and_forced_retry(self):
+        """Failure and success both throttle, while force permits an immediate recovery."""
+        self.seed()
+        runner = mock.Mock(side_effect=subprocess.TimeoutExpired('claude', 20))
+        self.assertFalse(self.refresh(run=runner))
+        self.assertFalse(self.refresh(run=runner))
+        self.assertEqual(runner.call_count, 1)
+        self.assertTrue(self.refresh(force=True))
+        self.assertFalse(usage.claude_refresh_failed(self.conn))
+        other = mock.Mock(return_value=self.response())
+        self.assertFalse(self.refresh(run=other))
+        other.assert_not_called()
+
+    # Isolation prohibits implicit real CLI execution.
+    def test_test_runtime_never_starts_cli_without_injector(self):
+        """The normal test environment cannot reach auth or network through refresh."""
+        with mock.patch('haivequeen.usage.subprocess.run') as run:
+            self.assertFalse(usage.refresh_claude_usage(self.conn, [{'command': 'claude', 'limit': 'claude'}]))
+            run.assert_not_called()
+
+    # Refresh disables hooks, tools, MCP and persistent sessions without using a shell.
+    def test_safe_process_arguments_and_environment(self):
+        """The proven metadata command is bounded with closed input and hidden output."""
+        self.seed()
+        run = mock.Mock(return_value=self.response())
+        with mock.patch.dict(os.environ, {'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'}):
+            self.assertTrue(self.refresh(run=run))
+        args, kwargs = run.call_args
+        argv = args[0]
+        self.assertEqual(argv[:3], ['/fake/claude', '-p', '/usage'])
+        for flag in ('--no-session-persistence', '--strict-mcp-config', '--setting-sources', '--settings', '--mcp-config', '--tools'):
+            self.assertIn(flag, argv)
+        self.assertNotIn('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', kwargs['env'])
+        self.assertEqual(kwargs['stdin'], subprocess.DEVNULL)
+        self.assertEqual(kwargs['stderr'], subprocess.DEVNULL)
+        self.assertLessEqual(kwargs['timeout'], 20)
+        self.assertFalse(kwargs.get('shell', False))
+
+    # Malformed and nonfinite quota fields cannot create a fresh-looking snapshot.
+    def test_invalid_numeric_and_reset_values_are_rejected(self):
+        """NaN, infinities, invalid ranges and ambiguous resets fail closed."""
+        self.seed()
+        for percent in (-1, 101, float('nan'), float('inf'), float('-inf'), True):
+            with self.subTest(percent=percent):
+                row = {'kind': 'weekly_all', 'percent': percent, 'resets_at': self.reset.isoformat()}
+                self.assertFalse(self.refresh(run=mock.Mock(return_value=self.response([row])), force=True))
+        for reset in ('bad', '2026-11-01T19:00:00'):
+            with self.subTest(reset=reset):
+                row = {'kind': 'weekly_all', 'percent': 10, 'resets_at': reset}
+                self.assertFalse(self.refresh(run=mock.Mock(return_value=self.response([row])), force=True))
+
+    # Ordinary interval expiry must permit retry without requiring force.
+    def test_expired_checked_at_allows_new_attempt(self):
+        """A persisted timestamp throttles all callers only until the interval ends."""
+        self.seed()
+        self.assertTrue(self.refresh())
+        raw = json.loads(runtime.kv_get(self.conn, '*', 'usage-claude'))
+        raw['checked_at'] = (datetime.now(timezone.utc) - timedelta(seconds=61)).isoformat()
+        runtime.kv_set(self.conn, '*', 'usage-claude', json.dumps(raw))
+        runtime.kv_set(self.conn, '*', 'usage-claude-last-check', raw['checked_at'])
+        run = mock.Mock(return_value=self.response())
+        self.assertTrue(self.refresh(run=run))
+        self.assertEqual(run.call_count, 1)
+
+
+    # A documented null reset does not invalidate a verified quota percentage.
+    def test_known_percent_with_null_reset_remains_visible_and_blocks(self):
+        """Retain real session and weekly exhaustion without inventing reset times."""
+        self.seed()
+        rows = [{'kind': 'session', 'percent': 100, 'resets_at': None},
+                {'kind': 'weekly_all', 'percent': 100, 'resets_at': None}]
+        self.assertTrue(self.refresh(run=mock.Mock(return_value=self.response(rows))))
+        known = usage.get_claude_usage(self.conn)
+        self.assertEqual(known['five_hour'], {'pct': 100, 'reset': ''})
+        self.assertEqual(known['seven_day'], {'pct': 100, 'reset': '', 'at': None})
+        windows = usage.limit_windows(self.conn, {'limit': 'claude'}, read_pc=True)
+        self.assertEqual(windows, [{'used_pct': 100, 'reset_epoch': None}, {'used_pct': 100, 'reset_epoch': None}])
+        limit = usage.get_provider_limit(self.conn, {'limit': 'claude'}, read_pc=True)
+        self.assertEqual((limit['used_pct'], limit['free_pct'], limit['reset_epoch']), (100, 0, None))
+
+    # Active stream telemetry must not erase the quota refresh interval.
+    def test_stream_writer_cannot_erase_refresh_throttle(self):
+        """A separate last-check key survives canonical cache replacement and expires normally."""
+        self.seed()
+        self.assertTrue(self.refresh())
+        usage.save_claude_usage(self.conn, {'rate_limit_info': {'unifiedWindows': {
+            'five_hour': {'utilization': 0.5, 'resetsAt': int(self.reset.timestamp())},
+            'seven_day': {'utilization': 0.9, 'resetsAt': int(self.reset.timestamp())}}}})
+        self.assertNotIn('checked_at', json.loads(runtime.kv_get(self.conn, '*', 'usage-claude')))
+        run = mock.Mock(return_value=self.response())
+        self.assertFalse(self.refresh(run=run))
+        run.assert_not_called()
+        expired = (datetime.now(timezone.utc) - timedelta(seconds=61)).isoformat()
+        runtime.kv_set(self.conn, '*', 'usage-claude-last-check', expired)
+        self.assertTrue(self.refresh(run=run))
+        self.assertEqual(run.call_count, 1)

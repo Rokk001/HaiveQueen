@@ -65,6 +65,10 @@ bzz stop                              # no new agents; running agents finish the
 
 Put your machine settings (providers, slots) into `config.toml` (see `examples/config.example.toml`; folder: `%APPDATA%\HaiveQueen` on Windows, `~/.config/HaiveQueen` on Linux).
 The dashboard and agent panes share one terminal window; its name is the machine setting `window` (default `HaiveQueen`), a project cannot set its own.
+Closing the terminal leaves the managing loop running. The next round restores a missing dashboard; `bzz start` also restores it without restarting running agents. A start during a pending stop reports that the existing agents must finish first. Windows desktop shortcuts can use `bzz start --desktop` and `bzz stop --desktop` for a visible result or error dialog; ordinary CLI calls keep their JSON output.
+
+Completed idle Hives are reconciled with the plan status and confirmed integration. Active agents and genuine owner questions are preserved. A Hive without a Queen shows its recorded start blocker or pending question numbers instead of a generic waiting label.
+Automatic worktree cleanup requires confirmation that the branch's current commit was integrated; missing or superseded confirmation preserves the worktree. Command output labels executed check scripts as checks, while reading or searching their filenames does not count as a check. Round totals count actual Queen launches independently of previous run timestamps.
 
 ## How HaiveQueen develops itself
 
@@ -97,6 +101,8 @@ Free Markdown below the header: the agents read it.
 ## Configuration
 
 Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedProviders`, provider `slots`, provider `classes`, and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. `escalateAfter` defaults to 3, and `contextLimitTokens` defaults to 300000: set it once in the machine config for all Apiaries; a project may override it, and a model entry under `[providers.classes]` may carry its own `contextLimitTokens` that wins for the Queens and Bees running with that model. Project settings override machine settings except machine-wide settings. See `examples/config.example.toml` and `examples/project.example.toml`.
+
+Claude subscription quotas are refreshed at most once per minute with the local CLI `/usage` metadata command, without model turns, hooks, MCP servers or saved sessions. The dashboard and scheduling share the verified account windows; a failed refresh hides the old percentage and pauses automatic Claude selection until a successful refresh.
 
 ## Inbox
 
