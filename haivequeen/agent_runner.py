@@ -129,6 +129,55 @@ def class_model(prov, cls):
 
 # ---------------------------------------------------------------- command classification
 
+# Find check scripts in command position, ignoring filenames used as data.
+def executed_check_scripts(cmd, wrapped=False):
+    """Return invoked check filenames, unwrapping one PowerShell command string."""
+    tokens = re.findall(r'''"[^"]*"|'[^']*'|\#[^\r\n]*|&&|\|\||[;&|\n]|[^\s;&|]+''', cmd)
+    segments, current = [], []
+    for token in tokens + [';']:
+        if token.startswith('#'):
+            continue
+        if token in (';', '&', '&&', '|', '||', '\n'):
+            if current:
+                segments.append(current)
+                current = []
+        else:
+            current.append(token[1:-1] if token[:1] in ('"', "'") and token[-1:] == token[:1] else token)
+    checks = []
+    for words in segments:
+        if words[0] == '.':
+            words = words[1:]
+        if not words:
+            continue
+        executable = re.split(r'[/\\]', words[0])[-1]
+        index = 0
+        if re.fullmatch(r'(?:python(?:\d+(?:\.\d+)*)?|py|pwsh|powershell)(?:\.exe)?', executable, re.I):
+            index = 1
+            while index < len(words) and words[index].startswith('-'):
+                flag = words[index].lower()
+                if words[index] in ('-h', '--help', '--help-env', '--help-xoptions', '--help-all', '-V', '--version'):
+                    index = len(words)
+                    break
+                if flag in ('-c', '-m', '-command', '-encodedcommand'):
+                    if not wrapped and re.fullmatch(r'(?:pwsh|powershell)(?:\.exe)?', executable, re.I) and flag in ('-c', '-command') and index + 1 < len(words):
+                        tail = words[index + 1:]
+                        command = tail[0] if len(tail) == 1 else ' '.join('"%s"' % word if re.search(r'\s', word) else word for word in tail)
+                        checks.extend(executed_check_scripts(command, wrapped=True))
+                    index = len(words)
+                    break
+                takes_value = words[index] in ('-X', '-W') or flag in ('--check-hash-based-pycs', '-executionpolicy', '-version', '-inputformat', '-outputformat')
+                index += 2 if takes_value else 1
+                if flag in ('--', '-file'):
+                    break
+        if index >= len(words):
+            continue
+        name = re.split(r'[/\\]', words[index])[-1]
+        if re.fullmatch(r'(?:check[\w-]*\.(?:py|ps1)|compile-check-changed\.ps1)', name, re.I):
+            checks.append(name)
+    return checks
+
+
+# Classify requested operations while treating read and search arguments as data.
 def classify_cmd(cmd, queue_re=None):
     """Recognise a milestone command (commit, push, compile test, check, ready line, file write); returns {kind, label} or None.
 
@@ -140,11 +189,11 @@ def classify_cmd(cmd, queue_re=None):
         return {"kind": "commit", "label": ("Commit: " + short(m.group(1), 100)) if m else "Commit"}
     if re.search(r"git\s+push", cmd):
         return {"kind": "push", "label": "Push"}
-    if "compile-check-changed" in cmd:
+    checks = executed_check_scripts(cmd)
+    if any(name.lower() == 'compile-check-changed.ps1' for name in checks):
         return {"kind": "check", "label": "Compile test"}
-    m = re.search(r"(check[\w\-]*\.(py|ps1))", cmd)
-    if m:
-        return {"kind": "check", "label": "Check " + m.group(1)}
+    if checks:
+        return {"kind": "check", "label": "Check " + checks[0]}
     if re.search(r"(?:bzz|cli.py)[\"']?\s+ready(\s|$)", cmd):
         return {"kind": "ready", "label": "ready line registered"}
     if queue_re and re.search(queue_re, cmd) and re.search(r">>|Add-Content|Out-File|Set-Content", cmd):

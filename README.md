@@ -68,6 +68,7 @@ The dashboard and agent panes share one terminal window; its name is the machine
 Closing the terminal leaves the managing loop running. The next round restores a missing dashboard; `bzz start` also restores it without restarting running agents. A start during a pending stop reports that the existing agents must finish first. Windows desktop shortcuts can use `bzz start --desktop` and `bzz stop --desktop` for a visible result or error dialog; ordinary CLI calls keep their JSON output.
 
 Completed idle Hives are reconciled with the plan status and confirmed integration. Active agents and genuine owner questions are preserved. A Hive without a Queen shows its recorded start blocker or pending question numbers instead of a generic waiting label.
+Automatic worktree cleanup requires confirmation that the branch's current commit was integrated; missing or superseded confirmation preserves the worktree. Command output labels executed check scripts as checks, while reading or searching their filenames does not count as a check. Round totals count actual Queen launches independently of previous run timestamps.
 
 ## How HaiveQueen develops itself
 

@@ -713,14 +713,14 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                         final_report = final.read_text(encoding='utf-8-sig') if final and final.is_file() else ''
                         if last:
                             try:
-                                started = datetime.fromisoformat(last['started_at']).timestamp()
+                                report_started = datetime.fromisoformat(last['started_at']).timestamp()
                             except (ValueError, TypeError, KeyError):
-                                started = float('inf')
+                                report_started = float('inf')
                             try:
                                 ended = datetime.fromisoformat(last['ended_at']).timestamp() + 1
                             except (ValueError, TypeError, KeyError):
                                 ended = float('inf')
-                            final_report = queen_final_text(env.run_dir(last['name']), started, final_report, ended)
+                            final_report = queen_final_text(env.run_dir(last['name']), report_started, final_report, ended)
                         questions = [q for q in runtime.list_questions(conn, env.name, status='open', plan=plan['path']) if not str(q['item']).upper().startswith('STALL-')]   # stop-rule questions never block a Hive
                         if last and interrupt.kind_of(last) == interrupt.VANISHED:
                             conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, plan['path']))
