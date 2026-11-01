@@ -8,6 +8,7 @@ The agent process itself is `haivequeen.agent_runner` (see docs/S13-S14-INTERFAC
 """
 import faulthandler
 import json
+import math
 import os
 import re
 import subprocess
@@ -19,7 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import db, events, export, faults, header, hivelayout, inbox, reattach, routine, runstate, runtime, triage, usage, views
+from . import config, db, events, export, faults, header, hivelayout, inbox, reattach, routine, runstate, runtime, triage, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -1292,14 +1293,84 @@ def daily_export(envs) -> None:
             env.log("EXPORT ERROR %s" % exc)
 
 
+# Track only machine/project TOML and registered project changes.
+def configuration_stamp(conn):
+    """Return exact TOML contents and registry values for change detection."""
+    projects = tuple(tuple(row) for row in conn.execute(
+        "SELECT name,workspace,colour,priority FROM projects ORDER BY name"))
+    paths = [config.config_dir() / "config.toml"]
+    paths += [Path(row[1]) / ".haivequeen" / "project.toml" for row in projects if row[1]]
+    files = []
+    for path in paths:
+        try:
+            value = path.read_bytes()
+        except FileNotFoundError:
+            value = None
+        except OSError:
+            value = ("unreadable",)
+        files.append((str(path), value))
+    return projects, tuple(files)
+
+
 # The loop body (see run_loop).
 # Keep provider quotas current during idle waits as well as scheduling rounds.
+# Apply valid TOML changes at safe scheduling boundaries without restarting agents.
 def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds, round_kwargs) -> int:
     """The loop body (see run_loop)."""
     envs = sch.load_projects(conn, machine)
     minutes = round_minutes if round_minutes else float(machine.get("roundMinutes", 5))
     state = {"since": datetime.now(), "next_at": None, "busy": False, "projects": [e.name for e in envs]}
     pane = Pane(conn, envs, out) if ui else None
+
+    applied_stamp = configuration_stamp(conn)
+    seen_stamp = None
+
+    # Validate the entire changed snapshot before replacing active settings.
+    def reload_settings() -> bool:
+        """Keep the last good snapshot on invalid edits; report each edit once."""
+        nonlocal machine, envs, minutes, applied_stamp, seen_stamp
+        stamp = configuration_stamp(conn)
+        if stamp == seen_stamp:
+            return False
+        seen_stamp = stamp
+        try:
+            old_files = dict(applied_stamp[1])
+            for path, metadata in stamp[1]:
+                if metadata == ("unreadable",) or metadata is None and old_files.get(path) is not None:
+                    raise OSError("TOML file unavailable")
+            candidate = config.load_config() if stamp[1][0][1] is not None else machine
+            sch.get_providers(candidate)
+            int(candidate.get("hives", 2))
+            candidate_minutes = round_minutes if round_minutes else float(candidate.get("roundMinutes", 5))
+            if not math.isfinite(candidate_minutes) or candidate_minutes <= 0:
+                raise ValueError("invalid round interval")
+            candidates = sch.load_projects(conn, candidate)
+            for env in candidates:
+                if not math.isfinite(_min_ram(env)):
+                    raise ValueError("invalid RAM limit")
+                for provider in env.providers:
+                    for cls in sch.CLASS_NAMES:
+                        sch.context_limit(env.settings, env.providers, provider["name"], cls)
+        except (OSError, ValueError, TypeError, AttributeError, OverflowError) as exc:
+            for env in envs:
+                env.event("TOML configuration reload failed (%s); keeping last valid settings." % type(exc).__name__, True)
+            return False
+        if configuration_stamp(conn) != stamp:
+            seen_stamp = None
+            return False
+        fields = ("name", "workspace", "settings", "colour", "priority", "plan_globs", "plan_exclude")
+        previous = [tuple(getattr(env, key) for key in fields) for env in envs]
+        updated = [tuple(getattr(env, key) for key in fields) for env in candidates]
+        applied_stamp = stamp
+        if candidate == machine and previous == updated:
+            return False
+        machine, envs, minutes = candidate, candidates, candidate_minutes
+        state["projects"] = [env.name for env in envs]
+        if pane:
+            pane.envs = envs
+        for env in envs:
+            env.log("TOML configuration reloaded; running agents retained.")
+        return True
 
     # Update the header values from the stored state and redraw.
     def refresh() -> None:
@@ -1312,8 +1383,10 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
             pane.maybe_head(state)
 
     # Settle and redraw during waits without letting a transient failure stop the loop.
-    def wait_refresh() -> None:
-        """Settle and redraw during waits without letting a transient failure stop the loop."""
+    # Wake scheduling when a valid configuration change is accepted.
+    def wait_refresh() -> bool:
+        """Reload, settle and redraw; return whether accepted settings changed."""
+        changed = reload_settings()
         for action in (lambda: usage.refresh_claude_usage(conn, sch.get_providers(machine)),
                        lambda: runstate.settle(conn), refresh):
             try:
@@ -1322,6 +1395,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
                 for env in envs:
                     env.log("ROUND ERROR %s" % exc)
                     env.event("Round error: %s" % exc, True)
+        return changed
 
     for env in envs:
         res = reattach.reattach(conn, env.name, osplat.process_alive)
@@ -1338,6 +1412,7 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         pane.out.write("%s[%d;1H" % (ESC, pane.rows + 1))
     done = 0
     while not stop_flag().exists() and (not rounds or done < rounds):
+        reload_settings()
         state.update(busy=True)
         write_state(conn, "round", datetime.now(), None)
         if pane:
@@ -1361,8 +1436,8 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         end = time.time() + minutes * 60
         while time.time() < end and not stop_flag().exists():
             sleep(wait_seconds)
-            wait_refresh()
-            if hives.wake_marker(conn, envs) != wake:
+            changed = wait_refresh()
+            if changed or hives.wake_marker(conn, envs) != wake:
                 break
     stopped = stop_flag().exists()
     for env in envs:
