@@ -79,6 +79,20 @@ class RunStateTest(unittest.TestCase):
         self.assertEqual(orch("resume")["state"], "RUNNING")
 
 
+    # A recycled PID of a process Windows denies access to (a system service) must not hold the run open.
+    def test_inaccessible_process_is_not_counted_as_running(self):
+        """A finished agent whose PID now belongs to a process that cannot be opened is not counted; an openable one with unreadable start time still is."""
+        from unittest import mock
+        from haivequeen import platform as osplat
+        db.add_agent(self.conn, "p", name="A", phase="queen", status="done", pid=123, ended_at="2026-01-01T12:00:00")
+        with mock.patch.object(osplat, "process_alive", return_value=True), \
+             mock.patch.object(osplat, "process_start_time", create=True, return_value=None), \
+             mock.patch.object(osplat, "process_inaccessible", create=True) as denied:
+            denied.return_value = True
+            self.assertEqual(runstate.running_agents(self.conn), 0)
+            denied.return_value = False
+            self.assertEqual(runstate.running_agents(self.conn), 1)
+
     # A reused PID must not count as a running agent, while a still-running runner remains protected.
     def test_reused_pid_is_not_counted_as_running(self):
         """Ignore only a process proven to have started after the agent ended."""
@@ -88,6 +102,7 @@ class RunStateTest(unittest.TestCase):
         db.add_agent(self.conn, "p", name="A", phase="queen", status="done", pid=123,
                      ended_at="2026-01-01T12:00:00")
         with mock.patch.object(osplat, "process_alive", return_value=True), \
+             mock.patch.object(osplat, "process_inaccessible", create=True, return_value=False), \
              mock.patch.object(osplat, "process_start_time", create=True) as started:
             started.return_value = datetime(2026, 1, 1, 12, 10)
             self.assertEqual(runstate.running_agents(self.conn), 0)

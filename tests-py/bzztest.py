@@ -74,6 +74,10 @@ class RoundCase(unittest.TestCase):
 
     def setUp(self):
         """Create the temp runtime, the database and the dummy project."""
+        from unittest import mock
+        patcher = mock.patch("haivequeen.platform.process_inaccessible", return_value=False)   # the tests use made-up PIDs that may belong to real system processes
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
         self.saved = {k: os.environ.get(k) for k in ENV_KEYS}

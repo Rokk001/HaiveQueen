@@ -159,6 +159,24 @@ def _win_process_creation(pid):
         return None
 
 
+# Tell whether Windows refuses this program access to a process.
+def process_inaccessible(pid) -> bool:
+    """True when a process exists but Windows denies access to it (error 5): a process an agent of this user started can always be opened,
+    so a denied one (for example a system service that got a recycled PID) is a stranger. False on other systems and for any other failure."""
+    if not is_windows():
+        return False
+    try:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        handle = kernel.OpenProcess(0x1000, False, int(pid))
+        if handle:
+            kernel.CloseHandle(ctypes.c_void_p(handle))
+            return False
+        return ctypes.get_last_error() == 5
+    except (OSError, AttributeError, TypeError, ValueError, OverflowError):
+        return False
+
+
 # Return a stable identity that distinguishes a reused PID on Windows or Linux.
 def process_identity(pid):
     """Return a process birth identity, or None when it cannot be verified."""

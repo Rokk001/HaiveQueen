@@ -31,6 +31,8 @@ def pid_reused(row):
         current = osplat.process_identity(pid)
         if current is not None:
             return current != recorded
+    if osplat.process_inaccessible(pid):   # an agent of this user is always accessible: a denied process is a stranger with a recycled PID
+        return True
     # Legacy records lack an immutable identity. Only chronology can disprove a match.
     ended = db.parse_time(row.get("ended_at"))
     started = db.parse_time(row.get("started_at")) if row.get("status") == "running" else None
