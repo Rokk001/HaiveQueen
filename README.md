@@ -102,6 +102,8 @@ Free Markdown below the header: the agents read it.
 
 Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedProviders`, provider `slots`, provider `classes`, and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. `escalateAfter` defaults to 3, and `contextLimitTokens` defaults to 300000: set it once in the machine config for all Apiaries; a project may override it, and a model entry under `[providers.classes]` may carry its own `contextLimitTokens` that wins for the Queens and Bees running with that model. Project settings override machine settings except machine-wide settings. See `examples/config.example.toml` and `examples/project.example.toml`.
 
+Claude subscription quotas are refreshed at most once per minute with the local CLI `/usage` metadata command, without model turns, hooks, MCP servers or saved sessions. The dashboard and scheduling share the verified account windows; a failed refresh hides the old percentage and pauses automatic Claude selection until a successful refresh.
+
 ## Inbox
 
 Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the owner, the coordinator, a script) can leave answers and decisions there as TOML files, and the Beekeeper takes them over at the start of the next round. This works for every project and needs no command.

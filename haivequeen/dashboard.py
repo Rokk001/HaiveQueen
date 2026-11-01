@@ -186,12 +186,13 @@ def _kv(conn, key):
         return None
 
 
+# Hide quota snapshots that could not be refreshed from the provider.
 def window_usage(raw, now):
     """Return {FiveHour, SevenDay} from a usage kv value ({fiveHour|sevenDay: {utilization, resetsAt}}).
 
     Each entry is {pct, reset} or None; a window whose reset time has passed shows "new window" without percent."""
     res = {"FiveHour": None, "SevenDay": None}
-    if not isinstance(raw, dict):
+    if not isinstance(raw, dict) or raw.get("refresh_error"):
         return res
     t = int(now.timestamp())
     for key, name in (("fiveHour", "FiveHour"), ("sevenDay", "SevenDay")):
@@ -199,7 +200,9 @@ def window_usage(raw, now):
         if not isinstance(w, dict):
             continue
         try:
-            if int(w.get("resetsAt") or 0) > t:
+            if w.get("resetsAt") is None:
+                res[name] = {"pct": round(100 * float(w["utilization"])), "reset": ""}
+            elif int(w.get("resetsAt") or 0) > t:
                 res[name] = {"pct": round(100 * float(w.get("utilization"))), "reset": format_reset(w["resetsAt"], now)}
             else:
                 res[name] = {"pct": None, "reset": "new window"}
