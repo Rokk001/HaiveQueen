@@ -1,4 +1,5 @@
 """Safe worktree cleanup tests using only temporary Git repositories."""
+import sys
 import subprocess
 import tempfile
 import unittest
@@ -8,6 +9,18 @@ from unittest import mock
 
 from haivequeen import worktrees
 
+
+# Verify worktree Git commands do not create a visible console on Windows.
+class GitWindowTests(unittest.TestCase):
+    """Check the flags used for Git during automatic cleanup."""
+
+    # Cleanup must hide each Git process on Windows.
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows only')
+    def test_git_uses_no_window_flag(self):
+        """Git subprocesses use CREATE_NO_WINDOW."""
+        with mock.patch('haivequeen.worktrees.subprocess.run') as run:
+            worktrees._git('repo', 'status')
+        self.assertEqual(run.call_args.kwargs.get('creationflags'), subprocess.CREATE_NO_WINDOW)
 
 # Check process working-directory protection.
 class ProcessDirectoryTests(unittest.TestCase):

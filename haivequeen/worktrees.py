@@ -2,14 +2,14 @@
 import re
 import subprocess
 
-from . import db, runtime
+from . import db, runtime, platform as osplat
 
 
 # Run Git without shell expansion and capture errors for the caller.
 def _git(repo, *args):
     """Run Git in the given repository and return its result."""
     return subprocess.run(['git', '-C', str(repo), *args], capture_output=True,
-                          text=True, encoding='utf-8', errors='replace', timeout=60)
+                          text=True, encoding='utf-8', errors='replace', timeout=60, creationflags=subprocess.CREATE_NO_WINDOW if osplat.is_windows() else 0)
 
 
 # Read Git's authoritative worktree inventory.

@@ -355,6 +355,7 @@ class PaneOpenTest(RoundCase):
             data = json.loads((env.run_dir(name) / "launch.json").read_text(encoding="utf-8"))
             self.assertEqual(data["argv"][-1:], loop.forward_env_args()[-1:] or data["argv"][-1:])
             self.assertIn("agent_runner", " ".join(data["argv"]))
+            self.assertNotIn('--wrap', data['argv'])
             self.assertEqual(self.ag(name)["pane_id"], pane)
         self.assertEqual(len(self.hive_panes()), 1)
 

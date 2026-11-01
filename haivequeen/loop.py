@@ -604,7 +604,10 @@ def start_queen(env, terminal, window: str, spec: dict) -> str:
     folder.mkdir(parents=True, exist_ok=True)
     rebuild_small_hive_pane(env, terminal, window, spec["plan"])
     pane_id = ensure_hive_pane(env, terminal, window, spec["plan"])
-    (folder / "launch.json").write_text(json.dumps({"argv": runner_argv(env, spec)}), encoding="utf-8")   # written after the pane exists: an old pane must not pick it up
+    argv = runner_argv(env, spec)
+    if "--wrap" in argv:
+        argv.remove("--wrap")  # The Hive, not the runner, owns this persistent pane.
+    (folder / "launch.json").write_text(json.dumps({"argv": argv}), encoding="utf-8")   # written after the pane exists: an old pane must not pick it up
     env.update_agent(spec["name"], {"pane_id": pane_id, "paneClosed": False})
     hivelayout.apply(terminal, window, env.conn, is_test_runtime())   # the Hive becomes big now that its Queen starts (best effort, never raises)
     return pane_id
