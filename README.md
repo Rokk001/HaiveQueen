@@ -104,6 +104,8 @@ Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedP
 
 Claude subscription quotas are refreshed at most once per minute with the local CLI `/usage` metadata command, without model turns, hooks, MCP servers or saved sessions. The dashboard and scheduling share the verified account windows; a failed refresh hides the old percentage and pauses automatic Claude selection until a successful refresh.
 
+Saved changes to machine `config.toml` and registered projects' `.haivequeen/project.toml` are reloaded at the next controller poll, including while idle, without restarting running agents. Valid changes wake scheduling immediately; invalid or temporarily missing files retain the complete last valid settings. An explicit `--round-minutes` still takes precedence.
+
 ## Inbox
 
 Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the owner, the coordinator, a script) can leave answers and decisions there as TOML files, and the Beekeeper takes them over at the start of the next round. This works for every project and needs no command.
