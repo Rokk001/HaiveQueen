@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import agent_process, config, db, header, hives, runtime
+from . import agent_process, config, db, header, hives, runstate, runtime
 from . import platform as osplat
 
 CONFIRM_SECONDS = 3.0   # a command runs only when its key is pressed twice within this time
@@ -41,24 +41,28 @@ def bar(step, cells=5):
 
 def head_lines(conn, project, width):
     """The slim head pane of an Apiary (project): one line "Apiary <Name>" in the colour of the Apiary."""
-    return [[("Apiary %s" % project, header.project_colour_of(conn, project))]]
+    text = "Apiary %s" % project
+    if len(text) > width:
+        text = text[:max(0, width - 1)] + "…" if width > 0 else ""
+    return [[(text, header.project_colour_of(conn, project))]]
 
 
-# Draw the Queen only while active and otherwise show the recorded Hive blocker.
+# Draw the visible Hive and its current agents, including during final shutdown.
 def frame_lines(conn, project, plan, width, now=None, message=""):
     """Lines of the Hive frame for `width` columns: a list of lines, each a list of (text, colour) parts.
 
     Big form (a Queen runs or starts): a box with "Hive: <plan>", the Queen line (name, model, runtime), one "Bee: <name> <task> <n/m> [bar]" line per Bee,
-    the `message` of a pending confirmation and the key hint. Small form (no Queen): the same box with only "Hive: <plan>" and the German state
-    (plus the message while a confirmation waits). Everything is drawn in the colour of the Apiary.
+    the `message` of a pending confirmation and the key hint. Small form (no Queen): the same box with "Hive: <plan>", the German state
+    and running Bees (plus the message while a confirmation waits). Everything is drawn in the colour of the Apiary.
     """
     now = now or datetime.now()
-    width = max(10, width)
+    width = max(1, width)
     inner = width - 4
     col = header.project_colour_of(conn, project)
-    data = next(iter(hives.hive_data(conn, project, runtime.list_agents(conn, project, "active"), plan)), None) or {"queen": None, "bees": [], **(hives.get(conn, project, plan) or {})}
+    hive = hives.get(conn, project, plan) or {}
+    data = next(iter(hives.hive_data(conn, project, runtime.list_agents(conn, project, "active"), plan, include_done=True)), None) or {"queen": None, "bees": [], "state": "", **hive}
     queen = data["queen"]
-    running = bool(queen and queen.get("status") in ("running", "starting") and agent_process.counts(queen))
+    running = bool(queen and agent_process.counts(queen))
     name_line = "Hive: %s" % Path(plan).stem
     if running:
         name = str(queen.get("person") or queen.get("name") or "-")
@@ -69,11 +73,18 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
             started = db.parse_time(queen.get("started_at"), now)
             text = "Queen: %s | %s %s | %s" % (name, typ, queen.get("modelShort") or "", header.fmt_run((now - started).total_seconds()))
     else:
-        text = "Queen: " + (hives.state_label(data) or "keine aktive Queen")
+        state = hives.state_label(data)
+        queue = conn.execute("SELECT status,note FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (project, plan)).fetchone()
+        if queue and queue['status'] == 'blocked' and queue['note']:
+            state = "blockiert: " + ' '.join(queue['note'].split())
+        elif state in ("", "weisellos") and runstate.get_state(conn)["state"] == "PAUSED":
+            state = "pausiert"
+        text = "Queen: " + (state or "weisellos")
     text = text.replace("  ", " ")
     body = [name_line, text]
-    if running:
-        body += ["Bee: " + " ".join(x for x in (str(bee["name"]), str(bee["task"]), str(bee["step"]), bar(bee["step"])) if x) for bee in data["bees"]]
+    body += ["Bee: " + " ".join(x for x in (str(bee["name"]), str(bee["task"]), str(bee["step"]), bar(bee["step"])) if x) for bee in data["bees"]]
+    if width < 5:
+        return [[(t if len(t) <= width else t[:width - 1] + "…", col)] for t in body]
 
     def row(content, colour):
         """One framed line: side bars in the colour of the Apiary; the text is already wrapped to the pane width."""
@@ -84,7 +95,8 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
         return textwrap.wrap(content, inner, break_long_words=True, subsequent_indent="  ") or [""]
 
     lines = [[(TOP + RULE * (width - 2) + "┐", col)]]
-    lines += [row(r, col) for t in body for r in wrapped(t)]
+    lines += [row(t if len(t) <= inner else t[:inner - 1] + "…", col) for t in body[:2]]
+    lines += [row(t if len(t) <= inner else t[:inner - 1] + "…", col) for t in body[2:]]
     if message:
         lines += [row(r, "yellow") for r in wrapped(message)]
     if running:
@@ -155,10 +167,19 @@ def execute(conn, project, plan, action, machine=None):
     return ("Dequeen" if command == "dequeen" else "Requeen") + ": fertig"
 
 
+# Keep a completed Hive pane while an agent or native Bee still runs.
 def finished(conn, project, plan):
-    """True when the Hive is done or its row is gone: the pane process ends then."""
+    """Return whether the Hive is done and no agent process still uses its pane."""
     hive = hives.get(conn, project, plan)
-    return hive is None or hive.get("state") == "done"
+    plan_row = conn.execute("SELECT status FROM plans WHERE project=? AND path=?", (project, plan)).fetchone()
+    if hive is not None and ((plan_row and plan_row['status'] != 'DONE') or (not plan_row and hive.get("state") != "done")):
+        return False
+    from . import native_bee
+    if any(item.get('plan') == plan and item.get('running') for item in native_bee.records(conn, project)):
+        return False
+    return not any(a.get('plan_path') == plan and (a.get('phase') == 'queen' or a.get('pane_id')) and
+                   (a.get('status') in ('running', 'starting') or (a.get('pid') and osplat.process_alive(a['pid'])))
+                   for a in runtime.list_agents(conn, project, 'active'))
 
 
 def launch_due(conn, project, plan, current):
@@ -192,6 +213,7 @@ def providers_of(machine):
     return [p["name"] for p in machine.get("providers", []) if not p.get("endpoint") and p["name"] not in (machine.get("excludedProviders") or [])]
 
 
+# Draw a Hive pane and handle its commands and Queen launches.
 def run(project, plan, out=None, interval=1.0, max_ticks=None, keys=None):
     """Draw the frame, read keys and start the Queens of the Hive until the Hive is done and no runner is left.
 
@@ -203,6 +225,7 @@ def run(project, plan, out=None, interval=1.0, max_ticks=None, keys=None):
     out = out or sys.stdout
     conn = db.connect(config.db_path())
     state, proc, last, last_text, ticks = new_state(), None, None, None, 0
+    last_request = None
     if keys is None:
         from .dashboard import KeyReader
         keys = KeyReader()
@@ -211,14 +234,39 @@ def run(project, plan, out=None, interval=1.0, max_ticks=None, keys=None):
             ticks += 1
             try:
                 size = shutil.get_terminal_size((120, 40))
-                width, height = max(10, size.columns), max(4, size.lines)
+                width, height = max(1, size.columns), max(1, size.lines)
+                suffix = Path(plan).stem
+                request = runtime.kv_get(conn, project, 'hive-measure-request-' + suffix)
+                if request and request != last_request:
+                    runtime.kv_set(conn, project, 'hive-rows-' + suffix, str(height))
+                    runtime.kv_set(conn, project, 'hive-measure-ack-' + suffix, request)
+                    last_request = request
                 lines = frame_lines(conn, project, plan, width, message=state["message"])
+                message_text = (textwrap.wrap(state["message"], width - 4, break_long_words=True, subsequent_indent="  ") or [""])[0] if state["message"] and width >= 5 else ""
+                if state["message"] and 3 <= height <= 4:
+                    message = next((line for line in lines if len(line) > 1 and line[1][0].rstrip() == message_text),
+                                   [(state["message"][:width], "yellow")])
+                    heads = lines[:2] if width < 5 else lines[1:3]
+                    lines = (lines[:1] if width >= 5 and height == 4 else []) + heads + [message]
+                elif state["message"] and height >= 5 and width >= 5 and len(lines) > height:
+                    message_index = next((i for i, line in enumerate(lines) if len(line) > 1 and line[1][0].rstrip() == message_text), None)
+                    if message_index is not None:
+                        lines = lines[:3] + lines[3:message_index][:height - 5] + [lines[message_index], lines[-1]]
+                elif len(lines) > height:
+                    if width < 5:
+                        lines = lines[:height]
+                    elif height < 4:
+                        lines = lines[1:height + 1]
+                    else:
+                        lines = lines[:height - 1] + lines[-1:]
                 key = (width, height, len(lines))
                 if key != last:
                     last, last_text = key, None
                     rows = runtime.list_agents(conn, project, "all")
                     newest = [a for a in rows if a.get("plan_path") == plan and a.get("phase") == "queen"]
-                    ms = (osplat.runs_dir() / project / newest[-1]["name"] / "milestones.txt") if newest and newest[-1].get("status") in ("running", "starting") else None   # an ended Queen's old text is not replayed
+                    current = next((a for a in reversed(newest) if a.get('status') in ('running', 'starting')),
+                                   next((a for a in reversed(newest) if a.get('pid') and osplat.process_alive(a['pid'])), None))
+                    ms = (osplat.runs_dir() / project / current["name"] / "milestones.txt") if current else None   # an ended Queen's old text is not replayed
                     out.write(header.render(lines, width, height, header.read_milestones(ms) if ms else [], True))
                 else:
                     text = header.render(lines, width, height, [], False)
@@ -248,19 +296,36 @@ def run(project, plan, out=None, interval=1.0, max_ticks=None, keys=None):
     return ticks
 
 
+# Draw the Apiary head and publish its measured size.
 def run_head(project, out=None, interval=2.0, max_ticks=None):
-    """Draw the head pane of an Apiary ("Apiary <Name>") until the Apiary has no Hive that is not done any more; returns the number of redraws."""
+    """Draw the head of a registered Apiary and return the number of redraws."""
     import shutil
     out = out or sys.stdout
     conn = db.connect(config.db_path())
-    ticks = 0
+    ticks, last_width, last_rows, last_request = 0, None, None, None
     while True:
         ticks += 1
         try:
-            if not conn.execute("SELECT 1 FROM hives WHERE project=? AND state!='done'", (project,)).fetchone():
+            registered = conn.execute("SELECT 1 FROM projects WHERE name=?", (project,)).fetchone()
+            occupied = any(a.get('pane_id') and (a.get('status') in ('running', 'starting') or
+                           (a.get('pid') and osplat.process_alive(a['pid']))) for a in runtime.list_agents(conn, project, 'active'))
+            if not registered and not occupied:
                 break
-            width = max(10, shutil.get_terminal_size((120, 40)).columns)
-            out.write(header.ESC + "[H" + "".join(header.line_str(p) for p in head_lines(conn, project, width)[0:1]) + header.ESC + "[K")   # overwrite, no screen clear: copies would pile up in the scrollback
+            size = shutil.get_terminal_size((120, 40))
+            width, rows = max(1, size.columns), max(1, size.lines)
+            if width != last_width:
+                runtime.kv_set(conn, project, 'apiary-columns', str(width))
+                last_width = width
+            if rows != last_rows:
+                runtime.kv_set(conn, project, 'apiary-rows', str(rows))
+                last_rows = rows
+            request = runtime.kv_get(conn, project, 'apiary-measure-request')
+            if request and request != last_request:
+                runtime.kv_set(conn, project, 'apiary-columns', str(width))
+                runtime.kv_set(conn, project, 'apiary-rows', str(rows))
+                runtime.kv_set(conn, project, 'apiary-measure-ack', request)
+                last_request = request
+            out.write(header.ESC + "[?7l" + header.ESC + "[H" + "".join(header.line_str(p) for p in head_lines(conn, project, width)[0:1]) + header.ESC + "[K" + header.ESC + "[?7h")   # overwrite, no screen clear: copies would pile up in the scrollback
             out.flush()
         except Exception:
             pass
@@ -274,7 +339,7 @@ def run_head(project, out=None, interval=2.0, max_ticks=None):
 def main(argv=None):
     """Command line entry: python -m haivequeen.hivepane --project P --plan PLAN [--env NAME=VALUE]."""
     p = argparse.ArgumentParser(prog="haivequeen.hivepane")
-    p.add_argument("--project", required=True)
+    p.add_argument("--project", required=True, metavar="APIARY", help="Apiary name")
     p.add_argument("--plan", default="")
     p.add_argument("--head", action="store_true", help="draw the head pane of the Apiary instead of one Hive")
     p.add_argument("--env", action="append", default=[], metavar="NAME=VALUE", help="environment value to set before the run (test and folder overrides)")

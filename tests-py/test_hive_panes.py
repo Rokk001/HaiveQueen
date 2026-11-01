@@ -135,7 +135,7 @@ class FrameTest(unittest.TestCase):
     def test_without_queen_the_line_shows_the_state_in_german(self):
         """Every Hive state without a running Queen has its German words on the Queen line."""
         cases = [('answer', 'wartet auf Antwort'), ('owner_check', 'wartet auf Owner-Prüfung'), ('queenless', 'weisellos'), ('integration_wait', 'wartet auf Integration'),
-                 ('codex_wait', 'wartet auf Codex'), ('handoff', '\u00dcbergabe'), ('waiting', 'wartet auf Start'),
+                 ('codex_wait', 'wartet auf Codex'), ('handoff', '\u00dcbergabe'), ('waiting', 'wartet auf Platz'),
                  ('starting', 'wartet auf Start'), ('resting', 'ruht bis 2026-11-01 12:00')]
         for state, expected in cases:
             with self.subTest(state=state):
@@ -151,6 +151,35 @@ class FrameTest(unittest.TestCase):
         self.assertIn('Bee: Cleo Draft 1/3', "\n".join(plain(self.lines())))
         db.add_event(self.conn, 'ODP', 'note', 'Cleo P1: step 3/3 Done', agent='Ada')
         self.assertNotIn('Cleo', "\n".join(plain(self.lines())))
+
+    # An actual Bee stays visible until its process ends.
+    def test_running_bee_stays_visible_after_its_last_step(self):
+        """A final progress note does not hide a still-running Bee."""
+        self.queen()
+        runtime.upsert_agent(self.conn, 'ODP', 'Cleo', {'plan': self.plan, 'phase': 'bee', 'status': 'running', 'person': 'Cleo'})
+        self.conn.execute("INSERT INTO packages(project,plan_path,id) VALUES ('ODP',?,'P1')", (self.plan,))
+        db.add_event(self.conn, 'ODP', 'note', 'Cleo P1: step 3/3 Done', agent='Ada')
+        self.assertIn('Bee: Cleo', "\n".join(plain(self.lines())))
+
+    # A reused Bee name does not inherit an earlier agent's progress.
+    def test_running_bee_does_not_show_old_progress(self):
+        """A Bee's progress begins with notes from its own run."""
+        self.queen()
+        self.conn.execute("INSERT INTO packages(project,plan_path,id) VALUES ('ODP',?,'P1')", (self.plan,))
+        db.add_event(self.conn, 'ODP', 'note', 'Cleo P1: step 1/3 Old task', agent='Ada')
+        self.conn.execute("UPDATE events SET ts='2026-01-01T00:00:00' WHERE kind='note'")
+        runtime.upsert_agent(self.conn, 'ODP', 'Cleo', {'plan': self.plan, 'phase': 'bee', 'status': 'running', 'person': 'Cleo', 'started_at': '2026-02-01T00:00:00', 'task': 'New task'})
+        text = "\n".join(plain(self.lines()))
+        self.assertIn('Bee: Cleo New task', text)
+        self.assertNotIn('Old task', text)
+
+    def test_ended_queen_notes_do_not_restore_bee(self):
+        """Old Queen notes do not recreate a Bee after the Queen ends."""
+        self.queen()
+        self.conn.execute("INSERT INTO packages(project,plan_path,id) VALUES ('ODP',?,'P1')", (self.plan,))
+        db.add_event(self.conn, 'ODP', 'note', 'Cleo P1: step 1/3 Draft', agent='Ada')
+        self.conn.execute("UPDATE agents SET status='done' WHERE name='Ada'")
+        self.assertNotIn('Bee: Cleo', "\n".join(plain(self.lines())))
 
     def test_hive_without_queen_is_compact(self):
         """A Hive without a running Queen draws a small frame with only its name and its state: no key hint, no Bee lines."""
@@ -175,6 +204,27 @@ class FrameTest(unittest.TestCase):
     def test_head_of_an_apiary(self):
         """The slim head pane of an Apiary says 'Apiary <Name>' in the Apiary colour."""
         self.assertEqual(hivepane.head_lines(self.conn, 'ODP', 40), [[('Apiary ODP', 'FF9F43')]])
+
+    # Check that the Apiary head records both measured dimensions.
+    def test_head_records_measured_apiary_width(self):
+        """The head records its actual width for subsequent Hive splits."""
+        import io
+        with mock.patch('haivequeen.hivepane.db.connect', return_value=db.connect(Path(self.tmp.name) / 'db')), \
+             mock.patch('shutil.get_terminal_size', return_value=os.terminal_size((96, 4))):
+            hivepane.run_head('ODP', out=io.StringIO(), max_ticks=1)
+        self.assertEqual(runtime.kv_get(self.conn, 'ODP', 'apiary-columns'), '96')
+        self.assertEqual(runtime.kv_get(self.conn, 'ODP', 'apiary-rows'), '4')
+
+    # Verify that an Apiary head acknowledges a request for a fresh measurement.
+    def test_head_acknowledges_measurement_request(self):
+        """A pending request is acknowledged after fresh dimensions are stored."""
+        import io
+        runtime.kv_set(self.conn, 'ODP', 'apiary-measure-request', '123')
+        with mock.patch('haivequeen.hivepane.db.connect', return_value=db.connect(Path(self.tmp.name) / 'db')), \
+             mock.patch('shutil.get_terminal_size', return_value=os.terminal_size((96, 4))):
+            hivepane.run_head('ODP', out=io.StringIO(), max_ticks=1)
+        self.assertEqual(runtime.kv_get(self.conn, 'ODP', 'apiary-measure-ack'), '123')
+        self.assertEqual(runtime.kv_get(self.conn, 'ODP', 'apiary-rows'), '4')
 
     def test_message_line_is_shown(self):
         """A pending confirmation text appears in the frame."""
@@ -359,8 +409,8 @@ class PaneOpenTest(RoundCase):
             self.assertEqual(self.ag(name)["pane_id"], pane)
         self.assertEqual(len(self.hive_panes()), 1)
 
-    def test_placement_head_first_then_hives_to_the_right(self):
-        """Per Apiary: the head pane first (first block beside the Beekeeper pane), its Hives below the head and then each to the right of the
+    def test_placement_head_first_then_hives_below(self):
+        """Per Apiary: the head pane first (first block beside the Beekeeper pane), its Hives below the head and then each below the
         previous one; the head of a new Apiary splits below the last pane of the last block."""
         env = self.envs()[0]
         calls = []
@@ -369,7 +419,7 @@ class PaneOpenTest(RoundCase):
         h1 = loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
         head1 = next(p.id for p in self.term.list_panes("HaiveQueen") if loop.is_apiary_title(p.title))
         h2 = loop.ensure_hive_pane(env, self.term, "HaiveQueen", "other/B-PLAN.md")
-        self.assertEqual(calls, [(self.chief, "horizontal"), (head1, "vertical"), (h1, "horizontal")])
+        self.assertEqual(calls, [(self.chief, "horizontal"), (head1, "vertical"), (h1, "vertical")])
         env2 = self.env("testproj")
         env2.name = "other"
         h3 = loop.ensure_hive_pane(env2, self.term, "HaiveQueen", "x/C-PLAN.md")
@@ -412,6 +462,18 @@ class PaneOpenTest(RoundCase):
         self.assertTrue(alive[live])
         self.assertFalse(alive[gone])
 
+    def test_session_stop_keeps_done_hive_with_running_agent(self):
+        """A running agent's pane remains open even if its Hive is done."""
+        env = self.envs()[0]
+        hives.create(self.conn, "testproj", REL, "claude", "4FA8FF")
+        pane = loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
+        head = next(p.id for p in self.term.list_panes("HaiveQueen") if p.alive and loop.is_apiary_title(p.title))
+        self.agent("Ada", phase="queen", status="running", plan_path=REL, pane_id=pane)
+        self.conn.execute("UPDATE hives SET state='done' WHERE plan_path=?", (REL,))
+        closed = loop.close_session_panes(self.conn, self.term, "HaiveQueen")
+        self.assertNotIn(pane, closed)
+        self.assertNotIn(head, closed)
+
     def test_round_opens_a_pane_for_a_hive_without_queen(self):
         """A Hive that rests (no Queen) still gets its pane from the schedule round; done Hives get none."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -420,8 +482,39 @@ class PaneOpenTest(RoundCase):
         self.round(terminal=self.term)
         self.assertEqual(len(self.hive_panes()), 1)
         self.conn.execute("UPDATE hives SET state='done' WHERE plan_path=?", (REL,))
+        self.plan("DONE", [{"id": "P1", "title": "First"}])
         self.round(terminal=self.term)
-        self.assertEqual(len(self.hive_panes()), 1)   # still the old one: no new pane for a done Hive
+        self.assertEqual(len(self.hive_panes()), 0)   # the finished Hive no longer has a pane
+
+    def test_paused_round_still_opens_hive_panes(self):
+        """Pausing Queen starts does not hide existing Hives."""
+        from haivequeen import runstate
+        hives.create(self.conn, "testproj", REL, "claude", "4FA8FF")
+        runstate.pause(self.conn)
+        self.round(terminal=self.term)
+        self.assertEqual(len(self.hive_panes()), 1)
+
+    def test_done_plan_closes_stale_hive_pane(self):
+        """A DONE plan closes its pane even if its Hive row is stale."""
+        env = self.envs()[0]
+        hives.create(self.conn, "testproj", REL, "claude", "4FA8FF")
+        self.conn.execute("INSERT INTO plans(project,path,status) VALUES (?,?,?)", ("testproj", REL, "DONE"))
+        pane = loop.ensure_hive_pane(env, self.term, "HaiveQueen", REL)
+        hives.ensure_hive_panes(self.conn, [env], self.term)
+        self.assertNotIn(pane, [p.id for p in self.hive_panes()])
+
+    def test_unfinished_plan_keeps_stale_done_hive_pane(self):
+        """A Hive remains visible while its plan is unfinished."""
+        env = self.envs()[0]
+        hives.create(self.conn, "testproj", REL, "claude", "4FA8FF")
+        self.conn.execute("INSERT INTO plans(project,path,status) VALUES (?,?,?)", ("testproj", REL, "IN_PROGRESS"))
+        self.conn.execute("UPDATE hives SET state='done' WHERE project=? AND plan_path=?", ("testproj", REL))
+        hives.ensure_hive_panes(self.conn, [env], self.term)
+        self.assertEqual(len(self.hive_panes()), 1)
+        pane = self.hive_panes()[0].id
+        self.assertNotIn(pane, loop.close_session_panes(self.conn, self.term, 'HaiveQueen'))
+        self.conn.execute("UPDATE plans SET status=NULL WHERE project=? AND path=?", ('testproj', REL))
+        self.assertNotIn(pane, loop.close_session_panes(self.conn, self.term, 'HaiveQueen'))
 
     def test_a_queen_start_does_not_wait_for_a_runner_pid(self):
         """_do_start of a Queen opens/finds the Hive pane, writes launch.json and returns although no runner sets a pid."""
@@ -460,14 +553,41 @@ class LayoutTest(RoundCase):
         self.assertGreater(test["hives"][0]["width"], test["hives"][1]["width"])
         self.assertEqual(other["hives"][0]["big"], False)
 
-    def test_done_hives_and_empty_apiaries_vanish(self):
-        """A done Hive is not part of the layout, an Apiary without a living Hive has no block."""
+    def test_blocks_follow_config_and_hives_follow_creation_order(self):
+        """Apiaries follow configuration order and Hives follow creation order."""
+        from haivequeen import hivelayout
+        from unittest import mock
+        hives.create(self.conn, "testproj", "0/FIRST-ALPHABETICALLY.md", "claude", "red")
+        with mock.patch('haivequeen.config.load_config', return_value={'projects': [{'name': 'testproj'}, {'name': 'other'}]}):
+            blocks = hivelayout.compute(self.conn)
+        self.assertEqual([b["project"] for b in blocks], ["testproj", "other"])
+        self.assertEqual([h["plan"] for h in blocks[0]["hives"]], ["a/A-PLAN.md", "a/B-PLAN.md", "0/FIRST-ALPHABETICALLY.md"])
+
+    # Keep empty registered Apiaries after their Hives finish.
+    def test_done_hives_vanish_but_empty_apiaries_remain(self):
+        """A done Hive vanishes while its registered Apiary remains."""
         from haivequeen import hivelayout
         self.conn.execute("UPDATE hives SET state='done' WHERE project='other'")
         self.conn.execute("UPDATE hives SET state='done' WHERE plan_path='a/B-PLAN.md'")
         blocks = hivelayout.compute(self.conn)
-        self.assertEqual([b["project"] for b in blocks], ["testproj"])
-        self.assertEqual([h["plan"] for h in blocks[0]["hives"]], ["a/A-PLAN.md"])
+        self.assertEqual([b["project"] for b in blocks], ["other", "testproj"])
+        self.assertEqual(blocks[0]["hives"], [])
+        self.assertEqual([h["plan"] for h in blocks[1]["hives"]], ["a/A-PLAN.md"])
+
+    # Exclude done plans without removing the Apiary.
+    def test_done_plan_is_excluded_from_layout(self):
+        """A DONE plan is excluded even before its Hive row is updated."""
+        from haivequeen import hivelayout
+        self.conn.execute("INSERT INTO plans(project,path,status) VALUES (?,?,?)", ('other', 'c/C-PLAN.md', 'DONE'))
+        other = next(b for b in hivelayout.compute(self.conn) if b['project'] == 'other')
+        self.assertEqual(other['hives'], [])
+
+    # A removed Apiary no longer has a block even if old Hive data remains.
+    def test_removed_apiary_has_no_block(self):
+        """Only registered Apiaries are shown in the layout."""
+        from haivequeen import hivelayout
+        self.conn.execute("DELETE FROM projects WHERE name='other'")
+        self.assertNotIn('other', [b['project'] for b in hivelayout.compute(self.conn)])
 
     def test_shares(self):
         """Height shares of the blocks and width shares of the Hives in a block add up to 1; the freed space goes to the working Hive."""
@@ -481,6 +601,56 @@ class LayoutTest(RoundCase):
         self.assertAlmostEqual(sum(widths.values()), 1.0)
         self.assertGreater(widths["a/A-PLAN.md"], widths["a/B-PLAN.md"])
 
+    # Check absolute idle block heights against the available window rows.
+    def test_idle_block_reserves_a_head_for_each_hive(self):
+        """An idle Apiary reserves its head and one four-row head per Hive."""
+        from haivequeen import hivelayout
+        blocks = [
+            {'project': 'idle', 'hives': [{'big': False}, {'big': False}]},
+            {'project': 'working', 'hives': [{'big': True}]},
+        ]
+        shares = hivelayout.height_shares(blocks, 40)
+        self.assertAlmostEqual(shares['idle'], 9 / 40)
+        self.assertAlmostEqual(shares['working'], 31 / 40)
+
+    # Preserve proportional minimums when the terminal cannot fit every head.
+    def test_idle_blocks_share_crowded_height_by_required_heads(self):
+        """A block with more Hive heads receives its proportional minimum."""
+        from haivequeen import hivelayout
+        blocks = [
+            {'project': 'one', 'hives': [{'big': False}]},
+            {'project': 'two', 'hives': [{'big': False}, {'big': False}]},
+        ]
+        shares = hivelayout.height_shares(blocks, 10)
+        self.assertAlmostEqual(shares['one'], 5 / 14)
+        self.assertAlmostEqual(shares['two'], 9 / 14)
+
+    # Check absolute idle block heights against the available window rows.
+    def test_idle_block_takes_one_hive_head(self):
+        """An idle block takes one Apiary row and four Hive head rows."""
+        from haivequeen import hivelayout
+        self.agent('Ada', phase='queen', status='running', plan_path='a/A-PLAN.md', started=1)
+        shares = hivelayout.height_shares(hivelayout.compute(self.conn), 40)
+        self.assertAlmostEqual(shares['other'], 0.125)
+        self.assertAlmostEqual(shares['testproj'], 0.875)
+
+    # Check idle and constrained Apiary block shares.
+    def test_block_heights_are_equal_without_a_working_queen(self):
+        """With no working Queen all Apiary blocks share the height equally."""
+        from haivequeen import hivelayout
+        shares = hivelayout.height_shares(hivelayout.compute(self.conn), 40)
+        self.assertEqual(shares, {'other': 0.5, 'testproj': 0.5})
+
+    # Check that an overfull layout still yields positive block shares.
+    def test_block_heights_stay_positive_when_window_is_too_short(self):
+        """An overfull block layout yields usable positive split shares."""
+        from haivequeen import hivelayout
+        self.agent('Ada', phase='queen', status='running', plan_path='a/A-PLAN.md', started=1)
+        shares = hivelayout.height_shares(hivelayout.compute(self.conn), 3)
+        self.assertTrue(all(0 < share < 1 for share in shares.values()))
+        self.assertAlmostEqual(sum(shares.values()), 1)
+
+    # Verify that supported resize backends receive measured block heights.
     def test_apply_resizes_through_the_backend_and_never_raises(self):
         """apply sends the shares to the backend's resize_pane; a backend that cannot resize is skipped without an error."""
         from haivequeen import hivelayout
@@ -499,7 +669,9 @@ class LayoutTest(RoundCase):
             ids[plan] = term.split_pane("HaiveQueen", loop.hive_pane_title(proj, plan, True), "white", SLEEP, "horizontal", 0.5, None, "h%d" % len(ids))
         try:
             self.agent("Ada", phase="queen", status="running", plan_path="a/A-PLAN.md", started=1)
+            runtime.kv_set(self.conn, '*', 'dashboard-rows', '40')
             hivelayout.apply(term, "HaiveQueen", self.conn, True)
+            self.assertIn((ids["c/C-PLAN.md"], "y", 0.12), calls)
             self.assertIn((ids["a/A-PLAN.md"], "x", 0.75), calls)
             self.assertIn((ids["a/B-PLAN.md"], "x", 0.25), calls)
             self.assertTrue(any(c[1] == "y" for c in calls))
@@ -514,6 +686,17 @@ class LayoutTest(RoundCase):
         from haivequeen.terminal.base import TerminalError
         with self.assertRaises(TerminalError):
             Headless(self.base / "panes").resize_pane("W.0", "x", 0.5)
+
+    def test_layout_does_not_resize_occupied_panes(self):
+        """An occupied pane retains both dimensions during layout updates."""
+        from haivequeen import hivelayout
+        from haivequeen.terminal.base import PaneInfo
+        from unittest import mock
+        term = mock.Mock()
+        term.list_panes.return_value = [PaneInfo('W.1', loop.hive_pane_title('testproj', 'a/A-PLAN.md', True), 1, True)]
+        self.agent('Ada', phase='queen', status='running', plan_path='a/A-PLAN.md', pane_id='W.1')
+        hivelayout.apply(term, 'W', self.conn, True)
+        term.resize_pane.assert_not_called()
 
 
 class LaunchTest(RoundCase):
@@ -577,8 +760,28 @@ class LaunchTest(RoundCase):
         """The pane process ends when the Hive is done or gone."""
         self.assertFalse(hivepane.finished(self.conn, "testproj", REL))
         self.conn.execute("UPDATE hives SET state='done' WHERE plan_path=?", (REL,))
+        self.conn.execute("UPDATE plans SET status='DONE' WHERE project=? AND path=?", ('testproj', REL))
         self.assertTrue(hivepane.finished(self.conn, "testproj", REL))
         self.assertTrue(hivepane.finished(self.conn, "testproj", "nope.md"))
+
+    def test_done_hive_waits_for_queen_process(self):
+        """A done Hive does not end its pane while its Queen process lives."""
+        from unittest import mock
+        self.agent('Ada', phase='queen', status='done', plan_path=REL, pid=123456)
+        self.conn.execute("UPDATE hives SET state='done' WHERE plan_path=?", (REL,))
+        with mock.patch('haivequeen.platform.process_alive', return_value=True):
+            self.assertFalse(hivepane.finished(self.conn, 'testproj', REL))
+
+    def test_done_plan_finishes_stale_hive(self):
+        """A DONE plan closes a Hive pane even before the Hive row catches up."""
+        self.conn.execute("UPDATE plans SET status='DONE' WHERE project=? AND path=?", ('testproj', REL))
+        self.assertTrue(hivepane.finished(self.conn, 'testproj', REL))
+
+    def test_done_hive_waits_for_agent_in_pane(self):
+        """An agent using the Hive pane keeps it alive after the Hive is done."""
+        self.agent('Bea', phase='bee', status='running', plan_path=REL, pane_id='HaiveQueen.1')
+        self.conn.execute("UPDATE hives SET state='done' WHERE plan_path=?", (REL,))
+        self.assertFalse(hivepane.finished(self.conn, 'testproj', REL))
 
 
 class StaleQueenTest(RoundCase):

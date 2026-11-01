@@ -417,9 +417,10 @@ def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen
 
 
 # Collect Hives, their Queen and the latest reported step of each Bee (shown in the frame of the Hive pane).
-def hive_data(conn, project, agents, plan=None):
-    """Collect Hives, active Queens and Bee progress from their reports; `project` and `plan` narrow the Hives (None = all)."""
-    where, args = ["state!='done'"], []
+def hive_data(conn, project, agents, plan=None, include_done=False):
+    """Collect Hive and agent progress, optionally including a finished plan's still-visible pane."""
+    where = ['1=1'] if include_done else ["(EXISTS (SELECT 1 FROM plans p WHERE p.project=hives.project AND p.path=hives.plan_path AND p.status IS NOT 'DONE') OR (state!='done' AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.project=hives.project AND p.path=hives.plan_path)))"]
+    args = []
     if project:
         where.append("project=?")
         args.append(project)
@@ -427,13 +428,29 @@ def hive_data(conn, project, agents, plan=None):
         where.append("plan_path=?")
         args.append(plan)
     rows = db.rows(conn, "SELECT * FROM hives WHERE " + " AND ".join(where) + " ORDER BY project,plan_path", args)
-    notes = db.rows(conn, "SELECT project,agent,text FROM events WHERE kind='note' ORDER BY id") if rows else []
+    notes = db.rows(conn, "SELECT id,project,agent,text,ts FROM events WHERE kind='note' ORDER BY id") if rows else []
     for hive in rows:
         active = [a for a in agents if a.get('project') == hive['project'] and a.get('plan_path') == hive['plan_path']]
         queens_of = [a for a in active if a.get('phase') == 'queen']
-        hive['queen'] = next((a for a in queens_of if a.get('status') in ('running', 'starting')), queens_of[-1] if queens_of else None)   # the running Queen, else the newest one
-        bees = {str(a.get('person') or a.get('name')): {'name': str(a.get('person') or a.get('name')), 'task': a.get('task') or a.get('package') or '', 'step': ''} for a in active if a.get('phase') == 'bee'}
-        queens = {a['name'] for a in active if a.get('phase') == 'queen'}
+        hive['queen'] = next((a for a in queens_of if a.get('status') in ('running', 'starting')),
+                             next((a for a in reversed(queens_of) if a.get('pid') and osplat.process_alive(a['pid'])), queens_of[-1] if queens_of else None))
+        active_bees = [a for a in active if a.get('phase') == 'bee' and (a.get('status') in ('running', 'starting') or (a.get('pid') and osplat.process_alive(a['pid'])))]
+        bees = {str(a.get('person') or a.get('name')): {'name': str(a.get('person') or a.get('name')), 'task': a.get('task') or a.get('package') or '', 'step': ''} for a in active_bees}
+        running_bees = set(bees)
+        bee_started = {str(a.get('person') or a.get('name')): a.get('started_at') for a in active_bees}
+        ended_bees = {str(a.get('person') or a.get('name')): a.get('ended_at') for a in active if a.get('phase') == 'bee' and a not in active_bees}
+        from . import native_bee
+        native_after = {}
+        for item in native_bee.records(conn, hive['project']):
+            if item.get('running') and item.get('plan') == hive['plan_path']:
+                name = item['name']
+                bees[name] = {'name': name, 'task': item.get('task') or item.get('package') or '', 'step': ''}
+                running_bees.add(name)
+                bee_started[name] = item.get('started')
+                native_after[name] = item.get('after_event', 0)
+            elif item.get('plan') == hive['plan_path'] and item.get('name'):
+                ended_bees[item['name']] = item.get('ended')
+        queens = {a['name'] for a in active if a.get('phase') == 'queen' and a.get('status') in ('running', 'starting')}
         packages = {r['id'] for r in db.rows(conn, "SELECT id FROM packages WHERE project=? AND plan_path=?", (hive['project'], hive['plan_path']))}
         for note in notes:
             if note['project'] != hive['project']:
@@ -442,9 +459,15 @@ def hive_data(conn, project, agents, plan=None):
             if not match:
                 continue
             name, package, step, task = match.groups()
+            if name in native_after and note['id'] <= native_after[name]:
+                continue
+            if name in running_bees and bee_started[name] and note['ts'] < bee_started[name]:
+                continue
+            if name not in bees and name in ended_bees and (not ended_bees[name] or note['ts'] <= ended_bees[name]):
+                continue
             if name in bees or (note['agent'] in queens and package in packages):
                 n, m = map(int, step.split('/'))
-                if n >= m:
+                if n >= m and name not in running_bees:
                     bees.pop(name, None)
                 else:
                     bees[name] = {'name': name, 'task': task or package, 'step': step}
@@ -493,7 +516,7 @@ def state_label(hive):
     if state == 'resting':
         return 'ruht bis ' + str(hive.get('reset_at') or '?').replace('T', ' ')[:16]
     return {'queenless': 'weisellos', 'integration_wait': 'wartet auf Integration', 'answer': 'wartet auf Antwort', 'owner_check': 'wartet auf Owner-Prüfung', 'codex_wait': 'wartet auf Codex',
-            'provider_wait': 'wartet auf Codex', 'handoff': 'Übergabe', 'waiting': 'wartet auf Start', 'starting': 'wartet auf Start',
+            'provider_wait': 'wartet auf Codex', 'handoff': 'Übergabe', 'waiting': 'wartet auf Platz', 'starting': 'wartet auf Start',
             'requeen': 'wartet auf Start'}.get(state, '')
 
 
@@ -593,6 +616,8 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
             if low:
                 result['skipped'] = 'free RAM %.2f GB is below the minimum %.2f GB' % (free_ram(), loop._min_ram(low))
         if result['skipped']:
+            if result['skipped'] != 'STOP' and not os.environ.get('BZZ_TEST_NOSTART'):
+                ensure_hive_panes(conn, envs, terminal)
             for env in envs:
                 agents = runtime.list_agents(conn, env.name, 'active')
                 for hive in db.rows(conn, "SELECT plan_path FROM hives WHERE project=? AND state!='done'", (env.name,)):
@@ -637,6 +662,8 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     excluded = set(machine.get('excludedProviders') or [])
     preferred = str(machine.get('preferredProvider') or '')
     projects = sch.order_projects(envs)
+    if not dry_run and not os.environ.get('BZZ_TEST_NOSTART'):
+        ensure_hive_panes(conn, projects, terminal, heads_only=True)
     result['projects'] = {env.name: {'report': [], 'started': 0, 'actions': 0} for env in projects}
     result['projects'].update({name: {'report': [reason], 'started': 0, 'actions': 0} for name, reason in deferred.items()})
     skipped = {env.name: [] for env in projects}
@@ -832,12 +859,14 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                         continue
                 action = {'name': name, 'type': pick['name'], 'phase': 'queen', 'plan': path, 'package': '', 'cwd': cwd, 'prompt': prompt, 'class': cls}
                 st = {'names': existing_names, 'busy': [], 'plan_status': {sch.norm_plan(path): plan['status']}, 'by_path': {sch.norm_plan(path): plan}}
-                ctx = {'env': env, 'state': st, 'pool': pool, 'report': report, 'dry': False, 'terminal': terminal, 'settle': settle, 'poll': poll, 'tries': tries}
+                ctx = {'env': env, 'envs': projects, 'state': st, 'pool': pool, 'report': report, 'dry': False, 'terminal': terminal, 'settle': settle, 'poll': poll, 'tries': tries}
                 try:
                     count = loop._do_start(ctx, action, forced_pick=pick)
                 except Exception:
                     conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
                     raise
+                if not count:
+                    conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
                 if count:
                     runtime.kv_set(conn, env.name, 'hive-blocker:' + path, '')
                     for package in runtime.list_packages(conn, env.name, path):
@@ -870,20 +899,89 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     return result
 
 
+# Rebuild unoccupied blocks for the first Queen before its pane starts.
+def prepare_blocks_for_queen(conn, envs, terminal):
+    """Give a starting Queen's block its height while no existing pane is occupied."""
+    from . import hivelayout, loop, native_bee
+    if not envs or len(hivelayout.compute(conn)) < 2:
+        return
+    window = envs[0].settings.get('window', 'HaiveQueen')
+    with loop.pane_lock():
+        panes = [p for p in terminal.list_panes(window) if p.alive]
+        occupied = {a.get('pane_id') for a in runtime.list_agents(conn, None, 'active') if loop.agent_has_live_process(a) and a.get('pane_id')}
+        occupied.update(native_bee.occupied(conn, panes))
+        if occupied.intersection(p.id for p in panes):
+            return
+        managed = {env.name for env in envs}
+        if any(p.title.split(' | ')[1] not in managed for p in panes if loop.is_hive_title(p.title) or loop.is_apiary_title(p.title)):
+            return
+        loop.close_idle_hive_panes(conn, terminal, window)
+    ensure_hive_panes(conn, envs, terminal, heads_only=True)
+
+
 # Make sure every living Hive has its sub-terminal, also when no Queen runs.
-def ensure_hive_panes(conn, envs, terminal=None):
+def ensure_hive_panes(conn, envs, terminal=None, heads_only=False):
     """Open the sub-terminal of every Hive that is not done and has none; a terminal problem is logged and never stops the round."""
-    from . import loop
+    from . import hivelayout, loop, native_bee
     from .terminal import get_terminal
-    for env in envs:
-        for hive in db.rows(conn, "SELECT plan_path FROM hives WHERE project=? AND state!='done'", (env.name,)):
+    by_name = {env.name: env for env in envs}
+    if envs:
+        try:
+            term = terminal or get_terminal(envs[0].settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes'))
+            window = envs[0].settings.get('window', 'HaiveQueen')
+            loop.repair_pane_window(envs[0], term, window)
+            with loop.pane_lock():
+                panes = [p for p in term.list_panes(window) if p.alive]
+                if any(p.title == 'Dashboard' for p in panes):
+                    loop.close_leftover_panes(term, window, conn, keep_dashboard=True)
+                    panes = [p for p in term.list_panes(window) if p.alive]
+                occupied = {a.get('pane_id') for a in runtime.list_agents(conn, None, 'active') if loop.agent_has_live_process(a)}
+                occupied.update(native_bee.occupied(conn, panes))
+                heads = {p.title for p in panes if loop.is_apiary_title(p.title)}
+                wanted = {loop.apiary_pane_title(name, loop.is_test_runtime()) for name in by_name}
+                hive_panes = [p for p in panes if loop.is_hive_title(p.title)]
+                ended_big = any(runtime.kv_get(conn, p.title.split(' | ')[1], 'hive-big-' + p.title.split(' | ')[3][5:]) == p.id for p in hive_panes)
+                agents = runtime.list_agents(conn, None, 'active')
+                queens = any(a.get('phase') == 'queen' and loop.agent_has_live_process(a) for a in agents)
+                hive_titles = {p.title for p in hive_panes}
+                wanted_hives = {loop.hive_pane_title(b['project'], h['plan'], loop.is_test_runtime())
+                                for b in hivelayout.compute(conn) if b['project'] in by_name for h in b['hives']}
+                rebuild = bool(wanted - heads) or (not queens and (ended_big or bool(wanted_hives ^ hive_titles)))
+                if not heads_only and rebuild and heads <= {loop.apiary_pane_title(name, loop.is_test_runtime()) for name in by_name} and hive_panes and all(p.title.split(' | ')[1] in by_name for p in hive_panes) and not occupied.intersection(p.id for p in panes):
+                    loop.close_idle_hive_panes(conn, term, window)
+        except Exception as exc:
+            envs[0].log('Apiary layout not rebuilt: %s' % exc)
+    for name in hivelayout.configured_order(by_name):
+        env = by_name[name]
+        try:
+            term = terminal or get_terminal(env.settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes'))
+            window = env.settings.get('window', 'HaiveQueen')
+            with loop.pane_lock():
+                live = [p for p in term.list_panes(window) if p.alive]
+                loop.ensure_apiary_pane(env, term, window, live)
+        except Exception as exc:
+            env.log('Apiary pane not opened: %s' % exc)
+    if heads_only:
+        return
+    for name in hivelayout.configured_order(by_name):
+        env = by_name[name]
+        try:
+            term = terminal or get_terminal(env.settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes'))
+            loop.close_finished_hive_panes(env, term, env.settings.get('window', 'HaiveQueen'))
+        except Exception as exc:
+            env.log('Finished Hive panes not closed: %s' % exc)
+            continue
+        for hive in db.rows(conn, "SELECT h.plan_path FROM hives h WHERE h.project=? AND (EXISTS (SELECT 1 FROM plans p WHERE p.project=h.project AND p.path=h.plan_path AND p.status IS NOT 'DONE') OR (h.state!='done' AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.project=h.project AND p.path=h.plan_path))) ORDER BY h.rowid", (env.name,)):
             try:
-                term = terminal or get_terminal(env.settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes'))
+                loop.rebuild_ended_hive_pane(env, term, env.settings.get('window', 'HaiveQueen'), hive['plan_path'])
                 loop.ensure_hive_pane(env, term, env.settings.get('window', 'HaiveQueen'), hive['plan_path'])
             except Exception as exc:
                 env.log('Hive pane of %s not opened: %s' % (hive['plan_path'], exc))
+        try:
+            native_bee.ensure(env, term, env.settings.get('window', 'HaiveQueen'))
+        except Exception as exc:
+            env.log('native Bee pane not restored: %s' % exc)
     if envs:   # big Hives with a running Queen, small ones without; a backend that cannot resize is skipped
-        from . import hivelayout
         try:
             hivelayout.apply(terminal or get_terminal(envs[0].settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes')),
                              envs[0].settings.get('window', 'HaiveQueen'), conn, loop.is_test_runtime())

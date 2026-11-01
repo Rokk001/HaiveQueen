@@ -122,18 +122,27 @@ class PauseKeptTest(RoundCase):
         self.start(keep_pause=False)
         self.assertEqual(runstate.get_state(self.conn)["state"], "PAUSED")
 
-    def test_plain_stop_flag_still_resumes(self):
-        """A STOP flag from `bzz stop` does not keep the pause."""
+    # Preserve a pause when the loop restarts after a normal stop.
+    def test_plain_stop_flag_keeps_pause(self):
+        """A normal stop does not clear the global pause."""
         flag = loop.stop_flag()
         flag.parent.mkdir(parents=True, exist_ok=True)
         flag.write_text("stop requested 2026-10-30T01:00:00\n", encoding="utf-8")
         runstate.pause(self.conn, "test")
         self.start(keep_pause=False)
-        self.assertEqual(runstate.get_state(self.conn)["state"], "RUNNING")
+        self.assertEqual(runstate.get_state(self.conn)["state"], "PAUSED")
 
-    def test_plain_start_still_resumes(self):
-        """Without the flag `bzz start` lifts the pause as before."""
+    # Preserve a pause when the loop starts without a stop flag.
+    def test_plain_start_keeps_pause(self):
+        """A restart without the flag preserves the global pause."""
         runstate.pause(self.conn, "test")
+        self.start(keep_pause=False)
+        self.assertEqual(runstate.get_state(self.conn)["state"], "PAUSED")
+
+    # A previous drain still clears on a normal start.
+    def test_plain_start_clears_drain(self):
+        """Keeping a pause does not change the existing drain restart."""
+        runstate.drain(self.conn, "test")
         self.start(keep_pause=False)
         self.assertEqual(runstate.get_state(self.conn)["state"], "RUNNING")
 

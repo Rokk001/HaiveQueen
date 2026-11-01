@@ -318,6 +318,18 @@ def cmd_bee(args, conn):
     return 0 if started else 1
 
 
+# Describe the internal project option consistently in every CLI command.
+def _label_apiary_options(parser):
+    """Label project options as Apiaries in help, including nested commands."""
+    for action in parser._actions:
+        if '--project' in action.option_strings:
+            action.metavar = 'APIARY'
+            action.help = 'Apiary name'
+        if isinstance(action, argparse._SubParsersAction):
+            for child in action.choices.values():
+                _label_apiary_options(child)
+
+
 # Build the argument parser with all commands.
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all commands."""
@@ -430,6 +442,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name in STUBS:
         p = sub.add_parser(name)
         p.set_defaults(fn=make_stub(name))
+    _label_apiary_options(ap)
     return ap
 
 

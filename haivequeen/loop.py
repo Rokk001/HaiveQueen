@@ -152,7 +152,7 @@ def first_split_target(panes) -> str:
     """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the Beekeeper pane, else None."""
     for marker in ("job: Dashboard", "| BEEKEEPER |", "| QUEEN |"):
         for pane in panes:
-            if marker in pane.title:
+            if marker in pane.title or (marker == "job: Dashboard" and pane.title == "Dashboard"):
                 return pane.id
     return None
 
@@ -167,22 +167,42 @@ def queen_pane_title(model: str, test: bool) -> str:
     return pane_title("all projects", "BEEKEEPER", "Beekeeper", model, test)
 
 
-def close_leftover_panes(term, window: str) -> list:
+# Close obsolete overview panes unless a running agent occupies them.
+def close_leftover_panes(term, window: str, conn=None, keep_dashboard=False) -> list:
     """Close the Beekeeper and Overview panes a previous start left in `window` (the loop ended, the dashboard never does) and return their ids.
-    Without this a new start opens a second tab next to the old one. Agent panes are never touched: only these two fixed titles match."""
+    Without this a new start opens a second tab next to the old one. Panes occupied by agents are kept."""
     closed = []
+    busy = {a.get('pane_id') for a in runtime.list_agents(conn, None, 'active') if agent_has_live_process(a)} if conn is not None else set()
     for p in term.list_panes(window):
-        if p.alive and (is_beekeeper_title(p.title) or "| all projects | Overview |" in p.title):
+        if p.alive and p.id not in busy and (is_beekeeper_title(p.title) or (p.title == "Dashboard" and not keep_dashboard) or "| all projects | Overview |" in p.title):
             term.close_pane(p.id)
             closed.append(p.id)
     return closed
 
 
+def agent_has_live_process(agent) -> bool:
+    """Return whether an agent is active or its process has not exited yet."""
+    return agent.get("status") in ("running", "starting") or bool(agent.get("pid") and osplat.process_alive(agent["pid"]))
+
+
+# Preserve occupied Hive panes when rebuilding the window.
 def close_idle_hive_panes(conn, term, window: str) -> list:
     """Close the Hive and Apiary head panes in which no agent runs and return the ids, so a start builds the whole display again in the right order.
     A pane that holds a running or starting agent stays, and with it the head of its Apiary. The panes of living Hives are opened again by the next round."""
-    busy = {a.get("pane_id") for a in runtime.list_agents(conn, None, "active") if a.get("status") in ("running", "starting") and a.get("pane_id")}
+    agents = [a for a in runtime.list_agents(conn, None, "active") if agent_has_live_process(a) and a.get("pane_id")]
+    busy = {a.get("pane_id") for a in agents}
     panes = [p for p in term.list_panes(window) if p.alive]
+    from . import native_bee
+    busy.update(native_bee.occupied(conn, panes))
+    by_id = {p.id: p for p in panes}
+    for agent in agents:
+        pane = by_id.get(agent.get("pane_id"))
+        plan = agent.get("plan_path")
+        if agent.get("phase") == "queen" and plan and pane and is_hive_title(pane.title):
+            runtime.kv_set(conn, agent["project"], "hive-big-" + Path(plan).stem, pane.id)
+        if agent.get("phase") == "bee" and plan and pane:
+            title = hive_pane_title(agent["project"], plan, is_test_runtime())
+            busy.update(p.id for p in panes if p.title == title)
     kept = {p.title.split(" | ")[1] for p in panes if is_hive_title(p.title) and p.id in busy}
     closed = []
     for p in panes:
@@ -192,19 +212,61 @@ def close_idle_hive_panes(conn, term, window: str) -> list:
     return closed
 
 
-def open_session_panes(term, window: str, dash: list, head=None) -> list:
+# Close finished Hive panes while retaining their Apiary head.
+def close_finished_hive_panes(env, term, window: str) -> None:
+    """Close finished Hive panes when no agent occupies them."""
+    with pane_lock():
+        panes = [p for p in term.list_panes(window) if p.alive]
+        agents = [a for a in runtime.list_agents(env.conn, env.name, "active") if agent_has_live_process(a) and a.get("pane_id")]
+        busy = {a["pane_id"] for a in agents}
+        from . import native_bee
+        busy.update(native_bee.occupied(env.conn, panes))
+        bee_titles = {hive_pane_title(env.name, a["plan_path"], is_test_runtime()) for a in agents if a.get("phase") == "bee" and a.get("plan_path")}
+        busy.update(p.id for p in panes if p.title in bee_titles)
+        living = {hive_pane_title(env.name, r["plan_path"], is_test_runtime()) for r in
+                  db.rows(env.conn, "SELECT h.plan_path FROM hives h WHERE h.project=? AND (EXISTS (SELECT 1 FROM plans p WHERE p.project=h.project AND p.path=h.plan_path AND p.status IS NOT 'DONE') OR (h.state!='done' AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.project=h.project AND p.path=h.plan_path)))", (env.name,))}
+        own = [p for p in panes if is_hive_title(p.title) and p.title.split(" | ")[1] == env.name]
+        for pane in own:
+            if pane.title not in living and pane.id not in busy:
+                term.close_pane(pane.id)
+# Wait for a newly opened pane to publish its measured size.
+def wait_pane_measurement(conn, project, key, terminal, expected=None):
+    """Return a positive measured size, or fail if the pane never reports one."""
+    deadline = time.monotonic() + terminal.start_timeout
+    while True:
+        value = runtime.kv_get(conn, project, key)
+        if value and str(value).isdigit() and int(value) > 0 and (expected is None or str(value) == str(expected)):
+            return int(value)
+        if time.monotonic() >= deadline:
+            raise TerminalError("pane did not report %s" % key)
+        time.sleep(0.05)
+
+
+# Open the dashboard and the first Apiary head.
+def open_session_panes(term, window: str, dash: list, head=None, conn=None) -> list:
     """Open the dashboard pane running `dash` and, in a fresh window, the first Apiary head to its right; return the pane ids. The caller holds pane.lock.
     The Beekeeper has no pane: the loop runs as a detached process and the dashboard is the only overview. Old Beekeeper and Overview panes go first.
     Panes of running agents that are still open keep their tab and the dashboard joins it: a new tab would split the one window in two.
     `head` is (title, command, name) of the first Apiary head: in a fresh window it is split off the dashboard to the right, so the dashboard
     stands in the left column and the Apiary block fills the right side."""
-    close_leftover_panes(term, window)
+    close_leftover_panes(term, window, conn)
     stay = [p for p in term.list_panes(window) if p.alive]
-    title = pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime())
+    if conn is not None:
+        runtime.kv_set(conn, '*', 'dashboard-rows', '')
+    title = "Dashboard"
     if stay:
-        return [term.split_pane(window, title, "white", dash, "horizontal", 0.5, stay[0].id, "dashboard")]
+        panes = [term.split_pane(window, title, "white", dash, "horizontal", 0.5, stay[0].id, "dashboard")]
+        if conn is not None and getattr(term, "name", "") == "wt":
+            wait_pane_measurement(conn, '*', 'dashboard-rows', term)
+        return panes
     panes = [term.open_window(window, title, dash, "white", "dashboard")]
+    if conn is not None and getattr(term, "name", "") == "wt":
+        wait_pane_measurement(conn, '*', 'dashboard-rows', term)
     if head is not None:
+        if conn is not None and is_apiary_title(head[0]):
+            project = head[0].split(" | ")[1]
+            runtime.kv_set(conn, project, 'apiary-columns', '')
+            runtime.kv_set(conn, project, 'apiary-rows', '')
         panes.append(term.split_pane(window, head[0], "white", head[1], "horizontal", APIARY_SIDE_SHARE, panes[0], head[2]))
     return panes
 
@@ -213,23 +275,31 @@ def close_session_panes(conn, term, window: str) -> list:
     """Close the Overview pane, every agent pane whose agent has ended and, last, the Beekeeper pane of `window`; return the ids.
     A pane of an agent that still runs is never closed."""
     closed, queen = [], []
-    for p in term.list_panes(window):
-        if not p.alive:
+    agents = [a for a in runtime.list_agents(conn, None, "active") if agent_has_live_process(a) and a.get("pane_id")]
+    busy = {a["pane_id"] for a in agents}
+    panes = term.list_panes(window)
+    from . import native_bee
+    busy.update(native_bee.occupied(conn, panes))
+    bee_titles = {hive_pane_title(a["project"], a["plan_path"], is_test_runtime()) for a in agents if a.get("phase") == "bee" and a.get("plan_path")}
+    busy.update(p.id for p in panes if p.title in bee_titles)
+    busy_projects = {p.title.split(" | ")[1] for p in panes if p.alive and p.id in busy and is_hive_title(p.title)}
+    for p in panes:
+        if not p.alive or p.id in busy:
             continue
         parts = p.title.split(" | ")
-        if "| all projects | Overview |" in p.title:
+        if p.title == "Dashboard" or "| all projects | Overview |" in p.title:
             term.close_pane(p.id)
             closed.append(p.id)
         elif is_beekeeper_title(p.title):
             queen.append(p)
         elif is_apiary_title(p.title):   # the head pane of an Apiary goes with its last living Hive
-            if not conn.execute("SELECT 1 FROM hives WHERE project=? AND state!='done'", (parts[1],)).fetchone():
+            if parts[1] not in busy_projects and not conn.execute("SELECT 1 FROM hives h WHERE h.project=? AND (EXISTS (SELECT 1 FROM plans p WHERE p.project=h.project AND p.path=h.plan_path AND p.status IS NOT 'DONE') OR (h.state!='done' AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.project=h.project AND p.path=h.plan_path)))", (parts[1],)).fetchone():
                 term.close_pane(p.id)
                 closed.append(p.id)
         elif is_hive_title(p.title):   # the pane of a living Hive stays, one of a finished Hive goes
-            row = db.rows(conn, "SELECT plan_path,state FROM hives WHERE project=?", (parts[1],))
+            row = db.rows(conn, "SELECT h.plan_path,h.state,p.status AS plan_status,p.path AS existing_plan FROM hives h LEFT JOIN plans p ON p.project=h.project AND p.path=h.plan_path WHERE h.project=?", (parts[1],))
             row = [r for r in row if Path(r["plan_path"]).stem == parts[3][len("job: "):]]
-            if not row or all(r["state"] == "done" for r in row):
+            if not row or all(r["plan_status"] == "DONE" or (r["existing_plan"] is None and r["state"] == "done") for r in row):
                 term.close_pane(p.id)
                 closed.append(p.id)
         elif len(parts) >= 4 and parts[2].startswith("Agent ") and parts[3].startswith("job: "):
@@ -396,10 +466,11 @@ def choose_slot(rows: list, name: str, min_cols: int = 40, min_rows: int = 24, a
     return {"target": half["pane_id"], "direction": direction, "cols": cols, "rows": rows_n, "half": half}
 
 
+# Launch an agent without opening an extra Windows Terminal window.
 def launch_agent(env, terminal, window: str, spec: dict, settle: float = 3.0, poll: float = 2.0, tries: int = 20) -> str:
     """Open the pane of one agent in the orchestrator window and wait until its runner has set the pid in the agent row.
 
-    The pane goes beside or below the widest open agent pane (choose_slot); without a live pane the window is opened. When the runner does not
+    The pane goes beside or below the widest open agent pane (choose_slot); without a live Windows Terminal pane the launch fails. When the runner does not
     show up within poll x tries seconds the pane is launched once more. Returns the pane id.
     """
     conn = env.conn
@@ -418,9 +489,12 @@ def launch_agent(env, terminal, window: str, spec: dict, settle: float = 3.0, po
         """Open the pane (split a live one, or open the window when none is alive); one pane command at a time across all processes."""
         with pane_lock():
             if not live:
-                env.log("pane of %s: no live pane to split, opens the window%s" % (spec["name"], label))
+                if getattr(terminal, "name", "") == "wt":
+                    raise TerminalError("no live pane to split for agent %s" % spec["name"])
                 return terminal.open_window(window, title, command, env.colour, pane_name)
             target = slot["target"] or first_split_target(live)   # no agent pane yet: beside the dashboard (else the chief) pane
+            if target is None and getattr(terminal, "name", "") == "wt":
+                raise TerminalError("no known split target for agent %s" % spec["name"])
             env.log("pane of %s: splits %s (%s)%s" % (spec["name"], target or "newest", slot["direction"], label))
             return terminal.split_pane(window, title, env.colour, command, slot["direction"], 0.5, target, pane_name)
 
@@ -530,6 +604,37 @@ def wt_trace_sink(conn, projects: list):
     return sink
 
 
+# List Apiary panes in their terminal tree order.
+def apiary_block_panes(terminal, window, live):
+    """Return live Apiary and Hive panes in their visible block order."""
+    heads = {p.title.split(' | ')[1] for p in live if is_apiary_title(p.title)}
+    blocks = [p for p in live if is_apiary_title(p.title) or
+              (is_hive_title(p.title) and p.title.split(' | ')[1] in heads)]
+    if blocks and getattr(terminal, 'name', '') == 'wt':
+        order = terminal.wt_order(window)
+        if isinstance(order, (list, tuple)):
+            rank = {number: index for index, number in enumerate(order)}
+            return sorted(blocks, key=lambda p: rank.get(_pane_order(p), len(rank) + _pane_order(p)))
+    return sorted(blocks, key=_pane_order)
+
+
+# Check whether Bee panes prevent opening another full-width Apiary block.
+def apiary_waits_for_bees(env, terminal, window: str, live=None) -> bool:
+    """Return whether a missing Apiary must wait for existing Bee panes."""
+    live = [p for p in (terminal.list_panes(window) if live is None else live) if p.alive]
+    if any(p.title == apiary_pane_title(env.name, is_test_runtime()) for p in live):
+        return False
+    blocks = apiary_block_panes(terminal, window, live)
+    target_project = blocks[-1].title.split(' | ')[1] if blocks else None
+    from . import native_bee
+    native_busy = native_bee.occupied(env.conn, live)
+    if any(p.id in native_busy and is_hive_title(p.title) and p.title.split(' | ')[1] == target_project for p in live):
+        return True
+    live_ids = {p.id for p in live}
+    return any(a.get('phase') == 'bee' and a.get('project') == target_project and a.get('pane_id') in live_ids
+               for a in runtime.list_agents(env.conn, None, 'all'))
+
+
 # Restore the dashboard without closing or restarting any existing pane.
 def ensure_dashboard_pane(terminal, window: str) -> str:
     """Return the live dashboard pane, opening only the missing overview."""
@@ -538,10 +643,10 @@ def ensure_dashboard_pane(terminal, window: str) -> str:
     except TerminalError:
         live = []
     for pane in live:
-        if "| all projects | Overview |" in pane.title:
+        if pane.title == "Dashboard" or "| all projects | Overview |" in pane.title:
             return pane.id
     dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
-    title = pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime())
+    title = "Dashboard"
     if live:
         return terminal.split_pane(window, title, "white", dash, "horizontal", 1 - APIARY_SIDE_SHARE, live[0].id, "dashboard")
     return terminal.open_window(window, title, dash, "white", "dashboard")
@@ -558,7 +663,7 @@ def maintain_dashboard(machine, terminal=None) -> str:
         return ensure_dashboard_pane(term, settings.get("window", "HaiveQueen"))
 
 
-# Ensure an Apiary head exists while keeping the dashboard as the window root.
+# Find or create an Apiary head pane.
 def ensure_apiary_pane(env, terminal, window: str, live: list) -> str:
     """Return the id of the live head pane of this Apiary; open it when there is none. `live` are the live panes of the window; the caller holds pane.lock.
     The first block goes beside the dashboard (else the Beekeeper) pane, a further block below the last pane of the last block."""
@@ -566,21 +671,136 @@ def ensure_apiary_pane(env, terminal, window: str, live: list) -> str:
     for p in live:
         if p.title == title:
             return p.id
-    blocks = sorted([p for p in live if is_apiary_title(p.title) or is_hive_title(p.title)], key=_pane_order)
+    blocks = apiary_block_panes(terminal, window, live)
+    if apiary_waits_for_bees(env, terminal, window, live):
+        raise TerminalError('Apiary block waits for Bee panes to close')
+    busy = {a.get("pane_id") for a in runtime.list_agents(env.conn, None, "active") if agent_has_live_process(a)}
+    for name in {p.title.split(" | ")[1] for p in blocks if is_hive_title(p.title)}:
+        hives = [p for p in blocks if is_hive_title(p.title) and p.title.split(" | ")[1] == name]
+        if len(hives) > 1 and any(p.id in busy for p in hives):
+            raise TerminalError("Apiary block waits for occupied panes to finish")
+    runtime.kv_set(env.conn, env.name, 'apiary-columns', '')
+    runtime.kv_set(env.conn, env.name, 'apiary-rows', '')
     command = apiary_argv(env)
     name = "%s__apiary" % env.name
     if not live:
+        if getattr(terminal, "name", "") == "wt":
+            raise TerminalError("no live pane to split for Apiary %s" % env.name)
         env.log("pane of Apiary %s: no live pane to split, opens the dashboard first" % env.name)
         dashboard = ensure_dashboard_pane(terminal, window)
         return terminal.split_pane(window, title, env.colour, command, "horizontal", APIARY_SIDE_SHARE, dashboard, name)
     target, direction = (blocks[-1].id, "vertical") if blocks else (first_split_target(live), "horizontal")
+    if target is None and getattr(terminal, "name", "") == "wt":
+        raise TerminalError("no known split target for Apiary %s" % env.name)
     env.log("pane of Apiary %s: splits %s (%s)" % (env.name, target or "newest", direction))
-    return terminal.split_pane(window, title, env.colour, command, direction, 0.5, target, name)
+    size = 0.5
+    if direction == "vertical":
+        agent = next((a for a in runtime.list_agents(env.conn, None, "active")
+                      if a.get("pane_id") == target and agent_has_live_process(a)), None)
+        rows = int(agent.get("paneRows") or 0) if agent else 0
+        block = next((b for b in hivelayout.compute(env.conn) if b['project'] == env.name), None)
+        minimum = 1 + 4 * len(block['hives']) if block else 4
+        if rows > minimum:
+            size = minimum / rows
+        elif not agent and not any(is_hive_title(p.title) for p in blocks):
+            measured = runtime.kv_get(env.conn, '*', 'dashboard-rows')
+            rows = int(measured) if measured and str(measured).isdigit() else 0
+            layout = hivelayout.compute(env.conn)
+            names = [block["project"] for block in layout]
+            previous = blocks[-1].title.split(" | ")[1]
+            if rows and previous in names and env.name in names:
+                index = names.index(previous)
+                if index + 1 < len(names) and names[index + 1] == env.name:
+                    shares = hivelayout.height_shares(layout, rows)
+                    remaining = sum(shares[name] for name in names[index + 1:])
+                    size = remaining / (shares[previous] + remaining)
+    return split_tracked(env, terminal, window, title, env.colour, command, direction, size, target, name)
+
+
+# Count consecutive failed pane starts for window recovery.
+def split_tracked(env, terminal, *args):
+    """Split a pane and record consecutive failed starts across Apiaries."""
+    try:
+        pane = terminal.split_pane(*args)
+    except TerminalError as exc:
+        if 'did not start within' not in str(exc):
+            raise
+        value = runtime.kv_get(env.conn, '*', 'pane-start-failures')
+        count = int(value or 0) + 1
+        runtime.kv_set(env.conn, '*', 'pane-start-failures', str(count))
+        if count >= 3:
+            runtime.kv_set(env.conn, '*', 'pane-repair-pending', '1')
+        raise
+    runtime.kv_set(env.conn, '*', 'pane-start-failures', '0')
+    return pane
+
+
+# Rebuild an unoccupied window after repeated pane start failures.
+def repair_pane_window(env, terminal, window):
+    """Replace the dashboard and idle panes inside the existing window when repair is pending."""
+    if runtime.kv_get(env.conn, '*', 'pane-repair-pending') != '1':
+        return False
+    with pane_lock():
+        panes = [p for p in terminal.list_panes(window) if p.alive]
+        busy = {a.get('pane_id') for a in runtime.list_agents(env.conn, None, 'active') if agent_has_live_process(a) and a.get('pane_id')}
+        from . import native_bee
+        busy.update(native_bee.occupied(env.conn, panes))
+        if busy.intersection(p.id for p in panes):
+            return False
+        dashboard = next((p for p in panes if p.title == 'Dashboard'), None)
+        anchor = dashboard or next((p for p in panes if is_hive_title(p.title) or is_apiary_title(p.title) or is_beekeeper_title(p.title)), None)
+        if anchor is None:
+            return False
+        if dashboard is not None:
+            close_idle_hive_panes(env.conn, terminal, window)
+        previous = runtime.kv_get(env.conn, '*', 'dashboard-repair-generation')
+        generation = str(int(previous) + 1) if previous is not None else '0'
+        dash = [osplat.python_executable(), '-c', 'import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.dashboard import main;sys.exit(main(sys.argv[2:]))', str(TOOLS_DIR)]
+        terminal.split_pane(window, 'Dashboard', 'white', dash, 'horizontal', 0.5, anchor.id, 'dashboard-repair-' + generation)
+        runtime.kv_set(env.conn, '*', 'dashboard-repair-generation', generation)
+        if dashboard is None:
+            close_idle_hive_panes(env.conn, terminal, window)
+        else:
+            terminal.close_pane(dashboard.id)
+        for old in panes:
+            if old.title == 'Dashboard' and old.id != anchor.id:
+                terminal.close_pane(old.id)
+        runtime.kv_set(env.conn, '*', 'pane-start-failures', '0')
+        runtime.kv_set(env.conn, '*', 'pane-repair-pending', '0')
+        return True
+
+
+# Find or create a Hive pane in its Apiary.
+# Check whether occupied Hive rows prevent opening this row in order.
+def hive_row_waits_for_bees(env, terminal, window: str, plan: str) -> bool:
+    """Return whether opening this Hive in order must wait for another pane."""
+    plans = [r['plan_path'] for r in db.rows(env.conn, 'SELECT plan_path FROM hives WHERE project=? ORDER BY rowid', (env.name,))]
+    if plan not in plans:
+        return False
+    live = [p for p in terminal.list_panes(window) if p.alive]
+    titles = {p.title for p in live}
+    previous = next((item for item in reversed(plans[:plans.index(plan)])
+                     if hive_pane_title(env.name, item, is_test_runtime()) in titles), None)
+    from . import native_bee
+    native_busy = native_bee.occupied(env.conn, live)
+    if previous and any(p.id in native_busy and p.title == hive_pane_title(env.name, previous, is_test_runtime()) for p in live):
+        return True
+    if not previous and hive_pane_title(env.name, plan, is_test_runtime()) not in titles:
+        later = set(plans[plans.index(plan) + 1:])
+        if any(p.id in native_busy and p.title in {hive_pane_title(env.name, item, is_test_runtime()) for item in later} for p in live):
+            return True
+        if any(a.get('plan_path') in later and a.get('pane_id') in {p.id for p in live} and
+               (a.get('phase') == 'bee' or agent_has_live_process(a))
+               for a in runtime.list_agents(env.conn, env.name, 'all')):
+            return True
+    ids = {p.id for p in live if p.title != hive_pane_title(env.name, previous, is_test_runtime())} if previous else set()
+    return any(a.get('phase') == 'bee' and a.get('plan_path') == previous and a.get('pane_id') in ids
+               for a in runtime.list_agents(env.conn, env.name, 'all'))
 
 
 def ensure_hive_pane(env, terminal, window: str, plan: str) -> str:
     """Return the id of the live pane of this Hive; open it when there is none. The Apiary head pane comes first; the first Hive of an Apiary goes
-    below the head, each further one to the right of the previous Hive of that Apiary. A sub-terminal exists as long as its Hive lives, also when no
+    below the head, each further one below the previous Hive of that Apiary. A sub-terminal exists as long as its Hive lives, also when no
     Queen runs. Opening a pane never brings the window to the front."""
     title = hive_pane_title(env.name, plan, is_test_runtime())
     with pane_lock():
@@ -593,39 +813,133 @@ def ensure_hive_pane(env, terminal, window: str, plan: str) -> str:
                 return p.id
         terminal.trace = wt_trace_sink(env.conn, [env.name])   # every wt call of this split (head and Hive) leaves one line in the log
         head = ensure_apiary_pane(env, terminal, window, live)
-        mine = sorted([p for p in live if is_hive_title(p.title) and p.title.split(" | ")[1] == title.split(" | ")[1]], key=_pane_order)
+        # Older Hive panes can still be on the left during migration.
+        head_number = str(head).rsplit(".", 1)[-1]
+        head_order = int(head_number) if "." in str(head) and head_number.isdigit() else None
+        mine = sorted([p for p in live if is_hive_title(p.title) and p.title.split(" | ")[1] == title.split(" | ")[1] and (head_order is None or _pane_order(p) > head_order)], key=_pane_order)
         colour = env.colour   # the colour of the Apiary, shared by its head and all its Hives
-        target, direction = (mine[-1].id, "horizontal") if mine else (head, "vertical")
+        living = [r["plan_path"] for r in db.rows(env.conn, "SELECT h.plan_path FROM hives h WHERE h.project=? AND (EXISTS (SELECT 1 FROM plans p WHERE p.project=h.project AND p.path=h.plan_path AND p.status IS NOT 'DONE') OR (h.state!='done' AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.project=h.project AND p.path=h.plan_path))) ORDER BY h.rowid", (env.name,))]
+        by_title = {p.title: p for p in mine}
+        preceding = living[:living.index(plan)] if plan in living else []
+        previous = next((by_title[hive_pane_title(env.name, item, is_test_runtime())] for item in reversed(preceding)
+                         if hive_pane_title(env.name, item, is_test_runtime()) in by_title), mine[-1] if mine else None)
+        if plan in living and mine and not any(hive_pane_title(env.name, item, is_test_runtime()) in by_title for item in preceding):
+            if hive_row_waits_for_bees(env, terminal, window, plan):
+                raise TerminalError('Hive row awaits later occupied panes')
+            busy = {a.get('pane_id') for a in runtime.list_agents(env.conn, env.name, 'active') if agent_has_live_process(a)}
+            if not close_idle_following_hives(env, terminal, window, plan, busy):
+                raise TerminalError('Hive row awaits later occupied panes')
+            mine, previous = [], None
+        if previous:
+            if hive_row_waits_for_bees(env, terminal, window, plan):
+                raise TerminalError('Hive row awaits closing Bee panes')
+            previous_plan = next((item for item in living if hive_pane_title(env.name, item, is_test_runtime()) == previous.title), None)
+            live_ids = {p.id for p in live}
+            if any(a.get('phase') == 'bee' and a.get('plan_path') == previous_plan and
+                   a.get('pane_id') in live_ids and a.get('pane_id') != previous.id
+                   for a in runtime.list_agents(env.conn, env.name, 'all')):
+                raise TerminalError('Hive row awaits closing Bee panes')
+        target, direction = (previous.id, "vertical") if previous else (head, "vertical")
         env.log("pane of Hive %s (Apiary %s): splits %s (%s)" % (Path(plan).stem, env.name, target, direction))
-        living = [r["plan_path"] for r in db.rows(env.conn, "SELECT plan_path FROM hives WHERE project=? AND state!='done' ORDER BY plan_path", (env.name,))]
         live_titles = {p.title for p in live}
-        width = lambda plan_path: hivelayout.width_of(env.conn, env.name, plan_path)   # noqa: E731
+        if getattr(terminal, "name", "") == "wt":
+            request = str(time.time_ns())
+            runtime.kv_set(env.conn, env.name, 'apiary-measure-request', request)
+            wait_pane_measurement(env.conn, env.name, 'apiary-measure-ack', terminal, expected=request)
+        measured = runtime.kv_get(env.conn, env.name, 'apiary-columns')
+        columns = int(measured) if measured and str(measured).isdigit() else 0
+        widths = hivelayout.hive_widths(env.conn, env.name, living, columns)
+        width = lambda plan_path: widths.get(plan_path, hivelayout.width_of(env.conn, env.name, plan_path))   # noqa: E731
         if not mine:
-            size = HIVE_BELOW_HEAD
+            rows = runtime.kv_get(env.conn, env.name, 'apiary-rows')
+            rows = int(rows) if rows and str(rows).isdigit() else 0
+            size = min(HIVE_BELOW_HEAD, (rows - 1) / rows) if rows > 1 else HIVE_BELOW_HEAD
         else:
-            prev = next((r for r in living if hive_pane_title(env.name, r, is_test_runtime()) == mine[-1].title), None)
+            prev = next((r for r in living if hive_pane_title(env.name, r, is_test_runtime()) == previous.title), None)
             rest = [r for r in living if hive_pane_title(env.name, r, is_test_runtime()) not in live_titles or r == plan]
-            size = weighted_split_size(width(prev) if prev else hivelayout.SMALL_WIDTH, max(sum(width(r) for r in rest), hivelayout.SMALL_WIDTH))
-        pane_id = terminal.split_pane(window, title, colour, hive_argv(env, plan), direction, size, target, "%s__hive__%s" % (env.name, Path(plan).stem))
-        if width(plan) == hivelayout.BIG_WIDTH:   # built large: a later Queen start leaves this pane alone
+            if prev and plan in living and living.index(prev) < living.index(plan):
+                following = next((i for i in range(living.index(plan) + 1, len(living))
+                                  if hive_pane_title(env.name, living[i], is_test_runtime()) in live_titles), len(living))
+                rest = [r for r in rest if r in living[living.index(prev) + 1:following]]
+            suffix = Path(prev).stem if prev else ''
+            if prev and getattr(terminal, 'name', '') == 'wt':
+                request = str(time.time_ns())
+                runtime.kv_set(env.conn, env.name, 'hive-measure-request-' + suffix, request)
+                wait_pane_measurement(env.conn, env.name, 'hive-measure-ack-' + suffix, terminal, expected=request)
+            measured_rows = runtime.kv_get(env.conn, env.name, 'hive-rows-' + suffix) if prev else None
+            rows = int(measured_rows) if measured_rows and str(measured_rows).isdigit() else 0
+            heights = hivelayout.hive_row_heights(env.conn, env.name, [prev] + rest, rows) if prev else {}
+            size = weighted_split_size(heights.get(prev, width(prev) if prev else hivelayout.SMALL_WIDTH),
+                                       max(sum(heights.get(r, width(r)) for r in rest), hivelayout.SMALL_WIDTH))
+            if rows and any(a.get('pane_id') == previous.id and agent_has_live_process(a)
+                            for a in runtime.list_agents(env.conn, env.name, 'active')):
+                size = min(size, 4 * len(rest) / rows)
+        pane_id = split_tracked(env, terminal, window, title, colour, hive_argv(env, plan), direction, size, target, "%s__hive__%s" % (env.name, Path(plan).stem))
+        if hivelayout.width_of(env.conn, env.name, plan) == hivelayout.BIG_WIDTH:   # built large: a later Queen start leaves this pane alone
             runtime.kv_set(env.conn, env.name, "hive-big-" + Path(plan).stem, pane_id)
         return pane_id
 
 
+# Clear later idle panes before rebuilding their predecessor.
+def close_idle_following_hives(env, terminal, window: str, plan: str, busy: set) -> bool:
+    """Close later idle Hive panes and report whether rebuilding is possible."""
+    plans = [r["plan_path"] for r in db.rows(env.conn, "SELECT plan_path FROM hives WHERE project=? ORDER BY rowid", (env.name,))]
+    later = plans[plans.index(plan) + 1:] if plan in plans else []
+    titles = {hive_pane_title(env.name, item, is_test_runtime()) for item in later}
+    following = [p for p in terminal.list_panes(window) if p.alive and p.title in titles]
+    from . import native_bee
+    busy = busy | native_bee.occupied(env.conn, terminal.list_panes(window))
+    live_ids = {p.id for p in terminal.list_panes(window) if p.alive}
+    bee_plans = {a.get('plan_path') for a in runtime.list_agents(env.conn, env.name, 'all')
+                 if a.get('phase') == 'bee' and a.get('pane_id') in live_ids}
+    bee_titles = {hive_pane_title(env.name, item, is_test_runtime()) for item in bee_plans if item}
+    if any(p.id in busy or p.title in bee_titles for p in following):
+        return False
+    for p in following:
+        terminal.close_pane(p.id)
+    return True
+
+
+# Rebuild an idle Hive for its starting Queen.
 def rebuild_small_hive_pane(env, terminal, window: str, plan: str) -> None:
-    """Close the pane of a Hive that was built without a Queen (narrow) when no agent runs in it, so ensure_hive_pane builds it again with the larger share.
-    A pane that was built large, or that holds a running or starting agent, stays as it is."""
+    """Close an empty Hive pane before a Queen starts, so her pane is built anew.
+    A pane holding a running or starting agent stays as it is."""
     title = hive_pane_title(env.name, plan, is_test_runtime())
     with pane_lock():
         try:
             pane = next((p for p in terminal.list_panes(window) if p.alive and p.title == title), None)
         except TerminalError:
             return
-        if pane is None or runtime.kv_get(env.conn, env.name, "hive-big-" + Path(plan).stem) == pane.id:
+        if pane is None:
             return
-        if any(a.get("pane_id") == pane.id and a.get("status") in ("running", "starting") for a in runtime.list_agents(env.conn, env.name, "active")):
+        agents = [a for a in runtime.list_agents(env.conn, env.name, "active") if agent_has_live_process(a)]
+        busy = {a.get("pane_id") for a in agents}
+        from . import native_bee
+        busy.update(native_bee.occupied(env.conn, terminal.list_panes(window)))
+        if pane.id in busy or any(a.get('phase') == 'bee' and a.get('plan_path') == plan for a in agents):
             return
-        terminal.close_pane(pane.id)
+        if close_idle_following_hives(env, terminal, window, plan, busy):
+            terminal.close_pane(pane.id)
+
+
+# Shrink an empty Hive after its Queen ends.
+def rebuild_ended_hive_pane(env, terminal, window: str, plan: str) -> None:
+    """Close an empty large Hive pane after its Queen has ended."""
+    title = hive_pane_title(env.name, plan, is_test_runtime())
+    with pane_lock():
+        pane = next((p for p in terminal.list_panes(window) if p.alive and p.title == title), None)
+        if pane is None or runtime.kv_get(env.conn, env.name, "hive-big-" + Path(plan).stem) != pane.id:
+            return
+        agents = runtime.list_agents(env.conn, env.name, "active")
+        from . import native_bee
+        if pane.id in native_bee.occupied(env.conn, terminal.list_panes(window)):
+            return
+        if any(agent_has_live_process(a) and (a.get("pane_id") == pane.id or
+               (a.get("phase") in ("queen", "bee") and a.get("plan_path") == plan)) for a in agents):
+            return
+        busy = {a.get("pane_id") for a in agents if agent_has_live_process(a)}
+        if close_idle_following_hives(env, terminal, window, plan, busy):
+            terminal.close_pane(pane.id)
 
 
 def start_queen(env, terminal, window: str, spec: dict) -> str:
@@ -642,6 +956,46 @@ def start_queen(env, terminal, window: str, spec: dict) -> str:
     env.update_agent(spec["name"], {"pane_id": pane_id, "paneClosed": False})
     hivelayout.apply(terminal, window, env.conn, is_test_runtime())   # the Hive becomes big now that its Queen starts (best effort, never raises)
     return pane_id
+
+
+# Calculate the first Bee's share while retaining the Queen's readable head.
+def bee_split_size(env, plan: str, name: str, hive_id: str, has_bees: bool) -> float:
+    """Return the new Bee pane's share of its target pane."""
+    if has_bees:
+        return 0.5
+    queen = next((a for a in runtime.list_agents(env.conn, env.name, 'active')
+                  if a.get('phase') == 'queen' and a.get('plan_path') == plan and a.get('pane_id') == hive_id), None)
+    columns = int((queen or {}).get('paneCols') or 0)
+    if not columns:
+        return 0.5
+    from . import hivepane
+    lines = hivepane.frame_lines(env.conn, env.name, plan, 1024)
+    needed = max(len(''.join(text for text, _ in line)[2:-2].rstrip()) + 4 for line in lines[1:3])
+    bee_label_width = len('Bee: ' + name.upper())
+    return min(0.5, max(bee_label_width, columns - needed) / columns)
+
+
+# Start a process Bee to the right of its Queen and earlier Bees.
+def start_bee_pane(env, terminal, window: str, spec: dict) -> str:
+    """Open a Bee runner in its Hive row without closing another agent's pane."""
+    with pane_lock():
+        live = [p for p in terminal.list_panes(window) if p.alive]
+        hive_title = hive_pane_title(env.name, spec["plan"], is_test_runtime())
+        hive = next((p for p in live if p.title == hive_title), None)
+        if hive is None:
+            raise TerminalError("no Hive pane for Bee %s" % spec["name"])
+        ids = {p.id for p in live}
+        bees = [a for a in runtime.list_agents(env.conn, env.name, "active")
+                if a.get("phase") == "bee" and a.get("plan_path") == spec["plan"] and a.get("pane_id") in ids]
+        from . import native_bee
+        bee_panes = [(a['pane_id'], native_bee.pane_order(a['pane_id'])) for a in bees]
+        bee_panes += [(r['pane'], r.get('order') or native_bee.pane_order(r['pane'])) for r in native_bee.records(env.conn, env.name) if r.get('plan') == spec['plan'] and r.get('pane') in ids]
+        target = max(bee_panes, key=lambda entry: entry[1])[0] if bee_panes else hive.id
+        size = bee_split_size(env, spec['plan'], spec['person'], hive.id, bool(bee_panes))
+        title = pane_title(env.name, "Bee " + spec["person"].upper(), spec["name"], spec["model_long"], is_test_runtime())
+        pane_id = split_tracked(env, terminal, window, title, env.colour, runner_argv(env, spec), "horizontal", size, target, "%s__%s" % (env.name, spec["name"]))
+        env.update_agent(spec["name"], {"pane_id": pane_id, "paneClosed": False})
+        return pane_id
 
 
 def launch_headless(env, spec: dict) -> None:
@@ -982,6 +1336,18 @@ def _do_start(c, a, forced_pick=None) -> int:
                 if norm_plan(ev["plan"]) == norm_plan(str(a.get("plan"))):
                     routine.remove_handled(env, ev["key"])
         return 0
+    if a.get('phase') == 'queen' and not dry and not os.environ.get('BZZ_TEST_NOSTART'):
+        term = c['terminal'] or get_terminal(env.settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes'))
+        if (hive_row_waits_for_bees(env, term, env.settings.get('window', 'HaiveQueen'), str(a['plan'])) or
+                apiary_waits_for_bees(env, term, env.settings.get('window', 'HaiveQueen'))):
+            env.log('Hive row or Apiary awaits occupied panes')
+            return 0
+    if a.get('phase') == 'bee' and not dry and not os.environ.get('BZZ_TEST_NOSTART'):
+        term = c['terminal'] or get_terminal(env.settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes'))
+        title = hive_pane_title(env.name, str(a['plan']), is_test_runtime())
+        if not any(p.alive and p.title == title for p in term.list_panes(env.settings.get('window', 'HaiveQueen'))):
+            env.log('Bee awaits its Hive pane')
+            return 0
     protocol, prov = pick["protocol"], pick["name"]
     nm, k = str(a["name"]), 1
     while nm in st["names"]:
@@ -1043,10 +1409,14 @@ def _do_start(c, a, forced_pick=None) -> int:
     else:
         spec = {"name": nm, "provider": prov, "protocol": protocol, "plan": plan, "package": pkg, "phase": phase, "cwd": str(a["cwd"]),
                 "prompt_file": str(pf), "person": ident["Person"], "model_long": sch.model_long(protocol, cm["Model"], cm["Effort"])}
-        if phase == "bee":   # D3: a Bee has no pane of its own, it shows as a line in the frame of its Hive
-            launch_headless(env, spec)
+        if phase == "bee":
+            term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
+            start_bee_pane(env, term, env.settings.get("window", "HaiveQueen"), spec)
         elif phase == "queen":   # a Queen runs inside the sub-terminal of its Hive, one after the other
             term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
+            if c.get("envs"):
+                from . import hives
+                hives.prepare_blocks_for_queen(env.conn, c["envs"], term)
             start_queen(env, term, env.settings.get("window", "HaiveQueen"), spec)
         else:
             term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
@@ -1513,7 +1883,7 @@ def existing_session(args, conn, machine, pid, terminal=None, locked=False) -> i
                                  "note": "The orchestrator is already running."})
 
 
-# Start a session or recover its missing overview without interrupting agents.
+# Start the loop and its dashboard with the first registered Apiary.
 def cmd_start(args, conn) -> int:
     """`bzz start`: run the loop in this process (--foreground) or open the orchestrator window (dashboard and Apiary head) and start the loop as a detached process."""
     from . import config
@@ -1532,8 +1902,8 @@ def cmd_start(args, conn) -> int:
         stop_flag().unlink()
     except OSError:
         pass
-    if not getattr(args, "keep_pause", False):   # the self-update restart keeps a pause
-        runstate.resume(conn, "bzz start")   # a pause or drain of the run before must not keep the new run from starting agents
+    if not getattr(args, "keep_pause", False) and runstate.get_state(conn)["state"] != "PAUSED":
+        runstate.resume(conn, "bzz start")   # a prior drain does not keep the new run from starting agents
     if args.foreground:
         return run_loop(conn, machine, args.rounds, args.round_minutes, ui=sys.stdout.isatty())
     settings = sch.build_settings(machine, {})
@@ -1555,9 +1925,10 @@ def cmd_start(args, conn) -> int:
                 close_idle_hive_panes(conn, term, window)
             except TerminalError:
                 pass
-            first = conn.execute("SELECT project FROM hives WHERE state!='done' ORDER BY project LIMIT 1").fetchone()
-            head = (apiary_pane_title(first["project"], is_test_runtime()), apiary_argv_of(first["project"]), "%s__apiary" % first["project"]) if first else None
-            panes = open_session_panes(term, window, dash, head)
+            names = [r["name"] for r in db.rows(conn, "SELECT name FROM projects")]
+            first = next(iter(hivelayout.configured_order(names)), None)
+            head = (apiary_pane_title(first, is_test_runtime()), apiary_argv_of(first), "%s__apiary" % first) if first else None
+            panes = open_session_panes(term, window, dash, head, conn)
             spawn_detached(boot, osplat.runs_dir() / "beekeeper.log")   # the loop has no pane: its output goes to this file, round errors show in the dashboard
         except Exception:
             start_pending_file().unlink()

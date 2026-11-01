@@ -60,6 +60,24 @@ class FormatTest(unittest.TestCase):
 class BuildHeadTest(unittest.TestCase):
     """The header lines."""
 
+    # Identify a Bee in its own pane.
+    def test_bee_header_names_its_role(self):
+        lines = header.build_head(row(phase='bee', task='Draft', bee_step='1/5'), 'demo', 'FF8800', 100, NOW)
+        self.assertEqual(texts(lines), ['Bee: MAX Draft 1/5 [#----]'])
+
+    # Keep the Bee's progress visible when a long task must be shortened.
+    def test_bee_header_keeps_progress_when_task_is_long(self):
+        """A long task cannot hide progress that fits in the pane."""
+        lines = header.build_head(row(phase='bee', task='A very long task description', bee_step='1/5'), 'demo', 'FF8800', 22, NOW)
+        self.assertLessEqual(len(texts(lines)[0]), 22)
+        self.assertIn('1/5 [#----]', texts(lines)[0])
+
+    # Preserve progress even when only the Bee name and progress fit.
+    def test_bee_header_progress_without_task_room(self):
+        """The progress fits without inserting a task ellipsis."""
+        lines = header.build_head(row(phase='bee', task='Long task', bee_step='1/5'), 'demo', 'FF8800', 20, NOW)
+        self.assertEqual(texts(lines), ['Bee: MAX 1/5 [#----]'])
+
     def test_wide(self):
         """Wide pane: line 1 has the project in its colour, the agent part in the agent colour and the status in its colour."""
         lines = header.build_head(row(), "demo", "FF8800", 100, NOW)
@@ -158,6 +176,32 @@ class RenderTest(unittest.TestCase):
                 conn.close()
             finally:
                 os.environ.pop("BZZ_DATA_DIR", None)
+
+    # Draw the Bee's latest reported progress in its pane.
+    def test_bee_pane_draws_reported_progress(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {'BZZ_DATA_DIR': str(Path(tmp) / 'data')}):
+                conn = db.connect(Path(tmp) / 'data' / 'haivequeen.db')
+                db.upsert_project(conn, 'demo', None, 'FF8800', 0)
+                runtime.upsert_agent(conn, 'demo', 'A-1', {'status': 'running', 'phase': 'bee', 'person': 'Max', 'plan': 'p.md'})
+                out = io.StringIO()
+                with mock.patch('haivequeen.hives.hive_data', return_value=[{'bees': [{'name': 'Max', 'task': 'Draft', 'step': '1/5'}]}]):
+                    header.run('demo', 'A-1', 0, Path(tmp) / 'runs', out, interval=0, max_ticks=1)
+                self.assertIn('Bee: MAX Draft 1/5 [#----]', out.getvalue())
+                conn.close()
+
+    # Avoid wrapping the Bee heading in a very narrow pane.
+    def test_bee_pane_uses_actual_narrow_width(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {'BZZ_DATA_DIR': str(Path(tmp) / 'data')}):
+                conn = db.connect(Path(tmp) / 'data' / 'haivequeen.db')
+                db.upsert_project(conn, 'demo', None, 'FF8800', 0)
+                runtime.upsert_agent(conn, 'demo', 'A-1', {'status': 'running', 'phase': 'bee', 'person': 'Max'})
+                out = io.StringIO()
+                with mock.patch('shutil.get_terminal_size', return_value=os.terminal_size((5, 4))):
+                    header.run('demo', 'A-1', 0, Path(tmp) / 'runs', out, interval=0, max_ticks=1)
+                conn.close()
+                self.assertIn('Bee:…', out.getvalue())
 
     def test_resize_redraws_fully_only_after_the_size_settled(self):
         """While the size changes every tick (window drag, DPI change) only the header rows are rewritten; the full redraw follows once the size stayed; an unchanged header is not written twice."""

@@ -110,6 +110,7 @@ def _parse_time(value, default):
     return db.parse_time(value, default)
 
 
+# Build the agent header within the available pane width.
 def build_head(row, project, project_colour, width, now=None, max_lines=None):
     """Return the header lines for `width` columns: a list of lines, each a list of (text, colour) parts.
 
@@ -119,6 +120,18 @@ def build_head(row, project, project_colour, width, now=None, max_lines=None):
     now = now or datetime.now()
     res = []
     person = str(row.get("person") or "-").upper()
+    if row.get("phase") == "bee":
+        from .hivepane import bar
+        step = str(row.get('bee_step') or '')
+        text = 'Bee: ' + ' '.join(part for part in (person, str(row.get('task') or ''), step, bar(step)) if part)
+        suffix = ' '.join(part for part in (step, bar(step)) if part)
+        prefix = 'Bee: ' + person
+        if suffix and len(text) > width and len(prefix) + len(suffix) + 1 <= width:
+            room = width - len(prefix) - len(suffix) - 2
+            task = str(row.get('task') or '')
+            short = ((task[:room - 1] + '…') if len(task) > room else task) if room > 0 else ''
+            text = ' '.join(part for part in (prefix, short, suffix) if part)
+        return [[(text if len(text) <= width else text[:max(0, width - 1)] + '…', project_colour)]]
     col = row.get("color") or "FFFFFF"
     typ = "Codex" if row.get("type") == "codex" else "Claude"
     status = str(row.get("status") or "")
@@ -190,12 +203,14 @@ def render(lines, width, height, milestones, full):
         for i, parts in enumerate(lines):
             sb.append("%s[%d;1H%s" % (ESC, i + 1, line_str(parts)))
         sb.append(AUTOWRAP_ON)
+        if n >= height:
+            return "".join(sb)
         sb.append("%s[%d;%dr" % (ESC, n + 1, height))
         room = height - n
         rep = []
         for colour, text in milestones:
             first = True
-            for wl in wrap_text(text, width - 6):
+            for wl in wrap_text(text, max(1, width - 6)):
                 rep.append((("" if first else "      ") + wl, colour))
                 first = False
         skip = max(0, len(rep) - (room - 1))
@@ -216,6 +231,7 @@ def project_colour_of(conn, project):
     return (row[0] if row and row[0] else "white")
 
 
+# Draw an agent's header while its process runs.
 def run(project, name, parent_pid=0, runs_dir=None, out=None, interval=1.0, max_ticks=None):
     """Redraw the header every `interval` seconds until the agent ended and its parent process is gone.
 
@@ -240,8 +256,14 @@ def run(project, name, parent_pid=0, runs_dir=None, out=None, interval=1.0, max_
         try:
             row = runtime.get_agent(conn, project, name)
             if row:
+                if row.get('phase') == 'bee' and row.get('plan_path'):
+                    from . import hives
+                    data = hives.hive_data(conn, project, runtime.list_agents(conn, project, 'active'), row['plan_path'], include_done=True)
+                    bee = next((b for h in data for b in h['bees'] if b['name'] == (row.get('person') or name)), None)
+                    if bee:
+                        row['task'], row['bee_step'] = bee['task'], bee['step']
                 size = shutil.get_terminal_size((120, 40))
-                width, height = max(10, size.columns), max(2, size.lines)   # the real width: 30 columns drawn into a narrower pane wrapped into the next rows
+                width, height = max(1 if row.get('phase') == 'bee' else 10, size.columns), max(2, size.lines)
                 lines = build_head(row, project, project_colour_of(conn, project), width, max_lines=height - 1)
                 key = (width, height, len(lines))
                 if last == (-1, -1, -1):
@@ -280,7 +302,7 @@ def run(project, name, parent_pid=0, runs_dir=None, out=None, interval=1.0, max_
 def main(argv=None):
     """Command line entry: python -m haivequeen.header --project P --name N [--parent-pid PID] [--runs-dir DIR]."""
     p = argparse.ArgumentParser(prog="haivequeen.header")
-    p.add_argument("--project", required=True)
+    p.add_argument("--project", required=True, metavar="APIARY", help="Apiary name")
     p.add_argument("--name", required=True)
     p.add_argument("--parent-pid", type=int, default=0)
     p.add_argument("--runs-dir", default=None)
