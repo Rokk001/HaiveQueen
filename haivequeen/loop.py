@@ -735,12 +735,15 @@ def hive_schedule_lock(timeout: float = 30.0):
 
 
 # Clean integrated worktrees and schedule one round of Hives across every registered project.
+# Refresh provider metadata outside the lock before scheduling real work.
 def run_round(conn, machine: dict, envs=None, terminal=None, dry_run=False, plan_files=None,
               out_file=None, settle: float = 3.0, poll: float = 2.0, tries: int = 20, free_ram=None, alive=None) -> dict:
     """Clean integrated worktrees and schedule one round across registered projects."""
     from . import hives
     envs = envs if envs is not None else sch.load_projects(conn, machine)
     if not dry_run:
+        # Fetch account metadata before taking the Hive scheduling lock.
+        usage.refresh_claude_usage(conn, sch.get_providers(machine))
         # Standalone foreground rounds have no terminal session to restore.
         if not os.environ.get('BZZ_TEST_NOSTART') and (terminal is not None or (osplat.runs_dir() / '_panes' / 'dashboard' / 'pane.json').is_file()):
             try:
@@ -1290,6 +1293,7 @@ def daily_export(envs) -> None:
 
 
 # The loop body (see run_loop).
+# Keep provider quotas current during idle waits as well as scheduling rounds.
 def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds, round_kwargs) -> int:
     """The loop body (see run_loop)."""
     envs = sch.load_projects(conn, machine)
@@ -1310,7 +1314,8 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
     # Settle and redraw during waits without letting a transient failure stop the loop.
     def wait_refresh() -> None:
         """Settle and redraw during waits without letting a transient failure stop the loop."""
-        for action in (lambda: runstate.settle(conn), refresh):
+        for action in (lambda: usage.refresh_claude_usage(conn, sch.get_providers(machine)),
+                       lambda: runstate.settle(conn), refresh):
             try:
                 action()
             except Exception as exc:
