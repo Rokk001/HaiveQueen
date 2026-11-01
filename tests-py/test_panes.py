@@ -223,20 +223,26 @@ class PaneLockTest(RoundCase):
         self.assertNotIn("--rounds", plain)
         self.assertNotIn("--round-minutes", plain)
 
+    # Repeated starts keep the live overview and never create a second window.
     def test_second_start_does_not_open_a_second_window(self):
-        """With a loop running, or a window start pending, `bzz start` opens no pane."""
+        """An existing dashboard is reused; a pending start opens no additional pane."""
         holder = subprocess.Popen(SLEEP)
+        term = Headless(loop.osplat.runs_dir() / "_panes")
+        dashboard = term.open_window("HaiveQueen", pane_title("all projects", "Overview", "Dashboard", "-", True), SLEEP, name="dashboard")
         try:
             loop.lock_file().parent.mkdir(parents=True, exist_ok=True)
             loop.lock_file().write_text(str(holder.pid), encoding="ascii")
-            self.assertTrue(self.start()["running"])
+            result = self.start()
+            self.assertTrue(result["running"])
+            self.assertEqual(result["dashboard"], dashboard)
+            loop.lock_file().unlink()
+            loop.start_pending_file().write_text("1", encoding="ascii")
+            self.assertTrue(self.start()["starting"])
+            self.assertEqual([p.id for p in term.list_panes("HaiveQueen")], [dashboard])
         finally:
+            term.close_pane(dashboard)
             holder.kill()
             holder.wait()
-        loop.lock_file().unlink()
-        loop.start_pending_file().write_text("1", encoding="ascii")
-        self.assertTrue(self.start()["starting"])
-        self.assertFalse((loop.osplat.runs_dir() / "_panes").exists(), "no pane was opened")
 
 
 # Real Windows Terminal in the test runtime (opt in with BZZ_REAL_WT=1

@@ -65,6 +65,9 @@ bzz stop                              # no new agents; running agents finish the
 
 Put your machine settings (providers, slots) into `config.toml` (see `examples/config.example.toml`; folder: `%APPDATA%\HaiveQueen` on Windows, `~/.config/HaiveQueen` on Linux).
 The dashboard and agent panes share one terminal window; its name is the machine setting `window` (default `HaiveQueen`), a project cannot set its own.
+Closing the terminal leaves the managing loop running. The next round restores a missing dashboard; `bzz start` also restores it without restarting running agents. A start during a pending stop reports that the existing agents must finish first. Windows desktop shortcuts can use `bzz start --desktop` and `bzz stop --desktop` for a visible result or error dialog; ordinary CLI calls keep their JSON output.
+
+Completed idle Hives are reconciled with the plan status and confirmed integration. Active agents and genuine owner questions are preserved. A Hive without a Queen shows its recorded start blocker or pending question numbers instead of a generic waiting label.
 
 ## How HaiveQueen develops itself
 

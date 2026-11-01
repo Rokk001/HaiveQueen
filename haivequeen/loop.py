@@ -529,6 +529,35 @@ def wt_trace_sink(conn, projects: list):
     return sink
 
 
+# Restore the dashboard without closing or restarting any existing pane.
+def ensure_dashboard_pane(terminal, window: str) -> str:
+    """Return the live dashboard pane, opening only the missing overview."""
+    try:
+        live = [p for p in terminal.list_panes(window) if p.alive]
+    except TerminalError:
+        live = []
+    for pane in live:
+        if "| all projects | Overview |" in pane.title:
+            return pane.id
+    dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
+    title = pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime())
+    if live:
+        return terminal.split_pane(window, title, "white", dash, "horizontal", 1 - APIARY_SIDE_SHARE, live[0].id, "dashboard")
+    return terminal.open_window(window, title, dash, "white", "dashboard")
+
+
+# Keep the overview available independently of Hive starts and provider slots.
+def maintain_dashboard(machine, terminal=None) -> str:
+    """Restore the overview under the pane lock, unless a stop is pending."""
+    with pane_lock():
+        if stop_flag().exists():
+            return ""
+        settings = sch.build_settings(machine, {})
+        term = terminal or get_terminal(settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
+        return ensure_dashboard_pane(term, settings.get("window", "HaiveQueen"))
+
+
+# Ensure an Apiary head exists while keeping the dashboard as the window root.
 def ensure_apiary_pane(env, terminal, window: str, live: list) -> str:
     """Return the id of the live head pane of this Apiary; open it when there is none. `live` are the live panes of the window; the caller holds pane.lock.
     The first block goes beside the dashboard (else the Beekeeper) pane, a further block below the last pane of the last block."""
@@ -540,8 +569,9 @@ def ensure_apiary_pane(env, terminal, window: str, live: list) -> str:
     command = apiary_argv(env)
     name = "%s__apiary" % env.name
     if not live:
-        env.log("pane of Apiary %s: no live pane to split, opens the window" % env.name)
-        return terminal.open_window(window, title, command, env.colour, name)
+        env.log("pane of Apiary %s: no live pane to split, opens the dashboard first" % env.name)
+        dashboard = ensure_dashboard_pane(terminal, window)
+        return terminal.split_pane(window, title, env.colour, command, "horizontal", APIARY_SIDE_SHARE, dashboard, name)
     target, direction = (blocks[-1].id, "vertical") if blocks else (first_split_target(live), "horizontal")
     env.log("pane of Apiary %s: splits %s (%s)" % (env.name, target or "newest", direction))
     return terminal.split_pane(window, title, env.colour, command, direction, 0.5, target, name)
@@ -711,6 +741,13 @@ def run_round(conn, machine: dict, envs=None, terminal=None, dry_run=False, plan
     from . import hives
     envs = envs if envs is not None else sch.load_projects(conn, machine)
     if not dry_run:
+        # Standalone foreground rounds have no terminal session to restore.
+        if not os.environ.get('BZZ_TEST_NOSTART') and (terminal is not None or (osplat.runs_dir() / '_panes' / 'dashboard' / 'pane.json').is_file()):
+            try:
+                maintain_dashboard(machine, terminal)
+            except Exception as exc:
+                for env in envs:
+                    env.log('Dashboard not restored: %s' % exc)
         from . import worktrees
         for env in envs:
             try:
@@ -1368,14 +1405,44 @@ def spawn_detached(argv: list, log: Path) -> None:
         subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, **flags)
 
 
+# Print the command result and retain it for optional desktop feedback.
+def command_result(args, payload) -> int:
+    """Emit the existing JSON protocol and expose its result to the launcher."""
+    args.desktop_result = payload
+    print(json.dumps(payload))
+    return 0
+
+
+# Recover an existing session without restarting its loop or agents.
+def existing_session(args, conn, machine, pid, terminal=None, locked=False) -> int:
+    """Restore the overview, or report an outstanding graceful stop."""
+    if stop_flag().exists():
+        return command_result(args, {"ok": True, "running": True, "stopping": True, "pid": pid,
+                                     "running_agents": active_count(conn), "note": "Waiting for the previous stop to finish."})
+    if terminal is None and args.terminal:
+        terminal = get_terminal(args.terminal, str(osplat.runs_dir() / "_panes"))
+    if locked:
+        settings = sch.build_settings(machine, {})
+        dashboard = ensure_dashboard_pane(terminal, settings.get("window", "HaiveQueen"))
+    else:
+        dashboard = maintain_dashboard(machine, terminal)
+    if not dashboard:
+        return command_result(args, {"ok": True, "running": True, "stopping": True, "pid": pid,
+                                     "running_agents": active_count(conn), "note": "Waiting for the previous stop to finish."})
+    return command_result(args, {"ok": True, "running": True, "pid": pid, "dashboard": dashboard,
+                                 "note": "The orchestrator is already running."})
+
+
+# Start a session or recover its missing overview without interrupting agents.
 def cmd_start(args, conn) -> int:
     """`bzz start`: run the loop in this process (--foreground) or open the orchestrator window (dashboard and Apiary head) and start the loop as a detached process."""
     from . import config
+    if args.foreground and getattr(args, "desktop", False):
+        raise ValueError("Die Desktop-Rückmeldung unterstützt nur den Hintergrundstart.")
     machine = config.load_config()
     pid = loop_running()
     if pid:
-        print(json.dumps({"ok": True, "running": True, "pid": pid, "note": "The orchestrator is already running."}))
-        return 0
+        return existing_session(args, conn, machine, pid)
     try:
         if "(self-update)" in stop_flag().read_text(encoding="utf-8", errors="replace"):   # an older self-update restarts without --keep-pause
             args.keep_pause = True
@@ -1397,11 +1464,9 @@ def cmd_start(args, conn) -> int:
     with pane_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first
         pid = loop_running()
         if pid:
-            print(json.dumps({"ok": True, "running": True, "pid": pid, "note": "The orchestrator is already running."}))
-            return 0
+            return existing_session(args, conn, machine, pid, term, locked=True)
         if start_pending():
-            print(json.dumps({"ok": True, "running": False, "starting": True, "note": "The orchestrator window is just starting."}))
-            return 0
+            return command_result(args, {"ok": True, "running": False, "starting": True, "note": "The orchestrator window is just starting."})
         start_pending_file().parent.mkdir(parents=True, exist_ok=True)
         start_pending_file().write_text(str(os.getpid()), encoding="ascii")
         try:
@@ -1417,19 +1482,19 @@ def cmd_start(args, conn) -> int:
         except Exception:
             start_pending_file().unlink()
             raise
-    print(json.dumps({"ok": True, "window": window, "panes": panes}))
-    return 0
+    return command_result(args, {"ok": True, "window": window, "panes": panes})
 
 
+# Request a graceful stop and report how many agents may finish first.
 def cmd_stop(args, conn) -> int:
     """`bzz stop`: create the STOP flag; running agents finish their task, no new agent starts, the loop ends."""
     stop_flag().parent.mkdir(parents=True, exist_ok=True)
     stop_flag().write_text("stop requested %s\n" % datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
     closed = [] if loop_running() else close_panes_after_stop(conn)   # a running loop closes the panes itself when it ends
-    print(json.dumps({"ok": True, "running_agents": active_count(conn), "closed_panes": closed}))
-    return 0
+    return command_result(args, {"ok": True, "running_agents": active_count(conn), "closed_panes": closed})
 
 
+# Register session commands and their optional desktop feedback.
 def register(sub) -> None:
     """Add the commands start and stop to the sub-parser collection of haivequeen/cli.py."""
     p = sub.add_parser("start")
@@ -1438,6 +1503,8 @@ def register(sub) -> None:
     p.add_argument("--rounds", type=int, default=0, help="end after this many rounds (0 = until stopped)")
     p.add_argument("--round-minutes", type=float, default=0)
     p.add_argument("--keep-pause", action="store_true", help="do not lift a pause or drain of the run before (used by the self-update)")
+    p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")
     p.set_defaults(fn=cmd_start)
     p = sub.add_parser("stop")
+    p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")
     p.set_defaults(fn=cmd_stop)
