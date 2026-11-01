@@ -59,9 +59,9 @@ def _within(path, parent):
         return False
 
 
-# Apply repository, queue, and active-agent protections to a worktree.
+# Require completed branch evidence alongside repository and active-agent protections.
 def _candidate_reason(env, record, first, queue, integration_ref=None):
-    """Return a reason to keep a worktree, or an empty string if these checks pass."""
+    """Verify current branch completion and keep worktrees with any safety blocker."""
     from pathlib import Path
     path = record['worktree']
     protected = [env.code_repo, env.workspace]
@@ -72,9 +72,23 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
         return 'protected worktree'
     if record.get('locked') or record.get('prunable'):
         return 'locked or missing'
+    branch = _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+    if branch.returncode or not branch.stdout.strip() or branch.stdout.strip() != record.get('branch'):
+        return 'current branch does not match the worktree inventory'
     if any(row.get('branch') == record.get('branch') and row.get('status') in ('ready', 'in_run', 'blocked')
            for row in queue if record.get('branch')):
         return 'branch has an open queue row'
+    completed = max((row for row in queue if record.get('branch') and row.get('branch') == record['branch']),
+                    key=lambda row: row['id'], default=None)
+    if not completed or completed.get('status') != 'integrated':
+        return 'branch has no current integrated queue row'
+    tip = completed.get('tip') or ''
+    if not re.fullmatch(r'[0-9a-fA-F]{7,64}', tip):
+        return 'integrated queue tip is invalid'
+    resolved = _git(env.code_repo, 'rev-parse', '--verify', tip + '^{commit}')
+    head = _git(path, 'rev-parse', '--verify', 'HEAD')
+    if resolved.returncode or head.returncode or resolved.stdout.strip() != head.stdout.strip():
+        return 'HEAD does not match the integrated queue tip'
     agents = runtime.list_agents(env.conn, None, 'active')
     for agent in agents:
         if agent.get('status') in ('running', 'starting') and agent.get('cwd') and _within(agent['cwd'], path):
@@ -98,7 +112,7 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
     if ignored:
         return 'ignored file: ' + ignored
     ref = integration_ref or 'origin/' + str(env.settings.get('integrationBranch') or 'main')
-    ancestor = _git(env.code_repo, 'merge-base', '--is-ancestor', record['HEAD'], ref)
+    ancestor = _git(env.code_repo, 'merge-base', '--is-ancestor', head.stdout.strip(), ref)
     if ancestor.returncode:
         return 'HEAD is not in the integration branch'
     return ''

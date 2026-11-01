@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import isolation
 from haivequeen import worktrees
 
 
@@ -106,9 +107,9 @@ class ProcessDirectoryTests(unittest.TestCase):
 class CleanupTests(unittest.TestCase):
     """Exercise cleanup against a temporary repository and remote."""
 
-    # Create an integrated branch in a linked worktree.
+    # Create a linked branch with explicit integrated queue evidence.
     def setUp(self):
-        """Create an integrated branch in a linked worktree."""
+        """Create a linked branch and record its exact completed tip."""
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
@@ -128,7 +129,9 @@ class CleanupTests(unittest.TestCase):
         self.git(self.repo, 'push', 'origin', 'main')
         self.git(self.repo, 'worktree', 'add', '-b', 'integrated', str(self.linked))
         self.env = SimpleNamespace(code_repo=self.repo, workspace=self.repo, settings={'integrationBranch': 'main'}, name='test', agents=lambda scope: [], conn=None)
-        patch = mock.patch('haivequeen.worktrees.db.queue_rows', return_value=[])
+        self.queue = [{'id': 1, 'branch': 'integrated', 'status': 'integrated',
+                       'tip': self.git(self.linked, 'rev-parse', 'HEAD').stdout.strip()}]
+        patch = mock.patch('haivequeen.worktrees.db.queue_rows', side_effect=lambda *args: self.queue)
         patch.start()
         self.addCleanup(patch.stop)
         self.agents = []
@@ -182,6 +185,7 @@ class CleanupTests(unittest.TestCase):
         (self.linked / 'new').write_text('unmerged', encoding='utf-8')
         self.git(self.linked, 'add', 'new')
         self.git(self.linked, 'commit', '-m', 'Unmerged')
+        self.queue[0]['tip'] = self.git(self.linked, 'rev-parse', 'HEAD').stdout.strip()
         self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
         self.assertTrue(self.linked.exists())
 
@@ -200,11 +204,11 @@ class CleanupTests(unittest.TestCase):
                 self.agents = [{'status': 'running', 'phase': phase, 'cwd': str(self.linked), 'name': 'agent'}]
                 self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
-    # A detached HEAD is eligible when its commit is integrated.
-    def test_detached_integrated_worktree_can_be_removed(self):
-        """A detached HEAD is eligible when its commit is integrated."""
+    # A detached HEAD cannot prove which completed branch owns the worktree.
+    def test_detached_integrated_worktree_is_kept(self):
+        """A detached HEAD stays even when its commit belongs to an integrated branch."""
         self.git(self.linked, 'checkout', '--detach')
-        self.assertIn(str(self.linked), worktrees.prune(self.env)['removed'])
+        self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
     # The configured workspace remains even when it is a linked worktree.
     def test_workspace_is_protected(self):
@@ -258,7 +262,64 @@ class CleanupTests(unittest.TestCase):
     def test_candidate_checks_clean_integrated_branch(self):
         """The repository checks accept a clean integrated worktree."""
         entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
-        self.assertEqual(worktrees._candidate_reason(self.env, entry, False, []), '')
+        self.assertEqual(worktrees._candidate_reason(self.env, entry, False, self.queue), '')
+
+    # A fresh branch at the integration tip is not evidence of finished work.
+    def test_fresh_branch_without_completion_evidence_is_kept(self):
+        """Keep a clean new branch whose base is already integrated."""
+        self.queue = []
+        result = worktrees._prune_with_checker(self.env, lambda path: False, True)
+        self.assertNotIn(str(self.linked), result['removed'])
+        self.assertTrue(self.linked.exists())
+
+    # Completion of another branch cannot authorize this branch's removal.
+    def test_other_branch_completion_is_not_evidence(self):
+        """Require an exact branch match even when another completed tip is identical."""
+        self.queue[0]['branch'] = 'other'
+        entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
+        self.assertTrue(worktrees._candidate_reason(self.env, entry, False, self.queue))
+
+    # A branch switch invalidates the inventory's completion evidence at the same HEAD.
+    def test_changed_branch_invalidates_inventory_completion_evidence(self):
+        """Keep a fresh branch that replaced the inventoried integrated branch."""
+        records = worktrees.list_worktrees(self.repo)
+        self.git(self.linked, 'switch', '-c', 'fresh')
+        result = worktrees._prune_candidates(self.env, records, self.queue, lambda path: False, True)
+        self.assertNotIn(str(self.linked), result['removed'])
+        self.assertTrue(self.linked.exists())
+
+    # A superseding queue row invalidates older completion evidence.
+    def test_latest_branch_row_must_be_integrated(self):
+        """Keep branches with newer withdrawn, ready, running or blocked work."""
+        entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
+        for state in ('withdrawn', 'ready', 'in_run', 'blocked'):
+            with self.subTest(state=state):
+                newer = dict(self.queue[0], id=2, status=state)
+                self.assertTrue(worktrees._candidate_reason(self.env, entry, False, [newer, *self.queue]))
+
+    # An old completed tip cannot authorize removal of subsequent integrated work.
+    def test_changed_head_invalidates_completion_evidence(self):
+        """Keep new commits even after they reach the integration branch."""
+        entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
+        self.git(self.linked, 'commit', '--allow-empty', '-m', 'New unfinished work')
+        self.git(self.repo, 'merge', '--ff-only', 'integrated')
+        self.git(self.repo, 'push', 'origin', 'main')
+        self.assertTrue(worktrees._candidate_reason(self.env, entry, False, self.queue))
+
+    # Resolve abbreviated queue tips to full commits instead of comparing prefixes.
+    def test_unique_abbreviated_completed_tip_is_accepted(self):
+        """A unique Git abbreviation identifies the exact completed HEAD."""
+        self.queue[0]['tip'] = self.queue[0]['tip'][:12]
+        entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
+        self.assertEqual(worktrees._candidate_reason(self.env, entry, False, self.queue), '')
+
+    # Missing, invalid and nonmatching completion hashes must retain the worktree.
+    def test_invalid_or_different_completed_tip_is_kept(self):
+        """Reject absent, malformed and unresolved queue tip values."""
+        entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
+        for tip in ('', None, 'HEAD', 'a' * 40, self.queue[0]['tip'][:4]):
+            with self.subTest(tip=tip):
+                self.assertTrue(worktrees._candidate_reason(self.env, entry, False, [dict(self.queue[0], tip=tip)]))
 
     # A failed fetch cannot authorize removal using a stale remote ref.
     def test_fetch_failure_keeps_candidate(self):
@@ -289,7 +350,7 @@ class CleanupTests(unittest.TestCase):
         for state in ('ready', 'in_run', 'blocked'):
             self.assertTrue(worktrees._candidate_reason(self.env, entry, False, [{'branch': 'integrated', 'status': state}]))
         (self.linked / 'new').write_text('data', encoding='utf-8')
-        self.assertTrue(worktrees._candidate_reason(self.env, entry, False, []))
+        self.assertTrue(worktrees._candidate_reason(self.env, entry, False, self.queue))
 
     # An active native Bee's assigned worktree is protected even without an agent row.
     def test_native_bee_assignment_protects_worktree(self):
@@ -304,7 +365,7 @@ class CleanupTests(unittest.TestCase):
         self.env.conn = conn
         self.agents = [{'status': 'running', 'phase': 'queen', 'project': 'test', 'plan_path': 'plan', 'cwd': str(self.repo)}]
         entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
-        self.assertTrue(worktrees._candidate_reason(self.env, entry, False, []))
+        self.assertTrue(worktrees._candidate_reason(self.env, entry, False, self.queue))
 
     # Both active agent states protect their current worktree.
     def test_starting_and_running_agents_protect_worktree(self):
@@ -314,7 +375,7 @@ class CleanupTests(unittest.TestCase):
             for status in ('starting', 'running'):
                 with self.subTest(phase=phase, status=status):
                     self.agents = [{'status': status, 'phase': phase, 'cwd': str(self.linked)}]
-                    self.assertTrue(worktrees._candidate_reason(self.env, entry, False, []))
+                    self.assertTrue(worktrees._candidate_reason(self.env, entry, False, self.queue))
 
     # Projects protect all ignored files unless they opt into build output.
     def test_project_cleanup_settings_default_empty(self):
@@ -356,7 +417,7 @@ class CleanupTests(unittest.TestCase):
     # Once all checks pass, removing a worktree leaves its branch intact.
     def test_candidate_removal_keeps_branch(self):
         """Once all checks pass, removing a worktree leaves its branch intact."""
-        result = worktrees._prune_candidates(self.env, worktrees.list_worktrees(self.repo), [], lambda path: False, False)
+        result = worktrees._prune_candidates(self.env, worktrees.list_worktrees(self.repo), self.queue, lambda path: False, False)
         self.assertIn(str(self.linked), result['removed'])
         self.git(self.repo, 'show-ref', '--verify', 'refs/heads/integrated')
 
@@ -375,7 +436,7 @@ class CleanupTests(unittest.TestCase):
     # Unknown process state must never authorize removal.
     def test_unknown_process_state_keeps_candidate(self):
         """Unknown process state must never authorize removal."""
-        result = worktrees._prune_candidates(self.env, worktrees.list_worktrees(self.repo), [], lambda path: None, False)
+        result = worktrees._prune_candidates(self.env, worktrees.list_worktrees(self.repo), self.queue, lambda path: None, False)
         self.assertNotIn(str(self.linked), result['removed'])
         self.assertTrue(self.linked.exists())
 
@@ -395,6 +456,7 @@ class CleanupTests(unittest.TestCase):
         self.git(self.linked, 'add', 'new')
         self.git(self.linked, 'commit', '-m', 'Not integrated')
         tip = self.git(self.linked, 'rev-parse', 'HEAD').stdout.strip()
+        self.queue[0]['tip'] = tip
         self.git(self.repo, 'update-ref', 'refs/remotes/origin/main', tip)
         self.git(self.repo, 'config', 'remote.origin.fetch', '+refs/heads/other:refs/remotes/origin/other')
         self.assertEqual(self.git(self.origin, 'rev-parse', 'refs/heads/main').stdout.strip(), base)
@@ -457,12 +519,12 @@ class CleanupTests(unittest.TestCase):
         self.assertIn(str(self.linked), result['removed'])
         self.assertTrue(self.linked.exists())
 
-    # An integrated detached worktree is eligible for cleanup.
-    def test_verified_detached_head_can_be_removed(self):
-        """An integrated detached worktree is eligible for cleanup."""
+    # A detached worktree lacks exact branch completion evidence.
+    def test_verified_detached_head_is_kept(self):
+        """Keep detached worktrees even when their commit is already integrated."""
         self.git(self.linked, 'checkout', '--detach')
         result = worktrees._prune_with_checker(self.env, lambda path: False, False)
-        self.assertIn(str(self.linked), result['removed'])
+        self.assertNotIn(str(self.linked), result['removed'])
 
     # Explicitly allowed ignored output does not protect the worktree.
     def test_verified_ignored_build_output_can_be_removed(self):
