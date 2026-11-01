@@ -13,15 +13,15 @@ class OwnerCheckTests(RoundCase):
         super().finish(name, final=final, status=status, project=project)
         runtime.upsert_agent(self.conn, project, name, {"pid": None})
 
-    def integrated_hive_with_question(self):
-        """Start the Queen, mark her branch integrated, let her ask the owner check question and end; return the question id."""
+    def integrated_hive_with_question(self, item="owner-check"):
+        """Start the Queen, mark her branch integrated, let her ask the owner check question (item `item`) and end; return the question id."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         queen = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] in ("running", "starting")][0]
         ready = db.add_ready(self.conn, "testproj", "branch", "abc", REL, "")
         self.conn.execute("UPDATE hives SET ready_id=? WHERE project='testproj' AND plan_path=?", (ready["id"], REL))
         runtime.queue_upsert(self.conn, "testproj", "branch", status="integrated")
-        qid = db.add_question(self.conn, "testproj", REL, "owner-check", "Please check the courtyard light.", "")
+        qid = db.add_question(self.conn, "testproj", REL, item, "Please check the courtyard light.", "")
         self.finish(queen["name"], final="Integrated and deployed. WAITING_FOR_OWNER")
         self.round()
         return qid
@@ -47,6 +47,19 @@ class OwnerCheckTests(RoundCase):
         db.answer_question(self.conn, qid, "ok", "owner")
         self.round()
         self.assertEqual(self.status(), "DONE")
+
+    def test_item_with_a_suffix_is_an_owner_check_too(self):
+        """A Queen that names the item owner-check-build17 keeps the Hive open; a not-ok answer reopens it and the plan never becomes DONE."""
+        qid = self.integrated_hive_with_question("owner-check-build17")
+        self.assertNotEqual(self.status(), "DONE")
+        self.assertEqual(hives.get(self.conn, "testproj", REL)["state"], "owner_check")
+        db.answer_question(self.conn, qid, "Nicht in Ordnung: er faellt noch um.", "owner")
+        self.round()
+        self.assertNotEqual(self.status(), "DONE")
+        self.assertEqual(len(self.queens()), 2)
+        self.assertEqual(db.rows(self.conn, "SELECT item FROM questions WHERE id=?", (qid,))[0]["item"], "owner-check-answered")
+        db.add_question(self.conn, "testproj", REL, "owner-check-build18", "Check again.", "")
+        self.assertEqual([q["item"] for q in hives.owner_check_questions(self.conn, "testproj", REL)], ["owner-check-build18"])
 
     def test_other_answer_sends_the_next_queen_to_fix(self):
         """Any other answer starts the next Queen of the same Hive; the plan stays open and the old ready row no longer closes it."""

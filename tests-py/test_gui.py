@@ -90,6 +90,21 @@ class SnapshotTest(unittest.TestCase):
         waiting = [b for b in snap["bees"] if b["status"] == "waiting"]
         self.assertEqual([(b["name"], b["hive"], b["model"], b["task"]) for b in waiting], [("–", "AI-LEVELS", "–", "P4")])   # no name and no stored provider before the Bee starts
 
+    # A plan whose status is PAUSED shows as paused in its Hive row, without a Queen and with one.
+    def test_paused_plan_shows_in_the_hive_row(self):
+        """The Hive row of a PAUSED plan is flagged and says so; a plan that is not paused keeps its normal status."""
+        self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','PAUSED','2026-11-01T12:00:00')")
+        self.conn.commit()
+        snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        row = snap["hives"][0]
+        self.assertTrue(row["paused"])
+        self.assertIn("paused", row["status"])
+        self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','READY','2026-11-01T12:00:00')")
+        self.conn.commit()
+        row = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)["hives"][0]
+        self.assertFalse(row["paused"])
+        self.assertNotIn("paused", row["status"])
+
     # Only a running Queen starts Bees, so the assignments of a Hive without one are not waiting Bees.
     def test_assignments_of_a_hive_without_a_running_queen_are_not_waiting_bees(self):
         """With the Queen ended, the stored Bee assignment of the Hive is not shown as a waiting Bee and does not count as a Bee of the Hive."""
@@ -236,6 +251,7 @@ class WindowTest(unittest.TestCase):
         from haivequeen import gui
         try:
             root = tk.Tk()
+            root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
         except tk.TclError:
             self.skipTest("no display")
         tmp = tempfile.TemporaryDirectory()
@@ -259,6 +275,7 @@ class WindowTest(unittest.TestCase):
         from haivequeen import gui
         try:
             root = tk.Tk()
+            root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
         except tk.TclError:
             self.skipTest("no display")
         tmp = tempfile.TemporaryDirectory()
@@ -285,6 +302,7 @@ class WindowTest(unittest.TestCase):
         from haivequeen import gui
         try:
             root = tk.Tk()
+            root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
         except tk.TclError:
             self.skipTest("no display")
         tmp = tempfile.TemporaryDirectory()
@@ -318,6 +336,7 @@ class WindowTest(unittest.TestCase):
         for width, height in ((800, 500), (1000, 600), (1366, 768), (1600, 900), (1920, 1050), (2400, 1300)):
             try:
                 root = tk.Tk()
+                root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
             except tk.TclError:
                 self.skipTest("no display")
             tmp = tempfile.TemporaryDirectory()

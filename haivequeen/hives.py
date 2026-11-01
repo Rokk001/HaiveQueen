@@ -110,11 +110,18 @@ def owner_check_ok(answer):
     return normalized in OWNER_CHECK_OK
 
 
+# The owner check questions of a Hive, whatever suffix the Queen gave the item (owner-check, owner-check-build17, ...).
+def owner_check_questions(conn, project, plan):
+    """Questions of the plan whose item is owner-check or owner-check-<suffix>, oldest first; owner-check-answered marks one that was already handled."""
+    return [q for q in runtime.list_questions(conn, project, plan=plan)
+            if q['item'] == 'owner-check' or (str(q['item']).startswith('owner-check-') and q['item'] != 'owner-check-answered')]
+
+
 # Return the owner check step of an integrated Hive: ('wait', ids) while the owner has not answered, ('fix',) when his answer says something is not right, None when there is no owner check or he said ok.
 def owner_check_step(conn, project, plan):
     """Return the owner check step of an integrated Hive: ('wait', ids) while the owner has not answered, ('fix',) when his answer says something is not right, None when there is no owner check or he said ok."""
     import re
-    asked = runtime.list_questions(conn, project, plan=plan, item='owner-check')
+    asked = owner_check_questions(conn, project, plan)
     if not asked:
         return None
     last = asked[-1]
@@ -213,7 +220,7 @@ def wait_for_owner_check(conn, project, plan, questions):
 def reopen_after_owner_check(conn, project, plan):
     """Reopen a Hive after a owner check answer that says something is not right: the old ready row no longer closes the plan and the next Queen fixes exactly that."""
     with db.transaction(conn):
-        conn.execute("UPDATE questions SET item='owner-check-answered' WHERE project=? AND plan_path=? AND item='owner-check' AND status='answered'", (project, plan))
+        conn.execute("UPDATE questions SET item='owner-check-answered' WHERE project=? AND plan_path=? AND (item='owner-check' OR (item LIKE 'owner-check-%' AND item!='owner-check-answered')) AND status='answered'", (project, plan))
         conn.execute("UPDATE hives SET state='waiting',ready_id=NULL,questions_json=NULL WHERE project=? AND plan_path=?", (project, plan))
         conn.execute("DELETE FROM hive_integration WHERE project=? AND plan_path=?", (project, plan))
 
@@ -633,6 +640,9 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 faults.check_round(env, 0, False)
                 loop.run_hook(env, loop._state_summary(env))
             return result
+    if not dry_run:
+        for env in envs:   # the global gates are open: a start blocker written while HaiveQueen was paused or stopped is stale
+            conn.execute("UPDATE kv SET value='' WHERE project=? AND key LIKE 'hive-blocker:%' AND value IN ('PAUSED','STOP')", (env.name,))
     deferred = {}
     if not dry_run:
         deferred = migrate_once(conn, envs)

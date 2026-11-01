@@ -394,7 +394,7 @@ class Dashboard:
         rows = s["hives"]
         sub = "%d hives across %d apiaries" % (len(rows), s["tiles"]["apiaries"]) + ("  (%s)" % s["project"] if s["project"] else "")
         state = s["run_state"]
-        self.panel(x0, y0, x1, y1, "ACTIVE HIVES", sub if state == "RUNNING" else state + "  " + sub, (("Enter", "live"), ("P", "pause/resume"), ("F", "apiary")))
+        self.panel(x0, y0, x1, y1, "ACTIVE HIVES", sub if state == "RUNNING" else state + "  " + sub, (("Enter", "live"), ("P", "pause/resume"), ("Space", "plan"), ("F", "apiary")))
         for name, x in (("#", 24), ("HIVE", 90), ("APIARY", 218), ("QUEEN", 312), ("BEES", 386), ("PROGRESS", 436), ("CONTEXT", 576), ("TOKENS", 670), ("STATUS", 772)):
             self.text(x0 + x, y0 + 56, name, 13, "dim", "w")
         self.pick_clamp("hives", len(rows))
@@ -712,9 +712,9 @@ class Dashboard:
 
     # Map keys to actions.
     def on_key(self, event):
-        """P pause/resume, F apiary filter, M queen menu of the selected Hive, X stop the selected Bee, C clear and S save the log, A toggle auto-scroll, Up/Down move the Hive selection, Enter opens the live view."""
+        """P pause/resume, Space pause/resume the selected plan, F apiary filter, M queen menu of the selected Hive, X stop the selected Bee, C clear and S save the log, A toggle auto-scroll, Up/Down move the Hive selection, Enter opens the live view."""
         key = (event.keysym or "").lower()
-        {"p": self.toggle_pause, "f": self.next_project, "m": self.hive_menu, "x": self.stop_bee, "c": self.clear_log, "s": self.save_log,
+        {"p": self.toggle_pause, "f": self.next_project, "m": self.hive_menu, "space": self.toggle_hive_pause, "x": self.stop_bee, "c": self.clear_log, "s": self.save_log,
          "a": self.toggle_autoscroll, "up": lambda: self.move(-1), "down": lambda: self.move(1), "return": self.open_live}.get(key, lambda: None)()
 
     # Move the Hive selection up or down.
@@ -758,10 +758,28 @@ class Dashboard:
         menu = tk.Menu(self.root, tearoff=0, bg=COL["panel"], fg=COL["text"], activebackground=COL["select"], activeforeground=COL["gold"], font=(self.mono, 11))
         menu.add_command(label="Restart Queen of %s" % hive["name"], command=lambda: self.queen_action(hive, "requeen"))
         menu.add_command(label="End Queen and Bees of %s" % hive["name"], command=lambda: self.queen_action(hive, "dequeen"))
+        menu.add_separator()
+        menu.add_command(label=("Resume plan %s" if hive["paused"] else "Pause plan %s") % hive["name"], command=lambda: self.toggle_hive_pause(hive))
         try:
             menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
         finally:
             menu.grab_release()
+
+    # Pause or resume the plan of a Hive.
+    def toggle_hive_pause(self, hive=None):
+        """Set the status of the Hive's plan file to PAUSED (no new Queen or Bee is started for it; a running Queen keeps working) or back to READY; key Space acts on the selected Hive."""
+        from . import runtime
+        if hive is None:
+            rows = (self.snap or {}).get("hives") or []
+            if not rows:
+                return
+            hive = rows[min(self.sel["hives"], len(rows) - 1)]
+        try:
+            runtime.set_plan_status(self.conn, hive["apiary"], hive["plan_path"], "READY" if hive["paused"] else "PAUSED")
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("HaiveQueen", "Could not change the plan status: %s" % exc, parent=self.root)
+        self.refresh()
 
     # Restart or end the Queen of a Hive through the bzz command.
     def queen_action(self, hive, command):
@@ -874,7 +892,7 @@ class Dashboard:
     def help(self):
         """Show the keyboard and mouse controls."""
         from tkinter import messagebox
-        messagebox.showinfo("HaiveQueen", "P  pause / resume\nF  next apiary filter\nM / right click  queen menu of the hive\nUp/Down  select hive\nClick  select a row\nEnter / double click  live output of the row\n"
+        messagebox.showinfo("HaiveQueen", "P  pause / resume\nSpace  pause / resume the selected plan\nF  next apiary filter\nM / right click  queen menu of the hive\nUp/Down  select hive\nClick  select a row\nEnter / double click  live output of the row\n"
                             "X  stop the selected bee\nC  clear log   S  save log   A  auto-scroll", parent=self.root)
 
 

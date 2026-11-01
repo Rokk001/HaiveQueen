@@ -166,11 +166,11 @@ def agent_tokens(agent) -> tuple:
 
 
 # Describe one Hive for the active-hives table.
-def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None) -> dict:
+def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None) -> dict:
     """Row of one Hive: name, apiary, queen with context and tokens, Bees busy/assigned, progress (finished packages of all packages), status and runtime.
 
     `assigned` and `completed` come from bee_tables, `ctx_limit(agent)` gives an agent's context limit in tokens, `agents_all` (all rows, also archived)
-    gives the Hive's token total over its whole life, `implemented` maps (project, plan) to the packages reported implemented but not verified."""
+    gives the Hive's token total over its whole life, `implemented` maps (project, plan) to the packages reported implemented but not verified, `paused` is the set of (project, plan) whose plan status is PAUSED."""
     key = (hive["project"], hive["plan_path"])
     mine = [a for a in agents if (a.get("project"), a.get("plan_path")) == key]
     queen = hive.get("queen")
@@ -181,7 +181,10 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     running_pkgs = {a.get("package") for a in mine if a.get("phase") == "bee" and a.get("status") in runtime.ACTIVE_STATUSES and a.get("package")}
     open_pkgs = {p for (pr, pl, p) in (assigned or {}) if (pr, pl) == key and p not in done} | running_pkgs
     progress = min(100, round(100 * len(done) / total_pkg)) if total_pkg else 0
-    if live:
+    is_paused = key in (paused or ())
+    if is_paused:
+        status, kind = ("Running, plan paused" if live else "Plan paused"), "wait"
+    elif live:
         status, kind = "Running", "ok"
     else:
         status = status_text(hive) or "Idle"
@@ -195,7 +198,7 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
             "queen_ctx": int((queen or {}).get("ctxTokens") or 0) if live else 0, "queen_ctx_limit": int(ctx_limit(queen)) if live and ctx_limit else 0,
             "queen_tin": qin, "queen_tout": qout, "hive_tin": hin, "hive_tout": hout,
             "steps": {b["name"]: b["step"] for b in hive.get("bees", []) if b.get("step")},
-            "bees_running": len(running_pkgs), "bees_total": len(open_pkgs) if live else len(running_pkgs), "live": live, "done": len(done), "implemented": (implemented or {}).get(key, 0), "total": total_pkg, "progress": progress,
+            "bees_running": len(running_pkgs), "bees_total": len(open_pkgs) if live else len(running_pkgs), "live": live, "paused": is_paused, "done": len(done), "implemented": (implemented or {}).get(key, 0), "total": total_pkg, "progress": progress,
             "status": status, "kind": kind, "runtime": fmt_elapsed(queen.get("started_at"), now) if live else ""}
 
 
@@ -415,7 +418,8 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
             return CONTEXT_FALLBACK
     assigned, completed = bee_tables(conn)
     impl = implemented_counts(conn)
-    hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl) for h in hives.hive_data(conn, project, agents)]
+    paused = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='PAUSED'")}
+    hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused) for h in hives.hive_data(conn, project, agents)]
     live = [a for a in agents if a.get("status") in runtime.ACTIVE_STATUSES]
     queens = [a for a in live if a.get("phase") == "queen"]
     steps = {k: v for h in hive_rows for k, v in h["steps"].items()}

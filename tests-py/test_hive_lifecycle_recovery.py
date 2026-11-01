@@ -221,6 +221,16 @@ class HiveLifecycleRecoveryTests(RoundCase):
                 self.assertEqual(hives.state_label(data), label)
                 self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'waiting')
 
+    # A blocker written while HaiveQueen was paused or stopped disappears once the gates are open.
+    def test_stale_global_blocker_is_cleared_when_the_gates_are_open(self):
+        """PAUSED and STOP blockers are removed by the next round; another blocker text is left alone."""
+        self.plan('IN_PROGRESS')
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        for stale in ('PAUSED', 'STOP'):
+            runtime.kv_set(self.conn, 'testproj', 'hive-blocker:' + REL, stale)
+            self.round()
+            self.assertNotIn(runtime.kv_get(self.conn, 'testproj', 'hive-blocker:' + REL), ('PAUSED', 'STOP'), stale)
+
     # Global gate presentation must not override owner questions or active agents.
     def test_global_gate_preserves_owner_priority_and_active_agent(self):
         """Question IDs remain visible and active Hive blockers are untouched."""

@@ -83,8 +83,19 @@ class LiveWindowTest(unittest.TestCase):
         import tkinter as tk
         try:
             self.root = tk.Tk()
+            self.root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
         except tk.TclError:
             self.skipTest("no display")
+        class QuietToplevel(tk.Toplevel):
+            """A Toplevel that is fully transparent from the start, so the live windows of the tests do not flash on the user's screen."""
+
+            def __init__(self, *args, **kw):
+                super().__init__(*args, **kw)
+                self.attributes("-alpha", 0.0)
+
+        quiet = mock.patch("tkinter.Toplevel", QuietToplevel)
+        quiet.start()
+        self.addCleanup(quiet.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.patch = mock.patch.dict(os.environ, {"BZZ_DATA_DIR": self.tmp.name, "BZZ_LOG_DIR": str(Path(self.tmp.name) / "logs")})
         self.patch.start()
