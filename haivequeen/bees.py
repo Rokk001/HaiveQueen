@@ -137,6 +137,8 @@ def escalation_providers(env, plan, package):
 # Record an attempt and file one owner question when the top class is exhausted.
 def report_attempt(env, plan, package, cls, outcome, attempt=None):
     """Record an outcome and ask once after the highest class fails repeatedly."""
+    from . import native_bee
+    native_bee.finish(env.conn, env.name, plan, package)
     record_attempt(env.conn, env.name, plan, package, cls, outcome, attempt)
     if outcome == 'succeeded':
         env.conn.execute('DELETE FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package))
@@ -188,7 +190,12 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             return False
         from . import platform as osplat
         running = [{**a, 'status': 'running'} for a in active if a.get('status') in ('running', 'starting') or (a.get('pid') and osplat.process_alive(a['pid']))]
-        if sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
+        from . import native_bee
+        native_running = [item for item in native_bee.records(env.conn, env.name) if item.get('plan') == plan and item.get('running')]
+        if any(item.get('package') == package for item in native_running):
+            return False
+        native_count = len(native_running)
+        if native_count + sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
             return False
         package_row = next((p for p in env.packages(plan) if p['id'] == package), None)
         if not package_row:
@@ -252,6 +259,16 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         pick = scheduler.get_provider(env.providers, provider)
         if provider == hive['provider'] and not pick.get('endpoint'):
             if not no_subagents or pick.get('protocol') != 'codex':
+                import os
+                if not os.environ.get('BZZ_TEST_NOSTART'):
+                    from . import native_bee
+                    from .terminal import TerminalError
+                    term = terminal or loop.get_terminal(env.settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes'))
+                    try:
+                        native_bee.start(env, plan, package, name, task, term, env.settings.get('window', 'HaiveQueen'))
+                    except TerminalError as exc:
+                        env.log('native Bee pane not opened: %s' % exc)
+                        return False
                 return {'kind': 'subagent', 'provider': provider, 'class': selected_class}
         if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
             return False

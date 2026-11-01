@@ -303,7 +303,7 @@ class IsolationLiveDataTest(unittest.TestCase):
         """logs/<any project>/..., the STOP flag and the self-update lock are left out; other files are counted."""
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            for rel in ("logs/ODP/a.log", "logs/HaiveQueen/b.log", "STOP", "self-update.lock", "loop.lock", "runs/x/y.txt"):
+            for rel in ("logs/ODP/a.log", "logs/HaiveQueen/b.log", "STOP", "self-update.lock", "loop.lock", "worktree-cleanup.lock", "runs/x/y.txt"):
                 (base / rel).parent.mkdir(parents=True, exist_ok=True)
                 (base / rel).write_text("x", encoding="utf-8")
             for rel in ("logs/c.log", "config.toml", "other/z.txt"):

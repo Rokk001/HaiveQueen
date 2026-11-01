@@ -949,7 +949,7 @@ def pane_wrap(a, argv):
 def parse_args(argv=None):
     """Parse the command line (see the module help)."""
     p = argparse.ArgumentParser(prog="haivequeen.agent_runner")
-    p.add_argument("--project", required=True)
+    p.add_argument("--project", required=True, metavar="APIARY", help="Apiary name")
     p.add_argument("--name", required=True, help="agent id")
     p.add_argument("--provider", required=True, help="provider name from config.toml")
     p.add_argument("--plan", default="")

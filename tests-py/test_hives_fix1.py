@@ -42,6 +42,15 @@ class PlanBranchTests(RoundCase):
 class NoStartReasonTests(RoundCase):
     """Every Hive that does not start gets a reason in the log, and no technical question goes to the owner."""
 
+    # A deferred start releases its Hive claim for the next round.
+    def test_deferred_queen_start_releases_hive_claim(self):
+        """A Queen that did not start leaves its Hive waiting."""
+        from unittest import mock
+        self.plan('READY', [{'id': 'P1', 'title': 'First'}])
+        with mock.patch.object(loop, '_do_start', return_value=0):
+            self.round()
+        self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'waiting')
+
     def test_unknown_branch_asks_nobody_and_logs_the_reason(self):
         """A plan without a branch in plan or state file stays waiting, creates no owner question and says why."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -127,7 +136,56 @@ class HeaderTests(unittest.TestCase):
 
 
 class ProcessBeePaneTests(RoundCase):
-    """A Queen gets her own pane; a Bee that runs as its own process gets none and shows only as a line in its Hive (A3, D3)."""
+    """A Queen and each process Bee get a pane in their Hive."""
+
+    # Defer a Bee before creating its agent record if its Hive pane is absent.
+    def test_bee_waits_before_creating_agent_without_hive_pane(self):
+        """A missing Hive pane does not leave a starting Bee."""
+        import os
+        from unittest import mock
+        from haivequeen import scheduler as sch
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
+        env = self.env()
+        os.environ.pop('BZZ_TEST_NOSTART', None)
+        action = {'name': 'Ada', 'type': 'claude', 'phase': 'bee', 'plan': REL, 'package': 'P1', 'cwd': str(self.wt), 'prompt': 'task', 'class': 'medium'}
+        state = {'names': [], 'busy': [], 'plan_status': {sch.norm_plan(REL): 'IN_PROGRESS'}, 'by_path': {sch.norm_plan(REL): {'path': REL}}}
+        term = mock.Mock()
+        term.list_panes.return_value = []
+        ctx = {'env': env, 'state': state, 'pool': loop.Pool({'claude': 5}, 0), 'report': [], 'dry': False, 'terminal': term, 'settle': 0, 'poll': 0, 'tries': 1}
+        self.assertEqual(loop._do_start(ctx, action, forced_pick=sch.get_provider(env.providers, 'claude')), 0)
+        self.assertIsNone(runtime.get_agent(self.conn, env.name, 'Ada'))
+
+    # Defer before creating an agent when its Hive row cannot yet be opened.
+    def test_queen_waits_before_creating_agent_for_blocked_row(self):
+        """A deferred row does not leave a starting Queen behind."""
+        import os
+        from unittest import mock
+        from haivequeen import scheduler as sch
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
+        env = self.env()
+        os.environ.pop('BZZ_TEST_NOSTART', None)
+        action = {'name': 'Ada', 'type': 'claude', 'phase': 'queen', 'plan': REL, 'package': '', 'cwd': str(self.wt), 'prompt': 'task', 'class': 'medium'}
+        state = {'names': [], 'busy': [], 'plan_status': {sch.norm_plan(REL): 'IN_PROGRESS'}, 'by_path': {sch.norm_plan(REL): {'path': REL}}}
+        ctx = {'env': env, 'state': state, 'pool': loop.Pool({'claude': 5}, 0), 'report': [], 'dry': False, 'terminal': mock.Mock(), 'settle': 0, 'poll': 0, 'tries': 1}
+        with mock.patch.object(loop, 'hive_row_waits_for_bees', return_value=True, create=True):
+            self.assertEqual(loop._do_start(ctx, action, forced_pick=sch.get_provider(env.providers, 'claude')), 0)
+        self.assertIsNone(runtime.get_agent(self.conn, env.name, 'Ada'))
+
+    # Defer a Queen while its Apiary cannot yet be opened at full width.
+    def test_queen_waits_before_creating_agent_for_blocked_apiary(self):
+        """A deferred Apiary leaves no starting Queen."""
+        import os
+        from unittest import mock
+        from haivequeen import scheduler as sch
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
+        env = self.env()
+        os.environ.pop('BZZ_TEST_NOSTART', None)
+        action = {'name': 'Ada', 'type': 'claude', 'phase': 'queen', 'plan': REL, 'package': '', 'cwd': str(self.wt), 'prompt': 'task', 'class': 'medium'}
+        state = {'names': [], 'busy': [], 'plan_status': {sch.norm_plan(REL): 'IN_PROGRESS'}, 'by_path': {sch.norm_plan(REL): {'path': REL}}}
+        ctx = {'env': env, 'state': state, 'pool': loop.Pool({'claude': 5}, 0), 'report': [], 'dry': False, 'terminal': mock.Mock(), 'settle': 0, 'poll': 0, 'tries': 1}
+        with mock.patch.object(loop, 'hive_row_waits_for_bees', return_value=False), mock.patch.object(loop, 'apiary_waits_for_bees', return_value=True, create=True):
+            self.assertEqual(loop._do_start(ctx, action, forced_pick=sch.get_provider(env.providers, 'claude')), 0)
+        self.assertIsNone(runtime.get_agent(self.conn, env.name, 'Ada'))
 
     def start(self, phase):
         """Start one agent of this phase through the real start path with the pane, the Queen hand-over and the headless launch recorded; return the two call lists
@@ -135,6 +193,7 @@ class ProcessBeePaneTests(RoundCase):
         import os
         from unittest import mock
         from haivequeen import scheduler as sch
+        from haivequeen.terminal.base import PaneInfo
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
         env = self.env()
         os.environ.pop("BZZ_TEST_NOSTART", None)
@@ -142,8 +201,10 @@ class ProcessBeePaneTests(RoundCase):
         self.queens = []
         action = {"name": "Ada", "type": "claude", "phase": phase, "plan": REL, "package": "P1" if phase == "bee" else "", "cwd": str(self.wt), "prompt": "task", "class": "medium"}
         state = {"names": [], "busy": [], "plan_status": {sch.norm_plan(REL): "IN_PROGRESS"}, "by_path": {sch.norm_plan(REL): {"path": REL}}}
-        ctx = {"env": env, "state": state, "pool": loop.Pool({"claude": 5}, 0), "report": [], "dry": False, "terminal": None, "settle": 0, "poll": 0, "tries": 1}
-        with mock.patch.object(loop, "launch_agent", lambda *a, **k: panes.append(a[3]["name"])), mock.patch.object(loop, "start_queen", lambda *a, **k: self.queens.append(a[3]["name"])), mock.patch.object(loop, "launch_headless", lambda *a, **k: headless.append(a[1]["name"]), create=True):
+        term = mock.Mock()
+        term.list_panes.return_value = [PaneInfo('window.1', loop.hive_pane_title(env.name, REL, loop.is_test_runtime()), 1, True)]
+        ctx = {"env": env, "state": state, "pool": loop.Pool({"claude": 5}, 0), "report": [], "dry": False, "terminal": term, "settle": 0, "poll": 0, "tries": 1}
+        with mock.patch.object(loop, "launch_agent", lambda *a, **k: panes.append(a[3]["name"])), mock.patch.object(loop, "start_queen", lambda *a, **k: self.queens.append(a[3]["name"])), mock.patch.object(loop, "launch_headless", lambda *a, **k: headless.append(a[1]["name"]), create=True), mock.patch.object(loop, "start_bee_pane", lambda *a, **k: panes.append(a[3]["name"]), create=True):
             loop._do_start(ctx, action, forced_pick=sch.get_provider(env.providers, "claude"))
         return panes, headless
 
@@ -152,9 +213,98 @@ class ProcessBeePaneTests(RoundCase):
         self.assertEqual(self.start("queen"), ([], []))
         self.assertEqual(self.queens, ["Ada"])
 
-    def test_process_bee_gets_no_pane(self):
-        """A Bee process is started without a pane."""
-        self.assertEqual(self.start("bee"), ([], ["Ada"]))
+    # Prepare block heights after recording the starting Queen and before starting its pane.
+    def test_queen_start_prepares_blocks_before_pane(self):
+        """The scheduler prepares the first Queen's block before opening her pane."""
+        import os
+        from unittest import mock
+        from haivequeen import hives, scheduler as sch
+        self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
+        env = self.env()
+        os.environ.pop("BZZ_TEST_NOSTART", None)
+        action = {"name": "Ada", "type": "claude", "phase": "queen", "plan": REL, "package": "", "cwd": str(self.wt), "prompt": "task", "class": "medium"}
+        state = {"names": [], "busy": [], "plan_status": {sch.norm_plan(REL): "IN_PROGRESS"}, "by_path": {sch.norm_plan(REL): {"path": REL}}}
+        term = mock.Mock()
+        term.list_panes.return_value = []
+        ctx = {"env": env, "envs": [env], "state": state, "pool": loop.Pool({"claude": 5}, 0), "report": [], "dry": False, "terminal": term, "settle": 0, "poll": 0, "tries": 1}
+        steps = []
+        # Record the Queen state seen by block preparation.
+        def prepare(*args):
+            """Observe the recorded Queen before the pane opens."""
+            steps.append(runtime.get_agent(self.conn, env.name, 'Ada')['status'])
+        with mock.patch.object(hives, 'prepare_blocks_for_queen', side_effect=prepare), mock.patch.object(loop, 'start_queen', side_effect=lambda *args: steps.append('pane')):
+            loop._do_start(ctx, action, forced_pick=sch.get_provider(env.providers, 'claude'))
+        self.assertEqual(steps, ['starting', 'pane'])
+
+    def test_process_bee_gets_a_pane(self):
+        """A Bee process starts in its own Hive pane."""
+        self.assertEqual(self.start("bee"), (["Ada"], []))
+
+    # Check the Bee split target and its agent record.
+    def test_bee_split_keeps_room_for_queen_head(self):
+        """The first Bee uses only the width left after the Queen's head."""
+        from unittest import mock
+        from haivequeen.terminal.base import PaneInfo
+        env = self.env()
+        title = loop.hive_pane_title(env.name, REL, loop.is_test_runtime())
+        term = mock.Mock()
+        term.list_panes.return_value = [PaneInfo('window.1', title, 1, True)]
+        term.split_pane.return_value = 'window.2'
+        self.agent('Cleo', phase='queen', status='running', plan_path=REL, pane_id='window.1', paneCols=80)
+        spec = {'name': 'Ada', 'person': 'Ada', 'plan': REL, 'model_long': 'model'}
+        lines = [[('', '')], [('│ ', ''), ('Q' * 56 + ' ' * 964, ''), (' │', '')], [('│ ', ''), ('Q' + ' ' * 1019, ''), (' │', '')]]
+        with mock.patch.object(loop, 'runner_argv', return_value=['runner']), mock.patch('haivequeen.hivepane.frame_lines', return_value=lines):
+            loop.start_bee_pane(env, term, 'window', spec)
+        self.assertEqual(term.split_pane.call_args.args[5], 0.25)
+
+    # Give the Bee its name when both full headers cannot fit.
+    def test_bee_split_preserves_queen_space_when_crowded(self):
+        """The Bee takes only the width needed for its label in a crowded row."""
+        from unittest import mock
+        from haivequeen.terminal.base import PaneInfo
+        env = self.env()
+        title = loop.hive_pane_title(env.name, REL, loop.is_test_runtime())
+        term = mock.Mock()
+        term.list_panes.return_value = [PaneInfo('window.1', title, 1, True)]
+        term.split_pane.return_value = 'window.2'
+        self.agent('Cleo', phase='queen', status='running', plan_path=REL, pane_id='window.1', paneCols=80)
+        spec = {'name': 'Ada', 'person': 'Ada', 'plan': REL, 'model_long': 'model'}
+        lines = [[('', '')], [('│ ', ''), ('Q' * 76 + ' ' * 944, ''), (' │', '')], [('│ ', ''), ('Q' + ' ' * 1019, ''), (' │', '')]]
+        with mock.patch.object(loop, 'runner_argv', return_value=['runner']), mock.patch('haivequeen.hivepane.frame_lines', return_value=lines):
+            loop.start_bee_pane(env, term, 'window', spec)
+        self.assertEqual(term.split_pane.call_args.args[5], len('Bee: ADA') / 80)
+
+    # Check the Bee split target and its agent record.
+    def test_bee_splits_its_own_hive(self):
+        """The first process Bee starts to the right of its Hive's Queen."""
+        from unittest import mock
+        from haivequeen.terminal.base import PaneInfo
+        env = self.env()
+        title = loop.hive_pane_title(env.name, REL, loop.is_test_runtime())
+        term = mock.Mock()
+        term.list_panes.return_value = [PaneInfo('window.1', title, 1, True)]
+        term.split_pane.return_value = 'window.2'
+        spec = {'name': 'Ada', 'person': 'Ada', 'plan': REL, 'model_long': 'model'}
+        with mock.patch.object(loop, 'runner_argv', return_value=['runner']), mock.patch.object(env, 'update_agent') as update:
+            self.assertEqual(loop.start_bee_pane(env, term, 'window', spec), 'window.2')
+        self.assertEqual(term.split_pane.call_args.args[4:7], ('horizontal', 0.5, 'window.1'))
+        update.assert_called_once_with('Ada', {'pane_id': 'window.2', 'paneClosed': False})
+
+    # Check that later Bees stay in their own Hive row.
+    def test_next_bee_splits_the_previous_bee(self):
+        """A later Bee opens to the right of the preceding Bee of the same Hive."""
+        from unittest import mock
+        from haivequeen.terminal.base import PaneInfo
+        env = self.env()
+        title = loop.hive_pane_title(env.name, REL, loop.is_test_runtime())
+        term = mock.Mock()
+        term.list_panes.return_value = [PaneInfo('window.1', title, 1, True), PaneInfo('window.2', 'Bee', 2, True)]
+        term.split_pane.return_value = 'window.3'
+        spec = {'name': 'Bea', 'person': 'Bea', 'plan': REL, 'model_long': 'model'}
+        agents = [{'phase': 'bee', 'plan_path': REL, 'pane_id': 'window.2'}]
+        with mock.patch.object(loop, 'runner_argv', return_value=['runner']), mock.patch.object(env, 'update_agent'), mock.patch.object(runtime, 'list_agents', return_value=agents):
+            loop.start_bee_pane(env, term, 'window', spec)
+        self.assertEqual(term.split_pane.call_args.args[4:7], ('horizontal', 0.5, 'window.2'))
 
 
 class DeadBrainCodeTests(RoundCase):
@@ -272,6 +422,58 @@ class StallQuestionTests(RoundCase):
 
 class ApiaryWordTests(RoundCase):
     """F11: CLI messages call a project an Apiary."""
+
+    def test_all_project_option_help_calls_it_apiary(self):
+        """Every CLI project option is described to the user as an Apiary."""
+        import argparse
+        from haivequeen import cli
+        def visit(parser):
+            """Check this parser and each nested command."""
+            for action in parser._actions:
+                if '--project' in action.option_strings:
+                    self.assertEqual(action.metavar, 'APIARY')
+                    self.assertIn('Apiary', action.help or '')
+                if isinstance(action, argparse._SubParsersAction):
+                    for child in action.choices.values():
+                        visit(child)
+        visit(cli.build_parser())
+
+    def test_legacy_import_missing_apiary_error(self):
+        """The legacy import error names the missing Apiary."""
+        from haivequeen import legacy
+        with self.assertRaisesRegex(Exception, 'Apiary is required'):
+            legacy.import_legacy(self.conn, '')
+
+    def test_pane_and_runner_help_calls_project_apiary(self):
+        """Standalone pane and runner help describe the Apiary option."""
+        import subprocess
+        import sys
+        for module in ('agent_runner', 'hivepane', 'header'):
+            with self.subTest(module=module):
+                result = subprocess.run([sys.executable, '-m', 'haivequeen.' + module, '--help'], capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn('--project APIARY', result.stdout)
+                self.assertIn('Apiary name', result.stdout)
+
+    def test_display_log_and_cli_help_use_apiary_words(self):
+        """Scan tool-written display, round log and CLI help for the retired terminology."""
+        import argparse
+        import re
+        from haivequeen import cli, dashboard
+        self.round()
+        texts = [self.log(), dashboard.render(self.conn, width=120, height=100, cfg={},
+                 sysinfo={'host': 'test', 'cores': 1, 'free_mb': 1, 'total_mb': 1, 'compiler_count': 0}, color=False)]
+        def collect(parser):
+            """Collect help from every command."""
+            texts.append(parser.format_help())
+            for action in parser._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    for child in action.choices.values():
+                        collect(child)
+        collect(cli.build_parser())
+        for text in texts:
+            clean = re.sub(r'--project\b|\bproject\.toml\b', '', text, flags=re.I)
+            self.assertNotRegex(clean, r'(?i)\b(?:projects?|projekt)\b')
 
     def test_unknown_apiary_message(self):
         """A Hive whose Apiary is not configured is reported as an unknown Apiary."""

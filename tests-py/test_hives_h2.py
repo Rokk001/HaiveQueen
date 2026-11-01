@@ -373,6 +373,64 @@ class QueenIntegrationTests(RoundCase):
         self.assertTrue(any(a['phase'] == 'queen' and a['status'] == 'running' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
 
     # A native subagent consumes no additional provider process slot and can start while paused.
+    def test_native_bee_route_opens_its_status_pane(self):
+        """A native Bee route opens a pane without creating a provider agent row."""
+        from unittest import mock
+        from haivequeen import hives, native_bee
+        from bzztest import REL
+        self.machine['providers'][0]['slots'] = 1
+        self.plan('READY', [{'id': 'P1', 'title': 'First'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        with mock.patch.dict('os.environ', {'BZZ_TEST_NOSTART': ''}), mock.patch.object(native_bee, 'start', return_value='window.2') as start:
+            result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], parallel=True)
+        self.assertEqual(result['kind'], 'subagent')
+        start.assert_called_once()
+        self.assertFalse(any(a['phase'] == 'bee' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
+
+    # A missing Hive pane defers a native Bee without starting it.
+    def test_native_bee_waits_when_status_pane_cannot_open(self):
+        """A terminal failure leaves the native Bee waiting."""
+        from unittest import mock
+        from haivequeen import hives, native_bee
+        from haivequeen.terminal.base import TerminalError
+        from bzztest import REL
+        self.machine['providers'][0]['slots'] = 1
+        self.plan('READY', [{'id': 'P1', 'title': 'First'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        with mock.patch.dict('os.environ', {'BZZ_TEST_NOSTART': ''}), mock.patch.object(native_bee, 'start', side_effect=TerminalError('no Hive pane')):
+            result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], parallel=True)
+        self.assertFalse(result)
+
+    # Native Bees count toward the Hive's Bee limit.
+    def test_native_bees_obey_the_hive_bee_limit(self):
+        """Three native Bees leave no slot for another Bee."""
+        import json
+        from haivequeen import hives, native_bee
+        from bzztest import REL
+        self.plan('READY', [{'id': 'P1', 'title': 'First'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        for number in range(3):
+            runtime.kv_set(self.conn, 'testproj', native_bee.key(REL, str(number)), json.dumps({'plan': REL, 'running': True}))
+        self.assertFalse(bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], parallel=True))
+
+    # An unconfirmed native Bee keeps its package, even after a Queen restart.
+    def test_unconfirmed_native_bee_blocks_only_its_own_package(self):
+        """The Queen cannot replace that Bee, but independent work remains startable."""
+        import json
+        from haivequeen import hives, native_bee
+        from bzztest import REL
+        self.plan('READY', [{'id': 'P1', 'title': 'First'}, {'id': 'P2', 'title': 'Second'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        runtime.kv_set(self.conn, 'testproj', native_bee.key(REL, 'P1'), json.dumps({'plan': REL, 'package': 'P1', 'running': True}))
+        self.assertFalse(bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], no_subagents=True))
+        other = bees.start_process(self.env(), REL, 'P2', 'Bea', 'medium', 'task', ['one'], [], [], no_subagents=True)
+        self.assertEqual(other['kind'], 'queen')
+
+    # A native subagent consumes no additional provider process slot and can start while paused.
     def test_native_bee_needs_no_slot_and_continues_during_pause(self):
         from haivequeen import hives, runstate
         from bzztest import REL

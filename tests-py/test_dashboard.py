@@ -26,9 +26,13 @@ def iso(minutes_ago):
 class DashboardTest(unittest.TestCase):
     """Render with two invented projects."""
 
+    # Create isolated dashboard data and a temporary STOP flag.
     def setUp(self):
         """Create a temp database with two projects, agents, plans, a question and usage rows."""
         self.tmp = tempfile.TemporaryDirectory()
+        stop = mock.patch('haivequeen.loop.stop_flag', return_value=Path(self.tmp.name) / 'STOP')
+        stop.start()
+        self.addCleanup(stop.stop)
         self.conn = db.connect(Path(self.tmp.name) / "o.db")
         db.upsert_project(self.conn, "alpha", None, "cyan", 1)
         db.upsert_project(self.conn, "beta", None, "magenta", 0)
@@ -63,6 +67,78 @@ class DashboardTest(unittest.TestCase):
         args.update(kw)
         return dashboard.render(self.conn, **args)
 
+    # A size read failure must be displayed instead of terminating the dashboard.
+    def test_run_displays_initial_screen_size_error(self):
+        """An initial terminal-size failure is shown in the dashboard pane."""
+        import io
+        output = io.StringIO()
+        with mock.patch.object(dashboard.db, "connect", return_value=mock.Mock()), \
+             mock.patch.object(dashboard.runtime, "kv_get", return_value=None), \
+             mock.patch.object(dashboard, "screen_size", side_effect=RuntimeError("size unavailable")), \
+             mock.patch.object(dashboard.header, "enable_vt"), \
+             mock.patch.object(dashboard, "KeyReader"), \
+             mock.patch.object(dashboard.sys, "stdout", output):
+            self.assertEqual(dashboard.run(once=True), 0)
+        self.assertIn("dashboard error: size unavailable", output.getvalue())
+
+    # A database writer must not hold the dashboard beyond its refresh interval.
+    def test_locked_database_shows_error_within_refresh_interval(self):
+        """A locked dashboard height update produces a visible error promptly."""
+        import io
+        output = io.StringIO()
+        conn = db.connect(Path(self.tmp.name) / 'o.db')
+        self.conn.execute('BEGIN IMMEDIATE')
+        try:
+            with mock.patch.object(dashboard.db, 'connect', return_value=conn), \
+                 mock.patch.object(dashboard.header, 'enable_vt'), \
+                 mock.patch.object(dashboard, 'KeyReader'), \
+                 mock.patch.object(dashboard.sys, 'stdout', output):
+                start = time.monotonic()
+                dashboard.run(once=True)
+                elapsed = time.monotonic() - start
+        finally:
+            self.conn.execute('ROLLBACK')
+        self.assertLess(elapsed, dashboard.REFRESH_SECONDS)
+        self.assertIn('dashboard error:', output.getvalue())
+
+    # A key handling error must be visible without ending dashboard refreshes.
+    def test_run_displays_key_error_and_keeps_refreshing(self):
+        """A failed key action is displayed and a later frame is drawn."""
+        import io
+        output = io.StringIO()
+        keys = mock.MagicMock()
+        keys.__enter__.return_value.get.side_effect = ["f", KeyboardInterrupt()]
+        conn = mock.Mock()
+        conn.execute.return_value = []
+        with mock.patch.object(dashboard.db, "connect", return_value=conn), \
+             mock.patch.object(dashboard.runtime, "kv_get", return_value=None), \
+             mock.patch.object(dashboard, "render", return_value="frame"), \
+             mock.patch.object(dashboard, "KeyReader", return_value=keys), \
+             mock.patch.object(dashboard.header, "enable_vt"), \
+             mock.patch.object(dashboard, "handle_key", side_effect=RuntimeError("key unavailable")), \
+             mock.patch.object(dashboard.sys, "stdout", output):
+            self.assertEqual(dashboard.run(), 0)
+        self.assertIn("dashboard error: key unavailable", output.getvalue())
+        self.assertGreaterEqual(output.getvalue().count("frame"), 2)
+
+    # Input polling failures must be visible and must not end dashboard refreshes.
+    def test_run_displays_input_error_and_keeps_refreshing(self):
+        """A failed input read is displayed and a later frame is drawn."""
+        import io
+        output = io.StringIO()
+        keys = mock.MagicMock()
+        keys.__enter__.return_value.get.side_effect = [OSError("input unavailable"), KeyboardInterrupt()]
+        with mock.patch.object(dashboard.db, "connect", return_value=mock.Mock()), \
+             mock.patch.object(dashboard.runtime, "kv_get", return_value=None), \
+             mock.patch.object(dashboard, "render", return_value="frame"), \
+             mock.patch.object(dashboard, "KeyReader", return_value=keys), \
+             mock.patch.object(dashboard.header, "enable_vt"), \
+             mock.patch.object(dashboard.time, "sleep"), \
+             mock.patch.object(dashboard.sys, "stdout", output):
+            self.assertEqual(dashboard.run(), 0)
+        self.assertIn("dashboard error: input unavailable", output.getvalue())
+        self.assertGreaterEqual(output.getvalue().count("frame"), 2)
+
     def test_sections_and_projects(self):
         """All sections show; both projects appear in agent rows; texts are English."""
         t = self.text()
@@ -72,6 +148,126 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("▲ Context 310k", t)
         self.assertIn("Total Input 2k / Output 100", t)
         self.assertIn("Total Input 120k / Output 3k", t)
+
+    def test_beekeeper_shows_round_state_and_next_round(self):
+        """The dashboard reports the loop's actual state and next round."""
+        runtime.kv_set(self.conn, "*", "loop-state", json.dumps({"status": "round", "since": iso(5), "nextAt": iso(-1)}))
+        t = self.text()
+        self.assertIn("Beekeeper running", t)
+        self.assertIn("12:01", t)
+
+    def test_beekeeper_header_shows_pause(self):
+        """The Beekeeper header reflects the global pause."""
+        runstate.pause(self.conn)
+        self.assertIn("Beekeeper paused", self.text())
+
+    def test_beekeeper_header_shows_stop(self):
+        """The Beekeeper header shows a pending STOP."""
+        from unittest import mock
+        with mock.patch('haivequeen.loop.stop_flag') as flag:
+            flag.return_value.exists.return_value = True
+            self.assertIn("Beekeeper STOP", self.text())
+
+    def test_filter_is_persisted(self):
+        """The Apiary filter survives a dashboard restart."""
+        dashboard.handle_key(self.conn, "f", None, ["alpha"])
+        self.assertEqual(runtime.kv_get(self.conn, "*", "dashboard-filter"), "alpha")
+
+    def test_dashboard_restart_restores_filter(self):
+        """A newly started dashboard renders the previously selected Apiary."""
+        import io
+        dashboard.handle_key(self.conn, "f", None, ["alpha"])
+        with mock.patch('haivequeen.config.db_path', return_value=Path(self.tmp.name) / 'o.db'), \
+             mock.patch('haivequeen.dashboard.render', return_value='frame') as render, \
+             mock.patch('haivequeen.dashboard.KeyReader'), mock.patch('sys.stdout', new_callable=io.StringIO):
+            dashboard.run(once=True)
+        self.assertEqual(render.call_args.args[3], 'alpha')
+
+    # Verify that block layout can use the dashboard's measured height.
+    def test_dashboard_records_actual_rows(self):
+        """The dashboard publishes the terminal height for Apiary layout."""
+        import io
+        with mock.patch('haivequeen.config.db_path', return_value=Path(self.tmp.name) / 'o.db'), \
+             mock.patch('haivequeen.dashboard.render', return_value='frame'), \
+             mock.patch('haivequeen.dashboard.KeyReader'), mock.patch('sys.stdout', new_callable=io.StringIO), \
+             mock.patch('shutil.get_terminal_size', return_value=os.terminal_size((100, 40))):
+            dashboard.run(once=True)
+        self.assertEqual(runtime.kv_get(self.conn, '*', 'dashboard-rows'), '40')
+
+    def test_beekeeper_events_are_visible_without_three_line_limit(self):
+        """The dashboard retains recent Beekeeper events in newest-first order."""
+        for i in range(5):
+            db.add_event(self.conn, "alpha", "events", "beekeeper event %d" % i)
+        events = dashboard.round_errors(self.conn, None, datetime.now())
+        self.assertEqual([e["text"] for e in events[:5]], ["beekeeper event %d" % i for i in range(4, -1, -1)])
+
+    # Verify that an Apiary filter retains events without an Apiary.
+    def test_filter_keeps_global_beekeeper_events(self):
+        """An Apiary filter keeps events that have no Apiary."""
+        db.add_event(self.conn, "*", "events", "global event")
+        db.add_event(self.conn, "", "events", "unnamed global event")
+        db.add_event(self.conn, "other", "events", "other event")
+        events = dashboard.round_errors(self.conn, "alpha", datetime.now())
+        self.assertIn("global event", [e["text"] for e in events])
+        self.assertIn("unnamed global event", [e["text"] for e in events])
+        self.assertNotIn("other event", [e["text"] for e in events])
+
+    # Show when no unfinished Hives remain.
+    def test_dashboard_shows_no_hives_when_all_are_done(self):
+        from haivequeen import hives
+        hives.create(self.conn, 'alpha', 'plans/x.md', 'claude', 'white')
+        self.conn.execute("INSERT INTO plans(project,path,status) VALUES ('alpha','plans/x.md','DONE')")
+        self.assertIn('Keine Hives', self.text())
+
+    def test_empty_registered_apiaries_are_shown_with_no_hives(self):
+        """Registered Apiaries remain visible when no unfinished Hive exists."""
+        text = self.text()
+        self.assertIn('alpha: 0 Hives', text)
+        self.assertIn('beta: 0 Hives', text)
+        self.assertIn('Keine Hives', text)
+        filtered = self.text(project='alpha')
+        self.assertIn('alpha: 0 Hives', filtered)
+        self.assertNotIn('beta: 0 Hives', filtered)
+        self.assertIn('Keine Hives', filtered)
+
+    def test_hive_count_excludes_done_plan(self):
+        """A stale Hive row does not count after its plan is DONE."""
+        from haivequeen import hives
+        hives.create(self.conn, "alpha", "plans/x.md", "claude", "white")
+        self.conn.execute("INSERT INTO plans(project,path,status) VALUES ('alpha','plans/x.md','DONE')")
+        self.assertNotIn(("alpha", 1), dashboard.hive_counts(self.conn, None))
+
+    def test_removed_apiary_is_not_shown_even_with_a_stale_hive(self):
+        """A removed Apiary does not appear through its remaining Hive row."""
+        from haivequeen import hives
+        hives.create(self.conn, 'alpha', 'plans/x.md', 'claude', 'white')
+        self.conn.execute("DELETE FROM projects WHERE name='alpha'")
+        self.assertNotIn('alpha: 1 Hives', self.text())
+
+    def test_hive_count_includes_unfinished_plan_with_stale_hive_state(self):
+        """An unfinished plan counts even if its Hive row still says done."""
+        from haivequeen import hives
+        hives.create(self.conn, 'alpha', 'plans/x.md', 'claude', 'white')
+        self.conn.execute("INSERT INTO plans(project,path,status) VALUES ('alpha','plans/x.md','IN_PROGRESS')")
+        self.conn.execute("UPDATE hives SET state='done' WHERE plan_path='plans/x.md'")
+        self.assertIn(('alpha', 1), dashboard.hive_counts(self.conn, None))
+
+    def test_hive_count_includes_plan_without_done_status(self):
+        """A plan with no status is not treated as DONE."""
+        from haivequeen import hives
+        hives.create(self.conn, 'alpha', 'plans/x.md', 'claude', 'white')
+        self.conn.execute("INSERT INTO plans(project,path,status) VALUES ('alpha','plans/x.md',NULL)")
+        self.assertIn(('alpha', 1), dashboard.hive_counts(self.conn, None))
+
+    def test_hive_counts_follow_apiary_configuration(self):
+        """Dashboard Apiary lines follow the configured order."""
+        from haivequeen import hives
+        from unittest import mock
+        hives.create(self.conn, 'alpha', 'a.md', 'claude', 'white')
+        hives.create(self.conn, 'zeta', 'z.md', 'claude', 'white')
+        db.upsert_project(self.conn, 'zeta', None, 'white', 0)
+        with mock.patch('haivequeen.config.load_config', return_value={'projects': [{'name': 'zeta'}, {'name': 'alpha'}]}):
+            self.assertEqual([name for name, _ in dashboard.hive_counts(self.conn, None)], ['zeta', 'alpha', 'beta'])
 
     def test_codex_limits_from_session_logs(self):
         """Invented Codex session logs in a temp home: the dashboard writes kv usage-codex and shows percent and reset instead of n/a."""
@@ -138,11 +334,11 @@ class DashboardTest(unittest.TestCase):
         self.assertTrue(all("dashboard key" in t for k, t in kinds if k in ("drain", "resume")), kinds)
 
     def test_questions_in_triage_are_counted(self):
-        """Under QUESTIONS the dashboard shows how many questions wait for the triage."""
+        """The dashboard does not show a triage counter."""
         self.assertNotIn("in triage", self.text())
         db.add_question(self.conn, "alpha", "x.md", "T1", "Which?", "A", status="triage")
         db.add_question(self.conn, "alpha", "x.md", "T2", "Which?", "A", status="triage")
-        self.assertIn("in triage: 2", self.text())
+        self.assertNotIn("in triage", self.text())
 
     def test_run_state_colour_and_keys(self):
         """The run state shows coloured in the header; P and D change it; F cycles the filter."""

@@ -94,6 +94,7 @@ class WindowsTerminal(Terminal):
         subs.append(first + list(command))
         return subs
 
+    # Launch a pane and retain its previous record if the replacement fails.
     def _launch(self, window, subs_builder, title, command, name, pane_id_index, what="call", after=None):
         """Start wt.exe with the built sub-commands, record the pane and wait for its pid file.
 
@@ -103,6 +104,7 @@ class WindowsTerminal(Terminal):
         """
         pane_id = "%s.%d" % (window, pane_id_index)
         folder_name = safe_name(name or "%s-%d" % (window, pane_id_index))
+        previous = next((r for r in self.registry.records() if r.get("name") == folder_name), None)
         folder = self.registry.folder(folder_name)
         folder.mkdir(parents=True, exist_ok=True)
         pidfile = folder / "pane.pid"
@@ -112,15 +114,29 @@ class WindowsTerminal(Terminal):
                                          "title": title, "pid": 0, "pidfile": str(pidfile), "after": after})
         line = wt_quote(self.exe()) + " " + wt_commandline(subs_builder(self.wrapped(pidfile, command)))
         time.sleep(self.settle)
-        with open(folder / "wt.out", "wb") as out, open(folder / "wt.err", "wb") as err:
-            # the Beekeeper itself runs in a wt pane: wt.exe gets neither that pane's WT_* variables nor its console
-            env = {k: v for k, v in os.environ.items() if not k.startswith("WT_")}
-            flags = {"creationflags": 0x00000008 | 0x00000200} if sys.platform == "win32" else {}   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-            proc = subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=out, stderr=err, close_fds=True, env=env, **flags)
+        proc = None
+        try:
+            with open(folder / "wt.out", "wb") as out, open(folder / "wt.err", "wb") as err:
+                # the Beekeeper itself runs in a wt pane: wt.exe gets neither that pane's WT_* variables nor its console
+                env = {k: v for k, v in os.environ.items() if not k.startswith("WT_")}
+                flags = {"creationflags": 0x00000008 | 0x00000200} if sys.platform == "win32" else {}   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+                proc = subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=out, stderr=err, close_fds=True, env=env, **flags)
+        except OSError:
+            if proc is None:
+                if previous:
+                    previous.pop("name", None)
+                    self.registry.save(folder_name, previous)
+                else:
+                    self.registry.discard(folder_name)
+            raise
         pids = self._wait_pids(pidfile)
         self._trace_call(pane_id, what, line, proc, pids, folder)
         if pids is None and self.start_timeout > 0:
-            self.registry.discard(folder_name)   # wt made no pane: its number must not count for the next focus-pane target
+            if previous:
+                previous.pop("name", None)
+                self.registry.save(folder_name, previous)
+            else:
+                self.registry.discard(folder_name)   # wt made no pane: its number must not count for the next focus-pane target
             raise TerminalError("pane %s did not start within %s s" % (pane_id, self.start_timeout))
         return pane_id
 
@@ -163,6 +179,7 @@ class WindowsTerminal(Terminal):
         return self._launch(window, lambda wrapped: self.open_window_args(window, title, wrapped, colour),
                             title, command, name, index, "open-window")
 
+    # Split only the requested Windows Terminal pane, including retries.
     def split_pane(self, window, title, colour, command, direction="horizontal", size=0.5,
                    target=None, name=None):
         """Split a pane of the named window; `colour` has no effect (wt colours tabs, not panes)."""
@@ -175,17 +192,12 @@ class WindowsTerminal(Terminal):
             try:
                 return self._split(window, title, command, direction, share, target, name)
             except TerminalError:
-                if target is not None and share == size:
-                    # no pane came of the split with focus-pane: once more on the pane wt has focused (the one it made last); the trace shows both calls
-                    try:
-                        return self._split(window, title, command, direction, share, None, name)
-                    except TerminalError:
-                        pass
                 if share == shares[-1]:
                     raise
 
+    # List live pane IDs in split-tree order.
     def wt_order(self, window):
-        """Creation numbers of the panes of `window` in the order wt counts them for focus-pane (depth first through the split tree).
+        """Creation IDs of the live panes of `window` in split-tree order.
 
         A split pane sits right behind the pane it was split off (or, split off the focused pane, behind the pane made last); panes whose launcher has ended are left out.
         """
@@ -200,26 +212,30 @@ class WindowsTerminal(Terminal):
         gone = {r["index"] for r in self.registry.records() if r.get("window") == window and not self._launcher_alive(r)}
         return [n for n in order if n not in gone]
 
+    # Check that the recorded pane launcher still runs.
     def _launcher_alive(self, rec):
-        """False only when the record has a launcher pid that no longer runs (records without a pid count as alive)."""
+        """Return whether the pane's recorded launcher is still running."""
         launcher, _command = self._pids(rec)
-        return not launcher or _proc.pid_alive(launcher)
+        return bool(launcher and _proc.pid_alive(launcher))
 
+    # Resolve the target and issue a single split command.
     def _split(self, window, title, command, direction, size, target, name):
         """One split call of wt with the next free pane number; `target` None splits the focused pane.
 
-        `target` is a creation number; wt's focus-pane counts in tree order, so it is translated first (a target that is gone splits the focused pane).
+        `target` is the pane's stable creation ID. A missing target fails.
         """
         index = self.registry.next_index(window)
         after, wt_target = None, None
         if target is not None:
             order = self.wt_order(window)
             after = int(target)
-            wt_target = order.index(after) if after in order else None
+            if after not in order:
+                raise TerminalError("split target is no longer live: %s" % target)
+            wt_target = after
         return self._launch(window,
                             lambda wrapped: self.split_pane_args(window, title, wrapped, direction, size, wt_target),
                             title, command, name, index,
-                            "split target=%s direction=%s size=%g wt-index=%s" % (target, direction, size, wt_target), after)
+                            "split target=%s direction=%s size=%g wt-id=%s" % (target, direction, size, wt_target), after)
 
     def _pids(self, rec):
         """Return (launcher pid, command pid) of a record, reading the pid file when it is there."""

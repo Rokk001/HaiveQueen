@@ -151,7 +151,7 @@ class WtArgsTest(unittest.TestCase):
         self.assertIn("print(1)\\;print(2)", line)
         self.assertIn("_panerun.py", line)
         self.assertEqual([r["title"] for r in self.term.registry.records()], ["Title; one"])   # the lookup title stays in the register
-        with mock.patch.object(wt.subprocess, "Popen"):
+        with mock.patch.object(wt.subprocess, "Popen"), mock.patch.object(self.term, '_launcher_alive', return_value=True):
             second = self.term.split_pane("W9", "T2", None, ["py"], "vertical", 0.4, target="W9.0", name="p1")
         self.assertEqual(second, "W9.1")
         infos = self.term.list_panes("W9")
@@ -168,7 +168,7 @@ class WtArgsTest(unittest.TestCase):
             kw["stdout"].write(b"some out")
             kw["stderr"].write(b"no such pane")
             return mock.Mock(poll=mock.Mock(return_value=1))
-        with mock.patch.object(wt.subprocess, "Popen", side_effect=popen):
+        with mock.patch.object(wt.subprocess, "Popen", side_effect=popen), mock.patch.object(self.term, '_launcher_alive', return_value=True):
             self.term.open_window("W7", "T", ["py"], name="t0")
             self.term.split_pane("W7", "T", None, ["py"], "vertical", 0.4, target="W7.0", name="t1")
         self.assertEqual(len(seen), 2)
@@ -180,20 +180,71 @@ class WtArgsTest(unittest.TestCase):
     def test_a_pane_that_never_starts_gives_its_number_back(self):
         """wt numbers only the panes it really made: a split whose pane never started must not use up a number, else every later focus-pane target is wrong."""
         term = wt.WindowsTerminal(self.tmp.name, start_timeout=0.3, settle=0)
-        term.registry.save("first", {"id": "W8.0", "window": "W8", "index": 0, "title": "T", "pid": 0, "pidfile": ""})
+        term.registry.save("first", {"id": "W8.0", "window": "W8", "index": 0, "title": "T", "pid": os.getpid(), "pidfile": ""})
         for _ in range(3):   # three rounds, each one split fails
             with mock.patch.object(wt.subprocess, "Popen"), self.assertRaises(TerminalError):
                 term.split_pane("W8", "T", None, ["py"], "vertical", 0.5, target="W8.0", name="hive")
         self.assertEqual(term.registry.next_index("W8"), 1)
         self.assertEqual([r["id"] for r in term.registry.records()], ["W8.0"])
 
-    def test_split_that_gets_no_pane_is_tried_once_more_on_the_focused_pane(self):
-        """When wt makes no pane for a split with focus-pane, the same split is tried once without focus-pane (on the pane wt has focused); both calls are traced."""
+    # Preserve the last allocated ID when a replacement pane fails to start.
+    def test_failed_replacement_retains_previous_pane_record(self):
+        """A failed replacement cannot erase the last allocated pane ID."""
+        term = wt.WindowsTerminal(self.tmp.name, start_timeout=0.1, settle=0)
+        previous = {"id": "W8.7", "window": "W8", "index": 7, "title": "T", "pid": 0, "pidfile": ""}
+        term.registry.save('hive', previous)
+        with mock.patch.object(wt.subprocess, 'Popen'), self.assertRaises(TerminalError):
+            term._launch('W8', lambda wrapped: [['-w', 'W8', 'split-pane'] + wrapped], 'T', ['py'], 'hive', 8)
+        self.assertEqual(term.registry.next_index('W8'), 8)
+        self.assertEqual(term.registry.find('W8.7')['index'], 7)
+
+    # An OS launch error must not allocate a pane ID or erase an earlier record.
+    def test_os_launch_failure_restores_pane_record(self):
+        """A failed wt process start leaves the registry as it was."""
+        term = wt.WindowsTerminal(self.tmp.name, start_timeout=0, settle=0)
+        previous = {"id": "W8.7", "window": "W8", "index": 7, "title": "T", "pid": 0, "pidfile": ""}
+        term.registry.save('hive', previous)
+        for name in ('hive', 'new'):
+            with mock.patch.object(wt.subprocess, 'Popen', side_effect=OSError('launch failed')), self.assertRaises(OSError):
+                term._launch('W8', lambda wrapped: [['-w', 'W8', 'split-pane'] + wrapped], 'T', ['py'], name, 8)
+            self.assertEqual(term.registry.next_index('W8'), 8)
+            self.assertEqual(term.registry.find('W8.7')['index'], 7)
+
+    # Verify that a failed targeted split cannot hit the focused pane instead.
+    def test_failed_targeted_split_never_retries_without_target(self):
+        """Every retry retains the requested pane as its target."""
+        term = wt.WindowsTerminal(self.tmp.name, start_timeout=0, settle=0)
+        with mock.patch.object(term, '_split', side_effect=TerminalError('failed')) as split:
+            with self.assertRaises(TerminalError):
+                term.split_pane('W', 'T', None, ['py'], 'horizontal', 0.5, target='W.0')
+        self.assertTrue(all(call.args[5] == '0' for call in split.call_args_list))
+
+    # Verify that a missing target is never replaced with the focused pane.
+    def test_missing_target_is_not_silently_replaced(self):
+        """A vanished pane raises before any terminal command runs."""
+        term = wt.WindowsTerminal(self.tmp.name, start_timeout=0, settle=0)
+        with mock.patch.object(term, '_launch') as launch:
+            with self.assertRaises(TerminalError):
+                term._split('W', 'T', ['py'], 'horizontal', 0.5, 99, 'hive')
+        launch.assert_not_called()
+
+    # A record without a live launcher cannot prove a split target exists.
+    def test_stale_record_without_pid_is_not_a_split_target(self):
+        """A stale record is rejected before wt can split another pane."""
+        term = wt.WindowsTerminal(self.tmp.name, start_timeout=1, settle=0)
+        term.registry.save('stale', {'id': 'W.3', 'window': 'W', 'index': 3, 'title': 'T', 'pid': 0, 'pidfile': ''})
+        with mock.patch.object(term, '_launch') as launch, self.assertRaises(TerminalError):
+            term._split('W', 'T', ['py'], 'horizontal', 0.5, 3, 'hive')
+        launch.assert_not_called()
+
+    # Verify that an unsuccessful targeted split is not redirected to another pane.
+    def test_split_that_gets_no_pane_does_not_use_focused_pane(self):
+        """A failed targeted split is reported instead of splitting the focused pane."""
         import re
         term = wt.WindowsTerminal(self.tmp.name, start_timeout=0.3, settle=0)
         seen = []
         term.trace = seen.append
-        term.registry.save("first", {"id": "W9.0", "window": "W9", "index": 0, "title": "T", "pid": 0, "pidfile": ""})
+        term.registry.save("first", {"id": "W9.0", "window": "W9", "index": 0, "title": "T", "pid": os.getpid(), "pidfile": ""})
 
         def popen(line, **kw):
             """Stand in for wt.exe: a split with focus-pane makes no pane, one without it does (the launcher writes its pid file)."""
@@ -201,17 +252,14 @@ class WtArgsTest(unittest.TestCase):
                 Path(re.search(r"_panerun\.py (\S+)", line).group(1)).write_text("111 222", encoding="ascii")
             return mock.Mock(poll=mock.Mock(return_value=0))
         with mock.patch.object(wt.subprocess, "Popen", side_effect=popen):
-            pane = term.split_pane("W9", "T", None, ["py"], "vertical", 0.5, target="W9.0", name="hive")
-        self.assertEqual(pane, "W9.1")
-        self.assertEqual(len(seen), 2)
+            with self.assertRaises(TerminalError):
+                term.split_pane("W9", "T", None, ["py"], "vertical", 0.5, target="W9.0", name="hive")
+        self.assertEqual(len(seen), 1)
         self.assertIn("focus-pane -t 0", seen[0])
         self.assertIn("pane.pid=no", seen[0])
-        self.assertIn("target=None", seen[1])
-        self.assertNotIn("focus-pane", seen[1])
-        self.assertIn("pane.pid=yes", seen[1])
 
-    def test_focus_pane_target_is_the_number_wt_counts_in_tree_order(self):
-        """wt counts panes through the split tree, not in creation order: the pane split off pane 0 last sits at 1, so the pane made third is wt's number 1."""
+    def test_focus_pane_target_is_the_stable_creation_id(self):
+        """Focus uses the pane's stable ID even when tree order differs."""
         import re
         term = wt.WindowsTerminal(self.tmp.name, start_timeout=0.3, settle=0)
         lines = []
@@ -228,7 +276,7 @@ class WtArgsTest(unittest.TestCase):
             term.split_pane("W10", "T", None, ["py"], "vertical", 0.5, target=head, name="hive")
         self.assertEqual(head, "W10.2")
         self.assertIn("focus-pane -t 0 ; split-pane", lines[2])
-        self.assertIn("focus-pane -t 1 ; split-pane", lines[3])
+        self.assertIn("focus-pane -t 2 ; split-pane", lines[3])
 
     def test_split_that_leaves_too_little_room_is_tried_with_a_smaller_share(self):
         """wt silently makes no pane when the old pane would keep too few lines (0.95 of a tall head pane); the split is tried again with a smaller share until a pane comes."""
@@ -243,7 +291,7 @@ class WtArgsTest(unittest.TestCase):
             if share <= 0.9:
                 Path(re.search(r"_panerun\.py (\S+)", line).group(1)).write_text("111 222", encoding="ascii")
             return mock.Mock(poll=mock.Mock(return_value=0))
-        term.registry.save("first", {"id": "W11.0", "window": "W11", "index": 0, "title": "T", "pid": 0, "pidfile": ""})
+        term.registry.save("first", {"id": "W11.0", "window": "W11", "index": 0, "title": "T", "pid": os.getpid(), "pidfile": ""})
         with mock.patch.object(wt.subprocess, "Popen", side_effect=popen):
             pane = term.split_pane("W11", "T", None, ["py"], "vertical", 0.95, target="W11.0", name="hive")
         self.assertEqual(pane, "W11.1")
@@ -267,7 +315,7 @@ class WtArgsTest(unittest.TestCase):
 
     def test_reopened_window_numbers_from_zero(self):
         """A window that is opened again starts at pane 0; the records of the old window are retired, not reused."""
-        with mock.patch.object(wt.subprocess, "Popen"):
+        with mock.patch.object(wt.subprocess, "Popen"), mock.patch.object(self.term, '_launcher_alive', return_value=True):
             self.term.open_window("W5", "T", ["py"], name="a0")
             self.term.split_pane("W5", "T", None, ["py"], "horizontal", 0.5, target="W5.0", name="a1")
             reopened = self.term.open_window("W5", "T", ["py"], name="b0")

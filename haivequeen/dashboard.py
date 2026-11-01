@@ -327,16 +327,28 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
             drafts.append(re.sub(r"-?PLAN$", "", Path(p["path"]).stem))
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     loop = _kv(conn, "loop-state") or {}
+    from haivequeen import loop as loop_module
+    run = runstate.get_state(conn)
     since = _parse_time(loop.get("since")) if isinstance(loop, dict) else None
-    if since:
-        orch_status = "idle since " + since.strftime("%H:%M")
-    else:
+    orch_status = loop.get("status", "idle") if isinstance(loop, dict) else "idle"
+    if loop_module.stop_flag().exists():
+        orch_status = "STOP"
+    elif run["state"] == "PAUSED":
+        orch_status = "paused"
+    elif orch_status == "round":
+        orch_status = "running"
+    elif orch_status == "brain":
         orch_status = "idle"
+    if since:
+        orch_status += " since " + since.strftime("%H:%M")
+    next_at = _parse_time(loop.get("nextAt")) if isinstance(loop, dict) else None
+    if next_at:
+        orch_status += "  next round " + next_at.strftime("%H:%M")
     last_round = conn.execute("SELECT ts FROM events WHERE kind='round'" + (" AND project=?" if project else "")
                               + " ORDER BY id DESC LIMIT 1", pa).fetchone()
     return {
         "now": now, "project": project, "projects": scope, "colours": colours, "cfg": cfg, "sysinfo": sysinfo,
-        "run": runstate.get_state(conn), "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all),
+        "run": run, "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all),
         "cu": window_usage(_kv(conn, "usage-claude"), now), "xu": window_usage(_kv(conn, "usage-codex"), now),
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
@@ -352,19 +364,23 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
 
 # The failed rounds of the last day (the Beekeeper has no pane of its own, so its errors show here).
 def round_errors(conn, project, now) -> list:
-    """The newest three round errors of the last 24 hours as dicts {ts, project, text}, newest first; `project` filters to one project."""
+    """Return recent round errors and Beekeeper events, newest first."""
     since = (now - timedelta(hours=24)).isoformat(timespec="seconds")
-    rows = conn.execute("SELECT ts, project, text FROM events WHERE kind='rounds' AND text LIKE '%ERROR%' AND ts>=?"
-                        + (" AND project=?" if project else "") + " ORDER BY id DESC LIMIT 3", (since, project) if project else (since,)).fetchall()
+    rows = conn.execute("SELECT ts, project, text FROM events WHERE (kind='events' OR (kind='rounds' AND text LIKE '%ERROR%' AND ts>=?))"
+                        + (" AND (project=? OR project='*' OR project='' OR project IS NULL)" if project else "") + " ORDER BY id DESC", (since, project) if project else (since,)).fetchall()
     return [{"ts": r[0], "project": r[1], "text": r[2]} for r in rows]
 
 
 # Count the Hives that live per Apiary (the Hives themselves are shown in their own sub-terminals).
 def hive_counts(conn, project):
-    """List of (Apiary, number of its Hives that are not done) for the Apiaries with at least one, in the project filter."""
-    rows = conn.execute("SELECT project, COUNT(*) FROM hives WHERE state!='done'" + (" AND project=?" if project else "") + " GROUP BY project ORDER BY project",
+    """List registered Apiaries and their unfinished Hive counts in the project filter."""
+    rows = conn.execute("SELECT h.project, COUNT(*) FROM hives h WHERE (EXISTS (SELECT 1 FROM plans p WHERE p.project=h.project AND p.path=h.plan_path AND p.status IS NOT 'DONE') OR (h.state!='done' AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.project=h.project AND p.path=h.plan_path)))" + (" AND h.project=?" if project else "") + " GROUP BY h.project ORDER BY h.project",
                         (project,) if project else ()).fetchall()
-    return [(r[0], r[1]) for r in rows]
+    from haivequeen import hivelayout
+    hive_totals = {r[0]: r[1] for r in rows}
+    counts = {row[0]: hive_totals.get(row[0], 0) for row in conn.execute(
+        "SELECT name FROM projects" + (" WHERE name=?" if project else ""), (project,) if project else ())}
+    return [(name, counts[name]) for name in hivelayout.configured_order(counts)]
 
 
 def self_update_line(su) -> list:
@@ -460,7 +476,8 @@ def build_lines(level, d, w, n_fin) -> list:
         head("HIVES %d" % sum(n for _, n in d['hives']))
         for apiary, n in d['hives']:
             L.append([("%s: %d Hives" % (apiary, n), colours.get(apiary) or "white")])
-    else:
+    if not any(n for _, n in d['hives']):
+        L.append([("Keine Hives", "darkgray")])
         head("AGENTS %d" % len(d["agents"]), "cyan", "  %s  last round %s" % (now.strftime("%H:%M:%S"), d["last_round"]))
         if not d["agents"] and not d["blocked"] and not d["fin"]:
             L.append([("no agents", "darkgray")])
@@ -591,13 +608,11 @@ def build_lines(level, d, w, n_fin) -> list:
     else:
         head("! QUESTIONS", "red")
         L.append([("open: %d  %s" % (len(d["qs"]), ", ".join("%s#%s" % (q["project"], q["id"]) for q in d["qs"])), "yellow")])
-    if d["triage"]:
-        L.append([("in triage: %d" % d["triage"], "gray")])
     if d["round_errors"]:
-        head("! ROUND ERRORS", "red")
+        head("! ROUND ERRORS / BEEKEEPER EVENTS", "red")
         for e in d["round_errors"]:
             when = _parse_time(e["ts"])
-            L.append([((when.strftime("%H:%M") if when else "--:--") + " ", "gray"), (e["project"], colours.get(e["project"]) or "white"),
+            L.append([((when.strftime("%H:%M") if when else "--:--") + " ", "gray"), (e["project"] or "", colours.get(e["project"]) or "white"),
                       (" " + e["text"], "red")])
     return L
 
@@ -695,6 +710,7 @@ def handle_key(conn, key, project, names, now=None):
     if key == "f":
         cycle = [None] + list(names)
         project = cycle[(cycle.index(project) + 1) % len(cycle)] if project in cycle else None
+        runtime.kv_set(conn, "*", "dashboard-filter", project or "")
     return project
 
 
@@ -713,19 +729,28 @@ def frame_text(text, clear=False) -> str:
     return "\x1b[?7l" + ("\x1b[2J\x1b[3J" if clear else "") + "\x1b[H" + "\r\n".join(ln + "\x1b[K" for ln in lines) + "\x1b[J\x1b[?7h"
 
 
+# Draw the dashboard and publish its measured terminal height.
 def run(project=None, once=False) -> int:
     """Open the database and redraw the dashboard until Ctrl+C (`once` draws one frame and returns)."""
     conn = db.connect(config.db_path())
+    conn.execute("PRAGMA busy_timeout = 1000")
+    if project is None:
+        project = runtime.kv_get(conn, "*", "dashboard-filter") or None
     stdout = sys.stdout
     if hasattr(stdout, "reconfigure"):
         stdout.reconfigure(encoding="utf-8")
-    last_size = None
+    last_size, last_rows = None, None
     header.enable_vt()   # the cursor moves and erases of frame_text need escape processing (pwsh switched it on by itself)
     try:
         with KeyReader() as keys:
             while True:
+                w, h = last_size or (0, 0)
                 try:
                     w, h = screen_size()
+                    rows = shutil.get_terminal_size((100, 40)).lines
+                    if rows != last_rows:
+                        runtime.kv_set(conn, '*', 'dashboard-rows', str(rows))
+                        last_rows = rows
                     text = render(conn, w, h, project)
                 except Exception as exc:   # a failed redraw must not close the pane
                     text = "\x1b[91mdashboard error: %s\x1b[0m" % exc
@@ -739,10 +764,20 @@ def run(project=None, once=False) -> int:
                     return 0
                 end = time.monotonic() + REFRESH_SECONDS
                 while time.monotonic() < end:
-                    key = keys.get(0.2)
+                    try:
+                        key = keys.get(0.2)
+                    except Exception as exc:
+                        stdout.write(frame_text("\x1b[91mdashboard error: %s\x1b[0m" % exc))
+                        stdout.flush()
+                        time.sleep(REFRESH_SECONDS)
+                        break
                     if key:
-                        names = [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")]
-                        project = handle_key(conn, key, project, names)
+                        try:
+                            names = [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")]
+                            project = handle_key(conn, key, project, names)
+                        except Exception as exc:
+                            stdout.write(frame_text("\x1b[91mdashboard error: %s\x1b[0m" % exc))
+                            stdout.flush()
                         break
     except KeyboardInterrupt:
         return 0

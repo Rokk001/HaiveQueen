@@ -526,7 +526,7 @@ def run_source(conn, results, name, fn) -> None:
 def import_legacy(conn, project, runtime_dir=None, questions=None, answers=None, queue=None, plans=None) -> dict:
     """Import all given v1 sources into the database and return per source {imported, skipped, errors}."""
     if not project:
-        raise CmdError("project is required")
+        raise CmdError("Apiary is required")
     with db.transaction(conn):
         conn.execute("INSERT OR IGNORE INTO projects (name, priority, registered_at) VALUES (?,0,?)", (project, db.now()))
     ws = conn.execute("SELECT workspace FROM projects WHERE name=?", (project,)).fetchone()[0]
