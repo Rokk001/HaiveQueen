@@ -557,8 +557,9 @@ class HeadlessStartTest(RoundCase):
         self.assertEqual(row["status"], "running")
         self.assertTrue(row["pid"] and osplat.process_alive(row["pid"]))
         panes = self.term.list_panes("HaiveQueen")
-        self.assertEqual(sorted(p.title for p in panes), ["HaiveQueen TEST | testproj | Apiary | job: testproj | model: -",
-                                                          "HaiveQueen TEST | testproj | Hive | job: DUMMY-PLAN | model: -"])   # head pane of the Apiary and the Hive pane
+        self.assertEqual(sorted(p.title for p in panes), ["HaiveQueen TEST | all projects | Overview | job: Dashboard | model: -",
+                                                          "HaiveQueen TEST | testproj | Apiary | job: testproj | model: -",
+                                                          "HaiveQueen TEST | testproj | Hive | job: DUMMY-PLAN | model: -"])   # overview, head pane of the Apiary and the Hive pane
         hive = next(p for p in panes if " | Hive | " in p.title)
         self.assertEqual(row["pane_id"], hive.id)
 

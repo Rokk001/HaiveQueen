@@ -433,6 +433,7 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+# Run the CLI and optionally keep a shortcut's result visible on the desktop.
 def main(argv=None) -> int:
     """Entry point: parse arguments, open the database, run the command."""
     for stream in (sys.stdout, sys.stdin):
@@ -443,11 +444,23 @@ def main(argv=None) -> int:
         return fail("unexpected arguments: " + " ".join(extra), 2)
     if args.command in STUBS:
         return args.fn(args, None)
-    conn = db.connect(config.db_path())
+    conn = None
+    desktop = getattr(args, "desktop", False)
     try:
-        return args.fn(args, conn)
+        conn = db.connect(config.db_path())
+        code = args.fn(args, conn)
+    except Exception as exc:
+        if not desktop:
+            raise
+        args.desktop_result = {"ok": False, "error": str(exc)}
+        code = fail(str(exc))
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
+    if desktop:
+        from haivequeen.desktop import show_result
+        show_result(args.command, args.desktop_result)
+    return code
 
 
 if __name__ == "__main__":

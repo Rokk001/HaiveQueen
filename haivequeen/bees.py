@@ -340,14 +340,14 @@ def state_branch(env, plan):
 
 # Resolve the plan's named branch and optional named worktree.
 def plan_worktree(env, plan):
-    """Read an unambiguous branch and worktree from the plan's explicit rules."""
+    """Read an unambiguous branch and worktree, including numbered Branches rules."""
     import re
     from pathlib import Path
     text = (env.workspace / plan).read_text(encoding='utf-8-sig')
     text = re.sub(r'\*\*([^*\n]+)\*\*', r'\1', text)
     feature = re.search(r'(?im)^\s*[-*]?\s*feature[ -]branch\s*:\s*`?([\w./-]+)`?', text)
     pair = re.search(r'(?im)\bworktree\s*`([^`]+)`\s*,?\s*branch\s*`([^`]+)`', text)
-    reverse = re.search(r'(?im)(?<!sub-)\bbranch\s*`([^`]+)`\s+in\s+worktree\s*`([^`]+)`', text)
+    reverse = re.search(r'(?im)(?<!sub-)\bbranch(?:es)?\s*:?\s*`([^`]+)`\s+in\s+worktree\s*`([^`]+)`', text)
     git_line = re.search(r'(?im)^\s*[-*]?\s*git\s*:\s*branch\s*`([\w./-]+)`', text)
     named = feature or git_line
     if named:

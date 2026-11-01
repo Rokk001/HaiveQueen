@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, db, header, hives, runtime
+from . import agent_process, config, db, header, hives, runtime
 from . import platform as osplat
 
 CONFIRM_SECONDS = 3.0   # a command runs only when its key is pressed twice within this time
@@ -44,6 +44,7 @@ def head_lines(conn, project, width):
     return [[("Apiary %s" % project, header.project_colour_of(conn, project))]]
 
 
+# Draw the Queen only while active and otherwise show the recorded Hive blocker.
 def frame_lines(conn, project, plan, width, now=None, message=""):
     """Lines of the Hive frame for `width` columns: a list of lines, each a list of (text, colour) parts.
 
@@ -55,10 +56,9 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
     width = max(10, width)
     inner = width - 4
     col = header.project_colour_of(conn, project)
-    data = next(iter(hives.hive_data(conn, project, runtime.list_agents(conn, project, "active"), plan)), None) or {"queen": None, "bees": [], "state": ""}
-    hive = hives.get(conn, project, plan) or {}
+    data = next(iter(hives.hive_data(conn, project, runtime.list_agents(conn, project, "active"), plan)), None) or {"queen": None, "bees": [], **(hives.get(conn, project, plan) or {})}
     queen = data["queen"]
-    running = bool(queen and queen.get("status") in ("running", "starting"))
+    running = bool(queen and queen.get("status") in ("running", "starting") and agent_process.counts(queen))
     name_line = "Hive: %s" % Path(plan).stem
     if running:
         name = str(queen.get("person") or queen.get("name") or "-")
@@ -69,7 +69,7 @@ def frame_lines(conn, project, plan, width, now=None, message=""):
             started = db.parse_time(queen.get("started_at"), now)
             text = "Queen: %s | %s %s | %s" % (name, typ, queen.get("modelShort") or "", header.fmt_run((now - started).total_seconds()))
     else:
-        text = "Queen: " + (hives.state_label(hive) or "wartet auf Start")
+        text = "Queen: " + (hives.state_label(data) or "keine aktive Queen")
     text = text.replace("  ", " ")
     body = [name_line, text]
     if running:
