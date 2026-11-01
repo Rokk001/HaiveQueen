@@ -140,13 +140,23 @@ def status_text(hive) -> str:
 
 # Read which packages have a Bee assigned and which a Bee has finished.
 def bee_tables(conn) -> tuple:
-    """(assigned, completed): {(project, plan, package): (class, provider)} of the Bee assignments and the set of (project, plan, package) a Bee finished.
+    """(assigned, completed): {(project, plan, package): (class, provider)} of the Bee assignments and the set of (project, plan, package) that are done.
 
-    Both are empty when the tables do not exist yet (older database). A Queen's Bees live in these tables, not only in the agents table."""
-    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('bee_assignments','bee_completed')")}
+    A package is done when a Bee finished it or its Queen reported it done (table package_progress). Both are empty when the tables do not exist yet (older database)."""
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('bee_assignments','bee_completed','package_progress')")}
     assigned = {(r[0], r[1], r[2]): (r[3], r[4]) for r in conn.execute("SELECT project,plan_path,package,class,provider FROM bee_assignments")} if "bee_assignments" in have else {}
     completed = {(r[0], r[1], r[2]) for r in conn.execute("SELECT project,plan_path,package FROM bee_completed")} if "bee_completed" in have else set()
+    if "package_progress" in have:
+        completed |= {(r[0], r[1], r[2]) for r in conn.execute("SELECT project,plan_path,package FROM package_progress WHERE state='done'")}
     return assigned, completed
+
+
+# Count the packages a Queen reported as implemented but not yet verified.
+def implemented_counts(conn) -> dict:
+    """{(project, plan): number of packages in state implemented}; empty when the table does not exist yet."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='package_progress'").fetchone():
+        return {}
+    return {(r[0], r[1]): r[2] for r in conn.execute("SELECT project,plan_path,COUNT(*) FROM package_progress WHERE state='implemented' GROUP BY project,plan_path")}
 
 
 # Input and output tokens of one agent row.
@@ -156,11 +166,11 @@ def agent_tokens(agent) -> tuple:
 
 
 # Describe one Hive for the active-hives table.
-def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None) -> dict:
+def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None) -> dict:
     """Row of one Hive: name, apiary, queen with context and tokens, Bees busy/assigned, progress (finished packages of all packages), status and runtime.
 
     `assigned` and `completed` come from bee_tables, `ctx_limit(agent)` gives an agent's context limit in tokens, `agents_all` (all rows, also archived)
-    gives the Hive's token total over its whole life."""
+    gives the Hive's token total over its whole life, `implemented` maps (project, plan) to the packages reported implemented but not verified."""
     key = (hive["project"], hive["plan_path"])
     mine = [a for a in agents if (a.get("project"), a.get("plan_path")) == key]
     queen = hive.get("queen")
@@ -185,7 +195,7 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
             "queen_ctx": int((queen or {}).get("ctxTokens") or 0) if live else 0, "queen_ctx_limit": int(ctx_limit(queen)) if live and ctx_limit else 0,
             "queen_tin": qin, "queen_tout": qout, "hive_tin": hin, "hive_tout": hout,
             "steps": {b["name"]: b["step"] for b in hive.get("bees", []) if b.get("step")},
-            "bees_running": len(running_pkgs), "bees_total": len(open_pkgs) if live else len(running_pkgs), "live": live, "done": len(done), "total": total_pkg, "progress": progress,
+            "bees_running": len(running_pkgs), "bees_total": len(open_pkgs) if live else len(running_pkgs), "live": live, "done": len(done), "implemented": (implemented or {}).get(key, 0), "total": total_pkg, "progress": progress,
             "status": status, "kind": kind, "runtime": fmt_elapsed(queen.get("started_at"), now) if live else ""}
 
 
@@ -404,7 +414,8 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         except Exception:
             return CONTEXT_FALLBACK
     assigned, completed = bee_tables(conn)
-    hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all) for h in hives.hive_data(conn, project, agents)]
+    impl = implemented_counts(conn)
+    hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl) for h in hives.hive_data(conn, project, agents)]
     live = [a for a in agents if a.get("status") in runtime.ACTIVE_STATUSES]
     queens = [a for a in live if a.get("phase") == "queen"]
     steps = {k: v for h in hive_rows for k, v in h["steps"].items()}

@@ -69,6 +69,9 @@ def cmd_ready(args, conn) -> int:
     res = db.add_ready(conn, args.project, args.branch, args.tip, args.plan, args.note)
     if agent and row and row.get("phase") == "queen":
         conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (res["id"], args.project, args.plan))
+        from haivequeen import bees
+        for (package,) in conn.execute("SELECT id FROM packages WHERE project=? AND plan_path=?", (args.project, args.plan)).fetchall():
+            bees.set_package_state(conn, args.project, args.plan, package, 'done', agent)   # ready means the Queen answered Offene Anforderungen: 0, so every package is done
     out({"ok": True, **res})
     return 0
 
@@ -261,6 +264,22 @@ def cmd_requeen(args, conn):
     return 0
 
 
+# Record the progress state of one package of the calling Queen's Hive.
+def cmd_package(args, conn):
+    """Store the state (working, implemented, done) of a package of the Queen's own plan; shown as progress in the window."""
+    from haivequeen import bees
+    agent = os.environ.get("BZZ_AGENT")
+    queen = runtime.get_agent(conn, args.project, agent) if agent else None
+    if not queen or queen.get("phase") != "queen" or not _plan_matches(conn, args.project, queen.get("plan_path"), args.plan):
+        return fail("package requires the Queen of this Hive")
+    plan = queen["plan_path"]
+    if conn.execute("SELECT 1 FROM packages WHERE project=? AND plan_path=? AND id=?", (args.project, plan, args.package)).fetchone() is None:
+        return fail("unknown package %s of this plan" % args.package)
+    bees.set_package_state(conn, args.project, plan, args.package, args.state, agent)
+    out({"ok": True, "package": args.package, "state": args.state})
+    return 0
+
+
 # Run a Bee or record its package attempt for the calling Queen.
 def cmd_bee(args, conn):
     """Route and start a Bee, or record an attempt for escalation."""
@@ -342,6 +361,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-subagents", action="store_true")
     p.add_argument("--parallel", action="store_true")
     p.set_defaults(fn=cmd_bee)
+
+    p = sub.add_parser("package")
+    for field in ("project", "plan", "package"):
+        p.add_argument("--" + field, required=True)
+    p.add_argument("--state", required=True, choices=["working", "implemented", "done"])
+    p.set_defaults(fn=cmd_package)
 
     p = sub.add_parser("integration")
     p.add_argument("action", choices=["acquire", "release"])

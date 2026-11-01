@@ -138,6 +138,7 @@ Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the
 | `bzz import-legacy ...` | owner | import the state of version 1 (see `docs/MIGRATION-v1.md`) |
 | `bzz dequeen <hive>` / `bzz requeen <hive> [provider]` | owner | leave a Hive queenless or start a new Queen, optionally on a different provider |
 | `bzz bee start`, `bzz bee result`, `bzz bee wait` | Queen | start a Bee, record an attempt or wait for its provider |
+| `bzz package --project p --plan f --package id --state working\|implemented\|done` | Queen | report the progress of a package of her plan; the window's progress bar counts the done ones |
 | `bzz integration acquire` / `release` | Queen or external window | acquire or release the per-project integration place; external windows provide a stable owner process ID |
 | `bzz done`, `bzz ready`, `bzz ask`, `bzz note` | agents | final report, branch ready for integration, question, note (`docs/RUNTIME-API.md`) |
 
