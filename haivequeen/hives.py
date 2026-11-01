@@ -3,7 +3,7 @@ import json
 import os
 import re
 import subprocess
-from . import db, runtime, interrupt
+from . import db, runtime, agent_process, interrupt
 from . import platform as osplat
 
 
@@ -302,7 +302,7 @@ def ask_about_end(conn, env, plan, agent, final_report):
 # Return whether all independent Bee processes of the Hive have finished.
 def can_handoff(conn, project, plan):
     """Return whether all independent Bee processes of the Hive have finished."""
-    return not any(a.get('plan_path') == plan and a.get('phase') == 'bee' and (a.get('status') in ('running', 'starting') or (a.get('pid') and osplat.process_alive(a['pid']))) for a in runtime.list_agents(conn, project, 'active'))
+    return not any(a.get('plan_path') == plan and a.get('phase') == 'bee' and agent_process.counts(a) for a in runtime.list_agents(conn, project, 'active'))
 
 
 # End this Hive's Queen and own-process Bees, leaving it queenless.
@@ -311,7 +311,7 @@ def dequeen(conn, project, plan, stop=None):
     if get(conn, project, plan) is None:
         raise ValueError('unknown Hive')
     stop = stop or osplat.kill_process_tree
-    rows = [a for a in runtime.list_agents(conn, project, 'active') if a.get('plan_path') == plan and a.get('phase') in ('queen', 'bee') and (a.get('status') in ('running', 'starting') or (a.get('pid') and osplat.process_alive(a['pid'])))]
+    rows = [a for a in runtime.list_agents(conn, project, 'active') if a.get('plan_path') == plan and a.get('phase') in ('queen', 'bee') and agent_process.counts(a)]
     for row in rows:
         if row.get('pid') and stop(row['pid']) is False:
             raise ValueError('could not end Hive process')
@@ -328,7 +328,7 @@ def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen
         raise ValueError('unknown Hive')
     if provider and (provider in excluded or providers is not None and not any(p['name'] == provider and not p.get('endpoint') and p.get('classes', {}).get(queen_class, {}).get('model') for p in providers)):
         raise ValueError('provider does not offer the Queen class')
-    if any(a.get('plan_path') == plan and a.get('phase') == 'queen' and (a.get('status') in ('running', 'starting') or (a.get('pid') and osplat.process_alive(a['pid']))) for a in runtime.list_agents(conn, project, 'active')):
+    if any(a.get('plan_path') == plan and a.get('phase') == 'queen' and agent_process.counts(a) for a in runtime.list_agents(conn, project, 'active')):
         dequeen(conn, project, plan, stop=stop)
     with db.transaction(conn):
         conn.execute("UPDATE hives SET state='requeen',requested_provider=?,reset_at=NULL WHERE project=? AND plan_path=?", (provider, project, plan))
@@ -504,7 +504,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     # Count an agent until its runner has actually exited.
     def process_running(row):
         """Count an agent until its runner has actually exited."""
-        return row.get('status') in ('running', 'starting') or bool(row.get('pid') and is_alive(row['pid']))
+        return agent_process.counts(row, is_alive)
 
     processes = [{**a, 'status': 'running'} for a in all_active if process_running(a)]
     free = sch.provider_free(envs[0].providers if envs else [], processes)
@@ -789,7 +789,7 @@ def wake_marker(conn, envs):
         if status not in ('running', 'starting') and not (row.get('phase') in ('queen', 'bee') and row.get('pid')):
             continue
         pid = row.get('pid')
-        live = bool(pid and osplat.process_alive(pid))
+        live = agent_process.is_live(row)
         owner = envs_by_name.get(row['project'])
         limit = sch.context_limit(owner.settings, owner.providers, sch.row_provider(row), row.get('class')) if owner else 300000
         context_reached = row.get('phase') == 'queen' and int(row.get('ctxTokens') or 0) >= limit

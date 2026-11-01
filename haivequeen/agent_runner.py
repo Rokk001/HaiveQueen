@@ -730,14 +730,15 @@ def run_agent(a, out=None):
     task = task_text(conn, a.project, a.plan, a.package, a.phase, plan_short) or task_line(a.prompt_file)
     events_file, err_file, final_file = run_dir / "events.jsonl", run_dir / "stderr.txt", run_dir / "final.txt"
 
-    if prev and prev.get("pid") and int(prev["pid"]) != os.getpid() and osplat.process_alive(int(prev["pid"])):
+    from . import agent_process
+    if prev and prev.get("pid") and int(prev["pid"]) != os.getpid() and agent_process.is_live(prev):
         out.write("agent %s already runs (pid %s), this second pane ends\n" % (a.name, prev["pid"]))   # a relaunched pane must never start the task twice
         return 0
     size = shutil.get_terminal_size((120, 40))
     started = run.started
     if not run.set_agent_retry({"type": protocol, "provider": a.provider, "model": model, "effort": effort, "plan": a.plan,
                                 "package": a.package, "phase": a.phase, "cwd": a.cwd, "status": "running",
-                                "startedAt": started.isoformat(), "endedAt": None, "pid": os.getpid(), "tokensIn": run.tin,
+                                "startedAt": started.isoformat(), "endedAt": None, "pid": os.getpid(), "processIdentity": osplat.process_identity(os.getpid()), "tokensIn": run.tin,
                                 "tokensOut": run.tout, "lastLine": "starting", "paneCols": size.columns, "paneRows": size.lines,
                                 "modelShort": (prev or {}).get("modelShort") or model_short(protocol, model, effort),
                                 "task": (prev or {}).get("task") or task}):

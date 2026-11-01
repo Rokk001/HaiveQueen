@@ -210,11 +210,9 @@ def process_alive(pid) -> bool:
         return False
 
 
-# Return a Windows process creation time, or None when it cannot be verified.
-def process_start_time(pid):
-    """Return the local creation time of a Windows process, or None."""
-    if not is_windows():
-        return None
+# Read the immutable creation tick count of a Windows process.
+def _win_process_creation(pid):
+    """Return a Windows FILETIME creation value, or None when inaccessible."""
     try:
         from ctypes import wintypes
         kernel = ctypes.windll.kernel32
@@ -228,12 +226,47 @@ def process_start_time(pid):
                                           ctypes.byref(exited), ctypes.byref(kernel_time),
                                           ctypes.byref(user_time)):
                 return None
-            ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
-            return datetime.fromtimestamp(ticks / 10000000 - 11644473600)
+            return (created.dwHighDateTime << 32) | created.dwLowDateTime
         finally:
             kernel.CloseHandle(ctypes.c_void_p(handle))
     except (OSError, AttributeError, TypeError, ValueError, OverflowError):
         return None
+
+
+# Return a stable identity that distinguishes a reused PID on Windows or Linux.
+def process_identity(pid):
+    """Return a process birth identity, or None when it cannot be verified."""
+    try:
+        pid = int(pid)
+        if pid <= 0:
+            return None
+        if is_windows():
+            created = _win_process_creation(pid)
+            return "win:%d" % created if created is not None else None
+        if is_linux():
+            with open('/proc/sys/kernel/random/boot_id', encoding='ascii') as boot:
+                boot_id = boot.read().strip()
+            with open('/proc/%d/stat' % pid, encoding='ascii') as stat:
+                fields = stat.read().rsplit(')', 1)[1].split()
+            return "linux:%s:%s" % (boot_id, fields[19]) if boot_id and fields[19].isdigit() else None
+    except (OSError, ValueError, TypeError, IndexError):
+        return None
+    return None
+
+
+# Return a Windows process creation time for records made before identities existed.
+def process_start_time(pid):
+    """Return local Windows process creation time, or None when unavailable."""
+    if not is_windows():
+        return None
+    ticks = _win_process_creation(pid)
+    if ticks is None:
+        return None
+    try:
+        return datetime.fromtimestamp(ticks / 10000000 - 11644473600)
+    except (OSError, ValueError, OverflowError):
+        return None
+
 
 def _win_kill_tree(pid: int) -> bool:
     """Windows: taskkill /PID <pid> /T /F; True when the process is gone afterwards."""

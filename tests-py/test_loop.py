@@ -131,7 +131,7 @@ class LoopTest(RoundCase):
     def test_reattach_and_end(self):
         """At the start a running agent with a living pid stays, one with a dead pid fails; the loop ends after the rounds and removes its lock."""
         self.plan("IN_PROGRESS", ONE)
-        self.agent("LIVE-work", package="P1", status="running", pid=os.getpid(), started=5)
+        self.agent("LIVE-work", package="P1", status="running", pid=os.getpid(), started=5, processIdentity=osplat.process_identity(os.getpid()))
         self.agent("GONE-work", package="P2", status="running", pid=2000000000, started=5)
         seen = {}
 
@@ -334,7 +334,7 @@ class LiveRunnerSurvivesTest(RoundCase):
         try:
             started = datetime.now() - timedelta(minutes=6)
             runtime.upsert_agent(self.conn, "testproj", "DUMMY-T-triage", {"type": "claude", "provider": "claude", "plan": REL, "package": "P1", "phase": "triage",
-                                                                         "status": "running", "startedAt": started.isoformat(), "pid": proc.pid})
+                                                                         "status": "running", "startedAt": started.isoformat(), "pid": proc.pid, "processIdentity": osplat.process_identity(proc.pid)})
             env = self.env()
             routine.repair_stale_agents(env, now=datetime.now() + timedelta(minutes=6))
             self.assertEqual(runtime.get_agent(self.conn, "testproj", "DUMMY-T-triage")["status"], "running")

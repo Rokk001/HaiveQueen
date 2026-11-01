@@ -198,7 +198,7 @@ def blocked_tasks(agents: list) -> list:
 
 def repair_stale_agents(env, now: datetime = None, alive=None) -> None:
     """Mark running or starting agents whose runner process is gone as failed, so slots and the dashboard stay correct."""
-    from . import platform as osplat
+    from . import platform as osplat, agent_process
     alive = alive or osplat.process_alive
     now = now or datetime.now()
     for a in env.agents("active"):
@@ -206,14 +206,17 @@ def repair_stale_agents(env, now: datetime = None, alive=None) -> None:
             continue
         why = None
         if a.get("pid"):
-            if not alive(a["pid"]):
+            if not agent_process.is_live(a, alive):
                 why = "runner process vanished (ended by executor or crashed)"
         elif a.get("started_at"):
             started = db.parse_time(a["started_at"])
             if started is not None and (now - started).total_seconds() > 120:
                 why = "pane never started (no runner process)"
         if why:
-            env.update_agent(a["name"], {"status": "failed", "ended_at": db.now(), "last_line": why, "paneClosed": True, "interrupted": interrupt.VANISHED})
+            fields = {"status": "failed", "ended_at": db.now(), "last_line": why, "paneClosed": True, "interrupted": interrupt.VANISHED}
+            if a.get("pid") and agent_process.pid_reused(a):
+                fields.update({"previousPid": a["pid"], "pid": None})
+            env.update_agent(a["name"], fields)
             env.log("TECHNICAL NOTE: %s: %s, marked failed" % (a["name"], why))
 
 

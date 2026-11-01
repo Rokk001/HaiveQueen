@@ -223,7 +223,8 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         if not queen:
             return False
         from . import platform as osplat
-        running = [{**a, 'status': 'running'} for a in active if a.get('status') in ('running', 'starting') or (a.get('pid') and osplat.process_alive(a['pid']))]
+        from . import agent_process
+        running = [{**a, 'status': 'running'} for a in active if agent_process.counts(a)]
         if sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
             return False
         package_row = next((p for p in env.packages(plan) if p['id'] == package), None)
