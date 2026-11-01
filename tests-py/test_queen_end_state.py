@@ -29,6 +29,47 @@ class QueenEndStateTest(EndedWithoutWorkTest):
             (repo / 'a').unlink()
             self.assertFalse(hives.ended_without_work(Env(), agent))
 
+    # The fast snapshot names only the files that differ from the last commit.
+    def test_state_lists_only_files_that_differ_from_the_commit(self):
+        """A clean committed file is not read or listed; a modified, a deleted and a new untracked file are; an ignored file is not."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'repo'
+            repo.mkdir()
+            self.git(repo, 'init', '-q')
+            (repo / '.gitignore').write_text('ignored\n')
+            for name in ('clean', 'edited', 'gone'):
+                (repo / name).write_text(name)
+            self.git(repo, 'add', '.')
+            self.git(repo, 'commit', '-q', '-m', 'old', date='2020-01-01T00:00:00')
+            (repo / 'edited').write_text('changed')
+            (repo / 'gone').unlink()
+            (repo / 'new').write_text('new')
+            (repo / 'ignored').write_text('ignored')
+            state = hives.worktree_state(repo)
+            self.assertEqual(sorted(state), ['edited', 'gone', 'new'])
+            self.assertIsNone(state['gone'])
+            self.assertEqual(len(state['edited']), 64)
+
+    # Snapshots saved before the fast method keep being compared with the thorough one.
+    def test_snapshot_without_mode_is_compared_the_thorough_way(self):
+        """A worktree-start.json without a mode holds every file's hash; ended_without_work still compares against it correctly."""
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, run = root / 'repo', root / 'run'
+            repo.mkdir(); run.mkdir()
+            self.git(repo, 'init', '-q')
+            (repo / 'a').write_text('old')
+            self.git(repo, 'add', 'a')
+            self.git(repo, 'commit', '-q', '-m', 'old', date='2020-01-01T00:00:00')
+            (run / 'worktree-start.json').write_text(json.dumps({'cwd': str(repo.resolve()), 'excluded': [], 'files': hives.full_worktree_state(repo)}), encoding='utf-8')
+            class Env:
+                def run_dir(self, name): return run
+            agent = {'name': 'Ada', 'cwd': str(repo), 'started_at': '2021-01-01T00:00:00'}
+            self.assertTrue(hives.ended_without_work(Env(), agent))
+            (repo / 'a').write_text('changed')
+            self.assertFalse(hives.ended_without_work(Env(), agent))
+
     def test_report_file_wins(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)

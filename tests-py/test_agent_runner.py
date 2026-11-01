@@ -1,5 +1,5 @@
 """Tests of haivequeen.agent_runner: helpers, stream parsing for Claude and Codex (fake CLIs), tokens, HANDOFF, final report,
-build jobs, the second-pane guard and the pane wrapper. Everything runs in a temp runtime (temp database, own runs folder)."""
+build jobs, the second-runner guard. Everything runs in a temp runtime (temp database, own runs folder)."""
 import json
 import os
 import stat
@@ -216,7 +216,7 @@ class RunnerBase(unittest.TestCase):
         self.base = base
         self.env = dict(os.environ)
         self.env.update({"BZZ_CONFIG_DIR": str(base / "cfg"), "BZZ_DATA_DIR": str(base / "data"), "BZZ_LOG_DIR": str(base / "logs"),
-                         "PYTHONPATH": str(ROOT), "BZZ_NO_HEADER": "1", "BZZ_CODEX_SESSIONS": str(base / "sessions"),
+                         "PYTHONPATH": str(ROOT), "BZZ_CODEX_SESSIONS": str(base / "sessions"),
                          "FAKE_RECORD": str(base / "record.json"), "FAKE_STREAM": str(base / "stream.txt")})
         self.env.pop("BUILD_JOBS", None)
         self.runs = base / "runs"
@@ -262,18 +262,18 @@ class RunnerBase(unittest.TestCase):
         (cfg / "config.toml").write_text(text, encoding="utf-8")
 
     def prepare(self, name, provider="claude", **fields):
-        """Create the agent row like the scheduler does before the pane starts."""
+        """Create the agent row like the scheduler does before the runner starts."""
         row = {"status": "starting", "class": "medium", "person": "Max", "color": "4FA8FF"}
         row.update(fields)
         runtime.upsert_agent(self.conn, "demo", name, row)
 
-    def run_runner(self, name, provider, stream, extra_args=(), exit_code=0, phase="work", env=None, wrap=False):
+    def run_runner(self, name, provider, stream, extra_args=(), exit_code=0, phase="work", env=None):
         """Run `python -m haivequeen.agent_runner` with a fake stream; returns the completed process."""
         (self.base / "stream.txt").write_text(stream, encoding="utf-8")
         e = dict(self.env)
         e["FAKE_EXIT"] = str(exit_code)
         e.update(env or {})
-        cmd = [sys.executable, "-m", "haivequeen.agent_runner"] + (["--wrap"] if wrap else []) + [
+        cmd = [sys.executable, "-m", "haivequeen.agent_runner"] + [
             "--project", "demo", "--name", name, "--provider", provider, "--plan", "plans/Demo-PLAN.md", "--package", "P1", "--phase", phase,
             "--cwd", str(self.ws), "--prompt-file", str(self.prompt), "--runs-dir", str(self.runs)] + list(extra_args)
         return subprocess.run(cmd, cwd=str(ROOT), env=e, capture_output=True, text=True, encoding="utf-8", timeout=120)
@@ -479,8 +479,8 @@ class ClaudeRunTest(RunnerBase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("provider 'nope' is not in config.toml", r.stderr)
 
-    def test_second_pane_guard(self):
-        """A relaunched pane whose agent runs already (live pid) ends without starting the task again."""
+    def test_second_runner_guard(self):
+        """A relaunched runner whose agent runs already (live pid) ends without starting the task again."""
         self.prepare("C-1", status="running", pid=os.getpid())
         r = self.run_runner("C-1", "claude", claude_stream())
         self.assertEqual(r.returncode, 0)
@@ -491,10 +491,15 @@ class ClaudeRunTest(RunnerBase):
     def test_fake_agent(self):
         """BZZ_FAKE_AGENT (tests only) runs without a model call and ends done."""
         self.prepare("C-2")
-        self.run_runner("C-2", "claude", "", env={"BZZ_FAKE_AGENT": "1", "BZZ_FAKE_DELAY": "0"})
+        r = self.run_runner("C-2", "claude", "", env={"BZZ_FAKE_AGENT": "1", "BZZ_FAKE_DELAY": "0"})
         row = self.row("C-2")
         self.assertEqual((row["status"], row["tokens_in"], row["tokens_out"]), ("done", 32000, 960))
         self.assertFalse((self.base / "record.json").exists())
+        live = (self.runs / "C-2" / "milestones.txt").read_text(encoding="utf-8").splitlines()   # the live text file the dashboard reads
+        self.assertTrue(live[0].startswith("White" + chr(9)) and "Test milestone 1" in live[0], live[:1])
+        self.assertTrue(any("Final message" in x or "End: done" in x for x in live), live[-2:])
+        self.assertIn("Test milestone 8", r.stdout)   # the plain runner output (runner.log of a loop start) has the same milestones
+        self.assertNotIn(chr(27), r.stdout)
 
     def test_unclassified_class_escalates_model(self):
         """The class of the agent row selects the model of the provider entry."""
@@ -573,30 +578,6 @@ class BuildJobsTest(RunnerBase):
         self.run_runner("E-2", "claude", claude_stream(), phase="work")
         self.assertIsNone(self.record()["build_jobs"])
         self.assertNotIn("buildJobs", self.row("E-2"))
-
-
-class PaneWrapTest(RunnerBase):
-    """The pane wrapper keeps the pane for the delay and always exits 0."""
-
-    def test_wrap_runs_child_and_exits_zero(self):
-        """The wrapper runs the agent as a child, sets paneClosed and exits 0."""
-        self.write_config("paneCloseDelaySeconds = 0\n")
-        self.prepare("F-1")
-        r = self.run_runner("F-1", "claude", claude_stream(), wrap=True)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("pane closes in 0 s", r.stdout)
-        row = self.row("F-1")
-        self.assertEqual(row["status"], "done")
-        self.assertTrue(row["paneClosed"])
-
-    def test_wrap_exits_zero_when_child_fails(self):
-        """A failing child (unknown provider) does not leave the pane open: exit code is still 0."""
-        self.write_config("paneCloseDelaySeconds = 0\n")
-        self.prepare("F-2")
-        r = self.run_runner("F-2", "nope", "", wrap=True)
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("pane closes in 0 s", r.stdout)
-        self.assertTrue(self.row("F-2")["paneClosed"])
 
 
 if __name__ == "__main__":

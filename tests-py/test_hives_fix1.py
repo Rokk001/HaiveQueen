@@ -1,7 +1,6 @@
 """Tests of the live defects found after the first resume: a Queen never waits on an owner question for branch and worktree (A3, A13), every
 non-start of a Hive and every round is logged with its reason, migrated project files that still say `repo` name the code repo, and the
-Beekeeper header shows nothing about a language model (D1, D18)."""
-import sys
+overview shows nothing about a language model of the Beekeeper (D1, D18)."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -105,56 +104,32 @@ class LegacyRepoKeyTests(unittest.TestCase):
         self.assertNotIn("codeRepo", self.load('name = "x"\n'))
 
 
-class HeaderTests(unittest.TestCase):
-    """The Beekeeper header makes no claim about a language model: the Beekeeper calls none (D1, D18)."""
-
-    def text(self, ui):
-        """All header lines as one text."""
-        return "\n".join(line for line, _ in loop.head_lines(100, ui))
-
-    def test_header_has_no_model_or_brain_text(self):
-        """No model name, no 'Brain calls', no 'brain' wording and no call statistics."""
-        text = self.text({"busy": True, "projects": ["a", "b"]})
-        for word in ("Claude", "Brain", "brain", "Decides", "Last call", "Today", "Total input"):
-            self.assertNotIn(word, text)
-
-    def test_header_shows_state_and_projects(self):
-        """The header still shows the Beekeeper, its state and its projects."""
-        text = self.text({"busy": True, "projects": ["a", "b"]})
-        self.assertIn("Beekeeper | round running", text)
-        self.assertIn("Apiaries: a, b", text)
-        self.assertIn("PAUSED", self.text({"run_state": "PAUSED"}))
-
-
-class ProcessBeePaneTests(RoundCase):
-    """A Queen gets her own pane; a Bee that runs as its own process gets none and shows only as a line in its Hive (A3, D3)."""
+class ProcessStartTests(RoundCase):
+    """A Queen and a Bee both start as hidden processes of their own through launch_headless (A3, D3)."""
 
     def start(self, phase):
-        """Start one agent of this phase through the real start path with the pane, the Queen hand-over and the headless launch recorded; return the two call lists
-        (a Queen is handed to the sub-terminal of her Hive: see self.queens)."""
+        """Start one agent of this phase through the real start path with the headless launch recorded; return the names it was called with."""
         import os
         from unittest import mock
         from haivequeen import scheduler as sch
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
         env = self.env()
         os.environ.pop("BZZ_TEST_NOSTART", None)
-        panes, headless = [], []
-        self.queens = []
+        headless = []
         action = {"name": "Ada", "type": "claude", "phase": phase, "plan": REL, "package": "P1" if phase == "bee" else "", "cwd": str(self.wt), "prompt": "task", "class": "medium"}
         state = {"names": [], "busy": [], "plan_status": {sch.norm_plan(REL): "IN_PROGRESS"}, "by_path": {sch.norm_plan(REL): {"path": REL}}}
-        ctx = {"env": env, "state": state, "pool": loop.Pool({"claude": 5}, 0), "report": [], "dry": False, "terminal": None, "settle": 0, "poll": 0, "tries": 1}
-        with mock.patch.object(loop, "launch_agent", lambda *a, **k: panes.append(a[3]["name"])), mock.patch.object(loop, "start_queen", lambda *a, **k: self.queens.append(a[3]["name"])), mock.patch.object(loop, "launch_headless", lambda *a, **k: headless.append(a[1]["name"]), create=True):
+        ctx = {"env": env, "state": state, "pool": loop.Pool({"claude": 5}, 0), "report": [], "dry": False, "settle": 0}
+        with mock.patch.object(loop, "launch_headless", lambda *a, **k: headless.append(a[1]["name"])):
             loop._do_start(ctx, action, forced_pick=sch.get_provider(env.providers, "claude"))
-        return panes, headless
+        return headless
 
-    def test_queen_gets_a_pane(self):
-        """The Queen gets no pane of her own: she is handed to the sub-terminal of her Hive."""
-        self.assertEqual(self.start("queen"), ([], []))
-        self.assertEqual(self.queens, ["Ada"])
+    def test_queen_starts_headless(self):
+        """The Queen is started as a hidden process."""
+        self.assertEqual(self.start("queen"), ["Ada"])
 
-    def test_process_bee_gets_no_pane(self):
-        """A Bee process is started without a pane."""
-        self.assertEqual(self.start("bee"), ([], ["Ada"]))
+    def test_process_bee_starts_headless(self):
+        """A Bee process is started as a hidden process."""
+        self.assertEqual(self.start("bee"), ["Ada"])
 
 
 class DeadBrainCodeTests(RoundCase):
@@ -166,21 +141,21 @@ class DeadBrainCodeTests(RoundCase):
         self.assertFalse(hasattr(loop, "_start_triage"))
         self.assertFalse((Path(loop.__file__).parent / "brain.py").exists())
 
-    def test_dashboard_shows_no_brain_text(self):
-        """Even a stored 'brain' loop state shows no 'brain call running' and the dashboard has no brain statistic."""
+    def test_overview_shows_no_brain_text(self):
+        """Even a stored 'brain' loop state shows no 'brain call running' and the overview has no brain statistic."""
         from datetime import datetime
-        from haivequeen import dashboard
+        from haivequeen import overview
         runtime.kv_set(self.conn, "*", "loop-state", '{"status": "brain", "since": "2026-10-30T15:00:00"}')
         sysinfo = {"cores": 4, "free_mb": 4000, "total_mb": 8000, "host": "test", "compiler_count": None}
-        text = dashboard.render(self.conn, width=100, height=60, now=datetime.now(), cfg={}, sysinfo=sysinfo, color=False)
-        self.assertNotIn("brain", text.lower())
+        data = overview.collect(self.conn, None, datetime.now(), {}, sysinfo)
+        self.assertNotIn("brain", str(data["orch"]).lower())
 
 
 class QueenStartTests(RoundCase):
-    """Queens start in a pane with a short female name; the Beekeeper is never called Queen (A2, A3, D1)."""
+    """Queens start with a short female name; the Beekeeper is never called Queen (A2, A3, D1)."""
 
     def test_runner_command_has_no_empty_argument(self):
-        """wt drops an empty argument such as --package "", so the runner died at once; the command never holds one."""
+        """An empty argument such as --package "" is left out; the command never holds one."""
         spec = {"name": "Ada", "provider": "claude", "protocol": "claude", "plan": REL, "package": "", "phase": "queen", "cwd": str(self.wt), "prompt_file": "p.md"}
         argv = loop.runner_argv(self.env(), spec)
         self.assertNotIn("", argv)
@@ -208,12 +183,6 @@ class QueenStartTests(RoundCase):
         text = (runtime.mirror_dir("testproj") / runtime.MIRRORS["events"]).read_text(encoding="utf-8")
         self.assertIn("Beekeeper started (round every", text)
         self.assertNotIn("Queen started", text)
-
-    def test_chief_pane_is_found_as_the_loop_pane(self):
-        """The title of the loop pane is recognised as the loop pane (the BEEKEEPER title; the old QUEEN title is accepted as well)."""
-        self.assertTrue(loop.is_beekeeper_title(loop.queen_pane_title("m", True)))
-        self.assertIn("BEEKEEPER", loop.queen_pane_title("m", True))
-        self.assertNotIn("QUEEN", loop.queen_pane_title("m", True))
 
 
 class RunnerCrashTests(RoundCase):

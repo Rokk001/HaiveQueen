@@ -1,13 +1,13 @@
-"""Runs ONE agent (Claude Code or Codex, headless) in its own pane (port of agent-run.ps1, pane-wrap.ps1 and the agent part of build-sampler.ps1).
+"""Runs ONE agent (Claude Code or Codex, headless) as a hidden background process (port of agent-run.ps1 and the agent part of build-sampler.ps1).
 
-The agent is tracked in the agents table; the pane shows a fixed header (haivequeen.header) and below it only milestones with a
-time stamp; the full raw output stays in <runs dir>/<agent>/ (events.jsonl, stderr.txt, milestones.txt, final.txt, rules.md).
+The agent is tracked in the agents table; the full raw output stays in <runs dir>/<agent>/ (events.jsonl, stderr.txt, milestones.txt, final.txt, rules.md).
+The LIVE TEXT of the agent (what the graphical dashboard shows in its live view) is <runs dir>/<agent>/milestones.txt: one line per milestone,
+written by AgentRun.say as "<colour><TAB><HH:MM> <text>" (colour is one of MS_COLOURS). The same milestones, plain, also go to the stdout of the
+runner, which the loop redirects to runner.log in that folder.
 
 Usage:
   python -m haivequeen.agent_runner --project P --name N --provider claude --cwd DIR --prompt-file FILE
          [--plan PATH] [--package ID] [--phase work] [--runs-dir DIR] [--model M] [--effort E]
-  python -m haivequeen.agent_runner --wrap ...same arguments...   (pane wrapper: runs the agent as a child, keeps the pane open
-                                                                 for the close delay, then exits 0)
 """
 import argparse
 import json
@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import buildjobs, config, db, header, interrupt, runtime, scheduler
+from . import buildjobs, config, db, interrupt, overview, runtime, scheduler
 from . import platform as osplat
 
 TOOL_ROOT = Path(__file__).resolve().parent.parent
@@ -58,7 +58,7 @@ def model_label(model):
 
 
 def model_short(provider_type, model, effort):
-    """Return the short model text of the first header line: "Son 5.5 med." / "Sol 6.1 med."."""
+    """Return the short model text: "Son 5.5 med." / "Sol 6.1 med."."""
     eff = "med." if effort == "medium" else effort
     if provider_type == "codex":
         m = re.match(r"^gpt-(\d+(?:\.\d+)?)-([a-z]+)", model or "")
@@ -419,15 +419,8 @@ def with_bzz_on_path(env, dirs=None):
     return env
 
 
-def child_env():
-    """Return the environment for child processes of the runner: the tool folder is on PYTHONPATH so `-m haivequeen...` works, `bzz` is found on PATH."""
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(TOOL_ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    return with_bzz_on_path(env)
-
-
 def task_text(conn, project, plan, package, phase, plan_short):
-    """Return the task for the header: work = package row of the plan (id and title); verify / release / integrate = phase plus package."""
+    """Return the task text: work = package row of the plan (id and title); verify / release / integrate = phase plus package."""
     pkg_txt = "package " + package if package and package != "ALL" and not re.match(r"^(REL|INT-)", package) else "whole plan"
     if phase == "verify":
         return "Verify %s, completeness check" % pkg_txt
@@ -463,7 +456,7 @@ class AgentRun:
     # Initialize one tracked agent run.
     def __init__(self, conn, project, name, provider, protocol, cwd, run_dir, plan="", package="", phase="work",
                  out=None, queue_re=None, sessions=None):
-        """Remember the run parameters; `out` is where pane text goes (default stdout)."""
+        """Remember the run parameters; `out` is where the plain milestone text goes (default stdout)."""
         self.conn, self.project, self.name = conn, project, name
         self.provider, self.type = provider, protocol
         self.cwd, self.run_dir = str(cwd), Path(run_dir)
@@ -486,14 +479,10 @@ class AgentRun:
         self.started = datetime.now()
         self.ms_file = self.run_dir / "milestones.txt"
 
-    # --- pane output
-
-    def width(self):
-        """Return the pane width in columns."""
-        return max(30, shutil.get_terminal_size((120, 40)).columns)
+    # --- live output
 
     def say(self, text, colour="White"):
-        """Write one milestone line with the time (wrapped, not cut) and keep it in milestones.txt for the header process."""
+        """Write one milestone line with the time: plain to `out` and as "<colour><TAB><time> <text>" into milestones.txt (the live text file the dashboard reads)."""
         text = str(text)
         if len(text) > 1500:
             text = text[:1500] + "..."
@@ -503,11 +492,8 @@ class AgentRun:
                 handle.write((colour + "\t" + ts + " ".join(text.split()) + "\n").encode("utf-8"))
         except OSError:
             pass
-        first = True
-        for line in header.wrap_text(text, self.width() - 6):
-            self.out.write("%s%s%s%s[0m\n" % (header.sgr(colour), ts if first else "      ", line, header.ESC))
-            first = False
         try:
+            self.out.write(ts + " ".join(text.split()) + "\n")
             self.out.flush()
         except Exception:
             pass
@@ -550,11 +536,9 @@ class AgentRun:
             cx = get_codex_tokens(self.thread, self.sessions)
             if cx:
                 self.ctx, self.tin, self.tout = cx["ctx"], cx["tin"], cx["tout"]
-        size = shutil.get_terminal_size((120, 40))
         try:
             runtime.upsert_agent(self.conn, self.project, self.name, {
-                "tokensIn": self.tin, "tokensOut": self.tout, "ctxTokens": self.ctx, "lastLine": self.last,
-                "paneCols": size.columns, "paneRows": size.lines})
+                "tokensIn": self.tin, "tokensOut": self.tout, "ctxTokens": self.ctx, "lastLine": self.last})
         except Exception:
             pass   # a failed write must not end the run
 
@@ -781,14 +765,13 @@ def run_agent(a, out=None):
 
     from . import agent_process
     if prev and prev.get("pid") and int(prev["pid"]) != os.getpid() and agent_process.is_live(prev):
-        out.write("agent %s already runs (pid %s), this second pane ends\n" % (a.name, prev["pid"]))   # a relaunched pane must never start the task twice
+        out.write("agent %s already runs (pid %s), this second runner ends\n" % (a.name, prev["pid"]))   # a relaunched runner must never start the task twice
         return 0
-    size = shutil.get_terminal_size((120, 40))
     started = run.started
     if not run.set_agent_retry({"type": protocol, "provider": a.provider, "model": model, "effort": effort, "plan": a.plan,
                                 "package": a.package, "phase": a.phase, "cwd": a.cwd, "status": "running",
                                 "startedAt": started.isoformat(), "endedAt": None, "pid": os.getpid(), "processIdentity": osplat.process_identity(os.getpid()), "tokensIn": run.tin,
-                                "tokensOut": run.tout, "lastLine": "starting", "paneCols": size.columns, "paneRows": size.lines,
+                                "tokensOut": run.tout, "lastLine": "starting",
                                 "modelShort": (prev or {}).get("modelShort") or model_short(protocol, model, effort),
                                 "task": (prev or {}).get("task") or task}):
         out.write("agent %s not started: the agent row could not be written, row set to failed\n" % a.name)   # the model is never called
@@ -801,13 +784,7 @@ def run_agent(a, out=None):
             names = (plan_path.stem + '-STATE.md', re.sub(r'-PLAN$', '', plan_path.stem) + '-STATE.md')
             state_paths = [Path(base) / plan_path.parent / name for base in (a.cwd, workspace) if base for name in names]
         hives.save_worktree_state(a.cwd, run_dir, state_paths)
-    # The header is drawn by haivequeen.header (own process in this pane); this process only prints milestones below it.
-    run.ms_file.write_text("", encoding="utf-8")
-    header_proc = None
-    if sys.stdout.isatty() and not os.environ.get("BZZ_NO_HEADER"):
-        header_proc = subprocess.Popen([osplat.python_executable(), "-m", "haivequeen.header", "--project", a.project, "--name", a.name,
-                                        "--parent-pid", str(os.getpid()), "--runs-dir", str(runs)], env=child_env())
-        time.sleep(2)
+    run.ms_file.write_text("", encoding="utf-8")   # a new live text file for this run
 
     try:
         agent_row = runtime.get_agent(conn, a.project, a.name)
@@ -875,7 +852,7 @@ def run_agent(a, out=None):
     stall_limit = float(cfg.get("agentStallSeconds", DEFAULT_STALL_SECONDS) or 0)
 
     def mark_stalled(secs):
-        """Mark the running agent as stalled (row field, event, pane line); the process keeps running."""
+        """Mark the running agent as stalled (row field, event, live text line); the process keeps running."""
         set_stalled(a, db.now(), "%s stalled: no output for %d s (still running, not ended)" % (a.name, secs))
         run.say("Stalled: no output for %d s. The agent is still running." % secs, "Yellow")
 
@@ -883,10 +860,10 @@ def run_agent(a, out=None):
         """Remove the stalled mark when the agent prints again."""
         set_stalled(a, "", "%s prints again" % a.name)
     try:
-        if os.environ.get("BZZ_FAKE_AGENT"):   # tests only: no model call, a few milestones and token numbers so the pane layout can be checked
+        if os.environ.get("BZZ_FAKE_AGENT"):   # tests only: no model call, a few milestones and token numbers so the live text can be checked
             delay = float(os.environ.get("BZZ_FAKE_DELAY") or 3)
             for i in range(1, 9):
-                run.say("Test milestone %d: this is a long line that should wrap in narrow panes so that the line wrapping becomes visible." % i, "White")
+                run.say("Test milestone %d: this is a long line that should wrap in a narrow window so that the line wrapping becomes visible." % i, "White")
                 run.tin += 4000
                 run.tout += 120
                 run.ctx = 4000 * i
@@ -948,13 +925,8 @@ def run_agent(a, out=None):
                          "interrupted": kind, "retryAt": ""})
     if run.final and (a.phase == "queen" or short(run.final, 1500) != short(run.last_said, 1500)):
         run.say("Final message: " + run.final, "Green" if status == "done" else "Red")
-    run.say("End: %s (exit %s), total input %s / output %s. The section closes after the close delay." % (status, code, header.fmt_tok(run.tin), header.fmt_tok(run.tout)),
+    run.say("End: %s (exit %s), total input %s / output %s." % (status, code, overview.fmt_tok(run.tin), overview.fmt_tok(run.tout)),
             "Green" if status == "done" else "Red")
-    if header_proc is not None:
-        try:
-            header_proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            header_proc.terminate()
     return 0
 
 
@@ -989,51 +961,6 @@ def complete_build_measure(conn, project, name, jobs, start_free_mb, sample_file
     return use
 
 
-# Run the child, mark its pane closing before and after the delay, and exit 0 even if the child failed.
-def pane_wrap(a, argv):
-    """Run the child, mark its pane closing before and after the delay, and exit 0 even if the child failed."""
-    try:
-        cfg = config.load_config()
-        delay = int(cfg.get("paneCloseDelaySeconds", 30))
-        conn = db.connect(config.db_path())
-    except Exception as exc:
-        print("pane start error: %s" % exc)
-        print("pane closes in 30 s")
-        time.sleep(30)
-        return 0
-    # Log wrapper failures to the pane and the runtime event log.
-    def log_error(text):
-        """Log wrapper failures to the pane and the runtime event log."""
-        print(text, file=sys.stderr)
-        try:
-            runtime.append_event(conn, a.project, text, kind="warning", agent=a.name, mirror="rounds")
-        except Exception as exc:
-            print("pane error logging failed: %s" % exc, file=sys.stderr)
-
-    # Write the closure flag, logging a failed write so the later attempt can retry it.
-    def mark_closed():
-        """Write the closure flag, logging a failed write so the later attempt can retry it."""
-        try:
-            runtime.upsert_agent(conn, a.project, a.name, {"paneClosed": True}, create=False)
-        except Exception as exc:
-            log_error("paneClosed write failed: %s" % exc)
-
-    try:
-        subprocess.run([osplat.python_executable(), "-m", "haivequeen.agent_runner"] + argv, env=child_env())
-    finally:
-        mark_closed()
-        print("pane closes in %d s" % delay)
-        time.sleep(delay)
-        mark_closed()
-        try:
-            from . import loop   # imported here: loop imports this module
-            loop.hold_pane_lock_until_exit()   # the pane closes while no other pane command runs; the lock ends with this process
-        except Exception as exc:
-            log_error("pane lock failed: %s" % exc)
-        conn.close()
-    return 0
-
-
 def parse_args(argv=None):
     """Parse the command line (see the module help)."""
     p = argparse.ArgumentParser(prog="haivequeen.agent_runner")
@@ -1048,7 +975,6 @@ def parse_args(argv=None):
     p.add_argument("--runs-dir", default=None, help="folder of the run folders (default: <data>/runs)")
     p.add_argument("--model", default=None)
     p.add_argument("--effort", default=None)
-    p.add_argument("--wrap", action="store_true", help="pane wrapper mode")
     p.add_argument("--protocol", default=None, help="passed by the loop; the protocol is taken from the provider entry")
     p.add_argument("--env", action="append", default=[], metavar="NAME=VALUE", help="environment value to set before the run (test and folder overrides)")
     return p.parse_args(argv)
@@ -1062,11 +988,9 @@ def main(argv=None):
         key, _, value = pair.partition("=")
         if key:
             os.environ[key] = value
-    if a.wrap:
-        return pane_wrap(a, [x for x in argv if x != "--wrap"])
     try:
         return run_agent(a)
-    except Exception as exc:   # a runner that dies before its first row write must leave its reason behind, not vanish with its pane
+    except Exception as exc:   # a runner that dies before its first row write must leave its reason behind, not vanish silently
         import traceback
         text = traceback.format_exc()
         folder = (Path(a.runs_dir) if a.runs_dir else osplat.runs_dir()) / a.name

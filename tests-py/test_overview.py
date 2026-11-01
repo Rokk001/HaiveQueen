@@ -1,21 +1,18 @@
-"""Tests of the dashboard text with invented data (no terminal, temp database)."""
+"""Tests of the overview data (haivequeen/overview.py) with invented data (temp database, no window)."""
 import json
 import os
-import re
 import sys
 import tempfile
-import time
 import unittest
 from datetime import datetime, timedelta
 from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from haivequeen import dashboard, db, runstate, runtime, usage  # noqa: E402
+from haivequeen import db, overview, runstate, runtime, usage  # noqa: E402
 
 NOW = datetime(2026, 10, 28, 12, 0, 0)
 SYS = {"cores": 12, "free_mb": 8192, "total_mb": 16384, "host": "h1", "compiler_count": None}
-ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def iso(minutes_ago):
@@ -23,9 +20,9 @@ def iso(minutes_ago):
     return (NOW - timedelta(minutes=minutes_ago)).isoformat(timespec="seconds")
 
 
-# Test dashboard behavior.
-class DashboardTest(unittest.TestCase):
-    """Render with two invented projects."""
+# Test the overview data.
+class OverviewTest(unittest.TestCase):
+    """Collect with two invented projects."""
 
     def setUp(self):
         """Create a temp database with two projects, agents, plans, a question and usage rows."""
@@ -58,28 +55,31 @@ class DashboardTest(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
-    def text(self, **kw):
-        """Render without colours unless asked."""
-        args = dict(width=100, height=60, now=NOW, cfg={"buildJobs": 1}, sysinfo=dict(SYS), color=False)
+    def data(self, **kw):
+        """collect() with the fixed clock and system values unless asked otherwise."""
+        args = dict(now=NOW, cfg={"buildJobs": 1}, sysinfo=dict(SYS))
         args.update(kw)
-        return dashboard.render(self.conn, **args)
+        project = args.pop("project", None)
+        return overview.collect(self.conn, project, **args)
 
-    # Check that the dashboard retains sections and omits the removed weekly rows.
+    # Check the collected sections.
     def test_sections_and_projects(self):
-        """All sections show; both projects appear in agent rows; texts are English."""
-        t = self.text()
-        for s in ("AGENTS 1", "LIMITS", "USAGE", "SYSTEM", "PLANS", "QUESTIONS", "RUNNING", "alpha | ANN", "beta | ",
-                  "ended in the last hour", "Claude 5h", " 42%", "open: 1  beta#", "draft: NEW"):
-            self.assertIn(s, t)
-        self.assertNotIn("Claude 7d", t)
-        self.assertNotIn("Codex 7d", t)
-        self.assertIn("▲ Context 310k", t)
-        self.assertIn("Total Input 2k / Output 100", t)
-        self.assertIn("Total Input 120k / Output 3k", t)
+        """Both projects, the running and the ended agent, the plan counts, the open question and the Claude quota are collected."""
+        d = self.data()
+        self.assertEqual([a["name"] for a in d["agents"]], ["alpha-job-one"])
+        self.assertEqual([a["name"] for a in d["fin"]], ["beta-job-two"])
+        self.assertEqual(d["projects"], ["alpha", "beta"])
+        self.assertEqual((d["counts"]["IN_PROGRESS"], d["counts"]["DRAFT"]), (1, 1))
+        self.assertEqual(d["drafts"], ["NEW"])
+        self.assertEqual([q["project"] for q in d["qs"]], ["beta"])
+        self.assertEqual(d["cu"]["FiveHour"]["pct"], 42)
+        self.assertEqual(d["cu"]["SevenDay"]["pct"], 90)
+        self.assertEqual(overview.fmt_tok0(310000), "310k")
+        self.assertEqual(overview.fmt_tok0(None), "–")
 
-    # Check that Codex 5-hour usage remains visible without a weekly row.
+    # Check that Codex usage is read from the session logs.
     def test_codex_limits_from_session_logs(self):
-        """Invented Codex session logs in a temp home: the dashboard writes kv usage-codex and shows percent and reset instead of n/a."""
+        """Invented Codex session logs in a temp home: collect writes kv usage-codex and returns the 5 hour percent."""
         home = Path(self.tmp.name) / "home"
         day = home / ".codex" / "sessions" / "2026" / "10" / "28"
         day.mkdir(parents=True)
@@ -88,98 +88,53 @@ class DashboardTest(unittest.TestCase):
               "secondary": {"used_percent": 64.0, "window_minutes": 10080, "resets_at": t + 86400 * 3}}
         line = json.dumps({"payload": {"rate_limits": rl}}, separators=(",", ":"))
         (day / "rollout-a.jsonl").write_text('{"x":1}\n' + line + "\n", encoding="utf-8")
-        before = self.text()
-        self.assertNotIn("Codex 7d", before)
         env = {k: v for k, v in os.environ.items() if k != "BZZ_DATA_DIR"}
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(usage, "home_dir", return_value=home):
             usage._codex_refresh.clear()
-            out = dashboard.render(self.conn, width=100, height=60, now=datetime.now(), cfg={}, sysinfo=dict(SYS), color=False)
+            d = overview.collect(self.conn, None, datetime.now(), {}, dict(SYS))
         self.assertIsNotNone(runtime.kv_get(self.conn, "*", "usage-codex"))
-        codex_line = [x for x in out.split("\n") if "Codex" in x and "5h" in x][0]
-        self.assertIn("37%", codex_line)
-        self.assertNotIn("Codex 7d", out)
-        self.assertNotIn("64%", out)
+        self.assertEqual(d["xu"]["FiveHour"]["pct"], 37)
 
     def test_build_jobs_line(self):
         """The build-jobs line shows jobs, cores, per-job use and the active cores of a running build."""
-        self.assertIn("Build jobs 4 of 12 cores (running) | per job not measured yet", self.text())
+        self.assertIn("Build jobs 4 of 12 cores (running) | per job not measured yet", self.data()["bj"])
         with db.transaction(self.conn):
             self.conn.execute("INSERT INTO build_measurements (host, project, ts, jobs, per_job_mb) VALUES ('h1','alpha','x',2,900)")
         s = dict(SYS, compiler_count=3)
-        self.assertIn("Build jobs 1 of 12 cores (next build) | per job not measured yet", self.text(sysinfo=s, project="beta"))
+        self.assertIn("Build jobs 1 of 12 cores (next build) | per job not measured yet", self.data(sysinfo=s, project="beta")["bj"])
         with db.transaction(self.conn):
             self.conn.execute("UPDATE agents SET status='done', ended_at=? WHERE project='alpha'", (iso(1),))
-        t = self.text(sysinfo=s, cfg={"buildJobs": {"coreShare": "1/2", "reserveMB": 1024}})
-        self.assertIn("Build jobs 1 of 12 cores (next build) | per job 900 MB | active: 3 cores", t)   # the owner's rule: the next build always gets one job
-        self.assertNotIn("Build jobs", self.text(cfg={}))
+        bj = self.data(sysinfo=s, cfg={"buildJobs": {"coreShare": "1/2", "reserveMB": 1024}})["bj"]
+        self.assertIn("Build jobs 1 of 12 cores (next build) | per job 900 MB | active: 3 cores", bj)   # the owner's rule: the next build always gets one job
+        self.assertIsNone(self.data(cfg={})["bj"])
 
     def test_project_filter(self):
         """With a project filter only its agents, plans and questions remain."""
-        t = self.text(project="alpha")
-        self.assertIn("alpha-job-one", t)
-        self.assertNotIn("beta-job-two", t)
-        self.assertIn("none open", t)
-
-    def press(self, key, t=None):
-        """A confirmed press of P or D: the same key twice, one second apart (now by default)."""
-        t = time.monotonic() if t is None else t
-        dashboard.handle_key(self.conn, key, None, [], now=t)
-        dashboard.handle_key(self.conn, key, None, [], now=t + 1)
-
-    def test_single_press_changes_nothing_double_press_does(self):
-        """A single D changes nothing and asks for the confirmation; D-D drains, D-D again lifts the drain; a late second press counts as a first."""
-        state = lambda: runstate.get_state(self.conn)["state"]  # noqa: E731
-        dashboard.handle_key(self.conn, "d", None, [], now=10.0)
-        self.assertEqual(state(), "RUNNING")
-        self.assertEqual(dashboard.pending_confirm(11.0), "d")
-        self.assertEqual(dashboard.pending_confirm(14.0), "", "after 3 s the confirmation is gone")
-        dashboard.handle_key(self.conn, "d", None, [], now=14.0)   # too late: only a new first press
-        self.assertEqual(state(), "RUNNING")
-        dashboard.handle_key(self.conn, "d", None, [], now=15.0)
-        self.assertIn(state(), ("DRAINING", "DRAINED"))
-        self.press("d", 50.0)
-        self.assertEqual(state(), "RUNNING")
-        kinds = [(r[0], r[1]) for r in self.conn.execute("SELECT kind, text FROM events WHERE project='*' ORDER BY id")]
-        self.assertTrue(all("dashboard key" in t for k, t in kinds if k in ("drain", "resume")), kinds)
+        d = self.data(project="alpha")
+        self.assertEqual([a["name"] for a in d["agents"]], ["alpha-job-one"])
+        self.assertEqual(d["fin"], [])
+        self.assertEqual(d["qs"], [])
+        self.assertEqual(d["counts"]["DRAFT"], 0)
 
     def test_questions_in_triage_are_counted(self):
-        """Under QUESTIONS the dashboard shows how many questions wait for the triage."""
-        self.assertNotIn("in triage", self.text())
+        """The number of questions that wait for the triage is collected."""
+        self.assertEqual(self.data()["triage"], 0)
         db.add_question(self.conn, "alpha", "x.md", "T1", "Which?", "A", status="triage")
         db.add_question(self.conn, "alpha", "x.md", "T2", "Which?", "A", status="triage")
-        self.assertIn("in triage: 2", self.text())
+        self.assertEqual(self.data()["triage"], 2)
 
-    def test_run_state_colour_and_keys(self):
-        """The run state shows coloured in the header; P and D change it; F cycles the filter."""
-        self.assertIn("\x1b[92mRUNNING", self.text(color=True))
-        self.press("p")
-        self.assertIn("\x1b[93mPAUSED", self.text(color=True))
-        self.press("p")
-        self.assertEqual(runstate.get_state(self.conn)["state"], "RUNNING")
-        self.press("d")
-        self.assertIn("DRAINING", self.text())
-        with db.transaction(self.conn):
-            self.conn.execute("UPDATE agents SET status='done', ended_at=?", (iso(1),))
-        self.assertIn("DRAINED", self.text())
-        names = ["alpha", "beta"]
-        self.assertEqual(dashboard.handle_key(self.conn, "f", None, names), "alpha")
-        self.assertIsNone(dashboard.handle_key(self.conn, "f", "beta", names))
-
-    def test_width_and_height(self):
-        """No line is wider than the pane and the text never has more lines than the height."""
-        for w, h in ((40, 25), (100, 12), (30, 60)):
-            plain = ANSI.sub("", self.text(width=w, height=h, color=True)).split("\n")
-            self.assertLessEqual(len(plain), h)
-            self.assertTrue(all(len(x) <= w for x in plain), (w, [x for x in plain if len(x) > w]))
-            self.assertNotIn("\x1b", self.text(width=w, height=h))
+    def test_run_state(self):
+        """The run state follows the pause."""
+        self.assertEqual(self.data()["run"]["state"], "RUNNING")
+        runstate.pause(self.conn, "test")
+        self.assertEqual(self.data()["run"]["state"], "PAUSED")
 
     def test_empty_database(self):
-        """An empty database renders without error."""
+        """An empty database collects without error."""
         conn = db.connect(Path(self.tmp.name) / "empty.db")
-        t = dashboard.render(conn, 80, 40, now=NOW, cfg={}, sysinfo=dict(SYS), color=False)
+        d = overview.collect(conn, None, NOW, {}, dict(SYS))
         conn.close()
-        self.assertIn("no agents", t)
-        self.assertIn("no data", t)
+        self.assertEqual((d["agents"], d["fin"], d["usage"], d["qs"]), ([], [], [], []))
 
     def test_blocked(self):
         """Two failed starts with the same error block the task."""
@@ -187,7 +142,8 @@ class DashboardTest(unittest.TestCase):
             runtime.upsert_agent(self.conn, "alpha", "fail-%d" % i, {
                 "plan": "p.md", "package": "X", "phase": "work", "status": "failed",
                 "startedAt": iso(i * 10), "endedAt": iso(i), "lastLine": "boom"})
-        self.assertIn("BLOCKED fail-2: boom", self.text())
+        blocked = self.data()["blocked"]
+        self.assertEqual([(b["name"], b["error"]) for b in blocked], [("fail-2", "boom")])
 
     # Check that only two recent newest failures without a later run are blocked.
     def test_blocked_requires_recent_two_failed_runs_and_no_newer_run(self):
@@ -209,16 +165,16 @@ class DashboardTest(unittest.TestCase):
         add("later-running-1", "failed", 20, "running")
         add("later-running-2", "failed", 10, "running")
         add("later-running-3", "running", 5, "running", ended=False)
-        got = {row["name"] for row in dashboard.blocked_tasks(runtime.list_agents(self.conn, scope="all"), NOW)}
+        got = {row["name"] for row in overview.blocked_tasks(runtime.list_agents(self.conn, scope="all"), NOW)}
         self.assertIn("recent-2", got)
         self.assertNotIn("old-2", got)
         self.assertNotIn("archived-2", got)
         self.assertNotIn("later-done-2", got)
         self.assertNotIn("later-running-2", got)
 
-    # Check quota, reset, slot, model and scheduler marker display for providers.
+    # Check quota, reset, slot, model and scheduler marker data for providers.
     def test_provider_limits_show_weekly_share_slots_model_and_next(self):
-        """Provider rows show weekly quota and reset, free slots and medium models; only the scheduler choice is marked next."""
+        """Provider rows hold the weekly quota and reset, free slots and medium models; only the scheduler choice is marked next."""
         providers = []
         for name, use, source in (("green-provider", "preferred", "codex"), ("yellow-provider", "fallback", "codex"),
                                   ("red-provider", "fallback", "codex"), ("unknown-provider", "fallback", "claude"),
@@ -233,47 +189,21 @@ class DashboardTest(unittest.TestCase):
             "red-provider": {"usedPercent": 95, "resetHours": 24},
             "no-reset-provider": {"usedPercent": 33}}), encoding="utf-8")
         with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(limits)}):
-            rows = dashboard.provider_lines(self.conn, {"providers": providers}, [])
-            data = {"now": NOW, "project": None, "colours": {}, "run": runstate.get_state(self.conn),
-                "hives": [], "agents": [], "fin": [], "blocked": [], "provider_limits": rows,
-                "cu": {"FiveHour": None, "SevenDay": None}, "xu": {"FiveHour": None, "SevenDay": None},
-                "usage": [], "counts": {}, "drafts": [], "status": [], "qs": [], "triage": 0,
-                "round_errors": [], "selfupdate": None, "bj": None, "orch": {"status": "idle"},
-                "sysinfo": dict(SYS), "host": "h1", "last_round": "-"}
-            lines = dashboard.build_lines(0, data, 120, 0)
+            rows = overview.provider_lines(self.conn, {"providers": providers}, [])
         for got, want in zip([r["ratio"] for r in rows[:3]], [1.0, 0.7, 0.35]):
             self.assertAlmostEqual(got, want)
         self.assertEqual([r["next"] for r in rows], [True, False, False, False, False, False, False])
         self.assertFalse(rows[5]["has_limit"])
         self.assertIsNone(rows[5]["ratio"])
-        flat = "\n".join("".join(text for text, _ in row) for row in lines)
-        self.assertRegex(flat, r"reset \d{2}\.\d{2}\. \d{2}:\d{2}")
-        self.assertIn("Quota 1.00× (50.0%/50.0%)", flat)
-        self.assertIn("slots 0/2  green-provider-model  ◀ nächster", flat)
-        self.assertIn("lmstudio kein Limit  slots 0/2  lmstudio-model", flat)
-        self.assertIn("local kein Limit  slots 0/2  local-model", flat)
-        self.assertIn("unknown-provider used unbekannt, reset unbekannt  Quota unbekannt  slots 0/2  unknown-provider-model", flat)
-        self.assertIn("no-reset-provider used 33%, reset unbekannt  Quota unbekannt  slots 0/2  no-reset-provider-model", flat)
-        quota_colours = [colour for line in lines for text, colour in line if "Quota " in text and colour]
-        self.assertEqual(quota_colours, ["green", "yellow", "red"])
-        local_line = next(line for line in lines if any(text.startswith("local kein Limit") for text, _ in line))
-        self.assertEqual(local_line, [("local kein Limit  slots 0/2  local-model", "")])
-        unknown_line = next(line for line in lines if any(text.startswith("unknown-provider used unbekannt") for text, _ in line))
-        self.assertEqual(unknown_line, [("unknown-provider used unbekannt, reset unbekannt  Quota unbekannt  slots 0/2  unknown-provider-model", "")])
-        no_reset_line = next(line for line in lines if any(text.startswith("no-reset-provider used 33%") for text, _ in line))
-        self.assertEqual(no_reset_line, [("no-reset-provider used 33%, reset unbekannt  Quota unbekannt  slots 0/2  no-reset-provider-model", "")])
+        self.assertEqual(rows[0]["model"], "green-provider-model")
+        self.assertEqual(rows[0]["used_pct"], 50.0)
+        self.assertIsNone(rows[4]["hours"])
         exhausted = [{"provider": name, "status": "running"} for name in ("green-provider", "yellow-provider", "red-provider", "unknown-provider", "no-reset-provider", "lmstudio", "local") for _ in range(2)]
         exhausted.extend([{"provider": "green-provider", "status": "starting"}])
         with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(limits)}):
-            exhausted_rows = dashboard.provider_lines(self.conn, {"providers": providers}, exhausted)
+            exhausted_rows = overview.provider_lines(self.conn, {"providers": providers}, exhausted)
         self.assertFalse(any(row["next"] for row in exhausted_rows))
         self.assertEqual(exhausted_rows[0]["used_slots"], 3)
-        overfull_lines = dashboard.build_lines(0, dict(data, provider_limits=exhausted_rows), 120, 0)
-        self.assertIn("slots 3/2", "\n".join("".join(text for text, _ in line) for line in overfull_lines))
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class MixedTimeTest(unittest.TestCase):
@@ -299,7 +229,7 @@ class MixedTimeTest(unittest.TestCase):
                           ts="2026-10-28T12:48:59.9456903+01:00")
         runtime.usage_add(conn, kind="brain", project="alpha", model="m", tokens_in=3, tokens_out=4,
                           ts="2026-10-28T12:50:00")
-        rows = dashboard.usage_models(conn, [], datetime(2026, 10, 28, 0, 0, 0))
+        rows = overview.usage_models(conn, [], datetime(2026, 10, 28, 0, 0, 0))
         self.assertEqual(rows[0]["Today"], (4, 6))
 
     def test_usage_one_entry_per_model(self):
@@ -317,13 +247,13 @@ class MixedTimeTest(unittest.TestCase):
         conn.execute("INSERT INTO providers_usage (ts, model, tokens_in, tokens_out, kind, project) VALUES ('2026-10-28T12:01:00','Sonnet 5.5',20,2,'brain','alpha')")
         conn.commit()
         agent = {"model": "claude-sonnet-5-5", "tokens_in": 100, "tokens_out": 5, "started_at": "2026-10-28T12:02:00"}
-        rows = dashboard.usage_models(conn, [agent], datetime(2026, 10, 28, 0, 0, 0))
+        rows = overview.usage_models(conn, [agent], datetime(2026, 10, 28, 0, 0, 0))
         self.assertEqual([r["Label"] for r in rows], ["Sonnet 5.5"])
         self.assertEqual(rows[0]["Plans"], (130, 8))
 
 
-class RoundErrorTest(DashboardTest):
-    """A failed round shows in the dashboard (the Beekeeper has no pane of its own any more)."""
+class RoundErrorTest(OverviewTest):
+    """A failed round is collected for the dashboard (the Beekeeper has no window of its own)."""
 
     def add(self, text, minutes_ago, kind="rounds"):
         """An event of the project alpha written `minutes_ago` minutes before NOW."""
@@ -331,15 +261,18 @@ class RoundErrorTest(DashboardTest):
             self.conn.execute("INSERT INTO events (ts, project, kind, text) VALUES (?,?,?,?)", (iso(minutes_ago), "alpha", kind, text))
 
     def test_recent_round_errors_are_listed(self):
-        """A section ROUND ERRORS names the error text and the time of a round error of the last day; an older one and other lines do not appear."""
+        """The round errors of the last day are collected with their text; an older one and other lines are not."""
         self.add("ROUND ERROR boom in plan scan", 5)
         self.add("ROUND ERROR long ago", 60 * 30)
         self.add("start Ada (claude, queen)", 4)
-        t = self.text()
-        self.assertIn("ROUND ERRORS", t)
-        self.assertIn("boom in plan scan", t)
-        self.assertNotIn("long ago", t)
+        texts = [e["text"] for e in self.data()["round_errors"]]
+        self.assertEqual(len(texts), 1)
+        self.assertIn("boom in plan scan", texts[0])
 
     def test_no_section_without_errors(self):
-        """Without a round error the section is not drawn."""
-        self.assertNotIn("ROUND ERRORS", self.text())
+        """Without a round error the list is empty."""
+        self.assertEqual(self.data()["round_errors"], [])
+
+
+if __name__ == "__main__":
+    unittest.main()

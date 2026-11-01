@@ -14,17 +14,22 @@ def next_class(providers, current, excluded):
 
 
 # Pick a permitted free provider and class for a Bee.
+# List the providers a Bee of this package may run on.
+def route_candidates(providers, hive_provider, capability, escalated):
+    """Image work needs an image-capable Codex provider, an escalated package may use any provider, else only the Queen's provider and endpoint providers."""
+    if 'images' in capability:
+        return [p for p in providers if p.get('protocol') == 'codex' and 'images' in p.get('capabilities', [])]
+    if escalated:
+        return list(providers)
+    candidates = [p for p in providers if p.get('endpoint') or p['name'] == hive_provider]
+    candidates.sort(key=lambda p: not bool(p.get('endpoint')))
+    return candidates
+
+
 def select_route(providers, free, hive_provider, package_class, capability, excluded, escalated, limited=()):
     """Pick a permitted Bee provider and class, returning None when it must wait."""
     providers = [p for p in providers if p['name'] not in excluded]
-    image = 'images' in capability
-    if image:
-        candidates = [p for p in providers if p.get('protocol') == 'codex' and 'images' in p.get('capabilities', [])]
-    elif escalated:
-        candidates = providers
-    else:
-        candidates = [p for p in providers if p.get('endpoint') or p['name'] == hive_provider]
-        candidates.sort(key=lambda p: not bool(p.get('endpoint')))
+    candidates = route_candidates(providers, hive_provider, capability, escalated)
     index = scheduler.class_index(package_class)
     for cls in scheduler.CLASS_NAMES[index:]:
         matching = [p for p in candidates if (p.get('classes', {}).get(cls) or {}).get('model')]
@@ -209,8 +214,8 @@ def valid_queen_worktree(env, path):
 
 
 # Start a separate Bee process after validating context, memory, slots and routing.
-def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=None, terminal=None, no_subagents=False, parallel=False):
-    """Start an eligible process Bee through the existing pane runner."""
+def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=None, no_subagents=False, parallel=False):
+    """Start an eligible process Bee through the agent runner."""
     from pathlib import Path
     from . import hives, loop, routine, usage
     with loop.hive_schedule_lock():
@@ -275,6 +280,8 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         limited = [p['name'] for p in env.providers if any(w['used_pct'] >= 100 for w in usage.limit_windows(env.conn, p))]
         ensure_attempts(env.conn)
         assigned = env.conn.execute('SELECT class,provider FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+        if assigned and assigned[0] == current and assigned[1] not in {p['name'] for p in route_candidates(env.providers, hive['provider'], need, current != base_class or use_other_provider)}:
+            assigned = None   # the stored provider is no longer allowed for this package: route it again
         if assigned and assigned[0] == current:
             provider = scheduler.get_provider(env.providers, assigned[1])
             if not provider or provider['name'] in excluded or provider['name'] in limited or route_free.get(provider['name'], 0) <= 0:
@@ -313,7 +320,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             return False
         existing = [a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')]
         state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'IN_PROGRESS'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
-        ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'terminal': terminal, 'settle': 0, 'poll': 2, 'tries': 20}
+        ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
         action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules), 'class': selected_class}
         if not loop._do_start(ctx, action, forced_pick=pick):
             return False

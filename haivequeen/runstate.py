@@ -1,11 +1,11 @@
-"""Machine-wide run state (D8): RUNNING, PAUSED, DRAINING, DRAINED, stored in the kv table."""
+"""Machine-wide run state (D8): RUNNING or PAUSED, stored in the kv table."""
 import json
 
 from . import db, agent_process
 
 GLOBAL_PROJECT = "*"   # kv/event project value for machine-wide state (not a real project)
 KEY = "run-state"
-STATES = ("RUNNING", "PAUSED", "DRAINING", "DRAINED")
+STATES = ("RUNNING", "PAUSED")
 ACTIVE = ("running", "starting")
 
 
@@ -14,7 +14,10 @@ def _read(conn) -> dict:
     row = conn.execute("SELECT value FROM kv WHERE project=? AND key=?", (GLOBAL_PROJECT, KEY)).fetchone()
     if row is None:
         return {"state": "RUNNING", "since": None}
-    return json.loads(row[0])
+    rec = json.loads(row[0])
+    if rec.get("state") not in STATES:
+        rec["state"] = "PAUSED"   # DRAINING or DRAINED, stored by an older version, behaves like a pause
+    return rec
 
 
 def _write(conn, state: str, kind: str, text: str, source: str = "") -> None:
@@ -37,8 +40,7 @@ def running_agents(conn) -> int:
 
 
 def get_state(conn) -> dict:
-    """Return {state, since, running_agents} after settling a finished drain."""
-    settle(conn)
+    """Return {state, since, running_agents}."""
     rec = _read(conn)
     return {"state": rec["state"], "since": rec["since"], "running_agents": running_agents(conn)}
 
@@ -52,7 +54,7 @@ def _transition(conn, allowed_from, new, kind, text, source: str = "") -> dict:
             _write(conn, new, kind, text, source)
         if new == "RUNNING":
             conn.execute("UPDATE kv SET value='armed',updated_at=? WHERE project=? AND key='hives-migration' AND value='pending'", (db.now(), GLOBAL_PROJECT))
-    return settle(conn) if new == "DRAINING" else get_state(conn)
+    return get_state(conn)
 
 
 def pause(conn, source: str = "") -> dict:
@@ -60,26 +62,12 @@ def pause(conn, source: str = "") -> dict:
     return _transition(conn, None, "PAUSED", "pause", "paused: no new agents are started", source)
 
 
-# Lift pause or drain and arm the one-time Hive migration.
+# Lift the pause and arm the one-time Hive migration.
 def resume(conn, source: str = "") -> dict:
-    """Lift pause or drain and arm the one-time Hive migration."""
+    """Lift the pause and arm the one-time Hive migration."""
     return _transition(conn, None, "RUNNING", "resume", "resumed", source)
-
-
-def drain(conn, source: str = "") -> dict:
-    """Like pause, and report `drained` once no agent runs (from RUNNING or PAUSED)."""
-    return _transition(conn, ("RUNNING", "PAUSED"), "DRAINING", "drain", "draining: waiting for running agents", source)
-
-
-def settle(conn) -> dict:
-    """Switch DRAINING to DRAINED (one `drained` event) when no agent runs; returns the state."""
-    with db.transaction(conn):
-        if _read(conn)["state"] == "DRAINING" and running_agents(conn) == 0:
-            _write(conn, "DRAINED", "drained", "drained: no agent is running, safe to shut down")
-    rec = _read(conn)
-    return {"state": rec["state"], "since": rec["since"], "running_agents": running_agents(conn)}
 
 
 def starts_allowed(conn) -> bool:
     """True only in RUNNING; the round calls this before every agent start."""
-    return settle(conn)["state"] == "RUNNING"
+    return _read(conn)["state"] == "RUNNING"

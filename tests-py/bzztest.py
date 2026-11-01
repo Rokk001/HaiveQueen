@@ -1,6 +1,6 @@
 """Shared helpers of the round tests: a throw-away runtime (database, settings, logs below a temp folder), dummy projects and plans, a provider list.
 
-Nothing here touches a real project: every test builds its own folders, the headless terminal backend or BZZ_TEST_NOSTART starts no real agent.
+Nothing here touches a real project: every test builds its own folders, BZZ_TEST_NOSTART starts no real agent.
 """
 import json
 import os

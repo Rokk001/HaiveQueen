@@ -1,4 +1,4 @@
-"""Tests of the run state (pause, resume, drain) against a temporary database."""
+"""Tests of the run state (pause, resume) against a temporary database."""
 import json
 import os
 import subprocess
@@ -26,10 +26,6 @@ class RunStateTest(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
-    def drained_events(self):
-        """Return the number of `drained` events."""
-        return self.conn.execute("SELECT COUNT(*) FROM events WHERE kind='drained'").fetchone()[0]
-
     def test_pause_blocks_starts(self):
         """pause makes starts_allowed False, resume makes it True again."""
         self.assertTrue(runstate.starts_allowed(self.conn))
@@ -38,37 +34,31 @@ class RunStateTest(unittest.TestCase):
         self.assertEqual(runstate.resume(self.conn)["state"], "RUNNING")
         self.assertTrue(runstate.starts_allowed(self.conn))
 
-    def test_drain_waits_for_agents(self):
-        """drain stays DRAINING while an agent runs; one `drained` event when the last one ends."""
+    def test_pause_keeps_running_agents(self):
+        """A pause does not touch a running agent: it keeps running, only new starts are blocked, and the state stays PAUSED."""
         db.add_agent(self.conn, "p", name="A", status="running", pid=1)
-        self.assertEqual(runstate.drain(self.conn)["state"], "DRAINING")
+        st = runstate.pause(self.conn)
+        self.assertEqual((st["state"], st["running_agents"]), ("PAUSED", 1))
         self.assertFalse(runstate.starts_allowed(self.conn))
-        self.assertEqual(runstate.settle(self.conn)["state"], "DRAINING")
-        self.assertEqual(self.drained_events(), 0)
-        self.conn.execute("UPDATE agents SET status='done'")
-        self.assertEqual(runstate.settle(self.conn)["state"], "DRAINED")
-        runstate.settle(self.conn)
-        runstate.get_state(self.conn)
-        self.assertEqual(self.drained_events(), 1)
-        self.assertFalse(runstate.starts_allowed(self.conn))
-
-    def test_drain_without_agents_and_transitions(self):
-        """drain with no agent drains at once; pause after drain gives PAUSED; drain from DRAINED does nothing."""
-        self.assertEqual(runstate.drain(self.conn)["state"], "DRAINED")
-        self.assertEqual(runstate.drain(self.conn)["state"], "DRAINED")
-        self.assertEqual(self.drained_events(), 1)
         self.assertEqual(runstate.pause(self.conn)["state"], "PAUSED")
-        self.assertEqual(runstate.drain(self.conn)["state"], "DRAINED")
-        self.assertEqual(runstate.resume(self.conn)["state"], "RUNNING")
+
+    def test_legacy_drain_values_count_as_a_pause(self):
+        """A DRAINING or DRAINED value stored by an older version behaves like PAUSED and can be resumed."""
+        for old in ("DRAINING", "DRAINED"):
+            self.conn.execute("DELETE FROM kv WHERE project='*' AND key='run-state'")
+            self.conn.execute("INSERT INTO kv (project,key,value,updated_at) VALUES ('*','run-state',?,'2026-01-01T00:00:00')", (json.dumps({"state": old, "since": None}),))
+            self.assertEqual(runstate.get_state(self.conn)["state"], "PAUSED", old)
+            self.assertFalse(runstate.starts_allowed(self.conn), old)
+            self.assertEqual(runstate.resume(self.conn)["state"], "RUNNING", old)
 
     def test_survives_restart(self):
         """The state is read back through a new connection."""
         db.add_agent(self.conn, "p", name="A", status="running", pid=1)
-        runstate.drain(self.conn)
+        runstate.pause(self.conn)
         self.conn.close()
         self.conn = db.connect(self.path)
         st = runstate.get_state(self.conn)
-        self.assertEqual((st["state"], st["running_agents"]), ("DRAINING", 1))
+        self.assertEqual((st["state"], st["running_agents"]), ("PAUSED", 1))
 
     def test_commands(self):
         """The bzz commands print JSON and starts-allowed follows the state."""
@@ -86,12 +76,11 @@ class RunStateTest(unittest.TestCase):
         self.assertEqual(orch("pause")["state"], "PAUSED")
         self.assertEqual(orch("starts-allowed"), {"allowed": False, "state": "PAUSED"})
         self.assertEqual(orch("run-state")["running_agents"], 0)
-        self.assertEqual(orch("drain")["state"], "DRAINED")
         self.assertEqual(orch("resume")["state"], "RUNNING")
 
 
-    # A reused PID must not block draining, while a still-running runner remains protected.
-    def test_reused_pid_does_not_block_drain(self):
+    # A reused PID must not count as a running agent, while a still-running runner remains protected.
+    def test_reused_pid_is_not_counted_as_running(self):
         """Ignore only a process proven to have started after the agent ended."""
         from unittest import mock
         from haivequeen import platform as osplat

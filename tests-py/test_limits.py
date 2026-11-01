@@ -27,10 +27,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from haivequeen import cli as orch  # noqa: E402
 from haivequeen import agent_runner as ar  # noqa: E402
-from haivequeen import dashboard, db, events, runtime  # noqa: E402
+from haivequeen import db, events, overview, runtime  # noqa: E402
 from haivequeen import platform as osplat  # noqa: E402
 from test_agent_runner import RunnerBase, claude_stream  # noqa: E402
-from test_dashboard import SYS  # noqa: E402
+from test_overview import SYS  # noqa: E402
 
 WRITER = '''import sys
 sys.path.insert(0, sys.argv[1])
@@ -163,7 +163,7 @@ class StallTest(RunnerBase):
 
     def test_silent_agent_is_marked_but_not_ended(self):
         """The fake CLI prints its stream and then stays silent for 10 s: with a 2 s limit the row gets the stalled mark while it still runs
-        (dashboard and status show it, one event is logged); nothing is ended, the agent finishes as done and the mark is gone."""
+        (the overview data and status show it, one event is logged); nothing is ended, the agent finishes as done and the mark is gone."""
         self.write_config('agentStallSeconds = 2')
         self.prepare("S-1")
         self.conn.execute("INSERT INTO packages (project, plan_path, id, title) VALUES ('demo', 'plans/Demo-PLAN.md', 'P1', 'first')")
@@ -179,8 +179,8 @@ class StallTest(RunnerBase):
         try:
             self.assertIsNotNone(marked, "the silent agent was never marked as stalled")
             self.assertEqual(marked["status"], "running", "a stalled agent keeps running")
-            text = dashboard.render(self.conn, 120, 60, now=datetime.now(), cfg={}, sysinfo=dict(SYS), color=False)
-            self.assertIn("stalled", text)
+            data = overview.collect(self.conn, None, datetime.now(), {}, dict(SYS))
+            self.assertEqual([a["name"] for a in data["agents"] if a.get("stalledAt")], ["S-1"])
             info = db.project_status(self.conn, "demo")[0]
             self.assertEqual((info["tasks"][0]["status"], info["stalled"]), ("stalled", ["S-1"]))
             buf = io.StringIO()

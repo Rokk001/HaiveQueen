@@ -19,15 +19,15 @@ HaiveQueen runs plans with one Hive per plan. The Beekeeper is a program loop, n
 
 ## Features
 
-- **Hives and Queens**: one Queen per plan, in her own worktree and pane; a Hive keeps its provider and colour across Queen changes.
+- **Hives and Queens**: one Queen per plan, in her own worktree and as a hidden background process; a Hive keeps its provider and colour across Queen changes.
 - **Bees**: slim package tasks with only needed paths, numbered steps and rules; independent packages run in parallel up to the configured limit. Code-changing Bees use sub-branches and worktrees which the Queen merges locally.
 - **Providers and limits**: select a provider by free weekly limit, with machine-wide preference and exclusions. A Hive rests until reset when its provider is limited; only the owner may change its provider.
 - **Escalation**: package classes bind the work. Failed attempts persist per class; after the configured threshold the Queen selects the next offered class. Interruptions never count as failures. Image packages stay on Codex; after its highest class fails the owner is asked.
 - **Completeness and integration**: the Queen records evidence for every requirement, continues while any remain open and integrates her own branch. Only one integration per project runs at a time.
 - **Handoffs**: at the context limit no new Bees start; running Bees finish and a new Queen continues from the handoff. Open owner questions do not stop independent work.
-- **Display**: the dashboard counts the Hives per Apiary and shows limits, questions and failed rounds (the Beekeeper loop has no pane of its own); every Hive has its own pane with its Queen, Bee progress and waiting state.
-- **Pause and drain**: pause prevents new Queens and separate Bee processes; drain lets running Queens finish. Existing subagents continue.
-- **SQLite and panes**: state survives restarts; Windows Terminal, tmux and a headless backend are supported.
+- **Display**: one graphical window shows the Hives per Apiary, the busy Bees, limits, questions, failed rounds and the live text of every Queen and Bee (the Beekeeper loop has no window of its own).
+- **Pause and stop**: pause prevents new Queens and separate Bee processes until you resume; stop lets the running agents finish and then ends HaiveQueen. Existing subagents continue.
+- **SQLite**: state survives restarts; every agent runs as a hidden background process and writes its live text to a file in its run folder.
 
 ## How it works
 
@@ -40,7 +40,13 @@ HaiveQueen runs plans with one Hive per plan. The Beekeeper is a program loop, n
 
 Words: an **Apiary** is a project, a **Hive** is one plan, the **Queen** is the main agent of a Hive, a **Bee** is a helper agent of a Queen, the **Beekeeper** is the managing loop.
 
-The window title is always `HaiveQueen`. The left pane is the dashboard, the only overview: one line `<Apiary>: <n> Hives` per Apiary, then limits, usage, system and, when a round failed, the round errors. The Beekeeper loop runs without a pane (its output goes to `beekeeper.log` in the data folder). On the right every Apiary has a block, the blocks one below the other: a narrow head pane `Apiary <name>` and below it its Hives as own terminals side by side, all in the colour of the Apiary. A Hive pane lives as long as the Hive does; its Queens run one after the other in it. Its head shows `Hive: <plan>` and `Queen: <name>` with model and run time (without a Queen the state of the Hive, for example `wartet auf Antwort`), then one line per Bee with task, step and a small progress bar. A Hive without a running Queen shrinks to its name and state and is opened narrow from the start; when a Queen starts in it and no agent runs in its pane yet, the pane is built again larger, while an agent runs it keeps its size. In a Hive pane press X (dequeen), R (requeen) or C then a provider number (requeen with that provider); each asks for the same key a second time to confirm. `bzz dequeen` and `bzz requeen` stay available.
+`bzz start` starts the Beekeeper loop as a hidden background process (its output goes to `beekeeper.log` in the data folder) and opens the graphical dashboard once; there is no terminal window and no terminal dashboard. Every Queen and Bee is a hidden background process too. `bzz dequeen` and `bzz requeen` stay available.
+
+### Graphical dashboard
+
+The dashboard is a graphical interface written in pure Python (tkinter, no extra packages). One window shows Apiaries, Hives, Queens, Bees, token use, the live log, system load and the integration queue, laid out like `docs/HaiveQueen_Dashboard.png` (logo and icons are cut out of that picture by `scripts/make_gui_assets.py` into `assets/gui/`). Context and token use are shown per Queen, Bee, Hive and Apiary; the model limits are progress bars; every list that does not fit has a scroll bar (or use the mouse wheel). Limits, plans, questions and round errors are in the status panel. `bzz gui` opens only the window (`--detach` returns at once, `--project <name>` shows one Apiary). The one state button at the bottom shows RUNNING, PAUSED, STOPPING or STOPPED and opens a menu with the actions that fit (pause or resume, stop, start). A click on the repository name in the header opens the GitHub page. Keys: `P` pause/resume, `M` (or a right click on a Hive) Queen menu with restart or end of that Hive's Queen, `F` next Apiary, `Up`/`Down` select a Hive, `X` stop the selected Bee, `C` clear, `S` save and `A` auto-scroll the log; every entry of the `bzz` bar at the bottom is clickable. Pause, resume and stop ask for a confirmation first.
+
+**Live output**: `Enter` or a double click on a Hive row opens a read-only window with the last 300 lines of the live text of the running Queen of that Hive (the latest one when none runs); on a Bee row it shows that Bee. The window reloads every 2 seconds and follows the end of the text; opening the same agent again focuses its window. The text is the file `milestones.txt` in the run folder of the agent (`<data>/runs/<project>/<agent>/`), written by the agent runner; `runner.log` next to it holds the plain runner output.
 
 ## Quick start
 
@@ -48,7 +54,7 @@ The window title is always `HaiveQueen`. The left pane is the dashboard, the onl
 
 - Python 3.11 or newer
 - [Claude Code](https://claude.com/claude-code) CLI (`claude`) and/or the Codex CLI (`codex`)
-- [Windows Terminal](https://aka.ms/terminal) (`wt`) on Windows, or `tmux` on Linux
+- Python with tkinter (part of the standard Python installers) for the dashboard window
 
 **Steps**
 
@@ -59,13 +65,13 @@ pip install -e .                       # optional: gives you the command `bzz` (
 
 bzz init /path/to/my-project          # creates .haivequeen/project.toml, AGENTS.md and an example plan
 bzz register /path/to/my-project      # adds the project to config.toml and the database
-bzz start                             # opens the HaiveQueen window and the dashboard
+bzz start                             # starts the loop in the background and opens the dashboard window
 bzz stop                              # no new agents; running agents finish their task
 ```
 
 Put your machine settings (providers, slots) into `config.toml` (see `examples/config.example.toml`; folder: `%APPDATA%\HaiveQueen` on Windows, `~/.config/HaiveQueen` on Linux).
-The dashboard and agent panes share one terminal window; its name is the machine setting `window` (default `HaiveQueen`), a project cannot set its own.
-Closing the terminal leaves the managing loop running. The next round restores a missing dashboard; `bzz start` also restores it without restarting running agents. A start during a pending stop reports that the existing agents must finish first. Windows desktop shortcuts can use `bzz start --desktop` and `bzz stop --desktop` for a visible result or error dialog; ordinary CLI calls keep their JSON output.
+The loop and all agents run as hidden background processes; the dashboard window is the only interface.
+Closing the dashboard window leaves the managing loop running. `bzz start` opens the window again without restarting running agents. A start during a pending stop reports that the existing agents must finish first. Windows desktop shortcuts can use `bzz start --desktop` and `bzz stop --desktop` for a visible result or error dialog; ordinary CLI calls keep their JSON output.
 
 Completed idle Hives are reconciled with the plan status and confirmed integration. Active agents and genuine owner questions are preserved. A Hive without a Queen shows its recorded start blocker or pending question numbers instead of a generic waiting label.
 Automatic worktree cleanup requires confirmation that the branch's current commit was integrated; missing or superseded confirmation preserves the worktree. Command output labels executed check scripts as checks, while reading or searching their filenames does not count as a check. Round totals count actual Queen launches independently of previous run timestamps.
@@ -120,8 +126,9 @@ Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the
 
 | Command | Who | What it does |
 |---|---|---|
-| `bzz start` / `bzz stop` | owner | start the loop (`--terminal auto/wt/tmux/headless`, `--rounds N`), or stop starting new agents |
-| `bzz pause` / `bzz resume` / `bzz drain` | owner | pause new starts, resume, or let the running agents finish |
+| `bzz start` / `bzz stop` | owner | start the loop in the background and open the dashboard window (`--foreground`, `--rounds N`, `--round-minutes M`), or stop starting new agents |
+| `bzz gui [--detach] [--project p]` | owner | open the graphical dashboard window |
+| `bzz pause` / `bzz resume` | owner | pause new starts, or resume them |
 | `bzz status [--project p] [--json]` | owner | "X / Y integrated (%)" and a task / agent / status table per project |
 | `bzz questions [--open]`, `bzz answer <id> "<text>" --by owner` | owner | read and answer questions of the agents |
 | `bzz queue [upsert]` | owner, Queen | the integration queue |

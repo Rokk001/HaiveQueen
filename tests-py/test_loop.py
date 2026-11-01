@@ -1,4 +1,4 @@
-"""Tests of the multi-project loop (D1, D4), the pause and drain gate and re-attach (D8), the triage start (D5), the brain, the headless terminal start and the loop itself."""
+"""Tests of the multi-project loop (D1, D4), the pause gate and re-attach (D8), the triage start (D5), the brain, the hidden-process start and the loop itself."""
 import json
 import os
 import re
@@ -10,7 +10,6 @@ from bzztest import REL, RoundCase, minutes_ago, provider, runtime
 from haivequeen import db, export, loop, routine, runstate, triage
 from haivequeen import platform as osplat
 from haivequeen import scheduler as sch
-from haivequeen.terminal.headless import Headless
 
 ONE = [{"id": "P1", "title": "first"}]
 
@@ -77,7 +76,7 @@ class MultiProjectTest(RoundCase):
 
 
 class RunStateTest(RoundCase):
-    """Pause and drain gate (D8)."""
+    """Pause gate (D8)."""
 
     def setUp(self):
         """A plan with a worktree row."""
@@ -99,17 +98,12 @@ class RunStateTest(RoundCase):
 
     # Verify the Queen-based loop behavior.
     def test_pause_keeps_running_agents(self):
-        """A running agent is not touched by a pause; a drain reports drained once it has ended."""
+        """A running agent is not touched by a pause; the round starts nothing new and says why."""
         self.round()
-        runstate.drain(self.conn)
-        self.assertEqual(runstate.get_state(self.conn)["state"], "DRAINING")
-        self.assertEqual(self.round()["skipped"], "DRAINING")
+        runstate.pause(self.conn)
+        self.assertEqual(runstate.get_state(self.conn)["state"], "PAUSED")
+        self.assertEqual(self.round()["skipped"], "PAUSED")
         self.assertEqual(next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None)["status"], "running")
-        queen = next(a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running")
-        self.finish(queen["name"])
-        runtime.upsert_agent(self.conn, "testproj", queen["name"], {"pid": None})
-        self.assertEqual(runstate.settle(self.conn)["state"], "DRAINED")
-        self.assertEqual(len([e for e in runtime.list_events(self.conn, "*") if e["kind"] == "drained"]), 1)
 
     # Verify the Queen-based loop behavior.
     def test_stop_flag_and_low_ram(self):
@@ -224,38 +218,22 @@ class LoopTest(RoundCase):
             loop.run_round = orig
         self.assertEqual(self.log().count("ROUND ERROR boom"), 2)
 
-    def test_header_and_wrap(self):
-        """Header lines and word wrap."""
-        self.assertEqual(loop.wrap_text("aaa bbb ccc", 7), ["aaa bbb", "ccc"])
-        self.assertEqual(loop.wrap_text("abcdefghij", 4), ["abcd", "efgh", "ij"])
-        hl = loop.head_lines(80, {"busy": True, "projects": ["a", "b"]})
-        self.assertIn("Beekeeper", hl[0][0])
-        self.assertIn("round running", hl[0][0])
-        self.assertIn("Apiaries: a, b", hl[1][0])
-        hl = loop.head_lines(80, {"run_state": "PAUSED"})
-        self.assertIn("PAUSED", hl[0][0])
+    def test_start_lock_is_exclusive_and_released(self):
+        """start_lock holds start.lock for its process, a second taker waits out its timeout, and the file is gone afterwards."""
+        with loop.start_lock():
+            self.assertEqual(loop.start_lock_file().read_text(encoding="ascii").strip(), str(os.getpid()))
+            with self.assertRaises(TimeoutError):
+                with loop.start_lock(timeout=0.3):
+                    pass
+        self.assertFalse(loop.start_lock_file().exists())
 
-    def test_window_is_one_for_all(self):
-        """One window for the Queen, the dashboard and every agent: a project cannot set its own window name."""
-        self.assertEqual(sch.build_settings({}, {})["window"], "HaiveQueen")
-        self.assertEqual(sch.build_settings({}, {"window": "ODP"})["window"], "HaiveQueen")
-        self.assertEqual(sch.build_settings({"window": "Main"}, {"window": "ODP"})["window"], "Main")
-
-    def test_pane_lock_held_until_exit(self):
-        """A closing pane takes pane.lock for its own process and keeps it."""
-        from unittest import mock
-        with mock.patch.object(loop, "pane_lock_file", return_value=self.base / "pane.lock"):
-            self.assertTrue(loop.hold_pane_lock_until_exit())
-            self.assertEqual((self.base / "pane.lock").read_text(encoding="ascii").strip(), str(os.getpid()))
-
-    def test_agent_names_and_queen_title(self):
-        """At least 24 unique agent names, none is Queen, and the pane of the main agent is titled BEEKEEPER."""
+    def test_agent_names(self):
+        """At least 24 unique agent names and none is Queen."""
         self.assertGreaterEqual(len(loop.AGENT_NAMES), 24)
         self.assertEqual(len(set(loop.AGENT_NAMES)), len(loop.AGENT_NAMES))
         self.assertNotIn("Queen", loop.AGENT_NAMES)
         self.assertEqual(loop.AGENT_NAMES[:3], ["Ada", "Bea", "Cleo"])
         self.assertEqual(loop.AGENT_NAMES[23], "Zoe")   # the first 24 names keep their order, later ones were added
-        self.assertIn("| all projects | BEEKEEPER | job: Beekeeper |", loop.queen_pane_title("m", True))
 
 
 class TriageStartTest(RoundCase):
@@ -519,10 +497,10 @@ def argv_index(argv, name):
 
 
 class HeadlessStartTest(RoundCase):
-    """A start through the headless terminal backend with a dummy runner program."""
+    """A start as a hidden process with a dummy runner program."""
 
     def setUp(self):
-        """No NOSTART: the pane is really opened (headless), the runner is a tiny script that sets the pid of its agent row."""
+        """No NOSTART: the runner process is really started, it is a tiny script that sets the pid of its agent row."""
         super().setUp()
         os.environ.pop("BZZ_TEST_NOSTART", None)
         self.plan("IN_PROGRESS", ONE)
@@ -534,21 +512,19 @@ class HeadlessStartTest(RoundCase):
             % str(loop.TOOLS_DIR), encoding="utf-8")
         self.orig = loop.runner_argv
         loop.runner_argv = lambda env, spec: [sys.executable, str(self.dummy), env.name, spec["name"]]
-        self.term = Headless(self.base / "panes")
 
     def tearDown(self):
         """End the dummy processes this test started."""
         loop.runner_argv = self.orig
-        for p in self.term.list_panes("HaiveQueen"):
-            if p.alive:
-                self.term.close_pane(p.id)
+        for a in runtime.list_agents(self.conn, "testproj", "all"):
+            if a.get("pid") and osplat.process_alive(a["pid"]) and a["pid"] != os.getpid():
+                osplat.kill_process_tree(a["pid"])
         super().tearDown()
 
     # Verify the Queen-based loop behavior.
-    def test_start_through_terminal(self):
-        """The Queen runs inside the sub-terminal of her Hive: the real hivepane process starts the runner from launch.json, the row gets the pane id of the
-        Hive pane and the pid from the runner, and the pane title carries project and plan."""
-        self.round(terminal=self.term, poll=0.2, tries=100)
+    def test_queen_starts_as_a_hidden_process(self):
+        """The Queen's runner starts as a process of its own with its output in runner.log of her run folder and sets its pid in the row."""
+        self.round()
         deadline = time.time() + 40
         row = None
         while row is None and time.time() < deadline:
@@ -556,26 +532,7 @@ class HeadlessStartTest(RoundCase):
             time.sleep(0.3)
         self.assertEqual(row["status"], "running")
         self.assertTrue(row["pid"] and osplat.process_alive(row["pid"]))
-        panes = self.term.list_panes("HaiveQueen")
-        self.assertEqual(sorted(p.title for p in panes), ["HaiveQueen TEST | all projects | Overview | job: Dashboard | model: -",
-                                                          "HaiveQueen TEST | testproj | Apiary | job: testproj | model: -",
-                                                          "HaiveQueen TEST | testproj | Hive | job: DUMMY-PLAN | model: -"])   # overview, head pane of the Apiary and the Hive pane
-        hive = next(p for p in panes if " | Hive | " in p.title)
-        self.assertEqual(row["pane_id"], hive.id)
-
-    def test_choose_slot(self):
-        """The widest open pane is split side by side while both halves stay 40 columns wide, else the tallest top/bottom."""
-        me = os.getpid()
-        rows = [{"name": "A", "pane_id": "w.1", "status": "running", "pid": me, "paneCols": 140, "paneRows": 50},
-                {"name": "B", "pane_id": "w.2", "status": "running", "pid": me, "paneCols": 60, "paneRows": 50},
-                {"name": "C", "pane_id": "w.3", "status": "done", "pid": me, "paneCols": 200, "paneRows": 50}]
-        s = loop.choose_slot(rows, "NEW")
-        self.assertEqual((s["target"], s["direction"], s["cols"]), ("w.1", "horizontal", 70))
-        rows[0]["paneCols"] = 70
-        s = loop.choose_slot(rows, "NEW")
-        self.assertEqual((s["target"], s["direction"], s["rows"]), ("w.1", "vertical", 25))
-        self.assertIsNone(loop.choose_slot([], "NEW")["target"])
-        self.assertIsNone(loop.choose_slot([dict(rows[0], pid=2000000000)], "NEW")["target"], "a dead runner is no target")
+        self.assertTrue((self.env().run_dir(row["name"]) / "runner.log").is_file())
 
 
 if __name__ == "__main__":

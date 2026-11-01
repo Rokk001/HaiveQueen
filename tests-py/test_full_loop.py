@@ -1,7 +1,7 @@
 """Gap 3c: a real loop run (run_loop, several rounds) over a throw-away project, headless, with the real agent runner and a fake provider CLI.
 
 A READY plan starts one Queen in its plan worktree; the fake provider registers and integrates its branch.
-Nothing here touches the live runtime, a real model or a terminal.
+Nothing here touches the live runtime or a real model.
 """
 import json
 import os
@@ -12,7 +12,6 @@ import unittest
 
 from bzztest import REL, RoundCase, provider, runtime
 from haivequeen import loop
-from haivequeen.terminal.headless import Headless
 
 ONE = [{"id": "P1", "title": "first"}]
 
@@ -47,7 +46,7 @@ class FullLoopTest(RoundCase):
     """One real run_loop with a Queen integrating a plan."""
 
     def setUp(self):
-        """Fake CLI as the only provider, headless terminal, a READY plan with one package."""
+        """Fake CLI as the only provider, a READY plan with one package."""
         super().setUp()
         os.environ.pop("BZZ_TEST_NOSTART", None)
         script = self.base / "fake_cli.py"
@@ -84,13 +83,9 @@ class FullLoopTest(RoundCase):
         git("remote", "add", "origin", str(self.repo))
         git("fetch", "origin", "main")
         self.seed()
-        self.term = Headless(self.base / "panes")
 
     def tearDown(self):
-        """Close leftover panes and drop the fake-CLI variables."""
-        for p in self.term.list_panes("HaiveQueen"):
-            if p.alive:
-                self.term.close_pane(p.id)
+        """Drop the fake-CLI variables."""
         for k in ("FAKE_TOOLS", "FAKE_LOG", "FAKE_PLAN"):
             os.environ.pop(k, None)
         super().tearDown()
@@ -98,7 +93,7 @@ class FullLoopTest(RoundCase):
     # Verify that a Queen starts and integrates her own plan.
     def test_plan_to_integrated(self):
         """READY plan: one Queen integrates her branch and the plan becomes DONE."""
-        round_kwargs = {"terminal": self.term, "free_ram": lambda: 16.0, "settle": 0, "poll": 0.2, "tries": 150}
+        round_kwargs = {"free_ram": lambda: 16.0, "settle": 0}
         code = loop.run_loop(self.conn, self.machine, rounds=8, round_minutes=0.05, wait_seconds=0.3, round_kwargs=round_kwargs)
         self.assertEqual(code, 0)
         ran = self.log_file.read_text(encoding="utf-8").split() if self.log_file.is_file() else []

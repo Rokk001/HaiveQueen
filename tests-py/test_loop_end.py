@@ -91,11 +91,11 @@ class LoopEndTest(RoundCase):
             loop.stop_flag().write_text("stop", encoding="ascii")
 
         with patch.object(loop, "run_round"), patch.object(loop, "daily_export"), \
-                patch.object(runstate, "settle", side_effect=RuntimeError("settle broke")), \
+                patch.object(loop.usage, "refresh_claude_usage", side_effect=RuntimeError("usage broke")), \
                 patch.object(runstate, "get_state", side_effect=[{"state": "RUNNING"}, RuntimeError("wait refresh broke")]):
             loop.run_loop(self.conn, self.machine, sleep=sleep)
         self.assertEqual(len(calls), 1)
-        self.assertIn("ROUND ERROR settle broke", self.log())
+        self.assertIn("ROUND ERROR usage broke", self.log())
         self.assertIn("ROUND ERROR wait refresh broke", self.log())
         self.assertEqual(loop.read_state(self.conn)["status"], "ended")
         self.assertEqual(self.questions(), [])

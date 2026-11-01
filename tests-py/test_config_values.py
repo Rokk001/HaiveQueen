@@ -98,7 +98,7 @@ class PauseKeptTest(RoundCase):
 
     def start(self, **kw):
         """Run `bzz start` in the foreground with a loop that ends at once."""
-        args = argparse.Namespace(foreground=True, terminal="headless", rounds=0, round_minutes=0, **kw)
+        args = argparse.Namespace(foreground=True, rounds=0, round_minutes=0, **kw)
         orig = loop.run_loop
         loop.run_loop = lambda *a, **k: 0
         try:
@@ -138,8 +138,8 @@ class PauseKeptTest(RoundCase):
         self.assertEqual(runstate.get_state(self.conn)["state"], "RUNNING")
 
     def test_boot_command_forwards_the_flag(self):
-        """The Queen pane runs `start --foreground --keep-pause` too, so the second start does not resume either."""
-        args = argparse.Namespace(foreground=False, terminal=None, rounds=0, round_minutes=0, keep_pause=True)
+        """The loop process runs `start --foreground --keep-pause` too, so the second start does not resume either."""
+        args = argparse.Namespace(foreground=False, rounds=0, round_minutes=0, keep_pause=True)
         self.assertIn("--keep-pause", loop.start_boot_command(args))
         args.keep_pause = False
         self.assertNotIn("--keep-pause", loop.start_boot_command(args))

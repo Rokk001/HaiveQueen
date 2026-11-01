@@ -289,10 +289,22 @@ def technical_start_faults(conn, project):
             db.add_question(conn, 'HaiveQueen', 'HQ-FAULTS', 'no_start', '[no_start] Three consecutive technical ends: ' + marker, '')
 
 
-# Capture the contents of Git-visible files for comparison at the Queen's end.
-def worktree_state(cwd, excluded=None):
-    """Return hashes of tracked and non-ignored untracked files, excluding the plan state."""
+# Fingerprint one worktree entry: a link target, the SHA-256 of a file, or None when the path no longer exists.
+def _entry_fingerprint(path, name):
+    """Return 'link:<target>', the SHA-256 hex digest of a regular file, or None for a missing path; raises OSError for anything unreadable."""
     import hashlib
+    if path.is_symlink():
+        return 'link:' + os.readlink(path)
+    if path.is_file():
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    if path.exists():
+        raise OSError('cannot read worktree entry: ' + name)
+    return None
+
+
+# Capture the contents of every Git-visible file (the thorough, slow way used by snapshots made before worktree_state became fast).
+def full_worktree_state(cwd, excluded=None):
+    """Return hashes of all tracked and non-ignored untracked files, excluding the plan state; reads every file, so it is slow in a large worktree."""
     import subprocess
     from pathlib import Path
     root = Path(cwd)
@@ -307,14 +319,33 @@ def worktree_state(cwd, excluded=None):
         path = root / name
         if path.resolve() in exclusions:
             continue
-        if path.is_symlink():
-            state[name] = 'link:' + os.readlink(path)
-        elif path.is_file():
-            state[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-        elif path.exists():
-            raise OSError('cannot read worktree entry: ' + name)
-        else:
-            state[name] = None
+        state[name] = _entry_fingerprint(path, name)
+    return state
+
+
+# Capture the files that differ from the last commit, for comparison at the Queen's end.
+def worktree_state(cwd, excluded=None):
+    """Return fingerprints of the files that differ from the last commit (modified, deleted and non-ignored untracked), excluding the plan state.
+
+    Git names those files without reading the clean ones, so this takes a fraction of a second also in a worktree with thousands of files.
+    A change shows as a new fingerprint and a revert to the committed content disappears, so two states are equal exactly when no file was
+    changed in between (a new commit is detected separately by ended_without_work)."""
+    import subprocess
+    from pathlib import Path
+    git = ['git', '--no-optional-locks', '-C', str(cwd)]   # --no-optional-locks: do not refresh the index while the Queen may be running Git too
+    top = Path(subprocess.run(git + ['rev-parse', '--show-toplevel'], capture_output=True, text=True, encoding='utf-8', check=True, timeout=30).stdout.strip())
+    result = subprocess.run(git + ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames'], capture_output=True, check=True, timeout=60)
+    state = {}
+    exclusions = excluded if isinstance(excluded, list) else [excluded] if excluded else []
+    exclusions = {Path(p).resolve() for p in exclusions}
+    for raw in result.stdout.split(b'\0'):
+        if len(raw) < 4:
+            continue
+        name = os.fsdecode(raw[3:])   # "XY <path>": two status letters, a space, the path relative to the top of the repository
+        path = top / name
+        if path.resolve() in exclusions:
+            continue
+        state[name] = _entry_fingerprint(path, name)
     return state
 
 
@@ -325,7 +356,7 @@ def save_worktree_state(cwd, run_dir, excluded=None):
     try:
         state = worktree_state(cwd, excluded)
         exclusions = excluded if isinstance(excluded, list) else [excluded] if excluded else []
-        (Path(run_dir) / 'worktree-start.json').write_text(json.dumps({'cwd': str(Path(cwd).resolve()), 'excluded': [str(p) for p in exclusions], 'files': state}), encoding='utf-8')
+        (Path(run_dir) / 'worktree-start.json').write_text(json.dumps({'cwd': str(Path(cwd).resolve()), 'excluded': [str(p) for p in exclusions], 'files': state, 'mode': 'git-status'}), encoding='utf-8')
     except (OSError, ValueError, subprocess.SubprocessError):
         return
 
@@ -368,7 +399,8 @@ def ended_without_work(env, agent):
         state = json.loads(snapshot.read_text(encoding='utf-8'))
         if Path(cwd).resolve() != Path(state['cwd']).resolve():
             return False
-        return worktree_state(cwd, state.get('excluded')) == state['files']
+        compare = worktree_state if state.get('mode') == 'git-status' else full_worktree_state   # snapshots without a mode were made by the thorough method
+        return compare(cwd, state.get('excluded')) == state['files']
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         return False
 
@@ -416,7 +448,7 @@ def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen
         conn.execute("UPDATE hives SET state='requeen',requested_provider=?,reset_at=NULL WHERE project=? AND plan_path=?", (provider, project, plan))
 
 
-# Collect Hives, their Queen and the latest reported step of each Bee (shown in the frame of the Hive pane).
+# Collect Hives, their Queen and the latest reported step of each Bee (shown in the Hive table of the graphical dashboard).
 def hive_data(conn, project, agents, plan=None):
     """Collect Hives, active Queens and Bee progress from their reports; `project` and `plan` narrow the Hives (None = all)."""
     where, args = ["state!='done'"], []
@@ -454,7 +486,7 @@ def hive_data(conn, project, agents, plan=None):
     return rows
 
 
-# Translate recorded scheduler blockers into the pane's existing German presentation.
+# Translate recorded scheduler blockers into German text.
 def blocker_label(reason):
     """Show the actual start blocker without exposing internal scheduling phrases."""
     if reason.startswith('Hive limit '):
@@ -466,7 +498,6 @@ def blocker_label(reason):
     if reason.startswith('waiting for a free slot or limit of provider '):
         return 'Anbieter belegt oder Kontingent ersch\u00f6pft: ' + reason.rsplit(' ', 1)[-1]
     return {'STOP': 'HaiveQueen gestoppt', 'PAUSED': 'HaiveQueen pausiert',
-            'DRAINING': 'HaiveQueen wird angehalten', 'DRAINED': 'HaiveQueen angehalten',
             'waiting for the integration place': 'wartet auf Integration',
             'handing off, Bee processes are still running': '\u00dcbergabe: Bees laufen noch',
             'retry after an interrupted Queen is not due yet': 'Wartezeit nach unterbrochener Queen',
@@ -565,7 +596,7 @@ def migrate_once(conn, envs):
 
 
 # Run one machine-wide scheduling round for Hives without a language model.
-def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=None, alive=None, settle=3.0, poll=2.0, tries=20, plan_files=None):
+def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None, settle=3.0, plan_files=None):
     """Run one machine-wide scheduling round for Hives without a language model."""
     from datetime import datetime, timedelta
     from pathlib import Path
@@ -582,7 +613,6 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
             pass
         for env in envs:
             inbox.process_inbox(env)
-            loop.repair_closed_panes(env, terminal)
     if not dry_run:
         if loop.stop_flag().exists():
             result['skipped'] = 'STOP'
@@ -832,7 +862,7 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                         continue
                 action = {'name': name, 'type': pick['name'], 'phase': 'queen', 'plan': path, 'package': '', 'cwd': cwd, 'prompt': prompt, 'class': cls}
                 st = {'names': existing_names, 'busy': [], 'plan_status': {sch.norm_plan(path): plan['status']}, 'by_path': {sch.norm_plan(path): plan}}
-                ctx = {'env': env, 'state': st, 'pool': pool, 'report': report, 'dry': False, 'terminal': terminal, 'settle': settle, 'poll': poll, 'tries': tries}
+                ctx = {'env': env, 'state': st, 'pool': pool, 'report': report, 'dry': False, 'settle': settle}
                 try:
                     count = loop._do_start(ctx, action, forced_pick=pick)
                 except Exception:
@@ -850,8 +880,6 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
                     started += 1
             result['projects'][env.name]['started'] += started
             result['projects'][env.name]['actions'] += started
-    if not dry_run and not os.environ.get('BZZ_TEST_NOSTART'):
-        ensure_hive_panes(conn, projects, terminal)
     if not dry_run:
         for env in projects:
             providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and not p.get('endpoint')
@@ -868,27 +896,6 @@ def schedule_round(conn, machine, envs, terminal=None, dry_run=False, free_ram=N
     if not dry_run:
         loop.write_state(conn, 'idle', datetime.now(), None)
     return result
-
-
-# Make sure every living Hive has its sub-terminal, also when no Queen runs.
-def ensure_hive_panes(conn, envs, terminal=None):
-    """Open the sub-terminal of every Hive that is not done and has none; a terminal problem is logged and never stops the round."""
-    from . import loop
-    from .terminal import get_terminal
-    for env in envs:
-        for hive in db.rows(conn, "SELECT plan_path FROM hives WHERE project=? AND state!='done'", (env.name,)):
-            try:
-                term = terminal or get_terminal(env.settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes'))
-                loop.ensure_hive_pane(env, term, env.settings.get('window', 'HaiveQueen'), hive['plan_path'])
-            except Exception as exc:
-                env.log('Hive pane of %s not opened: %s' % (hive['plan_path'], exc))
-    if envs:   # big Hives with a running Queen, small ones without; a backend that cannot resize is skipped
-        from . import hivelayout
-        try:
-            hivelayout.apply(terminal or get_terminal(envs[0].settings.get('terminal', 'auto'), str(osplat.runs_dir() / '_panes')),
-                             envs[0].settings.get('window', 'HaiveQueen'), conn, loop.is_test_runtime())
-        except Exception:
-            pass
 
 
 # Summarize only changes that can make a waiting Hive runnable.

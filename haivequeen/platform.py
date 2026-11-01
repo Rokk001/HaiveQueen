@@ -3,10 +3,7 @@
 Inside the package use `from haivequeen import platform as osplat`; the standard module `platform`
 is not affected because imports in this package are absolute.
 """
-import contextlib
-import csv
 import ctypes
-import io
 import ntpath
 import os
 import posixpath
@@ -14,83 +11,12 @@ import signal
 import socket
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from datetime import datetime
 
 APP = "HaiveQueen"
 STILL_ACTIVE = 259
-
-
-# Restore the user's foreground window after Windows Terminal activates itself.
-@contextlib.contextmanager
-def keep_foreground():
-    """Restore the user's foreground window after Windows Terminal activates itself."""
-    if not is_windows():
-        yield
-        return
-    from ctypes import wintypes
-    user = ctypes.windll.user32
-    kernel = ctypes.windll.kernel32
-    kernel.GetCurrentThreadId.restype = wintypes.DWORD
-    user.GetForegroundWindow.restype = wintypes.HWND
-    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
-    user.GetWindowThreadProcessId.restype = wintypes.DWORD
-    user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-    user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-    user.SetForegroundWindow.argtypes = [wintypes.HWND]
-    user.BringWindowToTop.argtypes = [wintypes.HWND]
-    user.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
-
-    # Read the class and title of a native window.
-    def window_info(hwnd):
-        """Read the class and title of a native window."""
-        cls = ctypes.create_unicode_buffer(256)
-        title = ctypes.create_unicode_buffer(512)
-        user.GetClassNameW(hwnd, cls, len(cls))
-        user.GetWindowTextW(hwnd, title, len(title))
-        return cls.value, title.value
-
-    original = user.GetForegroundWindow()
-    cls, title = window_info(original) if original else ("", "")
-    skip = not original or (cls == "CASCADIA_HOSTING_WINDOW_CLASS" and (title.startswith("HaiveQueen |") or title.startswith("HaiveQueen TEST |")))
-    finished = threading.Event()
-    # Watch the whole launch and up to three seconds afterwards for a focus change.
-    def restore():
-        """Watch the whole launch and up to three seconds afterwards for a focus change."""
-        deadline = None
-        while True:
-            current = user.GetForegroundWindow()
-            if current != original and current and window_info(current)[0] == "CASCADIA_HOSTING_WINDOW_CLASS":
-                current_thread = user.GetWindowThreadProcessId(current, None)
-                caller_thread = kernel.GetCurrentThreadId()
-                attached = user.AttachThreadInput(caller_thread, current_thread, True)
-                try:
-                    user.SetForegroundWindow(original)
-                    user.BringWindowToTop(original)
-                finally:
-                    if attached:
-                        user.AttachThreadInput(caller_thread, current_thread, False)
-                break
-            if finished.is_set():
-                if deadline is None:
-                    deadline = time.monotonic() + 3.0
-                elif time.monotonic() >= deadline:
-                    break
-            time.sleep(0.05)
-
-    worker = None
-    if not skip:
-        worker = threading.Thread(target=restore)
-        worker.start()
-    try:
-        yield
-    finally:
-        if worker:
-            finished.set()
-            worker.join()
-
 
 
 def is_windows() -> bool:
@@ -268,11 +194,55 @@ def process_start_time(pid):
         return None
 
 
+# Collect a process and everything it started, children before parents.
+def _win_tree(pid: int) -> list:
+    """Return `pid` and all its descendants from the process snapshot, deepest first.
+
+    A process counts as a child only when its parent id matches and it was created after that parent: Windows reuses process ids,
+    so a stranger whose recorded parent id equals a long-gone parent's must not be pulled in."""
+    children = {}
+    for child, parent, _name in _win_snapshot():
+        children.setdefault(parent, []).append(child)
+    order, stack, seen = [], [pid], {pid}
+    while stack:
+        current = stack.pop()
+        order.append(current)
+        born = _win_process_creation(current)
+        for child in children.get(current, []):
+            created = _win_process_creation(child)
+            if child in seen or (born is not None and created is not None and created < born):
+                continue
+            seen.add(child)
+            stack.append(child)
+    return order[::-1]
+
+
+# End one Windows process at once.
+def _win_terminate(pid: int) -> None:
+    """Windows: TerminateProcess on `pid` and wait until the process object is signalled (nothing happens when it is gone or may not be ended).
+
+    Waiting for the signal, not only for the exit code, matters: right after the exit code shows, Windows may still hold the process's open files,
+    so a folder removed at once could not be deleted."""
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    handle = kernel32.OpenProcess(0x00100001, False, pid)  # SYNCHRONIZE | PROCESS_TERMINATE
+    if not handle:
+        return
+    try:
+        kernel32.TerminateProcess(ctypes.c_void_p(handle), 1)
+        kernel32.WaitForSingleObject(ctypes.c_void_p(handle), 5000)
+    finally:
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+
+
 def _win_kill_tree(pid: int) -> bool:
-    """Windows: taskkill /PID <pid> /T /F; True when the process is gone afterwards."""
-    result = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                            capture_output=True, text=True, timeout=30)
-    return result.returncode == 0 or not process_alive(pid)
+    """Windows: end the process and all its descendants (what `taskkill /PID <pid> /T /F` did, without starting a program); True when it is gone."""
+    for victim in _win_tree(pid):
+        _win_terminate(victim)
+    deadline = time.monotonic() + 5
+    while process_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return not process_alive(pid)
 
 
 def _posix_kill_tree(pid: int, grace: float = 2.0) -> bool:
@@ -341,12 +311,42 @@ def run_with_timeout(argv: list, timeout: float, cwd=None, input_bytes=None, env
 
 
 def _win_process_list() -> list:
-    """Windows: all (pid, image name) pairs from `tasklist /FO CSV /NH`."""
-    result = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=30)
+    """Windows: all (pid, image name) pairs from a Toolhelp snapshot."""
+    return [(pid, name) for pid, _parent, name in _win_snapshot()]
+
+
+def _win_snapshot() -> list:
+    """Windows: all (pid, parent pid, image name) triples from a Toolhelp snapshot.
+
+    The Windows API is called directly: a helper program such as `tasklist` opens a console window each time when the caller
+    (the graphical dashboard, a detached process) has no console of its own. Raises OSError when the snapshot cannot be taken."""
+    from ctypes import wintypes
+
+    class ProcessEntry(ctypes.Structure):
+        """PROCESSENTRY32W of tlhelp32.h."""
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", ctypes.c_wchar * 260)]
+
+    kernel = ctypes.windll.kernel32
+    kernel.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel.Process32FirstW.argtypes = kernel.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ProcessEntry)]
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    snapshot = kernel.CreateToolhelp32Snapshot(0x2, 0)   # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+        raise OSError("process snapshot failed")
     rows = []
-    for row in csv.reader(io.StringIO(result.stdout)):
-        if len(row) >= 2 and row[1].isdigit():
-            rows.append((int(row[1]), row[0]))
+    try:
+        entry = ProcessEntry()
+        entry.dwSize = ctypes.sizeof(ProcessEntry)
+        more = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
+        while more:
+            rows.append((int(entry.th32ProcessID), int(entry.th32ParentProcessID), entry.szExeFile))
+            more = kernel.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel.CloseHandle(snapshot)
     return rows
 
 

@@ -71,7 +71,7 @@ class LiveConfigTest(RoundCase):
                 mock.patch.object(loop.time, 'time', side_effect=lambda: tick[0]), \
                 mock.patch.object(loop, 'write_state', side_effect=write), \
                 mock.patch.object(loop.osplat, 'kill_process_tree') as kill:
-            result = loop._run_loop(self.conn, self.machine, 2, round_minutes, False, None, sleeper, 2, {})
+            result = loop._run_loop(self.conn, self.machine, 2, round_minutes, sleeper, 2, {})
         self.assertEqual(result, 0)
         kill.assert_not_called()
 

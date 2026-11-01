@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import isolation  # noqa: E402,F401
-from haivequeen import dashboard, db, hives, loop, runtime, scheduler, usage  # noqa: E402
+from haivequeen import overview, db, hives, loop, runtime, scheduler, usage  # noqa: E402
 
 
 # Verify stale quota failures cannot keep recommending an exhausted provider.
@@ -43,7 +43,7 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
     # Apply the current account reading to the dashboard, ranking and start gate.
     def test_current_weekly_exhaustion_is_shared_everywhere(self):
         raw = self.snapshot(100)
-        self.assertEqual(dashboard.window_usage(raw, datetime.now())["SevenDay"]["pct"], 100)
+        self.assertEqual(overview.window_usage(raw, datetime.now())["SevenDay"]["pct"], 100)
         self.assertEqual(scheduler.claude_usage(self.conn)["SevenDay"]["Pct"], 100)
         self.assertEqual(usage.get_provider_limit(self.conn, self.provider, read_pc=True)["free_pct"], 0)
         self.assertEqual(scheduler.provider_limit(self.provider, self.conn)["FreePct"], 0)
@@ -53,9 +53,9 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
     # Hide an unverified historical percentage after a failed metadata refresh.
     def test_failed_refresh_does_not_display_old_ninety_percent(self):
         raw = self.snapshot(90, failed=True)
-        self.assertIsNone(dashboard.window_usage(raw, datetime.now())["SevenDay"])
+        self.assertIsNone(overview.window_usage(raw, datetime.now())["SevenDay"])
         self.assertIsNone(scheduler.claude_usage(self.conn)["SevenDay"])
-        row = dashboard.provider_lines(self.conn, self.cfg, [])[0]
+        row = overview.provider_lines(self.conn, self.cfg, [])[0]
         self.assertIsNone(row["used_pct"])
         self.assertIsNone(row["ratio"])
         self.assertFalse(row["next"])
@@ -73,10 +73,10 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
         raw = self.snapshot(100)
         raw["sevenDay"]["resetsAt"] = None
         runtime.kv_set(self.conn, "*", "usage-claude", json.dumps(raw))
-        self.assertEqual(dashboard.window_usage(raw, datetime.now())["SevenDay"], {"pct": 100, "reset": ""})
+        self.assertEqual(overview.window_usage(raw, datetime.now())["SevenDay"], {"pct": 100, "reset": ""})
         self.assertEqual(scheduler.claude_usage(self.conn)["SevenDay"], {"Pct": 100, "Reset": "", "At": None})
         self.assertEqual(scheduler.provider_limit(self.provider, self.conn)["FreePct"], 0)
-        row = dashboard.provider_lines(self.conn, self.cfg, [])[0]
+        row = overview.provider_lines(self.conn, self.cfg, [])[0]
         self.assertEqual(row["used_pct"], 100)
         self.assertIsNone(row["reset_at"])
         self.assertFalse(row["next"])
@@ -94,9 +94,9 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
     def test_successful_refresh_restores_known_quota(self):
         self.snapshot(90, failed=True)
         raw = self.snapshot(40)
-        self.assertEqual(dashboard.window_usage(raw, datetime.now())["SevenDay"]["pct"], 40)
+        self.assertEqual(overview.window_usage(raw, datetime.now())["SevenDay"]["pct"], 40)
         self.assertEqual(scheduler.provider_limit(self.provider, self.conn)["FreePct"], 60)
-        row = dashboard.provider_lines(self.conn, self.cfg, [])[0]
+        row = overview.provider_lines(self.conn, self.cfg, [])[0]
         self.assertEqual(row["used_pct"], 40)
         self.assertTrue(row["next"])
 

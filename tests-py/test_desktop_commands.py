@@ -21,12 +21,11 @@ class DesktopCommandsTest(RoundCase):
             code = cli.main(list(arguments))
         return code, json.loads(output.getvalue())
 
-    # Stop requests draining and shows feedback without killing agents.
+    # Stop waits for the running agents and shows feedback without killing them.
     def test_desktop_stop_keeps_running_agents(self):
-        """Stop requests draining and shows feedback without killing agents."""
+        """Stop waits for the running agents and shows feedback without killing them."""
         self.agent('busy', status='running', started=1)
         with mock.patch.object(loop, 'loop_running', return_value=4321), \
-                mock.patch.object(loop, 'close_panes_after_stop') as close, \
                 mock.patch.object(loop.osplat, 'kill_process_tree') as kill, \
                 mock.patch.object(desktop, 'show_result') as show:
             code, result = self.invoke('stop', '--desktop')
@@ -34,7 +33,6 @@ class DesktopCommandsTest(RoundCase):
         self.assertTrue(loop.stop_flag().exists())
         self.assertEqual(result['running_agents'], 1)
         self.assertEqual(runtime.list_agents(self.conn, 'testproj')[0]['status'], 'running')
-        close.assert_not_called()
         kill.assert_not_called()
         show.assert_called_once_with('stop', result)
 
@@ -44,7 +42,7 @@ class DesktopCommandsTest(RoundCase):
         with mock.patch.object(loop, 'loop_running', return_value=4321), \
                 mock.patch.object(desktop, 'show_result') as show:
             code, result = self.invoke('stop')
-        self.assertEqual((code, result), (0, {'ok': True, 'running_agents': 0, 'closed_panes': []}))
+        self.assertEqual((code, result), (0, {'ok': True, 'running_agents': 0}))
         show.assert_not_called()
 
     # Start retains the requested stop until the old loop finishes.
@@ -54,7 +52,6 @@ class DesktopCommandsTest(RoundCase):
         loop.stop_flag().write_text('stop requested\n', encoding='utf-8')
         runstate.pause(self.conn, 'test')
         with mock.patch.object(loop, 'loop_running', return_value=4321), \
-                mock.patch.object(loop, 'maintain_dashboard') as dashboard, \
                 mock.patch.object(loop, 'spawn_detached') as spawn, \
                 mock.patch.object(loop, 'run_loop') as run, \
                 mock.patch.object(desktop, 'show_result') as show:
@@ -64,50 +61,25 @@ class DesktopCommandsTest(RoundCase):
         self.assertEqual(result['running_agents'], 1)
         self.assertEqual(loop.stop_flag().read_text(encoding='utf-8'), 'stop requested\n')
         self.assertEqual(runstate.get_state(self.conn)['state'], 'PAUSED')
-        dashboard.assert_not_called()
         spawn.assert_not_called()
         run.assert_not_called()
         show.assert_called_once_with('start', result)
 
-    # Start restores a missing overview without starting another loop.
-    def test_existing_loop_recovers_dashboard_without_spawning(self):
-        """Start restores a missing overview without starting another loop."""
+    # Start opens the window without starting another loop.
+    def test_existing_loop_opens_the_window_without_spawning(self):
+        """Start opens the dashboard window once without starting another loop."""
         with mock.patch.object(loop, 'loop_running', return_value=4321), \
-                mock.patch.object(loop, 'maintain_dashboard', return_value='dashboard-1') as dashboard, \
+                mock.patch('haivequeen.gui.launch_detached', return_value={'ok': True, 'gui': 77, 'already': False}) as window, \
                 mock.patch.object(loop, 'spawn_detached') as spawn, \
                 mock.patch.object(loop, 'run_loop') as run, \
                 mock.patch.object(desktop, 'show_result') as show:
             code, result = self.invoke('start', '--desktop')
         self.assertEqual(code, 0)
-        self.assertEqual(result['dashboard'], 'dashboard-1')
-        dashboard.assert_called_once()
+        self.assertEqual(result['gui'], 77)
+        window.assert_called_once()
         spawn.assert_not_called()
         run.assert_not_called()
         show.assert_called_once_with('start', result)
-
-    # Explicit backend selection also applies when recovering a running session.
-    def test_existing_loop_honors_requested_terminal(self):
-        """A headless recovery never falls back to the default Windows backend."""
-        terminal = mock.Mock()
-        with mock.patch.object(loop, 'loop_running', return_value=4321), \
-                mock.patch.object(loop, 'get_terminal', return_value=terminal) as backend, \
-                mock.patch.object(loop, 'maintain_dashboard', return_value='dashboard-1') as recover:
-            code, result = self.invoke('start', '--terminal', 'headless')
-        self.assertEqual(code, 0)
-        self.assertTrue(result['running'])
-        self.assertEqual(backend.call_args.args[0], 'headless')
-        self.assertIs(recover.call_args.args[1], terminal)
-
-    # A concurrent stop can win while dashboard recovery waits for its pane lock.
-    def test_stop_during_dashboard_recovery_reports_wait(self):
-        """A skipped recovery never falsely reports an opened dashboard."""
-        with mock.patch.object(loop, 'loop_running', return_value=4321), \
-                mock.patch.object(loop, 'maintain_dashboard', return_value=''), \
-                mock.patch.object(desktop, 'show_result'):
-            code, result = self.invoke('start', '--desktop')
-        self.assertEqual(code, 0)
-        self.assertTrue(result['stopping'])
-        self.assertNotIn('dashboard', result)
 
     # A failing command produces both JSON failure and desktop feedback.
     def test_desktop_command_error_is_visible(self):
@@ -150,9 +122,9 @@ class DesktopCommandsTest(RoundCase):
                 self.invoke('stop')
         show.assert_not_called()
 
-    # Visible text explains draining agents and reports the actual error.
+    # Visible text explains that running agents are awaited and reports the actual error.
     def test_german_feedback_describes_wait_and_errors(self):
-        """Visible text explains draining agents and reports the actual error."""
+        """Visible text explains that running agents are awaited and reports the actual error."""
         text = desktop.result_text('start', {'ok': True, 'stopping': True, 'running_agents': 2})
         self.assertIn('2 laufende Agenten', text)
         self.assertIn('ununterbrochen', text)

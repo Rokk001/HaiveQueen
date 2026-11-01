@@ -44,8 +44,8 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 | `decisions list` | `[--project] [--plan] [--item] [--all]` | decision rows; only `active` ones unless `--all` (status values: `active`, `rule`, `superseded`) |
 | `decisions add` | `--project --source owner\|coordinator\|auto --text [--plan] [--item]` | `{ok, id}` |
 | `decisions update` | `<id> [--plan] [--item] [--status active\|rule\|superseded]` | `{ok, decision}` |
-| `pause` / `resume` / `drain` | none | the run state `{state, since, running_agents}`; see "Run state" below |
-| `run-state` | none | `{state, since, running_agents}`; also settles a finished drain |
+| `pause` / `resume` | none | the run state `{state, since, running_agents}`; see "Run state" below |
+| `run-state` | none | `{state, since, running_agents}` |
 | `starts-allowed` | none | `{allowed, state}`; the round asks this before every agent start |
 | `reattach` | `--project --alive-pids 123,456` | `{ok, kept, failed}`; see "Run state" below |
 | `done`, `ready`, `ask`, `note`, `answer`, `status` | see the command line help | agent and owner commands |
@@ -54,12 +54,11 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 
 The run state is one machine-wide value: kv row with project `*`, key `run-state`, value `{"state","since"}`; it survives restarts. No row means `RUNNING`. State changes write events with project `*`.
 
-- `pause`: any state to `PAUSED`. `resume`: any state to `RUNNING`. `drain`: `RUNNING` or `PAUSED` to `DRAINING`.
-- `DRAINING` becomes `DRAINED` automatically (every `drain`, `run-state` and `starts-allowed` call settles it) as soon as no agent (any project, status `starting` or `running`, not archived) runs; exactly one `drained` event is written.
+- `pause`: any state to `PAUSED`. `resume`: any state to `RUNNING`. A `DRAINING` or `DRAINED` value stored by an older version counts as `PAUSED`.
 - `starts-allowed` is true only in `RUNNING`. Running agents are never stopped.
 - `reattach --project p --alive-pids 123,456` (run once on orchestrator start): `running` rows of the project whose PID is in the list stay `running`; rows with another or no PID become `failed` (`last_line` "process gone after orchestrator restart", one `failed` event each). The real PID check stays in PowerShell.
 
 ## What stays a file
 
-`STOP`, `HANDOFF`, the loop lock, `idle.pid`, the pane slot counters, the raw files of a run (`prompt.md`, `rules.md`, `milestones.txt`, `events.jsonl`, `stderr.txt`, `final.txt`, `build-samples.txt`), `window.txt` and the usage cache folder.
+`STOP`, `HANDOFF`, the loop lock, `idle.pid`, the raw files of a run (`prompt.md`, `rules.md`, `milestones.txt`, `events.jsonl`, `stderr.txt`, `final.txt`, `build-samples.txt`), `window.txt` and the usage cache folder.
 The loop state, the event hook state and the Claude usage windows are stored as JSON text with `kv` (suggested keys: `loop-state`, `event-sync`, `usage-claude`).

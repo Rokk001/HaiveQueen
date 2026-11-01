@@ -72,9 +72,6 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
         return 'protected worktree'
     if record.get('locked') or record.get('prunable'):
         return 'locked or missing'
-    branch = _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
-    if branch.returncode or not branch.stdout.strip() or branch.stdout.strip() != record.get('branch'):
-        return 'current branch does not match the worktree inventory'
     if any(row.get('branch') == record.get('branch') and row.get('status') in ('ready', 'in_run', 'blocked')
            for row in queue if record.get('branch')):
         return 'branch has an open queue row'
@@ -85,6 +82,10 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
     tip = completed.get('tip') or ''
     if not re.fullmatch(r'[0-9a-fA-F]{7,64}', tip):
         return 'integrated queue tip is invalid'
+    # The branch is read from Git only now: worktrees without integrated queue evidence were rejected above without a Git call.
+    branch = _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+    if branch.returncode or not branch.stdout.strip() or branch.stdout.strip() != record.get('branch'):
+        return 'current branch does not match the worktree inventory'
     resolved = _git(env.code_repo, 'rev-parse', '--verify', tip + '^{commit}')
     head = _git(path, 'rev-parse', '--verify', 'HEAD')
     if resolved.returncode or head.returncode or resolved.stdout.strip() != head.stdout.strip():
@@ -240,13 +241,28 @@ def _prune_candidates(env, records, queue, process_busy, dry, integration_ref=No
             result['notRemovable'].append({'path': path, 'reason': str(exc)})
     return result
 
+# Tell from the queue alone whether a worktree could ever be removed.
+def _may_be_removable(record, queue):
+    """True when the newest queue row of the worktree's branch is 'integrated' and no row of it is open (ready, in_run, blocked)."""
+    branch = record.get('branch')
+    rows = [row for row in queue if branch and row.get('branch') == branch]
+    if not rows or any(row.get('status') in ('ready', 'in_run', 'blocked') for row in rows):
+        return False
+    return max(rows, key=lambda row: row['id']).get('status') == 'integrated'
+
+
 # Refresh the integration ref before checking any candidate.
 def _prune_with_checker(env, process_busy, dry):
     """Fetch the integration branch and evaluate its worktrees safely."""
     import os
     branch = str(env.settings.get('integrationBranch') or 'main')
-    fetched = _git(env.code_repo, 'fetch', 'origin', branch)
     records = list_worktrees(env.code_repo)
+    queue = db.queue_rows(env.conn, env.name)
+    if not any(_may_be_removable(record, queue) for record in records[1:]):
+        # No worktree belongs to a finished, integrated branch, so nothing can be removed: skip the network (fetch, ls-remote);
+        # the usual checks still run and only report why each worktree stays.
+        return _prune_candidates(env, records, queue, process_busy, dry)
+    fetched = _git(env.code_repo, 'fetch', 'origin', branch)
     if fetched.returncode:
         return {'removed': [], 'kept': [{'path': os.path.normpath(record['worktree']),
                 'reason': 'fetch failed: ' + fetched.stderr.strip()} for record in records],
@@ -261,7 +277,7 @@ def _prune_with_checker(env, process_busy, dry):
         return {'removed': [], 'kept': [{'path': os.path.normpath(record['worktree']),
                 'reason': 'integration branch changed during fetch'} for record in records],
                 'notRemovable': [], 'dryRun': bool(dry)}
-    return _prune_candidates(env, records, db.queue_rows(env.conn, env.name), process_busy, dry, tip.stdout.strip())
+    return _prune_candidates(env, records, queue, process_busy, dry, tip.stdout.strip())
 
 # Move untracked links aside before Git removal and restore them if removal fails.
 def _remove_with_links(repo, path, targets):

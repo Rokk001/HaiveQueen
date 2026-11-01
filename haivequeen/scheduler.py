@@ -62,11 +62,8 @@ DEFAULT_SETTINGS = {
     "planSuffixRegex": "-?PLAN$",
     "buildProcessNames": [],
     "capabilityRules": [],
-    "window": "HaiveQueen",
-    "terminal": "auto",
-
 }
-MACHINE_ONLY = ("hives", "preferredProvider", "excludedProviders", "providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects", "window")   # window: the Queen, the dashboard and all agents share one terminal window
+MACHINE_ONLY = ("hives", "preferredProvider", "excludedProviders", "providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
 
 
 def deep_merge(base: dict, over: dict) -> dict:
@@ -438,23 +435,6 @@ def model_short(protocol: str, model: str, effort: str) -> str:
     return ("%s %s" % (nm, v)).strip() + " " + eff
 
 
-def model_long(protocol: str, model: str, effort: str) -> str:
-    """Long model text for pane titles: 'Claude Sonnet 5.5 medium' / 'Codex GPT-6.1-Sol medium'."""
-    if protocol == "codex":
-        m = re.match(r"^gpt-(.+)$", model or "")
-        if m:
-            return "Codex GPT-" + "-".join(_title(x) for x in m.group(1).split("-")) + " " + effort
-        return "Codex %s %s" % (model, effort)
-    nm, v = model, ""
-    for key, label in (("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku")):
-        if key in (model or ""):
-            nm, v = label, "5.5"
-    m = re.search(r"(\d+)[-.](\d+)", model or "")
-    if m:
-        v = m.group(1) + "." + m.group(2)
-    return ("Claude %s %s" % (nm, v)).replace("  ", " ").strip() + " " + effort
-
-
 def format_tokens(n) -> str:
     """Token count in short form (51k, 1.2M); a dash when unknown."""
     if n is None:
@@ -498,7 +478,7 @@ class ProjectEnv:
         runtime.append_event(self.conn, self.name, text, mirror="rounds")
 
     def event(self, text: str, error: bool = False) -> None:
-        """Write a history event and a line into the ORCH-EVENTS.log mirror (what the orchestrator pane shows)."""
+        """Write a history event and a line into the ORCH-EVENTS.log mirror (what the dashboard log shows)."""
         runtime.append_event(self.conn, self.name, text, mirror="events", error=error)
 
     def agents(self, scope: str = "active") -> list:

@@ -160,13 +160,13 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(self.ag("Ada")["status"], "running")
         self.assertEqual(len(runtime.list_agents(self.conn, "testproj", "active")), 1)
 
-    # Drain waits for a running Queen and starts no replacement.
-    def test_drain_preserves_running_queen(self):
-        """Drain waits for a running Queen and starts no replacement."""
+    # A pause leaves a running Queen alone and starts no replacement.
+    def test_pause_preserves_running_queen(self):
+        """A pause leaves a running Queen alone and starts no replacement."""
         from haivequeen import runstate
         self.agent("Ada", phase="queen", status="running", pid=42)
         self.plan("READY", [{"id": "P1", "title": "First"}])
-        runstate.drain(self.conn)
+        runstate.pause(self.conn)
         self.round(alive=lambda pid: True)
         self.assertEqual(self.ag("Ada")["status"], "running")
         self.assertEqual(len(runtime.list_agents(self.conn, "testproj", "active")), 1)

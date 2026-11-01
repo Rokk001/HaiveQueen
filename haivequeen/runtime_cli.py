@@ -323,7 +323,7 @@ def register(sub) -> None:
 
 
 def register_runstate(sub) -> None:
-    """Add pause, resume, drain, run-state, starts-allowed and reattach (run state and restart, D8)."""
+    """Add pause, resume, run-state, starts-allowed and reattach (run state and restart, D8)."""
     from . import reattach, runstate
 
     def allowed(a, c):
@@ -338,7 +338,6 @@ def register_runstate(sub) -> None:
     for name, fn, flags in (
             ("pause", lambda a, c: runstate.pause(c), []),
             ("resume", lambda a, c: runstate.resume(c), []),
-            ("drain", lambda a, c: runstate.drain(c), []),
             ("run-state", lambda a, c: runstate.get_state(c), []),
             ("starts-allowed", allowed, []),
             ("reattach", re_attach, [P, ("--alive-pids", {"default": ""})])):

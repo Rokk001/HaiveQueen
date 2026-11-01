@@ -547,6 +547,25 @@ class QueenIntegrationTests(RoundCase):
             self.assertTrue(bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(bee_wt)))
         self.assertEqual(runtime.get_agent(self.conn, 'testproj', 'Ada')['provider'], 'local')
 
+    # A stored provider that is no longer allowed for the package is replaced instead of blocking the Bee.
+    def test_stale_codex_assignment_is_routed_again(self):
+        from unittest import mock
+        from haivequeen import hives, usage
+        from bzztest import REL
+        self.add_local_provider()
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'heavy'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        bees.ensure_attempts(self.conn)
+        self.conn.execute('INSERT INTO bee_assignments VALUES (?,?,?,?,?)', ('testproj', REL, 'P1', 'heavy', 'codex'))
+        env = self.env()
+        bee_wt = self.base / 'bee-wt'
+        bee_wt.mkdir()
+        with mock.patch.object(usage, 'limit_windows', return_value=[]), mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
+            self.assertTrue(bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(bee_wt)))
+        self.assertNotEqual(runtime.get_agent(self.conn, 'testproj', 'Ada')['provider'], 'codex')
+        self.assertNotEqual(self.conn.execute('SELECT provider FROM bee_assignments WHERE package=?', ('P1',)).fetchone()[0], 'codex')
+
     # A plan-named branch with a foreign ready row is not adopted by a new Hive.
     def test_foreign_ready_branch_is_left_untouched(self):
         from unittest import mock

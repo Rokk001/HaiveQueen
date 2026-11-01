@@ -5,20 +5,6 @@ from datetime import datetime
 from bzztest import REL, RoundCase, runtime
 from haivequeen import db, faults, triage
 
-OTHER_LOG = """Event[0]:
-  Log Name: Application
-  Source: Application Error
-  Date: 2026-10-29T09:00:00.000
-  Description:
-  Faulting application name: other.exe, version: 1.0
-"""
-CRASH_LOG = """Event[0]:
-  Log Name: Application
-  Source: Application Error
-  Date: 2026-10-29T10:43:21.123
-  Description:
-  Faulting application name: WindowsTerminal.exe, version: 1.2
-""" + OTHER_LOG.replace("Event[0]", "Event[1]")
 VANISHED = "runner process vanished (ended by executor or crashed)"
 
 
@@ -36,9 +22,9 @@ class FaultsTest(RoundCase):
         """Fault questions of the fault project (optionally of one kind)."""
         return db.rows(self.conn, "SELECT * FROM questions WHERE project=? AND plan_path=?" + (" AND item=?" if kind else "") + " ORDER BY id", ("HaiveQueen", faults.FAULT_PLAN, kind) if kind else ("HaiveQueen", faults.FAULT_PLAN))
 
-    def check(self, started=1, can_start=True, log="", now=None):
-        """One fault check of the dummy project; `log` is the text the event log reader returns."""
-        faults.check_round(self.env(), started, can_start, now=now or datetime(2026, 10, 29, 12, 0), reader=lambda: log)
+    def check(self, started=1, can_start=True, now=None):
+        """One fault check of the dummy project."""
+        faults.check_round(self.env(), started, can_start, now=now or datetime(2026, 10, 29, 12, 0))
 
     def test_file_fault_files_an_open_question_with_the_fixed_plan(self):
         """A fault becomes an open question of plan HQ-FAULTS with the kind as item."""
@@ -96,33 +82,6 @@ class FaultsTest(RoundCase):
         self.assertEqual(len(q), 1)
         self.assertIn("DUMMY-B-work", q[0]["question"])
 
-    def test_windows_terminal_crash_in_the_event_log_is_filed(self):
-        """A WindowsTerminal.exe entry of the Application log files terminal_crash; an entry of another program does not."""
-        self.check(log=OTHER_LOG)
-        self.assertEqual(self.faults_of(), [])
-        runtime.kv_delete(self.conn, "HaiveQueen", faults.EVENTLOG_KEY)
-        self.check(log=CRASH_LOG)
-        self.assertEqual(len(self.faults_of("terminal_crash")), 1)
-
-    def test_event_log_is_read_at_most_every_ten_minutes(self):
-        """A second check inside 10 minutes does not read the log, one after 10 minutes does."""
-        calls = []
-
-        def reader():
-            """Count the reads."""
-            calls.append(1)
-            return ""
-
-        for minute in (0, 9, 10):
-            faults.check_round(self.env(), 1, True, now=datetime(2026, 10, 29, 12, minute), reader=reader)
-        self.assertEqual(len(calls), 2)
-
-    def test_wevtutil_query_names_the_application_error_provider(self):
-        """The event log query is the agreed wevtutil call."""
-        self.assertEqual(faults.WEVTUTIL[:3], ["wevtutil", "qe", "Application"])
-        self.assertIn("Application Error", faults.WEVTUTIL[3])
-        self.assertIn("/f:text", faults.WEVTUTIL)
-
     # Verify non-interrupted faults remain detected by a real round.
     def test_round_runs_the_detection(self):
         """A real round files a new non-interrupted agent with no result."""
@@ -170,25 +129,6 @@ class FaultsTest(RoundCase):
             self.assertEqual((q["status"], q["answered_by"]), ("answered", "coordinator"))
             self.assertTrue(q["answer"])
 
-    # A crash entry after the question confirms the fault; absence only resolves after an hour.
-    def test_terminal_fault_waits_and_distinguishes_new_crash(self):
-        """A new crash remains open; otherwise the hour of observation resolves it."""
-        qid = faults.file_fault(self.conn, "HaiveQueen", "terminal_crash", "check")
-        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00' WHERE id=?", (qid,))
-        self.conn.commit()
-        self.check(now=datetime(2026, 10, 29, 10, 59), log=CRASH_LOG)
-        self.assertEqual(self.faults_of("terminal_crash")[0]["status"], "open")
-        self.check(now=datetime(2026, 10, 29, 11, 0))
-        self.assertEqual(self.faults_of("terminal_crash")[0]["status"], "open")
-        self.check(now=datetime(2026, 10, 29, 11, 1))
-        self.assertEqual(self.faults_of("terminal_crash")[0]["status"], "open")
-        db.answer_question(self.conn, qid, "reviewed", "owner")
-        qid = db.add_question(self.conn, "HaiveQueen", faults.FAULT_PLAN, "terminal_crash", "check again", "")
-        self.conn.execute("UPDATE questions SET created_at='2026-10-29T11:01:00' WHERE id=?", (qid,))
-        self.conn.commit()
-        self.check(now=datetime(2026, 10, 29, 12, 1))
-        self.assertEqual(self.faults_of("terminal_crash")[-1]["status"], "answered")
-
     # A restart must run continuously for an hour after the latest unexpected end.
     def test_loop_vanished_requires_continuous_runtime(self):
         """A later unexpected end resets the recovery observation."""
@@ -220,16 +160,15 @@ class FaultsTest(RoundCase):
     # Open reports retain coordinator-visible observations after an hour.
     def test_unresolved_faults_record_evidence_once(self):
         """Each unresolved kind stays open and records its observed recovery state."""
-        kinds = ("no_start", "runner_vanished", "agent_no_result", "terminal_crash",
+        kinds = ("no_start", "runner_vanished", "agent_no_result",
                  "loop_vanished", "self_update_rollback", "self_update_pane")
         for kind in kinds:
             faults.file_fault(self.conn, "HaiveQueen", kind,
                               "Agent DUMMY-A-work of Apiary testproj: failed. Apiary testproj:")
         self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00'")
         self.conn.commit()
-        runtime.kv_set(self.conn, "HaiveQueen", faults.EVENTLOG_KEY, "2026-10-29T11:00:00")
-        self.check(started=0, now=datetime(2026, 10, 29, 11, 0), log=CRASH_LOG)
-        self.check(started=0, now=datetime(2026, 10, 29, 11, 1), log=CRASH_LOG)
+        self.check(started=0, now=datetime(2026, 10, 29, 11, 0))
+        self.check(started=0, now=datetime(2026, 10, 29, 11, 1))
         events = runtime.list_events(self.conn, "HaiveQueen", kind="note")
         for q in self.faults_of():
             self.assertEqual(q["status"], "open")
@@ -252,7 +191,7 @@ class FaultsTest(RoundCase):
     # Pending fault reports are checked privately before they reach the owner.
     def test_pending_fault_is_hidden_until_observation_expires(self):
         """Unresolved faults become open with evidence after an hour, not before."""
-        from haivequeen import views, dashboard, cli
+        from haivequeen import views, overview, cli
         from unittest.mock import patch
         import argparse
         qid = faults.file_fault(self.conn, "HaiveQueen", "no_start", "Apiary testproj: no starts")
@@ -266,7 +205,7 @@ class FaultsTest(RoundCase):
         with patch("haivequeen.cli.out") as output:
             cli.cmd_questions(argparse.Namespace(project="HaiveQueen", open=False, status=None, plan=None, item=None), self.conn)
             output.assert_called_once_with([])
-        self.assertEqual(dashboard.collect(self.conn, "HaiveQueen", cfg={}, sysinfo={"host": "test", "cores": 1, "free_mb": 1024, "total_mb": 2048, "compiler_count": 0})["qs"], [])
+        self.assertEqual(overview.collect(self.conn, "HaiveQueen", cfg={}, sysinfo={"host": "test", "cores": 1, "free_mb": 1024, "total_mb": 2048, "compiler_count": 0})["qs"], [])
         self.assertNotIn("no starts", views.render_questions(self.conn, "HaiveQueen"))
         self.check(started=0, now=datetime(2026, 10, 29, 11, 0))
         self.assertEqual(runtime.list_questions(self.conn, "HaiveQueen", "open")[0]["id"], qid)

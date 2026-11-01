@@ -110,19 +110,43 @@ class TestStubbedBranches(unittest.TestCase):
         with mock.patch("os.kill", return_value=None):
             self.assertTrue(osplat._posix_process_alive(9))
 
-    def test_windows_kill_uses_taskkill(self):
-        done = subprocess.CompletedProcess([], 0, "", "")
+    def test_windows_kill_ends_the_tree_through_the_api(self):
+        """On Windows the process and its descendants are ended children first, without starting any helper program."""
+        ended = []
+        rows = [(42, 1, "a.exe"), (43, 42, "b.exe"), (44, 43, "c.exe"), (50, 1, "other.exe")]
         with mock.patch.object(sys, "platform", "win32"), \
-                mock.patch("subprocess.run", return_value=done) as run:
+                mock.patch.object(osplat, "_win_snapshot", return_value=rows), \
+                mock.patch.object(osplat, "_win_process_creation", return_value=100), \
+                mock.patch.object(osplat, "_win_terminate", side_effect=ended.append), \
+                mock.patch.object(osplat, "process_alive", return_value=False), \
+                mock.patch("subprocess.run", side_effect=AssertionError("a helper program was started")), \
+                mock.patch("subprocess.Popen", side_effect=AssertionError("a helper program was started")):
             self.assertTrue(osplat.kill_process_tree(42))
-            self.assertEqual(run.call_args[0][0], ["taskkill", "/PID", "42", "/T", "/F"])
-        failed = subprocess.CompletedProcess([], 128, "", "")
+        self.assertEqual(ended, [44, 43, 42])
+
+    def test_windows_kill_spares_a_process_older_than_its_recorded_parent(self):
+        """A process whose parent id was reused (it was created before that parent) is not a child and stays alive."""
+        ended = []
+        born = {42: 200, 43: 100}   # 43 names 42 as its parent but is older than 42: a stranger
         with mock.patch.object(sys, "platform", "win32"), \
-                mock.patch("subprocess.run", return_value=failed), \
-                mock.patch.object(osplat, "process_alive", return_value=True):
+                mock.patch.object(osplat, "_win_snapshot", return_value=[(42, 1, "a.exe"), (43, 42, "b.exe")]), \
+                mock.patch.object(osplat, "_win_process_creation", side_effect=lambda pid: born[pid]), \
+                mock.patch.object(osplat, "_win_terminate", side_effect=ended.append), \
+                mock.patch.object(osplat, "process_alive", return_value=False):
+            self.assertTrue(osplat.kill_process_tree(42))
+        self.assertEqual(ended, [42])
+
+    def test_windows_kill_reports_a_process_that_stays_alive_and_api_errors(self):
+        """False when the process is still there after the waiting time, and False (never an exception) when the snapshot fails."""
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(osplat, "_win_snapshot", return_value=[(42, 1, "a.exe")]), \
+                mock.patch.object(osplat, "_win_process_creation", return_value=100), \
+                mock.patch.object(osplat, "_win_terminate"), \
+                mock.patch.object(osplat, "process_alive", return_value=True), \
+                mock.patch.object(osplat.time, "sleep"), \
+                mock.patch.object(osplat.time, "monotonic", side_effect=[0, 1, 99, 99, 99, 99]):
             self.assertFalse(osplat.kill_process_tree(42))
-        with mock.patch.object(sys, "platform", "win32"), \
-                mock.patch("subprocess.run", side_effect=OSError):
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.object(osplat, "_win_snapshot", side_effect=OSError):
             self.assertFalse(osplat.kill_process_tree(42))
 
     def test_posix_kill_signals_group(self):
@@ -150,9 +174,9 @@ class TestStubbedBranches(unittest.TestCase):
         self.assertEqual(sent, [sg.SIGTERM, getattr(sg, "SIGKILL", 9)])
 
     def test_windows_process_list_parse(self):
-        out = '"System","4","Services","0","10 K"\n"Python.EXE","123","Console","1","9 K"\n"python.exe","7","Console","1","9 K"\n'
-        done = subprocess.CompletedProcess([], 0, out, "")
-        with mock.patch.object(sys, "platform", "win32"), mock.patch("subprocess.run", return_value=done):
+        """On Windows list_processes filters the (pid, name) rows of the process snapshot by name, case-insensitively."""
+        rows = [(4, "System"), (123, "Python.EXE"), (7, "python.exe")]
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.object(osplat, "_win_process_list", return_value=rows):
             self.assertEqual(osplat.list_processes(["PYTHON.exe"]), [(123, "Python.EXE"), (7, "python.exe")])
             self.assertEqual(osplat.count_processes(["python.exe", "system"]), 3)
             self.assertEqual(osplat.list_processes([]), [])
@@ -195,6 +219,14 @@ class TestRealWindowsOrLinux(unittest.TestCase):
         pids = [p for p, _ in osplat.list_processes([name.upper()])]
         self.assertIn(os.getpid(), pids)
         self.assertGreaterEqual(osplat.count_processes([name]), 1)
+
+    @unittest.skipUnless(osplat.is_windows(), "Windows API")
+    def test_process_list_starts_no_helper_program(self):
+        """The Windows process list uses the API directly: a helper program would open a console window on every call of a windowless process."""
+        import os
+        with mock.patch.object(subprocess, "Popen", side_effect=AssertionError("a helper program was started")):
+            rows = osplat._win_process_list()
+        self.assertIn(os.getpid(), [pid for pid, _ in rows])
 
 
 class TestNetworkPath(unittest.TestCase):

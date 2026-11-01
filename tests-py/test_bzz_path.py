@@ -1,4 +1,4 @@
-"""Tests of the PATH handling for agent processes: the folder of the `bzz` console script is put in front of PATH (no real models, no panes)."""
+"""Tests of the PATH handling for agent processes: the folder of the `bzz` console script is put in front of PATH (no real models)."""
 import os
 import stat
 import sys
@@ -15,11 +15,10 @@ from bzztest import REL, RoundCase, runtime  # noqa: E402
 from haivequeen import agent_runner as ar  # noqa: E402
 from haivequeen import loop  # noqa: E402
 from haivequeen import platform as osplat  # noqa: E402
-from haivequeen.terminal.headless import Headless  # noqa: E402
 
 
 class BzzPathTest(unittest.TestCase):
-    """with_bzz_on_path and child_env."""
+    """with_bzz_on_path."""
 
     def setUp(self):
         """Create a scripts folder with a bzz program and an empty folder."""
@@ -60,14 +59,6 @@ class BzzPathTest(unittest.TestCase):
         ar.with_bzz_on_path(env, [self.scripts])
         self.assertEqual(env["PATH"], str(self.scripts) + os.pathsep)
 
-    def test_child_env(self):
-        """child_env starts PATH with the scripts folder and keeps PYTHONPATH."""
-        with mock.patch.object(ar, "bzz_script_dirs", return_value=[self.scripts]), \
-                mock.patch.dict(os.environ, {"PATH": os.pathsep.join(["/a", "/b"])}):
-            env = ar.child_env()
-        self.assertEqual(env["PATH"].split(os.pathsep)[0], str(self.scripts))
-        self.assertIn(str(ar.TOOL_ROOT), env["PYTHONPATH"])
-
     def test_candidates_include_python_scripts(self):
         """The folders looked at include the Scripts folder next to the running Python."""
         self.assertIn(Path(sys.executable).parent / "Scripts", ar.bzz_script_dirs())
@@ -88,7 +79,7 @@ for ev in ({"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens
 
 
 class AgentFindsOrchTest(RoundCase):
-    """A pane started by loop.launch_agent (headless backend, fake CLI) finds `bzz` although its folder is not on PATH."""
+    """An agent started by loop.launch_headless (fake CLI) finds `bzz` although its folder is not on PATH."""
 
     def setUp(self):
         """Venv without pip as the running Python (its Scripts folder holds a fake bzz), fake CLI as provider, PATH without any bzz."""
@@ -125,13 +116,13 @@ class AgentFindsOrchTest(RoundCase):
         (cfg / "config.toml").write_text(
             "[[providers]]\nname = 'claude'\ncommand = '%s'\nargs = []\n[providers.classes.medium]\nmodel = 'claude-sonnet-5-5'\neffort = 'medium'\n"
             % str(cmd).replace(chr(92), "/"), encoding="utf-8")
-        self.term = Headless(self.base / "panes")
 
     def tearDown(self):
-        """Close leftover panes and restore PATH and the fake-CLI variables."""
-        for p in self.term.list_panes("Orchestrator"):
-            if p.alive:
-                self.term.close_pane(p.id)
+        """End the runner this test started, then restore PATH and the fake-CLI variables."""
+        for a in runtime.list_agents(self.conn, "testproj", "all"):
+            if a.get("pid") and a["pid"] != os.getpid() and osplat.process_alive(a["pid"]):
+                osplat.kill_process_tree(a["pid"])
+                time.sleep(1)
         for k, v in self.saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -140,14 +131,15 @@ class AgentFindsOrchTest(RoundCase):
         super().tearDown()
 
     def test_pane_agent_finds_orch(self):
-        """The agent started through launch_agent finds the fake bzz in the interpreter's Scripts folder and `bzz note` runs."""
+        """The agent started through launch_headless finds the fake bzz in the interpreter's Scripts folder and `bzz note` runs."""
         prompt = self.base / "prompt.md"
         prompt.write_text("# Header\nTASK\nDo the demo task now\n", encoding="utf-8")
         runtime.upsert_agent(self.conn, "testproj", "A-1", {"status": "starting", "class": "medium", "person": "Max", "color": "4FA8FF"})
         spec = {"name": "A-1", "provider": "claude", "protocol": "claude", "plan": REL, "package": "P1", "phase": "work", "cwd": str(self.repo),
-                "prompt_file": str(prompt), "person": "Max", "model_long": "fake"}
-        with mock.patch.object(osplat, "python_executable", return_value=self.python), mock.patch.dict(os.environ, {"BZZ_NO_HEADER": "1"}):
-            loop.launch_agent(self.env(), self.term, "Orchestrator", spec, settle=0, poll=0.2, tries=150)
+                "prompt_file": str(prompt)}
+        self.env().run_dir("A-1").mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(osplat, "python_executable", return_value=self.python):
+            loop.launch_headless(self.env(), spec)
             deadline = time.time() + 60
             while time.time() < deadline and not self.mark.is_file():
                 time.sleep(0.2)

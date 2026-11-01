@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from haivequeen import dashboard, db, views  # noqa: E402
+from haivequeen import db, overview, views  # noqa: E402
 
 NOW = datetime(2026, 10, 29, 12, 0, 0)
 SYS = {"cores": 12, "free_mb": 8192, "total_mb": 16384, "host": "h1", "compiler_count": None}
@@ -31,9 +31,15 @@ class SelfhostDashboardTest(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
-    def render(self, color=False):
-        """Render the whole dashboard."""
-        return dashboard.render(self.conn, width=100, height=60, now=NOW, cfg={"buildJobs": 1}, sysinfo=dict(SYS), color=color)
+    def data(self):
+        """The collected overview data."""
+        return overview.collect(self.conn, None, NOW, {"buildJobs": 1}, dict(SYS))
+
+    def line(self):
+        """The self-update line as one text and its parts, or ("", []) without a self-update."""
+        su = self.data()["selfupdate"]
+        parts = overview.self_update_line(su) if su else []
+        return "".join(t for t, _ in parts), parts
 
     def add_update(self, result, old="1111111aaaa", new="2222222bbbb", ended="2026-10-29T11:02:00"):
         """Create the stub table if needed and insert one self-update row."""
@@ -44,40 +50,40 @@ class SelfhostDashboardTest(unittest.TestCase):
         self.conn.commit()
 
     def test_missing_table_is_tolerated(self):
-        """Without the table self_updates the dashboard renders and shows no self-update line."""
+        """Without the table self_updates the overview collects and has no self-update line."""
         self.assertIsNone(db.last_self_update(self.conn))
-        self.assertNotIn("self-update", self.render())
+        self.assertEqual(self.line()[0], "")
 
     def test_empty_table_shows_no_line(self):
         """An empty table gives no line either."""
         self.conn.execute(STUB_TABLE)
-        self.assertNotIn("self-update", self.render())
+        self.assertEqual(self.line()[0], "")
 
     def test_last_update_ok(self):
         """The newest row is shown with result, end time and short new commit; older rows are not."""
         self.add_update("failed", new="9999999zzzz")
         self.add_update("ok")
-        t = self.render()
+        t = self.line()[0]
         self.assertIn("self-update ok  29.10. 11:02  2222222", t)
         self.assertNotIn("9999999", t)
 
     def test_rollback_names_old_commit(self):
         """A rollback shows the commit it went back to."""
         self.add_update("rollback")
-        self.assertIn("self-update rollback  29.10. 11:02  2222222 (back to 1111111)", self.render())
+        self.assertIn("self-update rollback  29.10. 11:02  2222222 (back to 1111111)", self.line()[0])
 
     def test_result_colours(self):
-        """ok is green, rollback yellow, failed red (ANSI codes of the dashboard colours)."""
-        for result, code in (("ok", "92"), ("rollback", "93"), ("failed", "91")):
+        """ok is green, rollback yellow, failed red."""
+        for result, colour in (("ok", "green"), ("rollback", "yellow"), ("failed", "red")):
             self.conn.execute("DROP TABLE IF EXISTS self_updates")
             self.add_update(result)
-            self.assertIn("\x1b[%sm%s" % (code, result), self.render(color=True))
+            self.assertIn((result, colour), self.line()[1])
 
     def test_project_visible_with_colour(self):
-        """HaiveQueen shows in the plans section in its own colour (magenta = 95), ODP in cyan (96)."""
-        t = self.render(color=True)
-        self.assertIn("\x1b[95mHaiveQueen", t)
-        self.assertIn("\x1b[96mODP", t)
+        """HaiveQueen is collected with its own colour (magenta), ODP with cyan."""
+        d = self.data()
+        self.assertEqual((d["colours"]["HaiveQueen"], d["colours"]["ODP"]), ("magenta", "cyan"))
+        self.assertEqual(d["projects"], ["ODP", "HaiveQueen"])
 
     def test_k2_views_are_written(self):
         """A workspace laid out as in the self-hosting plan gets the three views at the configured paths."""

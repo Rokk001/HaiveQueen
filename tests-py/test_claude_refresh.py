@@ -103,6 +103,56 @@ class ClaudeRefreshTests(RoundCase):
         self.assertFalse(self.refresh(run=other))
         other.assert_not_called()
 
+    # A provider that could not be reached is checked only every ten minutes.
+    def test_unreachable_provider_is_checked_every_ten_minutes(self):
+        """After a failed check, a retry five minutes later is throttled; after a successful check the one minute interval applies."""
+        self.seed()
+        failing = mock.Mock(side_effect=subprocess.TimeoutExpired('claude', 20))
+        self.assertFalse(self.refresh(run=failing, force=True))
+        self.assertTrue(usage.claude_refresh_failed(self.conn))
+        runtime.kv_set(self.conn, '*', usage.CLAUDE_CHECK_KEY, (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat())
+        retry = mock.Mock(return_value=self.response())
+        self.assertFalse(self.refresh(run=retry))
+        retry.assert_not_called()
+        runtime.kv_set(self.conn, '*', usage.CLAUDE_CHECK_KEY, (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat())
+        self.assertTrue(self.refresh(run=retry))
+        retry.assert_called_once()
+        runtime.kv_set(self.conn, '*', usage.CLAUDE_CHECK_KEY, (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat())
+        again = mock.Mock(return_value=self.response())
+        self.assertTrue(self.refresh(run=again))   # reachable again: one minute interval
+        again.assert_called_once()
+
+    # The ten minute rule is the same for every model provider.
+    def test_usage_interval_depends_only_on_reachability(self):
+        """A reachable provider is asked every minute, an unreachable one every ten minutes."""
+        self.assertEqual(usage.usage_interval(False), usage.USAGE_INTERVAL)
+        self.assertEqual(usage.usage_interval(True), usage.USAGE_UNREACHABLE_INTERVAL)
+
+    # Codex is read less often while it cannot be reached.
+    def test_codex_refresh_follows_reachability(self):
+        """A read that found no window throttles for ten minutes; once windows are found the one minute interval applies."""
+        import tempfile
+        from pathlib import Path
+        empty = {'five_hour': None, 'seven_day': None}
+        window = {'five_hour': {'pct': 10, 'at': 1}, 'seven_day': None}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(usage, 'get_codex_usage', return_value=empty) as read:
+            usage._codex_refresh.clear()
+            usage._codex_unreachable.clear()
+            usage.refresh_codex_usage(self.conn, folder)
+            self.assertEqual(read.call_count, 1)
+            usage._codex_refresh[str(Path(folder))] -= 120
+            usage.refresh_codex_usage(self.conn, folder)
+            self.assertEqual(read.call_count, 1)
+            usage._codex_refresh[str(Path(folder))] -= 600
+            read.return_value = window
+            self.assertTrue(usage.refresh_codex_usage(self.conn, folder))
+            self.assertEqual(read.call_count, 2)
+            usage._codex_refresh[str(Path(folder))] -= 120
+            usage.refresh_codex_usage(self.conn, folder)
+            self.assertEqual(read.call_count, 3)
+            usage._codex_refresh.clear()
+            usage._codex_unreachable.clear()
+
     # Isolation prohibits implicit real CLI execution.
     def test_test_runtime_never_starts_cli_without_injector(self):
         """The normal test environment cannot reach auth or network through refresh."""

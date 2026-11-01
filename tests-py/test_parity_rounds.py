@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 from bzztest import REL, RoundCase, runtime
-from haivequeen import agent_runner, config
+from haivequeen import config
 from haivequeen import scheduler as sch
 
 
@@ -36,17 +36,6 @@ class ParityRoundsTest(RoundCase):
         """The medium class of Claude is Sonnet at effort medium."""
         cm = sch.class_model(self.env().providers, "claude", "medium")
         self.assertEqual((cm["Model"], cm["Effort"]), ("claude-sonnet-5-5", "medium"))
-
-    def test_pane_start_error_waits_and_exits_zero(self):
-        """A pane wrapper whose settings cannot be read prints the error, waits 30 s before closing and still exits 0."""
-        args = mock.Mock(project="testproj", pane_name="x")
-        with mock.patch.object(config, "load_config", side_effect=ValueError("bad settings")), \
-                mock.patch.object(agent_runner.time, "sleep") as sleep, mock.patch("builtins.print") as out:
-            code = agent_runner.pane_wrap(args, [])
-        self.assertEqual(code, 0)
-        sleep.assert_called_once_with(30)
-        printed = " ".join(str(c.args[0]) for c in out.call_args_list)
-        self.assertIn("pane start error", printed)
 
     def test_project_file_valid_and_bad_escape_rejected(self):
         """The written project file loads; a file with a bad escape sequence (single backslash path) is rejected by the parser."""

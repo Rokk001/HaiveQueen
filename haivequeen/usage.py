@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 import zlib
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from haivequeen import platform as osplat
@@ -730,15 +730,32 @@ def claude_refresh_failed(conn, project=GLOBAL_PROJECT):
     return bool(_claude_snapshot(conn, project).get('refresh_error'))
 
 
+USAGE_INTERVAL = 60              # seconds between usage checks of a model provider
+USAGE_UNREACHABLE_INTERVAL = 600   # seconds between usage checks of a provider whose last check failed (not reachable)
+
+
+# Choose how often the usage status of a model provider is asked for.
+def usage_interval(unreachable) -> int:
+    """Seconds between two usage checks of a provider: USAGE_UNREACHABLE_INTERVAL when its last check failed, else USAGE_INTERVAL.
+
+    The rule is the same for every model provider (Claude, Codex, ...)."""
+    return USAGE_UNREACHABLE_INTERVAL if unreachable else USAGE_INTERVAL
+
+
 # Fetch bounded metadata from the configured CLI without starting a model turn.
-def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=60):
-    """Refresh global Claude quota; return True only for a verified new snapshot."""
+def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=None):
+    """Refresh global Claude quota; return True only for a verified new snapshot.
+
+    `min_interval` is the shortest time between two checks; by default usage_interval decides: one minute, ten minutes after a failed check
+    (Claude not reachable)."""
     if run is None and (os.environ.get('BZZ_DATA_DIR') or os.environ.get('BZZ_RUNTIME_OVERRIDE')):
         return False
     provider = next((p for p in providers if (p.get('limit', {}).get('source') if isinstance(p.get('limit'), dict) else p.get('limit')) == 'claude'), None)
     if provider is None:
         return False
     old = _claude_snapshot(conn)
+    if min_interval is None:
+        min_interval = usage_interval(bool(old.get('refresh_error')))
     now = datetime.now(timezone.utc)
     try:
         checked = datetime.fromisoformat(runtime.kv_get(conn, GLOBAL_PROJECT, CLAUDE_CHECK_KEY) or old.get('checked_at') or '').astimezone(timezone.utc)
@@ -895,17 +912,21 @@ def get_codex_usage(codex_dir=None) -> dict:
 
 CODEX_USAGE_KEY = "usage-codex"
 _codex_refresh = {}   # codex folder -> time of the last read, so the logs are read at most once per interval
+_codex_unreachable = {}   # codex folder -> whether the last read found no usage window
 
 
-def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min_interval: float = 60.0, force: bool = False) -> bool:
+def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min_interval: float = None, force: bool = False) -> bool:
     """Write Codex's 5h/7d windows from the session logs into kv (key usage-codex, same form as usage-claude); True when written.
 
-    Cheap: the logs are read at most once per `min_interval` seconds per folder. Nothing is written when no window is known
+    Cheap: the logs are read at most once per `min_interval` seconds per folder; by default usage_interval decides (one minute,
+    ten minutes after a read that found no window: Codex not reachable). Nothing is written when no window is known
     (the old value stays). Without an explicit folder it does nothing in a test runtime (BZZ_DATA_DIR set). Only reads ~/.codex.
     """
     if codex_dir is None and os.environ.get("BZZ_DATA_DIR"):
         return False
     root = str(Path(codex_dir) if codex_dir else codex_root())
+    if min_interval is None:
+        min_interval = usage_interval(_codex_unreachable.get(root, False))
     nowt = time.monotonic()
     last = _codex_refresh.get(root)
     if not force and last is not None and nowt - last < min_interval:
@@ -919,6 +940,7 @@ def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min
         if w:
             value[key] = {"utilization": w["pct"] / 100.0, "resetsAt": w["at"]}
             found = True
+    _codex_unreachable[root] = not found
     if not found:
         return False
     runtime.kv_set(conn, project, CODEX_USAGE_KEY, json.dumps(value))

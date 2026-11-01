@@ -213,7 +213,7 @@ def repair_stale_agents(env, now: datetime = None, alive=None) -> None:
             if started is not None and (now - started).total_seconds() > 120:
                 why = "pane never started (no runner process)"
         if why:
-            fields = {"status": "failed", "ended_at": db.now(), "last_line": why, "paneClosed": True, "interrupted": interrupt.VANISHED}
+            fields = {"status": "failed", "ended_at": db.now(), "last_line": why, "interrupted": interrupt.VANISHED}
             if a.get("pid") and agent_process.pid_reused(a):
                 fields.update({"previousPid": a["pid"], "pid": None})
             env.update_agent(a["name"], fields)
@@ -223,7 +223,7 @@ def repair_stale_agents(env, now: datetime = None, alive=None) -> None:
 # ---- final answers of verify agents ----
 
 COUNT_RE = re.compile(r"Offene Anforderungen[^:\r\n]*:\s*(\d+)")   # the count line of a verify answer
-RUNNER_FILES = {"final.txt", "prompt.md", "rules.md", "milestones.txt", "stderr.txt", "build-samples.txt", "pane.pid", "pane.json"}   # files the runner writes itself, never a report
+RUNNER_FILES = {"final.txt", "prompt.md", "rules.md", "milestones.txt", "stderr.txt", "build-samples.txt", "runner.log", "runner-error.txt"}   # files the runner writes itself, never a report
 
 
 def read_final(env, name: str) -> str:

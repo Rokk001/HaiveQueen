@@ -272,6 +272,51 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn(str(self.linked), result['removed'])
         self.assertTrue(self.linked.exists())
 
+    # Without any finished branch nothing can be removed, so the cleanup must not touch the network.
+    def test_no_network_access_when_nothing_can_be_removed(self):
+        """No integrated queue row: no fetch and no ls-remote, and the worktree is still reported as kept."""
+        self.queue = []
+        with mock.patch.object(worktrees, '_git', wraps=worktrees._git) as git:
+            result = worktrees._prune_with_checker(self.env, lambda path: False, True)
+        commands = [call.args[1] for call in git.call_args_list if len(call.args) > 1]
+        self.assertNotIn('fetch', commands)
+        self.assertNotIn('ls-remote', commands)
+        self.assertTrue(any(item['path'] == str(self.linked) for item in result['kept']))
+
+    # Worktrees without integrated queue evidence are rejected without asking Git for their branch.
+    def test_no_git_branch_lookup_without_queue_evidence(self):
+        """A worktree with no integrated queue row is kept before any `symbolic-ref` call; an integrated one still gets its branch verified."""
+        entry = next(item for item in worktrees.list_worktrees(self.repo) if Path(item['worktree']) == self.linked)
+        self.queue = []
+        with mock.patch.object(worktrees, '_git', wraps=worktrees._git) as git:
+            self.assertTrue(worktrees._candidate_reason(self.env, entry, False, self.queue))
+        self.assertNotIn('symbolic-ref', [call.args[1] for call in git.call_args_list if len(call.args) > 1])
+        self.queue = [{'id': 1, 'branch': 'integrated', 'status': 'integrated', 'tip': self.git(self.linked, 'rev-parse', 'HEAD').stdout.strip()}]
+        with mock.patch.object(worktrees, '_git', wraps=worktrees._git) as git:
+            worktrees._candidate_reason(self.env, entry, False, self.queue)
+        self.assertIn('symbolic-ref', [call.args[1] for call in git.call_args_list if len(call.args) > 1])
+
+    # A finished, integrated branch still needs the verified remote state.
+    def test_network_is_used_when_a_branch_is_integrated(self):
+        """An integrated queue row keeps the fetch and ls-remote verification before any removal."""
+        with mock.patch.object(worktrees, '_git', wraps=worktrees._git) as git:
+            worktrees._prune_with_checker(self.env, lambda path: False, True)
+        commands = [call.args[1] for call in git.call_args_list if len(call.args) > 1]
+        self.assertIn('fetch', commands)
+        self.assertIn('ls-remote', commands)
+
+    # The queue alone decides whether a worktree is a removal candidate.
+    def test_may_be_removable_follows_the_newest_queue_row(self):
+        """Only a newest 'integrated' row without open rows makes a worktree a candidate."""
+        record = {'branch': 'b'}
+        row = lambda id, status: {'id': id, 'branch': 'b', 'status': status}
+        self.assertTrue(worktrees._may_be_removable(record, [row(1, 'integrated')]))
+        self.assertFalse(worktrees._may_be_removable(record, []))
+        self.assertFalse(worktrees._may_be_removable({}, [row(1, 'integrated')]))
+        self.assertFalse(worktrees._may_be_removable(record, [row(1, 'integrated'), row(2, 'withdrawn')]))
+        for state in ('ready', 'in_run', 'blocked'):
+            self.assertFalse(worktrees._may_be_removable(record, [row(1, 'integrated'), row(2, state)]))
+
     # Completion of another branch cannot authorize this branch's removal.
     def test_other_branch_completion_is_not_evidence(self):
         """Require an exact branch match even when another completed tip is identical."""

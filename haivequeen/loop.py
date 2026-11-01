@@ -2,7 +2,7 @@
 
 Ports round.ps1 and round-loop.ps1 onto the database. A round syncs the plans of every project, orders the projects (priority first, ties by
 the oldest waiting package), lets the routine decide what needs no language model, asks the brain only for events that need judgement,
-validates every action (rules 11 and others) and starts agents through the terminal interface. A pause or drain (D8) skips the starts,
+validates every action (rules 11 and others) and starts agents as hidden background processes. A pause (D8) skips the starts,
 a lock starts a triage agent (D5), and at the start running agents are re-attached by process id.
 The agent process itself is `haivequeen.agent_runner` (see docs/S13-S14-INTERFACE.md).
 """
@@ -20,12 +20,11 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import config, db, events, export, faults, header, hivelayout, inbox, reattach, routine, runstate, runtime, triage, usage, views
+from . import config, db, events, export, faults, inbox, reattach, routine, runstate, runtime, triage, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
 from .scheduler import ACTIVE, norm_plan
-from .terminal import TerminalError, get_terminal, pane_title
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent
 PHASES = ("work", "verify", "release", "integrate")
@@ -59,11 +58,6 @@ def loop_running() -> int:
     return pid if osplat.process_alive(pid) and pid != os.getpid() else 0
 
 
-def pane_lock_file() -> Path:
-    """Path of the pane command lock (the process id of the process that sends pane commands right now)."""
-    return osplat.data_dir() / "pane.lock"
-
-
 def start_pending_file() -> Path:
     """Path of the marker that a window start is under way (the loop of that window has not taken its lock yet)."""
     return osplat.data_dir() / "start.pending"
@@ -75,6 +69,11 @@ def start_pending(max_age: float = 120.0) -> bool:
         return time.time() - start_pending_file().stat().st_mtime < max_age
     except OSError:
         return False
+
+
+def start_lock_file() -> Path:
+    """Path of the start lock (the process id of the `bzz start` that is starting the loop right now)."""
+    return osplat.data_dir() / "start.lock"
 
 
 def _take_pid_lock(path: Path, own_ok: bool, wait: float = 5.0) -> int:
@@ -112,159 +111,11 @@ def _take_pid_lock(path: Path, own_ok: bool, wait: float = 5.0) -> int:
     return holder
 
 
-@contextmanager
-def pane_lock(timeout: float = 120.0, poll: float = 0.1):
-    """Serialise pane commands between processes: only the holder of pane.lock opens or splits a pane (loop round, `bzz start`).
-
-    Waits up to `timeout` seconds for another process to finish its pane command, then raises TimeoutError.
-    """
-    deadline = time.monotonic() + timeout
-    while True:
-        holder = _take_pid_lock(pane_lock_file(), own_ok=False)
-        if holder == 0:
-            break
-        if time.monotonic() >= deadline:
-            raise TimeoutError("pane commands are blocked by process %s" % holder)
-        time.sleep(poll)
-    try:
-        yield
-    finally:
-        try:
-            pane_lock_file().unlink()
-        except OSError:
-            pass
-
-
-def hold_pane_lock_until_exit(timeout: float = 120.0, poll: float = 0.1) -> bool:
-    """Take pane.lock for the calling process and keep it: it counts as released when this process has exited (as in the first version).
-
-    A pane that closes itself thus never overlaps a split or an open in the same window. Returns False when the lock stayed busy for `timeout` seconds.
-    """
-    deadline = time.monotonic() + timeout
-    while _take_pid_lock(pane_lock_file(), own_ok=True) != 0:
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(poll)
-    return True
-
-
-def first_split_target(panes) -> str:
-    """Pane id that the first agent pane splits when no agent pane is open: the dashboard pane, else the Beekeeper pane, else None."""
-    for marker in ("job: Dashboard", "| BEEKEEPER |", "| QUEEN |"):
-        for pane in panes:
-            if marker in pane.title:
-                return pane.id
-    return None
-
-
-def is_beekeeper_title(title: str) -> bool:
-    """True for the title of the loop pane; panes opened before the rename carry the old QUEEN title and count as well."""
-    return "| all projects | BEEKEEPER |" in title or "| all projects | QUEEN |" in title
-
-
-def queen_pane_title(model: str, test: bool) -> str:
-    """Fixed title of the pane of the loop (the Beekeeper); is_beekeeper_title also accepts the old QUEEN title of panes opened before the rename."""
-    return pane_title("all projects", "BEEKEEPER", "Beekeeper", model, test)
-
-
-def close_leftover_panes(term, window: str) -> list:
-    """Close the Beekeeper and Overview panes a previous start left in `window` (the loop ended, the dashboard never does) and return their ids.
-    Without this a new start opens a second tab next to the old one. Agent panes are never touched: only these two fixed titles match."""
-    closed = []
-    for p in term.list_panes(window):
-        if p.alive and (is_beekeeper_title(p.title) or "| all projects | Overview |" in p.title):
-            term.close_pane(p.id)
-            closed.append(p.id)
-    return closed
-
-
-def close_idle_hive_panes(conn, term, window: str) -> list:
-    """Close the Hive and Apiary head panes in which no agent runs and return the ids, so a start builds the whole display again in the right order.
-    A pane that holds a running or starting agent stays, and with it the head of its Apiary. The panes of living Hives are opened again by the next round."""
-    busy = {a.get("pane_id") for a in runtime.list_agents(conn, None, "active") if a.get("status") in ("running", "starting") and a.get("pane_id")}
-    panes = [p for p in term.list_panes(window) if p.alive]
-    kept = {p.title.split(" | ")[1] for p in panes if is_hive_title(p.title) and p.id in busy}
-    closed = []
-    for p in panes:
-        if (is_hive_title(p.title) and p.id not in busy) or (is_apiary_title(p.title) and p.title.split(" | ")[1] not in kept):
-            term.close_pane(p.id)
-            closed.append(p.id)
-    return closed
-
-
-def open_session_panes(term, window: str, dash: list, head=None) -> list:
-    """Open the dashboard pane running `dash` and, in a fresh window, the first Apiary head to its right; return the pane ids. The caller holds pane.lock.
-    The Beekeeper has no pane: the loop runs as a detached process and the dashboard is the only overview. Old Beekeeper and Overview panes go first.
-    Panes of running agents that are still open keep their tab and the dashboard joins it: a new tab would split the one window in two.
-    `head` is (title, command, name) of the first Apiary head: in a fresh window it is split off the dashboard to the right, so the dashboard
-    stands in the left column and the Apiary block fills the right side."""
-    close_leftover_panes(term, window)
-    stay = [p for p in term.list_panes(window) if p.alive]
-    title = pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime())
-    if stay:
-        return [term.split_pane(window, title, "white", dash, "horizontal", 0.5, stay[0].id, "dashboard")]
-    panes = [term.open_window(window, title, dash, "white", "dashboard")]
-    if head is not None:
-        panes.append(term.split_pane(window, head[0], "white", head[1], "horizontal", APIARY_SIDE_SHARE, panes[0], head[2]))
-    return panes
-
-
-def close_session_panes(conn, term, window: str) -> list:
-    """Close the Overview pane, every agent pane whose agent has ended and, last, the Beekeeper pane of `window`; return the ids.
-    A pane of an agent that still runs is never closed."""
-    closed, queen = [], []
-    for p in term.list_panes(window):
-        if not p.alive:
-            continue
-        parts = p.title.split(" | ")
-        if "| all projects | Overview |" in p.title:
-            term.close_pane(p.id)
-            closed.append(p.id)
-        elif is_beekeeper_title(p.title):
-            queen.append(p)
-        elif is_apiary_title(p.title):   # the head pane of an Apiary goes with its last living Hive
-            if not conn.execute("SELECT 1 FROM hives WHERE project=? AND state!='done'", (parts[1],)).fetchone():
-                term.close_pane(p.id)
-                closed.append(p.id)
-        elif is_hive_title(p.title):   # the pane of a living Hive stays, one of a finished Hive goes
-            row = db.rows(conn, "SELECT plan_path,state FROM hives WHERE project=?", (parts[1],))
-            row = [r for r in row if Path(r["plan_path"]).stem == parts[3][len("job: "):]]
-            if not row or all(r["state"] == "done" for r in row):
-                term.close_pane(p.id)
-                closed.append(p.id)
-        elif len(parts) >= 4 and parts[2].startswith("Agent ") and parts[3].startswith("job: "):
-            agent = runtime.get_agent(conn, parts[1], parts[3][len("job: "):])
-            if agent is None or agent["status"] not in runtime.ACTIVE_STATUSES:
-                term.close_pane(p.id)
-                closed.append(p.id)
-    for p in queen:   # the Queen pane may be the one this process runs in: it goes last
-        term.close_pane(p.id)
-        closed.append(p.id)
-    return closed
-
-
-def close_panes_after_stop(conn) -> list:
-    """Close the session panes of the configured window (see close_session_panes); a terminal error is ignored, it never blocks a stop."""
-    from . import config
-    try:
-        settings = sch.build_settings(config.load_config(), {})
-        term = get_terminal(settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-        with pane_lock():   # no pane opens, splits or closes itself while these panes go (as the mutex of the first version)
-            return close_session_panes(conn, term, settings.get("window", "HaiveQueen"))
-    except Exception:
-        return []
-
-
-def is_test_runtime() -> bool:
-    """True when the process runs with a test runtime (BZZ_RUNTIME_OVERRIDE set)."""
-    return bool(os.environ.get("BZZ_RUNTIME_OVERRIDE"))
-
-
 # ---- loop state (kv key loop-state, machine wide) ----
 
-# Write the loop state for the dashboard and pane header.
+# Write the loop state for the dashboard.
 def write_state(conn, status: str, since: datetime, next_at) -> None:
-    """Write the loop state for the dashboard and pane header."""
+    """Write the loop state for the dashboard."""
     runtime.kv_set(conn, sch.GLOBAL, "loop-state", json.dumps({
         "status": status, "since": since.isoformat(timespec="seconds"),
         "nextAt": next_at.isoformat(timespec="seconds") if next_at else None}))
@@ -339,7 +190,7 @@ def agent_identity(conn, excluded_names=()) -> dict:
     return {"Person": n, "Color": c}
 
 
-# ---- starting an agent through the terminal ----
+# ---- starting an agent as a hidden background process ----
 
 def forward_env_args() -> list:
     """`--env NAME=VALUE` arguments for the runner: the test and folder overrides the loop was started with."""
@@ -361,293 +212,18 @@ def runner_argv(env, spec: dict) -> list:
     options = ["--project", env.name, "--name", spec["name"], "--provider", spec["provider"], "--protocol", spec["protocol"],
                "--plan", spec["plan"], "--package", spec["package"], "--phase", spec["phase"], "--cwd", spec["cwd"],
                "--prompt-file", spec["prompt_file"], "--runs-dir", str(env.run_dir(spec["name"]).parent)]
-    # Windows Terminal drops an empty argument (a Queen has no package), which made the runner fail at once; the runner defaults them, so they are left out.
+    # An empty argument (a Queen has no package) is left out; the runner defaults it.
     pairs = [options[i:i + 2] for i in range(0, len(options), 2)]
-    return [osplat.python_executable(), "-c", boot, str(TOOLS_DIR), "--wrap"] + [a for pair in pairs if pair[1] != "" for a in pair] + forward_env_args()
+    return [osplat.python_executable(), "-c", boot, str(TOOLS_DIR)] + [a for pair in pairs if pair[1] != "" for a in pair] + forward_env_args()
 
 
-def alive_agent_pane(row: dict, alive=None) -> bool:
-    """True when an agent row has a pane that certainly exists now: the runner process is alive and the agent runs (a pane of an ended agent is about to close)."""
-    alive = alive or osplat.process_alive
-    return bool(row.get("pane_id") and not row.get("paneClosed") and row.get("status") == "running" and row.get("pid") and alive(row["pid"]))
-
-
-def choose_slot(rows: list, name: str, min_cols: int = 40, min_rows: int = 24, alive=None) -> dict:
-    """Where the next agent pane goes: split the widest open agent pane side by side while both halves stay at least `min_cols` wide, else the tallest
-    one top/bottom, else the widest anyway. Returns {target (pane id or None), direction, cols, rows, half (the split agent row or None)}."""
-    open_rows = [r for r in rows if r.get("name") != name and alive_agent_pane(r, alive)]
-    if not open_rows:
-        return {"target": None, "direction": "horizontal", "cols": 140, "rows": 50, "half": None}
-    cols_of = lambda r: int(r.get("paneCols") or 0)   # noqa: E731
-    rows_of = lambda r: int(r.get("paneRows") or 0)   # noqa: E731
-    wide = sorted([r for r in open_rows if cols_of(r) >= 2 * min_cols + 1], key=cols_of, reverse=True)
-    tall = sorted([r for r in open_rows if rows_of(r) >= min_rows], key=rows_of, reverse=True)
-    if wide:
-        half, direction = wide[0], "horizontal"
-    elif tall:
-        half, direction = tall[0], "vertical"
-    else:
-        half, direction = sorted(open_rows, key=cols_of, reverse=True)[0], "horizontal"   # nothing fits: the widest is split anyway
-    cols, rows_n = cols_of(half), rows_of(half)
-    if direction == "horizontal":
-        cols //= 2
-    else:
-        rows_n //= 2
-    return {"target": half["pane_id"], "direction": direction, "cols": cols, "rows": rows_n, "half": half}
-
-
-def launch_agent(env, terminal, window: str, spec: dict, settle: float = 3.0, poll: float = 2.0, tries: int = 20) -> str:
-    """Open the pane of one agent in the orchestrator window and wait until its runner has set the pid in the agent row.
-
-    The pane goes beside or below the widest open agent pane (choose_slot); without a live pane the window is opened. When the runner does not
-    show up within poll x tries seconds the pane is launched once more. Returns the pane id.
-    """
-    conn = env.conn
-    rows = runtime.list_agents(conn, None, "active")
-    try:
-        live = [p for p in terminal.list_panes(window) if p.alive]
-    except TerminalError:
-        live = []
-    live_ids = set(p.id for p in live)
-    slot = choose_slot([r for r in rows if r.get("pane_id") in live_ids], spec["name"])   # a pane the register no longer knows is no split target
-    title = pane_title(env.name, "Agent " + spec["person"].upper(), spec["name"], spec["model_long"], is_test_runtime())
-    command = runner_argv(env, spec)
-    pane_name = "%s__%s" % (env.name, spec["name"])
-
-    def open_pane(label: str) -> str:
-        """Open the pane (split a live one, or open the window when none is alive); one pane command at a time across all processes."""
-        with pane_lock():
-            if not live:
-                env.log("pane of %s: no live pane to split, opens the window%s" % (spec["name"], label))
-                return terminal.open_window(window, title, command, env.colour, pane_name)
-            target = slot["target"] or first_split_target(live)   # no agent pane yet: beside the dashboard (else the chief) pane
-            env.log("pane of %s: splits %s (%s)%s" % (spec["name"], target or "newest", slot["direction"], label))
-            return terminal.split_pane(window, title, env.colour, command, slot["direction"], 0.5, target, pane_name)
-
-    pane_id = open_pane("")
-    cols, rows_n = slot["cols"], slot["rows"]
-    if slot["half"]:
-        env.update_agent(slot["half"]["name"], {"paneCols": cols, "paneRows": rows_n})   # estimate until the pane reports its real size
-    env.update_agent(spec["name"], {"pane_id": pane_id, "paneCols": cols, "paneRows": rows_n, "paneClosed": False})
-    for attempt in (1, 2):
-        for _ in range(tries):
-            time.sleep(poll)
-            row = runtime.get_agent(conn, env.name, spec["name"])
-            if row and row.get("pid"):
-                time.sleep(settle)   # settle time: the split that created the pane is finished
-                return pane_id
-        if attempt == 1:
-            try:
-                alive_any = any(p.alive for p in terminal.list_panes(window))
-            except TerminalError:
-                alive_any = False
-            if not alive_any:
-                env.log("pane of %s: the terminal is not running, no second launch" % spec["name"])
-                return pane_id
-            env.log("pane of %s did not start within %d s, launching it again" % (spec["name"], int(poll * tries)))
-            live = [p for p in terminal.list_panes(window) if p.alive]
-            pane_id = open_pane(" (second launch)")
-    return pane_id
-
-
-HIVE_BOOT = "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.hivepane import main;sys.exit(main(sys.argv[2:]))"   # bootstrap of the Hive and Apiary panes
-
-
-def hive_pane_title(project: str, plan: str, test: bool) -> str:
-    """Title of the sub-terminal of one Hive: the generic pane title with who "Hive" and the plan file stem as job."""
-    return pane_title(project, "Hive", Path(plan).stem, "-", test)
-
-
-def is_hive_title(title: str) -> bool:
-    """True for the title of a Hive sub-terminal."""
-    parts = title.split(" | ")
-    return len(parts) >= 4 and parts[2] == "Hive" and parts[3].startswith("job: ")
-
-
-def hive_argv(env, plan: str) -> list:
-    """Command of the Hive sub-terminal: python -m haivequeen.hivepane for this project and plan (started through the same small bootstrap as the runner)."""
-    return [osplat.python_executable(), "-c", HIVE_BOOT, str(TOOLS_DIR), "--project", env.name, "--plan", plan] + forward_env_args()
-
-
-def apiary_pane_title(project: str, test: bool) -> str:
-    """Title of the slim head pane of an Apiary (project): the generic pane title with who "Apiary"."""
-    return pane_title(project, "Apiary", project, "-", test)
-
-
-def is_apiary_title(title: str) -> bool:
-    """True for the title of the head pane of an Apiary."""
-    parts = title.split(" | ")
-    return len(parts) >= 4 and parts[2] == "Apiary" and parts[3].startswith("job: ")
-
-
-def apiary_argv(env) -> list:
-    """Command of the head pane of an Apiary: python -m haivequeen.hivepane --head for this project."""
-    return apiary_argv_of(env.name)
-
-
-def apiary_argv_of(project: str) -> list:
-    """Command of the head pane of the Apiary named `project` (the session start has no environment object yet)."""
-    return [osplat.python_executable(), "-c", HIVE_BOOT, str(TOOLS_DIR), "--project", project, "--head"] + forward_env_args()
-
-
-APIARY_SIDE_SHARE = 0.6   # share of the window width the Apiary block takes right of the Beekeeper and dashboard column
-HIVE_BELOW_HEAD = 0.9   # share of the Apiary block that the first Hive pane takes below the slim head pane; wt makes no pane at 0.95 of a tall head (checked live: 0.9 and 0.85 work)
-
-
-def hive_split_size(placed: int, total: int) -> float:
-    """Share the new Hive pane takes when it splits the last Hive pane, so that all Hive panes of the Apiary end up equally wide.
-
-    `placed` is the number of live Hive panes of the Apiary, `total` the number of living Hives. The first pane goes below the head; the next one
-    takes everything that is still to be placed except one share, so splits of 3/4, 2/3, 1/2 give four equal panes. A Hive beyond `total` is split in half.
-    """
-    if placed == 0:
-        return HIVE_BELOW_HEAD
-    remaining = total - placed
-    return remaining / (remaining + 1) if remaining >= 1 else 0.5
-
-
-def weighted_split_size(prev_width: int, rest_width: int) -> float:
-    """Share the new Hive pane takes when it splits the last Hive pane, from the relative widths: `prev_width` is the Hive of the pane that is split,
-    `rest_width` the sum of the Hives that still have no pane (the new one included). With equal widths this is the same as hive_split_size."""
-    return rest_width / float(rest_width + prev_width)
-
-
-def _pane_order(pane) -> int:
-    """Creation number of a pane (the number after the last dot of its id), to put panes in the order they were opened."""
-    try:
-        return int(str(pane.id).rsplit(".", 1)[1])
-    except (IndexError, ValueError):
-        return 0
-
-
-def wt_trace_sink(conn, projects: list):
-    """Return the sink for the trace of a terminal: it writes each line as an event of kind wt-call (and into ROUNDS.log) for every project in `projects`.
-    The kind is not "rounds" on purpose: the self-update reads an ERROR in a rounds event as a failed round, and wt's own text may contain that word."""
-    def sink(text: str) -> None:
-        """Write one trace line for each project."""
-        for name in projects:
-            runtime.append_event(conn, name, text, kind="wt-call", mirror="rounds")
-    return sink
-
-
-# Restore the dashboard without closing or restarting any existing pane.
-def ensure_dashboard_pane(terminal, window: str) -> str:
-    """Return the live dashboard pane, opening only the missing overview."""
-    try:
-        live = [p for p in terminal.list_panes(window) if p.alive]
-    except TerminalError:
-        live = []
-    for pane in live:
-        if "| all projects | Overview |" in pane.title:
-            return pane.id
-    dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
-    title = pane_title("all projects", "Overview", "Dashboard", "-", is_test_runtime())
-    if live:
-        return terminal.split_pane(window, title, "white", dash, "horizontal", 1 - APIARY_SIDE_SHARE, live[0].id, "dashboard")
-    return terminal.open_window(window, title, dash, "white", "dashboard")
-
-
-# Keep the overview available independently of Hive starts and provider slots.
-def maintain_dashboard(machine, terminal=None) -> str:
-    """Restore the overview under the pane lock, unless a stop is pending."""
-    with pane_lock():
-        if stop_flag().exists():
-            return ""
-        settings = sch.build_settings(machine, {})
-        term = terminal or get_terminal(settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-        return ensure_dashboard_pane(term, settings.get("window", "HaiveQueen"))
-
-
-# Ensure an Apiary head exists while keeping the dashboard as the window root.
-def ensure_apiary_pane(env, terminal, window: str, live: list) -> str:
-    """Return the id of the live head pane of this Apiary; open it when there is none. `live` are the live panes of the window; the caller holds pane.lock.
-    The first block goes beside the dashboard (else the Beekeeper) pane, a further block below the last pane of the last block."""
-    title = apiary_pane_title(env.name, is_test_runtime())
-    for p in live:
-        if p.title == title:
-            return p.id
-    blocks = sorted([p for p in live if is_apiary_title(p.title) or is_hive_title(p.title)], key=_pane_order)
-    command = apiary_argv(env)
-    name = "%s__apiary" % env.name
-    if not live:
-        env.log("pane of Apiary %s: no live pane to split, opens the dashboard first" % env.name)
-        dashboard = ensure_dashboard_pane(terminal, window)
-        return terminal.split_pane(window, title, env.colour, command, "horizontal", APIARY_SIDE_SHARE, dashboard, name)
-    target, direction = (blocks[-1].id, "vertical") if blocks else (first_split_target(live), "horizontal")
-    env.log("pane of Apiary %s: splits %s (%s)" % (env.name, target or "newest", direction))
-    return terminal.split_pane(window, title, env.colour, command, direction, 0.5, target, name)
-
-
-def ensure_hive_pane(env, terminal, window: str, plan: str) -> str:
-    """Return the id of the live pane of this Hive; open it when there is none. The Apiary head pane comes first; the first Hive of an Apiary goes
-    below the head, each further one to the right of the previous Hive of that Apiary. A sub-terminal exists as long as its Hive lives, also when no
-    Queen runs. Opening a pane never brings the window to the front."""
-    title = hive_pane_title(env.name, plan, is_test_runtime())
-    with pane_lock():
-        try:
-            live = [p for p in terminal.list_panes(window) if p.alive]
-        except TerminalError:
-            live = []
-        for p in live:
-            if p.title == title:
-                return p.id
-        terminal.trace = wt_trace_sink(env.conn, [env.name])   # every wt call of this split (head and Hive) leaves one line in the log
-        head = ensure_apiary_pane(env, terminal, window, live)
-        mine = sorted([p for p in live if is_hive_title(p.title) and p.title.split(" | ")[1] == title.split(" | ")[1]], key=_pane_order)
-        colour = env.colour   # the colour of the Apiary, shared by its head and all its Hives
-        target, direction = (mine[-1].id, "horizontal") if mine else (head, "vertical")
-        env.log("pane of Hive %s (Apiary %s): splits %s (%s)" % (Path(plan).stem, env.name, target, direction))
-        living = [r["plan_path"] for r in db.rows(env.conn, "SELECT plan_path FROM hives WHERE project=? AND state!='done' ORDER BY plan_path", (env.name,))]
-        live_titles = {p.title for p in live}
-        width = lambda plan_path: hivelayout.width_of(env.conn, env.name, plan_path)   # noqa: E731
-        if not mine:
-            size = HIVE_BELOW_HEAD
-        else:
-            prev = next((r for r in living if hive_pane_title(env.name, r, is_test_runtime()) == mine[-1].title), None)
-            rest = [r for r in living if hive_pane_title(env.name, r, is_test_runtime()) not in live_titles or r == plan]
-            size = weighted_split_size(width(prev) if prev else hivelayout.SMALL_WIDTH, max(sum(width(r) for r in rest), hivelayout.SMALL_WIDTH))
-        pane_id = terminal.split_pane(window, title, colour, hive_argv(env, plan), direction, size, target, "%s__hive__%s" % (env.name, Path(plan).stem))
-        if width(plan) == hivelayout.BIG_WIDTH:   # built large: a later Queen start leaves this pane alone
-            runtime.kv_set(env.conn, env.name, "hive-big-" + Path(plan).stem, pane_id)
-        return pane_id
-
-
-def rebuild_small_hive_pane(env, terminal, window: str, plan: str) -> None:
-    """Close the pane of a Hive that was built without a Queen (narrow) when no agent runs in it, so ensure_hive_pane builds it again with the larger share.
-    A pane that was built large, or that holds a running or starting agent, stays as it is."""
-    title = hive_pane_title(env.name, plan, is_test_runtime())
-    with pane_lock():
-        try:
-            pane = next((p for p in terminal.list_panes(window) if p.alive and p.title == title), None)
-        except TerminalError:
-            return
-        if pane is None or runtime.kv_get(env.conn, env.name, "hive-big-" + Path(plan).stem) == pane.id:
-            return
-        if any(a.get("pane_id") == pane.id and a.get("status") in ("running", "starting") for a in runtime.list_agents(env.conn, env.name, "active")):
-            return
-        terminal.close_pane(pane.id)
-
-
-def start_queen(env, terminal, window: str, spec: dict) -> str:
-    """Hand a new Queen to the sub-terminal of its Hive: make sure the Hive pane exists (a narrow pane without agent is built again larger), write
-    launch.json (the runner command) into the run folder and point the agent row at the pane. The pane starts the runner; nothing waits for its pid here. Returns the pane id."""
-    folder = env.run_dir(spec["name"])
-    folder.mkdir(parents=True, exist_ok=True)
-    rebuild_small_hive_pane(env, terminal, window, spec["plan"])
-    pane_id = ensure_hive_pane(env, terminal, window, spec["plan"])
-    argv = runner_argv(env, spec)
-    if "--wrap" in argv:
-        argv.remove("--wrap")  # The Hive, not the runner, owns this persistent pane.
-    (folder / "launch.json").write_text(json.dumps({"argv": argv}), encoding="utf-8")   # written after the pane exists: an old pane must not pick it up
-    env.update_agent(spec["name"], {"pane_id": pane_id, "paneClosed": False})
-    hivelayout.apply(terminal, window, env.conn, is_test_runtime())   # the Hive becomes big now that its Queen starts (best effort, never raises)
-    return pane_id
-
-
+# Start the runner of any agent (Queen, Bee, verify, release, integrate, triage) as a hidden background process.
 def launch_headless(env, spec: dict) -> None:
-    """Start the runner of a Bee as its own process without a pane; its output goes to runner.log in the run folder and the runner sets the pid in the agent row."""
+    """Start the runner of an agent as its own hidden process; its stdout and stderr go to runner.log in the run folder and the runner sets the pid in the agent row.
+
+    The live text of the agent (what the graphical dashboard shows) is written by the runner itself to milestones.txt in the same folder."""
     log = open(env.run_dir(spec["name"]) / "runner.log", "ab")
-    flags = {"creationflags": 0x00000008 | 0x00000200} if osplat.is_windows() else {"start_new_session": True}   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    flags = {"creationflags": 0x08000000 | 0x00000200} if osplat.is_windows() else {"start_new_session": True}   # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP (hidden console: its children open no windows)
     try:
         subprocess.Popen(runner_argv(env, spec), stdin=subprocess.DEVNULL, stdout=log, stderr=log, **flags)
     finally:
@@ -737,21 +313,14 @@ def hive_schedule_lock(timeout: float = 30.0):
 
 # Clean integrated worktrees and schedule one round of Hives across every registered project.
 # Refresh provider metadata outside the lock before scheduling real work.
-def run_round(conn, machine: dict, envs=None, terminal=None, dry_run=False, plan_files=None,
-              out_file=None, settle: float = 3.0, poll: float = 2.0, tries: int = 20, free_ram=None, alive=None) -> dict:
+def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
+              out_file=None, settle: float = 3.0, free_ram=None, alive=None) -> dict:
     """Clean integrated worktrees and schedule one round across registered projects."""
     from . import hives
     envs = envs if envs is not None else sch.load_projects(conn, machine)
     if not dry_run:
         # Fetch account metadata before taking the Hive scheduling lock.
         usage.refresh_claude_usage(conn, sch.get_providers(machine))
-        # Standalone foreground rounds have no terminal session to restore.
-        if not os.environ.get('BZZ_TEST_NOSTART') and (terminal is not None or (osplat.runs_dir() / '_panes' / 'dashboard' / 'pane.json').is_file()):
-            try:
-                maintain_dashboard(machine, terminal)
-            except Exception as exc:
-                for env in envs:
-                    env.log('Dashboard not restored: %s' % exc)
         from . import worktrees
         for env in envs:
             try:
@@ -766,8 +335,8 @@ def run_round(conn, machine: dict, envs=None, terminal=None, dry_run=False, plan
             try:
                 conn.backup(snapshot)
                 copied = [sch.ProjectEnv(snapshot, e.name, e.workspace, e.settings, e.colour, e.priority, e.plan_globs, e.plan_exclude) for e in envs]
-                result = hives.schedule_round(snapshot, machine, copied, terminal=terminal, dry_run=True, free_ram=free_ram, alive=alive,
-                                              settle=settle, poll=poll, tries=tries, plan_files=plan_files)
+                result = hives.schedule_round(snapshot, machine, copied, dry_run=True, free_ram=free_ram, alive=alive,
+                                              settle=settle, plan_files=plan_files)
             finally:
                 snapshot.close()
             if out_file:
@@ -778,30 +347,8 @@ def run_round(conn, machine: dict, envs=None, terminal=None, dry_run=False, plan
                     snapshot_view = {"project": e.name, "repo": str(e.code_repo), "workspace": str(e.workspace), "dryRun": True}
                     Path(out_file).with_suffix(".snapshot.json").write_text(json.dumps(snapshot_view, indent=2), encoding="utf-8")
             return result
-        return hives.schedule_round(conn, machine, envs, terminal=terminal, dry_run=False, free_ram=free_ram, alive=alive,
-                                    settle=settle, poll=poll, tries=tries, plan_files=plan_files)
-
-
-# Record dead panes and interrupt any agent still marked running.
-def repair_closed_panes(env, terminal=None) -> None:
-    """Record dead panes and interrupt any agent still marked running."""
-    from . import interrupt
-    rows = [a for a in env.agents("active") if a.get("pane_id") and not a.get("paneClosed")]
-    if not rows:
-        return
-    term = terminal or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-    try:
-        panes = {p.id: p for p in term.list_panes(env.settings.get("window", "HaiveQueen"))}
-    except TerminalError as exc:
-        env.log("pane closure check failed: %s" % exc)
-        return
-    for row in rows:
-        pane = panes.get(row["pane_id"])
-        if pane is not None and not pane.alive:
-            fields = {"paneClosed": True}
-            if row.get("status") in ACTIVE:
-                fields.update(status="failed", ended_at=db.now(), last_line="runner process vanished (pane closed)", interrupted=interrupt.VANISHED)
-            env.update_agent(row["name"], fields)
+        return hives.schedule_round(conn, machine, envs, dry_run=False, free_ram=free_ram, alive=alive,
+                                    settle=settle, plan_files=plan_files)
 
 
 def _min_ram(env) -> float:
@@ -964,9 +511,9 @@ def _reject_reason(c, a):
     return why, pick
 
 
-# Action start_agent: validate, write the prompt and the agent row, open the pane. Returns 1 when an agent was started.
+# Action start_agent: validate, write the prompt and the agent row, start the runner. Returns 1 when an agent was started.
 def _do_start(c, a, forced_pick=None) -> int:
-    """Action start_agent: validate, write the prompt and the agent row, open the pane. Returns 1 when an agent was started.
+    """Action start_agent: validate, write the prompt and the agent row, start the runner. Returns 1 when an agent was started.
 
     `forced_pick` is a provider chosen by the caller (triage agents): the validation is skipped.
     """
@@ -1038,19 +585,12 @@ def _do_start(c, a, forced_pick=None) -> int:
                           "bundle_json": json.dumps(bundle) if bundle else None, "task": agent_task(env, plan, pkg, phase, pf)})
     if phase in ("work", "verify"):
         routine.record_progress(env, nm, plan, pkg, str(a["cwd"]))   # state of the branch at the start, to see later whether the agent committed
-    if os.environ.get("BZZ_TEST_NOSTART"):   # tests only: no pane, the fake agent is marked running (this process is always alive)
+    if os.environ.get("BZZ_TEST_NOSTART"):   # tests only: no runner process, the fake agent is marked running (this process is always alive)
         env.update_agent(nm, {"status": "running", "pid": os.getpid()})
     else:
         spec = {"name": nm, "provider": prov, "protocol": protocol, "plan": plan, "package": pkg, "phase": phase, "cwd": str(a["cwd"]),
-                "prompt_file": str(pf), "person": ident["Person"], "model_long": sch.model_long(protocol, cm["Model"], cm["Effort"])}
-        if phase == "bee":   # D3: a Bee has no pane of its own, it shows as a line in the frame of its Hive
-            launch_headless(env, spec)
-        elif phase == "queen":   # a Queen runs inside the sub-terminal of its Hive, one after the other
-            term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-            start_queen(env, term, env.settings.get("window", "HaiveQueen"), spec)
-        else:
-            term = c["terminal"] or get_terminal(env.settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-            launch_agent(env, term, env.settings.get("window", "HaiveQueen"), spec, c["settle"], c["poll"], c["tries"])
+                "prompt_file": str(pf)}
+        launch_headless(env, spec)   # every agent (Queen, Bee, verify, release, integrate, triage) starts the same way
     env.log("start %s (%s, %s)" % (nm, prov, phase))
     env.event("%s started (%s)" % (ident["Person"] if phase in ("bee", "queen") else nm, {"codex": "Codex", "claude": "Claude"}.get(prov, prov)))
     if phase != "integrate":
@@ -1066,133 +606,6 @@ def _do_start(c, a, forced_pick=None) -> int:
     if not os.environ.get("BZZ_TEST_NOSTART"):
         time.sleep(c["settle"])
     return 1
-
-
-# ---- orchestrator pane (BEEKEEPER): fixed header and one line per event ----
-
-ESC = "\x1b"
-SGR = {"Cyan": "1;36", "Gray": "90", "White": "97", "Green": "32", "Red": "31", "Yellow": "33"}
-
-
-def wrap_text(s: str, w: int) -> list:
-    """Word-wrap a text to the width w (long words are split); returns the lines."""
-    out = []
-    for para in s.splitlines() or [""]:
-        cur = ""
-        for word in para.split(" "):
-            while len(word) > w:
-                if cur:
-                    out.append(cur)
-                    cur = ""
-                out.append(word[:w])
-                word = word[w:]
-            if not cur:
-                cur = word
-            elif len(cur) + 1 + len(word) <= w:
-                cur += " " + word
-            else:
-                out.append(cur)
-                cur = word
-        out.append(cur)
-    return out
-
-
-def head_lines(width: int, ui: dict) -> list:
-    """The fixed header of the orchestrator pane as (text, colour) pairs; the Beekeeper calls no language model, so it shows none.
-
-    `ui` holds stop (bool), run_state, busy (bool), since and next_at (datetimes or None) and projects (names).
-    """
-    res = []
-    if ui.get("stop"):
-        state = "‖ STOP set, no new agents"
-    elif ui.get("run_state", "RUNNING") != "RUNNING":
-        state = ui["run_state"]
-    elif ui.get("busy"):
-        state = "round running"
-    elif ui.get("next_at"):
-        state = "idle since %s, ◔ next round %s" % (ui["since"].strftime("%H:%M"), ui["next_at"].strftime("%H:%M"))
-    else:
-        state = "starting"
-    for ln in wrap_text("◆ Beekeeper | %s" % state, width):
-        res.append((ln, "White"))
-    res.append(("Apiaries: " + (", ".join(ui.get("projects") or []) or "none"), "Gray"))
-    return res
-
-
-class Pane:
-    """Draws the header of the orchestrator pane and prints new event lines of all projects (ANSI terminal)."""
-
-    def __init__(self, conn, envs, out=None):
-        """Remember the connection and projects; positions in the event mirror files start at their current end."""
-        self.conn, self.envs, self.out = conn, envs, out or sys.stdout
-        if self.out.isatty():
-            header.enable_vt()   # the cursor moves of the fixed header need escape processing (pwsh switched it on by itself)
-        self.rows = 0
-        self.head_at = 0.0
-        self.pos = {}
-        for e in envs:
-            self.pos[e.name] = self._count(e)
-
-    def _file(self, env) -> Path:
-        """Events mirror file of a project."""
-        return runtime.mirror_dir(env.name) / runtime.MIRRORS["events"]
-
-    def _count(self, env) -> int:
-        """Number of lines in the events mirror file."""
-        try:
-            return len(self._file(env).read_text(encoding="utf-8").splitlines())
-        except OSError:
-            return 0
-
-    def width(self) -> int:
-        """Pane width in columns."""
-        return max(30, os.get_terminal_size().columns if self.out.isatty() else 100)
-
-    def height(self) -> int:
-        """Pane height in rows."""
-        return max(10, os.get_terminal_size().lines if self.out.isatty() else 30)
-
-    def draw_head(self, ui: dict) -> int:
-        """Redraw the header in the top rows and keep the scroll region below it; the height is reserved for the worst case, so it never grows."""
-        w, h = self.width(), self.height()
-        if self.out.isatty():
-            w = max(10, os.get_terminal_size().columns)   # the real width: 30 columns drawn into a narrower pane wrapped into the next rows
-        hl = head_lines(w, ui)
-        if not self.rows:
-            self.rows = len(head_lines(w, dict(ui, next_at=datetime.now(), since=datetime.now(), stop=False, busy=False)))
-        while len(hl) < self.rows:
-            hl.append(("", "White"))
-        buf = [ESC + "7", ESC + "[?7l", "%s[%d;%dr" % (ESC, len(hl) + 1, h)]   # ?7l: a header line longer than the pane is cut, never wrapped into the next row
-        for i, (t, c) in enumerate(hl):
-            buf.append("%s[%d;1H%s[2K%s[%sm%s%s[0m" % (ESC, i + 1, ESC, ESC, SGR.get(c, "0"), t, ESC))
-        buf.append(ESC + "[?7h" + ESC + "8")
-        self.out.write("".join(buf))
-        self.out.flush()
-        self.head_at = time.time()
-        return len(hl)
-
-    def maybe_head(self, ui: dict) -> None:
-        """Redraw the header at most every 5 seconds."""
-        if time.time() - self.head_at >= 5:
-            self.draw_head(ui)
-
-    def show_new_events(self) -> None:
-        """Print the new event lines (time, project, text), wrapped instead of cut, errors red."""
-        for env in self.envs:
-            try:
-                lines = self._file(env).read_text(encoding="utf-8").splitlines()
-            except OSError:
-                continue
-            for ln in lines[self.pos.get(env.name, 0):]:
-                p = ln.split("|", 2)
-                if len(p) < 3:
-                    continue
-                first = True
-                for part in wrap_text("[Apiary %s] %s" % (env.name, p[2]), self.width() - 7):
-                    self.out.write("%s[%sm%s%s%s[0m\n" % (ESC, "31" if p[1] == "E" else "97", (p[0] + "  ") if first else "       ", part, ESC))
-                    first = False
-            self.pos[env.name] = len(lines)
-        self.out.flush()
 
 
 def active_count(conn) -> int:
@@ -1220,7 +633,7 @@ def report_loop_failure(conn, text: str) -> None:
 
 
 # Run rounds until the STOP flag exists (or `rounds` rounds are done), then wait for the running agents and end.
-def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui: bool = False, out=None, sleep=time.sleep,
+def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, sleep=time.sleep,
              wait_seconds: float = 2.0, round_kwargs: dict = None) -> int:
     """Run rounds until the STOP flag exists (or `rounds` rounds are done), then wait for the running agents and end.
 
@@ -1258,7 +671,7 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui:
             report_loop_failure(conn, vanished)
         runtime.kv_set(conn, sch.GLOBAL, "loop-started-at", datetime.now().isoformat(timespec="seconds"))
         try:
-            result = _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds, round_kwargs or {})
+            result = _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_kwargs or {})
         except Exception:
             text = traceback.format_exc()
             crash.write(text)
@@ -1277,8 +690,6 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, ui:
             lock_file().unlink()
         except OSError:
             pass
-        if stop_flag().exists():   # `bzz stop`: the loop has ended, so the Overview pane and the panes of ended agents go; the Beekeeper pane last
-            close_panes_after_stop(conn)
 
 
 def daily_export(envs) -> None:
@@ -1315,12 +726,11 @@ def configuration_stamp(conn):
 # The loop body (see run_loop).
 # Keep provider quotas current during idle waits as well as scheduling rounds.
 # Apply valid TOML changes at safe scheduling boundaries without restarting agents.
-def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds, round_kwargs) -> int:
+def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_kwargs) -> int:
     """The loop body (see run_loop)."""
     envs = sch.load_projects(conn, machine)
     minutes = round_minutes if round_minutes else float(machine.get("roundMinutes", 5))
     state = {"since": datetime.now(), "next_at": None, "busy": False, "projects": [e.name for e in envs]}
-    pane = Pane(conn, envs, out) if ui else None
 
     applied_stamp = configuration_stamp(conn)
     seen_stamp = None
@@ -1366,29 +776,23 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
             return False
         machine, envs, minutes = candidate, candidates, candidate_minutes
         state["projects"] = [env.name for env in envs]
-        if pane:
-            pane.envs = envs
         for env in envs:
             env.log("TOML configuration reloaded; running agents retained.")
         return True
 
-    # Update the header values from the stored state and redraw.
+    # Update the loop state values from the stored state.
     def refresh() -> None:
-        """Update the header values from the stored state and redraw."""
+        """Update the loop state values from the stored state."""
         runtime.kv_set(conn, sch.GLOBAL, "loop-heartbeat", datetime.now().isoformat(timespec="seconds"))
         rs = runstate.get_state(conn)["state"]
         state.update(stop=stop_flag().exists(), run_state=rs)
-        if pane:
-            pane.show_new_events()
-            pane.maybe_head(state)
 
-    # Settle and redraw during waits without letting a transient failure stop the loop.
+    # Refresh during waits without letting a transient failure stop the loop.
     # Wake scheduling when a valid configuration change is accepted.
     def wait_refresh() -> bool:
-        """Reload, settle and redraw; return whether accepted settings changed."""
+        """Reload settings and refresh; return whether accepted settings changed."""
         changed = reload_settings()
-        for action in (lambda: usage.refresh_claude_usage(conn, sch.get_providers(machine)),
-                       lambda: runstate.settle(conn), refresh):
+        for action in (lambda: usage.refresh_claude_usage(conn, sch.get_providers(machine)), refresh):
             try:
                 action()
             except Exception as exc:
@@ -1406,17 +810,11 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
             env.log("restart: re-attached %d running agent(s), %d gone" % (len(res["kept"]), len(res["failed"])))
         env.log("loop started (roundMinutes=%s)" % minutes)
         env.event("Beekeeper started (round every %s minutes)" % minutes)
-    if pane:
-        pane.out.write("%s[2J%s[3J%s[H" % (ESC, ESC, ESC))
-        pane.draw_head(state)
-        pane.out.write("%s[%d;1H" % (ESC, pane.rows + 1))
     done = 0
     while not stop_flag().exists() and (not rounds or done < rounds):
         reload_settings()
         state.update(busy=True)
         write_state(conn, "round", datetime.now(), None)
-        if pane:
-            pane.draw_head(state)
         try:
             run_round(conn, machine, envs, **round_kwargs)
         except Exception as exc:   # a broken round must never stop the loop
@@ -1445,8 +843,6 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
         env.event("STOP file found: no new agents, waiting for running agents" if stopped else "Loop ending")
     state.update(next_at=None)
     write_state(conn, "idle", datetime.now(), None)
-    if pane:
-        pane.show_new_events()
     while active_count(conn) > 0:
         sleep(wait_seconds)
         for env in envs:   # a row whose runner process is gone must not hold the stopped loop open
@@ -1455,34 +851,20 @@ def _run_loop(conn, machine, rounds, round_minutes, ui, out, sleep, wait_seconds
     for env in envs:
         env.log("loop ended")
         env.event("Loop ended: all agents are done")
-    if pane:
-        pane.show_new_events()
-        pane.draw_head(state)
     return 0
 
 
 # ---- command line: bzz start / bzz stop ----
 
-def start_boot_command(args) -> list:
-    """Command line of the Beekeeper pane: `start --foreground` with the terminal, --rounds and --round-minutes of this call (so a limited run ends after its rounds)."""
-    cmd = [osplat.python_executable(), str(TOOLS_DIR / "haivequeen" / "cli.py"), "start", "--foreground"]
-    if args.terminal:
-        cmd += ["--terminal", args.terminal]
-    if args.rounds:
-        cmd += ["--rounds", str(args.rounds)]
-    if args.round_minutes:
-        cmd += ["--round-minutes", str(args.round_minutes)]
-    if getattr(args, "keep_pause", False):
-        cmd += ["--keep-pause"]
-    return cmd
+def spawn_detached(argv: list, log: Path, env: dict = None) -> None:
+    """Start `argv` as a process of its own without a visible window; its output is appended to the file `log`. `env` adds environment variables.
 
-
-def spawn_detached(argv: list, log: Path) -> None:
-    """Start `argv` as a process of its own without a console or pane; its output is appended to the file `log`."""
+    On Windows the process gets a hidden console (CREATE_NO_WINDOW), not none: every program it starts (git, claude, taskkill) inherits that console,
+    while a process without any console makes Windows open a new console window for each of them."""
     log.parent.mkdir(parents=True, exist_ok=True)
-    flags = {"creationflags": 0x00000008 | 0x00000200} if osplat.is_windows() else {"start_new_session": True}   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    flags = {"creationflags": 0x08000000 | 0x00000200} if osplat.is_windows() else {"start_new_session": True}   # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     with open(log, "ab") as out:
-        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, **flags)
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, env={**os.environ, **env} if env else None, **flags)
 
 
 # Print the command result and retain it for optional desktop feedback.
@@ -1493,36 +875,56 @@ def command_result(args, payload) -> int:
     return 0
 
 
-# Recover an existing session without restarting its loop or agents.
-def existing_session(args, conn, machine, pid, terminal=None, locked=False) -> int:
-    """Restore the overview, or report an outstanding graceful stop."""
-    if stop_flag().exists():
-        return command_result(args, {"ok": True, "running": True, "stopping": True, "pid": pid,
-                                     "running_agents": active_count(conn), "note": "Waiting for the previous stop to finish."})
-    if terminal is None and args.terminal:
-        terminal = get_terminal(args.terminal, str(osplat.runs_dir() / "_panes"))
-    if locked:
-        settings = sch.build_settings(machine, {})
-        dashboard = ensure_dashboard_pane(terminal, settings.get("window", "HaiveQueen"))
-    else:
-        dashboard = maintain_dashboard(machine, terminal)
-    if not dashboard:
-        return command_result(args, {"ok": True, "running": True, "stopping": True, "pid": pid,
-                                     "running_agents": active_count(conn), "note": "Waiting for the previous stop to finish."})
-    return command_result(args, {"ok": True, "running": True, "pid": pid, "dashboard": dashboard,
-                                 "note": "The orchestrator is already running."})
+# Serialise `bzz start` between processes.
+@contextmanager
+def start_lock(timeout: float = 120.0, poll: float = 0.1):
+    """Serialise `bzz start` between processes: only the holder of start.lock starts the loop and the window.
+
+    Waits up to `timeout` seconds for another start to finish, then raises TimeoutError.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        holder = _take_pid_lock(start_lock_file(), own_ok=False)
+        if holder == 0:
+            break
+        if time.monotonic() >= deadline:
+            raise TimeoutError("another start is running (process %s)" % holder)
+        time.sleep(poll)
+    try:
+        yield
+    finally:
+        try:
+            start_lock_file().unlink()
+        except OSError:
+            pass
 
 
-# Start a session or recover its missing overview without interrupting agents.
+def start_boot_command(args) -> list:
+    """Command line of the loop process: `start --foreground` with --rounds and --round-minutes of this call (so a limited run ends after its rounds)."""
+    cmd = [osplat.python_executable(), str(TOOLS_DIR / "haivequeen" / "cli.py"), "start", "--foreground"]
+    if args.rounds:
+        cmd += ["--rounds", str(args.rounds)]
+    if args.round_minutes:
+        cmd += ["--round-minutes", str(args.round_minutes)]
+    if getattr(args, "keep_pause", False):
+        cmd += ["--keep-pause"]
+    return cmd
+
+
+# Start a session: the loop as a hidden process and the graphical window.
 def cmd_start(args, conn) -> int:
-    """`bzz start`: run the loop in this process (--foreground) or open the orchestrator window (dashboard and Apiary head) and start the loop as a detached process."""
-    from . import config
+    """`bzz start`: run the loop in this process (--foreground), or start it as a hidden background process (no terminal window) and open the graphical dashboard once."""
+    from . import config, gui
     if args.foreground and getattr(args, "desktop", False):
         raise ValueError("Die Desktop-Rückmeldung unterstützt nur den Hintergrundstart.")
     machine = config.load_config()
     pid = loop_running()
     if pid:
-        return existing_session(args, conn, machine, pid)
+        if stop_flag().exists():
+            return command_result(args, {"ok": True, "running": True, "stopping": True, "pid": pid,
+                                         "running_agents": active_count(conn), "note": "Waiting for the previous stop to finish."})
+        return command_result(args, {"ok": True, "running": True, "pid": pid, **({} if args.foreground else gui.launch_detached()),
+                                     "note": "The orchestrator is already running."})
     try:
         if "(self-update)" in stop_flag().read_text(encoding="utf-8", errors="replace"):   # an older self-update restarts without --keep-pause
             args.keep_pause = True
@@ -1533,36 +935,33 @@ def cmd_start(args, conn) -> int:
     except OSError:
         pass
     if not getattr(args, "keep_pause", False):   # the self-update restart keeps a pause
-        runstate.resume(conn, "bzz start")   # a pause or drain of the run before must not keep the new run from starting agents
+        runstate.resume(conn, "bzz start")   # a pause of the run before must not keep the new run from starting agents
     if args.foreground:
-        return run_loop(conn, machine, args.rounds, args.round_minutes, ui=sys.stdout.isatty())
-    settings = sch.build_settings(machine, {})
-    term = get_terminal(args.terminal or settings.get("terminal", "auto"), str(osplat.runs_dir() / "_panes"))
-    window = settings.get("window", "HaiveQueen")
-    term.trace = wt_trace_sink(conn, [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY name")])   # the session start leaves one line per wt call
+        return run_loop(conn, machine, args.rounds, args.round_minutes)
     boot = start_boot_command(args)
-    with pane_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first
+    with start_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first
         pid = loop_running()
         if pid:
-            return existing_session(args, conn, machine, pid, term, locked=True)
+            return command_result(args, {"ok": True, "running": True, "pid": pid, **gui.launch_detached(), "note": "The orchestrator is already running."})
         if start_pending():
-            return command_result(args, {"ok": True, "running": False, "starting": True, "note": "The orchestrator window is just starting."})
+            return command_result(args, {"ok": True, "running": False, "starting": True, "note": "The orchestrator is just starting."})
         start_pending_file().parent.mkdir(parents=True, exist_ok=True)
         start_pending_file().write_text(str(os.getpid()), encoding="ascii")
         try:
-            dash = [osplat.python_executable(), "-c", "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.dashboard import main;sys.exit(main(sys.argv[2:]))", str(TOOLS_DIR)]
-            try:
-                close_idle_hive_panes(conn, term, window)
-            except TerminalError:
-                pass
-            first = conn.execute("SELECT project FROM hives WHERE state!='done' ORDER BY project LIMIT 1").fetchone()
-            head = (apiary_pane_title(first["project"], is_test_runtime()), apiary_argv_of(first["project"]), "%s__apiary" % first["project"]) if first else None
-            panes = open_session_panes(term, window, dash, head)
-            spawn_detached(boot, osplat.runs_dir() / "beekeeper.log")   # the loop has no pane: its output goes to this file, round errors show in the dashboard
+            spawn_detached(boot, osplat.runs_dir() / "beekeeper.log")   # the loop has no window: its output goes to this file, round errors show in the dashboard
+            return command_result(args, {"ok": True, **gui.launch_detached()})
         except Exception:
             start_pending_file().unlink()
             raise
-    return command_result(args, {"ok": True, "window": window, "panes": panes})
+
+
+# Open the graphical dashboard.
+def cmd_gui(args, conn) -> int:
+    """`bzz gui`: show the graphical dashboard window (blocks until it is closed); --detach opens it as a process of its own and returns."""
+    from . import gui
+    if args.detach:
+        return command_result(args, {"ok": True, **gui.launch_detached()})
+    return gui.main(["--project", args.project] if args.project else [])
 
 
 # Request a graceful stop and report how many agents may finish first.
@@ -1570,21 +969,23 @@ def cmd_stop(args, conn) -> int:
     """`bzz stop`: create the STOP flag; running agents finish their task, no new agent starts, the loop ends."""
     stop_flag().parent.mkdir(parents=True, exist_ok=True)
     stop_flag().write_text("stop requested %s\n" % datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
-    closed = [] if loop_running() else close_panes_after_stop(conn)   # a running loop closes the panes itself when it ends
-    return command_result(args, {"ok": True, "running_agents": active_count(conn), "closed_panes": closed})
+    return command_result(args, {"ok": True, "running_agents": active_count(conn)})
 
 
 # Register session commands and their optional desktop feedback.
 def register(sub) -> None:
-    """Add the commands start and stop to the sub-parser collection of haivequeen/cli.py."""
+    """Add the commands start, gui and stop to the sub-parser collection of haivequeen/cli.py."""
     p = sub.add_parser("start")
     p.add_argument("--foreground", action="store_true", help="run the loop in this process")
-    p.add_argument("--terminal", choices=["auto", "wt", "tmux", "headless"])
     p.add_argument("--rounds", type=int, default=0, help="end after this many rounds (0 = until stopped)")
     p.add_argument("--round-minutes", type=float, default=0)
-    p.add_argument("--keep-pause", action="store_true", help="do not lift a pause or drain of the run before (used by the self-update)")
+    p.add_argument("--keep-pause", action="store_true", help="do not lift a pause of the run before (used by the self-update)")
     p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")
     p.set_defaults(fn=cmd_start)
+    p = sub.add_parser("gui")
+    p.add_argument("--detach", action="store_true", help="open the window as a process of its own and return (default: run it in this process)")
+    p.add_argument("--project", help="show one Apiary only")
+    p.set_defaults(fn=cmd_gui)
     p = sub.add_parser("stop")
     p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")
     p.set_defaults(fn=cmd_stop)
