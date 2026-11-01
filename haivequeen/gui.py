@@ -872,15 +872,16 @@ class Dashboard:
         st = runstate.get_state(self.conn)
         messagebox.showinfo("HaiveQueen", "Run state: %s\nRunning agents: %d" % (st["state"], st["running_agents"]), parent=self.root)
 
-    # Open the settings folder.
+    # Open the settings editor.
     def open_config(self):
-        """Open the settings folder in the file manager."""
-        folder = config.config_dir()
-        folder.mkdir(parents=True, exist_ok=True)
-        if osplat.is_windows():
-            os.startfile(str(folder))   # the folder belongs to the user
-        else:
-            subprocess.Popen(["xdg-open", str(folder)])
+        """Open the settings editor (config.toml and the project.toml files as forms); a second click brings the open editor to the front."""
+        from . import gui_config
+        current = getattr(self, "config_window", None)
+        if current is not None and current.win.winfo_exists():
+            current.win.lift()
+            return
+        config.config_dir().mkdir(parents=True, exist_ok=True)
+        self.config_window = gui_config.ConfigWindow(self.root, self.conn, config.config_dir(), self.mono, on_saved=self.refresh)
 
     # Open the project page.
     def open_repo(self):
