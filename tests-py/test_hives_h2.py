@@ -54,16 +54,14 @@ class BeePolicyTests(unittest.TestCase):
         for text in ('Offene Anforderungen:', '300000', '3', 'integration', 'subagent'):
             self.assertIn(text.lower(), prompt.lower())
 
-    # Check package above queen class is bee even if alone.
-    def test_package_above_queen_class_is_bee_even_if_alone(self):
-        self.assertTrue(bees.requires_bee('medium', 'heavy', False, False))
-        self.assertFalse(bees.requires_bee('medium', 'medium', False, False))
-        self.assertTrue(bees.requires_bee('medium', 'medium', True, False))
-
-    # Check codex without subagents works own class.
-    def test_codex_without_subagents_works_own_class(self):
-        self.assertFalse(bees.requires_bee('medium', 'medium', True, True))
-        self.assertTrue(bees.requires_bee('medium', 'heavy', False, True))
+    # The Bee mode of a provider defaults by protocol and rejects unknown values.
+    def test_bee_mode_defaults_and_validation(self):
+        from haivequeen import scheduler
+        got = {p['name']: p['beeMode'] for p in scheduler.get_providers({'providers': [
+            {'name': 'a', 'protocol': 'claude'}, {'name': 'b', 'protocol': 'codex'}, {'name': 'c', 'protocol': 'claude', 'beeMode': 'process'}]})}
+        self.assertEqual(got, {'a': 'subagent', 'b': 'process', 'c': 'process'})
+        with self.assertRaises(ValueError):
+            scheduler.get_providers({'providers': [{'name': 'x', 'protocol': 'claude', 'beeMode': 'agents'}]})
 
     # Check attempts survive reopen and ignore interruption.
     def test_attempts_survive_reopen_and_ignore_interruption(self):
@@ -94,7 +92,7 @@ class BeePolicyTests(unittest.TestCase):
     # Check prompt instructs dependencies and higher classes.
     def test_prompt_instructs_dependencies_and_higher_classes(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
-        for word in ('dependenc', 'heavy', 'local', 'image', 'escalat', '3', 'handoff', 'returned cwd'):
+        for word in ('dependenc', 'every package goes to a bee', 'local', 'image', 'escalat', '3', 'handoff', 'returned cwd'):
             self.assertIn(word, prompt)
 
     # A repeated report of the same attempt does not increment its failure count.
@@ -450,17 +448,42 @@ class QueenIntegrationTests(RoundCase):
         self.assertEqual(result['cwd'], str(first))
         self.assertEqual(start.call_args.args[1]['cwd'], str(first))
 
-    # A Codex Queen without subagents works her own class even with no extra slot.
-    def test_codex_queen_fallback_does_not_need_an_extra_slot(self):
+    # The Queen never works a package herself: even one on her own class goes to a Bee.
+    def test_every_package_goes_to_a_bee(self):
+        from haivequeen import hives
+        from bzztest import REL
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [])
+        self.assertEqual((result['kind'], result['class']), ('subagent', 'medium'))
+
+    # The provider setting beeMode process runs the Bee of the Queen's own provider as a separate agent.
+    def test_bee_mode_process_starts_a_separate_agent(self):
+        from unittest import mock
+        from haivequeen import hives
+        from bzztest import REL
+        self.machine['providers'][0]['beeMode'] = 'process'
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        bee_wt = self.base / 'bee-wt'
+        bee_wt.mkdir()
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
+            result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], cwd=str(bee_wt))
+        self.assertEqual((result['kind'], result['provider']), ('process', 'claude'))
+        self.assertEqual(runtime.get_agent(self.conn, 'testproj', 'Ada')['phase'], 'bee')
+
+    # A Codex Queen without subagents cannot start a Bee without a free slot and is told why.
+    def test_codex_queen_fallback_needs_a_slot_and_names_the_reason(self):
         from haivequeen import hives
         from bzztest import REL
         self.machine['providers'][1]['slots'] = 1
-        self.add_local_provider()
         self.plan('READY', [{'id': 'P1', 'title': 'First'}])
         hives.create(self.conn, 'testproj', REL, 'codex', '123456')
         self.agent('queen', phase='queen', status='running', provider='codex', type='codex', pid=42)
-        result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], no_subagents=True)
-        self.assertEqual(result['kind'], 'queen')
+        self.assertFalse(bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], no_subagents=True))
+        self.assertTrue(bees.LAST_REFUSAL)
         self.assertFalse(any(a['phase'] == 'bee' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
 
     # A lower class cannot override the package class in the plan.

@@ -12,7 +12,7 @@ import tomllib
 from pathlib import Path
 
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
-CHOICES = {"protocol": ("claude", "codex"), "use": ("preferred", "fallback", "capability-only")}   # fields that offer a fixed choice
+CHOICES = {"protocol": ("claude", "codex"), "use": ("preferred", "fallback", "capability-only"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
 CLASSES = ("light", "medium", "heavy")
 
 
@@ -327,6 +327,7 @@ class ConfigWindow:
             rest, tools, self.position = split_args(shown.get("args"))
             shown = {k: v for k, v in shown.items() if k != "args"}
             shown["allowedTools"], shown["args"] = tools, rest
+            shown.setdefault("beeMode", "process" if shown.get("protocol") == "codex" else "subagent")   # always offer the setting, with the value that applies without an entry
         self.fields(self.form, shown, ())
         self.add_row(self.form, ())
 

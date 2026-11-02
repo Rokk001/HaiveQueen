@@ -26,6 +26,7 @@ command = "claude"
 args = ["--output-format", "stream-json", "--verbose", "--model", "{model}", "--permission-mode", "auto", "--effort", "{effort}", "--add-dir", "{repo}", "--add-dir", "{tools}", "--disable-slash-commands", "--strict-mcp-config", "--tools", "{claudeTools}", "--setting-sources", "", "--append-system-prompt-file", "{rules}"]
 slots = 2
 use = "preferred"
+beeMode = "subagent"   # how the Queen of this provider runs her Bees: subagent (embedded, default for claude) | process (separate agents, default for codex)
 limit = { source = "claude" }
 [providers.classes]
 light = { model = "claude-haiku-5-5", effort = "medium" }
@@ -39,6 +40,7 @@ command = "codex"
 args = ["exec", "--json", "--skip-git-repo-check", "-m", "{model}", "-c", "model_reasoning_effort={effort}", "--dangerously-bypass-approvals-and-sandbox", "--ignore-user-config", "-C", "{cwd}"]
 slots = 2
 use = "preferred"
+beeMode = "process"
 capabilities = ["images"]
 limit = { source = "codex" }
 [providers.classes]

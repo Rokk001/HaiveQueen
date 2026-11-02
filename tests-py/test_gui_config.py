@@ -177,6 +177,20 @@ class WindowTest(unittest.TestCase):
                 return
         self.fail("no entry showing %r" % old)
 
+    # Every provider offers the Bee mode with the value that applies when the file has no entry.
+    def test_provider_offers_the_bee_mode_with_its_default(self):
+        """A claude provider shows subagent and a codex provider shows process; choosing a value and saving writes it to the file."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(1)   # provider claude
+        self.assertEqual({path: getter() for path, getter, _like in win.getters}[("beeMode",)], "subagent")
+        win.select(2)   # provider codex
+        getters = {path: getter for path, getter, _like in win.getters}
+        self.assertEqual(getters[("beeMode",)](), "process")
+        win.target()["beeMode"] = "subagent"   # the choice the owner makes in the list
+        win.build_form()
+        win.save()
+        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["providers"][1]["beeMode"], "subagent")
+
     # Editing the allowed tools list and a number, then saving.
     def test_edit_allowed_tools_and_save(self):
         """Changing the allowed tools and the slots of a provider writes both; everything else in the file stays."""

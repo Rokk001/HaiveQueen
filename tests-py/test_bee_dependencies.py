@@ -52,7 +52,10 @@ class BeeDependencies(RoundCase):
         self.assertEqual(runtime.list_questions(self.conn, 'testproj', plan=REL), [])
         self.assertIn('dependency P1 of package P2 not done', (self.base / 'logs' / 'ROUNDS.log').read_text())
         bees.report_attempt(self.env(), REL, 'P1', 'medium', 'succeeded', 'done')
-        self.assertEqual(self.start('P2', ('--no-subagents',))[0], 0)
+        self.machine['providers'][1]['beeMode'] = 'subagent'   # a Codex Queen that can start embedded subagents
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
+            code, output = self.start('P2')
+        self.assertEqual(code, 0, output)
 
     # All and unknown dependencies are checked explicitly.
     def test_all_and_unknown_dependencies(self):
