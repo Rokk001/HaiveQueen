@@ -295,11 +295,15 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
         if entry:
             used, hours = entry.get("usedPercent"), entry.get("resetHours")
     elif not os.environ.get("BZZ_RUNTIME_OVERRIDE") and provider["limit"] in ("claude", "codex"):
+        kept = None
         if provider["limit"] == "claude" and conn is not None:
             from . import usage
             if usage.claude_refresh_failed(conn):
-                return {"FreePct": 0.0, "Hours": 168.0}
-        u = (claude_usage(conn)["SevenDay"] if provider["limit"] == "claude" and conn is not None
+                kept = usage.retained_weekly(conn)   # the last verified weekly reading while it is recent; without one the quota counts as unavailable
+                if kept is None:
+                    return {"FreePct": 0.0, "Hours": 168.0}
+        u = ({"Pct": kept[0], "At": kept[1]} if kept else
+             claude_usage(conn)["SevenDay"] if provider["limit"] == "claude" and conn is not None
              else codex_usage()["SevenDay"] if provider["limit"] == "codex" else None)
         if u and u.get("Pct") is not None:
             used = u["Pct"]

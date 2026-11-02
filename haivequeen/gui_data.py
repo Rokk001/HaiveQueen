@@ -104,8 +104,8 @@ def blocker_text(reason) -> str:
         return "Not enough free RAM: " + reason.split(" is below")[0][9:]
     if reason.startswith("no provider with a free slot"):
         return "No free provider with a Queen model"
-    if reason.startswith("waiting for a free slot or limit of provider "):
-        return "Provider busy or quota used up: " + reason.rsplit(" ", 1)[-1]
+    if reason.startswith("waiting for provider "):
+        return "Waiting for provider " + reason[len("waiting for provider "):]
     if reason.startswith("its branch "):
         return "Plan branch is used elsewhere"
     if reason.startswith("worktree for branch "):

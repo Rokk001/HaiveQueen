@@ -212,6 +212,31 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
             finish_hive(conn, env.name, plan['path'])
 
 
+# Check whether a provider can take a waiting Hive again.
+def provider_wait_check(conn, env, hive, provider, free, plan):
+    """Return (available, detail) for a Hive that waits for `provider`: whether a Queen can start now and, if not, what is missing.
+
+    A Queen needs a slot of her own, and a Bee that runs as a separate process of the same provider needs one more: the slot the waiting Queen has just
+    given up is no reason to wake her. When the provider can never offer that many slots, the owner is asked once (item provider-slots)."""
+    from . import usage
+    full = [w for w in usage.limit_windows(conn, provider) if w['used_pct'] >= 100]
+    if full:
+        if any(w.get('unknown') for w in full):
+            return False, 'usage unknown, no recent reading (%s)' % (usage.claude_refresh_error(conn) or 'check failed')
+        return False, 'quota used up'
+    needed = 1 + (1 if provider['name'] == hive['provider'] and provider.get('beeMode') == 'process' and not provider.get('endpoint') else 0)
+    if provider['slots'] < needed:
+        if not runtime.list_questions(conn, env.name, status='open', plan=plan, item='provider-slots'):
+            db.add_question(conn, env.name, plan, 'provider-slots',
+                            'Provider %s has %d slot(s), but its Queen plus a Bee that runs as a separate process needs %d, so no Bee of this Hive can ever start. '
+                            'Raise the slots of %s, or set beeMode = "subagent" for it so its Bees need no slot of their own.' % (provider['name'], provider['slots'], needed, provider['name']),
+                            'Raise slots to %d, or set beeMode to subagent if the provider can run subagents.' % needed)
+        return False, 'needs %d slots (Queen and Bee process) but has %d' % (needed, provider['slots'])
+    if free < needed:
+        return False, 'no free slot (needs %d, %d free)' % (needed, free)
+    return True, ''
+
+
 # Whether the owner already accepted the integrated plan.
 def owner_accepted(conn, project, plan, since):
     """True when an owner check of the plan that was already handled (item owner-check-answered) got an ok answer at or after `since` (the time of the integration)."""
@@ -541,8 +566,8 @@ def blocker_label(reason):
         return 'Zu wenig freier Arbeitsspeicher: ' + reason.split(' is below')[0][9:]
     if reason.startswith('no provider with a free slot'):
         return 'Kein freier Anbieter mit verf\u00fcgbarem Queen-Modell'
-    if reason.startswith('waiting for a free slot or limit of provider '):
-        return 'Anbieter belegt oder Kontingent ersch\u00f6pft: ' + reason.rsplit(' ', 1)[-1]
+    if reason.startswith('waiting for provider '):
+        return 'Wartet auf Anbieter ' + reason[len('waiting for provider '):]
     return {'STOP': 'HaiveQueen gestoppt', 'PAUSED': 'HaiveQueen pausiert',
             'waiting for the integration place': 'wartet auf Integration',
             'handing off, Bee processes are still running': '\u00dcbergabe: Bees laufen noch',
@@ -820,9 +845,10 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     from . import bees
                     wait = conn.execute('SELECT provider FROM bee_provider_wait WHERE project=? AND plan_path=?', (env.name, plan['path'])).fetchone()
                     provider = sch.get_provider(env.providers, wait[0]) if wait else None
-                    limited = not provider or any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, provider))
-                    if not provider or not bees.provider_available(conn, env.name, plan['path'], provider['name'], pool.free.get(provider['name'], 0), limited):
-                        not_started(env, plan['path'], 'waiting for a free slot or limit of provider %s' % (provider['name'] if provider else wait[0] if wait else '?'))
+                    name = provider['name'] if provider else wait[0] if wait else '?'
+                    can, detail = provider_wait_check(conn, env, hive, provider, pool.free.get(name, 0), plan['path']) if provider else (False, 'provider unknown')
+                    if not (can and bees.provider_available(conn, env.name, plan['path'], name, pool.free.get(name, 0), False)):
+                        not_started(env, plan['path'], 'waiting for provider %s: %s' % (name, detail or 'not available'))
                         continue
                     hive = get(conn, env.name, plan['path'])
                 if hive and hive['state'] in ('queenless', 'resting', 'answer', 'owner_check', 'handoff'):

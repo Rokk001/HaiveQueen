@@ -1096,6 +1096,27 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(planlib.parse_plan_text(text).owner_check, "none")
         self.assertFalse(hives.owner_check_wanted(env, REL))
 
+    # A waiting Hive is not woken by the slot its own Queen has just given up.
+    def test_waiting_hive_needs_a_slot_for_the_queen_and_a_bee_process(self):
+        from haivequeen import hives
+        from bzztest import REL
+        self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
+        hives.create(self.conn, "testproj", REL, "codex", "123456")
+        env = self.env()
+        provider = next(p for p in env.providers if p["name"] == "codex")
+        hive = hives.get(self.conn, "testproj", REL)
+        provider["beeMode"], provider["slots"] = "process", 1
+        available, detail = hives.provider_wait_check(self.conn, env, hive, provider, 1, REL)
+        self.assertFalse(available)
+        self.assertIn("needs 2 slots", detail)
+        hives.provider_wait_check(self.conn, env, hive, provider, 1, REL)   # asked once only
+        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item="provider-slots")), 1)
+        provider["slots"] = 3
+        self.assertFalse(hives.provider_wait_check(self.conn, env, hive, provider, 1, REL)[0])   # only one slot free: the Queen would take it again
+        self.assertTrue(hives.provider_wait_check(self.conn, env, hive, provider, 2, REL)[0])
+        provider["beeMode"] = "subagent"   # embedded Bees need no slot of their own
+        self.assertTrue(hives.provider_wait_check(self.conn, env, hive, provider, 1, REL)[0])
+
     # An owner check that was already answered ok after the integration is not asked again.
     def test_accepted_owner_check_is_not_asked_again(self):
         from haivequeen import db, hives

@@ -5,7 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -32,8 +32,8 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
         self.reset = int(time.time()) + 3600
 
     # Store a fictional snapshot in the existing shared cache format.
-    def snapshot(self, percent, failed=False):
-        raw = {"saved": datetime.now().astimezone().isoformat(),
+    def snapshot(self, percent, failed=False, age_hours=0):
+        raw = {"saved": (datetime.now().astimezone() - timedelta(hours=age_hours)).isoformat(),
             "sevenDay": {"utilization": percent / 100, "resetsAt": self.reset}}
         if failed:
             raw["refresh_error"] = "quota refresh failed"
@@ -52,7 +52,7 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
 
     # Hide an unverified historical percentage after a failed metadata refresh.
     def test_failed_refresh_does_not_display_old_ninety_percent(self):
-        raw = self.snapshot(90, failed=True)
+        raw = self.snapshot(90, failed=True, age_hours=usage.RETAIN_HOURS + 1)
         self.assertIsNone(overview.window_usage(raw, datetime.now())["SevenDay"])
         self.assertIsNone(scheduler.claude_usage(self.conn)["SevenDay"])
         row = overview.provider_lines(self.conn, self.cfg, [])[0]
@@ -60,13 +60,27 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
         self.assertIsNone(row["ratio"])
         self.assertFalse(row["next"])
 
-    # Do not grant automatic work based on quota that could not be verified.
-    def test_failed_refresh_does_not_recommend_or_start_claude(self):
-        self.snapshot(90, failed=True)
+    # A failed check keeps working on the last verified reading while it is recent: 13 % used must not look like 100 %.
+    def test_failed_refresh_keeps_a_recent_reading_for_starts(self):
+        self.snapshot(13, failed=True)
+        self.assertEqual(scheduler.provider_limit(self.provider, self.conn)["FreePct"], 87)
+        self.assertEqual(usage.get_provider_limit(self.conn, self.provider, read_pc=True)["free_pct"], 87)
+        self.assertEqual([round(w["used_pct"]) for w in usage.limit_windows(self.conn, self.provider, read_pc=True)], [13])
+        self.assertIsNotNone(scheduler.select_provider([self.provider], "medium", [], {"claude": 5}, conn=self.conn))
+
+    # Do not grant automatic work based on quota that could not be verified for a long time.
+    def test_failed_refresh_with_an_old_reading_does_not_recommend_or_start_claude(self):
+        self.snapshot(13, failed=True, age_hours=usage.RETAIN_HOURS + 1)
         self.assertEqual(scheduler.provider_limit(self.provider, self.conn)["FreePct"], 0)
         self.assertEqual(usage.get_provider_limit(self.conn, self.provider, read_pc=True)["free_pct"], 0)
         self.assertIsNone(scheduler.select_provider([self.provider], "medium", [], {"claude": 5}, conn=self.conn))
         self.assertGreaterEqual(usage.limit_windows(self.conn, self.provider, read_pc=True)[0]["used_pct"], 100)
+
+    # A failed check says what went wrong instead of a generic text.
+    def test_failed_refresh_stores_the_reason(self):
+        provider = dict(self.provider, command="a-claude-cli-that-does-not-exist")
+        self.assertFalse(usage.refresh_claude_usage(self.conn, [provider], run=lambda *a, **k: None, force=True))
+        self.assertIn("missing CLI", usage.claude_refresh_error(self.conn))
 
     # The provider may confirm exhaustion without supplying a reset timestamp.
     def test_verified_percentage_without_reset_stays_known(self):

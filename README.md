@@ -179,7 +179,7 @@ Every list that does not fit has a scroll bar (or use the mouse wheel).
 | `help` | the keys |
 | `Tab` | switch between the Hives table and the Queens-and-Bees table; `Up`/`Down` move the selection in the active table |
 | `Enter` / double click | live output of the selected row |
-| `M` / right click | Queen menu for the Hive or Queen row: restart the Queen, end Queen and Bees, pause or resume the plan |
+| `M` / right click | Queen menu for the Hive or Queen row: restart the Queen (on the same provider, or on another configured provider that offers the Queen class; the Hive then keeps that provider), end Queen and Bees, pause or resume the plan |
 | `Space` | pause or resume the plan of the selected Hive |
 | `P` | pause or resume all new starts |
 | `X` | stop the selected Bee (a Queen or a not yet started Bee only gets a hint) |
@@ -195,7 +195,7 @@ A click on the repository name in the header opens the GitHub page. Pause, resum
 
 Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedProviders`, provider `slots`, provider `classes` and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. Per provider, `beeMode` chooses how the Bees of that provider's Queen run: `subagent` (embedded, small context, no extra slot; default for Claude) or `process` (a separate agent each; default for Codex); it can also be changed in the settings window. `escalateAfter` defaults to 3. `contextLimitTokens` defaults to 300000: set it once for all Apiaries; a project may override it, and a model entry under `[providers.classes]` may carry its own value that wins for Queens and Bees running with that model. Project settings override machine settings except the machine-wide ones. See [`examples/config.example.toml`](examples/config.example.toml) and [`examples/project.example.toml`](examples/project.example.toml).
 
-- **Quotas.** Claude subscription quotas are refreshed at most once per minute with the local CLI `/usage` metadata command, without model turns, hooks, MCP servers or saved sessions. The dashboard and scheduling share the verified account windows; a failed refresh hides the old percentage and pauses automatic Claude selection until a refresh succeeds.
+- **Quotas.** Claude subscription quotas are refreshed at most once per minute with the local CLI `/usage` metadata command, without model turns, hooks, MCP servers or saved sessions. The dashboard and scheduling share the verified account windows; a failed refresh hides the old percentage in the dashboard and stores what went wrong. Starts keep using the last verified reading for up to 6 hours; with an older or no reading automatic Claude selection pauses until a refresh succeeds. A Hive that waits for a provider shows why (quota used up, usage unknown, or too few slots). A provider whose slots can never fit a Queen plus a Bee process (`beeMode = "process"`) raises one owner question instead of restarting Queens in a loop.
 - **Reload.** Saved changes to the machine `config.toml` and to registered projects' `.haivequeen/project.toml` are reloaded at the next poll, also while idle, without restarting running agents. Valid changes wake scheduling at once; an invalid or temporarily missing file keeps the complete last valid settings. An explicit `--round-minutes` still takes precedence.
 
 ## Inbox
