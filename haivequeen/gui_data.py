@@ -134,7 +134,7 @@ def status_text(hive) -> str:
     if state == "resting":
         return "Resting until " + str(hive.get("reset_at") or "?").replace("T", " ")[:16]
     return {"queenless": "Queenless", "integration_wait": "Waiting for integration", "answer": "Waiting for answer", "owner_check": "Waiting for owner check",
-            "codex_wait": "Waiting for Codex", "provider_wait": "Waiting for Codex", "handoff": "Handoff", "waiting": "Waiting to start",
+            "codex_wait": "Waiting for Codex", "provider_wait": "Waiting for provider", "handoff": "Handoff", "waiting": "Waiting to start",
             "starting": "Waiting to start", "requeen": "Waiting to start"}.get(state, "")
 
 
@@ -232,11 +232,11 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
 
 # Describe one running Bee for the busy-bees table.
 def bee_row(agent, now, steps=None, ctx_limit=None) -> dict:
-    """Row of one running Bee: person name, model label, hive, apiary, task (with its reported step like 2/5), context, tokens, status and runtime."""
+    """Row of one running Bee: kind "bee", person name, model label, hive, apiary, plan path, task (with its reported step like 2/5), context, tokens, status and runtime."""
     name = str(agent.get("person") or agent.get("name"))
     step = (steps or {}).get(name, "")
     tin, tout = agent_tokens(agent)
-    return {"name": name, "agent": agent.get("name"), "project": agent.get("project"),
+    return {"kind": "bee", "name": name, "agent": agent.get("name"), "project": agent.get("project"), "plan_path": agent.get("plan_path") or "",
             "model": overview.model_short(agent.get("provider"), agent.get("model"), agent.get("effort")),
             "hive": hive_name(agent.get("plan_path") or ""), "apiary": agent.get("project"),
             "task": (str(agent.get("task") or agent.get("package") or agent.get("last_line") or "")[:40] + (" " + step if step else "")).strip(),
@@ -244,11 +244,21 @@ def bee_row(agent, now, steps=None, ctx_limit=None) -> dict:
             "status": "running" if agent.get("status") in runtime.ACTIVE_STATUSES else str(agent.get("status")), "runtime": fmt_elapsed(agent.get("started_at"), now)}
 
 
-# Collect the Bees of the active Hives: running Bee processes and packages that have a Bee assigned but no process yet.
-def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None) -> list:
-    """Rows for the busy-bees table. A package with a Bee assignment but no running process shows as 'waiting'; finished packages are left out.
+# Describe the running Queen of a Hive for the Bees table, from the Hive's row.
+def queen_row(hive) -> dict:
+    """Row of the running Queen of the Hive row `hive` (kind "queen"): name, model with effort, context, tokens and runtime; the Hive table does not repeat them."""
+    return {"kind": "queen", "name": hive["queen"], "agent": hive["queen_agent"], "project": hive["apiary"], "plan_path": hive["plan_path"],
+            "model": hive["queen_model"] or "–", "hive": hive["name"], "apiary": hive["apiary"], "task": "Queen",
+            "ctx": hive["queen_ctx"], "ctx_limit": hive["queen_ctx_limit"], "tin": hive["queen_tin"], "tout": hive["queen_tout"],
+            "status": "running", "runtime": hive["runtime"]}
 
-    `hive_keys` limits the waiting rows to the (project, plan) pairs whose Queen is running: only a running Queen starts Bees, so the assignments of any other Hive are not waiting Bees."""
+
+# Collect the Bees of the active Hives: running Bee processes and packages that have a Bee assigned but no process yet.
+def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None, hive_rows=None) -> list:
+    """Rows for the Bees table. A package with a Bee assignment but no running process shows as 'waiting'; finished packages are left out.
+
+    `hive_keys` limits the waiting rows to the (project, plan) pairs whose Queen is running: only a running Queen starts Bees, so the assignments of any other Hive are not waiting Bees.
+    With `hive_rows` (the Hive rows) every Hive with a running Queen gets the Queen's row first and its Bees directly below it; Bees of other Hives follow."""
     rows, seen = [], set()
     for agent in agents:
         if agent.get("phase") == "bee" and agent.get("status") in runtime.ACTIVE_STATUSES:
@@ -259,9 +269,17 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
             continue
         # A Bee that has not started has no name yet (names are given at the start) and its stored provider is only the choice of an earlier try,
         # so neither the package id nor that provider is shown as the Bee's name or model.
-        rows.append({"name": "–", "agent": None, "project": project, "model": "–", "hive": hive_name(plan),
+        rows.append({"kind": "bee", "name": "–", "agent": None, "project": project, "plan_path": plan, "model": "–", "hive": hive_name(plan),
                      "apiary": project, "task": package, "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": "waiting", "runtime": "–"})
-    return rows
+    if not hive_rows:
+        return rows
+    ordered, placed = [], set()
+    for hive in hive_rows:
+        if hive["live"]:
+            mine = [r for r in rows if (r["apiary"], r["plan_path"]) == (hive["apiary"], hive["plan_path"])]
+            ordered += [queen_row(hive)] + mine
+            placed.update(id(r) for r in mine)
+    return ordered + [r for r in rows if id(r) not in placed]
 
 
 # Format one event row as a log line with a source tag.
@@ -453,12 +471,13 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     live = [a for a in agents if a.get("status") in runtime.ACTIVE_STATUSES]
     queens = [a for a in live if a.get("phase") == "queen"]
     steps = {k: v for h in hive_rows for k, v in h["steps"].items()}
-    bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]})
+    bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]}, hive_rows)
+    workers = [b for b in bees if b["kind"] == "bee"]
     apiaries = sorted({h["apiary"] for h in hive_rows})
     slots = sum(int(p["total_slots"] or 0) for p in d["provider_limits"])
     today = [m["Today"] for m in d["usage"] if m.get("Today")]
     who = {a["name"]: (a.get("phase") or "", a.get("person") or a["name"]) for a in agents_all}
-    events = db.rows(conn, "SELECT ts,project,kind,agent,text FROM events" + (" WHERE project IN (?, ?)" if project else "") +
+    events = db.rows(conn, "SELECT id,ts,project,kind,agent,text FROM events" + (" WHERE project IN (?, ?)" if project else "") +
                      " ORDER BY id DESC LIMIT %d" % LOG_LINES, (project, runstate.GLOBAL_PROJECT) if project else ())
     try:
         from . import loop
@@ -466,11 +485,11 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     except Exception:   # a broken lock file must not stop the window: show the run state alone
         orchestrator = orchestrator_state(d["run"]["state"], 1, False)
     return {"now": now, "project": project, "run_state": d["run"]["state"], "orchestrator": orchestrator, "version": _version(),
-            "tiles": {"apiaries": len(apiaries), "hives": len(hive_rows), "queens": len(queens), "bees": sum(1 for b in bees if b["status"] == "running"),
-                      "bee_capacity": max(len(bees), slots), "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today)},
+            "tiles": {"apiaries": len(apiaries), "hives": len(hive_rows), "queens": len(queens), "bees": sum(1 for b in workers if b["status"] == "running"),
+                      "bee_capacity": max(len(workers), slots), "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today)},
             "hives": hive_rows, "bees": bees, "apiaries": apiaries,
             "projects": [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")],
-            "log": [log_line(e, who) for e in reversed(events)], "activity": activity_rows(agents_all, now),
+            "log": [log_line(e, who) for e in reversed(events)], "log_ids": [e["id"] for e in reversed(events)], "activity": activity_rows(agents_all, now),
             "system": sysinfo if sysinfo is not None else system_info(d["sysinfo"]), "queue": queue_panel(conn, project),
             "info": info_sections(d), "limits": limit_bars(d)}
 

@@ -225,7 +225,9 @@ class ConfigWindow:
         self.file_var = tk.StringVar(value=self.files[0][0])
         tk.Label(top, text="File:").pack(side="left")
         tk.OptionMenu(top, self.file_var, *[f[0] for f in self.files], command=self.pick_file).pack(side="left", padx=6)
-        self.status = tk.Label(top, anchor="w", fg="#a00000")
+        from .gui import COL
+        self.col = COL   # the dashboard colours, also for the status texts
+        self.status = tk.Label(top, anchor="w", fg=COL["red"])
         self.status.pack(side="left", padx=12, fill="x", expand=True)
         body = tk.Frame(self.win)
         body.pack(fill="both", expand=True, padx=8)
@@ -251,7 +253,7 @@ class ConfigWindow:
         bottom.pack(fill="x", padx=8, pady=6)
         for text, command in (("Save", self.save), ("Revert", self.reload), ("Open folder", self.open_folder), ("Close", self.win.destroy)):
             tk.Button(bottom, text=text, width=12, command=command).pack(side="left", padx=4)
-        tk.Label(bottom, text="Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.", fg="#666666").pack(side="left", padx=12)
+        tk.Label(bottom, text="Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.", fg=COL["dim"]).pack(side="left", padx=12)
         self.reload()
 
     # Is the file shown a machine config (providers, projects)?
@@ -376,7 +378,7 @@ class ConfigWindow:
         row = tk.Frame(parent)
         row.pack(fill="x", pady=(6, 2), anchor="w")
         key, value = tk.StringVar(), tk.StringVar()
-        tk.Label(row, text="new setting", width=22, anchor="w", fg="#666666", font=(self.mono, 10)).pack(side="left")
+        tk.Label(row, text="new setting", width=22, anchor="w", fg=self.col["dim"], font=(self.mono, 10)).pack(side="left")
         tk.Entry(row, textvariable=key, width=22, font=(self.mono, 10)).pack(side="left")
         tk.Entry(row, textvariable=value, width=40, font=(self.mono, 10)).pack(side="left", padx=4)
 
@@ -403,7 +405,7 @@ class ConfigWindow:
                 raw = getter()
                 values[path] = raw if isinstance(raw, (bool, list, dict)) or isinstance(like, (bool, list)) else parse_typed(raw, like)
         except (ValueError, TypeError) as exc:
-            self.status.config(text="%s: %s" % (".".join(where), exc), fg="#a00000")
+            self.status.config(text="%s: %s" % (".".join(where), exc), fg=self.col["red"])
             return False
         for path, raw in values.items():
             if self.node[0] == "providers" and path in (("allowedTools",), ("args",)):
@@ -440,8 +442,8 @@ class ConfigWindow:
         kind, i = self.node
         if kind == "general":
             return
-        from tkinter import messagebox
-        if messagebox.askyesno("HaiveQueen", "Remove this %s from the settings?" % kind[:-1], parent=self.win):
+        from . import gui_dialog
+        if gui_dialog.ask(self.win, "HaiveQueen", "Remove this %s from the settings?" % kind[:-1], self.mono):
             del self.data[kind][i]
             self.fill_nodes()
             self.select(0)
@@ -453,10 +455,10 @@ class ConfigWindow:
             return
         problems = check(self.data, self.machine())
         if problems:
-            self.status.config(text="; ".join(problems)[:300], fg="#a00000")
+            self.status.config(text="; ".join(problems)[:300], fg=self.col["red"])
             return
         save_file(self.files[self.index][1], self.data)
-        self.status.config(text="Saved.", fg="#007000")
+        self.status.config(text="Saved.", fg=self.col["green"])
         if self.on_saved:
             self.on_saved()
 

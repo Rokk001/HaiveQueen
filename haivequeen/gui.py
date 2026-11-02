@@ -162,9 +162,11 @@ class Dashboard:
         self.root, self.conn, self.project = root, conn, project
         self.snap, self.scale, self.hits, self.images, self.resize_job = None, 1.0, [], {}, None
         self.mono = next((f for f in FONTS if f in tkfont.families(root)), "TkFixedFont")
+        from . import gui_dialog
+        gui_dialog.apply_style(root, self.mono)   # the questions and settings windows get the dashboard look
         self.sel = {"hives": 0, "bees": 0}
         self.table, self.live = "hives", {}   # table that Enter acts on; open live windows by (project, agent)
-        self.autoscroll, self.cleared_at, self.error = True, 0, ""
+        self.autoscroll, self.cleared_id, self.error = True, 0, ""   # cleared_id: log lines up to this event id are hidden
         self.scroll, self.rooms, self.bars, self.areas, self.drag = {}, {}, {}, [], None   # scroll offsets, visible rows, drawn scroll bars, wheel areas, dragged bar
         self.canvas = tk.Canvas(root, bg=COL["bg"], highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
@@ -390,12 +392,12 @@ class Dashboard:
 
     # Draw the table of active Hives.
     def hive_table(self, s, x0, y0, x1, y1):
-        """Draw the Hive table: Queen, Bees, progress (finished packages), the Queen's context and tokens, status and runtime; details of the selected row below."""
+        """Draw the Hive table: Queen name, Bees, progress (finished packages), status and runtime; details of the selected row below. All other Queen data is in the Bees table."""
         rows = s["hives"]
         sub = "%d hives across %d apiaries" % (len(rows), s["tiles"]["apiaries"]) + ("  (%s)" % s["project"] if s["project"] else "")
         state = s["run_state"]
-        self.panel(x0, y0, x1, y1, "ACTIVE HIVES", sub if state == "RUNNING" else state + "  " + sub, (("Enter", "live"), ("P", "pause/resume"), ("Space", "plan"), ("F", "apiary")))
-        for name, x in (("#", 24), ("HIVE", 90), ("APIARY", 218), ("QUEEN", 312), ("BEES", 386), ("PROGRESS", 436), ("CONTEXT", 576), ("TOKENS", 670), ("STATUS", 772)):
+        self.panel(x0, y0, x1, y1, "ACTIVE HIVES", sub if state == "RUNNING" else state + "  " + sub, (("Enter", "live"), ("P", "pause/resume"), ("Space", "plan"), ("F", "apiary"), ("Tab", "table")))
+        for name, x in (("#", 24), ("HIVE", 90), ("APIARY", 218), ("QUEEN", 312), ("BEES", 386), ("PROGRESS", 436), ("STATUS", 576)):
             self.text(x0 + x, y0 + 56, name, 13, "dim", "w")
         self.pick_clamp("hives", len(rows))
         room = 6
@@ -404,7 +406,7 @@ class Dashboard:
         self.scrollbar("hives", x1 - 16, y0 + 70, y0 + 82 + room * 25 - 12, len(rows), room)
         for n, r in enumerate(rows[off:off + room]):
             i, y = off + n, y0 + 82 + n * 25
-            chosen = i == self.sel["hives"]
+            chosen = i == self.sel["hives"] and self.table == "hives"
             if chosen:
                 self.rect(x0 + 8, y - 12, x1 - 22, y + 12, fill="select", outline="selectedge")
             self.hit(x0 + 8, y - 12, x1 - 22, y + 12, self.select, ("hives", i))
@@ -417,28 +419,28 @@ class Dashboard:
             self.text(x0 + 386, y, "%d/%d" % (r["bees_running"], r["bees_total"]), 14, "text", "w")
             self.bar(x0 + 436, y - 7, 70, 14, r["progress"] / 100, "seg", 7)
             self.text(x0 + 513, y, "%d/%d" % (r["done"], r["total"]), 13, "text", "w")
-            self.context_bar(x0 + 576, y, r["queen_ctx"], r["queen_ctx_limit"])
-            self.text(x0 + 670, y, "%s/%s" % (gui_data.fmt_tokens(r["queen_tin"]), gui_data.fmt_tokens(r["queen_tout"])), 13, "cyan", "w")
-            self.dot(x0 + 778, y, colour)
-            self.text(x0 + 790, y, self.fit(r["status"], 145 if r["runtime"] else 200, 12), 12, colour, "w")
+            self.dot(x0 + 582, y, colour)
+            self.text(x0 + 594, y, self.fit(r["status"], 300 if r["runtime"] else 380, 12), 12, colour, "w")
             self.text(x1 - 26, y, r["runtime"], 14, "text", "e")
         if rows:
             r = rows[self.sel["hives"]]
-            ctx = "ctx %s/%s" % (gui_data.fmt_tokens(r["queen_ctx"]), gui_data.fmt_tokens(r["queen_ctx_limit"])) if r["queen_ctx_limit"] else "ctx -"
-            line = "%s | %s | packages %d done, %d implemented%s%s of %d | Queen %s%s | %s | queen in/out %s/%s | hive total in/out %s/%s | %s" % (
+            line = "%s | %s | packages %d done, %d implemented%s%s of %d | hive total in/out %s/%s | %s" % (
                 r["name"], r["apiary"], r["done"], r["implemented"], ", %d rejected" % r["rejected"] if r["rejected"] else "",
-                ", %d waiting (%s)" % (r["waiting"], r["waiting_reasons"]) if r["waiting"] else "", r["total"], r["queen"], " " + r["queen_model"] if r["queen_model"] else "", ctx,
-                gui_data.fmt_tokens(r["queen_tin"]), gui_data.fmt_tokens(r["queen_tout"]), gui_data.fmt_tokens(r["hive_tin"]), gui_data.fmt_tokens(r["hive_tout"]), r["status"])
+                ", %d waiting (%s)" % (r["waiting"], r["waiting_reasons"]) if r["waiting"] else "", r["total"],
+                gui_data.fmt_tokens(r["hive_tin"]), gui_data.fmt_tokens(r["hive_tout"]), r["status"])
             self.text(x0 + 24, y1 - 14, self.fit(line, x1 - x0 - 48, 12), 12, "dim", "w")
         else:
             self.text(x0 + 24, y0 + 90, "no active hives", 15, "dim", "w")
 
     # Draw the table of busy Bees.
     def bee_table(self, s, x0, y0, x1, y1):
-        """Draw the Bees (running processes and packages with a Bee assigned) with model, Hive, task, context, tokens and runtime; the selected running Bee can be stopped with X."""
+        """Draw the running Queens, each with its Bees (running processes and packages with a Bee assigned) directly below it, with model, Hive, task, context, tokens and runtime; the selected running Bee can be stopped with X."""
         rows = s["bees"]
-        running = sum(1 for b in rows if b["status"] == "running")
-        self.panel(x0, y0, x1, y1, "BUSY BEES", "%d running, %d waiting across %d hive%s" % (running, len(rows) - running, len({b["hive"] for b in rows}), "" if len({b["hive"] for b in rows}) == 1 else "s"), (("Enter", "live"), ("X", "stop")))
+        workers = [b for b in rows if b["kind"] == "bee"]
+        running = sum(1 for b in workers if b["status"] == "running")
+        parents = {(b["apiary"], b["plan_path"]) for b in rows if b["kind"] == "queen"}   # Hives whose Bees are drawn below their Queen
+        hives = {b["hive"] for b in rows}
+        self.panel(x0, y0, x1, y1, "QUEENS AND BEES", "%d running, %d waiting across %d hive%s" % (running, len(workers) - running, len(hives), "" if len(hives) == 1 else "s"), (("Enter", "live"), ("X", "stop"), ("M", "queen")))
         for name, x in (("#", 24), ("BEE", 80), ("MODEL", 170), ("HIVE", 300), ("TASK", 410), ("CONTEXT", 545), ("TOKENS", 655), ("STATUS", 765), ("RUNTIME", 900)):
             self.text(x0 + x, y0 + 56, name, 13, "dim", "w")
         self.pick_clamp("bees", len(rows))
@@ -448,24 +450,30 @@ class Dashboard:
         self.scrollbar("bees", x1 - 16, y0 + 66, y0 + 76 + room * 22 - 8, len(rows), room)
         for n, r in enumerate(rows[off:off + room]):
             i, y = off + n, y0 + 76 + n * 22
-            chosen = i == self.sel["bees"]
+            chosen = i == self.sel["bees"] and self.table == "bees"
             if chosen:
                 self.rect(x0 + 8, y - 10, x1 - 22, y + 10, fill="select", outline="selectedge")
             self.hit(x0 + 8, y - 10, x1 - 22, y + 10, self.select, ("bees", i))
             colour = "green" if r["status"] == "running" else "amber"
             self.text(x0 + 24, y, str(i + 1), 14, "dim", "w")
             self.pic("row_icon" if chosen else "row_icon_dim", x0 + 50, y, "w")
-            self.text(x0 + 80, y, r["name"][:11], 14, "gold" if chosen else "text", "w")
+            if r["kind"] == "queen":
+                self.text(x0 + 80, y, r["name"][:11], 14, "gold", "w")
+            elif (r["apiary"], r["plan_path"]) in parents:
+                self.text(x0 + 80, y, "└", 14, "dim", "w")
+                self.text(x0 + 94, y, r["name"][:9], 14, "gold" if chosen else "text", "w")
+            else:
+                self.text(x0 + 80, y, r["name"][:11], 14, "gold" if chosen else "text", "w")
             self.text(x0 + 170, y, r["model"][:16], 14, "text", "w")
             self.text(x0 + 300, y, r["hive"][:14], 14, "text", "w")
-            self.text(x0 + 410, y, r["task"][:15], 14, "text", "w")
+            self.text(x0 + 410, y, r["task"][:15], 14, "gold" if r["kind"] == "queen" else "text", "w")
             self.context_bar(x0 + 545, y, r["ctx"], r["ctx_limit"])
             self.text(x0 + 655, y, "%s/%s" % (gui_data.fmt_tokens(r["tin"]), gui_data.fmt_tokens(r["tout"])), 13, "cyan", "w")
             self.dot(x0 + 772, y, colour)
             self.text(x0 + 784, y, r["status"], 14, colour, "w")
             self.text(x0 + 900, y, r["runtime"], 14, "text", "w")
         if not rows:
-            self.text(x0 + 24, y0 + 90, "no busy bees", 15, "dim", "w")
+            self.text(x0 + 24, y0 + 90, "no queens or bees", 15, "dim", "w")
 
     # Draw the token use per Apiary and Hive.
     def activity(self, s, x0, y0, x1, y1):
@@ -525,7 +533,7 @@ class Dashboard:
         self.text(x, y0 + 26, "[%s]" % ("On" if self.autoscroll else "Off"), 15, "cyan", "e")
         self.hit(x - 40, y0 + 12, x, y0 + 40, lambda _a: self.toggle_autoscroll())
         self.text(x - 46, y0 + 26, "Auto-scroll", 15, "dim", "e")
-        lines = s["log"][self.cleared_at:]
+        lines = self.visible_log()
         room = int((y1 - y0 - 60) // 22)
         if self.autoscroll:
             self.scroll["log"] = max(0, len(lines) - room)
@@ -592,9 +600,7 @@ class Dashboard:
         self.hit(160, 866, right + 34, 908, lambda _a: self.state_menu())
         x = right + 50
         self.text(x - 22, 886, "|", 17, "dim", "w")
-        for name, action in (("status", self.status), ("bees", lambda: self.focus("bees")),
-                             ("hives", lambda: self.focus("hives")), ("apiaries" if not self.project else "apiary:" + self.project, self.next_project),
-                             ("logs", self.toggle_autoscroll),
+        for name, action in (("apiaries" if not self.project else "apiary:" + self.project, self.next_project),
                              ("questions", self.open_questions), ("config", self.open_config), ("help", self.help)):
             w = 13 * len(name)
             self.text(x, 886, name, 17, "text", "w")
@@ -620,11 +626,34 @@ class Dashboard:
         self.table = arg[0]
         self.draw()
 
-    # Move the selection to a table.
-    def focus(self, table):
-        """Select the first row of `table`."""
-        self.sel[table] = 0
+    # Read the selected row of a table.
+    def selected(self, table=None):
+        """The selected row of `table` (default: the table Enter acts on), or None when it has no rows."""
+        table = table or self.table
+        rows = (self.snap or {}).get(table) or []
+        return rows[min(self.sel[table], len(rows) - 1)] if rows else None
+
+    # Find the Hive of the selection.
+    def selected_hive(self):
+        """The Hive row of the selection: the selected Hive, or the Hive of the selected Queen row; None for a Bee row or when nothing is selected."""
+        row = self.selected()
+        if row is None or self.table == "hives":
+            return row
+        if row["kind"] != "queen":
+            return None
+        return next((h for h in self.snap["hives"] if (h["apiary"], h["plan_path"]) == (row["apiary"], row["plan_path"])), None)
+
+    # Switch between the two tables.
+    def switch_table(self):
+        """Make the other table (Hives, Queens and Bees) the one that the arrow keys, Enter, M and Space act on."""
+        self.table = "bees" if self.table == "hives" else "hives"
         self.draw()
+
+    # The log lines that were not cleared.
+    def visible_log(self) -> list:
+        """The log lines newer than the last clear (by event id, so lines pushed out of the window cannot make new ones disappear)."""
+        s = self.snap or {}
+        return [line for line, event in zip(s.get("log", []), s.get("log_ids", [])) if event > self.cleared_id]
 
     # Send a click to the area under the pointer.
     def on_click(self, event):
@@ -671,9 +700,9 @@ class Dashboard:
 
     # Open the Queen menu of the Hive under the pointer.
     def on_context(self, event):
-        """A right click on a Hive row selects it and opens its Queen menu."""
+        """A right click on a Hive row or a Queen row selects it and opens the Queen menu; on a Bee row no menu opens."""
         for x0, y0, x1, y1, action, arg in reversed(self.hits):
-            if x0 <= event.x <= x1 and y0 <= event.y <= y1 and action == self.select and arg[0] == "hives":
+            if x0 <= event.x <= x1 and y0 <= event.y <= y1 and action == self.select:
                 self.select(arg)
                 self.hive_menu()
                 return
@@ -681,17 +710,15 @@ class Dashboard:
     # Open the live view of the selected row.
     def open_live(self):
         """Open (or focus) the live text window of the selected row of the table Enter acts on: a Hive shows its running Queen, else its latest one; a Bee its own text."""
-        rows = (self.snap or {}).get(self.table) or []
-        if not rows:
+        row = self.selected()
+        if row is None:
             return
-        row = rows[min(self.sel[self.table], len(rows) - 1)]
         if self.table == "hives":
             project, agent, title = row["apiary"], row.get("queen_agent"), "Queen %s | %s" % (row["queen"], row["name"])
         else:
-            project, agent, title = row["project"], row.get("agent"), "Bee %s | %s" % (row["name"], row["hive"])
+            project, agent, title = row["project"], row.get("agent"), "%s %s | %s" % ("Queen" if row["kind"] == "queen" else "Bee", row["name"], row["hive"])
         if not agent:
-            from tkinter import messagebox
-            messagebox.showinfo("HaiveQueen", "This row has no agent process yet, so there is no live output.", parent=self.root)
+            self.inform("This row has no agent process yet, so there is no live output.")
             return
         view = self.live.get((project, agent))
         if view is not None and view.alive():
@@ -713,25 +740,38 @@ class Dashboard:
 
     # Map keys to actions.
     def on_key(self, event):
-        """P pause/resume, Q answer the open questions, Space pause/resume the selected plan, F apiary filter, M queen menu of the selected Hive, X stop the selected Bee, C clear and S save the log, A toggle auto-scroll, Up/Down move the Hive selection, Enter opens the live view."""
+        """P pause/resume, Q answer the open questions, Space pause/resume the selected plan, F apiary filter, M queen menu of the selected Hive, X stop the selected Bee, C clear and S save the log, A toggle auto-scroll, Tab switch between the Hives and the Queens-and-Bees table, Up/Down move the selection in that table, Enter opens the live view."""
         key = (event.keysym or "").lower()
         {"p": self.toggle_pause, "f": self.next_project, "m": self.hive_menu, "space": self.toggle_hive_pause, "x": self.stop_bee, "c": self.clear_log, "s": self.save_log,
-         "a": self.toggle_autoscroll, "q": self.open_questions, "up": lambda: self.move(-1), "down": lambda: self.move(1), "return": self.open_live}.get(key, lambda: None)()
+         "a": self.toggle_autoscroll, "q": self.open_questions, "tab": self.switch_table, "up": lambda: self.move(-1), "down": lambda: self.move(1), "return": self.open_live}.get(key, lambda: None)()
 
-    # Move the Hive selection up or down.
+    # Move the selection of the active table up or down.
     def move(self, step):
-        """Move the selected Hive row by `step` rows and scroll the table so that the row stays visible."""
-        rows = len(self.snap["hives"]) if self.snap else 0
-        self.sel["hives"] = max(0, min(self.sel["hives"] + step, max(0, rows - 1)))
-        room, off = self.rooms.get("hives", 6), self.scroll.get("hives", 0)
-        self.scroll["hives"] = self.sel["hives"] if self.sel["hives"] < off else max(off, self.sel["hives"] - room + 1)
+        """Move the selected row of the active table by `step` rows and scroll the table so that the row stays visible."""
+        table = self.table
+        rows = len((self.snap or {}).get(table) or [])
+        self.sel[table] = max(0, min(self.sel[table] + step, max(0, rows - 1)))
+        room, off = self.rooms.get(table, 6 if table == "hives" else 5), self.scroll.get(table, 0)
+        self.scroll[table] = self.sel[table] if self.sel[table] < off else max(off, self.sel[table] - room + 1)
         self.draw()
 
     # Ask before doing something that changes the run.
     def confirm(self, text) -> bool:
-        """Ask the user a yes/no question in a dialog."""
-        from tkinter import messagebox
-        return messagebox.askyesno("HaiveQueen", text, parent=self.root)
+        """Ask the user a yes/no question in a dialog of the dashboard look."""
+        from . import gui_dialog
+        return gui_dialog.ask(self.root, "HaiveQueen", text, self.mono)
+
+    # Show a message.
+    def inform(self, text, title="HaiveQueen"):
+        """Show `text` in an information window of the dashboard look."""
+        from . import gui_dialog
+        gui_dialog.info(self.root, title, text, self.mono)
+
+    # Show an error message.
+    def complain(self, text):
+        """Show `text` in an error window of the dashboard look."""
+        from . import gui_dialog
+        gui_dialog.error(self.root, "HaiveQueen", text, self.mono)
 
     # Pause the run or resume it.
     def toggle_pause(self):
@@ -750,36 +790,26 @@ class Dashboard:
 
     # Offer the Queen actions of the selected Hive.
     def hive_menu(self):
-        """Open a menu at the pointer with Restart Queen and End Queen and Bees for the selected Hive."""
-        import tkinter as tk
-        rows = (self.snap or {}).get("hives") or []
-        if not rows:
+        """Open a menu at the pointer with Restart Queen, End Queen and Bees and Pause/Resume plan for the Hive of the selection (a Hive row or a Queen row; none for a Bee row)."""
+        from . import gui_dialog
+        hive = self.selected_hive()
+        if hive is None:
             return
-        hive = rows[min(self.sel["hives"], len(rows) - 1)]
-        menu = tk.Menu(self.root, tearoff=0, bg=COL["panel"], fg=COL["text"], activebackground=COL["select"], activeforeground=COL["gold"], font=(self.mono, 11))
-        menu.add_command(label="Restart Queen of %s" % hive["name"], command=lambda: self.queen_action(hive, "requeen"))
-        menu.add_command(label="End Queen and Bees of %s" % hive["name"], command=lambda: self.queen_action(hive, "dequeen"))
-        menu.add_separator()
-        menu.add_command(label=("Resume plan %s" if hive["paused"] else "Pause plan %s") % hive["name"], command=lambda: self.toggle_hive_pause(hive))
-        try:
-            menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
-        finally:
-            menu.grab_release()
+        gui_dialog.popup_menu(self.root, [("Restart Queen of %s" % hive["name"], lambda: self.queen_action(hive, "requeen")),
+                                          ("End Queen and Bees of %s" % hive["name"], lambda: self.queen_action(hive, "dequeen")), None,
+                                          (("Resume plan %s" if hive["paused"] else "Pause plan %s") % hive["name"], lambda: self.toggle_hive_pause(hive))], self.mono)
 
     # Pause or resume the plan of a Hive.
     def toggle_hive_pause(self, hive=None):
         """Set the status of the Hive's plan file to PAUSED (no new Queen or Bee is started for it; a running Queen keeps working) or back to READY; key Space acts on the selected Hive."""
         from . import runtime
+        hive = hive or self.selected_hive()
         if hive is None:
-            rows = (self.snap or {}).get("hives") or []
-            if not rows:
-                return
-            hive = rows[min(self.sel["hives"], len(rows) - 1)]
+            return
         try:
             runtime.set_plan_status(self.conn, hive["apiary"], hive["plan_path"], "READY" if hive["paused"] else "PAUSED")
         except Exception as exc:
-            from tkinter import messagebox
-            messagebox.showerror("HaiveQueen", "Could not change the plan status: %s" % exc, parent=self.root)
+            self.complain("Could not change the plan status: %s" % exc)
         self.refresh()
 
     # Restart or end the Queen of a Hive through the bzz command.
@@ -800,17 +830,23 @@ class Dashboard:
             return
         out, err = proc.communicate()
         if proc.returncode != 0:
-            from tkinter import messagebox
-            messagebox.showerror("HaiveQueen", "%s failed: %s" % (command, (err or out or "").strip()[:300] or "exit code %d" % proc.returncode), parent=self.root)
+            self.complain("%s failed: %s" % (command, (err or out or "").strip()[:300] or "exit code %d" % proc.returncode))
         self.refresh()
 
     # Stop the selected Bee.
     def stop_bee(self):
-        """Kill the process tree of the selected Bee after a confirmation; the runner records the vanished process and the task is retried."""
-        rows = self.snap["bees"] if self.snap else []
-        if not rows:
+        """Kill the process tree of the selected Bee after a confirmation; the runner records the vanished process and the task is retried.
+
+        A Queen row is refused with a hint to the Queen menu, and a Bee that has not started yet with a hint that there is nothing to stop."""
+        bee = self.selected("bees")
+        if bee is None:
             return
-        bee = rows[min(self.sel["bees"], len(rows) - 1)]
+        if bee["kind"] == "queen":
+            self.inform("X stops Bees only. Use the Queen menu (M, or a right click on the Queen) to restart or end a Queen.")
+            return
+        if not bee["agent"]:
+            self.inform("This Bee has not started yet, so there is nothing to stop.")
+            return
         found = db.rows(self.conn, "SELECT pid FROM agents WHERE project=? AND name=? AND archived=0", (bee["project"], bee["agent"]))
         if found and found[0]["pid"] and self.confirm("Stop bee %s (%s)?" % (bee["name"], bee["task"])):
             osplat.kill_process_tree(found[0]["pid"])
@@ -824,8 +860,10 @@ class Dashboard:
 
     # Hide the lines shown so far.
     def clear_log(self):
-        """Hide every log line that exists now; later lines still appear (the window keeps the newest lines only, so the cut is by count)."""
-        self.cleared_at = len(self.snap["log"]) if self.snap else 0
+        """Hide every log line that exists now; later lines still appear (the cut is by event id)."""
+        ids = (self.snap or {}).get("log_ids") or []
+        if ids:
+            self.cleared_id = ids[-1]
         self.draw()
 
     # Write the log lines to a text file.
@@ -834,24 +872,14 @@ class Dashboard:
         from tkinter import filedialog
         path = filedialog.asksaveasfilename(parent=self.root, defaultextension=".log", initialfile="haivequeen-%s.log" % datetime.now().strftime("%Y%m%d-%H%M"))
         if path and self.snap:
-            Path(path).write_text("\n".join("%s [%s] %s" % ln for ln in self.snap["log"][self.cleared_at:]) + "\n", encoding="utf-8")
+            Path(path).write_text("\n".join("%s [%s] %s" % ln for ln in self.visible_log()) + "\n", encoding="utf-8")
 
     # Open the state button's menu.
     def state_menu(self):
         """Open a menu at the pointer with the actions that fit the current state (see state_actions)."""
-        import tkinter as tk
-        menu = tk.Menu(self.root, tearoff=0, bg=COL["panel"], fg=COL["text"], activebackground=COL["select"], activeforeground=COL["gold"], font=(self.mono, 11))
-        for item in state_actions(self.snap["orchestrator"]["label"]):
-            if item is None:
-                menu.add_separator()
-            elif item[1] is None:
-                menu.add_command(label=item[0], state="disabled")
-            else:
-                menu.add_command(label=item[0], command=getattr(self, item[1]))
-        try:
-            menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
-        finally:
-            menu.grab_release()
+        from . import gui_dialog
+        gui_dialog.popup_menu(self.root, [None if item is None else (item[0], getattr(self, item[1]) if item[1] else None)
+                                          for item in state_actions(self.snap["orchestrator"]["label"])], self.mono)
 
     # Start the orchestrator loop.
     def start(self):
@@ -865,13 +893,6 @@ class Dashboard:
         if self.confirm("Stop HaiveQueen gracefully? Running agents finish their task first."):
             subprocess.Popen([osplat.python_executable(), "-m", "haivequeen", "stop"], stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **NO_WINDOW)
-
-    # Show the run state in a dialog.
-    def status(self):
-        """Show the run state and the number of running agents."""
-        from tkinter import messagebox
-        st = runstate.get_state(self.conn)
-        messagebox.showinfo("HaiveQueen", "Run state: %s\nRunning agents: %d" % (st["state"], st["running_agents"]), parent=self.root)
 
     # Open the window that answers the open questions.
     def open_questions(self):
@@ -903,9 +924,8 @@ class Dashboard:
     # Show the keys.
     def help(self):
         """Show the keyboard and mouse controls."""
-        from tkinter import messagebox
-        messagebox.showinfo("HaiveQueen", "P  pause / resume\nQ  answer the open questions\nSpace  pause / resume the selected plan\nF  next apiary filter\nM / right click  queen menu of the hive\nUp/Down  select hive\nClick  select a row\nEnter / double click  live output of the row\n"
-                            "X  stop the selected bee\nC  clear log   S  save log   A  auto-scroll", parent=self.root)
+        self.inform("P  pause / resume\nQ  answer the open questions\nSpace  pause / resume the selected plan\nF  next apiary filter\nM / right click  queen menu of the hive or the Queen row\nTab  switch between the Hives and the Queens and Bees table\nUp/Down  select a row of that table\nClick  select a row\nEnter / double click  live output of the row\n"
+                    "X  stop the selected bee\nC  clear log   S  save log   A  auto-scroll", "Keys")
 
 
 # The actions the state button offers in a given state.

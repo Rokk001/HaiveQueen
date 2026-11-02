@@ -49,6 +49,7 @@ class QuestionsWindow:
     def __init__(self, root, conn, mono="Consolas", on_answered=None):
         """Open the window below `root`; `on_answered()` is called after every stored answer."""
         import tkinter as tk
+        from .gui import COL
         self.tk, self.conn, self.mono, self.on_answered = tk, conn, mono, on_answered
         self.win = tk.Toplevel(root)
         self.win.title("HaiveQueen questions")
@@ -72,7 +73,7 @@ class QuestionsWindow:
         self.steps.pack(fill="x", pady=(0, 6))
         buttons = tk.Frame(main)
         buttons.pack(fill="x")
-        self.status = tk.Label(buttons, anchor="w", fg="#aa3333", font=(mono, 10))
+        self.status = tk.Label(buttons, anchor="w", fg=COL["red"], font=(mono, 10))
         self.status.pack(side="left", fill="x", expand=True)
         for label, action in (("Use recommendation", self.use_recommendation), ("Answer", self.send), ("Close", self.win.destroy)):
             tk.Button(buttons, text=label, command=action, font=(mono, 10)).pack(side="right", padx=3)

@@ -230,7 +230,7 @@ class WindowTest(unittest.TestCase):
         names = [p["name"] for p in gui_config.load_raw(self.folder / "config.toml")["providers"]]
         self.assertEqual(names, ["claude", "codex", "extra"])
         win.select(3)   # the new provider
-        with mock.patch("tkinter.messagebox.askyesno", return_value=True):
+        with mock.patch("haivequeen.gui_dialog.ask", return_value=True):
             win.remove_node()
         win.save()
         self.assertEqual([p["name"] for p in gui_config.load_raw(self.folder / "config.toml")["providers"]], ["claude", "codex"])

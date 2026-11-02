@@ -147,11 +147,32 @@ class SnapshotTest(unittest.TestCase):
         for reason in ("STOP", "PAUSED", "waiting for the integration place", "Hive limit 3 reached", "no provider with a free slot", "the Hive is already claimed"):
             self.assertIsNone(german.search(gui_data.blocker_text(reason)), reason)
 
-    # Only running Bees are listed.
+    # The Queen heads the list and her Bees follow directly below her.
     def test_bees(self):
-        """Two busy Bees with their person names and the Hive name."""
-        self.assertEqual(sorted(b["name"] for b in self.snap["bees"]), ["Emma", "Sophia"])
-        self.assertEqual({b["hive"] for b in self.snap["bees"]}, {"AI-LEVELS"})
+        """The running Queen Ava comes first with her model and effort, then her two running Bees; the finished Bee is not listed."""
+        rows = self.snap["bees"]
+        self.assertEqual(rows[0]["kind"], "queen")
+        self.assertEqual(rows[0]["name"], "Ava")
+        self.assertEqual(sorted(b["name"] for b in rows[1:]), ["Emma", "Sophia"])
+        self.assertEqual({b["kind"] for b in rows[1:]}, {"bee"})
+        self.assertEqual({b["hive"] for b in rows}, {"AI-LEVELS"})
+        self.assertEqual((rows[0]["model"], rows[0]["task"], rows[0]["status"]), ("Son 5.5 med.", "Queen", "running"))
+        self.assertEqual(rows[0]["ctx_limit"], gui_data.CONTEXT_FALLBACK)
+
+    # Without a running Queen the Bees stay in the list, without a Queen row.
+    def test_bees_without_a_running_queen_have_no_queen_row(self):
+        """With the Queen ended the two running Bees are still listed and no row is a Queen row."""
+        self.conn.execute("UPDATE agents SET status='done' WHERE phase='queen'")
+        self.conn.commit()
+        snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        self.assertEqual([b["kind"] for b in snap["bees"]], ["bee", "bee"])
+        self.assertEqual(snap["tiles"]["queens"], 0)
+
+    # Every log line has the id of its event.
+    def test_log_ids_follow_the_log(self):
+        """The ids run parallel to the lines, oldest first."""
+        self.assertEqual(len(self.snap["log_ids"]), len(self.snap["log"]))
+        self.assertEqual(self.snap["log_ids"], sorted(self.snap["log_ids"]))
 
     # Tokens of the Hive over seven days.
     def test_activity(self):
