@@ -104,6 +104,7 @@ depends_on = []
 id = "P2"
 title = "Draw the icons"
 capability = "images"   # only providers with this capability may run it
+verify = "owner"        # code (default) | build | owner: who closes the last requirements; the Bee is done when its own work is
 depends_on = ["P1"]
 +++
 # My plan
@@ -143,8 +144,8 @@ Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the
 | `bzz export`, `bzz views --project p` | owner | export the state, write the Markdown views |
 | `bzz import-legacy ...` | owner | import the state of version 1 (see `docs/MIGRATION-v1.md`) |
 | `bzz dequeen <hive>` / `bzz requeen <hive> [provider]` | owner | leave a Hive queenless or start a new Queen, optionally on a different provider |
-| `bzz bee start`, `bzz bee result`, `bzz bee wait` | Queen | start a Bee, record an attempt or wait for its provider |
-| `bzz package --project p --plan f --package id --state working\|implemented\|done\|rejected` | Queen | report the progress of a package of her plan; the window's progress bar counts the done ones; a rejected package (the owner did not accept it) is not done and `bzz ready` is refused until it is reworked |
+| `bzz bee start`, `bzz bee result`, `bzz bee wait` | Queen | start a Bee, record an attempt or wait for its provider; a failed result needs evidence (`--open-requirements` or `--error`) or `--blocked-by question` (with `--blocked-ref <question id>`), `build`, `owner`, `package` or `provider`: such an attempt is no failure and sets the package to waiting until the answer arrives |
+| `bzz package --project p --plan f --package id --state working\|waiting\|implemented\|done\|rejected [--reason ...]` | Queen | report the progress of a package of her plan (waiting needs `--reason` question:id, build, owner, package or provider; it is no failure and a package that waited for a question works again when the question is answered); the window's progress bar counts the done ones; a rejected package (the owner did not accept it) is not done and `bzz ready` is refused until it is reworked |
 | `bzz integration acquire` / `release` | Queen or external window | acquire or release the per-project integration place; external windows provide a stable owner process ID |
 | `bzz done`, `bzz ready`, `bzz ask`, `bzz note` | agents | final report, branch ready for integration, question, note (`docs/RUNTIME-API.md`) |
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 7   # 7: persistent Hive state and integration queue
+SCHEMA_VERSION = 8   # 8: verify field of a package; 7: persistent Hive state and integration queue
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -34,6 +34,10 @@ V3_COLUMNS = (
 # Columns added in schema version 5 (lifecycle status of a decision: active, rule or superseded).
 V5_COLUMNS = (
     ("decisions", "status", "TEXT NOT NULL DEFAULT 'active'"),
+)
+# Columns added in schema version 8 (who closes the last requirements of a package: code, build or owner).
+V8_COLUMNS = (
+    ("packages", "verify", "TEXT NOT NULL DEFAULT 'code'"),
 )
 
 
@@ -119,10 +123,14 @@ def migrate(conn: sqlite3.Connection) -> None:
         schema_text = SCHEMA_FILE.read_text(encoding="utf-8")
         rebuild_queue_table(conn, schema_text)
         conn.executescript(schema_text)
-        for table, column, decl in V2_COLUMNS + V3_COLUMNS + V5_COLUMNS:
+        for table, column, decl in V2_COLUMNS + V3_COLUMNS + V5_COLUMNS + V8_COLUMNS:
             have = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
             if column not in have:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                except sqlite3.OperationalError as exc:   # another process added it between the check and the ALTER
+                    if "duplicate column" not in str(exc):
+                        raise
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_archived ON agents (project, archived)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_kind ON providers_usage (kind, ts)")
         if version < 7:
@@ -260,6 +268,10 @@ def answer_question(conn, qid: int, text: str, by: str) -> dict:
             "UPDATE questions SET status='answered', answer=?, answered_by=?, answered_at=? WHERE id=?",
             (text, by, now(), qid),
         )
+        try:   # a package that waited for this answer works again (the table or its column may not exist yet)
+            conn.execute("UPDATE package_progress SET state='working', reason='', updated_at=? WHERE state='waiting' AND reason=? AND project=?", (now(), "question:%d" % qid, row["project"]))
+        except sqlite3.OperationalError:
+            pass
         conn.execute(
             "INSERT INTO decisions (project, ts, source, text, plan_path, item) VALUES (?,?,?,?,?,?)",
             (row["project"], now(), by, f"{row['question']} -> {text}", row["plan_path"], row["item"]),

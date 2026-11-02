@@ -12,6 +12,7 @@ id = "P2"
 title = "Draw the icons"
 class = "light"
 capability = "images"   # only providers with this capability may run it
+verify = "owner"        # code (default) | build | owner: who closes the last requirements; the Bee is done when its own work is
 depends_on = ["P1"]
 
 [[packages]]

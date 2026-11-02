@@ -58,7 +58,7 @@ def write_plan(path, status, packages=(), title="Dummy plan"):
     t = '+++\nstatus = "%s"\n' % status
     for p in packages:
         t += '[[packages]]\nid = "%s"\ntitle = "%s"\n' % (p["id"], p.get("title", ""))
-        for k in ("class", "agent", "capability"):
+        for k in ("class", "agent", "capability", "verify"):
             if p.get(k):
                 t += '%s = "%s"\n' % (k, p[k])
         t += "depends_on = [%s]\n" % ", ".join('"%s"' % d for d in p.get("depends", []) if d)

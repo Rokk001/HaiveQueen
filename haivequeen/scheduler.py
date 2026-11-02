@@ -490,7 +490,7 @@ class ProjectEnv:
         return runtime.upsert_agent(self.conn, self.name, name, fields)
 
     def packages(self, plan: str) -> list:
-        """Package table of a plan: dicts with id, cls, content (title), depends, depends_all, phase, capability. Dependency 'all' means every other package."""
+        """Package table of a plan: dicts with id, cls, content (title), depends, depends_all, phase, capability, verify. Dependency 'all' means every other package."""
         res = []
         for p in runtime.list_packages(self.conn, self.name, plan):
             deps = [str(d) for d in p["depends_on"] if d and not re.match(r"(?i)^all(e)?$", str(d))]
@@ -498,7 +498,7 @@ class ProjectEnv:
             res.append({"id": str(p["id"]), "cls": cls.lower() if re.match(r"(?i)^(light|medium|heavy)$", cls) else "medium",
                         "content": str(p["title"] or ""), "depends": deps, "phase": str(p["phase"] or ""),
                         "depends_all": any(re.match(r"(?i)^all(e)?$", str(d)) for d in p["depends_on"]),
-                        "capability": str(p["capability"] or "")})
+                        "capability": str(p["capability"] or ""), "verify": str(p.get("verify") or "code")})
         for r in res:
             if r["depends_all"]:
                 r["depends"] += [x["id"] for x in res if x["id"] != r["id"] and x["id"] not in r["depends"]]

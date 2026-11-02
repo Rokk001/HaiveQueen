@@ -425,8 +425,9 @@ class Dashboard:
         if rows:
             r = rows[self.sel["hives"]]
             ctx = "ctx %s/%s" % (gui_data.fmt_tokens(r["queen_ctx"]), gui_data.fmt_tokens(r["queen_ctx_limit"])) if r["queen_ctx_limit"] else "ctx -"
-            line = "%s | %s | packages %d done, %d implemented%s of %d | Queen %s%s | %s | queen in/out %s/%s | hive total in/out %s/%s | %s" % (
-                r["name"], r["apiary"], r["done"], r["implemented"], ", %d rejected" % r["rejected"] if r["rejected"] else "", r["total"], r["queen"], " " + r["queen_model"] if r["queen_model"] else "", ctx,
+            line = "%s | %s | packages %d done, %d implemented%s%s of %d | Queen %s%s | %s | queen in/out %s/%s | hive total in/out %s/%s | %s" % (
+                r["name"], r["apiary"], r["done"], r["implemented"], ", %d rejected" % r["rejected"] if r["rejected"] else "",
+                ", %d waiting (%s)" % (r["waiting"], r["waiting_reasons"]) if r["waiting"] else "", r["total"], r["queen"], " " + r["queen_model"] if r["queen_model"] else "", ctx,
                 gui_data.fmt_tokens(r["queen_tin"]), gui_data.fmt_tokens(r["queen_tout"]), gui_data.fmt_tokens(r["hive_tin"]), gui_data.fmt_tokens(r["hive_tout"]), r["status"])
             self.text(x0 + 24, y1 - 14, self.fit(line, x1 - x0 - 48, 12), 12, "dim", "w")
         else:

@@ -323,16 +323,18 @@ def pkg_stage(env, agents: list, plan: str, pkg: str) -> dict:
 
 
 def package_failures(env, agents: list, plan: str, pkg: str) -> int:
-    """Failures of one package: failed work agents (not technical ends) plus verifies that reported open items.
+    """Failures of one package: failed work agents (not technical ends) plus verifies that reported open items (not for a package closed by build or owner).
 
     A finished verify without any count line (not in final.txt and not in a report file either) counts as one failed attempt, once per verify.
     """
     mine = [a for a in agents if norm_plan(a["plan"]) == norm_plan(plan) and (str(a.get("package")) == pkg or pkg in a["bundle"])]
     f = sum(1 for a in mine if a.get("phase") == "work" and a.get("status") == "failed" and not interrupt.is_interrupted(a))
     o = 0
-    for v in (a for a in mine if a.get("phase") == "verify" and a.get("status") == "done"):
-        if verify_open_count(env, v["name"]) != 0:
-            o += 1
+    row = next((p for p in env.packages(plan) if p["id"] == pkg), None)
+    if not row or row["verify"] == "code":   # open items of a package that build or owner close are no failure
+        for v in (a for a in mine if a.get("phase") == "verify" and a.get("status") == "done"):
+            if verify_open_count(env, v["name"]) != 0:
+                o += 1
     return f + o
 
 

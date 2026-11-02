@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 STATUSES = ("DRAFT", "READY", "IN_PROGRESS", "DONE", "PAUSED")
 CLASSES = ("light", "medium", "heavy")
+VERIFIES = ("code", "build", "owner")   # who closes the last requirements of a package: the Bee (code), the build, or the owner
 DEFAULT_GLOBS = ("docs/plans/*.md",)
 STARTABLE_STATUSES = ("READY", "IN_PROGRESS")
 
@@ -19,6 +20,7 @@ class Package:
     cls: str = "medium"
     agent: str = ""
     capability: str = ""
+    verify: str = "code"
     depends_on: list = field(default_factory=list)
 
 
@@ -29,6 +31,7 @@ class Plan:
     title: str = ""
     status: str = "DRAFT"
     packages: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
 
 
 def normalize_status(value):
@@ -41,6 +44,12 @@ def normalize_class(value):
     """Return light/medium/heavy; missing, empty or unknown becomes medium."""
     s = str(value or "").strip().lower()
     return s if s in CLASSES else "medium"
+
+
+def normalize_verify(value):
+    """Return (verify, valid): code, build or owner; missing or empty is code and valid, anything else is code and not valid."""
+    s = str(value or "").strip().lower()
+    return (s, True) if s in VERIFIES else ("code", not s)
 
 
 def split_front_matter(text):
@@ -86,21 +95,25 @@ def _depends(value):
 def parse_plan_text(text, path=""):
     """Parse plan text with TOML front matter into a Plan; no header means DRAFT without packages."""
     header, body = split_front_matter(text)
-    packages = []
+    packages, warnings = [], []
     raw = header.get("packages", [])
     if isinstance(raw, list):
         for row in raw:
             if not isinstance(row, dict) or not str(row.get("id", "")).strip():
                 continue
+            verify, valid = normalize_verify(row.get("verify"))
+            if not valid:
+                warnings.append("package %s: verify '%s' is unknown (use %s), treated as code" % (str(row["id"]).strip(), row.get("verify"), ", ".join(VERIFIES)))
             packages.append(Package(
                 id=str(row["id"]).strip(),
                 title=str(row.get("title", "")),
                 cls=normalize_class(row.get("class")),
                 agent="",
                 capability=str(row.get("capability", "")),
+                verify=verify,
                 depends_on=_depends(row.get("depends_on")),
             ))
-    return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages)
+    return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings)
 
 
 def load_plan(path):

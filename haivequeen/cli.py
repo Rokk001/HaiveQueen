@@ -270,7 +270,7 @@ def cmd_requeen(args, conn):
 
 # Record the progress state of one package of the calling Queen's Hive.
 def cmd_package(args, conn):
-    """Store the state (working, implemented, done, rejected) of a package of the Queen's own plan; shown as progress in the window."""
+    """Store the state (working, waiting, implemented, done, rejected) of a package of the Queen's own plan; shown as progress in the window."""
     from haivequeen import bees
     agent = os.environ.get("BZZ_AGENT")
     queen = runtime.get_agent(conn, args.project, agent) if agent else None
@@ -279,7 +279,9 @@ def cmd_package(args, conn):
     plan = queen["plan_path"]
     if conn.execute("SELECT 1 FROM packages WHERE project=? AND plan_path=? AND id=?", (args.project, plan, args.package)).fetchone() is None:
         return fail("unknown package %s of this plan" % args.package)
-    bees.set_package_state(conn, args.project, plan, args.package, args.state, agent)
+    if args.state == "waiting" and not args.reason:
+        return fail("waiting needs --reason (question:<id>, build, owner, package or provider)")
+    bees.set_package_state(conn, args.project, plan, args.package, args.state, agent, args.reason)
     out({"ok": True, "package": args.package, "state": args.state})
     return 0
 
@@ -316,7 +318,19 @@ def cmd_bee(args, conn):
                 return fail("open requirements must be a JSON string list")
         except ValueError as exc:
             return fail(str(exc))
-        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error)
+        blocked = ""
+        if args.blocked_by:
+            if args.outcome == "succeeded":
+                return fail("--blocked-by cannot go with the outcome succeeded")
+            blocked = args.blocked_by
+            if blocked == "question":
+                open_ids = [str(q["id"]) for q in runtime.list_questions(conn, args.project, status="open", plan=plan)]
+                if args.blocked_ref not in open_ids:
+                    return fail("--blocked-by question needs --blocked-ref <id of an open question of this plan>")
+                blocked = "question:" + args.blocked_ref
+        elif args.outcome == "failed" and not requirements and not args.error:
+            return fail("a failed attempt needs evidence: --open-requirements or --error; if the Bee only waits for an answer, a build or the owner use --blocked-by")
+        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked)
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
         out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls})
@@ -362,6 +376,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--attempt", default="")
     p.add_argument("--open-requirements", default="[]")
     p.add_argument("--error", default="")
+    p.add_argument("--blocked-by", choices=["question", "build", "owner", "package", "provider"], default="")
+    p.add_argument("--blocked-ref", default="")
     p.add_argument("--no-subagents", action="store_true")
     p.add_argument("--parallel", action="store_true")
     p.set_defaults(fn=cmd_bee)
@@ -369,7 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("package")
     for field in ("project", "plan", "package"):
         p.add_argument("--" + field, required=True)
-    p.add_argument("--state", required=True, choices=["working", "implemented", "done", "rejected"])
+    p.add_argument("--state", required=True, choices=["working", "waiting", "implemented", "done", "rejected"])
+    p.add_argument("--reason", default="")
     p.set_defaults(fn=cmd_package)
 
     p = sub.add_parser("integration")
