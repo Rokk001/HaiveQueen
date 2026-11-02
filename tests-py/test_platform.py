@@ -256,5 +256,23 @@ class TestNetworkPath(unittest.TestCase):
         self.assertFalse(osplat.is_network_path(tempfile.gettempdir()))
 
 
+@unittest.skipUnless(sys.platform == "win32", "Windows only")
+class TestHiddenConsole(unittest.TestCase):
+    """Every program started through subprocess gets no console window on Windows."""
+
+    PROBE = "import ctypes; print(ctypes.windll.kernel32.GetConsoleWindow())"
+
+    def test_started_program_has_no_console_window(self):
+        """A plain subprocess.run child sees no console window handle."""
+        out = subprocess.run([sys.executable, "-c", self.PROBE], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(out, "0")
+
+    def test_hide_is_idempotent(self):
+        """Calling it again does not wrap Popen a second time."""
+        before = subprocess.Popen.__init__
+        osplat.hide_console_windows()
+        self.assertIs(subprocess.Popen.__init__, before)
+
+
 if __name__ == "__main__":
     unittest.main()

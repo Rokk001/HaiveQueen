@@ -29,6 +29,29 @@ def is_linux() -> bool:
     return sys.platform.startswith("linux")
 
 
+# Make every program this process starts run without a console window (git, claude, pwsh, anything).
+def hide_console_windows() -> None:
+    """On Windows add CREATE_NO_WINDOW to every subprocess.Popen call, so no console (or Windows Terminal) window opens and closes again.
+
+    Calls that already ask for DETACHED_PROCESS or CREATE_NEW_CONSOLE keep their flags. Safe to call more than once."""
+    if not is_windows() or getattr(subprocess.Popen, "_hq_no_window", False):
+        return
+    no_window, detached, new_console = 0x08000000, 0x00000008, 0x00000010
+    original = subprocess.Popen.__init__
+
+    def patched(self, *args, **kwargs):
+        flags = kwargs.get("creationflags", 0)
+        if not flags & (detached | new_console):
+            kwargs["creationflags"] = flags | no_window
+        original(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = patched
+    subprocess.Popen._hq_no_window = True
+
+
+hide_console_windows()
+
+
 def host_name() -> str:
     """Return the short name of this machine."""
     return socket.gethostname() or "host"
