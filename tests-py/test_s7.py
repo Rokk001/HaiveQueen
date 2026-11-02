@@ -125,7 +125,7 @@ class S7Test(RoundCase):
             args = argparse.Namespace(project="testproj", plan=REL, item=item, question="q?", recommendation="r")
             with contextlib.redirect_stdout(io.StringIO()):
                 cli.cmd_ask(args, self.conn)
-        open_items = [q["item"] for q in runtime.list_questions(self.conn, "testproj", status="open")]
+        open_items = [q["item"] for state in ("open", "triage") for q in runtime.list_questions(self.conn, "testproj", status=state)]   # a new question waits for the triage first
         self.assertNotIn("M7", open_items)
         self.assertNotIn("V9", open_items)
         self.assertEqual(open_items.count("M8 new item"), 1)

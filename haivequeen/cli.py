@@ -84,17 +84,12 @@ def cmd_ready(args, conn) -> int:
 def cmd_ask(args, conn) -> int:
     """File a question for the owner."""
     from haivequeen import triage
-    open_questions = runtime.list_questions(conn, args.project, status="open", plan=args.plan, item=args.item)
-    if open_questions:
-        out({"ok": True, "id": open_questions[-1]["id"], "status": "open"})
+    waiting = (runtime.list_questions(conn, args.project, status="open", plan=args.plan, item=args.item)
+               or runtime.list_questions(conn, args.project, status="triage", plan=args.plan, item=args.item))
+    if waiting:
+        out({"ok": True, "id": waiting[-1]["id"], "status": waiting[-1]["status"]})
         return 0
-    known = triage._known_answer(conn, args.project, args.plan, args.item)
-    if known:
-        qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation, status="triage")
-        out(triage._close_with_reference(conn, qid, *known))
-    else:
-        qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation)
-        out({"ok": True, "id": qid, "status": "open"})
+    out(triage.intake(conn, args.project, args.plan, args.item, args.question, args.recommendation))   # waits for the triage agent; a known answer closes it at once
     return 0
 
 
@@ -351,7 +346,7 @@ def cmd_bee(args, conn):
         return 0
     bees.ensure_attempts(conn)
     assignment = conn.execute("SELECT provider FROM bee_assignments WHERE project=? AND plan_path=? AND package=?", (args.project, plan, args.package)).fetchone() if not started else None
-    out({"ok": bool(started), "started": bool(started), "kind": "process" if started else "waiting", "provider": assignment[0] if assignment else None})
+    out({"ok": bool(started), "started": bool(started), "kind": "process" if started else "waiting", "provider": assignment[0] if assignment else None, **({} if started else {"reason": bees.LAST_REFUSAL})})
     return 0 if started else 1
 
 

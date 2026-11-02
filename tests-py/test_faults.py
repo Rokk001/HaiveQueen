@@ -92,15 +92,16 @@ class FaultsTest(RoundCase):
         self.round()
         self.assertEqual(len(self.faults_of("agent_no_result")), 1)
 
-    # Verify no separate triage agent starts for any question.
-    def test_no_triage_agent_for_fault_or_normal_question(self):
-        """The Queen handles plan questions without launching triage agents."""
+    # Verify a plan question gets a triage agent and a fault question never does.
+    def test_triage_agent_for_a_normal_question_but_not_for_a_fault(self):
+        """Fault questions are read by the coordinator; a question of a plan waits for its triage agent."""
+        from haivequeen import triage
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         db.add_question(self.conn, "testproj", faults.FAULT_PLAN, "no_start", "[no_start] x", "", status="triage")
-        db.add_question(self.conn, "testproj", REL, "N1", "Which?", "A", status="triage")
+        normal = db.add_question(self.conn, "testproj", REL, "N1", "Which?", "A", status="triage")
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["status"] == "running"]
-        self.assertTrue(all(a["phase"] != "triage" for a in active))
+        self.assertEqual([a["package"] for a in active if a["phase"] == "triage"], [triage.QUESTION_PKG % normal])
 
     # Ensure an answered fault does not start a work agent.
     def test_no_work_agent_for_an_answered_fault_question(self):

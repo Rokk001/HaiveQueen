@@ -526,6 +526,28 @@ class QueenIntegrationTests(RoundCase):
         row = runtime.get_agent(self.conn, 'testproj', 'Ada')
         self.assertEqual((row['provider'], row['class']), ('codex', 'heavy'))
 
+    # A package already escalated to heavy keeps that class when its failure counters read zero again.
+    def test_stored_escalation_survives_reset_counters(self):
+        from haivequeen import hives
+        from bzztest import REL
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        bees.ensure_attempts(self.conn)
+        self.conn.execute('INSERT INTO bee_assignments VALUES (?,?,?,?,?)', ('testproj', REL, 'P1', 'heavy', 'claude'))
+        result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [])
+        self.assertEqual((result['kind'], result['class']), ('subagent', 'heavy'))
+
+    # A refused start says why instead of only reporting that it waits.
+    def test_refused_start_names_the_reason(self):
+        from haivequeen import hives
+        from bzztest import REL
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        self.assertFalse(bees.start_process(self.env(), REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], []))
+        self.assertIn('class heavy was requested', bees.LAST_REFUSAL)
+
     # A limited Bee provider remains assigned even when another provider is free.
     def test_interrupted_bee_does_not_switch_provider(self):
         from unittest import mock

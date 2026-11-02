@@ -531,7 +531,7 @@ def state_label(hive):
     if state == 'resting':
         return 'ruht bis ' + str(hive.get('reset_at') or '?').replace('T', ' ')[:16]
     return {'queenless': 'weisellos', 'integration_wait': 'wartet auf Integration', 'answer': 'wartet auf Antwort', 'owner_check': 'wartet auf Owner-Prüfung', 'codex_wait': 'wartet auf Codex',
-            'provider_wait': 'wartet auf Codex', 'handoff': 'Übergabe', 'waiting': 'wartet auf Start', 'starting': 'wartet auf Start',
+            'provider_wait': 'wartet auf Anbieter', 'handoff': 'Übergabe', 'waiting': 'wartet auf Start', 'starting': 'wartet auf Start',
             'requeen': 'wartet auf Start'}.get(state, '')
 
 
@@ -892,6 +892,12 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
             result['projects'][env.name]['actions'] += started
     if not dry_run:
         for env in projects:
+            from . import triage
+            triage.release_stale(conn, env.name)   # a question the triage could not settle goes to the owner
+            if env.settings.get('triage', True):
+                names = [a['name'] for a in runtime.list_agents(conn, env.name, 'all')]
+                loop._start_question_triage({'env': env, 'state': {'names': names, 'busy': [], 'plan_status': {}, 'by_path': {}}, 'pool': pool,
+                                             'report': result['projects'][env.name]['report'], 'dry': False, 'settle': settle})
             providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and not p.get('endpoint')
                          and not any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, p))]
             eligible = any(p['status'] in ('READY', 'IN_PROGRESS') and ((get(conn, env.name, p['path']) or {}).get('state') in (None, 'waiting', 'requeen')) for p in runtime.list_plans(conn, env.name))

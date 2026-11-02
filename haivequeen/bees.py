@@ -243,28 +243,42 @@ def valid_queen_worktree(env, path):
     return valid_bee_worktree(env, path, None)
 
 
+LAST_REFUSAL = ''   # why the last start_process call refused to start a Bee; the bee command hands it to the Queen
+
+
+# Refuse a Bee start and remember why.
+def refuse(env, package, reason):
+    """Log and store the reason a Bee start was refused and return False, so a caller can write `return refuse(...)`."""
+    global LAST_REFUSAL
+    LAST_REFUSAL = reason
+    env.log('Bee start refused for package %s: %s' % (package, reason))
+    return False
+
+
 # Start a separate Bee process after validating context, memory, slots and routing.
 def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=None, no_subagents=False, parallel=False):
-    """Start an eligible process Bee through the agent runner."""
+    """Start an eligible process Bee through the agent runner. A refusal returns False and leaves its reason in LAST_REFUSAL."""
+    global LAST_REFUSAL
+    LAST_REFUSAL = ''
     from pathlib import Path
     from . import hives, loop, routine, usage
     with loop.hive_schedule_lock():
         check_dependencies(env, plan, package)
         hive = hives.get(env.conn, env.name, plan)
         if not hive or not hives.can_start_bee(env.conn, env.name, plan, False, env.settings.get('contextLimitTokens', 300000)):
-            return False
+            return refuse(env, package, 'the Hive may not start a Bee now (Hive state %s, context limit or HANDOFF reached)' % (hive['state'] if hive else 'missing'))
         active = runtime.list_agents(env.conn, None, 'active')
         queen = next((a for a in active if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'queen' and a.get('status') in ('running', 'starting')), None)
         if not queen:
-            return False
+            return refuse(env, package, 'no running Queen of this plan')
         from . import platform as osplat
         from . import agent_process
         running = [{**a, 'status': 'running'} for a in active if agent_process.counts(a)]
         if sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
-            return False
+            return refuse(env, package, 'the Queen already has %s Bees running' % env.settings.get('beesPerQueen', 3))
         package_row = next((p for p in env.packages(plan) if p['id'] == package), None)
         if not package_row:
-            return False
+            return refuse(env, package, 'the package is not in the plan')
         requested_class = package_row['cls']
         threshold = int(env.settings.get('escalateAfter', 3))
         excluded = env.settings.get('excludedProviders', [])
@@ -285,20 +299,24 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
                     else 'No configured provider offers the required class or a higher class. How should this package continue?')
             if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, plan=plan, item=package)):
                 db.add_question(env.conn, env.name, plan, package, text, 'Configure an eligible provider.')
-            return False
+            return refuse(env, package, 'no configured provider offers the required class or the images capability (question filed)')
         current = base_class
         queen_class = env.settings.get('queenClass', 'medium')
         if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
                 failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):
             current = next_class(escalation_providers(env, plan, package), queen_class, excluded)
             if current is None:
-                return False
+                return refuse(env, package, 'the package failed %d times at the Queen class %s and no higher class is offered' % (threshold, queen_class))
         while failure_count(env.conn, env.name, plan, package, current) >= threshold:
             current = next_class(escalation_providers(env, plan, package), current, excluded)
             if current is None:
-                return False
+                return refuse(env, package, 'the package failed %d times and no higher class is offered' % threshold)
+        ensure_attempts(env.conn)
+        stored = env.conn.execute('SELECT class FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+        if stored and stored[0] == cls and scheduler.class_index(cls) > scheduler.class_index(current):
+            current = cls   # the package was already escalated to this higher class: keep it even when the failure counters were reset
         if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
-            return False
+            return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
         queen_provider = scheduler.get_provider(env.providers, hive['provider'])
         image_needs_codex_bee = 'images' in need and (not queen_provider or queen_provider.get('protocol') != 'codex')
         if current == base_class and not image_needs_codex_bee and not requires_bee(env.settings.get('queenClass', 'medium'), current, parallel, no_subagents):
@@ -315,12 +333,12 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         if assigned and assigned[0] == current:
             provider = scheduler.get_provider(env.providers, assigned[1])
             if not provider or provider['name'] in excluded or provider['name'] in limited or route_free.get(provider['name'], 0) <= 0:
-                return False
+                return refuse(env, package, 'the assigned provider %s is unknown, excluded, at its limit or has no free slot' % assigned[1])
             route = (provider['name'], current)
         else:
             route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, current != base_class or use_other_provider, limited)
         if not route:
-            return False
+            return refuse(env, package, 'no provider with a free slot offers class %s' % current)
         provider, selected_class = route
         env.conn.execute('INSERT INTO bee_assignments(project,plan_path,package,class,provider) VALUES(?,?,?,?,?) ON CONFLICT(project,plan_path,package) DO UPDATE SET class=excluded.class,provider=excluded.provider', (env.name, plan, package, selected_class, provider))
         pick = scheduler.get_provider(env.providers, provider)
@@ -339,21 +357,21 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             if not no_subagents or pick.get('protocol') != 'codex':
                 if cwd:
                     if Path(cwd).exists() and not valid_bee_worktree(env, cwd, queen.get('cwd')):
-                        return False
+                        return refuse(env, package, 'the worktree %s is not a valid separate worktree with a branch of this repository' % cwd)
                     env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(Path(cwd).absolute())))
                     cwd = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()[0]
                 return {'kind': 'subagent', 'provider': provider, 'class': selected_class, 'cwd': cwd}
         if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
-            return False
+            return refuse(env, package, 'a Bee process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
         path = Path(cwd or '')
         if not cwd or not valid_bee_worktree(env, path, queen.get('cwd')):
-            return False
+            return refuse(env, package, 'no valid separate worktree for the Bee was given')
         existing = [a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')]
         state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'IN_PROGRESS'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
         ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
         action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules), 'class': selected_class}
         if not loop._do_start(ctx, action, forced_pick=pick):
-            return False
+            return refuse(env, package, 'the agent runner could not start the Bee process')
         env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
         return {'kind': 'process', 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute())}
 
