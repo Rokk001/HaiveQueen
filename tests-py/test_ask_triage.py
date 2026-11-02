@@ -1,15 +1,12 @@
-"""Questions that agents ask with `bzz ask` go through the triage before they can reach the owner: a duplicate or an already decided item is closed
-with a reference, a technical question is answered by the Queen, a game/balance question stays open for the owner."""
+"""Questions that agents ask with `bzz ask` reach the owner at once; a duplicate or an already decided item is closed with a reference."""
 import argparse
 import contextlib
 import io
 import json
 import unittest
-from unittest import mock
 
 from bzztest import REL, RoundCase, runtime
-from haivequeen import cli, db, triage
-from haivequeen.runtime import CmdError
+from haivequeen import cli, db
 
 
 class AskTriageTest(RoundCase):
@@ -44,18 +41,6 @@ class AskTriageTest(RoundCase):
         active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["status"] == "running"]
         self.assertEqual([a["phase"] for a in active], ["queen"])
 
-    # A technical question is answered by the Queen: answered_by auto, reason and source in the answer; the owner sees nothing.
-    def test_technical_question_is_answered_by_auto_with_reason(self):
-        """A technical question is answered by the Queen: answered_by auto, reason and source in the answer; the owner sees nothing."""
-        qid = db.add_question(self.conn, "testproj", REL, "T1", "Which one?", "A", status="triage")
-        triage.answer_asked(self.conn, "testproj", qid, "Use the existing helper.", "the code has it", "haivequeen/triage.py")
-        q = self.status(qid)
-        self.assertEqual((q["status"], q["answered_by"]), ("answered", "auto"))
-        self.assertIn("reason: the code has it", q["answer"])
-        self.assertEqual(runtime.list_questions(self.conn, "testproj", "open"), [])
-        with self.assertRaises(CmdError):
-            triage.answer_asked(self.conn, "testproj", db.add_question(self.conn, "testproj", REL, "T2", "Which?", "A", status="triage"), "x", "", "")
-
     # Verify an owner question remains open and is not duplicated.
     def test_game_question_stays_open_for_the_owner(self):
         """A game question reaches the owner once."""
@@ -81,15 +66,6 @@ class AskTriageTest(RoundCase):
         self.assertIn("decision %d" % did, res["answer"])
         self.assertEqual(runtime.list_questions(self.conn, "testproj", "open"), [])
 
-    def test_triage_off_goes_straight_to_the_owner(self):
-        """With the triage switched off a question is open at once and nothing waits for a triage agent."""
-        machine = dict(self.machine, triage=False)
-        with mock.patch("haivequeen.config.load_config", return_value=machine):
-            res = self.ask("O1")
-        self.assertEqual(res["status"], "open")
-        self.assertEqual(self.status(res["id"])["status"], "open")
-        self.assertEqual(triage.questions_to_triage(self.conn, "testproj"), [])
-
     # Verify the direct question path reuses existing answers and open questions.
     def test_queen_ask_owner_is_matched_against_decisions_and_questions(self):
         """Known answers do not create new open owner questions."""
@@ -102,17 +78,6 @@ class AskTriageTest(RoundCase):
         self.assertEqual(self.ask("W5")["id"], waiting)
         fresh = self.ask("NEW1")["id"]
         self.assertEqual({q["id"] for q in runtime.list_questions(self.conn, "testproj", "open")}, {waiting, fresh})
-
-    # The triage agent can close a question by the id of a decision that answers it in other words; an unknown id is refused.
-    def test_triage_agent_closes_by_reference_to_a_decision(self):
-        """The triage agent can close a question by the id of a decision that answers it in other words; an unknown id is refused."""
-        did = runtime.add_decision(self.conn, "testproj", "owner", "Traps cost 50 gold.", REL, "TRAPCOST")
-        qid = db.add_question(self.conn, "testproj", REL, "OTHER", "What does a trap cost?", "A", status="triage")
-        with self.assertRaises(CmdError):
-            triage.close_by_reference(self.conn, "testproj", qid, "decision", did + 999, "x")
-        triage.close_by_reference(self.conn, "testproj", qid, "decision", did, "same price question")
-        self.assertEqual(self.status(qid)["status"], "answered")
-        self.assertEqual(runtime.list_questions(self.conn, "testproj", "open"), [])
 
 
 if __name__ == "__main__":

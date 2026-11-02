@@ -188,14 +188,6 @@ class CodeRepoStartTest(CodeRepoCase):
         self.assertEqual(act["phase"], "release")
         self.assertIn("of plan %s " % self.plan_name(), act["prompt"])
 
-    def test_lock_question_gets_the_plan(self):
-        """The lockQuestion template can name the plan; it is the absolute workspace path with a code repo."""
-        f = self.repo / ".haivequeen" / "project.toml"
-        f.write_text(f.read_text(encoding="utf-8") + '\n[prompts]\nlockQuestion = "{tag} {pkg} in {plan}"\n', encoding="utf-8")
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        loop._do_lock({"env": self.env(), "report": [], "dry": False}, {"plan": REL, "package": "P1", "agent": "x", "text": "open"})
-        self.assertEqual(runtime.kv_get(self.conn, "testproj", "lock:%s|P1" % REL), "LOCK-P1 P1 in %s" % self.plan_name())
-
 
 class CodeRepoUnchangedTest(CodeRepoStartTest):
     """The same flows in a project without `codeRepo` give the plain plan paths and the workspace as main checkout, as before."""

@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import config, db, events, export, faults, inbox, reattach, routine, runstate, runtime, triage, usage, views
+from . import config, db, events, export, faults, inbox, reattach, routine, runstate, runtime, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -369,72 +369,6 @@ def run_hook(env, summary: dict) -> None:
     """Call the onEvent command of the project (see events.py) with this round's data."""
     qrows = list(routine.queue_rows(env).values())
     events.invoke_hook(env, summary["all_plans"], qrows, lambda n: routine.verify_zero(env, n), routine.question_rows(env))
-
-
-def routine_release_locks(env) -> None:
-    """Release locks that were resolved: a decision or an answer (owner, coordinator or auto) for item LOCK-<package>, a decision that closes the
-    package, or (with triage) a package whose open points are all decided. The package is unlocked and the failures counted so far are forgiven,
-    so it gets a fresh set of attempts."""
-    conn = env.conn
-    triage_on = env.settings.get("triage", True)
-    for kv in runtime.kv_list(conn, env.name, "lock:"):
-        plan, _, pkg = kv["key"][5:].rpartition("|")
-        row = next((p for p in runtime.list_packages(conn, env.name, plan) if p["id"] == pkg), None)
-        resolved = routine.lock_resolution(env, plan, pkg)
-        if row is None:
-            if not resolved:
-                continue
-            row = {"locked": False}   # the whole-plan check (ALL) has no package row
-        elif row["locked"] and (resolved or (triage_on and not triage._undecided_points(conn, env.name, plan, pkg))):
-            runtime.set_package(conn, env.name, plan, pkg, locked=False, reason="")
-            row["locked"] = False
-        if not row["locked"] and (resolved or triage_on):
-            agents = routine.all_agents(env)
-            fails = routine.package_failures(env, agents, plan, pkg)
-            runtime.kv_set(conn, env.name, "lockrel:%s|%s" % (plan, pkg), str(fails))
-            runtime.kv_set(conn, env.name, "lockrelv:%s|%s" % (plan, pkg), str(routine.done_verifies(agents, plan, pkg)))   # verifies up to now no longer count towards a new lock
-            runtime.kv_delete(conn, env.name, kv["key"])
-            env.log("package %s of %s unlocked, %d earlier failure(s) forgiven" % (pkg, plan, fails))
-
-
-def _do_lock(c, a) -> None:
-    """Action lock_package: record the open points of a locked package once (kv key lock:<plan>|<package>, package row locked)."""
-    env, report = c["env"], c["report"]
-    tag = "LOCK-" + str(a["package"])
-    key = "lock:%s|%s" % (a["plan"], a["package"])
-    if not c["dry"] and runtime.kv_get(env.conn, env.name, key) is None:
-        q = routine.prompt(env, "lockQuestion", {"marker": env.settings.get("openMarker", "Open for Owner"), "tag": tag, "pkg": str(a["package"]),
-                                                  "agent": str(a.get("agent")), "text": str(a.get("text")),
-                                                  "plan": routine.plan_ref(env, str(a["plan"]))})
-        runtime.kv_set(env.conn, env.name, key, q)
-        reason = routine.lock_reason(str(a.get("text") or "")) if env.settings.get("triage", True) else q[:300]
-        try:
-            runtime.set_package(env.conn, env.name, str(a["plan"]), str(a["package"]), locked=True, reason=reason or q[:300])
-        except runtime.CmdError:
-            pass   # the whole-plan check (ALL) has no package row
-        env.log("package %s of %s locked, open question recorded" % (a["package"], a["plan"]))
-        env.event("Package %s locked (%s)" % (a["package"], env.settings.get("openMarker", "Open for Owner")), True)
-    report.append("LOCK %s %s" % (a["plan"], a["package"]))
-
-
-def routine_release_stalls(env) -> None:
-    """Lift a progress-guard stop only when the owner answered its question (an answer of the Queen or the coordinator does not count, and a
-    restart of the Queen changes nothing). A released package starts counting its verifies anew, a released plan its hours."""
-    conn = env.conn
-    for prefix in ("stall:", "planstall:"):
-        for kv in runtime.kv_list(conn, env.name, prefix):
-            q = next((x for x in runtime.list_questions(conn, env.name, "answered") if str(x["id"]) == str(kv["value"])), None)
-            if q is None or q["answered_by"] != "owner":
-                continue
-            if prefix == "stall:":
-                plan, _, pkg = kv["key"][len(prefix):].rpartition("|")
-                agents = routine.all_agents(env)
-                runtime.kv_set(conn, env.name, "stallrel:%s|%s" % (plan, pkg), str(routine.done_verifies(agents, plan, pkg)))
-                runtime.kv_set(conn, env.name, "stallrelw:%s|%s" % (plan, pkg), str(len(routine.package_works(agents, plan, pkg))))
-            else:
-                runtime.kv_set(conn, env.name, "planstallrel:" + kv["key"][len(prefix):], db.now())
-            runtime.kv_delete(conn, env.name, kv["key"])
-            env.log("progress-guard stop %s lifted by the owner" % kv["key"])
 
 
 def _reject_reason(c, a):

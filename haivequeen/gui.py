@@ -795,9 +795,25 @@ class Dashboard:
         hive = self.selected_hive()
         if hive is None:
             return
-        gui_dialog.popup_menu(self.root, [("Restart Queen of %s" % hive["name"], lambda: self.queen_action(hive, "requeen")),
-                                          ("End Queen and Bees of %s" % hive["name"], lambda: self.queen_action(hive, "dequeen")), None,
-                                          (("Resume plan %s" if hive["paused"] else "Pause plan %s") % hive["name"], lambda: self.toggle_hive_pause(hive))], self.mono)
+        items = [("Restart Queen of %s" % hive["name"], lambda: self.queen_action(hive, "requeen"))]
+        items += [("Restart Queen of %s on %s" % (hive["name"], name), lambda name=name: self.queen_action(hive, "requeen", name)) for name in self.queen_providers(hive)]
+        gui_dialog.popup_menu(self.root, items + [("End Queen and Bees of %s" % hive["name"], lambda: self.queen_action(hive, "dequeen")), None,
+                                                  (("Resume plan %s" if hive["paused"] else "Pause plan %s") % hive["name"], lambda: self.toggle_hive_pause(hive))], self.mono)
+
+    # The providers a replacement Queen of a Hive could run on instead of its own.
+    def queen_providers(self, hive) -> list:
+        """Names of the configured providers other than the Hive's current one that offer the Queen class (not excluded, no local endpoint); empty when the settings cannot be read."""
+        from . import config, hives
+        from . import scheduler as sch
+        try:
+            env = next(e for e in sch.load_projects(self.conn, config.load_config()) if e.name == hive["apiary"])
+        except (StopIteration, Exception):
+            return []
+        queen_class = env.settings.get("queenClass", "medium")
+        excluded = env.settings.get("excludedProviders", [])
+        current = (hives.get(self.conn, hive["apiary"], hive["plan_path"]) or {}).get("provider")
+        return [p["name"] for p in env.providers if p["name"] not in excluded and p["name"] != current and not p.get("endpoint")
+                and (p.get("classes", {}).get(queen_class) or {}).get("model")]
 
     # Pause or resume the plan of a Hive.
     def toggle_hive_pause(self, hive=None):
@@ -813,12 +829,14 @@ class Dashboard:
         self.refresh()
 
     # Restart or end the Queen of a Hive through the bzz command.
-    def queen_action(self, hive, command):
-        """After a confirmation run `bzz requeen` (a replacement Queen) or `bzz dequeen` (end Queen and own-process Bees) for the Hive in the background and report a failure."""
+    def queen_action(self, hive, command, provider=None):
+        """After a confirmation run `bzz requeen` (a replacement Queen, on `provider` when given: the Hive then keeps that provider) or `bzz dequeen` (end Queen and own-process Bees) for the Hive in the background and report a failure."""
         ask = {"requeen": "Restart the Queen of %s? A replacement Queen takes over.", "dequeen": "End the Queen and the Bees of %s? The hive stays queenless."}[command]
+        if provider:
+            ask = "Restart the Queen of %s on " + provider + "? The Hive moves to " + provider + " and keeps it until you change it again."
         if not self.confirm(ask % hive["name"]):
             return
-        proc = subprocess.Popen([osplat.python_executable(), "-m", "haivequeen", command, "%s:%s" % (hive["apiary"], hive["plan_path"])], stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen([osplat.python_executable(), "-m", "haivequeen", command, "%s:%s" % (hive["apiary"], hive["plan_path"])] + ([provider] if provider else []), stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **NO_WINDOW)
         self.watch_command(proc, command)
 

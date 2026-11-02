@@ -7,7 +7,7 @@ from . import db, runtime
 from .runtime import CmdError
 
 COMMANDS = ("agents", "event", "events", "kv", "handled", "nofollow", "build", "usage", "plans", "packages",
-            "decisions", "triage")
+            "decisions")
 
 
 def text_arg(value):
@@ -249,8 +249,6 @@ def intflag(v):
 
 def register(sub) -> None:
     """Add the runtime commands to the sub-parser collection of haivequeen/cli.py."""
-    from . import triage
-    triage.register(sub)
     actions(sub, "agents", {
         "list": (h_agents_list, [PO, ("--scope", {"choices": ["active", "archive", "all"], "default": "active"}),
                                  ("--status", {})]),

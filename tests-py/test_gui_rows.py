@@ -128,6 +128,17 @@ class RowsTest(unittest.TestCase):
             self.win.hive_menu()
             self.assertEqual(popup.call_count, 2)
 
+    # The Queen menu offers a restart on every other provider and runs bzz requeen with it.
+    def test_queen_menu_offers_a_restart_on_another_provider(self):
+        """With a second provider the menu lists "Restart Queen ... on codex" right after the plain restart; choosing it runs `requeen <hive> codex`."""
+        with mock.patch.object(self.win, "queen_providers", return_value=["codex"]), mock.patch("haivequeen.gui_dialog.popup_menu") as popup:
+            self.win.hive_menu()
+        items = popup.call_args[0][1]
+        self.assertEqual([i[0] for i in items[:2]], ["Restart Queen of AI-LEVELS", "Restart Queen of AI-LEVELS on codex"])
+        with mock.patch.object(self.win, "confirm", return_value=True), mock.patch("haivequeen.gui.subprocess.Popen") as popen, mock.patch.object(self.win, "watch_command"):
+            items[1][1]()
+        self.assertEqual(popen.call_args[0][0][-3:], ["requeen", "ODP:" + PLAN, "codex"])
+
     # X stops Bees only, and only started ones.
     def test_x_on_a_queen_or_a_waiting_bee_only_informs(self):
         """X on the Queen row and on a Bee that has not started shows a hint and kills nothing."""
