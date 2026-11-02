@@ -957,8 +957,8 @@ class HiveRoundTests(RoundCase):
         self.assertNotEqual(active[0]["name"], original[0]["name"])
 
     # Questions created by Queens reach the owner without a triage agent.
-    def test_ask_command_waits_for_the_triage(self):
-        """Questions created by Queens wait for the triage before they reach the owner."""
+    def test_ask_command_opens_owner_question_without_triage(self):
+        """Questions created by Queens reach the owner without a triage agent."""
         import argparse
         import contextlib
         import io
@@ -967,10 +967,9 @@ class HiveRoundTests(RoundCase):
         args = argparse.Namespace(project="testproj", plan=REL, item="P1", question="Which?", recommendation="A")
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(cli.cmd_ask(args, self.conn), 0)
-        questions = runtime.list_questions(self.conn, "testproj", status="triage")
+        questions = runtime.list_questions(self.conn, "testproj", status="open")
         self.assertEqual(len(questions), 1)
         self.assertEqual(questions[0]["question"], "Which?")
-        self.assertEqual(runtime.list_questions(self.conn, "testproj", status="open"), [])
 
     # A Queen report makes the Hive wait until its existing question is answered.
     def test_owner_wait_is_recorded_from_actual_queen_report(self):

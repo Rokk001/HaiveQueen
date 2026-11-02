@@ -35,7 +35,8 @@ class QueenInstructionTests(unittest.TestCase):
     def test_queen_triages_questions_herself(self):
         """The Queen decides technical questions herself and records the decision; only game, balance and design questions go to the owner, in doubt as an owner question (HQ-HIVES D18)."""
         text = self.text()
-        self.assertIn("Technical questions are decided by the agent itself", text)
+        self.assertIn("you decide yourself: record the decision with bzz decisions add", text)
+        self.assertNotIn("triage agent", text)
         self.assertIn("A product question pauses only that item; all independent work continues.", text)
         self.assertIn("record the decision", text)
         self.assertIn("game, balance and design", text)

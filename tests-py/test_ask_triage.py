@@ -27,43 +27,22 @@ class AskTriageTest(RoundCase):
         """The question row."""
         return next(q for q in runtime.list_questions(self.conn, "testproj") if q["id"] == qid)
 
-    # Verify that a new question waits for the triage instead of reaching the owner.
-    def test_new_question_waits_for_triage(self):
-        """A new question has the status triage; the owner sees nothing until the triage agent releases it."""
+    # Verify that questions reach the owner directly without a triage agent.
+    def test_new_question_reaches_owner_directly(self):
+        """A new question is open without starting a separate agent."""
         res = self.ask("N1")
-        self.assertEqual(res["status"], "triage")
-        self.assertEqual(self.status(res["id"])["status"], "triage")
-        self.assertEqual(runtime.list_questions(self.conn, "testproj", "open"), [])
-        self.assertEqual([q["id"] for q in triage.questions_to_triage(self.conn, "testproj")], [res["id"]])
+        self.assertEqual(res["status"], "open")
+        self.assertEqual(self.status(res["id"])["status"], "open")
+        self.assertEqual([q["id"] for q in runtime.list_questions(self.conn, "testproj", "open")], [res["id"]])
 
-    # The owner check is a question for the owner and skips the triage.
-    def test_owner_check_skips_the_triage(self):
-        """A question with the item owner-check is open at once."""
-        self.assertEqual(self.ask("owner-check")["status"], "open")
-
-    # Verify the round starts the Queen and a triage agent for the waiting question.
-    def test_round_starts_queen_and_a_triage_agent(self):
-        """A waiting question gets its own triage agent next to the Queen."""
+    # Verify the plan starts a Queen, not a question triage agent.
+    def test_round_starts_queen_without_triage_agent(self):
+        """A question does not start a separate triage agent."""
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        qid = self.ask("N2")["id"]
+        self.ask("N2")
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["status"] == "running"]
-        self.assertEqual(sorted(a["phase"] for a in active), ["queen", "triage"])
-        self.assertEqual(next(a for a in active if a["phase"] == "triage")["package"], triage.QUESTION_PKG % qid)
-
-    # A question the triage cannot settle goes to the owner.
-    def test_stale_question_is_released_to_the_owner(self):
-        """After two ended triage agents, or after an hour without any, the question becomes open for the owner."""
-        qid = db.add_question(self.conn, "testproj", REL, "S1", "Which?", "A", status="triage")
-        self.assertEqual(triage.release_stale(self.conn, "testproj"), [])
-        for i in range(2):
-            runtime.upsert_agent(self.conn, "testproj", "S1-triage-%d" % i, {"plan": REL, "phase": "triage", "provider": "claude", "status": "done",
-                                                                            "startedAt": db.now(), "package": triage.QUESTION_PKG % qid})
-        self.assertEqual(triage.release_stale(self.conn, "testproj"), [qid])
-        self.assertEqual(self.status(qid)["status"], "open")
-        late = db.add_question(self.conn, "testproj", REL, "S2", "Which?", "A", status="triage")
-        self.conn.execute("UPDATE questions SET created_at='2000-01-01T00:00:00' WHERE id=?", (late,))
-        self.assertEqual(triage.release_stale(self.conn, "testproj"), [late])
+        self.assertEqual([a["phase"] for a in active], ["queen"])
 
     # A technical question is answered by the Queen: answered_by auto, reason and source in the answer; the owner sees nothing.
     def test_technical_question_is_answered_by_auto_with_reason(self):
@@ -79,12 +58,10 @@ class AskTriageTest(RoundCase):
 
     # Verify an owner question remains open and is not duplicated.
     def test_game_question_stays_open_for_the_owner(self):
-        """A game question waits for the triage once and reaches the owner when the triage agent releases it."""
+        """A game question reaches the owner once."""
         qid = self.ask("G1", "How strong is the trap?")["id"]
         self.assertEqual(self.ask("G1", "How strong is the trap?")["id"], qid)
-        triage.release_asked(self.conn, "testproj", qid)
         self.assertEqual([q["id"] for q in runtime.list_questions(self.conn, "testproj", "open")], [qid])
-        self.assertEqual(self.ask("G1", "How strong is the trap?")["id"], qid)
 
     def test_duplicate_of_answered_question_is_closed_with_reference(self):
         """The same item asked again after an answer is closed by auto and names the old question."""
@@ -104,13 +81,14 @@ class AskTriageTest(RoundCase):
         self.assertIn("decision %d" % did, res["answer"])
         self.assertEqual(runtime.list_questions(self.conn, "testproj", "open"), [])
 
-    def test_triage_cannot_be_switched_off(self):
-        """The setting triage is a removed setting: a question waits for the triage whatever the machine settings say."""
+    def test_triage_off_goes_straight_to_the_owner(self):
+        """With the triage switched off a question is open at once and nothing waits for a triage agent."""
         machine = dict(self.machine, triage=False)
         with mock.patch("haivequeen.config.load_config", return_value=machine):
             res = self.ask("O1")
-        self.assertEqual(res["status"], "triage")
-        self.assertEqual([q["id"] for q in triage.questions_to_triage(self.conn, "testproj")], [res["id"]])
+        self.assertEqual(res["status"], "open")
+        self.assertEqual(self.status(res["id"])["status"], "open")
+        self.assertEqual(triage.questions_to_triage(self.conn, "testproj"), [])
 
     # Verify the direct question path reuses existing answers and open questions.
     def test_queen_ask_owner_is_matched_against_decisions_and_questions(self):
@@ -123,8 +101,7 @@ class AskTriageTest(RoundCase):
         self.assertEqual(self.ask("V9")["status"], "answered")
         self.assertEqual(self.ask("W5")["id"], waiting)
         fresh = self.ask("NEW1")["id"]
-        self.assertEqual({q["id"] for q in runtime.list_questions(self.conn, "testproj", "triage")}, {waiting, fresh})
-        self.assertEqual(runtime.list_questions(self.conn, "testproj", "open"), [])
+        self.assertEqual({q["id"] for q in runtime.list_questions(self.conn, "testproj", "open")}, {waiting, fresh})
 
     # The triage agent can close a question by the id of a decision that answers it in other words; an unknown id is refused.
     def test_triage_agent_closes_by_reference_to_a_decision(self):

@@ -194,8 +194,6 @@ class RuntimeTest(unittest.TestCase):
         qid = self.ok("ask", "--project", "p", "--plan", "x.md", "--item", "I1", "--question", "Q?")["id"]
         q2 = self.ok("ask", "--project", "p", "--plan", "x.md", "--item", "I2", "--question", "Q2?")["id"]
         self.assertEqual(len(self.ok("questions", "--project", "p", "--item", "I1")), 1)
-        for waiting in (qid, q2):   # a new question waits for the triage until it is released to the owner; only an open question can be answered
-            self.ok("triage", "release", "--project", "p", "--question-id", str(waiting))
         self.ok("answer", str(qid), "yes", "--by", "owner")
         self.assertEqual(len(self.ok("questions", "--open")), 1)
         self.assertEqual(len(self.ok("questions", "--status", "answered")), 1)

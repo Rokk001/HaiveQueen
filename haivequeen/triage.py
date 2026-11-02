@@ -156,8 +156,8 @@ def enabled(conn, project) -> bool:
 
 def intake(conn, project, plan_path, item, question, recommendation="") -> dict:
     """`bzz ask`: a new question first waits for triage; one that a stored decision or answered question already settles is closed right away.
-    With the triage switched off nothing waits for it: the question goes straight to the owner. The owner check is a question for the owner by definition and skips the triage."""
-    if not enabled(conn, project) or str(item or "").startswith("owner-check"):
+    With the triage switched off nothing waits for it: the question goes straight to the owner."""
+    if not enabled(conn, project):
         return {"ok": True, "id": db.add_question(conn, project, plan_path, item, question, recommendation), "status": "open"}
     qid = db.add_question(conn, project, plan_path, item, question, recommendation, status="triage")
     hit = _known_answer(conn, project, plan_path, item)
@@ -206,29 +206,6 @@ def questions_to_triage(conn, project) -> list:
     busy = {a["package"] for a in runtime.list_agents(conn, project, "active") if a["phase"] == TRIAGE_PHASE}
     return [q for q in runtime.list_questions(conn, project, "triage")
             if QUESTION_PKG % q["id"] not in busy and q["plan_path"] != FAULT_PLAN]   # fault questions are read by the coordinator, never triaged
-
-
-TRIAGE_MAX_ATTEMPTS = 2        # triage agents of one question that may end without an answer before the question goes to the owner
-TRIAGE_MAX_WAIT_MINUTES = 60   # minutes a question may wait for triage without a running triage agent before it goes to the owner
-
-
-def release_stale(conn, project) -> list:
-    """Send questions the triage could not settle to the owner: those whose triage agents ended TRIAGE_MAX_ATTEMPTS times without an answer
-    or that waited TRIAGE_MAX_WAIT_MINUTES without a running triage agent. Returns the ids released."""
-    from datetime import datetime
-    agents = [a for a in runtime.list_agents(conn, project, "all") if a["phase"] == TRIAGE_PHASE]
-    running = {a["package"] for a in agents if a["status"] in runtime.ACTIVE_STATUSES}
-    released = []
-    for q in runtime.list_questions(conn, project, "triage"):
-        pkg = QUESTION_PKG % q["id"]
-        if pkg in running or q["plan_path"] == FAULT_PLAN:
-            continue
-        created = db.parse_time(q["created_at"])
-        waited = (datetime.now() - created).total_seconds() / 60 if created else 0
-        if sum(1 for a in agents if a["package"] == pkg) >= TRIAGE_MAX_ATTEMPTS or waited >= TRIAGE_MAX_WAIT_MINUTES:
-            release_asked(conn, project, q["id"])
-            released.append(q["id"])
-    return released
 
 
 def question_prompt(conn, project, q, python_path) -> str:

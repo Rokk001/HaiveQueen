@@ -84,12 +84,17 @@ def cmd_ready(args, conn) -> int:
 def cmd_ask(args, conn) -> int:
     """File a question for the owner."""
     from haivequeen import triage
-    waiting = (runtime.list_questions(conn, args.project, status="open", plan=args.plan, item=args.item)
-               or runtime.list_questions(conn, args.project, status="triage", plan=args.plan, item=args.item))
-    if waiting:
-        out({"ok": True, "id": waiting[-1]["id"], "status": waiting[-1]["status"]})
+    open_questions = runtime.list_questions(conn, args.project, status="open", plan=args.plan, item=args.item)
+    if open_questions:
+        out({"ok": True, "id": open_questions[-1]["id"], "status": "open"})
         return 0
-    out(triage.intake(conn, args.project, args.plan, args.item, args.question, args.recommendation))   # waits for the triage agent; a known answer closes it at once
+    known = triage._known_answer(conn, args.project, args.plan, args.item)
+    if known:
+        qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation, status="triage")
+        out(triage._close_with_reference(conn, qid, *known))
+    else:
+        qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation)
+        out({"ok": True, "id": qid, "status": "open"})
     return 0
 
 

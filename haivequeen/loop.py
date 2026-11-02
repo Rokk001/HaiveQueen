@@ -608,29 +608,6 @@ def _do_start(c, a, forced_pick=None) -> int:
     return 1
 
 
-# Start a triage agent for every question that waits for triage.
-def _start_question_triage(c) -> int:
-    """Every new question of an agent (bzz ask) waits for triage before it can reach the owner: it gets a triage agent of class medium that closes it by
-    reference, answers it when it is technical, or leaves it for the owner. Returns the number started."""
-    env, pool, st = c["env"], c["pool"], c["state"]
-    n = 0
-    for q in triage.questions_to_triage(env.conn, env.name):
-        if not runstate.starts_allowed(env.conn) or stop_flag().exists() or pool.workers() <= 0:
-            break
-        pick = sch.select_provider(env.providers, triage.TRIAGE_CLASS, [], pool.free, conn=env.conn)
-        if not pick:
-            continue
-        plan, pkg = str(q["plan_path"] or routine.QUEUE_PLAN_ID), triage.QUESTION_PKG % q["id"]
-        nm = routine.new_agent_name("%s-%s-triage" % (routine.plan_tag(env, plan), pkg), [view(r) for r in env.agents("all")], st["names"])
-        text = triage.question_prompt(env.conn, env.name, q, osplat.python_executable())
-        text = text.replace(" -I haivequeen/cli.py", ' -I "%s"' % (TOOLS_DIR / "haivequeen" / "cli.py"))
-        a = {"action": "start_agent", "name": nm, "type": pick["name"], "phase": "triage", "plan": plan, "package": pkg,
-             "cwd": str(env.workspace), "prompt": text, "class": triage.TRIAGE_CLASS, "bundle": []}
-        if (norm_plan(a["plan"]) + "|" + a["package"]) not in st["busy"]:
-            n += _do_start(c, a, pick)
-    return n
-
-
 def active_count(conn) -> int:
     """Number of agents (any project) that are starting or running."""
     return runstate.running_agents(conn)

@@ -48,7 +48,7 @@ HaiveQueen is a local orchestrator for coding agents ([Claude Code](https://clau
 Along the way:
 
 - **Handoffs.** At the context limit no new Bees start, running Bees finish and a new Queen continues from the handoff.
-- **Questions.** Every question an agent files with `bzz ask` first waits for a triage agent (class medium). It closes duplicates by reference, answers technical questions itself with a reason and a source, and passes game, balance and design questions on to you. A question it cannot settle goes to you after two tries or an hour. An open owner question pauses only the item it blocks; independent work goes on. Any answer can resume the Hive.
+- **Questions.** The Queen decides technical questions herself and records the decision (`bzz decisions add`, source `auto`); only game, balance and design questions go to you with `bzz ask`, and a question that an earlier decision or answer already settles is closed by reference. An open owner question pauses only the item it blocks; independent work goes on. Any answer can resume the Hive.
 - **Provider limits.** The Hive rests on its provider until the reset. Only the owner may change a Hive's provider.
 - **Interruptions** (laptop sleep, network or API errors, a vanished process) are retried with growing waits and never count as failures.
 
