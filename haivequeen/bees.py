@@ -54,6 +54,27 @@ def ensure_attempts(conn):
     conn.execute('CREATE TABLE IF NOT EXISTS package_progress (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, state TEXT NOT NULL, agent TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     if 'reason' not in [r[1] for r in conn.execute('PRAGMA table_info(package_progress)')]:
         conn.execute("ALTER TABLE package_progress ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+    conn.execute("CREATE TABLE IF NOT EXISTS embedded_bees (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, name TEXT NOT NULL, class TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', effort TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, ended_at TEXT, outcome TEXT NOT NULL DEFAULT '')")
+
+
+# Remember a Bee that runs as an embedded subagent of the Queen.
+def record_embedded_start(conn, project, plan, package, name, cls, provider, model='', effort=''):
+    """An embedded Bee has no agent row of its own: store it so the window can show it under its Queen. An older open row of the package is closed first."""
+    ensure_attempts(conn)
+    close_embedded(conn, project, plan, package, 'replaced')
+    conn.execute('INSERT INTO embedded_bees(project,plan_path,package,name,class,provider,model,effort,started_at) VALUES (?,?,?,?,?,?,?,?,?)',
+                 (project, plan, package, name, cls, provider, model, effort, db.now()))
+
+
+# Mark embedded Bees as ended.
+def close_embedded(conn, project, plan, package=None, outcome='done'):
+    """Close the open embedded Bees of a package, or of the whole plan when no package is given, with the outcome that ended them."""
+    ensure_attempts(conn)
+    sql, args = 'UPDATE embedded_bees SET ended_at=?, outcome=? WHERE project=? AND plan_path=? AND ended_at IS NULL', [db.now(), outcome, project, plan]
+    if package:
+        sql += ' AND package=?'
+        args.append(package)
+    conn.execute(sql, args)
 
 
 # Count a failed attempt, ignoring technical interruptions.
@@ -197,6 +218,7 @@ def escalation_providers(env, plan, package):
 # Record an attempt and file one owner question when the top class is exhausted.
 def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked=''):
     """Record an outcome and ask once after the highest class fails repeatedly. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
+    close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome)   # the embedded Bee of this package has reported
     if blocked:
         set_package_state(env.conn, env.name, plan, package, 'waiting', 'queen', blocked)
         return
@@ -353,6 +375,8 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
                     return refuse(env, package, 'the worktree %s is not a valid separate worktree with a branch of this repository' % cwd)
                 env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(Path(cwd).absolute())))
                 cwd = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()[0]
+            entry = (pick.get('classes') or {}).get(selected_class) or {}
+            record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''))
             return {'kind': 'subagent', 'provider': provider, 'class': selected_class, 'cwd': cwd}
         if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
             return refuse(env, package, 'a Bee process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)

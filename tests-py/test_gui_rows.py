@@ -75,6 +75,17 @@ class RowsTest(unittest.TestCase):
         rows = self.win.snap["bees"]
         self.assertEqual([(r["kind"], r["name"]) for r in rows], [("queen", "Ava"), ("bee", "Sophia")])
 
+    # A Bee that runs as a subagent of the Queen has no agent row but shows up under her.
+    def test_embedded_bee_shows_under_its_queen_until_it_reports(self):
+        """An embedded Bee is listed below its Queen with its name and runs until the Queen reports its result."""
+        bees.record_embedded_start(self.conn, "ODP", PLAN, "P2", "Mona", "heavy", "claude", "claude-opus-5-5", "medium")
+        self.win.refresh()
+        self.assertEqual([(r["kind"], r["name"], r["status"]) for r in self.win.snap["bees"]],
+                         [("queen", "Ava", "running"), ("bee", "Sophia", "running"), ("bee", "Mona", "running")])
+        bees.close_embedded(self.conn, "ODP", PLAN, "P2", "succeeded")
+        self.win.refresh()
+        self.assertEqual([r["name"] for r in self.win.snap["bees"]], ["Ava", "Sophia"])
+
     # The footer only offers what has a purpose.
     def test_footer_has_five_buttons(self):
         """The state button, the apiary filter, questions, config and help are the only clickable parts of the footer."""

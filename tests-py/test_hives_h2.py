@@ -457,6 +457,10 @@ class QueenIntegrationTests(RoundCase):
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
         result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [])
         self.assertEqual((result['kind'], result['class']), ('subagent', 'medium'))
+        row = self.conn.execute('SELECT name, class, ended_at FROM embedded_bees').fetchone()   # the window shows the embedded Bee until it reports
+        self.assertEqual((row['name'], row['class'], row['ended_at']), ('Ada', 'medium', None))
+        bees.report_attempt(self.env(), REL, 'P1', 'medium', 'succeeded', 'Ada')
+        self.assertIsNotNone(self.conn.execute('SELECT ended_at FROM embedded_bees').fetchone()['ended_at'])
 
     # The provider setting beeMode process runs the Bee of the Queen's own provider as a separate agent.
     def test_bee_mode_process_starts_a_separate_agent(self):
