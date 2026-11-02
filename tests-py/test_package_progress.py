@@ -77,6 +77,26 @@ class PackageProgressTest(RoundCase):
         states = dict(self.conn.execute('SELECT package,state FROM package_progress').fetchall())
         self.assertEqual(states, {'P1': 'done', 'P2': 'done', 'P3': 'done'})
 
+    # A step the owner did not accept is not done and keeps the Queen from reporting ready.
+    def test_rejected_package_is_not_done_and_blocks_ready(self):
+        """Rejected P2 is left out of the done count and shown as rejected; bzz ready is refused until P2 is reworked, then it goes through."""
+        for package in ('P1', 'P2', 'P3'):
+            self.report(package, 'done')
+        bees.record_attempt(self.conn, 'testproj', REL, 'P2', 'medium', 'succeeded', 'one')   # also a finished Bee attempt must not count it done
+        bees.set_package_state(self.conn, 'testproj', REL, 'P2', 'rejected', 'owner')
+        assigned, completed = gui_data.bee_tables(self.conn)
+        agents = [a for a in cli.runtime.list_agents(self.conn, 'testproj', 'all')]
+        hive = next(h for h in hives.hive_data(self.conn, None, agents) if h['plan_path'] == REL)
+        row = gui_data.hive_row(hive, agents, {('testproj', REL): 3}, gui_data.datetime.now(), assigned, completed, None, agents, {}, None, gui_data.rejected_map(self.conn))
+        self.assertEqual((row['done'], row['rejected'], row['progress']), (2, 1, 67))
+        self.assertEqual(bees.rejected_packages(self.conn, 'testproj', REL), ['P2'])
+        args = argparse.Namespace(project='testproj', branch='branch', tip='abc', plan=REL, note='')
+        with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.cmd_ready(args, self.conn), 1)
+            self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM queue').fetchone()[0], 0)
+            self.assertEqual(self.report('P2', 'implemented'), 0)
+            self.assertEqual(cli.cmd_ready(args, self.conn), 0)
+
     # The Queen instruction names the command.
     def test_queen_instruction_names_the_package_command(self):
         """The Queen is told to report package progress."""

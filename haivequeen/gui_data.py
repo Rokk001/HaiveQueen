@@ -142,12 +142,13 @@ def status_text(hive) -> str:
 def bee_tables(conn) -> tuple:
     """(assigned, completed): {(project, plan, package): (class, provider)} of the Bee assignments and the set of (project, plan, package) that are done.
 
-    A package is done when a Bee finished it or its Queen reported it done (table package_progress). Both are empty when the tables do not exist yet (older database)."""
+    A package is done when a Bee finished it or its Queen reported it done (table package_progress), unless the owner rejected it. Both are empty when the tables do not exist yet (older database)."""
     have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('bee_assignments','bee_completed','package_progress')")}
     assigned = {(r[0], r[1], r[2]): (r[3], r[4]) for r in conn.execute("SELECT project,plan_path,package,class,provider FROM bee_assignments")} if "bee_assignments" in have else {}
     completed = {(r[0], r[1], r[2]) for r in conn.execute("SELECT project,plan_path,package FROM bee_completed")} if "bee_completed" in have else set()
     if "package_progress" in have:
         completed |= {(r[0], r[1], r[2]) for r in conn.execute("SELECT project,plan_path,package FROM package_progress WHERE state='done'")}
+        completed -= {(r[0], r[1], r[2]) for r in conn.execute("SELECT project,plan_path,package FROM package_progress WHERE state='rejected'")}   # the owner did not accept it: not done
     return assigned, completed
 
 
@@ -159,6 +160,17 @@ def implemented_counts(conn) -> dict:
     return {(r[0], r[1]): r[2] for r in conn.execute("SELECT project,plan_path,COUNT(*) FROM package_progress WHERE state='implemented' GROUP BY project,plan_path")}
 
 
+# Find the packages the owner did not accept.
+def rejected_map(conn) -> dict:
+    """{(project, plan): set of package ids in state rejected}; empty when the table does not exist yet."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='package_progress'").fetchone():
+        return {}
+    found = {}
+    for project, plan, package in conn.execute("SELECT project,plan_path,package FROM package_progress WHERE state='rejected'"):
+        found.setdefault((project, plan), set()).add(package)
+    return found
+
+
 # Input and output tokens of one agent row.
 def agent_tokens(agent) -> tuple:
     """(tokens in, tokens out) of an agent row; zero when not reported."""
@@ -166,11 +178,11 @@ def agent_tokens(agent) -> tuple:
 
 
 # Describe one Hive for the active-hives table.
-def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None) -> dict:
+def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None, rejected=None) -> dict:
     """Row of one Hive: name, apiary, queen with context and tokens, Bees busy/assigned, progress (finished packages of all packages), status and runtime.
 
     `assigned` and `completed` come from bee_tables, `ctx_limit(agent)` gives an agent's context limit in tokens, `agents_all` (all rows, also archived)
-    gives the Hive's token total over its whole life, `implemented` maps (project, plan) to the packages reported implemented but not verified, `paused` is the set of (project, plan) whose plan status is PAUSED."""
+    gives the Hive's token total over its whole life, `implemented` maps (project, plan) to the packages reported implemented but not verified, `paused` is the set of (project, plan) whose plan status is PAUSED, `rejected` maps (project, plan) to the packages the owner did not accept (never counted as done)."""
     key = (hive["project"], hive["plan_path"])
     mine = [a for a in agents if (a.get("project"), a.get("plan_path")) == key]
     queen = hive.get("queen")
@@ -178,6 +190,8 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     total_pkg = packages.get(key, 0)
     done = {p for (pr, pl, p) in (completed or ()) if (pr, pl) == key}
     done |= {a.get("package") for a in mine if a.get("status") == "done" and a.get("phase") in ("work", "bee") and a.get("package")}
+    rejected_pkgs = (rejected or {}).get(key, set())
+    done -= rejected_pkgs
     running_pkgs = {a.get("package") for a in mine if a.get("phase") == "bee" and a.get("status") in runtime.ACTIVE_STATUSES and a.get("package")}
     open_pkgs = {p for (pr, pl, p) in (assigned or {}) if (pr, pl) == key and p not in done} | running_pkgs
     progress = min(100, round(100 * len(done) / total_pkg)) if total_pkg else 0
@@ -198,7 +212,7 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
             "queen_ctx": int((queen or {}).get("ctxTokens") or 0) if live else 0, "queen_ctx_limit": int(ctx_limit(queen)) if live and ctx_limit else 0,
             "queen_tin": qin, "queen_tout": qout, "hive_tin": hin, "hive_tout": hout,
             "steps": {b["name"]: b["step"] for b in hive.get("bees", []) if b.get("step")},
-            "bees_running": len(running_pkgs), "bees_total": len(open_pkgs) if live else len(running_pkgs), "live": live, "paused": is_paused, "done": len(done), "implemented": (implemented or {}).get(key, 0), "total": total_pkg, "progress": progress,
+            "bees_running": len(running_pkgs), "bees_total": len(open_pkgs) if live else len(running_pkgs), "live": live, "paused": is_paused, "done": len(done), "implemented": (implemented or {}).get(key, 0), "rejected": len(rejected_pkgs), "total": total_pkg, "progress": progress,
             "status": status, "kind": kind, "runtime": fmt_elapsed(queen.get("started_at"), now) if live else ""}
 
 
@@ -418,8 +432,9 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
             return CONTEXT_FALLBACK
     assigned, completed = bee_tables(conn)
     impl = implemented_counts(conn)
+    rejected = rejected_map(conn)
     paused = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='PAUSED'")}
-    hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused) for h in hives.hive_data(conn, project, agents)]
+    hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected) for h in hives.hive_data(conn, project, agents)]
     live = [a for a in agents if a.get("status") in runtime.ACTIVE_STATUSES]
     queens = [a for a in live if a.get("phase") == "queen"]
     steps = {k: v for h in hive_rows for k, v in h["steps"].items()}

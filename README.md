@@ -50,6 +50,8 @@ The dashboard is a graphical interface written in pure Python (tkinter, no extra
 
 **Plans**: a plan can be paused and resumed in the window (`Space` on the selected Hive or the Hive menu): this sets the status in the plan file to PAUSED or READY. A paused plan gets no new Queen or Bee; a running Queen keeps working.
 
+**Questions**: the `questions` entry of the window (key `Q`) lists the open owner questions; answer them there instead of writing an inbox file (inbox files still work). For an owner check, tick the steps you do not accept: they become rejected and the Queen reworks exactly those.
+
 **Live output**: `Enter` or a double click on a Hive row opens a read-only window with the last 300 lines of the live text of the running Queen of that Hive (the latest one when none runs); on a Bee row it shows that Bee. The window reloads every 2 seconds and follows the end of the text; opening the same agent again focuses its window. The text is the file `milestones.txt` in the run folder of the agent (`<data>/runs/<project>/<agent>/`), written by the agent runner; `runner.log` next to it holds the plain runner output.
 
 ## Quick start
@@ -142,7 +144,7 @@ Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the
 | `bzz import-legacy ...` | owner | import the state of version 1 (see `docs/MIGRATION-v1.md`) |
 | `bzz dequeen <hive>` / `bzz requeen <hive> [provider]` | owner | leave a Hive queenless or start a new Queen, optionally on a different provider |
 | `bzz bee start`, `bzz bee result`, `bzz bee wait` | Queen | start a Bee, record an attempt or wait for its provider |
-| `bzz package --project p --plan f --package id --state working\|implemented\|done` | Queen | report the progress of a package of her plan; the window's progress bar counts the done ones |
+| `bzz package --project p --plan f --package id --state working\|implemented\|done\|rejected` | Queen | report the progress of a package of her plan; the window's progress bar counts the done ones; a rejected package (the owner did not accept it) is not done and `bzz ready` is refused until it is reworked |
 | `bzz integration acquire` / `release` | Queen or external window | acquire or release the per-project integration place; external windows provide a stable owner process ID |
 | `bzz done`, `bzz ready`, `bzz ask`, `bzz note` | agents | final report, branch ready for integration, question, note (`docs/RUNTIME-API.md`) |
 

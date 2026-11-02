@@ -425,8 +425,8 @@ class Dashboard:
         if rows:
             r = rows[self.sel["hives"]]
             ctx = "ctx %s/%s" % (gui_data.fmt_tokens(r["queen_ctx"]), gui_data.fmt_tokens(r["queen_ctx_limit"])) if r["queen_ctx_limit"] else "ctx -"
-            line = "%s | %s | packages %d done, %d implemented of %d | Queen %s%s | %s | queen in/out %s/%s | hive total in/out %s/%s | %s" % (
-                r["name"], r["apiary"], r["done"], r["implemented"], r["total"], r["queen"], " " + r["queen_model"] if r["queen_model"] else "", ctx,
+            line = "%s | %s | packages %d done, %d implemented%s of %d | Queen %s%s | %s | queen in/out %s/%s | hive total in/out %s/%s | %s" % (
+                r["name"], r["apiary"], r["done"], r["implemented"], ", %d rejected" % r["rejected"] if r["rejected"] else "", r["total"], r["queen"], " " + r["queen_model"] if r["queen_model"] else "", ctx,
                 gui_data.fmt_tokens(r["queen_tin"]), gui_data.fmt_tokens(r["queen_tout"]), gui_data.fmt_tokens(r["hive_tin"]), gui_data.fmt_tokens(r["hive_tout"]), r["status"])
             self.text(x0 + 24, y1 - 14, self.fit(line, x1 - x0 - 48, 12), 12, "dim", "w")
         else:
@@ -594,7 +594,7 @@ class Dashboard:
         for name, action in (("status", self.status), ("bees", lambda: self.focus("bees")),
                              ("hives", lambda: self.focus("hives")), ("apiaries" if not self.project else "apiary:" + self.project, self.next_project),
                              ("logs", self.toggle_autoscroll),
-                             ("config", self.open_config), ("help", self.help)):
+                             ("questions", self.open_questions), ("config", self.open_config), ("help", self.help)):
             w = 13 * len(name)
             self.text(x, 886, name, 17, "text", "w")
             self.hit(x - 8, 866, x + w + 8, 908, lambda _a, f=action: f())
@@ -712,10 +712,10 @@ class Dashboard:
 
     # Map keys to actions.
     def on_key(self, event):
-        """P pause/resume, Space pause/resume the selected plan, F apiary filter, M queen menu of the selected Hive, X stop the selected Bee, C clear and S save the log, A toggle auto-scroll, Up/Down move the Hive selection, Enter opens the live view."""
+        """P pause/resume, Q answer the open questions, Space pause/resume the selected plan, F apiary filter, M queen menu of the selected Hive, X stop the selected Bee, C clear and S save the log, A toggle auto-scroll, Up/Down move the Hive selection, Enter opens the live view."""
         key = (event.keysym or "").lower()
         {"p": self.toggle_pause, "f": self.next_project, "m": self.hive_menu, "space": self.toggle_hive_pause, "x": self.stop_bee, "c": self.clear_log, "s": self.save_log,
-         "a": self.toggle_autoscroll, "up": lambda: self.move(-1), "down": lambda: self.move(1), "return": self.open_live}.get(key, lambda: None)()
+         "a": self.toggle_autoscroll, "q": self.open_questions, "up": lambda: self.move(-1), "down": lambda: self.move(1), "return": self.open_live}.get(key, lambda: None)()
 
     # Move the Hive selection up or down.
     def move(self, step):
@@ -872,6 +872,16 @@ class Dashboard:
         st = runstate.get_state(self.conn)
         messagebox.showinfo("HaiveQueen", "Run state: %s\nRunning agents: %d" % (st["state"], st["running_agents"]), parent=self.root)
 
+    # Open the window that answers the open questions.
+    def open_questions(self):
+        """Open the questions window (answer the open owner questions, mark rejected steps); a second click brings the open window to the front."""
+        from . import gui_questions
+        current = getattr(self, "questions_window", None)
+        if current is not None and current.win.winfo_exists():
+            current.win.lift()
+            return
+        self.questions_window = gui_questions.QuestionsWindow(self.root, self.conn, self.mono, on_answered=self.refresh)
+
     # Open the settings editor.
     def open_config(self):
         """Open the settings editor (config.toml and the project.toml files as forms); a second click brings the open editor to the front."""
@@ -893,7 +903,7 @@ class Dashboard:
     def help(self):
         """Show the keyboard and mouse controls."""
         from tkinter import messagebox
-        messagebox.showinfo("HaiveQueen", "P  pause / resume\nSpace  pause / resume the selected plan\nF  next apiary filter\nM / right click  queen menu of the hive\nUp/Down  select hive\nClick  select a row\nEnter / double click  live output of the row\n"
+        messagebox.showinfo("HaiveQueen", "P  pause / resume\nQ  answer the open questions\nSpace  pause / resume the selected plan\nF  next apiary filter\nM / right click  queen menu of the hive\nUp/Down  select hive\nClick  select a row\nEnter / double click  live output of the row\n"
                             "X  stop the selected bee\nC  clear log   S  save log   A  auto-scroll", parent=self.root)
 
 

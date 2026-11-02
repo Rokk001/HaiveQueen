@@ -61,6 +61,10 @@ def cmd_ready(args, conn) -> int:
             if not _plan_matches(conn, args.project, plan, args.plan) or hives.get(conn, args.project, plan) is None:
                 return fail("ready refused: branch does not belong to this Hive")
             args.plan = plan
+            from haivequeen import bees
+            rejected = bees.rejected_packages(conn, args.project, plan)
+            if rejected:
+                return fail("ready refused: package(s) %s rejected by the owner; rework them and set their state with bzz package" % ", ".join(rejected))
         else:
             env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
             why = routine.ready_refusal(env, agent) if env is not None else ""
@@ -266,7 +270,7 @@ def cmd_requeen(args, conn):
 
 # Record the progress state of one package of the calling Queen's Hive.
 def cmd_package(args, conn):
-    """Store the state (working, implemented, done) of a package of the Queen's own plan; shown as progress in the window."""
+    """Store the state (working, implemented, done, rejected) of a package of the Queen's own plan; shown as progress in the window."""
     from haivequeen import bees
     agent = os.environ.get("BZZ_AGENT")
     queen = runtime.get_agent(conn, args.project, agent) if agent else None
@@ -365,7 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("package")
     for field in ("project", "plan", "package"):
         p.add_argument("--" + field, required=True)
-    p.add_argument("--state", required=True, choices=["working", "implemented", "done"])
+    p.add_argument("--state", required=True, choices=["working", "implemented", "done", "rejected"])
     p.set_defaults(fn=cmd_package)
 
     p = sub.add_parser("integration")
