@@ -32,6 +32,7 @@ class Plan:
     status: str = "DRAFT"
     packages: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    owner_check: str = "ask"   # "ask": the owner accepts the integrated plan; "none" (header owner_check = "none") skips that question
 
 
 def normalize_status(value):
@@ -113,7 +114,8 @@ def parse_plan_text(text, path=""):
                 verify=verify,
                 depends_on=_depends(row.get("depends_on")),
             ))
-    return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings)
+    owner_check = "none" if str(header.get("owner_check", "")).strip().lower() in ("none", "false", "no", "off") else "ask"
+    return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings, owner_check=owner_check)
 
 
 def load_plan(path):

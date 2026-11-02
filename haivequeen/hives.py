@@ -204,8 +204,47 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
             if questions:
                 wait_for_answers(conn, env.name, plan['path'], questions)
                 continue
+            if (not owner_check_questions(conn, env.name, plan['path']) and not owner_accepted(conn, env.name, plan['path'], integrated.get('updated_at'))
+                    and owner_check_wanted(env, plan['path'])):
+                file_owner_check(conn, env, plan['path'])   # the system asks for the acceptance itself; the Queen is not relied on to do it
+                continue
             runtime.set_plan_status(conn, env.name, plan['path'], 'DONE', str(env.workspace))
             finish_hive(conn, env.name, plan['path'])
+
+
+# Whether the owner already accepted the integrated plan.
+def owner_accepted(conn, project, plan, since):
+    """True when an owner check of the plan that was already handled (item owner-check-answered) got an ok answer at or after `since` (the time of the integration)."""
+    return any(owner_check_ok(q.get('answer')) and str(q.get('answered_at') or '') >= str(since or '')
+               for q in runtime.list_questions(conn, project, status='answered', plan=plan, item='owner-check-answered'))
+
+
+# Whether the owner has to accept the integrated plan.
+def owner_check_wanted(env, plan):
+    """True unless the plan's header says owner_check = "none"; an unreadable plan file counts as wanted."""
+    from . import plans as planlib
+    try:
+        return planlib.load_plan(str(env.workspace / plan)).owner_check != 'none'
+    except (OSError, ValueError):
+        return True
+
+
+# Ask the owner to accept an integrated plan.
+def file_owner_check(conn, env, plan):
+    """File the owner check question of an integrated plan (with the final report of its last Queen) and park the Hive until the owner answers; returns the question id."""
+    final = ''
+    last = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all')) if a.get('plan_path') == plan and a.get('phase') == 'queen'), None)
+    if last:
+        try:
+            final = (env.run_dir(last['name']) / 'final.txt').read_text(encoding='utf-8', errors='replace').strip()[:800]
+        except OSError:
+            final = ''
+    text = 'Plan %s is integrated and deployed. Please test the integrated build in the game: answer ok, or say what is not right and the next Queen fixes exactly that.' % plan
+    if final:
+        text += '\n\nReport of the Queen:\n' + final
+    qid = db.add_question(conn, env.name, plan, 'owner-check', text, 'Test it in the game, then answer ok or describe what is wrong.')
+    wait_for_owner_check(conn, env.name, plan, [qid])
+    return qid
 
 
 # Park an integrated Hive until the owner has answered the owner check question; no Queen runs and no integration place is held.
@@ -879,6 +918,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
                     raise
                 if count:
+                    bees.close_embedded(conn, env.name, path, None, 'queen replaced')   # embedded Bees of the old Queen are gone with her
                     runtime.kv_set(conn, env.name, 'hive-blocker:' + path, '')
                     for package in runtime.list_packages(conn, env.name, path):
                         runtime.kv_delete(conn, env.name, "wait:%s|%s" % (path, package["id"]))

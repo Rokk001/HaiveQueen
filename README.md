@@ -43,7 +43,7 @@ HaiveQueen is a local orchestrator for coding agents ([Claude Code](https://clau
 3. **Work.** The Queen coordinates and never works a package herself: every package goes to a Bee of its class, respecting dependencies and the Bee limit. She answers technical questions, merges the Bee branches and, when every requirement is done, integrates (git, compile check, build). Image work goes to a provider with the `images` capability; local providers are used when available.
 4. **Completeness.** Before integration the Queen answers the completeness question with evidence for every requirement and ends with `Offene Anforderungen: 0`. Partial items count as open. Owner-only play checks are listed separately.
 5. **Integration.** She merges the current integration branch into her branch, runs the project check, registers her branch and performs the project's integration steps. Only one integration per project runs at a time; a waiting Hive hands off and resumes when its turn comes.
-6. **Done.** The plan status moves to DONE after integration.
+6. **Acceptance and done.** After integration and deploy HaiveQueen itself files an owner check question (`owner-check`): you test the integrated build and answer `ok`, or say what is not right and the next Queen fixes exactly that. The plan status moves to DONE only after your `ok`; a plan whose header says `owner_check = "none"` skips the question and is done after integration.
 
 Along the way:
 
@@ -132,6 +132,7 @@ Free Markdown below the header: the agents read it.
 | `class` | `light`, `medium` or `heavy`; the provider maps each class to a model and an effort |
 | `depends_on` | package ids this one waits for, or `["all"]` |
 | `capability` | only providers offering it may run the package (for example `images`) |
+| `owner_check` | header key (not per package): `"none"` skips the acceptance question after integration, anything else (default) asks you to test the integrated build |
 | `verify` | who closes the last requirements: `code` (the Bee does, default), `build` (a build step does) or `owner` (a play check by you). A Bee is done when its own work is. An unknown value is treated as `code` |
 
 A plan may be paused and resumed in the window. A paused plan gets no new Queen or Bee; a running Queen keeps working.

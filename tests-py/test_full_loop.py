@@ -11,7 +11,7 @@ import sys
 import unittest
 
 from bzztest import REL, RoundCase, provider, runtime
-from haivequeen import loop
+from haivequeen import db, loop
 
 ONE = [{"id": "P1", "title": "first"}]
 
@@ -98,6 +98,11 @@ class FullLoopTest(RoundCase):
         self.assertEqual(code, 0)
         ran = self.log_file.read_text(encoding="utf-8").split() if self.log_file.is_file() else []
         self.assertEqual(len(ran), 1, "the plan should have one Queen: %s\n%s" % (ran, self.log()))
+        self.assertNotEqual(runtime.list_plans(self.conn, "testproj")[0]["status"], "DONE")   # the owner has not accepted it yet
+        asked = runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item="owner-check")
+        self.assertEqual(len(asked), 1, "the system should have filed the owner check\n%s" % self.log())
+        db.answer_question(self.conn, asked[0]["id"], "ok", "owner")
+        loop.run_loop(self.conn, self.machine, rounds=2, round_minutes=0.05, wait_seconds=0.3, round_kwargs=round_kwargs)
         self.assertEqual(runtime.list_plans(self.conn, "testproj")[0]["status"], "DONE")
         rows = [dict(r) for r in self.conn.execute("SELECT * FROM queue")]
         self.assertEqual([r["status"] for r in rows], ["integrated"], json.dumps(rows, default=str))

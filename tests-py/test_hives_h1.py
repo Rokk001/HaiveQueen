@@ -1074,7 +1074,36 @@ class HiveRoundTests(RoundCase):
         runtime.queue_upsert(self.conn, "testproj", "branch", status="integrated")
         self.finish(queen["name"], final="Integrated")
         self.round()
+        self.assertNotEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "DONE")   # the owner has not accepted it yet
+        asked = runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item="owner-check")
+        self.assertEqual(len(asked), 1)   # the system filed the owner check itself
+        from haivequeen import db
+        db.answer_question(self.conn, asked[0]["id"], "ok", "owner")
+        self.round()
         self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "DONE")
+
+    # A plan can switch the owner check off in its header; without that line the owner is asked.
+    def test_plan_header_can_switch_the_owner_check_off(self):
+        import re
+        from haivequeen import hives, plans as planlib
+        from bzztest import REL
+        self.plan("READY", [{"id": "P1", "title": "First"}])
+        env = self.env()
+        self.assertTrue(hives.owner_check_wanted(env, REL))
+        path = self.repo / REL
+        text = re.sub(r"^\+\+\+\r?\n", lambda m: m.group(0) + 'owner_check = "none"\n', path.read_text(encoding="utf-8"), count=1)
+        path.write_text(text, encoding="utf-8")
+        self.assertEqual(planlib.parse_plan_text(text).owner_check, "none")
+        self.assertFalse(hives.owner_check_wanted(env, REL))
+
+    # An owner check that was already answered ok after the integration is not asked again.
+    def test_accepted_owner_check_is_not_asked_again(self):
+        from haivequeen import db, hives
+        from bzztest import REL
+        qid = db.add_question(self.conn, "testproj", REL, "owner-check-answered", "Check it", "")
+        db.answer_question(self.conn, qid, "ist ok", "owner")
+        self.assertTrue(hives.owner_accepted(self.conn, "testproj", REL, "2000-01-01T00:00:00"))
+        self.assertFalse(hives.owner_accepted(self.conn, "testproj", REL, "2999-01-01T00:00:00"))
 
     # Queen startup works with existing project work-phase rule selections.
     def test_queen_runner_gets_existing_work_phase_rules(self):
