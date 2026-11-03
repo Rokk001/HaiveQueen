@@ -241,6 +241,17 @@ class QueenIntegrationTests(RoundCase):
         bees.set_package_state(self.conn, 'testproj', REL, 'I1', 'waiting', 'Bea', 'provider')
         self.assertEqual(bees.runnable_packages(self.env(), REL, images), [])
 
+    # Check a capability that two providers offer does not stop the Hive when one of them is missing.
+    def test_a_shared_capability_runs_on_the_other_provider(self):
+        from bzztest import REL, provider
+        first, second = provider('claude', 2), provider('codex', 1, proto='codex')
+        first['capabilities'], second['capabilities'] = ['blender'], ['blender', 'images']
+        self.machine['providers'] = [first, second]
+        self.plan('READY', [{'id': 'B1', 'title': 'Model', 'capability': 'blender'}, {'id': 'I1', 'title': 'Images', 'capability': 'images'}])
+        env = self.env()
+        codex = next(p for p in env.providers if p['name'] == 'codex')
+        self.assertEqual(bees.runnable_packages(env, REL, codex), ['B1'])
+
     # Check process bee refuses start when paused.
     def test_process_bee_refuses_start_when_paused(self):
         self.add_local_provider()

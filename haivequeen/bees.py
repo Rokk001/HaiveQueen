@@ -198,18 +198,19 @@ Before integration answer for each requirement with evidence (file, commit or te
 
 # Packages of a plan that can still start although one provider is missing.
 def runnable_packages(env, plan, provider) -> list:
-    """Ids of the packages that are not finished or waiting, whose dependencies are done and that do not need a capability only the missing provider has: the Queen must work them before the Hive waits."""
+    """Ids of the packages that are not finished or waiting, whose dependencies are done and that do not need a capability only the missing provider has (a capability another provider offers too does not count): the Queen must work them before the Hive waits."""
     from . import routine
     ensure_attempts(env.conn)
     states = {r[0]: r[1] for r in env.conn.execute('SELECT package,state FROM package_progress WHERE project=? AND plan_path=?', (env.name, plan))}
-    special = set(provider.get('capabilities') or [])
+    others = [p for p in env.providers if p['name'] != provider['name']]
     packages = env.packages(plan)
     ids = {p['id'] for p in packages}
     found = []
     for p in packages:
         if states.get(p['id']) in ('done', 'implemented', 'waiting') or package_done(env.conn, env.name, plan, p['id']):
             continue
-        if special & set(routine.package_needs_for(env, plan, p['id'])):
+        need = routine.package_needs_for(env, plan, p['id'])
+        if need and not capable_providers(others, need):
             continue   # only the missing provider can work it
         if all(dep in ids and package_done(env.conn, env.name, plan, dep) for dep in p['depends']):
             found.append(p['id'])

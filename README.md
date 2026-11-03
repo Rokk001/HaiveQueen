@@ -131,7 +131,7 @@ Free Markdown below the header: the agents read it.
 | `status` | `SUBMITTED` hands over a plan that is not cut yet (see below); `READY` releases a cut plan; `IN_PROGRESS` and `DONE` are set by HaiveQueen; `PAUSED` stops new starts (window: `Space`) |
 | `class` | `light`, `medium` or `heavy`; the provider maps each class to a model and an effort |
 | `depends_on` | package ids this one waits for, or `["all"]` |
-| `capability` | only providers offering it may run the package (for example `images`) |
+| `capability` | only providers offering it may run the package. The name is free: you define it in the provider entry of the machine settings (`capabilities = ["images", "blender", "build"]`) and several providers may offer the same one, for example `blender` or `build` for work that only some models are suited for. A package whose provider is missing waits alone; one that another provider offers too goes there. |
 | `owner_check` | header key (not per package): `"none"` skips the acceptance question after integration, anything else (default) asks you to test the integrated build |
 | `verify` | who closes the last requirements: `code` (the Bee does, default), `build` (a build step does) or `owner` (a play check by you). A Bee is done when its own work is. An unknown value is treated as `code` |
 
