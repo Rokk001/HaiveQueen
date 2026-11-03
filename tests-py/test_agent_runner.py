@@ -422,7 +422,7 @@ class ClaudeRunTest(RunnerBase):
         self.assertEqual(r.returncode, 0, r.stderr)
         row = self.row("S-1")
         self.assertEqual(row["ctxTokens"], 1000)
-        self.assertEqual(row["subCtx"], {"ag1": {"desc": "Nele T1 tavern clips", "ctx": 156970}})
+        self.assertEqual(row["subCtx"], {"ag1": {"desc": "Nele T1 tavern clips", "ctx": 156970, "tin": 156970, "tout": 5}})
 
     def test_error_result_fails(self):
         """A result event with is_error makes the agent failed, even with exit code 0."""

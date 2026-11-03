@@ -88,14 +88,28 @@ class RowsTest(unittest.TestCase):
 
     # The Queen's runner stores the context of each subagent; the Bee row shows it.
     def test_embedded_bee_shows_its_context(self):
-        """An embedded Bee gets the context size of the subagent whose task description starts with its name."""
+        """An embedded Bee gets context and tokens of the subagent whose task description names it."""
         bees.record_embedded_start(self.conn, "ODP", PLAN, "P2", "Mona", "heavy", "claude", "claude-opus-5-5", "medium")
         queen = next(a for a in runtime.list_agents(self.conn, "ODP", "active") if a.get("phase") == "queen")
-        runtime.upsert_agent(self.conn, "ODP", queen["name"], {"subCtx": {"ag1": {"desc": "Mona P2 work", "ctx": 90000}, "ag2": {"desc": "Other", "ctx": 5}}})
+        runtime.upsert_agent(self.conn, "ODP", queen["name"], {"subCtx": {"ag1": {"desc": "P2 Mona: tavern work", "ctx": 90000, "tin": 400000, "tout": 800}, "ag2": {"desc": "Other", "ctx": 5}}})
         self.win.refresh()
         row = next(r for r in self.win.snap["bees"] if r["name"] == "Mona")
-        self.assertEqual(row["ctx"], 90000)
+        self.assertEqual((row["ctx"], row["tin"], row["tout"]), (90000, 400000, 800))
         self.assertGreater(row["ctx_limit"], 0)
+
+    # A Bee that reports "step n/m" gets a progress bar.
+    def test_bee_row_carries_the_step_for_the_progress_bar(self):
+        """The step a Bee reported becomes the share of the bar; no step gives an empty bar."""
+        from datetime import datetime
+        from haivequeen import gui_data
+        self.assertEqual(gui_data.step_fraction("2/5"), 0.4)
+        self.assertEqual(gui_data.step_fraction(""), 0.0)
+        self.assertEqual(gui_data.step_fraction("x/0"), 0.0)
+        bees.record_embedded_start(self.conn, "ODP", PLAN, "P2", "Mona", "heavy", "claude", "claude-opus-5-5", "medium")
+        embedded = gui_data.embedded_rows(self.conn)
+        rows = gui_data.bee_list([], {}, set(), datetime.now(), None, {"Mona": "3/5"}, None, None, embedded)
+        mona = next(r for r in rows if r["name"] == "Mona")
+        self.assertEqual((mona["step"], mona["step_frac"], mona["task"]), ("3/5", 0.6, "P2"))
 
     # The footer only offers what has a purpose.
     def test_footer_has_five_buttons(self):

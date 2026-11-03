@@ -609,7 +609,10 @@ class AgentRun:
                 self.tout += int(u.get("output_tokens") or 0)
                 if e.get("parent_tool_use_id") and e.get("agent_id"):
                     # A subagent's message: its context is the Bee's, never the Queen's.
-                    self.sub_ctx[str(e["agent_id"])] = {"desc": str(e.get("task_description") or ""), "ctx": c1}
+                    entry = self.sub_ctx.setdefault(str(e["agent_id"]), {"desc": "", "ctx": 0, "tin": 0, "tout": 0})
+                    entry.update(desc=str(e.get("task_description") or entry["desc"]), ctx=c1)
+                    entry["tin"] += c1
+                    entry["tout"] += int(u.get("output_tokens") or 0)
                 else:
                     self.ctx = c1
             for c in msg.get("content") or []:

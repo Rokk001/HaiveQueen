@@ -1,4 +1,5 @@
 """Data for the graphical dashboard (haivequeen/gui.py): one plain-dict snapshot of everything the window shows, read from the database."""
+import re
 import shutil
 import sys
 from datetime import datetime, timedelta
@@ -231,6 +232,16 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
 
 
 # Describe one running Bee for the busy-bees table.
+def step_fraction(step) -> float:
+    """The finished share of a reported step like "2/5" (0.4); 0.0 for anything else."""
+    done, _, total = str(step or "").partition("/")
+    try:
+        return max(0.0, min(1.0, int(done) / int(total)))
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
+# Describe one running Bee as a row of the Bees table.
 def bee_row(agent, now, steps=None, ctx_limit=None) -> dict:
     """Row of one running Bee: kind "bee", person name, model label, hive, apiary, plan path, task (with its reported step like 2/5), context, tokens, status and runtime."""
     name = str(agent.get("person") or agent.get("name"))
@@ -239,7 +250,7 @@ def bee_row(agent, now, steps=None, ctx_limit=None) -> dict:
     return {"kind": "bee", "name": name, "agent": agent.get("name"), "project": agent.get("project"), "plan_path": agent.get("plan_path") or "",
             "model": overview.model_short(agent.get("provider"), agent.get("model"), agent.get("effort")),
             "hive": hive_name(agent.get("plan_path") or ""), "apiary": agent.get("project"),
-            "task": (str(agent.get("task") or agent.get("package") or agent.get("last_line") or "")[:40] + (" " + step if step else "")).strip(),
+            "task": str(agent.get("task") or agent.get("package") or agent.get("last_line") or "")[:40].strip(), "step": step, "step_frac": step_fraction(step),
             "ctx": int(agent.get("ctxTokens") or 0), "ctx_limit": int(ctx_limit(agent)) if ctx_limit else 0, "tin": tin, "tout": tout,
             "status": "running" if agent.get("status") in runtime.ACTIVE_STATUSES else str(agent.get("status")), "runtime": fmt_elapsed(agent.get("started_at"), now)}
 
@@ -278,13 +289,14 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
         step = (steps or {}).get(bee["name"], "")
         queen = next((a for a in agents if a.get("phase") == "queen" and a.get("status") in runtime.ACTIVE_STATUSES
                       and (a.get("project"), a.get("plan_path")) == (bee["project"], bee["plan_path"])), None)
-        # The runner of the Queen reads each subagent's context from her event stream (no extra model call); the Task description starts with the Bee's name.
+        # The runner of the Queen reads each subagent's context from her event stream (no extra model call); the Task description names the Bee.
         sub = next((v for v in ((queen or {}).get("subCtx") or {}).values()
-                    if str(v.get("desc") or "").lower().startswith(str(bee["name"]).lower())), None)
+                    if re.search(r"\b%s\b" % re.escape(str(bee["name"])), str(v.get("desc") or ""), re.I)), None)
         rows.append({"kind": "bee", "name": bee["name"], "agent": None, "project": bee["project"], "plan_path": bee["plan_path"],
                      "model": overview.model_short(bee["provider"], bee["model"], bee["effort"]), "hive": hive_name(bee["plan_path"]), "apiary": bee["project"],
-                     "task": (str(bee["package"]) + (" " + step if step else "")).strip(),
-                     "ctx": int((sub or {}).get("ctx") or 0), "ctx_limit": int(ctx_limit(queen)) if sub and ctx_limit else 0, "tin": 0, "tout": 0,
+                     "task": str(bee["package"]).strip(), "step": step, "step_frac": step_fraction(step),
+                     "ctx": int((sub or {}).get("ctx") or 0), "ctx_limit": int(ctx_limit(queen)) if sub and ctx_limit else 0,
+                     "tin": int((sub or {}).get("tin") or 0), "tout": int((sub or {}).get("tout") or 0),
                      "status": "running", "runtime": fmt_elapsed(bee["started_at"], now)})
         seen.add((bee["project"], bee["plan_path"], bee["package"]))
     for (project, plan, package) in sorted(assigned or {}):

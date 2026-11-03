@@ -161,7 +161,7 @@ A `failed` result without evidence (`--open-requirements` or `--error`) is refus
 **Panels**
 
 - **Active Hives**: one row per Hive with its Apiary, the name of its Queen, Bees running of assigned, a progress bar (finished packages), status and runtime. The detail line below the table shows the selected Hive's packages (done, implemented, rejected, waiting with the reason) and its token total.
-- **Queens and Bees**: every running Queen is a parent row, her Bees hang directly below her. A Queen row carries all Queen data: model and effort, Hive, context fill, tokens and runtime. Bees that have no process yet show as `waiting`.
+- **Queens and Bees**: every running Queen is a parent row, her Bees hang directly below her. A Queen row carries all Queen data: model and effort, Hive, context fill, tokens and runtime. Bees that have no process yet show as `waiting`. A Bee that reports `step n/m` shows a progress bar with its step; Bees that run as subagents of their Queen show their own context and tokens, read from the Queen's event stream.
 - **Tokens, system, queue**: token use per Apiary and Hive, load of the machine and the integration queue.
 - **Logs**: the newest events with coloured source tags, with save, clear and auto-scroll.
 - **Model limits** and **Status**: the provider windows and weekly quotas as bars, and run state, plans, questions and round errors as text.

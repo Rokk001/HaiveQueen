@@ -466,7 +466,12 @@ class Dashboard:
                 self.text(x0 + 80, y, r["name"][:11], 14, "gold" if chosen else "text", "w")
             self.text(x0 + 170, y, r["model"][:16], 14, "text", "w")
             self.text(x0 + 300, y, r["hive"][:14], 14, "text", "w")
-            self.text(x0 + 410, y, r["task"][:15], 14, "gold" if r["kind"] == "queen" else "text", "w")
+            if r.get("step"):   # a Bee that reported "step n/m": its task name, a progress bar and the step
+                self.text(x0 + 410, y, r["task"][:8], 14, "text", "w")
+                self.bar(x0 + 476, y - 5, 36, 10, r["step_frac"], "seg", 5)
+                self.text(x0 + 516, y, r["step"], 12, "cyan", "w")
+            else:
+                self.text(x0 + 410, y, r["task"][:15], 14, "gold" if r["kind"] == "queen" else "text", "w")
             self.context_bar(x0 + 545, y, r["ctx"], r["ctx_limit"])
             self.text(x0 + 655, y, "%s/%s" % (gui_data.fmt_tokens(r["tin"]), gui_data.fmt_tokens(r["tout"])), 13, "cyan", "w")
             self.dot(x0 + 772, y, colour)
