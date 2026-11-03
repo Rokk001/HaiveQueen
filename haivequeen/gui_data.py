@@ -276,9 +276,15 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
         if hive_keys is not None and (bee["project"], bee["plan_path"]) not in hive_keys:
             continue
         step = (steps or {}).get(bee["name"], "")
+        queen = next((a for a in agents if a.get("phase") == "queen" and a.get("status") in runtime.ACTIVE_STATUSES
+                      and (a.get("project"), a.get("plan_path")) == (bee["project"], bee["plan_path"])), None)
+        # The runner of the Queen reads each subagent's context from her event stream (no extra model call); the Task description starts with the Bee's name.
+        sub = next((v for v in ((queen or {}).get("subCtx") or {}).values()
+                    if str(v.get("desc") or "").lower().startswith(str(bee["name"]).lower())), None)
         rows.append({"kind": "bee", "name": bee["name"], "agent": None, "project": bee["project"], "plan_path": bee["plan_path"],
                      "model": overview.model_short(bee["provider"], bee["model"], bee["effort"]), "hive": hive_name(bee["plan_path"]), "apiary": bee["project"],
-                     "task": (str(bee["package"]) + (" " + step if step else "")).strip(), "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0,
+                     "task": (str(bee["package"]) + (" " + step if step else "")).strip(),
+                     "ctx": int((sub or {}).get("ctx") or 0), "ctx_limit": int(ctx_limit(queen)) if sub and ctx_limit else 0, "tin": 0, "tout": 0,
                      "status": "running", "runtime": fmt_elapsed(bee["started_at"], now)})
         seen.add((bee["project"], bee["plan_path"], bee["package"]))
     for (project, plan, package) in sorted(assigned or {}):
@@ -419,8 +425,6 @@ def info_sections(d) -> list:
         qs = [("open: %d  %s" % (len(d["qs"]), ", ".join("%s#%s" % (q["project"], q["id"]) for q in d["qs"])), "warn")]
     else:
         qs = [("none open", "dim")]
-    if d["triage"]:
-        qs.append(("in triage: %d" % d["triage"], "text"))
     out.append(("QUESTIONS", qs))
     if d["round_errors"]:
         out.append(("ROUND ERRORS", [((db.parse_time(e["ts"]).strftime("%H:%M") if db.parse_time(e["ts"]) else "--:--") + " " + e["project"] + " " + e["text"], "bad")

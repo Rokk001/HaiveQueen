@@ -86,6 +86,17 @@ class RowsTest(unittest.TestCase):
         self.win.refresh()
         self.assertEqual([r["name"] for r in self.win.snap["bees"]], ["Ava", "Sophia"])
 
+    # The Queen's runner stores the context of each subagent; the Bee row shows it.
+    def test_embedded_bee_shows_its_context(self):
+        """An embedded Bee gets the context size of the subagent whose task description starts with its name."""
+        bees.record_embedded_start(self.conn, "ODP", PLAN, "P2", "Mona", "heavy", "claude", "claude-opus-5-5", "medium")
+        queen = next(a for a in runtime.list_agents(self.conn, "ODP", "active") if a.get("phase") == "queen")
+        runtime.upsert_agent(self.conn, "ODP", queen["name"], {"subCtx": {"ag1": {"desc": "Mona P2 work", "ctx": 90000}, "ag2": {"desc": "Other", "ctx": 5}}})
+        self.win.refresh()
+        row = next(r for r in self.win.snap["bees"] if r["name"] == "Mona")
+        self.assertEqual(row["ctx"], 90000)
+        self.assertGreater(row["ctx_limit"], 0)
+
     # The footer only offers what has a purpose.
     def test_footer_has_five_buttons(self):
         """The state button, the apiary filter, questions, config and help are the only clickable parts of the footer."""

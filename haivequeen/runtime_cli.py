@@ -328,13 +328,18 @@ def register_runstate(sub) -> None:
         """starts-allowed: may the round start an agent now."""
         return {"allowed": runstate.starts_allowed(c), "state": runstate.get_state(c)["state"]}
 
+    def pause_now(a, c):
+        """pause: stop new starts; with --now every running agent also gets the HANDOFF flag and ends after its current step."""
+        out = runstate.pause(c)
+        return {**out, "handoff": runstate.request_handoff(c)} if a.now else out
+
     def re_attach(a, c):
         """reattach: fail running agents whose PID is not in the given list."""
         alive = {int(x) for x in (a.alive_pids or "").split(",") if x.strip()}
         return reattach.reattach(c, a.project, lambda pid: pid in alive)
 
     for name, fn, flags in (
-            ("pause", lambda a, c: runstate.pause(c), []),
+            ("pause", pause_now, [("--now", {"action": "store_true", "help": "also ask every running agent to hand off after its current step"})]),
             ("resume", lambda a, c: runstate.resume(c), []),
             ("run-state", lambda a, c: runstate.get_state(c), []),
             ("starts-allowed", allowed, []),

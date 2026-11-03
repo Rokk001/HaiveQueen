@@ -343,7 +343,7 @@ def cmd_bee(args, conn):
         rules = json.loads(args.rules)
         if not all(isinstance(x, list) and all(isinstance(v, str) for v in x) for x in (steps, paths, rules)) or not steps:
             return fail("steps, paths and rules must be string lists and steps must not be empty")
-        started = bees.start_process(env, plan, args.package, args.name, args.cls, args.task, steps, paths, rules, cwd=args.cwd, no_subagents=args.no_subagents, parallel=args.parallel)
+        started = bees.start_process(env, plan, args.package, args.name, args.cls, args.task, steps, paths, rules, cwd=args.cwd, no_subagents=args.no_subagents)
     except (ValueError, TypeError) as exc:
         return fail(str(exc))
     if isinstance(started, dict):
@@ -379,7 +379,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--blocked-by", choices=["question", "build", "owner", "package", "provider"], default="")
     p.add_argument("--blocked-ref", default="")
     p.add_argument("--no-subagents", action="store_true")
-    p.add_argument("--parallel", action="store_true")
     p.set_defaults(fn=cmd_bee)
 
     p = sub.add_parser("package")

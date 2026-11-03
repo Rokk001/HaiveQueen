@@ -92,7 +92,7 @@ class BeePolicyTests(unittest.TestCase):
     # Check prompt instructs dependencies and higher classes.
     def test_prompt_instructs_dependencies_and_higher_classes(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
-        for word in ('dependenc', 'every package goes to a bee', 'local', 'image', 'escalat', '3', 'handoff', 'returned cwd', 'without a tool call'):
+        for word in ('dependenc', 'every package goes to a bee', 'local', 'image', 'escalat', '3', 'handoff', 'returned cwd', 'without a tool call', 'in the foreground', 'never run a bee in the background', 'after the package, never after the bee'):
             self.assertIn(word, prompt)
 
     # A repeated report of the same attempt does not increment its failure count.
@@ -238,7 +238,7 @@ class QueenIntegrationTests(RoundCase):
         self.plan('READY', [{'id': 'P1', 'title': 'First'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         runstate.pause(self.conn)
-        result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', [], [], [], parallel=True)
+        result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', [], [], [])
         self.assertFalse(result)
         self.assertFalse(any(a['phase'] == 'bee' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
 
@@ -380,7 +380,7 @@ class QueenIntegrationTests(RoundCase):
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
         runstate.pause(self.conn)
-        result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], parallel=True)
+        result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [])
         self.assertEqual(result['kind'], 'subagent')
         self.assertFalse(any(a['phase'] == 'bee' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
 
@@ -404,14 +404,14 @@ class QueenIntegrationTests(RoundCase):
         git('worktree', 'add', '-b', 'package-p1', str(first))
         (first / 'uncommitted.txt').write_text('keep', encoding='utf-8')
         with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
-            result = bees.start_process(env, REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], cwd=str(first), parallel=True)
+            result = bees.start_process(env, REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], cwd=str(first))
             self.assertEqual((result['kind'], result['cwd']), ('subagent', str(first)))
-            result = bees.start_process(env, REL, 'P1', 'Bea', 'medium', 'task', ['one'], [], [], cwd=str(other), parallel=True)
+            result = bees.start_process(env, REL, 'P1', 'Bea', 'medium', 'task', ['one'], [], [], cwd=str(other))
             self.assertEqual(result['cwd'], str(first))
             for i in range(4):
                 bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'try-%s' % i,
                                     open_requirements=['unfinished'], error='test failed')
-            result = bees.start_process(env, REL, 'P1', 'Cora', 'heavy', 'task', ['one'], [], [], cwd=str(other), parallel=True)
+            result = bees.start_process(env, REL, 'P1', 'Cora', 'heavy', 'task', ['one'], [], [], cwd=str(other))
             self.assertEqual(result['cwd'], str(first))
         self.assertEqual((first / 'uncommitted.txt').read_text(encoding='utf-8'), 'keep')
 
@@ -427,7 +427,7 @@ class QueenIntegrationTests(RoundCase):
         first.mkdir()
         self.agent('old', phase='bee', package='P1', status='done', cwd=str(first))
         with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
-            result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], cwd=str(self.base / 'other'), parallel=True)
+            result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], cwd=str(self.base / 'other'))
         self.assertEqual(result['cwd'], str(first))
 
     # A process retry receives and reports the first attempt's worktree.

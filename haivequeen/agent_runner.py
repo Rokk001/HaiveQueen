@@ -363,8 +363,6 @@ def write_phase_rules(pcfg, workspace, phase, out_file):
         sel = rules.get(phase)
         if sel is None and phase == "queen":
             sel = rules.get("work")
-        if sel is None and phase == "triage":
-            sel = rules.get("verify")   # a triage agent only reads and decides, so it follows the verify rules unless project.toml names its own
         if sel is None:
             raise ValueError("no phaseRules for phase '%s' in project.toml" % phase)
         sources = pcfg.get("ruleSources") or {}
@@ -466,6 +464,7 @@ class AgentRun:
         self.thread = ""
         self.tin, self.tout = (None, None) if protocol == "codex" else (0, 0)   # Codex reports its token totals only in the session log
         self.ctx = 0
+        self.sub_ctx = {}   # latest context size of every subagent Bee of this Queen: agent id -> {desc, ctx}
         self.context_limit = CONTEXT_LIMIT
         self.seen = set()
         self.last = ""
@@ -538,7 +537,8 @@ class AgentRun:
                 self.ctx, self.tin, self.tout = cx["ctx"], cx["tin"], cx["tout"]
         try:
             runtime.upsert_agent(self.conn, self.project, self.name, {
-                "tokensIn": self.tin, "tokensOut": self.tout, "ctxTokens": self.ctx, "lastLine": self.last})
+                "tokensIn": self.tin, "tokensOut": self.tout, "ctxTokens": self.ctx, "lastLine": self.last,
+                **({"subCtx": self.sub_ctx} if self.sub_ctx else {})})
         except Exception:
             pass   # a failed write must not end the run
 
@@ -607,7 +607,11 @@ class AgentRun:
                 c1 = int(u.get("input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
                 self.tin += c1
                 self.tout += int(u.get("output_tokens") or 0)
-                self.ctx = c1
+                if e.get("parent_tool_use_id") and e.get("agent_id"):
+                    # A subagent's message: its context is the Bee's, never the Queen's.
+                    self.sub_ctx[str(e["agent_id"])] = {"desc": str(e.get("task_description") or ""), "ctx": c1}
+                else:
+                    self.ctx = c1
             for c in msg.get("content") or []:
                 if not isinstance(c, dict):
                     continue
@@ -921,7 +925,7 @@ def run_agent(a, out=None):
     # An end caused by sleep, network, API error or a vanished process is marked interrupted: it is no failure and is tried again after a wait.
     err_text = err_file.read_text(encoding="utf-8", errors="replace") if err_file.is_file() else ""
     kind = interrupt.classify_end(status == "failed", run.api_errors, err_text, bool(clock_jumps), run.last)
-    run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx,
+    run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx, "subCtx": run.sub_ctx,
                          "interrupted": kind, "retryAt": ""})
     if run.final and (a.phase == "queen" or short(run.final, 1500) != short(run.last_said, 1500)):
         run.say("Final message: " + run.final, "Green" if status == "done" else "Red")

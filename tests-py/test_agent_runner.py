@@ -154,21 +154,6 @@ class HelperTest(unittest.TestCase):
             self.assertEqual(ar.write_phase_rules({}, str(ws), "work", out), 1)
             self.assertIn("rule 1", out.read_text(encoding="utf-8"))
 
-    def test_triage_follows_the_verify_rules(self):
-        """A project without its own triage rules gives a triage agent the verify rules; an own entry wins, other unknown phases still raise."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp)
-            (ws / "RULES.md").write_text("# Top\n\n## Check\nread only\n\n## Triage\ndecide\n", encoding="utf-8")
-            out = ws / "agent-rules.md"
-            pcfg = {"phaseRules": {"verify": {"main": ["## Check"]}}, "ruleSources": {"main": "RULES.md"}}
-            self.assertEqual(ar.write_phase_rules(pcfg, str(ws), "triage", out), 1)
-            self.assertIn("read only", out.read_text(encoding="utf-8"))
-            pcfg["phaseRules"]["triage"] = {"main": ["## Triage"]}
-            ar.write_phase_rules(pcfg, str(ws), "triage", out)
-            self.assertIn("decide", out.read_text(encoding="utf-8"))
-            with self.assertRaises(ValueError):
-                ar.write_phase_rules(pcfg, str(ws), "release", out)
-
     def test_codex_tokens(self):
         """Live tokens come from the last token_count line of the session log."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -391,15 +376,6 @@ class ClaudeRunTest(RunnerBase):
         (self.ws / ".haivequeen" / "project.toml").write_text(
             "[ruleSources]\nmain = 'AGENTS.md'\n[phaseRules.work]\nmain = ['# Agents']\n[phaseRules.verify]\nmain = ['# Agents']\n", encoding="utf-8")
 
-    def test_claude_triage_without_own_rules_finishes(self):
-        """A Claude triage agent starts and ends done although project.toml has no phaseRules.triage (it died at start before)."""
-        self.write_phase_rules_project()
-        self.prepare("T-1")
-        r = self.run_runner("T-1", "claude", claude_stream(), phase="triage")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.row("T-1")["status"], "done")
-        self.assertIn("be nice", (self.runs / "T-1" / "rules.md").read_text(encoding="utf-8"))
-
     def test_rule_error_fails_the_agent_at_once(self):
         """A phase without rules ends the agent as failed with the reason in the row, not as a runner that vanishes unseen."""
         self.write_phase_rules_project()
@@ -432,6 +408,21 @@ class ClaudeRunTest(RunnerBase):
         flag = self.runs / "A-5" / "HANDOFF"
         self.assertTrue(flag.is_file())
         self.assertIn("context 310000", flag.read_text(encoding="utf-8"))
+
+    def test_subagent_context_is_kept_apart_from_the_queen(self):
+        """A subagent's message neither sets nor raises the Queen's context; its size is stored per subagent in the Queen's row."""
+        events = [
+            {"type": "assistant", "message": {"id": "q1", "usage": {"input_tokens": 100, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 900, "output_tokens": 5}, "content": [{"type": "text", "text": "Start."}]}},
+            {"type": "assistant", "parent_tool_use_id": "toolu_1", "agent_id": "ag1", "task_description": "Nele T1 tavern clips",
+             "message": {"id": "s1", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 156960, "output_tokens": 5}, "content": [{"type": "text", "text": "Working."}]}},
+            {"type": "result", "is_error": False, "result": "done", "usage": {"input_tokens": 1, "output_tokens": 1}},
+        ]
+        self.prepare("S-1")
+        r = self.run_runner("S-1", "claude", "\n".join(json.dumps(e) for e in events) + "\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        row = self.row("S-1")
+        self.assertEqual(row["ctxTokens"], 1000)
+        self.assertEqual(row["subCtx"], {"ag1": {"desc": "Nele T1 tavern clips", "ctx": 156970}})
 
     def test_error_result_fails(self):
         """A result event with is_error makes the agent failed, even with exit code 0."""

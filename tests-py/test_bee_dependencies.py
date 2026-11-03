@@ -43,7 +43,7 @@ class BeeDependencies(RoundCase):
     # Every routing result is gated before side effects and the refusal is logged.
     def test_refusal_and_completion_for_queen_and_subagent(self):
         self.agent('existing', phase='bee', status='running', pid=55)
-        for extra in (('--no-subagents',), ('--parallel',), ()):
+        for extra in (('--no-subagents',), ()):
             code, output = self.start('P2', extra)
             self.assertNotEqual(code, 0)
             self.assertIn('dependency P1 of package P2 not done', output)

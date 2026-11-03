@@ -116,13 +116,6 @@ class OverviewTest(unittest.TestCase):
         self.assertEqual(d["qs"], [])
         self.assertEqual(d["counts"]["DRAFT"], 0)
 
-    def test_questions_in_triage_are_counted(self):
-        """The number of questions that wait for the triage is collected."""
-        self.assertEqual(self.data()["triage"], 0)
-        db.add_question(self.conn, "alpha", "x.md", "T1", "Which?", "A", status="triage")
-        db.add_question(self.conn, "alpha", "x.md", "T2", "Which?", "A", status="triage")
-        self.assertEqual(self.data()["triage"], 2)
-
     def test_run_state(self):
         """The run state follows the pause."""
         self.assertEqual(self.data()["run"]["state"], "RUNNING")

@@ -62,6 +62,20 @@ def pause(conn, source: str = "") -> dict:
     return _transition(conn, None, "PAUSED", "pause", "paused: no new agents are started", source)
 
 
+# Ask every running agent to hand off after its current step: the pause then does not wait until they run out.
+def request_handoff(conn) -> list:
+    """Write the HANDOFF flag file into the run folder of every running or starting agent (the agents are never killed); returns their names."""
+    from . import platform as osplat
+    names = []
+    for agent in conn.execute("SELECT project,name FROM agents WHERE archived=0 AND status IN ('running','starting')").fetchall():
+        flag = osplat.runs_dir() / agent["project"] / agent["name"] / "HANDOFF"
+        if not flag.exists():
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.write_text("pause requested %s\n" % db.now(), encoding="utf-8")
+            names.append(agent["name"])
+    return names
+
+
 # Lift the pause and arm the one-time Hive migration.
 def resume(conn, source: str = "") -> dict:
     """Lift the pause and arm the one-time Hive migration."""

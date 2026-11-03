@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -41,6 +42,17 @@ class RunStateTest(unittest.TestCase):
         self.assertEqual((st["state"], st["running_agents"]), ("PAUSED", 1))
         self.assertFalse(runstate.starts_allowed(self.conn))
         self.assertEqual(runstate.pause(self.conn)["state"], "PAUSED")
+
+    def test_request_handoff_flags_only_running_agents(self):
+        """pause --now writes the HANDOFF flag into the run folder of every running agent and of no finished one."""
+        db.add_agent(self.conn, "p", name="Run", status="running", pid=1)
+        db.add_agent(self.conn, "p", name="Old", status="done")
+        runs = Path(self.tmp.name) / "runs"
+        with mock.patch("haivequeen.platform.runs_dir", return_value=runs):
+            self.assertEqual(runstate.request_handoff(self.conn), ["Run"])
+            self.assertEqual(runstate.request_handoff(self.conn), [])
+        self.assertTrue((runs / "p" / "Run" / "HANDOFF").is_file())
+        self.assertFalse((runs / "p" / "Old").exists())
 
     def test_legacy_drain_values_count_as_a_pause(self):
         """A DRAINING or DRAINED value stored by an older version behaves like PAUSED and can be resumed."""

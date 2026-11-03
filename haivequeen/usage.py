@@ -813,7 +813,8 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
             kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         result = (run or subprocess.run)(argv, **kwargs)
         if result.returncode != 0:
-            raise ValueError('CLI failed')
+            # Only the exit code is kept: the CLI's own output may hold secrets and must not reach the status.
+            raise ValueError('CLI failed (exit %s)' % result.returncode)
         events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
         results = [event for event in events if isinstance(event, dict) and event.get('type') == 'result']
         final = results[-1] if results else {}

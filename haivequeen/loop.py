@@ -148,8 +148,6 @@ def agent_task(env, plan: str, package: str, phase: str, prompt_file=None) -> st
         return "Release: merge plan branch, compile check, ready row (%s)" % plan_short
     if phase == "integrate":
         return "Integrator: merge ready rows, build, checks, push"
-    if phase == "triage":
-        return "Triage of locked package %s" % package
     row = next((p for p in env.packages(plan) if p["id"] == package), None)
     if row and row["content"]:
         return "%s: %s" % (package, row["content"])

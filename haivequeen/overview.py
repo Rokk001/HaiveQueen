@@ -265,7 +265,6 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
         "qs": db.open_questions(conn, project, only_open=True),
-        "triage": conn.execute("SELECT COUNT(*) FROM questions WHERE status='triage'" + (" AND project=?" if project else ""), pa).fetchone()[0],
         "bj": build_jobs_line(conn, cfg, scope, all_rows, sysinfo), "host": host,
         "selfupdate": db.last_self_update(conn),
         "orch": {"status": orch_status},
