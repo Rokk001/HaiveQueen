@@ -230,6 +230,17 @@ class QueenIntegrationTests(RoundCase):
         self.assertTrue(bees.provider_available(self.conn, 'testproj', REL, 'codex', 1, False))
         self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'waiting')
 
+    # A missing provider stops only its package: the Hive may wait only when no other package can start.
+    def test_a_package_for_a_missing_provider_does_not_stop_the_hive(self):
+        from bzztest import REL
+        images = {'name': 'codex', 'capabilities': ['images']}
+        self.plan('READY', [{'id': 'I1', 'title': 'Images', 'capability': 'images'}, {'id': 'W1', 'title': 'Window'},
+                            {'id': 'FINAL', 'title': 'Final', 'depends': ['all']}])
+        self.assertEqual(bees.runnable_packages(self.env(), REL, images), ['W1'])
+        bees.set_package_state(self.conn, 'testproj', REL, 'W1', 'implemented')
+        bees.set_package_state(self.conn, 'testproj', REL, 'I1', 'waiting', 'Bea', 'provider')
+        self.assertEqual(bees.runnable_packages(self.env(), REL, images), [])
+
     # Check process bee refuses start when paused.
     def test_process_bee_refuses_start_when_paused(self):
         self.add_local_provider()

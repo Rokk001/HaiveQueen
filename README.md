@@ -40,7 +40,7 @@ HaiveQueen is a local orchestrator for coding agents ([Claude Code](https://clau
 
 1. **Plan.** You write a plan (Markdown with a TOML header, see [Plans](#plans)) and set `status = "READY"`. That is the release; there is no submit step.
 2. **Start.** The Beekeeper reads READY and IN_PROGRESS plans, picks a provider that offers the Queen class and starts one Hive per plan within the machine-wide limits. Hives that can resume take precedence over new plans.
-3. **Work.** The Queen coordinates and never works a package herself: every package goes to a Bee of its class, respecting dependencies and the Bee limit. Subagent Bees run in the foreground, independent ones in parallel from one message, so the Queen never polls a Bee. She answers technical questions, merges the Bee branches and, when every requirement is done, integrates (git, compile check, build). Image work goes to a provider with the `images` capability; local providers are used when available.
+3. **Work.** The Queen coordinates and never works a package herself: every package goes to a Bee of its class, respecting dependencies and the Bee limit. Subagent Bees run in the foreground, independent ones in parallel from one message, so the Queen never polls a Bee. She answers technical questions, merges the Bee branches and, when every requirement is done, integrates (git, compile check, build). A package that needs a capability (for example `images`) goes to a provider that offers it; local providers are used when available.
 4. **Completeness.** Before integration the Queen answers the completeness question with evidence for every requirement and ends with `Offene Anforderungen: 0`. Partial items count as open. Owner-only play checks are listed separately.
 5. **Integration.** She merges the current integration branch into her branch, runs the project check, registers her branch and performs the project's integration steps. Only one integration per project runs at a time; a waiting Hive hands off and resumes when its turn comes.
 6. **Acceptance and done.** After integration and deploy HaiveQueen itself files an owner check question (`owner-check`): you test the integrated build and answer `ok`, or say what is not right and the next Queen fixes exactly that. The plan status moves to DONE only after your `ok`; a plan whose header says `owner_check = "none"` skips the question and is done after integration.
@@ -128,18 +128,20 @@ Free Markdown below the header: the agents read it.
 
 | Field | Meaning |
 |---|---|
-| `status` | `READY` releases the plan; `IN_PROGRESS` and `DONE` are set by HaiveQueen; `PAUSED` stops new starts (window: `Space`) |
+| `status` | `SUBMITTED` hands over a plan that is not cut yet (see below); `READY` releases a cut plan; `IN_PROGRESS` and `DONE` are set by HaiveQueen; `PAUSED` stops new starts (window: `Space`) |
 | `class` | `light`, `medium` or `heavy`; the provider maps each class to a model and an effort |
 | `depends_on` | package ids this one waits for, or `["all"]` |
 | `capability` | only providers offering it may run the package (for example `images`) |
 | `owner_check` | header key (not per package): `"none"` skips the acceptance question after integration, anything else (default) asks you to test the integrated build |
 | `verify` | who closes the last requirements: `code` (the Bee does, default), `build` (a build step does) or `owner` (a play check by you). A Bee is done when its own work is. An unknown value is treated as `code` |
 
+**Submitting a plan that is not cut yet.** Write the plan as free Markdown under a header that only says `status = "SUBMITTED"`. The plan gets a Hive and a Queen like any other, and her first step is to cut it: she reads the text and the capabilities of the configured providers, writes the packages (id, title, class, `depends_on`, `verify`) into the header and makes work that only some providers can do (any capability that not every provider offers, such as `images`) a package of its own with `capability`. `bzz plan check` then verifies the header (at least one package, unique ids, a title each, known dependencies without a cycle, every capability offered by a configured provider); when it passes the plan becomes `READY` and the Queen starts Bees. `bzz bee start` is refused while a plan is still `SUBMITTED`. Plans whose header already lists packages run as before. A package that waits for a missing provider stops only itself: the Queen keeps working every other package that can start, and the Hive waits only when none can.
+
 A plan may be paused and resumed in the window. A paused plan gets no new Queen or Bee; a running Queen keeps working.
 
 ## Failures and escalation
 
-Package classes bind the work: each package is worked at its class, and the Queen escalates to the next offered class only when the current model cannot solve it. Failed attempts are counted per package and class; after `escalateAfter` failures (default 3) the next higher class is used and the count starts again. If no higher class can solve it, the owner is asked. Image packages stay on Codex; after its highest class fails, the owner is asked.
+Package classes bind the work: each package is worked at its class, and the Queen escalates to the next offered class only when the current model cannot solve it. Failed attempts are counted per package and class; after `escalateAfter` failures (default 3) the next higher class is used and the count starts again. If no higher class can solve it, the owner is asked. A package that needs a capability escalates only through the providers that offer it; after their highest class fails, the owner is asked.
 
 **What counts as a failure** is deliberately narrow: only a model that keeps trying the same thing and does not get it done. These never count and never escalate:
 

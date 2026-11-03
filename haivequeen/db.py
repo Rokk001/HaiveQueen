@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 8   # 8: verify field of a package; 7: persistent Hive state and integration queue
+SCHEMA_VERSION = 9   # 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -115,6 +115,34 @@ def rebuild_queue_table(conn: sqlite3.Connection, schema_text: str) -> None:
     conn.execute("COMMIT")
 
 
+def rebuild_plans_table(conn: sqlite3.Connection, schema_text: str) -> None:
+    """Recreate an old plans table whose CHECK list lacks 'SUBMITTED' (SQLite cannot alter a CHECK); all rows and their statuses are kept, done in one transaction."""
+    def old_sql():
+        """Return the stored CREATE statement of the plans table, or None when the table does not exist yet."""
+        row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='plans'").fetchone()
+        return row[0] if row else None
+
+    sql = old_sql()
+    if sql is None or "'SUBMITTED'" in sql:
+        return
+    match = re.search(r"CREATE TABLE IF NOT EXISTS plans \(.*?\n\);", schema_text, re.S)
+    if match is None:
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        sql = old_sql()   # another process may have migrated while this one waited for the lock
+        if sql is not None and "'SUBMITTED'" not in sql:
+            conn.execute("ALTER TABLE plans RENAME TO plans_old")
+            conn.execute(match.group(0))
+            cols = ", ".join(r[1] for r in conn.execute("PRAGMA table_info(plans_old)"))
+            conn.execute(f"INSERT INTO plans ({cols}) SELECT {cols} FROM plans_old")
+            conn.execute("DROP TABLE plans_old")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
+
+
 # Bring the database up to SCHEMA_VERSION (user_version pragma).
 def migrate(conn: sqlite3.Connection) -> None:
     """Bring the database up to SCHEMA_VERSION (user_version pragma)."""
@@ -122,6 +150,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     if version < SCHEMA_VERSION:
         schema_text = SCHEMA_FILE.read_text(encoding="utf-8")
         rebuild_queue_table(conn, schema_text)
+        rebuild_plans_table(conn, schema_text)
         conn.executescript(schema_text)
         for table, column, decl in V2_COLUMNS + V3_COLUMNS + V5_COLUMNS + V8_COLUMNS:
             have = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]

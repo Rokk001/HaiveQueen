@@ -268,6 +268,33 @@ def cmd_requeen(args, conn):
     return 0
 
 
+# Check the plan the calling Queen has cut into packages.
+def cmd_plan(args, conn):
+    """Check the header of the Queen's own plan (packages, unique ids, titles, dependencies without cycle, capabilities some provider offers). On success a SUBMITTED plan becomes READY and the packages are read into the database; otherwise the problems are reported and nothing changes."""
+    from haivequeen import plans as plan_mod, scheduler
+    agent = os.environ.get("BZZ_AGENT")
+    queen = runtime.get_agent(conn, args.project, agent) if agent else None
+    if not queen or queen.get("phase") != "queen" or not _plan_matches(conn, args.project, queen.get("plan_path"), args.plan):
+        return fail("plan check requires the Queen of this Hive")
+    env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
+    if not env:
+        return fail("unknown Apiary")
+    plan = queen["plan_path"]
+    path = runtime._workspace(conn, args.project) / plan
+    if not path.is_file():
+        return fail("plan file not found: %s" % plan)
+    parsed = plan_mod.load_plan(str(path))
+    problems = plan_mod.check_plan(parsed, {c for p in env.providers for c in p.get("capabilities", [])})
+    if problems:
+        return fail("the plan is not cut properly: " + "; ".join(problems))
+    status = parsed.status
+    if status == "SUBMITTED":
+        status = runtime.set_plan_status(conn, args.project, plan, "READY")["status"]
+    runtime.sync_plans(conn, args.project)
+    out({"ok": True, "plan": plan, "status": status, "packages": [p.id for p in parsed.packages]})
+    return 0
+
+
 # Record the progress state of one package of the calling Queen's Hive.
 def cmd_package(args, conn):
     """Store the state (working, waiting, implemented, done, rejected) of a package of the Queen's own plan; shown as progress in the window."""
@@ -302,6 +329,9 @@ def cmd_bee(args, conn):
         provider = scheduler.get_provider(env.providers, args.provider)
         if not provider or provider['name'] in env.settings.get('excludedProviders', []):
             return fail("provider is unavailable or excluded")
+        runnable = bees.runnable_packages(env, plan, provider)
+        if runnable:   # one package without the provider never stops the whole Hive
+            return fail("not yet: package %s can still start without %s; work it first and wait only when nothing else can start" % (", ".join(runnable), provider['name']))
         from haivequeen import usage
         windows = usage.limit_windows(conn, provider)
         resets = [w['reset_epoch'] for w in windows if w['used_pct'] >= 100 and w.get('reset_epoch')]
@@ -387,6 +417,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--state", required=True, choices=["working", "waiting", "implemented", "done", "rejected"])
     p.add_argument("--reason", default="")
     p.set_defaults(fn=cmd_package)
+
+    p = sub.add_parser("plan")
+    p.add_argument("action", choices=["check"])
+    for field in ("project", "plan"):
+        p.add_argument("--" + field, required=True)
+    p.set_defaults(fn=cmd_plan)
 
     p = sub.add_parser("integration")
     p.add_argument("action", choices=["acquire", "release"])

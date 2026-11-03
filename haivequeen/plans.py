@@ -5,11 +5,12 @@ import re
 import tomllib
 from dataclasses import dataclass, field
 
-STATUSES = ("DRAFT", "READY", "IN_PROGRESS", "DONE", "PAUSED")
+STATUSES = ("DRAFT", "SUBMITTED", "READY", "IN_PROGRESS", "DONE", "PAUSED")
 CLASSES = ("light", "medium", "heavy")
 VERIFIES = ("code", "build", "owner")   # who closes the last requirements of a package: the Bee (code), the build, or the owner
 DEFAULT_GLOBS = ("docs/plans/*.md",)
 STARTABLE_STATUSES = ("READY", "IN_PROGRESS")
+QUEEN_STATUSES = ("SUBMITTED",) + STARTABLE_STATUSES   # plans that get a Hive and a Queen; a SUBMITTED plan is cut into packages by its Queen first
 
 
 @dataclass
@@ -155,6 +156,47 @@ def package_dependencies(plan, package):
         else:
             deps.append(d)
     return deps
+
+
+def check_plan(plan, capabilities):
+    """Problems that keep a cut plan from running, as a list of texts (empty when it is fine).
+
+    `capabilities` is the set of capability names the configured providers offer. Checked: at least one package, unique ids, a title per
+    package, every dependency names a package of the plan (or all), no dependency cycle and every named capability is offered by a provider."""
+    problems = []
+    ids = [p.id for p in plan.packages]
+    if not plan.packages:
+        problems.append("the header lists no package")
+    for dup in sorted({i for i in ids if ids.count(i) > 1}):
+        problems.append("package id %s is used more than once" % dup)
+    deps = {p.id: package_dependencies(plan, p) for p in plan.packages}
+    for p in plan.packages:
+        if not p.title.strip():
+            problems.append("package %s has no title" % p.id)
+        for d in deps[p.id]:
+            if d not in ids:
+                problems.append("package %s depends on %s, which is not in the plan" % (p.id, d))
+        for cap in [c.strip() for c in p.capability.split(",") if c.strip()]:
+            if cap not in capabilities:
+                problems.append("package %s needs the capability %s, which no configured provider offers" % (p.id, cap))
+    state = {}
+
+    def visit(i, trail):
+        """Depth-first walk over the dependencies; reports the first cycle found."""
+        if state.get(i) == "done":
+            return
+        if state.get(i) == "open":
+            problems.append("dependency cycle: " + " -> ".join(trail[trail.index(i):] + [i]))
+            return
+        state[i] = "open"
+        for d in deps.get(i, []):
+            if d in deps:
+                visit(d, trail + [d])
+        state[i] = "done"
+
+    for i in ids:
+        visit(i, [i])
+    return problems
 
 
 def startable_packages(plans, done_ids):

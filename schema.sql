@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS plans (
     project TEXT NOT NULL,
     path TEXT NOT NULL,
     title TEXT,
-    status TEXT CHECK (status IN ('DRAFT','READY','IN_PROGRESS','DONE','PAUSED')),
+    status TEXT CHECK (status IN ('DRAFT','SUBMITTED','READY','IN_PROGRESS','DONE','PAUSED')),
     updated_at TEXT,
     PRIMARY KEY (project, path)
 );
