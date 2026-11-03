@@ -31,6 +31,14 @@ class CheckPlanTests(unittest.TestCase):
         self.assertIn("dependency cycle", " ".join(plans.check_plan(plan_of([("A", "x", ["B"], ""), ("B", "y", ["A"], "")]), set())))
         self.assertIn("no configured provider offers", " ".join(plans.check_plan(plan_of([("A", "x", [], "speech")]), {"images"})))
 
+    def test_waiting_for_a_capability_package_is_warned_about(self):
+        """A package without a capability that depends on one with a capability is reported; all, the capability package itself and independent packages are not."""
+        plan = plan_of([("I1", "Images", [], "images"), ("W1", "Window", ["I1"], ""), ("S1", "Speech", ["I1"], "speech"), ("C1", "Code", [], ""), ("FINAL", "Final", ["all"], "")])
+        warnings = plans.plan_warnings(plan)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("package W1 waits for I1", warnings[0])
+        self.assertEqual(plans.check_plan(plan, {"images", "speech"}), [])   # a hint, not a blocking problem
+
     def test_submitted_gets_a_queen_but_is_not_startable(self):
         """SUBMITTED is a known status that gets a Queen, while its (missing) packages are never startable."""
         self.assertEqual(plans.parse_plan_text('+++\nstatus = "submitted"\n+++\n# T\n').status, "SUBMITTED")

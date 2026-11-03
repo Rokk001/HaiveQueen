@@ -199,6 +199,20 @@ def check_plan(plan, capabilities):
     return problems
 
 
+def plan_warnings(plan):
+    """Hints that do not block a plan: a package without a capability that waits for a package that needs one stops when that provider is missing.
+
+    The dependency `all` is left out (a final check waits for everything on purpose)."""
+    needs = {p.id: p.capability.strip() for p in plan.packages if p.capability.strip()}
+    warnings = []
+    for p in plan.packages:
+        for d in p.depends_on:
+            if d in needs and p.id not in needs and not _is_all(d):
+                warnings.append("package %s waits for %s, which needs the capability %s: keep this only if %s needs its result, otherwise remove it so %s can start without that provider"
+                                % (p.id, d, needs[d], p.id, p.id))
+    return warnings
+
+
 def startable_packages(plans, done_ids):
     """Rule 11: packages of READY/IN_PROGRESS plans that are not done and whose dependencies are all in done_ids.
 
