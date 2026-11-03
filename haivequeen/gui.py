@@ -81,7 +81,8 @@ class LiveView:
         self.win.title(title)
         self.win.geometry("900x520")
         self.win.configure(bg=COL["bg"])
-        bar = tk.Scrollbar(self.win)
+        from . import gui_dialog
+        bar = gui_dialog.scrollbar(self.win, None)
         bar.pack(side="right", fill="y")
         self.box = tk.Text(self.win, bg=COL["panel"], fg=COL["text"], font=(mono, 11), wrap="word", state="disabled", relief="flat",
                            highlightthickness=1, highlightbackground=COL["edge"], yscrollcommand=bar.set, padx=10, pady=8)
@@ -167,6 +168,7 @@ class Dashboard:
         self.sel = {"hives": 0, "bees": 0}
         self.table, self.live = "hives", {}   # table that Enter acts on; open live windows by (project, agent)
         self.autoscroll, self.cleared_id, self.error = True, 0, ""   # cleared_id: log lines up to this event id are hidden
+        self.log_filter, self.log_big, self.show_noise = None, False, False   # log: ("hive", apiary, name) or ("bee", name) or None; enlarged; routine round lines shown
         self.scroll, self.rooms, self.bars, self.areas, self.drag = {}, {}, {}, [], None   # scroll offsets, visible rows, drawn scroll bars, wheel areas, dragged bar
         self.canvas = tk.Canvas(root, bg=COL["bg"], highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
@@ -268,7 +270,11 @@ class Dashboard:
         size = max(13, min(20, (x1 - x0 - 70) / (0.62 * len(title))))   # long titles shrink to fit narrow panels
         self.text(x0 + 52, y0 + 26, title, size, "gold", "w")
         if sub:
-            self.text(x0 + 52 + 0.62 * size * len(title) + 14, y0 + 26, "| " + sub, 15, "dim", "w")
+            sx = x0 + 52 + 0.62 * size * len(title) + 14
+            hints = sum(9 * len(label) + 8 + 9 * (len(key) + 2) + 22 for key, label in keys)   # width the right-aligned hints take
+            room = (x1 - 16 - hints) - sx - 12
+            if room > 60:
+                self.text(sx, y0 + 26, self.fit("| " + sub, room, 15), 15, "dim", "w")
         x = x1 - 16
         for key, label in reversed(keys):
             self.text(x, y0 + 26, label, 15, "dim", "e")
@@ -324,9 +330,12 @@ class Dashboard:
         self.activity(s, 10, 710, 505, 850)
         self.system(s, 515, 710, 837, 850)
         self.queue(s, 846, 710, 1035, 850)
-        self.log_panel(s, 1045, 165, 1662, 385)
-        self.limits_panel(s, 1045, 395, 1662, 600)
-        self.status_panel(s, 1045, 610, 1662, 850)
+        if self.log_big:
+            self.log_panel(s, 1045, 165, 1662, 850)
+        else:
+            self.log_panel(s, 1045, 165, 1662, 385)
+            self.limits_panel(s, 1045, 395, 1662, 600)
+            self.status_panel(s, 1045, 610, 1662, 850)
         self.footer()
 
     # Draw the title block: the picture of the mockup plus the version line.
@@ -399,6 +408,7 @@ class Dashboard:
         self.panel(x0, y0, x1, y1, "ACTIVE HIVES", sub if state == "RUNNING" else state + "  " + sub, (("Enter", "live"), ("P", "pause/resume"), ("Space", "plan"), ("F", "apiary"), ("Tab", "table")))
         for name, x in (("#", 24), ("HIVE", 90), ("APIARY", 218), ("QUEEN", 312), ("BEES", 386), ("PROGRESS", 436), ("STATUS", 576)):
             self.text(x0 + x, y0 + 56, name, 13, "dim", "w")
+        self.text(x1 - 26, y0 + 56, "RUNTIME", 13, "dim", "e")
         self.pick_clamp("hives", len(rows))
         room = 6
         off = self.offset("hives", len(rows), room)
@@ -491,7 +501,8 @@ class Dashboard:
         self.scrollbar("activity", x1 - 16, y0 + 50, y1 - 8, len(rows), room)
         for n, r in enumerate(rows[off:off + room]):
             y = y0 + 62 + n * 21
-            self.text(x0 + 14, y, r["name"][:15], 14, "cyan" if r["kind"] == "apiary" else "text", "w")
+            label = r["name"] if r["kind"] == "apiary" else "%s/%s" % (r["apiary"], r["name"])   # a Hive row is part of its Apiary, not another share of the total
+            self.text(x0 + 14, y, self.fit(label, 132, 14), 14, "cyan" if r["kind"] == "apiary" else "text", "w")
             self.bar(x0 + 150, y - 7, 90, 14, r["pct"] / 100, "seg" if r["pct"] >= 50 else "green", 9)
             self.text(x0 + 246, y, "%d%%" % r["pct"], 14, "cyan", "w")
             self.text(x1 - 30, y, "%s/%s" % (gui_data.fmt_tokens(r["tin"]), gui_data.fmt_tokens(r["tout"])), 14, "text", "e")
@@ -503,8 +514,9 @@ class Dashboard:
         """Draw the CPU, RAM and disk meters."""
         self.panel(x0, y0, x1, y1, "SYSTEM", icon="icon_system")
         m = s["system"]
-        rows = (("CPU", m["cpu"], "(%d cores)" % m["cores"], "#2b8cff", "icon_cpu"), ("RAM", m["ram_pct"], "%.1f/%.0f GB" % (m["ram_used_gb"], m["ram_total_gb"]), "#f9ce3a", "icon_ram"),
-                ("Disk", m["disk_pct"], "%.1f/%.1f TB" % (m["disk_used_tb"], m["disk_total_tb"]), "#24fb42", "icon_disk"))
+        load = lambda pct: "green" if pct < 70 else "yellow" if pct <= 85 else "red"   # the colour follows the load, like the context bars
+        rows = (("CPU", m["cpu"], "(%d cores)" % m["cores"], load(m["cpu"]), "icon_cpu"), ("RAM", m["ram_pct"], "%.1f/%.0f GB" % (m["ram_used_gb"], m["ram_total_gb"]), load(m["ram_pct"]), "icon_ram"),
+                ("Disk", m["disk_pct"], "%.1f/%.1f TB" % (m["disk_used_tb"], m["disk_total_tb"]), load(m["disk_pct"]), "icon_disk"))
         for i, (name, pct, note, colour, icon) in enumerate(rows):
             y = y0 + 66 + i * 27
             self.pic(icon, x0 + 10, y, "w")
@@ -518,7 +530,7 @@ class Dashboard:
         """Draw the open question count and the queued integration rows."""
         self.panel(x0, y0, x1, y1, "APIARY QUEUE", icon="icon_queue")
         q = s["queue"]
-        self.text(x0 + 14, y0 + 64, "open:   %d" % q["open"], 15, "text", "w")
+        self.text(x0 + 14, y0 + 64, "questions: %d" % q["open"], 15, "text", "w")
         self.text(x0 + 14, y0 + 88, "queued: %d" % q["queued"], 15, "text", "w")
         self.text(x0 + 14, y0 + 112, self.fit(", ".join(q["labels"]), x1 - x0 - 28, 15), 15, "text", "w")
 
@@ -528,7 +540,12 @@ class Dashboard:
         self.rect(x0, y0, x1, y1, fill="panel", outline="edge", width=2)
         self.pic("icon_logs", x0 + 12, y0 + 10)
         self.text(x0 + 52, y0 + 26, "LOGS", 20, "gold", "w")
-        self.text(x0 + 130, y0 + 26, "| live", 15, "dim", "w")
+        self.log_head = (self.px(x0 + 40), self.px(y0 + 8), self.px(x0 + 130), self.px(y0 + 44))
+        flt = self.log_filter
+        chip = "all" if flt is None else (flt[2] if flt[0] == "hive" else flt[1]) + "  ✕"
+        self.text(x0 + 130, y0 + 26, "| " + chip, 15, "cyan" if flt else "dim", "w")
+        if flt:
+            self.hit(x0 + 130, y0 + 12, x0 + 130 + 9 * (len(chip) + 2), y0 + 40, lambda _a: self.clear_log_filter())
         x = x1 - 16
         for key, label, action in (("S", "save", self.save_log), ("C", "clear", self.clear_log)):
             self.text(x, y0 + 26, label, 15, "dim", "e")
@@ -539,6 +556,13 @@ class Dashboard:
         self.hit(x - 40, y0 + 12, x, y0 + 40, lambda _a: self.toggle_autoscroll())
         self.text(x - 46, y0 + 26, "Auto-scroll", 15, "dim", "e")
         lines = self.visible_log()
+        if self.log_big:   # in the big log long messages continue on the next line instead of being cut off
+            chars = int((x1 - x0 - 196) / 8.4)
+            wrapped = []
+            for stamp, tag, msg in lines:
+                parts = textwrap.wrap(msg, chars) or [""]
+                wrapped += [(stamp, tag, parts[0])] + [("", "", part) for part in parts[1:]]
+            lines = wrapped
         room = int((y1 - y0 - 60) // 22)
         if self.autoscroll:
             self.scroll["log"] = max(0, len(lines) - room)
@@ -547,9 +571,10 @@ class Dashboard:
         self.scrollbar("log", x1 - 16, y0 + 50, y1 - 8, len(lines), room)
         for n, (stamp, tag, msg) in enumerate(lines[off:off + room]):
             y = y0 + 62 + n * 22
+            kind, _, name = tag.partition(" ")
             self.text(x0 + 12, y, stamp, 14, "text", "w")
-            self.text(x0 + 70, y, self.fit("[%s]" % tag, 165, 14), 14, TAG_COL.get(tag.split()[0], "text"), "w")   # the mockup pads tags to one column
-            self.text(x0 + 240, y, self.fit(msg, x1 - x0 - 270, 14), 14, "text", "w")
+            self.text(x0 + 66, y, self.fit(name or kind, 96, 14), 14, TAG_COL.get(kind, "text"), "w")   # only the name: the colour tells Queen, Bee, Apiary
+            self.text(x0 + 166, y, self.fit(msg, x1 - x0 - 196, 14), 14, "text", "w")
         if not lines:
             self.text(x0 + 14, y0 + 62, "no log lines", 13, "dim", "w")
 
@@ -629,6 +654,7 @@ class Dashboard:
         """Select row i of table name (arg is the tuple (name, i)), make it the table that Enter acts on and redraw."""
         self.sel[arg[0]] = arg[1]
         self.table = arg[0]
+        self.set_log_filter()
         self.draw()
 
     # Read the selected row of a table.
@@ -658,7 +684,51 @@ class Dashboard:
     def visible_log(self) -> list:
         """The log lines newer than the last clear (by event id, so lines pushed out of the window cannot make new ones disappear)."""
         s = self.snap or {}
-        return [line for line, event in zip(s.get("log", []), s.get("log_ids", [])) if event > self.cleared_id]
+        meta = s.get("log_meta") or [{}] * len(s.get("log", []))
+        flt = self.log_filter
+
+        def wanted(line, event, info):
+            """Newer than the last clear, not routine noise (unless shown) and inside the filter."""
+            if event <= self.cleared_id or (info.get("noise") and not self.show_noise):
+                return False
+            if flt is None:
+                return True
+            if flt[0] == "hive":
+                return (info.get("project"), info.get("hive")) == (flt[1], flt[2])
+            kind, _, name = line[1].partition(" ")
+            return kind in ("QUEEN", "BEE") and name == flt[1]
+        return [line for line, event, info in zip(s.get("log", []), s.get("log_ids", []), meta) if wanted(line, event, info)]
+
+    # Set the log filter from the selected row.
+    def set_log_filter(self):
+        """The selected Hive or Queen row filters the log to its Hive, a selected Bee row to that Bee (a waiting Bee without a name to its Hive)."""
+        row = self.selected()
+        if row is None:
+            return
+        if self.table == "hives":
+            self.log_filter = ("hive", row["apiary"], row["name"])
+        elif row["kind"] == "bee" and row["name"] != "–":
+            self.log_filter = ("bee", row["name"])
+        else:
+            self.log_filter = ("hive", row["apiary"], row["hive"])
+
+    # Show every line again.
+    def clear_log_filter(self):
+        """Remove the log filter (key Escape or a click on the filter chip)."""
+        self.log_filter = None
+        self.draw()
+
+    # Make the log big or small.
+    def toggle_log_big(self):
+        """Switch between the log panel and the log over the whole right column (key L or a double click on the log heading)."""
+        self.log_big = not self.log_big
+        self.draw()
+
+    # Show or hide the routine round lines.
+    def toggle_noise(self):
+        """Show or hide the routine round lines of the log (key N)."""
+        self.show_noise = not self.show_noise
+        self.draw()
 
     # Send a click to the area under the pointer.
     def on_click(self, event):
@@ -696,7 +766,11 @@ class Dashboard:
 
     # Open the live view of the row under the pointer.
     def on_double(self, event):
-        """A double click on a Hive or Bee row selects it and opens the live view of its agent."""
+        """A double click on a Hive or Bee row selects it and opens the live view of its agent; on the log heading it makes the log big or small."""
+        hx0, hy0, hx1, hy1 = getattr(self, "log_head", (0, 0, -1, -1))
+        if hx0 <= event.x <= hx1 and hy0 <= event.y <= hy1:
+            self.toggle_log_big()
+            return
         for x0, y0, x1, y1, action, arg in reversed(self.hits):
             if x0 <= event.x <= x1 and y0 <= event.y <= y1 and action == self.select:
                 self.select(arg)
@@ -748,7 +822,7 @@ class Dashboard:
         """P pause/resume, Q answer the open questions, Space pause/resume the selected plan, F apiary filter, M queen menu of the selected Hive, X stop the selected Bee, C clear and S save the log, A toggle auto-scroll, Tab switch between the Hives and the Queens-and-Bees table, Up/Down move the selection in that table, Enter opens the live view."""
         key = (event.keysym or "").lower()
         {"p": self.toggle_pause, "f": self.next_project, "m": self.hive_menu, "space": self.toggle_hive_pause, "x": self.stop_bee, "c": self.clear_log, "s": self.save_log,
-         "a": self.toggle_autoscroll, "q": self.open_questions, "tab": self.switch_table, "up": lambda: self.move(-1), "down": lambda: self.move(1), "return": self.open_live}.get(key, lambda: None)()
+         "a": self.toggle_autoscroll, "l": self.toggle_log_big, "n": self.toggle_noise, "escape": self.clear_log_filter, "q": self.open_questions, "tab": self.switch_table, "up": lambda: self.move(-1), "down": lambda: self.move(1), "return": self.open_live}.get(key, lambda: None)()
 
     # Move the selection of the active table up or down.
     def move(self, step):
@@ -756,6 +830,7 @@ class Dashboard:
         table = self.table
         rows = len((self.snap or {}).get(table) or [])
         self.sel[table] = max(0, min(self.sel[table] + step, max(0, rows - 1)))
+        self.set_log_filter()
         room, off = self.rooms.get(table, 6 if table == "hives" else 5), self.scroll.get(table, 0)
         self.scroll[table] = self.sel[table] if self.sel[table] < off else max(off, self.sel[table] - room + 1)
         self.draw()
@@ -892,9 +967,11 @@ class Dashboard:
     # Write the log lines to a text file.
     def save_log(self):
         """Ask for a file name and write the visible log lines to it."""
-        from tkinter import filedialog
-        path = filedialog.asksaveasfilename(parent=self.root, defaultextension=".log", initialfile="haivequeen-%s.log" % datetime.now().strftime("%Y%m%d-%H%M"))
+        from . import gui_dialog
+        folder = osplat.data_dir() / "exports"
+        path = gui_dialog.ask_path(self.root, "Save the log as", str(folder / ("haivequeen-%s.log" % datetime.now().strftime("%Y%m%d-%H%M"))), self.mono)
         if path and self.snap:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
             Path(path).write_text("\n".join("%s [%s] %s" % ln for ln in self.visible_log()) + "\n", encoding="utf-8")
 
     # Open the state button's menu.
@@ -948,7 +1025,7 @@ class Dashboard:
     def help(self):
         """Show the keyboard and mouse controls."""
         self.inform("P  pause / resume\nQ  answer the open questions\nSpace  pause / resume the selected plan\nF  next apiary filter\nM / right click  queen menu of the hive or the Queen row\nTab  switch between the Hives and the Queens and Bees table\nUp/Down  select a row of that table\nClick  select a row\nEnter / double click  live output of the row\n"
-                    "X  stop the selected bee\nC  clear log   S  save log   A  auto-scroll", "Keys")
+                    "X  stop the selected bee\nC  clear log   S  save log   A  auto-scroll\nL / double click on LOGS  big log   N  routine round lines   Esc  remove the log filter", "Keys")
 
 
 # The actions the state button offers in a given state.

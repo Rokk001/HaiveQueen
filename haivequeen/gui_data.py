@@ -9,7 +9,8 @@ from . import config, db, hives, overview, runstate, runtime
 from . import platform as osplat
 from . import scheduler as sch
 
-LOG_LINES = 80         # newest event rows shown in the log panel
+LOG_LINES = 80         # newest event rows (without routine noise) shown in the log panel
+LOG_FETCH = 500        # newest event rows read to find those LOG_LINES
 CONTEXT_FALLBACK = 300000   # context limit in tokens when the provider's own limit is unknown (scheduler default contextLimitTokens)
 ACTIVITY_DAYS = 7       # window of the token usage panel
 LIVE_LINES = 300        # newest lines shown in the live view of an agent
@@ -192,7 +193,7 @@ def agent_tokens(agent) -> tuple:
 
 
 # Describe one Hive for the active-hives table.
-def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None, rejected=None, waiting=None) -> dict:
+def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None, rejected=None, waiting=None, embedded=None) -> dict:
     """Row of one Hive: name, apiary, queen with context and tokens, Bees busy/assigned, progress (finished packages of all packages), status and runtime.
 
     `assigned` and `completed` come from bee_tables, `ctx_limit(agent)` gives an agent's context limit in tokens, `agents_all` (all rows, also archived)
@@ -208,6 +209,7 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     waiting_pkgs = (waiting or {}).get(key, [])
     done -= rejected_pkgs
     running_pkgs = {a.get("package") for a in mine if a.get("phase") == "bee" and a.get("status") in runtime.ACTIVE_STATUSES and a.get("package")}
+    running_pkgs |= {b["package"] for b in embedded or () if (b["project"], b["plan_path"]) == key and b.get("package")}   # a Bee that runs as a subagent of the Queen is busy too
     open_pkgs = {p for (pr, pl, p) in (assigned or {}) if (pr, pl) == key and p not in done} | running_pkgs
     progress = min(100, round(100 * len(done) / total_pkg)) if total_pkg else 0
     is_paused = key in (paused or ())
@@ -374,6 +376,21 @@ def queue_panel(conn, project) -> dict:
     return {"open": open_q, "queued": len(queued), "labels": ["%s#%d" % (q["project"], q["id"]) for q in queued][:4]}
 
 
+# Tell routine round events that report nothing apart from the rest.
+def is_noise(event) -> bool:
+    """True for round events that say nothing happened (no Queen started, hook ok, nothing cleaned up): the log panel hides them unless asked."""
+    text = str(event.get("text") or "")
+    return event.get("kind") == "rounds" and (text.startswith("round done: 0 Queen(s) started") or text.startswith("event hook ok")
+                                               or (text.startswith("Worktree cleanup:") and '"removed": []' in text))
+
+
+# What a log line needs for filtering.
+def log_meta(event, plan_of) -> dict:
+    """{project, agent, hive, noise} of an event: `hive` is the name of the Hive of the agent that wrote it ("" for events without an agent)."""
+    plan = plan_of.get(event["agent"]) if event["agent"] else ""
+    return {"project": event["project"], "agent": event["agent"], "hive": hive_name(plan) if plan else "", "noise": is_noise(event)}
+
+
 # Describe the provider limits as bars.
 def limit_bars(d) -> list:
     """[{label, pct, note, level}] for the Claude/Codex 5-hour windows and, per provider, the weekly quota used and the slots in use.
@@ -385,11 +402,9 @@ def limit_bars(d) -> list:
         return {"green": "ok", "yellow": "warn", "red": "bad"}[overview.level_colour(pct)] if pct is not None else "dim"
     out = []
     for label, entry in (("Claude 5h", d["cu"]["FiveHour"]), ("Codex 5h", d["xu"]["FiveHour"])):
-        if label == "Codex 5h" and not entry:
+        if entry is None:   # the provider reports no 5-hour window: no bar
             continue
-        if entry is None:
-            out.append({"label": label, "pct": None, "note": "no data from the provider", "level": "dim"})
-        elif entry["pct"] is None:
+        if entry["pct"] is None:
             out.append({"label": label, "pct": None, "note": entry["reset"], "level": "dim"})
         else:
             out.append({"label": label, "pct": entry["pct"], "note": ("resets " + entry["reset"]).strip(), "level": level(entry["pct"])})
@@ -399,9 +414,9 @@ def limit_bars(d) -> list:
             reset = sch.format_reset_time(p["reset_at"]) if p["reset_at"] else ""
             quota = "" if p["ratio"] is None else "quota %.2fx" % p["ratio"]
             note = " | ".join(part for part in ("resets " + reset if reset else "reset unknown", quota) if part)
-            out.append({"label": p["name"] + " 7d", "pct": None if p["used_pct"] is None else round(p["used_pct"]), "note": note, "level": level(p["used_pct"])})
+            out.append({"label": p["name"].capitalize() + " 7d", "pct": None if p["used_pct"] is None else round(p["used_pct"]), "note": note, "level": level(p["used_pct"])})
         total = int(p["total_slots"] or 0)
-        out.append({"label": p["name"] + " slots", "pct": round(100 * p["used_slots"] / total) if total else None,
+        out.append({"label": p["name"].capitalize() + " slots", "pct": round(100 * p["used_slots"] / total) if total else None,
                     "note": "%d/%d | %s%s" % (p["used_slots"], total, p["model"] or "no medium model", marker), "level": "slots"})
     return out
 
@@ -500,29 +515,34 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     rejected = rejected_map(conn)
     waiting = waiting_map(conn)
     paused = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='PAUSED'")}
-    hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected, waiting) for h in hives.hive_data(conn, project, agents)]
+    embedded = embedded_rows(conn)
+    hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected, waiting, embedded) for h in hives.hive_data(conn, project, agents)]
     live = [a for a in agents if a.get("status") in runtime.ACTIVE_STATUSES]
     queens = [a for a in live if a.get("phase") == "queen"]
     steps = {k: v for h in hive_rows for k, v in h["steps"].items()}
-    bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]}, hive_rows, embedded_rows(conn))
+    bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]}, hive_rows, embedded)
     workers = [b for b in bees if b["kind"] == "bee"]
     apiaries = sorted({h["apiary"] for h in hive_rows})
     slots = sum(int(p["total_slots"] or 0) for p in d["provider_limits"])
     today = [m["Today"] for m in d["usage"] if m.get("Today")]
     who = {a["name"]: (a.get("phase") or "", a.get("person") or a["name"]) for a in agents_all}
+    plan_of = {a["name"]: a.get("plan_path") for a in agents_all}
     events = db.rows(conn, "SELECT id,ts,project,kind,agent,text FROM events" + (" WHERE project IN (?, ?)" if project else "") +
-                     " ORDER BY id DESC LIMIT %d" % LOG_LINES, (project, runstate.GLOBAL_PROJECT) if project else ())
+                     " ORDER BY id DESC LIMIT %d" % LOG_FETCH, (project, runstate.GLOBAL_PROJECT) if project else ())
+    kept = [e for e in events if not is_noise(e)][:LOG_LINES]   # the newest LOG_LINES events that carry news, plus the noise that is newer than the oldest of them
+    floor = kept[-1]["id"] if kept else 0
+    events = [e for e in events if e["id"] >= floor]
     try:
         from . import loop
         orchestrator = orchestrator_state(d["run"]["state"], loop.loop_running(), loop.stop_flag().exists())
     except Exception:   # a broken lock file must not stop the window: show the run state alone
         orchestrator = orchestrator_state(d["run"]["state"], 1, False)
     return {"now": now, "project": project, "run_state": d["run"]["state"], "orchestrator": orchestrator, "version": _version(),
-            "tiles": {"apiaries": len(apiaries), "hives": len(hive_rows), "queens": len(queens), "bees": sum(1 for b in workers if b["status"] == "running"),
+            "tiles": {"apiaries": len(apiaries), "hives": sum(1 for h in hive_rows if h["live"]), "queens": len(queens), "bees": sum(1 for b in workers if b["status"] == "running"),
                       "bee_capacity": max(len(workers), slots), "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today)},
             "hives": hive_rows, "bees": bees, "apiaries": apiaries,
             "projects": [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")],
-            "log": [log_line(e, who) for e in reversed(events)], "log_ids": [e["id"] for e in reversed(events)], "activity": activity_rows(agents_all, now),
+            "log": [log_line(e, who) for e in reversed(events)], "log_ids": [e["id"] for e in reversed(events)], "log_meta": [log_meta(e, plan_of) for e in reversed(events)], "activity": activity_rows(agents_all, now),
             "system": sysinfo if sysinfo is not None else system_info(d["sysinfo"]), "queue": queue_panel(conn, project),
             "info": info_sections(d), "limits": limit_bars(d)}
 

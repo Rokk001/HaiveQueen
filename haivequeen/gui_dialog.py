@@ -30,6 +30,82 @@ def apply_style(root, mono):
         for name, value in options.items():
             root.option_add("*%s.%s" % (widget, name), value, 60)
     root.option_add("*Font", "{%s} 10" % mono, 60)
+    from tkinter import ttk
+    style = ttk.Style(root)
+    style.theme_use("clam")   # the only built-in ttk theme that takes colours for scroll bars
+    for orient in ("Vertical", "Horizontal"):
+        name = "%s.TScrollbar" % orient
+        style.configure(name, background=edge, troughcolor=track, bordercolor=bg, lightcolor=edge, darkcolor=edge, arrowcolor=gold, relief="flat", gripcount=0)
+        style.map(name, background=[("active", gold), ("pressed", gold)])
+
+
+# A scroll bar in the dashboard colours.
+def scrollbar(parent, command, orient="vertical"):
+    """A ttk scroll bar (coloured by apply_style) for `command`, e.g. `text.yview`; use it like tk.Scrollbar."""
+    from tkinter import ttk
+    return ttk.Scrollbar(parent, orient=orient, command=command)
+
+
+# A file name prompt in the dashboard look (instead of the system save dialog).
+def ask_path(parent, title, initial, mono):
+    """Ask for a file path in a modal dashboard window; returns the typed path, or None for Cancel, Escape or closing."""
+    import tkinter as tk
+    panel = COL["panel"]
+    result = {"path": None}
+    win = tk.Toplevel(parent)
+    win.title("HaiveQueen")
+    win.configure(bg=COL["edge"])
+    win.resizable(False, False)
+    win.transient(parent)
+    inner = tk.Frame(win, bg=panel)
+    inner.pack(padx=2, pady=2)
+    tk.Label(inner, text=title, bg=panel, fg=COL["gold"], font=(mono, 14, "bold"), anchor="w").pack(fill="x", padx=18, pady=(14, 4))
+    var = tk.StringVar(value=initial)
+    entry = tk.Entry(inner, textvariable=var, width=64, font=(mono, 11))
+    entry.pack(padx=18, pady=(4, 14))
+    row = tk.Frame(inner, bg=panel)
+    row.pack(fill="x", padx=18, pady=(0, 14))
+
+    def close(save):
+        """Keep the typed path (Save) or nothing (Cancel) and close the window."""
+        result["path"] = var.get().strip() or None if save else None
+        win.destroy()
+    tk.Button(row, text="Cancel", font=(mono, 11), command=lambda: close(False)).pack(side="right", padx=(8, 0))
+    tk.Button(row, text="Save", font=(mono, 11), command=lambda: close(True)).pack(side="right")
+    win.bind("<Return>", lambda _e: close(True))
+    win.bind("<Escape>", lambda _e: close(False))
+    win.protocol("WM_DELETE_WINDOW", lambda: close(False))
+    win.update_idletasks()
+    x = parent.winfo_rootx() + max(0, (parent.winfo_width() - win.winfo_reqwidth()) // 2)
+    y = parent.winfo_rooty() + max(0, (parent.winfo_height() - win.winfo_reqheight()) // 2)
+    win.geometry("+%d+%d" % (x, y))
+    win.grab_set()
+    entry.focus_set()
+    entry.select_range(0, "end")
+    parent.wait_window(win)
+    return result["path"]
+
+
+# A drop-down list in the dashboard look.
+def option_menu(parent, var, values, mono, command=None):
+    """A menu button that shows the value of the StringVar `var` with an arrow and lets the user pick one of `values`; `command(value)` runs after a pick."""
+    import tkinter as tk
+    button = tk.Menubutton(parent, font=(mono, 10), anchor="w", relief="flat", indicatoron=False, padx=8, pady=3,
+                           highlightthickness=1, highlightbackground=COL["selectedge"], highlightcolor=COL["gold"])
+    menu = tk.Menu(button, tearoff=0)
+    button["menu"] = menu
+
+    def pick(value):
+        """Set the variable and tell the caller."""
+        var.set(value)
+        if command:
+            command(value)
+    for value in values:
+        menu.add_command(label=value, command=lambda v=value: pick(v))
+    show = lambda *_: button.configure(text="%s  ▾" % var.get())
+    var.trace_add("write", show)
+    show()
+    return button
 
 
 # A modal message window in the dashboard look.

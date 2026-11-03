@@ -215,6 +215,8 @@ class ConfigWindow:
         """Open the editor on `root`; `config_dir` holds config.toml, `mono` is the font family, `on_saved` is called after a successful save."""
         import tkinter as tk
         self.tk, self.root, self.conn, self.mono, self.on_saved = tk, root, conn, mono, on_saved
+        from . import gui_dialog   # imported here: gui_dialog imports gui, which imports this module only on demand
+        self.dialog = gui_dialog
         self.files = settings_files(conn, config_dir)
         self.index, self.data, self.node, self.getters, self.entries, self.position = 0, {}, ("general", None), [], [], None
         self.win = tk.Toplevel(root)
@@ -224,7 +226,7 @@ class ConfigWindow:
         top.pack(fill="x", padx=8, pady=6)
         self.file_var = tk.StringVar(value=self.files[0][0])
         tk.Label(top, text="File:").pack(side="left")
-        tk.OptionMenu(top, self.file_var, *[f[0] for f in self.files], command=self.pick_file).pack(side="left", padx=6)
+        self.dialog.option_menu(top, self.file_var, [f[0] for f in self.files], self.mono, self.pick_file).pack(side="left", padx=6)
         from .gui import COL
         self.col = COL   # the dashboard colours, also for the status texts
         self.status = tk.Label(top, anchor="w", fg=COL["red"])
@@ -239,7 +241,7 @@ class ConfigWindow:
         for text, command in (("Add provider", self.add_provider), ("Add project", self.add_project), ("Remove entry", self.remove_node)):
             tk.Button(side, text=text, command=command).pack(fill="x", pady=1)
         canvas = tk.Canvas(body, highlightthickness=0)
-        scroll = tk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        scroll = self.dialog.scrollbar(body, canvas.yview)
         canvas.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True, padx=(8, 0))
@@ -357,7 +359,7 @@ class ConfigWindow:
             return var.get
         if isinstance(value, str) and key in CHOICES:
             var = tk.StringVar(value=value)
-            tk.OptionMenu(parent, var, *dict.fromkeys(CHOICES[key] + (value,))).pack(side="left")
+            self.dialog.option_menu(parent, var, list(dict.fromkeys(CHOICES[key] + (value,))), self.mono).pack(side="left")
             return var.get
         if isinstance(value, (int, float, str)):
             var = tk.StringVar(value=str(value))

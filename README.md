@@ -163,7 +163,7 @@ A `failed` result without evidence (`--open-requirements` or `--error`) is refus
 - **Active Hives**: one row per Hive with its Apiary, the name of its Queen, Bees running of assigned, a progress bar (finished packages), status and runtime. The detail line below the table shows the selected Hive's packages (done, implemented, rejected, waiting with the reason) and its token total.
 - **Queens and Bees**: every running Queen is a parent row, her Bees hang directly below her. A Queen row carries all Queen data: model and effort, Hive, context fill, tokens and runtime. Bees that have no process yet show as `waiting`. A Bee that reports `step n/m` shows a progress bar with its step; Bees that run as subagents of their Queen show their own context and tokens, read from the Queen's event stream.
 - **Tokens, system, queue**: token use per Apiary and Hive, load of the machine and the integration queue.
-- **Logs**: the newest events with coloured source tags, with save, clear and auto-scroll.
+- **Logs**: the newest events with the name of the Queen, Bee or Apiary in a colour that tells which, with save, clear and auto-scroll. Routine round lines that report nothing (no Queen started, hook ok, nothing cleaned up) are hidden (`N` shows them). Selecting a Hive or Bee row filters the log to it, the chip beside `LOGS` shows the filter (click it or press `Esc` to remove it). `L` or a double click on `LOGS` makes the log as high as the right column, long messages continue on the next line.
 - **Model limits** and **Status**: the provider windows and weekly quotas as bars, and run state, plans, questions and round errors as text.
 
 Every list that does not fit has a scroll bar (or use the mouse wheel).
@@ -184,6 +184,7 @@ Every list that does not fit has a scroll bar (or use the mouse wheel).
 | `P` | pause or resume all new starts |
 | `X` | stop the selected Bee (a Queen or a not yet started Bee only gets a hint) |
 | `C`, `S`, `A` | clear, save, auto-scroll the log |
+| `L`, `N`, `Esc` | big log (also double click on `LOGS`), show or hide routine round lines, remove the log filter |
 
 A click on the repository name in the header opens the GitHub page. Pause, resume, stop and every Queen action ask for a confirmation first. All messages, questions, menus and the questions and settings windows share the dashboard's dark look; only the file dialog of "save log" is the system one.
 

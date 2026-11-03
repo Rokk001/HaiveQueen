@@ -97,6 +97,75 @@ class RowsTest(unittest.TestCase):
         self.assertEqual((row["ctx"], row["tin"], row["tout"]), (90000, 400000, 800))
         self.assertGreater(row["ctx_limit"], 0)
 
+    # Log events for the log tests.
+    def log_events(self):
+        """Add a routine round line, a line of the Queen, a line of the Bee and a system line; refresh the window."""
+        with db.transaction(self.conn):
+            db.add_event(self.conn, "ODP", "note", "Ava talks", agent="ODP__queen")
+            db.add_event(self.conn, "ODP", "note", "Sophia works", agent="ODP__bee")
+            db.add_event(self.conn, "HaiveQueen", "note", "other apiary")
+            db.add_event(self.conn, "ODP", "rounds", "round done: 0 Queen(s) started")
+        self.win.refresh()
+
+    # Routine round lines stay out of the log.
+    def test_log_hides_routine_round_lines(self):
+        """A round that started nothing is hidden; N shows it again."""
+        self.log_events()
+        self.assertNotIn("round done: 0 Queen(s) started", [line[2] for line in self.win.visible_log()])
+        self.win.toggle_noise()
+        self.assertIn("round done: 0 Queen(s) started", [line[2] for line in self.win.visible_log()])
+
+    # Selecting a Hive or Bee sets the log filter.
+    def test_selecting_rows_sets_the_log_filter(self):
+        """A Hive row filters the log to its Hive, a Bee row to that Bee, Escape removes the filter."""
+        self.log_events()
+        self.win.select(("hives", 0))
+        self.assertEqual(sorted(line[2] for line in self.win.visible_log() if line[2] in ("Ava talks", "Sophia works", "other apiary")), ["Ava talks", "Sophia works"])
+        rows = self.win.snap["bees"]
+        self.win.select(("bees", next(i for i, r in enumerate(rows) if r["name"] == "Sophia")))
+        self.assertEqual([line[2] for line in self.win.visible_log()], ["Sophia works"])
+        self.win.clear_log_filter()
+        self.assertIn("other apiary", [line[2] for line in self.win.visible_log()])
+
+    # The log can fill the right column.
+    def test_big_log_replaces_limits_and_status(self):
+        """L makes the log panel as high as the right column; the draw still works and L restores the small panel."""
+        self.win.toggle_log_big()
+        self.assertTrue(self.win.log_big)
+        self.root.update()
+        self.win.toggle_log_big()
+        self.assertFalse(self.win.log_big)
+
+    # Windows use the dashboard widgets instead of the system ones.
+    def test_themed_drop_down_and_scroll_bar(self):
+        """The drop-down shows its value with an arrow and reports a pick; the scroll bar is the themed ttk one."""
+        import tkinter as tk
+        from haivequeen import gui_dialog
+        var, picked = tk.StringVar(value="a"), []
+        button = gui_dialog.option_menu(self.root, var, ["a", "b"], "Consolas", picked.append)
+        self.assertEqual(button.cget("text"), "a  ▾")
+        self.root.nametowidget(button["menu"]).invoke(1)
+        self.assertEqual((var.get(), picked, button.cget("text")), ("b", ["b"], "b  ▾"))
+        self.assertEqual(gui_dialog.scrollbar(self.root, None).winfo_class(), "TScrollbar")
+
+    # The 5-hour bar only exists when the provider reports a 5-hour window.
+    def test_no_five_hour_bar_without_a_window(self):
+        """With no 5-hour reading of Claude or Codex the limit bars hold no 5h row."""
+        from haivequeen import gui_data
+        d = {"cu": {"FiveHour": None}, "xu": {"FiveHour": None}, "provider_limits": []}
+        self.assertEqual(gui_data.limit_bars(d), [])
+        d["cu"]["FiveHour"] = {"pct": 40, "reset": "18:00"}
+        self.assertEqual([r["label"] for r in gui_data.limit_bars(d)], ["Claude 5h"])
+
+    # A subagent Bee is busy in its Hive.
+    def test_embedded_bee_counts_as_busy_in_its_hive(self):
+        """The Hive row counts a Bee that runs as a subagent among its busy Bees."""
+        before = next(h for h in self.win.snap["hives"] if h["plan_path"] == PLAN)["bees_running"]
+        bees.record_embedded_start(self.conn, "ODP", PLAN, "P9", "Mona", "heavy", "claude", "claude-opus-5-5", "medium")
+        self.win.refresh()
+        after = next(h for h in self.win.snap["hives"] if h["plan_path"] == PLAN)["bees_running"]
+        self.assertEqual(after, before + 1)
+
     # A Bee that reports "step n/m" gets a progress bar.
     def test_bee_row_carries_the_step_for_the_progress_bar(self):
         """The step a Bee reported becomes the share of the bar; no step gives an empty bar."""
