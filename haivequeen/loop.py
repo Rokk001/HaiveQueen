@@ -171,10 +171,12 @@ def agent_identity(conn, excluded_names=()) -> dict:
                 recent = (datetime.now() - ended).total_seconds() <= 3600
         if a.get("status") in ACTIVE or recent:
             rows.append(a)
-    used_n = [str(a.get("person")) for a in rows] + list(excluded_names)
+    from . import bees
+    embedded_names = bees.open_embedded_names(conn)   # a Bee that runs as a subagent holds its name too
+    used_n = [str(a.get("person")) for a in rows] + list(excluded_names) + list(embedded_names)
     used_c = [str(a.get("color")) for a in rows]
     run_c = [str(a.get("color")) for a in rows if a.get("status") in ACTIVE]
-    running_names = {str(a.get("person")) for a in rows if a.get("status") in ACTIVE}
+    running_names = {str(a.get("person")) for a in rows if a.get("status") in ACTIVE} | embedded_names
     n = (next((x for x in AGENT_NAMES if x not in used_n), None)
          or next((x for x in AGENT_NAMES if x not in running_names and x not in excluded_names), None)
          or min(AGENT_NAMES, key=lambda x: sum(1 for a in rows if str(a.get("person")) == x and a.get("status") in ACTIVE)))   # all taken: the least used one

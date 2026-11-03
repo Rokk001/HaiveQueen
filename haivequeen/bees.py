@@ -1,5 +1,6 @@
 """Bee routing, package attempts and scoped Queen instructions."""
 import json
+import re
 
 from . import db, runtime, scheduler
 
@@ -64,6 +65,15 @@ def record_embedded_start(conn, project, plan, package, name, cls, provider, mod
     close_embedded(conn, project, plan, package, 'replaced')
     conn.execute('INSERT INTO embedded_bees(project,plan_path,package,name,class,provider,model,effort,started_at) VALUES (?,?,?,?,?,?,?,?,?)',
                  (project, plan, package, name, cls, provider, model, effort, db.now()))
+
+
+# Names that open embedded Bees hold.
+def open_embedded_names(conn, skip=None) -> set:
+    """The names of the embedded Bees that have not ended; `skip` is a (project, plan, package) whose Bee does not count because it is being replaced."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedded_bees'").fetchone():
+        return set()
+    rows = conn.execute('SELECT name,project,plan_path,package FROM embedded_bees WHERE ended_at IS NULL').fetchall()
+    return {r[0] for r in rows if (r[1], r[2], r[3]) != tuple(skip or ())}
 
 
 # Mark embedded Bees as ended.
@@ -289,6 +299,9 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         queen = next((a for a in active if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'queen' and a.get('status') in ('running', 'starting')), None)
         if not queen:
             return refuse(env, package, 'no running Queen of this plan')
+        held = {str(a.get('person') or a.get('name')) for a in active if a.get('status') in ('running', 'starting')} | open_embedded_names(env.conn, (env.name, plan, package))
+        if re.sub(r'-\d+$', '', str(name)) in held:   # a name is held by one Queen or Bee at a time
+            return refuse(env, package, 'the name %s is already held by a running Queen or Bee; use the free name %s' % (name, loop.agent_identity(env.conn)['Person']))
         from . import platform as osplat
         from . import agent_process
         running = [{**a, 'status': 'running'} for a in active if agent_process.counts(a)]

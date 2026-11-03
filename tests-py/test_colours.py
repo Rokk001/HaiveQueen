@@ -84,6 +84,18 @@ class AgentColourTest(RoundCase):
             for b in hues[i + 1:]:
                 self.assertGreaterEqual(min(abs(a - b), 360 - abs(a - b)), 25, cols)
 
+    def test_a_held_name_is_never_given_again(self):
+        """Running agents and open embedded Bees hold their names: the next ones get all different names, and an ended embedded Bee frees hers."""
+        from haivequeen import bees
+        bees.record_embedded_start(self.conn, "testproj", "plan.md", "P1", "Ada", "medium", "claude")
+        names = [loop.agent_identity(self.conn)["Person"]]
+        self.agent("Q0", package="P0", status="running", pid=1, color="4FA8FF", person=names[0])
+        names.append(loop.agent_identity(self.conn)["Person"])
+        self.assertNotIn("Ada", names)
+        self.assertEqual(len(set(names)), 2)
+        bees.close_embedded(self.conn, "testproj", "plan.md", "P1")
+        self.assertNotIn("Ada", bees.open_embedded_names(self.conn))
+
 
 if __name__ == "__main__":
     unittest.main()

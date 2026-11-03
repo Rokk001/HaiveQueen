@@ -224,7 +224,7 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     hin = sum(agent_tokens(a)[0] for a in (agents_all if agents_all is not None else agents) if (a.get("project"), a.get("plan_path")) == key)
     hout = sum(agent_tokens(a)[1] for a in (agents_all if agents_all is not None else agents) if (a.get("project"), a.get("plan_path")) == key)
     return {"name": hive_name(hive["plan_path"]), "apiary": hive["project"], "plan_path": hive["plan_path"],
-            "queen": str((queen or {}).get("person") or (queen or {}).get("name") or "–"), "queen_agent": (queen or {}).get("name"),
+            "queen": str((queen or {}).get("person") or (queen or {}).get("name") or "–") if live else "–", "queen_agent": (queen or {}).get("name"),   # a Queen that has ended no longer holds her name
             "queen_model": overview.model_short(queen.get("provider"), queen.get("model"), queen.get("effort")) if live else "",
             "queen_ctx": int((queen or {}).get("ctxTokens") or 0) if live else 0, "queen_ctx_limit": int(ctx_limit(queen)) if live and ctx_limit else 0,
             "queen_tin": qin, "queen_tout": qout, "hive_tin": hin, "hive_tout": hout,
