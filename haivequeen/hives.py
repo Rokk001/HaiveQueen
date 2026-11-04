@@ -3,7 +3,7 @@ import json
 import os
 import re
 import subprocess
-from . import db, runtime, agent_process, interrupt
+from . import db, roles, runtime, agent_process, interrupt
 from . import plans as plan_mod
 from . import platform as osplat
 
@@ -924,11 +924,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)
                 prompt += ' Project integration configuration: ' + json.dumps(integration, ensure_ascii=False)
                 if plan['status'] == 'SUBMITTED':   # a plan the owner submitted as free text: the Queen cuts it into packages before any Bee starts
-                    prompt += ('\nThis plan is SUBMITTED: its header lists no packages yet. Cut it first, before any Bee starts. Read the whole plan and the configured Bee providers above, then write the TOML header '
-                               '(status, then one [[packages]] entry per package with id, title, class, depends_on and verify) above the unchanged Markdown text. Work that only some providers can do '
-                               '(a capability that not every provider offers, for example image generation, modelling in Blender or a full build, whenever a provider above lists it) becomes its own package with capability = "<name>" and contains no other work; other packages depend on it only when they need its result. '
-                               'Then run bzz plan check --project %s --plan %s until it reports ok; it sets the plan to READY. If the plan is unclear on a point only the owner can decide, ask with bzz ask. '
-                               'bzz bee start is refused until the check passed.' % (env.name, path))
+                    prompt += '\n' + roles.role_text('queen-cut', {'project': env.name, 'plan': path})
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
                 cwd = routine.pick_cwd(prior, str(env.code_repo), workspace=routine.other_workspace(env)) if prior else str(env.code_repo)
                 if bees.plan_worktree(env, path) or not bees.valid_queen_worktree(env, cwd):
