@@ -283,8 +283,10 @@ def add_question(conn, project, plan_path, item, question, recommendation, statu
 
 
 # Record an answer and its decision for an eligible question.
-def answer_question(conn, qid: int, text: str, by: str) -> dict:
-    """Answer an open question, or a pending fault by the coordinator, and log the decision."""
+def answer_question(conn, qid: int, text: str, by: str, apiary: bool = False) -> dict:
+    """Answer an open question, or a pending fault by the coordinator, and log the decision.
+
+    With `apiary` the decision is stored without a plan: it then holds for every plan of this Apiary (never for another Apiary), and the same item is not asked again."""
     if by not in ("owner", "coordinator", "auto"):
         raise ValueError("answered_by must be owner, coordinator or auto")
     with transaction(conn):
@@ -303,7 +305,7 @@ def answer_question(conn, qid: int, text: str, by: str) -> dict:
             pass
         conn.execute(
             "INSERT INTO decisions (project, ts, source, text, plan_path, item) VALUES (?,?,?,?,?,?)",
-            (row["project"], now(), by, f"{row['question']} -> {text}", row["plan_path"], row["item"]),
+            (row["project"], now(), by, f"{row['question']} -> {text}", None if apiary else row["plan_path"], row["item"]),
         )
         add_event(conn, row["project"], "answer", text, data={"question_id": qid, "by": by})
     return {"id": qid, "project": row["project"], "answered_by": by}

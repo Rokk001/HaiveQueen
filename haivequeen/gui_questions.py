@@ -27,7 +27,7 @@ def plan_packages(conn, project, plan_path) -> list:
 
 
 # Store the owner's answer and mark the rejected steps.
-def answer(conn, qid, text, rejected=()) -> None:
+def answer(conn, qid, text, rejected=(), apiary=False) -> None:
     """Answer question `qid` as the owner and mark the packages in `rejected` as rejected.
 
     Raises ValueError when the text is empty or says ok while steps are marked rejected; db.answer_question raises KeyError for a question that is already answered
@@ -38,7 +38,7 @@ def answer(conn, qid, text, rejected=()) -> None:
     if rejected and hives.owner_check_ok(text):
         raise ValueError("The answer says ok, but steps are marked as rejected.")
     row = conn.execute("SELECT project, plan_path FROM questions WHERE id=?", (qid,)).fetchone()
-    db.answer_question(conn, qid, text, "owner")
+    db.answer_question(conn, qid, text, "owner", apiary=bool(apiary))
     for package in rejected:
         bees.set_package_state(conn, row["project"], row["plan_path"], package, "rejected", "owner")
 
@@ -68,7 +68,10 @@ class QuestionsWindow:
         self.body.pack(fill="both", expand=True, pady=(4, 6))
         tk.Label(main, text="Your answer", anchor="w", font=(mono, 10)).pack(fill="x")
         self.reply = tk.Text(main, height=7, wrap="word", font=(mono, 10))
-        self.reply.pack(fill="x", pady=(2, 6))
+        self.reply.pack(fill="x", pady=(2, 0))
+        self.apiary_var = tk.BooleanVar(value=False)
+        self.apiary_box = tk.Checkbutton(main, text="This answer applies to the whole Apiary", variable=self.apiary_var, anchor="w", font=(mono, 10))
+        self.apiary_box.pack(fill="x", pady=(0, 6))
         self.steps = tk.LabelFrame(main, text="Not accepted steps (marked rejected, the Queen reworks them)", font=(mono, 10))
         self.steps.pack(fill="x", pady=(0, 6))
         buttons = tk.Frame(main)
@@ -154,11 +157,12 @@ class QuestionsWindow:
         if q is None:
             return
         try:
-            answer(self.conn, q["id"], self.reply.get("1.0", "end"), [p for p, var in self.checks.items() if var.get()])
+            answer(self.conn, q["id"], self.reply.get("1.0", "end"), [p for p, var in self.checks.items() if var.get()], self.apiary_var.get())
         except (ValueError, KeyError) as exc:
             self.status.config(text=str(exc).strip("'\""))
             return
         self.reply.delete("1.0", "end")
+        self.apiary_var.set(False)
         self.questions = []
         self.refresh()
         if self.on_answered:
