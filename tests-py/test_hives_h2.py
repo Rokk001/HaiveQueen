@@ -921,7 +921,7 @@ class BeeRunnerTests(RunnerBase):
         self.assertEqual(self.row('Ada')['status'], 'done')
         args = self.record()['argv']
         self.assertIn('--setting-sources', args)
-        self.assertEqual((self.runs / 'Ada' / 'rules.md').read_text(encoding='utf-8'), '')
+        self.assertEqual((self.runs / 'Ada' / 'rules.md').read_text(encoding='utf-8'), '')   # no repository with instruction files here: nothing to load
 
     # Bee context exhaustion writes its handoff signal for the current package.
     def test_bee_context_limit_sets_handoff(self):
