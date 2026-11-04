@@ -37,6 +37,12 @@ def apply_style(root, mono):
         name = "%s.TScrollbar" % orient
         style.configure(name, background=edge, troughcolor=track, bordercolor=bg, lightcolor=edge, darkcolor=edge, arrowcolor=gold, relief="flat", gripcount=0)
         style.map(name, background=[("active", gold), ("pressed", gold)])
+    font = (mono, 10)
+    style.configure("Treeview", background=panel, fieldbackground=panel, foreground=text, font=font, rowheight=24, relief="flat", borderwidth=0,
+                    bordercolor=bg, lightcolor=panel, darkcolor=panel)
+    style.map("Treeview", background=[("selected", select)], foreground=[("selected", gold)])
+    style.configure("Treeview.Heading", background=bg, foreground=gold, font=(mono, 10, "bold"), relief="flat", borderwidth=0)
+    style.map("Treeview.Heading", background=[("active", select)], foreground=[("active", gold)])
 
 
 # A scroll bar in the dashboard colours.

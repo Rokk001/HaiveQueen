@@ -79,6 +79,7 @@ class HivesWindow:
         """Open the window below `root`; `on_changed()` is called after every change."""
         import tkinter as tk
         from tkinter import ttk
+        from . import gui_dialog
         self.tk, self.conn, self.mono, self.on_changed, self.rows = tk, conn, mono, on_changed, []
         self.root = root
         self.win = tk.Toplevel(root)
@@ -88,7 +89,7 @@ class HivesWindow:
         for column, title, width in (("apiary", "Apiary", 160), ("hive", "Hive", 420), ("status", "Status", 130), ("has", "Has Hive", 80)):
             self.tree.heading(column, text=title)
             self.tree.column(column, width=width, anchor="w")
-        bar = ttk.Scrollbar(self.win, orient="vertical", command=self.tree.yview)
+        bar = gui_dialog.scrollbar(self.win, self.tree.yview)
         self.tree.configure(yscrollcommand=bar.set)
         bar.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
