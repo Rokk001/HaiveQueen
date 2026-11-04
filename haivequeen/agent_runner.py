@@ -95,7 +95,7 @@ def get_providers(cfg):
             raise ValueError("provider %s: protocol must be claude or codex, not '%s'" % (name, proto))
         out.append({"name": name, "protocol": proto, "command": str(p.get("command") or proto),
                     "args": [str(x) for x in (p.get("args") or [])], "classes": p.get("classes") or {},
-                    "endpoint": p.get("endpoint") or None})
+                    "endpoint": p.get("endpoint") or None, **profile.custom_fields(p)})
     return out
 
 

@@ -139,6 +139,88 @@ class LoginTest(ProfileCase):
         self.assertFalse(profile.has_login(odd))
 
 
+CUSTOM = {"name": "mycli", "protocol": "mycli", "command": "mycli", "slots": 1, "profileEnv": {"MYCLI_HOME": "{home}/cfg"},
+          "loginCommand": "mycli signin", "loginFiles": ["cfg/token.json"]}
+
+
+class CustomCliTest(ProfileCase):
+    """A CLI HaiveQueen does not know brings its profile variables, login command and login files from the provider entry."""
+
+    def test_custom_cli_is_kept_to_the_profile(self):
+        """Profile variable, login status and login text of an unknown CLI come from the entry's own values."""
+        self.assertTrue(profile.confined(CUSTOM))
+        home = self.data / "profile" / "mycli"
+        self.assertEqual(Path(profile.environment(CUSTOM, {})["MYCLI_HOME"]), home / "cfg")
+        self.assertFalse(profile.has_login(CUSTOM))
+        (home / "cfg").mkdir(parents=True)
+        (home / "cfg" / "token.json").write_text("{}", encoding="utf-8")
+        self.assertTrue(profile.has_login(CUSTOM))
+        self.assertTrue(profile.prepare(CUSTOM))
+        self.assertIn("mycli signin", profile.login_text(CUSTOM))
+        self.assertEqual(profile.login_command(CUSTOM), "mycli signin")
+
+    def test_missing_values_keep_todays_rule(self):
+        """Without the variables or without the login files an unknown CLI cannot be kept to the profile."""
+        for drop in ("profileEnv", "loginFiles"):
+            odd = {k: v for k, v in CUSTOM.items() if k != drop}
+            self.assertFalse(profile.confined(odd), drop)
+            self.assertFalse(profile.has_login(odd), drop)
+            self.assertFalse(profile.prepare(odd), drop)
+
+    def test_known_cli_ignores_custom_values(self):
+        """Claude keeps its built-in values even when the entry carries own ones."""
+        prov = {"name": "claude", "protocol": "claude", "profileEnv": {"X": "{home}"}, "loginFiles": ["x"], "loginCommand": "x"}
+        self.assertIn("CLAUDE_CONFIG_DIR", profile.environment(prov, {}))
+        self.assertNotIn("X", profile.environment(prov, {}))
+        self.assertEqual(profile.login_command(prov), "claude auth login")
+
+    def test_scheduler_passes_the_values_on(self):
+        """get_providers keeps the three values so that the profile and the window see them."""
+        cfg = {"providers": [dict(provider("claude", 1), profileEnv={"A": "{home}"}, loginCommand="c", loginFiles=["f"])]}
+        got = sch.get_providers(cfg)[0]
+        self.assertEqual((got["profileEnv"], got["loginCommand"], got["loginFiles"]), ({"A": "{home}"}, "c", ["f"]))
+
+
+class LoginLaunchTest(ProfileCase):
+    """The login button opens a visible terminal with the profile variables set and the login command running."""
+
+    def run_login(self, prov, windows):
+        """Start the login with a fake Popen and return its (process, seen arguments)."""
+        seen = {}
+
+        def fake(argv, **kw):
+            seen.update(argv=argv, kw=kw)
+            return mock.Mock()
+        with mock.patch("haivequeen.platform.is_windows", return_value=windows), mock.patch("shutil.which", side_effect=lambda n: "/usr/bin/" + n):
+            proc = profile.login_run(prov, popen=fake)
+        return proc, seen
+
+    def test_windows_terminal(self):
+        """On Windows a new console runs cmd /k with the login command; the environment holds the profile variable."""
+        proc, seen = self.run_login({"name": "claude", "protocol": "claude", "command": "claude"}, True)
+        self.assertIsNotNone(proc)
+        self.assertEqual(seen["argv"][:2], ["cmd.exe", "/k"])
+        self.assertIn("claude auth login", seen["argv"][-1])
+        self.assertEqual(seen["kw"]["creationflags"], 0x00000010)
+        self.assertEqual(Path(seen["kw"]["env"]["CLAUDE_CONFIG_DIR"]), self.data / "profile" / "claude")
+        self.assertTrue((self.data / "profile" / "claude").is_dir())
+
+    def test_linux_terminal(self):
+        """On Linux a terminal emulator runs the login command in bash and stays open afterwards."""
+        _proc, seen = self.run_login({"name": "codex", "protocol": "codex", "command": "codex"}, False)
+        self.assertIn("codex login", " ".join(seen["argv"]))
+        self.assertEqual(Path(seen["kw"]["env"]["CODEX_HOME"]), self.data / "profile" / "codex")
+
+    def test_no_login_without_command_or_profile(self):
+        """An unknown CLI without a login command or without profile values gets no terminal."""
+        called = []
+        odd = {"name": "odd", "protocol": "odd"}
+        nocmd = {k: v for k, v in CUSTOM.items() if k != "loginCommand"}
+        self.assertIsNone(profile.login_run(odd, popen=lambda *a, **k: called.append(1)))
+        self.assertIsNone(profile.login_run(nocmd, popen=lambda *a, **k: called.append(1)))
+        self.assertEqual(called, [])
+
+
 class RunnerTest(RunnerBase):
     """The runner starts the fake CLIs with the profile environment."""
 

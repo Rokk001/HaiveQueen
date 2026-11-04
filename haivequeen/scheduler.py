@@ -165,7 +165,7 @@ def get_providers(settings: dict) -> list:
             "capabilities": [str(c) for c in (p.get("capabilities") or [])],
             "classes": p.get("classes") or {},
             "limit": str(limit.get("source", "")) if isinstance(limit, dict) else str(limit or ""),
-            "endpoint": p.get("endpoint"),
+            "endpoint": p.get("endpoint"), **profile.custom_fields(p),
         })
         out[-1]["login"] = profile.has_login(out[-1])   # the login in the HaiveQueen profile; without it the provider counts as not available
     return out

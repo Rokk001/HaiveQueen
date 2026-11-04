@@ -7,10 +7,14 @@ HaiveQueen writes. Memory is switched off, session logs older than a week are re
 import json
 import os
 import re
+import shlex
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
 from . import config, db, runtime
+from . import platform as osplat
 
 GLOBAL = "*"
 KEEP_DAYS = 8   # session logs stay this long (the usage table reads them), then they are removed
@@ -49,9 +53,26 @@ def profile_dir() -> Path:
     return config.data_dir() / "profile"
 
 
+def custom_fields(p) -> dict:
+    """Return the three values of a provider entry of config.toml that describe the profile of a CLI that is not built in
+    (`profileEnv`, `loginCommand`, `loginFiles`), with empty defaults."""
+    return {"profileEnv": dict(p.get("profileEnv") or {}), "loginCommand": str(p.get("loginCommand") or ""),
+            "loginFiles": [str(f) for f in (p.get("loginFiles") or [])]}
+
+
+def custom_spec(prov):
+    """Return the profile description that a provider entry brings for a CLI that is not built in (`profileEnv`, `loginFiles`, `loginCommand`),
+    or None when the entry has no protocol name, no variables or no login files."""
+    env, files = (prov or {}).get("profileEnv"), (prov or {}).get("loginFiles")
+    if not str((prov or {}).get("protocol") or "") or not isinstance(env, dict) or not env or not isinstance(files, list) or not files:
+        return None
+    return {"env": {str(k): str(v) for k, v in env.items()}, "login": [str(f) for f in files], "settings": {}, "sessions": [], "loginArgs": "",
+            "loginCommand": str(prov.get("loginCommand") or "").strip()}
+
+
 def spec(prov):
-    """Return the profile description of a provider's protocol, or None when the CLI cannot be kept to the profile."""
-    return SPECS.get(str((prov or {}).get("protocol") or ""))
+    """Return the profile description of a provider's protocol (a built-in CLI first, else the values of the entry itself), or None when the CLI cannot be kept to the profile."""
+    return SPECS.get(str((prov or {}).get("protocol") or "")) or custom_spec(prov)
 
 
 def provider_home(prov) -> Path:
@@ -110,6 +131,16 @@ def has_login(prov) -> bool:
     return bool(s) and any((provider_home(prov) / f).is_file() for f in s["login"])
 
 
+def login_command(prov) -> str:
+    """Return the command line that makes the provider's login ('' when the CLI cannot be kept to the profile or an own CLI has no login command)."""
+    s = spec(prov)
+    if not s:
+        return ""
+    if "loginCommand" in s:
+        return s["loginCommand"]
+    return str(prov.get("command") or prov.get("protocol")) + " " + s["loginArgs"]
+
+
 def login_text(prov) -> str:
     """Return the one-line instruction that tells the owner how to log in to the provider in the profile."""
     s = spec(prov)
@@ -117,7 +148,27 @@ def login_text(prov) -> str:
         return "Provider %s cannot be kept to the HaiveQueen profile." % prov.get("name")
     env = "; ".join("%s=%s" % (k, v.replace("{home}", str(provider_home(prov)))) for k, v in s["env"].items() if "{home}" in v)
     return ("Provider %s needs its login in the HaiveQueen profile (once). Run `%s` with the environment %s. "
-            "Its packages wait until then, all others go on." % (prov.get("name"), str(prov.get("command") or prov.get("protocol")) + " " + s["loginArgs"], env))
+            "Its packages wait until then, all others go on." % (prov.get("name"), login_command(prov) or "its login command", env))
+
+
+# Terminal programs tried on Linux, each with the argument that precedes the command to run.
+TERMINALS = (("x-terminal-emulator", "-e"), ("gnome-terminal", "--"), ("konsole", "-e"), ("xterm", "-e"))
+
+
+def login_run(prov, popen=subprocess.Popen):
+    """Open a visible terminal window in which the profile variables are set and the provider's login command runs; the window stays open afterwards.
+    Returns the started process, or None when the CLI cannot be kept to the profile, has no login command or no terminal program is found."""
+    command = login_command(prov)
+    if not command or not prepare(prov):
+        return None
+    env = environment(prov)
+    if osplat.is_windows():
+        return popen(["cmd.exe", "/k", command], env=env, creationflags=0x00000010)   # CREATE_NEW_CONSOLE
+    exports = "".join("export %s=%s; " % (k, shlex.quote(env[k])) for k in spec(prov)["env"])   # a terminal server may not hand on the environment
+    for terminal, flag in TERMINALS:
+        if shutil.which(terminal):
+            return popen([terminal, flag, "bash", "-c", exports + command + "; exec bash"], env=env)
+    return None
 
 
 def notify_missing(conn, providers) -> list:

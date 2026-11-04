@@ -177,6 +177,55 @@ class WindowTest(unittest.TestCase):
                 return
         self.fail("no entry showing %r" % old)
 
+    # The provider page shows the login status and a Login button.
+    def test_provider_page_shows_login_status_and_button(self):
+        """The page of a provider says "Login missing" or "Login present" from the profile, and the Login button asks first, then opens the terminal."""
+        import os
+        from haivequeen import profile
+        data = self.folder / "data"
+        with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(data)}):
+            os.environ.pop(profile.NO_CHECK_ENV, None)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win.select(1)   # provider claude
+            self.assertEqual(win.login_status.cget("text"), "Login missing")
+            with mock.patch("haivequeen.gui_dialog.ask", return_value=False) as ask, mock.patch("haivequeen.profile.login_run") as run:
+                win.login_button.invoke()
+                self.assertTrue(ask.called)
+                run.assert_not_called()
+            proc = mock.Mock()
+            proc.poll.return_value = 0
+            with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.profile.login_run", return_value=proc) as run:
+                win.login_button.invoke()
+                self.assertEqual(run.call_args[0][0]["name"], "claude")
+            (data / "profile" / "claude").mkdir(parents=True)
+            (data / "profile" / "claude" / ".credentials.json").write_text("{}", encoding="utf-8")
+            win.refresh_login()
+            self.assertEqual(win.login_status.cget("text"), "Login present")
+            win.select(2)
+            self.assertEqual(win.login_status.cget("text"), "Login missing")   # codex has no login yet
+
+    # Own CLI: the three values are offered on its page and used for the status.
+    def test_unknown_cli_offers_its_login_values(self):
+        """A provider whose CLI is not built in shows profileEnv, loginCommand and loginFiles, and its status follows the login file."""
+        import os
+        from haivequeen import profile
+        data = self.folder / "data"
+        with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(data)}):
+            os.environ.pop(profile.NO_CHECK_ENV, None)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win.data["providers"].append({"name": "mycli", "protocol": "mycli"})
+            win.fill_nodes()
+            win.select(3)
+            keys = {path[0] for path, _g, _l in win.getters}
+            self.assertTrue({"loginCommand", "loginFiles"} <= keys)
+            win.target().update({"profileEnv": {"MYCLI_HOME": "{home}"}, "loginCommand": "mycli signin", "loginFiles": ["t.json"]})
+            win.refresh_login()
+            self.assertEqual(win.login_status.cget("text"), "Login missing")
+            (data / "profile" / "mycli").mkdir(parents=True)
+            (data / "profile" / "mycli" / "t.json").write_text("{}", encoding="utf-8")
+            win.refresh_login()
+            self.assertEqual(win.login_status.cget("text"), "Login present")
+
     # Every provider offers the Bee mode with the value that applies when the file has no entry.
     def test_provider_offers_the_bee_mode_with_its_default(self):
         """A claude provider shows subagent and a codex provider shows process; choosing a value and saving writes it to the file."""

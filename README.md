@@ -104,6 +104,35 @@ pip install -e .                      # optional: gives you the command `bzz` (e
 
 bzz init /path/to/my-project          # creates .haivequeen/project.toml, AGENTS.md and an example plan
 bzz register /path/to/my-project      # adds the project to config.toml and the database
+```
+
+**Log in once per CLI, in the HaiveQueen profile.** Do this for every CLI you want to use, after `bzz register`. The agents never read your own login (see [Why](#why)), so each CLI needs its login in the profile folder `<data folder>/profile/<cli>` (data folder: `%LOCALAPPDATA%\HaiveQueen` on Windows, `${XDG_DATA_HOME:-~/.local/share}/HaiveQueen` on Linux). Set the variable(s) that point the CLI to that folder, then run its login command:
+
+PowerShell (Windows):
+
+```powershell
+# Claude
+$env:CLAUDE_CONFIG_DIR = "$env:LOCALAPPDATA\HaiveQueen\profile\claude"; claude auth login
+# Codex
+$env:CODEX_HOME = "$env:LOCALAPPDATA\HaiveQueen\profile\codex"; codex login
+# OpenCode
+$p = "$env:LOCALAPPDATA\HaiveQueen\profile\opencode"; $env:OPENCODE_CONFIG_DIR = "$p\config"; $env:XDG_CONFIG_HOME = "$p\config"; $env:XDG_DATA_HOME = "$p\data"; $env:XDG_STATE_HOME = "$p\state"; $env:XDG_CACHE_HOME = "$p\cache"; opencode auth login
+```
+
+bash (Linux):
+
+```bash
+# Claude
+CLAUDE_CONFIG_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/claude" claude auth login
+# Codex
+CODEX_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/codex" codex login
+# OpenCode
+p="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/opencode"; OPENCODE_CONFIG_DIR="$p/config" XDG_CONFIG_HOME="$p/config" XDG_DATA_HOME="$p/data" XDG_STATE_HOME="$p/state" XDG_CACHE_HOME="$p/cache" opencode auth login
+```
+
+Without a login a provider counts as not available and its packages wait; all others go on. You can also do this from the dashboard: the settings window shows "Login present" or "Login missing" on every provider's page, and its **Login** button opens a terminal window with the variables set and the login command running. For a CLI HaiveQueen does not know, set `profileEnv`, `loginCommand` and `loginFiles` in its provider entry (see [`examples/config.example.toml`](examples/config.example.toml)); the same status, profile and button then work for it.
+
+```bash
 bzz start                             # starts the loop in the background and opens the dashboard window
 bzz stop                              # no new agents; running agents finish their task
 ```

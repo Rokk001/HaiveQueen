@@ -325,6 +325,15 @@ class ConfigWindow:
         data = self.target()
         shown = {k: v for k, v in data.items() if kind != "general" or k not in ("providers", "projects")}
         self.position = None
+        self.login_status = self.login_button = None
+        if kind == "providers":
+            from . import profile
+            if profile.SPECS.get(str(data.get("protocol") or data.get("name") or "")) is None:
+                data.setdefault("profileEnv", {})   # an own CLI: the variables that point it to the profile folder ({home} = its profile folder)
+                shown["profileEnv"] = data["profileEnv"]
+                shown.setdefault("loginCommand", "")   # the command that makes the login
+                shown.setdefault("loginFiles", [])   # the login files, relative to the profile folder of the CLI
+            self.login_row()
         if kind == "general":
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
         if kind == "providers":
@@ -334,6 +343,72 @@ class ConfigWindow:
             shown.setdefault("beeMode", "process" if shown.get("protocol") == "codex" else "subagent")   # always offer the setting, with the value that applies without an entry
         self.fields(self.form, shown, ())
         self.add_row(self.form, ())
+
+    # The provider of the shown page in the form the profile functions read.
+    def login_provider(self) -> dict:
+        """The shown provider entry as the profile functions need it (name, protocol, command and the own-CLI values), with the defaults config.toml applies."""
+        from . import profile
+        raw = self.target()
+        name = str(raw.get("name") or "")
+        proto = str(raw.get("protocol") or name)
+        return {"name": name, "protocol": proto, "command": str(raw.get("command") or proto), **profile.custom_fields(raw)}
+
+    # Status line and Login button of a provider page.
+    def login_row(self):
+        """Add the login status ("Login present" or "Login missing", from the profile) and the Login button at the top of a provider page."""
+        tk = self.tk
+        row = tk.Frame(self.form)
+        row.pack(fill="x", pady=(0, 8), anchor="w")
+        tk.Label(row, text="login", width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+        self.login_status = tk.Label(row, anchor="w", font=(self.mono, 10, "bold"))
+        self.login_status.pack(side="left")
+        self.login_button = tk.Button(row, text="Login", width=12, command=self.login_click)
+        self.login_button.pack(side="left", padx=12)
+        self.refresh_login()
+
+    # Show whether the shown provider has its login in the profile.
+    def refresh_login(self):
+        """Read the login state again from the profile folder and show it; does nothing on a page without a login row."""
+        from . import profile
+        if self.login_status is None:
+            return
+        present = profile.has_login(self.login_provider())
+        self.login_status.config(text="Login present" if present else "Login missing", fg=self.col["green"] if present else self.col["red"])
+
+    # The Login button.
+    def login_click(self):
+        """After a safety question open the terminal window for the login of the shown provider; the state is read again when that window is closed."""
+        from . import profile
+        if not self.collect():
+            return
+        prov = self.login_provider()
+        if not profile.login_command(prov):
+            self.dialog.info(self.win, "HaiveQueen", "No login is set up for this provider. For a CLI that is not built in, set the profile variables, "
+                             "the login command and the login files on this page.", self.mono)
+            return
+        if not self.dialog.ask(self.win, "HaiveQueen", "Open a terminal window and run `%s` for provider %s in the HaiveQueen profile?" % (profile.login_command(prov), prov["name"]), self.mono):
+            return
+        proc = profile.login_run(prov)
+        if proc is None:
+            self.dialog.error(self.win, "HaiveQueen", "The login window could not be opened (no terminal program found).", self.mono)
+            return
+        self.watch_login(proc)
+
+    # Refresh the state when the terminal window is closed.
+    def watch_login(self, proc):
+        """Check every 2 seconds whether the login window is still open; when it is closed, read the login state again."""
+        def check():
+            """Re-arm the timer while the window is open, else refresh."""
+            try:
+                if not self.win.winfo_exists():
+                    return
+                if proc.poll() is None:
+                    self.win.after(2000, check)
+                else:
+                    self.refresh_login()
+            except self.tk.TclError:
+                pass
+        self.win.after(2000, check)
 
     # Rows for the keys of a dict.
     def fields(self, parent, data, path):

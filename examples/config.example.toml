@@ -48,6 +48,19 @@ light = { model = "gpt-6-luna", effort = "medium" }
 medium = { model = "gpt-6.1-terra", effort = "medium" }
 heavy = { model = "gpt-6.1-sol", effort = "medium" }
 
+# A CLI HaiveQueen does not know brings its profile values itself (Claude, Codex and OpenCode have them built in). Example, kept as a comment:
+# [[providers]]
+# name = "mycli"
+# protocol = "mycli"
+# command = "mycli"
+# slots = 1
+# use = "fallback"
+# profileEnv = { MYCLI_HOME = "{home}/cfg" }   # variable(s) that point the CLI to its profile folder; {home} = <data folder>/profile/mycli
+# loginCommand = "mycli signin"                  # the full command line of the login (the Login button in the settings window runs it)
+# loginFiles = ["cfg/token.json"]                # login file(s), relative to {home}; with one of them present the provider counts as logged in
+# [providers.classes]
+# medium = { model = "my-model", effort = "medium" }
+
 [[projects]]
 name = "example"
 workspace = "D:\\work\\example"
