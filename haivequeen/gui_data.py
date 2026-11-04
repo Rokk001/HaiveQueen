@@ -5,7 +5,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import config, db, hives, overview, runstate, runtime
+from . import config, db, gui_overlays, hives, overview, runstate, runtime
 from . import platform as osplat
 from . import scheduler as sch
 
@@ -192,6 +192,13 @@ def agent_tokens(agent) -> tuple:
     return int(agent.get("tokens_in") or 0), int(agent.get("tokens_out") or 0)
 
 
+# Find the subagent entry of a Queen that belongs to an embedded Bee.
+def match_sub(queen, name):
+    """The entry {desc, ctx, tin, tout} of the Queen's subCtx whose Task description names the Bee `name`, or None."""
+    return next((v for v in ((queen or {}).get("subCtx") or {}).values()
+                 if re.search(r"\b%s\b" % re.escape(str(name)), str(v.get("desc") or ""), re.I)), None)
+
+
 # Describe one Hive for the active-hives table.
 def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None, rejected=None, waiting=None, embedded=None, plan_rejected=None) -> dict:
     """Row of one Hive: name, apiary, queen with context and tokens, Bees busy/assigned, progress (finished packages of all packages), status and runtime.
@@ -224,6 +231,10 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
         status = status_text(hive) or "Idle"
         kind = "idle" if status == "Idle" else "wait"
     qin, qout = agent_tokens(queen) if queen else (0, 0)
+    for bee in embedded or ():   # the tokens of a Bee that runs as a subagent are shown at the Bee, not again at its Queen
+        sub = match_sub(queen, bee["name"]) if queen and (bee["project"], bee["plan_path"]) == key else None
+        if sub:
+            qin, qout = max(0, qin - int(sub.get("tin") or 0)), max(0, qout - int(sub.get("tout") or 0))
     hin = sum(agent_tokens(a)[0] for a in (agents_all if agents_all is not None else agents) if (a.get("project"), a.get("plan_path")) == key)
     hout = sum(agent_tokens(a)[1] for a in (agents_all if agents_all is not None else agents) if (a.get("project"), a.get("plan_path")) == key)
     return {"name": hive_name(hive["plan_path"]), "apiary": hive["project"], "plan_path": hive["plan_path"],
@@ -304,8 +315,7 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
         queen = next((a for a in agents if a.get("phase") == "queen" and a.get("status") in runtime.ACTIVE_STATUSES
                       and (a.get("project"), a.get("plan_path")) == (bee["project"], bee["plan_path"])), None)
         # The runner of the Queen reads each subagent's context from her event stream (no extra model call); the Task description names the Bee.
-        sub = next((v for v in ((queen or {}).get("subCtx") or {}).values()
-                    if re.search(r"\b%s\b" % re.escape(str(bee["name"])), str(v.get("desc") or ""), re.I)), None)
+        sub = match_sub(queen, bee["name"])
         rows.append({"kind": "bee", "name": bee["name"], "agent": None, "project": bee["project"], "plan_path": bee["plan_path"],
                      "model": overview.model_short(bee["provider"], bee["model"], bee["effort"]), "hive": hive_name(bee["plan_path"]), "apiary": bee["project"],
                      "task": str(bee["package"]).strip(), "step": step, "step_frac": step_fraction(step),
@@ -553,9 +563,13 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         orchestrator = orchestrator_state(d["run"]["state"], loop.loop_running(), loop.stop_flag().exists())
     except Exception:   # a broken lock file must not stop the window: show the run state alone
         orchestrator = orchestrator_state(d["run"]["state"], 1, False)
+    shown = [h for h in hive_rows if not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done]
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    overlays, start_tile = gui_overlays.build(conn, d["usage"], agents_all, shown, bees, apiaries, day, [str(p.get("name")) for p in cfg.get("providers") or [] if p.get("name")])
     return {"now": now, "project": project, "run_state": d["run"]["state"], "orchestrator": orchestrator, "version": _version(),
             "tiles": {"apiaries": len(apiaries), "hives": sum(1 for h in hive_rows if h["live"] and not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done), "queens": len(queens), "bees": sum(1 for b in workers if b["status"] == "running"),
-                      "bee_capacity": max(len(workers), slots), "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today)},
+                      "bee_capacity": max(len(workers), slots), "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today), "start_ctx": start_tile},
+            "overlays": overlays,
             "hives": [h for h in hive_rows if not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done], "bees": bees, "apiaries": apiaries,
             "projects": [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")],
             "log": [log_line(e, who) for e in reversed(events)], "log_ids": [e["id"] for e in reversed(events)], "log_meta": [log_meta(e, plan_of) for e in reversed(events)], "activity": activity_rows(agents_all, now),

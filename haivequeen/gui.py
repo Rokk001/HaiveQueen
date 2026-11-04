@@ -178,6 +178,9 @@ class Dashboard:
         self.canvas.bind("<Double-Button-1>", self.on_double)
         self.canvas.bind("<Button-3>", self.on_context)
         self.canvas.bind("<B1-Motion>", self.on_motion)
+        self.canvas.bind("<Motion>", self.hover)
+        self.canvas.bind("<Leave>", self.hover_leave)
+        self.tile_boxes, self.overlay_key = [], None   # the six tiles (key, design rectangle) and the tile whose overlay is open
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
         self.canvas.bind("<MouseWheel>", self.on_wheel)
         root.bind("<Key>", self.on_key)
@@ -357,6 +360,7 @@ class Dashboard:
             self.limits_panel(s, 1045, 395, 1662, 600)
             self.status_panel(s, 1045, 610, 1662, 850)
         self.footer()
+        self.draw_overlay()
 
     # Draw the title block: the picture of the mockup plus the version line.
     def header(self, s):
@@ -367,20 +371,71 @@ class Dashboard:
         link = self.text(left, 143, "Rokk001/HaiveQueen", 17, "cyan", "w", underline=True)
         self.hit(left - 4, 130, self.canvas.bbox(link)[2] / self.scale + 4, 156, lambda _a: self.open_repo())
 
-    # Draw the five counter tiles.
+    # Draw the six tiles.
     def tiles(self, s):
-        """Draw the Apiaries, Hives, Queens, Busy Bees and Total I/O tiles."""
+        """Draw the Apiaries, Hives, Queens, Busy Bees, Total I/O and Start Context tiles and remember where they are for the overlays."""
         t = s["tiles"]
         io = "%s / %s" % (gui_data.fmt_tokens(t["tokens_in"]), gui_data.fmt_tokens(t["tokens_out"]))
-        items = (("APIARIES", str(t["apiaries"]), "active", 10, 207, "t_apiaries"), ("HIVES", str(t["hives"]), "active", 215, 407, "t_hives"),
-                 ("QUEENS", str(t["queens"]), "online", 417, 602, "t_queens"), ("BUSY BEES", "%d / %d" % (t["bees"], t["bee_capacity"]), "active", 610, 812, "t_bees"),
-                 ("TOTAL I/O", io, "in / out (today)", 821, 1035, "t_io"))
-        for title, value, sub, x0, x1, icon in items:
+        items = (("APIARIES", str(t["apiaries"]), "active", 10, 145, "t_apiaries", "apiaries"), ("HIVES", str(t["hives"]), "active", 153, 283, "t_hives", "hives"),
+                 ("QUEENS", str(t["queens"]), "online", 291, 426, "t_queens", "queens"), ("BUSY BEES", "%d / %d" % (t["bees"], t["bee_capacity"]), "active", 434, 599, "t_bees", "bees"),
+                 ("TOTAL I/O", io, "in / out (today)", 607, 822, "t_io", "io"))
+        self.tile_boxes = []
+        for title, value, sub, x0, x1, icon, key in items:
             self.rect(x0, 165, x1, 255, fill="panel", outline="edge", width=2)
-            self.pic(icon, x0 + 10, 172)
-            self.text(x0 + 82, 183, title, 17, "text", "nw")
-            self.text(x0 + 82, 208, value, min(28, (x1 - x0 - 90) / (0.62 * len(value))), "cyan", "nw")
-            self.text(x0 + 82, 236, sub, min(15, (x1 - x0 - 90) / (0.6 * len(sub))), "dim", "nw")
+            self.pic(icon, x0 + 6, 172)
+            self.text(x0 + 74, 183, title, 16, "text", "nw")
+            self.text(x0 + 74, 208, value, max(12, min(28, (x1 - x0 - 80) / (0.62 * len(value)))), "cyan", "nw")
+            self.text(x0 + 74, 236, sub, min(15, (x1 - x0 - 80) / (0.6 * len(sub))), "dim", "nw")
+            self.tile_boxes.append((key, x0, 165, x1, 255))
+        x0, x1 = 830, 1035   # the Start Context tile: the average start context of today's starts per CLI
+        self.rect(x0, 165, x1, 255, fill="panel", outline="edge", width=2)
+        self.text(x0 + 12, 172, "START CONTEXT", 16, "text", "nw")
+        rows = t["start_ctx"][:4]
+        for i, r in enumerate(rows):
+            self.text(x0 + 12, 195 + i * 15, self.fit("%s %s" % (r["provider"], gui_data.fmt_tokens(r["avg"]) if r["avg"] is not None else "–"), x1 - x0 - 20, 13), 13, "cyan", "nw")
+        if len(t["start_ctx"]) > 4:
+            self.text(x1 - 10, 172, "+%d" % (len(t["start_ctx"]) - 4), 13, "dim", "ne")
+        self.tile_boxes.append(("start", x0, 165, x1, 255))
+
+    # ---- overlays ----
+
+    # The mouse moved over the canvas.
+    def hover(self, event):
+        """Open the overlay of the tile under the pointer (the state now, no period switch) and close it when the pointer leaves the tiles."""
+        key = next((k for k, x0, y0, x1, y1 in self.tile_boxes if self.px(x0) <= event.x <= self.px(x1) and self.px(y0) <= event.y <= self.px(y1)), None)
+        if key != self.overlay_key:
+            self.overlay_key = key
+            self.canvas.delete("overlay")
+            self.draw_overlay()
+
+    # The pointer left the window.
+    def hover_leave(self, _event):
+        """Close the open overlay."""
+        if self.overlay_key:
+            self.overlay_key = None
+            self.canvas.delete("overlay")
+
+    # Draw the overlay of the hovered tile under it.
+    def draw_overlay(self):
+        """Draw the lines of the open overlay in a panel under its tile, on top of everything else; nothing without a snapshot or an open overlay."""
+        if not self.overlay_key or self.snap is None:
+            return
+        from . import gui_overlays
+        rows = gui_overlays.lines(self.snap, self.overlay_key)
+        limit = 34
+        if len(rows) > limit:
+            rows = rows[:limit - 1] + [("… %d more lines" % (len(rows) - limit + 1), "dim")]
+        size, step = 14, 19
+        width = max(self.tw(text, size) for text, _col in rows) + 28
+        box = next(b for b in self.tile_boxes if b[0] == self.overlay_key)
+        x0 = max(10, min(box[1], 1660 - width))
+        y0 = box[4] + 6
+        before = set(self.canvas.find_all())
+        self.rect(x0, y0, x0 + width, y0 + 12 + step * len(rows), fill="panel", outline="cyan", width=2)
+        for i, (text, col) in enumerate(rows):
+            self.text(x0 + 14, y0 + 8 + i * step, text, size, col, "nw")
+        for item in set(self.canvas.find_all()) - before:
+            self.canvas.addtag_withtag("overlay", item)
 
     # ---- scrolling ----
 

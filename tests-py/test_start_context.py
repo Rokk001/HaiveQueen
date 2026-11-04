@@ -53,7 +53,7 @@ class Base(unittest.TestCase):
         self.add("ODP", "ODP__sophia", PLAN, "bee", "Sophia", "running", 20, 600, 60, package="P1", provider="claude", cache=(400, 100))
         self.add("ODP", "ODP__mia", PLAN, "bee", "Mia", "done", 25, 300, 30, package="P2", provider="claude", cache=(200, 50))
         self.add("ZED", "ZED__queen", PLAN2, "queen", "Eva", "running", 40, 2000, 200, provider="codex", model="gpt-6.1-sol")
-        self.add("ZED", "ZED__old", PLAN2, "bee", "Old", "done", 60 * 30, 800, 80, package="P1", provider="codex", model="gpt-6.1-sol")   # a run of an earlier day
+        self.add("ZED", "ZED__old", PLAN2, "bee", "Old", "failed", 60 * 30, 800, 80, package="P1", provider="codex", model="gpt-6.1-sol")   # a run of an earlier day
         no_loop = mock.patch("haivequeen.loop.loop_running", return_value=0)
         no_loop.start()
         self.addCleanup(no_loop.stop)
@@ -100,8 +100,7 @@ class OverlayTest(Base):
         hv = {r["apiary"]: r for r in s["overlays"]["hives"]["rows"]}
         self.assertEqual(len(hv), s["tiles"]["hives"])
         self.assertEqual((hv["ODP"]["tin"], hv["ODP"]["tout"]), (1900, 190))
-        self.assertEqual(hv["ODP"]["per_package"], (950, 95))   # 2 runs of the Hive... all runs / done packages
-        self.assertEqual(hv["ZED"]["per_package"], (None, None) if hv["ZED"]["done"] == 0 else hv["ZED"]["per_package"])
+        self.assertEqual(hv["ODP"]["per_package"], (1900, 190))   # all runs of the Hive since its plan started / 1 done package
         self.assertEqual((hv["ZED"]["tin"], hv["ZED"]["tout"]), (2000, 200))
 
     def test_hive_without_a_done_package_shows_a_dash(self):
@@ -416,7 +415,6 @@ class HoverTest(unittest.TestCase):
         root.geometry("1672x901")
         win = gui.Dashboard(root, conn)
         root.update()
-        self.assertEqual(len(win.snap["tiles"]["start_ctx"]), len(win.snap["tiles"]["start_ctx"]))
         self.assertEqual([k for k, *_ in win.tile_boxes], ["apiaries", "hives", "queens", "bees", "io", "start"])
         for key, x0, y0, x1, y1 in win.tile_boxes:
             win.hover(type("E", (), {"x": int((x0 + x1) / 2 * win.scale), "y": int((y0 + y1) / 2 * win.scale)})())

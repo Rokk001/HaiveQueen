@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 10   # 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
+SCHEMA_VERSION = 11   # 11: start contexts and start benchmarks; 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
 BUSY_TIMEOUT_MS = 10000
 
 

@@ -196,3 +196,27 @@ CREATE TABLE IF NOT EXISTS hive_integration (
     build_jobs INTEGER,
     UNIQUE (project, plan_path)
 );
+
+-- U-7: the start context (context size of the first model turn) of every Queen, process Bee and subagent Bee; parts_json holds the approximate parts of HaiveQueen.
+CREATE TABLE IF NOT EXISTS start_contexts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project TEXT NOT NULL,
+    plan_path TEXT,
+    agent TEXT,
+    kind TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    tokens INTEGER NOT NULL,
+    parts_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_start_contexts_time ON start_contexts (started_at);
+
+-- U-8: the benchmark of the start context per provider, Apiary and mode (hq = with the HaiveQueen profile, own = the user's own configuration); a new measurement replaces the old one.
+CREATE TABLE IF NOT EXISTS start_benchmarks (
+    provider TEXT NOT NULL,
+    project TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    tokens INTEGER NOT NULL,
+    measured_at TEXT NOT NULL,
+    PRIMARY KEY (provider, project, mode)
+);

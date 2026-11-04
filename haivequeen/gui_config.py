@@ -8,6 +8,7 @@ import math
 import os
 import re
 import shutil
+import threading
 import tomllib
 from pathlib import Path
 
@@ -325,7 +326,7 @@ class ConfigWindow:
         data = self.target()
         shown = {k: v for k, v in data.items() if kind != "general" or k not in ("providers", "projects")}
         self.position = None
-        self.login_status = self.login_button = None
+        self.login_status = self.login_button = self.benchmark_button = self.benchmark_status = None
         if kind == "providers":
             from . import cli_presets
             key = cli_presets.key_for(data)
@@ -392,6 +393,11 @@ class ConfigWindow:
         self.login_status.pack(side="left")
         self.login_button = tk.Button(row, text="Login", width=12, command=self.login_click)
         self.login_button.pack(side="left", padx=12)
+        self.benchmark_button = tk.Button(row, text="Benchmark Start Context", command=self.benchmark_click)
+        self.benchmark_button.pack(side="left")
+        self.benchmark_status = tk.Label(self.form, anchor="w", justify="left", font=(self.mono, 9), wraplength=900)
+        self.benchmark_status.pack(fill="x", pady=(0, 8), anchor="w")
+        self.show_benchmark()
         self.refresh_login()
 
     # Show whether the shown provider has its login in the profile.
@@ -421,6 +427,83 @@ class ConfigWindow:
             self.dialog.error(self.win, "HaiveQueen", "The login window could not be opened (no terminal program found).", self.mono)
             return
         self.watch_login(proc)
+
+    # The stored benchmark of the shown provider.
+    def benchmark_lines(self, name) -> list:
+        """One line per Apiary with the stored benchmark of provider `name` (with the date of the measurement), or the note that there is none yet."""
+        from . import startctx
+        rows = startctx.benchmarks(self.conn, name)
+        out = []
+        for project in sorted({r["project"] for r in rows}):
+            mine = [r for r in rows if r["project"] == project]
+            out.append("%s: %s (%s)" % (project, startctx.benchmark_text(self.conn, name, project), max(r["measured_at"] for r in mine)[:10]))
+        return out or ["Start context: no benchmark yet"]
+
+    # Show the stored benchmark and an error line on the page.
+    def show_benchmark(self, notes=(), error=False):
+        """Write the stored benchmark of the shown provider and the extra lines `notes` (errors in red) into the status text under the buttons."""
+        if self.benchmark_status is None:
+            return
+        self.benchmark_status.config(text="\n".join(list(notes) + self.benchmark_lines(self.login_provider()["name"])), fg=self.col["red"] if error else self.col["dim"])
+
+    # The Benchmark Start Context button.
+    def benchmark_click(self, wait=False):
+        """After a safety question measure the start context of the shown provider in every registered Apiary, with and without the HaiveQueen profile
+        (in a thread, so the window stays usable; `wait` runs it here). The results and the errors of failed runs are shown on the page."""
+        from . import startctx, db
+        if not self.collect():
+            return
+        name = self.login_provider()["name"]
+        if not self.dialog.ask(self.win, "HaiveQueen", "Measure the start context of provider %s in every registered Apiary, twice: once with the HaiveQueen profile and once "
+                               "with your own configuration? This starts the CLI %d times and uses a few tokens of your login." % (
+                                   name, 2 * self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]), self.mono):
+            return
+        cfg = dict(self.data)
+        self.benchmark_button.config(state="disabled")
+        self.benchmark_status.config(text="measuring …", fg=self.col["dim"])
+        box = {}
+        path = next((r[2] for r in self.conn.execute("PRAGMA database_list") if r[1] == "main"), "")
+
+        def work():
+            """Measure on an own connection (SQLite connections belong to one thread)."""
+            conn = self.conn if wait else db.connect(path)
+            try:
+                box["result"] = startctx.benchmark(conn, cfg, name)
+            except Exception as exc:
+                box["result"] = {"excluded": False, "errors": [str(exc)], "results": []}
+            finally:
+                if conn is not self.conn:
+                    conn.close()
+
+        def finish():
+            """Show the result in the status text."""
+            res = box["result"]
+            try:
+                self.benchmark_button.config(state="normal")
+                if res["excluded"]:
+                    self.show_benchmark(["Provider %s is excluded (excludedProviders): nothing was measured." % name], True)
+                else:
+                    self.show_benchmark(["Error: " + e for e in res["errors"]], bool(res["errors"]))
+            except self.tk.TclError:
+                pass   # the page was closed meanwhile
+
+        def poll():
+            """Wait for the thread without blocking the window."""
+            try:
+                if not self.win.winfo_exists():
+                    return
+                if "result" in box:
+                    finish()
+                else:
+                    self.win.after(300, poll)
+            except self.tk.TclError:
+                pass
+        if wait:
+            work()
+            finish()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+            self.win.after(300, poll)
 
     # Refresh the state when the terminal window is closed.
     def watch_login(self, proc):

@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import buildjobs, config, db, interrupt, overview, profile, runtime, scheduler
+from . import buildjobs, config, db, interrupt, overview, profile, runtime, scheduler, startctx
 from . import platform as osplat
 
 TOOL_ROOT = Path(__file__).resolve().parent.parent
@@ -214,8 +214,9 @@ def codex_sessions_dir():
     return profile.sessions_dir("codex")
 
 
-def get_codex_tokens(thread_id, sessions=None):
-    """Return live token numbers {ctx, tin, tout} of a running Codex agent from its session log, or None when not available yet."""
+def get_codex_tokens(thread_id, sessions=None, first=False):
+    """Return live token numbers {ctx, tin, tout, cached} of a running Codex agent from its session log, or None when not available yet.
+    With `first` the context is that of the first model turn of the run (read from the start of the log) instead of the latest."""
     if not thread_id:
         return None
     try:
@@ -226,14 +227,18 @@ def get_codex_tokens(thread_id, sessions=None):
         with open(str(files[0]), "rb") as handle:
             handle.seek(0, os.SEEK_END)
             size = handle.tell()
-            handle.seek(max(0, size - 300 * 1024))
-            data = handle.read().decode("utf-8", errors="replace")
+            handle.seek(0 if first else max(0, size - 300 * 1024))
+            data = handle.read(300 * 1024 if first else -1).decode("utf-8", errors="replace")
         lines = [ln for ln in data.split("\n") if '"type":"token_count"' in ln and "last_token_usage" in ln]
         if not lines:
             return None
-        info = json.loads(lines[-1])["payload"]["info"]
-        return {"ctx": int(info["last_token_usage"]["input_tokens"]), "tin": int(info["total_token_usage"]["input_tokens"]),
-                "tout": int(info["total_token_usage"]["output_tokens"])}
+        info = json.loads(lines[0 if first else -1])["payload"]["info"]
+        cached = info["total_token_usage"].get("cached_input_tokens")
+        out = {"ctx": int(info["last_token_usage"]["input_tokens"]), "tin": int(info["total_token_usage"]["input_tokens"]),
+               "tout": int(info["total_token_usage"]["output_tokens"])}
+        if cached is not None:
+            out["cached"] = int(cached)
+        return out
     except Exception:
         return None
 
@@ -465,6 +470,11 @@ class AgentRun:
         self.tin, self.tout = (None, None) if protocol == "codex" else (0, 0)   # Codex reports its token totals only in the session log
         self.ctx = 0
         self.sub_ctx = {}   # latest context size of every subagent Bee of this Queen: agent id -> {desc, ctx}
+        self.task_desc = {}   # description of each Task call of the Queen by tool use id: it names the subagent Bee
+        self.sub_started = set()   # subagents whose start context is stored
+        self.start_ctx = 0   # the context of the first model turn of this run (the start context)
+        self.start_parts = {}   # approximate parts of HaiveQueen in the start context: role file, project rules files, task
+        self.cache_read, self.cache_write = (None, None) if protocol == "codex" else (0, 0)   # cached and newly cached input tokens; None = the CLI reports none
         self.context_limit = CONTEXT_LIMIT
         self.seen = set()
         self.last = ""
@@ -535,10 +545,35 @@ class AgentRun:
             cx = get_codex_tokens(self.thread, self.sessions)
             if cx:
                 self.ctx, self.tin, self.tout = cx["ctx"], cx["tin"], cx["tout"]
+                if cx.get("cached") is not None:
+                    self.cache_read = cx["cached"]
+                if not self.start_ctx:
+                    first = get_codex_tokens(self.thread, self.sessions, first=True)
+                    self.note_start(first["ctx"] if first else cx["ctx"])
         try:
             runtime.upsert_agent(self.conn, self.project, self.name, {
                 "tokensIn": self.tin, "tokensOut": self.tout, "ctxTokens": self.ctx, "lastLine": self.last,
+                **({"startCtx": self.start_ctx} if self.start_ctx else {}),
+                **({"cacheRead": self.cache_read, "cacheWrite": self.cache_write} if self.cache_read is not None else {}),
                 **({"subCtx": self.sub_ctx} if self.sub_ctx else {})})
+        except Exception:
+            pass   # a failed write must not end the run
+
+    # Remember the first model turn of this run.
+    def note_start(self, tokens, kind=None, agent=None):
+        """Store the start context (the context of the first model turn) of this run, or of a subagent Bee of it when `kind` is "subbee"; Queens and
+        Bees are stored, other phases and runs without a database (the benchmark) are not."""
+        kind = kind or self.phase
+        if not tokens:
+            return
+        if kind != "subbee":
+            if self.start_ctx:
+                return
+            self.start_ctx = int(tokens)
+        if self.conn is None or kind not in startctx.KINDS:
+            return
+        try:
+            startctx.record(self.conn, self.project, self.plan, agent or self.name, kind, self.provider, tokens, self.start_parts if kind != "subbee" else None)
         except Exception:
             pass   # a failed write must not end the run
 
@@ -609,14 +644,21 @@ class AgentRun:
                 c1 = int(u.get("input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
                 self.tin += c1
                 self.tout += int(u.get("output_tokens") or 0)
-                if e.get("parent_tool_use_id") and e.get("agent_id"):
-                    # A subagent's message: its context is the Bee's, never the Queen's.
-                    entry = self.sub_ctx.setdefault(str(e["agent_id"]), {"desc": "", "ctx": 0, "tin": 0, "tout": 0})
-                    entry.update(desc=str(e.get("task_description") or entry["desc"]), ctx=c1)
+                self.cache_read += int(u.get("cache_read_input_tokens") or 0)
+                self.cache_write += int(u.get("cache_creation_input_tokens") or 0)
+                if e.get("parent_tool_use_id"):
+                    # A subagent's message (told by its parent tool use id; the Task call names it): its context is the Bee's, never the Queen's.
+                    key = str(e.get("agent_id") or e["parent_tool_use_id"])
+                    entry = self.sub_ctx.setdefault(key, {"desc": "", "ctx": 0, "tin": 0, "tout": 0})
+                    entry.update(desc=str(e.get("task_description") or self.task_desc.get(str(e["parent_tool_use_id"])) or entry["desc"]), ctx=c1)
                     entry["tin"] += c1
                     entry["tout"] += int(u.get("output_tokens") or 0)
+                    if key not in self.sub_started:
+                        self.sub_started.add(key)
+                        self.note_start(c1, "subbee", entry["desc"])
                 else:
                     self.ctx = c1
+                    self.note_start(c1)
             for c in msg.get("content") or []:
                 if not isinstance(c, dict):
                     continue
@@ -628,6 +670,8 @@ class AgentRun:
                 elif c.get("type") == "tool_use":
                     self.last = "tool: " + str(c.get("name"))
                     inp = c.get("input") or {}
+                    if c.get("name") in ("Task", "Agent") and c.get("id") and not e.get("parent_tool_use_id"):
+                        self.task_desc[str(c["id"])] = short(str(inp.get("description") or inp.get("prompt") or ""), 200)
                     if c.get("name") in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
                         fp = str(inp.get("file_path") or inp.get("notebook_path") or "")
                         if fp and self.queue_re and re.search(self.queue_re, fp):
@@ -683,7 +727,10 @@ class AgentRun:
             c1 = int(tokens.get("input") or 0) + int(cache.get("read") or 0) + int(cache.get("write") or 0)
             self.tin += c1
             self.tout += int(tokens.get("output") or 0)
+            self.cache_read += int(cache.get("read") or 0)
+            self.cache_write += int(cache.get("write") or 0)
             self.ctx = c1   # the size of the latest context
+            self.note_start(c1)
             self.ok = not self.api_errors
         elif et == "error":
             self.ok = False
@@ -719,9 +766,14 @@ class AgentRun:
         elif et == "turn.completed" and e.get("usage"):
             self.tin = int(e["usage"].get("input_tokens") or 0)
             self.tout = int(e["usage"].get("output_tokens") or 0)
+            if e["usage"].get("cached_input_tokens") is not None:
+                self.cache_read = int(e["usage"]["cached_input_tokens"])
             cx = get_codex_tokens(self.thread, self.sessions)
             if cx:
                 self.ctx = cx["ctx"]
+            if not self.start_ctx:
+                first = get_codex_tokens(self.thread, self.sessions, first=True)
+                self.note_start(first["ctx"] if first else self.tin)
             self.ok = True
         elif et in ("turn.failed", "error"):
             self.last = "error: " + short(json.dumps(e, separators=(",", ":")))
@@ -762,6 +814,21 @@ def build_args(prov, vars_):
     def sub(arg):
         return re.sub(r"\{(\w+)\}", lambda m: str(vars_[m.group(1)]) if m.group(1) in vars_ else m.group(0), arg)
     return [sub(a) for a in prov["args"] + endpoint_args(prov)]
+
+
+# Estimate the parts of HaiveQueen in the start context of a Queen or Bee.
+def approx_start_parts(a, pcfg, cfg, workspace, protocol):
+    """{"role": n, "rules": {file: n}, "task": n} as approximate token counts (4 characters per token) of the role file, every project rules file and the task;
+    empty when a file cannot be read (the start context is stored without its split then)."""
+    try:
+        from . import roles
+        settings = scheduler.build_settings(cfg, pcfg)
+        role = roles.role_text("queen-start" if a.phase == "queen" else "bee-start", {"language": roles.language(settings)})
+        rules = profile.project_rules(pcfg, pcfg.get("codeRepo") or workspace or a.cwd, protocol, a.cwd)
+        prompt = Path(a.prompt_file).read_text(encoding="utf-8", errors="replace")
+        return startctx.approx_parts(role, rules["inline"], prompt)
+    except Exception:
+        return {}
 
 
 # Run one agent, rejecting empty Claude tool arguments before starting its CLI.
@@ -831,6 +898,8 @@ def run_agent(a, out=None):
                 rules_file.write_text(profile.rules_text(profile.project_rules(pcfg, pcfg.get("codeRepo") or workspace or a.cwd, protocol, a.cwd)), encoding="utf-8")
             else:
                 write_phase_rules(pcfg, workspace, a.phase, rules_file)
+        if a.phase in ("bee", "queen"):
+            run.start_parts = approx_start_parts(a, pcfg, cfg, workspace, protocol)
         vars_ = {"model": model, "effort": effort, "repo": pcfg.get("codeRepo") or workspace or a.cwd, "workspace": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
                  "claudeTools": pcfg.get("claudeTools", cfg.get("claudeTools", "")), "rules": str(rules_file)}
         if protocol == "claude" and not str(vars_["claudeTools"] or "").strip():
@@ -964,6 +1033,7 @@ def run_agent(a, out=None):
     err_text = err_file.read_text(encoding="utf-8", errors="replace") if err_file.is_file() else ""
     kind = interrupt.classify_end(status == "failed", run.api_errors, err_text, bool(clock_jumps), run.last)
     run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx, "subCtx": run.sub_ctx,
+                         **({"startCtx": run.start_ctx} if run.start_ctx else {}), **({"cacheRead": run.cache_read, "cacheWrite": run.cache_write} if run.cache_read is not None else {}),
                          "interrupted": kind, "retryAt": ""})
     if run.final and (a.phase == "queen" or short(run.final, 1500) != short(run.last_said, 1500)):
         run.say("Final message: " + run.final, "Green" if status == "done" else "Red")
