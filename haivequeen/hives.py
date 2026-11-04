@@ -596,6 +596,42 @@ def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen
         conn.execute("UPDATE hives SET state='requeen',requested_provider=?,reset_at=NULL WHERE project=? AND plan_path=?", (provider, project, plan))
 
 
+STEP_WORD = re.compile(r"(?i)\b(?:step|schritt)\s*(\d+)\s*(?:/|of|von)\s*(\d+)")   # "step 2/5", "Step 2 of 5", "Schritt 2/5"
+
+
+# Find the latest step report of each package of a Hive.
+def package_steps(conn, project, plan, packages, active, notes):
+    """{package: {'step': 'n/m', 'task': text}} from the newest note per package that names a package of the plan and a step number "n/m".
+
+    The wording around them is free ("Mia P1: step 2/4 text", "P1 step 2 of 4"). Only notes of the Hive count: a note written by one of its agents (Queen or Bee, also an ended one)
+    or by a Bee or subagent that belonged to it, named at the start of the text. The newest report of a package stays when its Bee is replaced, until the new Bee reports a step."""
+    own = [a for a in runtime.list_agents(conn, project, 'all') if a.get('plan_path') == plan] + list(active)
+    mine = {str(a['name']) for a in own}
+    people = {str(a['person']) for a in own if a.get('person')}
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedded_bees'").fetchone():
+        people |= {r[0] for r in conn.execute("SELECT name FROM embedded_bees WHERE project=? AND plan_path=?", (project, plan))}
+    found = {}
+    for note in notes:
+        if note['project'] != project:
+            continue
+        text = note['text'] or ''
+        step = STEP_WORD.search(text)
+        n, m = int(step.group(1)), int(step.group(2))
+        if m <= 0 or n > m:
+            continue
+        first = re.split(r"[\s:,;()\[\]-]+", text.strip(), 1)[0]
+        if note['agent'] not in mine and first not in people:
+            continue
+        before = text[:step.start()] or text
+        hits = [(h.start(), p) for p in packages for h in re.finditer(r"(?<![\w-])%s(?![\w-])" % re.escape(p), before, re.I)]
+        if not hits:
+            hits = [(h.start(), p) for p in packages for h in re.finditer(r"(?<![\w-])%s(?![\w-])" % re.escape(p), text, re.I)]
+        if hits:
+            package = max(hits)[1]   # the package named last before the step number
+            found[package] = {'step': '%d/%d' % (n, m), 'task': text[step.end():].strip()}
+    return found
+
+
 # Collect Hives, their Queen and the latest reported step of each Bee (shown in the Hive table of the graphical dashboard).
 def hive_data(conn, project, agents, plan=None):
     """Collect Hives, active Queens and Bee progress from their reports; `project` and `plan` narrow the Hives (None = all)."""
@@ -608,6 +644,7 @@ def hive_data(conn, project, agents, plan=None):
         args.append(plan)
     rows = db.rows(conn, "SELECT * FROM hives WHERE " + " AND ".join(where) + " ORDER BY project,plan_path", args)
     notes = db.rows(conn, "SELECT project,agent,text FROM events WHERE kind='note' ORDER BY id") if rows else []
+    step_notes = [n for n in notes if STEP_WORD.search(n['text'] or '')]
     for hive in rows:
         active = [a for a in agents if a.get('project') == hive['project'] and a.get('plan_path') == hive['plan_path']]
         queens_of = [a for a in active if a.get('phase') == 'queen']
@@ -629,6 +666,7 @@ def hive_data(conn, project, agents, plan=None):
                 else:
                     bees[name] = {'name': name, 'task': task or package, 'step': step}
         hive['bees'] = list(bees.values())
+        hive['package_steps'] = package_steps(conn, hive['project'], hive['plan_path'], packages, active, step_notes)
         hive['blocker'] = runtime.kv_get(conn, hive['project'], 'hive-blocker:' + hive['plan_path'])
         hive['pending_questions'] = [q['id'] for q in runtime.list_questions(conn, hive['project'], plan=hive['plan_path']) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
     return rows

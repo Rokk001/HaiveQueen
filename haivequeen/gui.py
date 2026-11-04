@@ -162,6 +162,7 @@ class Dashboard:
         from tkinter import font as tkfont
         self.root, self.conn, self.project = root, conn, project
         self.snap, self.scale, self.hits, self.images, self.resize_job = None, 1.0, [], {}, None
+        self.fonts = {}   # measuring fonts by pixel size
         self.mono = next((f for f in FONTS if f in tkfont.families(root)), "TkFixedFont")
         from . import gui_dialog
         gui_dialog.apply_style(root, self.mono)   # the questions and settings windows get the dashboard look
@@ -269,18 +270,21 @@ class Dashboard:
         self.pic(icon, x0 + 12, y0 + 10)
         size = max(13, min(20, (x1 - x0 - 70) / (0.62 * len(title))))   # long titles shrink to fit narrow panels
         self.text(x0 + 52, y0 + 26, title, size, "gold", "w")
+        widths = [(self.tw(label, 15), self.tw("[%s]" % key, 15)) for key, label in keys]   # measured with the real font, so the room of the subtitle is not underestimated
+        hints = sum(lw + 5 + kw + 10 for lw, kw in widths)   # width the right-aligned hints take
         if sub:
-            sx = x0 + 52 + 0.62 * size * len(title) + 14
-            hints = sum(9 * len(label) + 8 + 9 * (len(key) + 2) + 22 for key, label in keys)   # width the right-aligned hints take
+            sx = x0 + 52 + self.tw(title, size) + 14
             room = (x1 - 16 - hints) - sx - 12
             if room > 60:
-                self.text(sx, y0 + 26, self.fit("| " + sub, room, 15), 15, "dim", "w")
+                options = [sub] if isinstance(sub, str) else list(sub)   # several wordings, the longest first: the first that fits whole is drawn, else the last one is shortened
+                text = next((o for o in options if self.tw("| " + o, 15) <= room), options[-1])
+                self.text(sx, y0 + 26, self.fit("| " + text, room, 15), 15, "dim", "w")
         x = x1 - 16
-        for key, label in reversed(keys):
+        for (key, label), (lw, kw) in zip(reversed(keys), reversed(widths)):
             self.text(x, y0 + 26, label, 15, "dim", "e")
-            x -= 9 * len(label) + 8
+            x -= lw + 5
             self.text(x, y0 + 26, "[%s]" % key, 15, "cyan", "e")
-            x -= 9 * (len(key) + 2) + 22
+            x -= kw + 10
 
     # Draw a horizontal bar with a dark track and filled segments.
     def bar(self, x, y, w, h, frac, fill="seg", segments=0):
@@ -303,9 +307,25 @@ class Dashboard:
 
     # Cut a text to the characters that fit a design width.
     def fit(self, s, width, size):
-        """`s` cut with an ellipsis so that it fits `width` design pixels at font size `size`."""
-        room = max(4, int(width / (0.6 * size)))
-        return s if len(s) <= room else s[:room - 1] + "…"
+        """`s` cut with an ellipsis so that it fits `width` design pixels at font size `size` (measured with the real font)."""
+        s = str(s)
+        if self.tw(s, size) <= width:
+            return s
+        while s and self.tw(s + "…", size) > width:
+            s = s[:-1]
+        return s.rstrip() + "…" if s else "…"
+
+    # Width of a text in design pixels.
+    def tw(self, s, size):
+        """Design width of `s` drawn at font size `size`, measured with the dashboard font (an estimate before the font exists)."""
+        px = -max(8, round(self.px(size)))
+        if self.fonts.get(px) is None:
+            try:
+                from tkinter import font as tkfont
+                self.fonts[px] = tkfont.Font(root=self.root, family=self.mono, size=px)
+            except Exception:   # no display: estimate
+                return 0.6 * size * len(str(s))
+        return self.fonts[px].measure(str(s)) / max(self.scale, 0.01)
 
     # ---- sections ----
 
@@ -403,9 +423,12 @@ class Dashboard:
     def hive_table(self, s, x0, y0, x1, y1):
         """Draw the Hive table: Queen name, Bees, progress (finished packages), status and runtime; details of the selected row below. All other Queen data is in the Bees table."""
         rows = s["hives"]
-        sub = "%d hives across %d apiaries" % (len(rows), s["tiles"]["apiaries"]) + ("  (%s)" % s["project"] if s["project"] else "")
+        sub = "%d hives across %d apiaries" % (len(rows), s["tiles"]["apiaries"])
+        short = "%d hives, %d apiaries" % (len(rows), s["tiles"]["apiaries"])
         state = s["run_state"]
-        self.panel(x0, y0, x1, y1, "ACTIVE HIVES", sub if state == "RUNNING" else state + "  " + sub, (("Enter", "live"), ("P", "pause/resume"), ("Space", "plan"), ("F", "apiary"), ("Tab", "table")))
+        prefix = "" if state == "RUNNING" else state + "  "
+        wordings = ([prefix + sub + "  (%s)" % s["project"]] if s["project"] else []) + [prefix + sub, prefix + short]   # the project name goes first, then the words, when the room is short
+        self.panel(x0, y0, x1, y1, "ACTIVE HIVES", wordings, (("Enter", "live"), ("P", "pause/resume"), ("Space", "plan"), ("F", "apiary"), ("Tab", "table")))
         for name, x in (("#", 24), ("HIVE", 90), ("APIARY", 218), ("QUEEN", 312), ("BEES", 386), ("PROGRESS", 436), ("STATUS", 576)):
             self.text(x0 + x, y0 + 56, name, 13, "dim", "w")
         self.text(x1 - 26, y0 + 56, "RUNTIME", 13, "dim", "e")
@@ -423,9 +446,9 @@ class Dashboard:
             colour = STATUS_COL[r["kind"]]
             self.text(x0 + 24, y, str(i + 1), 15, "dim", "w")
             self.pic("row_icon" if chosen else "row_icon_dim", x0 + 58, y, "w")
-            self.text(x0 + 90, y, r["name"][:15], 14, "gold" if chosen else "text", "w")
-            self.text(x0 + 218, y, r["apiary"][:10], 14, "cyan", "w")
-            self.text(x0 + 312, y, r["queen"][:9], 14, "text", "w")
+            self.text(x0 + 90, y, self.fit(r["name"], 120, 14), 14, "gold" if chosen else "text", "w")
+            self.text(x0 + 218, y, self.fit(r["apiary"], 86, 14), 14, "cyan", "w")
+            self.text(x0 + 312, y, self.fit(r["queen"], 68, 14), 14, "text", "w")
             self.text(x0 + 386, y, "%d/%d" % (r["bees_running"], r["bees_total"]), 14, "text", "w")
             self.bar(x0 + 436, y - 7, 70, 14, r["progress"] / 100, "seg", 7)
             self.text(x0 + 513, y, "%d/%d" % (r["done"], r["total"]), 13, "text", "w")
@@ -451,7 +474,7 @@ class Dashboard:
         parents = {(b["apiary"], b["plan_path"]) for b in rows if b["kind"] == "queen"}   # Hives whose Bees are drawn below their Queen
         hives = {b["hive"] for b in rows}
         self.panel(x0, y0, x1, y1, "QUEENS AND BEES", "%d running, %d waiting across %d hive%s" % (running, len(workers) - running, len(hives), "" if len(hives) == 1 else "s"), (("Enter", "live"), ("X", "stop"), ("M", "queen")))
-        for name, x in (("#", 24), ("BEE", 80), ("MODEL", 170), ("HIVE", 300), ("TASK", 410), ("CONTEXT", 545), ("TOKENS", 655), ("STATUS", 765), ("RUNTIME", 900)):
+        for name, x in (("#", 24), ("BEE", 80), ("MODEL", 170), ("HIVE", 300), ("TASK", 410), ("CONTEXT", 580), ("TOKENS", 690), ("STATUS", 790), ("RUNTIME", 920)):
             self.text(x0 + x, y0 + 56, name, 13, "dim", "w")
         self.pick_clamp("bees", len(rows))
         room = 5
@@ -467,26 +490,28 @@ class Dashboard:
             colour = "green" if r["status"] == "running" else "amber"
             self.text(x0 + 24, y, str(i + 1), 14, "dim", "w")
             self.pic("row_icon" if chosen else "row_icon_dim", x0 + 50, y, "w")
+            # Every cell is shortened with an ellipsis inside its own column (the width up to the next column minus a gap), so columns never overlap.
             if r["kind"] == "queen":
-                self.text(x0 + 80, y, r["name"][:11], 14, "gold", "w")
+                self.text(x0 + 80, y, self.fit(r["name"], 84, 14), 14, "gold", "w")
             elif (r["apiary"], r["plan_path"]) in parents:
                 self.text(x0 + 80, y, "└", 14, "dim", "w")
-                self.text(x0 + 94, y, r["name"][:9], 14, "gold" if chosen else "text", "w")
+                tree = self.tw("└", 14) + 8
+                self.text(x0 + 80 + tree, y, self.fit(r["name"], 84 - tree, 14), 14, "gold" if chosen else "text", "w")
             else:
-                self.text(x0 + 80, y, r["name"][:11], 14, "gold" if chosen else "text", "w")
-            self.text(x0 + 170, y, r["model"][:16], 14, "text", "w")
-            self.text(x0 + 300, y, r["hive"][:14], 14, "text", "w")
-            if r.get("step"):   # a Bee that reported "step n/m": its task name, a progress bar and the step
-                self.text(x0 + 410, y, r["task"][:8], 14, "text", "w")
-                self.bar(x0 + 476, y - 5, 36, 10, r["step_frac"], "seg", 5)
-                self.text(x0 + 516, y, r["step"], 12, "cyan", "w")
+                self.text(x0 + 80, y, self.fit(r["name"], 84, 14), 14, "gold" if chosen else "text", "w")
+            self.text(x0 + 170, y, self.fit(r["model"], 122, 14), 14, "text", "w")
+            self.text(x0 + 300, y, self.fit(r["hive"], 102, 14), 14, "text", "w")
+            if r.get("step"):   # a running Bee: its task name, a progress bar and the finished steps n/m
+                self.text(x0 + 410, y, self.fit(r["task"], 72, 14), 14, "text", "w")
+                self.bar(x0 + 486, y - 5, 36, 10, r["step_frac"], "seg", 5)
+                self.text(x0 + 526, y, self.fit(r["step"], 46, 12), 12, "cyan", "w")
             else:
-                self.text(x0 + 410, y, r["task"][:15], 14, "gold" if r["kind"] == "queen" else "text", "w")
-            self.context_bar(x0 + 545, y, r["ctx"], r["ctx_limit"])
-            self.text(x0 + 655, y, "%s/%s" % (gui_data.fmt_tokens(r["tin"]), gui_data.fmt_tokens(r["tout"])), 13, "cyan", "w")
-            self.dot(x0 + 772, y, colour)
-            self.text(x0 + 784, y, r["status"], 14, colour, "w")
-            self.text(x0 + 900, y, r["runtime"], 14, "text", "w")
+                self.text(x0 + 410, y, self.fit(r["task"], 160, 14), 14, "gold" if r["kind"] == "queen" else "text", "w")
+            self.context_bar(x0 + 580, y, r["ctx"], r["ctx_limit"])
+            self.text(x0 + 690, y, self.fit("%s/%s" % (gui_data.fmt_tokens(r["tin"]), gui_data.fmt_tokens(r["tout"])), 92, 13), 13, "cyan", "w")
+            self.dot(x0 + 797, y, colour)
+            self.text(x0 + 809, y, self.fit(r["status"], 100, 14), 14, colour, "w")
+            self.text(x0 + 920, y, self.fit(r["runtime"], 90, 14), 14, "text", "w")
         if not rows:
             self.text(x0 + 24, y0 + 90, "no queens or bees", 15, "dim", "w")
 

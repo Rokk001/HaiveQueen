@@ -61,6 +61,14 @@ def ensure_attempts(conn):
     if 'reason' not in [r[1] for r in conn.execute('PRAGMA table_info(package_progress)')]:
         conn.execute("ALTER TABLE package_progress ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE TABLE IF NOT EXISTS embedded_bees (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, name TEXT NOT NULL, class TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', effort TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, ended_at TEXT, outcome TEXT NOT NULL DEFAULT '')")
+    conn.execute('CREATE TABLE IF NOT EXISTS bee_step_counts (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, steps INTEGER NOT NULL, PRIMARY KEY(project,plan_path,package))')
+
+
+# Remember how many numbered steps the Bee of a package got.
+def record_step_count(conn, project, plan, package, steps):
+    """Store the number of steps of the newest Bee of the package: the window shows 0/steps from its start, until it reports a step."""
+    ensure_attempts(conn)
+    conn.execute('INSERT INTO bee_step_counts(project,plan_path,package,steps) VALUES (?,?,?,?) ON CONFLICT(project,plan_path,package) DO UPDATE SET steps=excluded.steps', (project, plan, package, int(steps)))
 
 
 # Remember a Bee that runs as an embedded subagent of the Queen.
@@ -408,7 +416,10 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
                 cwd = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()[0]
             entry = (pick.get('classes') or {}).get(selected_class) or {}
             record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''))
-            return {'kind': 'subagent', 'provider': provider, 'class': selected_class, 'cwd': cwd}
+            record_step_count(env.conn, env.name, plan, package, len(steps))
+            # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
+            prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules)
+            return {'kind': 'subagent', 'provider': provider, 'class': selected_class, 'cwd': cwd, 'prompt': prompt}
         if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
             return refuse(env, package, 'a Bee process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
         path = Path(cwd or '')
@@ -421,6 +432,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         if not loop._do_start(ctx, action, forced_pick=pick):
             return refuse(env, package, 'the agent runner could not start the Bee process')
         env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
+        record_step_count(env.conn, env.name, plan, package, len(steps))
         return {'kind': 'process', 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute())}
 
 

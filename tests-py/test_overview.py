@@ -244,6 +244,32 @@ class MixedTimeTest(unittest.TestCase):
         self.assertEqual([r["Label"] for r in rows], ["Sonnet 5.5"])
         self.assertEqual(rows[0]["Plans"], (130, 8))
 
+    def test_usage_bare_family_name_joins_its_model_and_empty_rows_are_left_out(self):
+        """A row that names only the family ("Sonnet") adds its numbers to the one model of that family; a model whose today, plans and total are all 0 gets no row."""
+        tmp = tempfile.TemporaryDirectory()
+        conn = db.connect(Path(tmp.name) / "o.db")
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(conn.close)
+        db.upsert_project(conn, "alpha", None, "cyan", 1)
+        runtime.usage_add(conn, kind="brain", project="alpha", model="claude-sonnet-5-5", tokens_in=10, tokens_out=1, ts="2026-10-28T12:00:00")
+        runtime.usage_add(conn, kind="brain", project="alpha", model="Sonnet", tokens_in=5, tokens_out=2, ts="2026-10-28T12:01:00")
+        runtime.usage_add(conn, kind="brain", project="alpha", model="Opus", tokens_in=None, tokens_out=None, ts="2026-10-28T12:02:00")   # no such model with numbers: all 0
+        runtime.usage_add(conn, kind="brain", project="alpha", model="gpt-6.1-sol", tokens_in=0, tokens_out=0, ts="2026-10-28T12:03:00")
+        rows = overview.usage_models(conn, [], datetime(2026, 10, 28, 0, 0, 0))
+        self.assertEqual([r["Label"] for r in rows], ["Sonnet 5.5"])
+        self.assertEqual((rows[0]["Today"], rows[0]["Plans"], rows[0]["Total"]), ((15, 3), (15, 3), (15, 3)))
+
+    def test_usage_bare_family_name_alone_with_numbers_stays(self):
+        """A bare family name without any full model of that family keeps its row when it has numbers."""
+        tmp = tempfile.TemporaryDirectory()
+        conn = db.connect(Path(tmp.name) / "o.db")
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(conn.close)
+        db.upsert_project(conn, "alpha", None, "cyan", 1)
+        runtime.usage_add(conn, kind="brain", project="alpha", model="Opus", tokens_in=7, tokens_out=1, ts="2026-10-28T12:02:00")
+        rows = overview.usage_models(conn, [], datetime(2026, 10, 28, 0, 0, 0))
+        self.assertEqual([r["Label"] for r in rows], ["Opus"])
+
 
 class RoundErrorTest(OverviewTest):
     """A failed round is collected for the dashboard (the Beekeeper has no window of its own)."""

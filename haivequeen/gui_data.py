@@ -232,6 +232,7 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
             "queen_ctx": int((queen or {}).get("ctxTokens") or 0) if live else 0, "queen_ctx_limit": int(ctx_limit(queen)) if live and ctx_limit else 0,
             "queen_tin": qin, "queen_tout": qout, "hive_tin": hin, "hive_tout": hout,
             "steps": {b["name"]: b["step"] for b in hive.get("bees", []) if b.get("step")},
+            "package_steps": {p: r["step"] for p, r in (hive.get("package_steps") or {}).items()},
             "bees_running": len(running_pkgs), "bees_total": len(open_pkgs) if live else len(running_pkgs), "live": live, "paused": is_paused, "plan_rejected": is_rejected, "done": len(done), "implemented": (implemented or {}).get(key, 0), "rejected": len(rejected_pkgs), "waiting": len(waiting_pkgs), "waiting_reasons": ", ".join("%s %s" % (p, why) for p, why in waiting_pkgs), "total": total_pkg, "progress": progress,
             "status": status, "kind": kind, "runtime": fmt_elapsed(queen.get("started_at"), now) if live else ""}
 
@@ -246,11 +247,19 @@ def step_fraction(step) -> float:
         return 0.0
 
 
+# Read how many steps the newest Bee of each package got.
+def step_counts(conn) -> dict:
+    """{(project, plan, package): "0/m"} for the packages whose Bee was started with m numbered steps; empty when the table does not exist yet."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bee_step_counts'").fetchone():
+        return {}
+    return {(r[0], r[1], r[2]): "0/%d" % r[3] for r in conn.execute("SELECT project,plan_path,package,steps FROM bee_step_counts") if r[3] > 0}
+
+
 # Describe one running Bee as a row of the Bees table.
-def bee_row(agent, now, steps=None, ctx_limit=None) -> dict:
+def bee_row(agent, now, steps=None, ctx_limit=None, package_steps=None) -> dict:
     """Row of one running Bee: kind "bee", person name, model label, hive, apiary, plan path, task (with its reported step like 2/5), context, tokens, status and runtime."""
     name = str(agent.get("person") or agent.get("name"))
-    step = (steps or {}).get(name, "")
+    step = (package_steps or {}).get((agent.get("project"), agent.get("plan_path") or "", agent.get("package"))) or (steps or {}).get(name, "")
     tin, tout = agent_tokens(agent)
     return {"kind": "bee", "name": name, "agent": agent.get("name"), "project": agent.get("project"), "plan_path": agent.get("plan_path") or "",
             "model": overview.model_short(agent.get("provider"), agent.get("model"), agent.get("effort")),
@@ -278,7 +287,7 @@ def embedded_rows(conn) -> list:
 
 
 # Collect the Bees of the active Hives: running Bee processes and packages that have a Bee assigned but no process yet.
-def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None, hive_rows=None, embedded=None) -> list:
+def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None, hive_rows=None, embedded=None, package_steps=None) -> list:
     """Rows for the Bees table. A package with a Bee assignment but no running process shows as 'waiting'; finished packages are left out.
 
     `hive_keys` limits the waiting rows to the (project, plan) pairs whose Queen is running: only a running Queen starts Bees, so the assignments of any other Hive are not waiting Bees.
@@ -286,12 +295,12 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
     rows, seen = [], set()
     for agent in agents:
         if agent.get("phase") == "bee" and agent.get("status") in runtime.ACTIVE_STATUSES:
-            rows.append(bee_row(agent, now, steps, ctx_limit))
+            rows.append(bee_row(agent, now, steps, ctx_limit, package_steps))
             seen.add((agent.get("project"), agent.get("plan_path"), agent.get("package")))
     for bee in embedded or ():   # a Bee that runs as a subagent of its Queen has no agent row: it shows up under her like any other Bee
         if hive_keys is not None and (bee["project"], bee["plan_path"]) not in hive_keys:
             continue
-        step = (steps or {}).get(bee["name"], "")
+        step = (package_steps or {}).get((bee["project"], bee["plan_path"], bee["package"])) or (steps or {}).get(bee["name"], "")
         queen = next((a for a in agents if a.get("phase") == "queen" and a.get("status") in runtime.ACTIVE_STATUSES
                       and (a.get("project"), a.get("plan_path")) == (bee["project"], bee["plan_path"])), None)
         # The runner of the Queen reads each subagent's context from her event stream (no extra model call); the Task description names the Bee.
@@ -525,7 +534,9 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     live = [a for a in agents if a.get("status") in runtime.ACTIVE_STATUSES]
     queens = [a for a in live if a.get("phase") == "queen"]
     steps = {k: v for h in hive_rows for k, v in h["steps"].items()}
-    bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]}, hive_rows, embedded)
+    package_steps = step_counts(conn)   # a running Bee starts at 0/m of the steps it was given ...
+    package_steps.update({(h["apiary"], h["plan_path"], p): step for h in hive_rows for p, step in h["package_steps"].items()})   # ... and shows the newest step report of its package
+    bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]}, hive_rows, embedded, package_steps)
     workers = [b for b in bees if b["kind"] == "bee"]
     apiaries = sorted({h["apiary"] for h in hive_rows})
     slots = sum(int(p["total_slots"] or 0) for p in d["provider_limits"])

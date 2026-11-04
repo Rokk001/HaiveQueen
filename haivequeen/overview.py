@@ -202,10 +202,22 @@ def usage_models(conn, agents_all, today) -> list:
     for a in agents_all:
         if a.get("model") and a.get("tokens_in") is not None and a.get("tokens_out") is not None:
             add(cell(a["model"])["orch"], _parse_time(a.get("started_at")), a["tokens_in"], a["tokens_out"])
+    # A row that names only the family ("Sonnet") is a second key of the one model of that family: its numbers join that model.
+    for key in [k for k in models if re.fullmatch(r"(?i)sonnet|opus|haiku", str(k))]:
+        full = [k for k in models if str(k).lower().startswith("claude-%s-" % key.lower())]
+        if len(full) == 1:
+            alias = models.pop(key)
+            for part in ("logs", "orch"):
+                src, dst = alias[part], models[full[0]][part]
+                dst[:4] = [d + v for d, v in zip(dst[:4], src[:4])]
+                dst[4] = dst[4] or src[4]
+                dst[5] = min([t for t in (dst[5], src[5]) if t is not None], default=None)
     out = []
     for m in models.values():
         use = m["logs"] if m["logs"][4] else m["orch"]
         orch = m["orch"]
+        if not any((use[0], use[1], use[2], use[3], orch[0], orch[1])):
+            continue   # today, plans and total are all 0 (or without data): no row
         out.append({"Label": m["Label"], "Since": use[5],
                     "Today": (use[2], use[3]) if use[4] else None,
                     "Plans": (orch[0], orch[1]) if orch[4] else None,
