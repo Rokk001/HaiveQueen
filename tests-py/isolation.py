@@ -14,8 +14,16 @@ LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-updat
 
 
 def is_live(rel: Path) -> bool:
-    """True when the file (path relative to a data folder) is written by a running loop: a top-level live file or anything below logs/<project>."""
-    return rel.parts[0].startswith(LIVE_TOP) or (rel.parts[0] == "logs" and len(rel.parts) > 2)
+    """True when the file (path relative to a data folder) is written by a running loop: a top-level live file, anything below logs/<project>,
+    or a file a CLI writes at run time below profile/<cli> (session logs, caches, state). The settings files HaiveQueen writes into the profile
+    itself (profile.SPECS) and anything directly in profile/ are not live, so a test that writes them is still found."""
+    if rel.parts[0].startswith(LIVE_TOP) or (rel.parts[0] == "logs" and len(rel.parts) > 2):
+        return True
+    if rel.parts[0] == "profile" and len(rel.parts) > 2:
+        from haivequeen import profile
+        own = {name for spec in profile.SPECS.values() for name in spec["settings"]}
+        return not (len(rel.parts) == 3 and rel.parts[2] in own)
+    return False
 
 
 def snapshot_real(bases=None) -> dict:
