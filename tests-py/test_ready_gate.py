@@ -103,7 +103,7 @@ class ListTests(unittest.TestCase):
         text = roles.role_text("ready-check")
         self.assertIn("READY-CHECK: PASSED", text)
         self.assertIn("READY-CHECK: FAILED", text)
-        self.assertNotIn("c:\users", text.lower())
+        self.assertNotIn("users\\", text.lower())
 
 
 class GateTests(RoundCase):
