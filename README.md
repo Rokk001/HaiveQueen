@@ -21,10 +21,27 @@ HaiveQueen is a local orchestrator for coding agents ([Claude Code](https://clau
 
 ## Why
 
-- **Token economy is the first quality goal.** A Bee gets only its package, numbered steps, the paths it needs and the rules it needs, never the whole project instructions. Fresh, small contexts replace one huge one.
-- **The manager is not a model.** The Beekeeper is a plain program loop. Models are used only for plan work, so the orchestration itself costs no tokens.
-- **Every limit is respected.** Providers are chosen by the free weekly limit; a Hive rests until the reset when its provider is limited.
-- **It survives restarts.** State lives in one local SQLite database; after a crash the next start re-attaches to agents that are still alive.
+**1. It runs in its own profile, so your private instructions never reach its agents.** HaiveQueen is a development environment of its own. Every agent it starts (Claude, Codex, OpenCode) works with one profile folder in HaiveQueen's data folder, never with your private files: your global `CLAUDE.md` or `AGENTS.md`, your memory, your settings and plugins stay beside it, untouched, and are not loaded. Each CLI is started with its config-dir variable pointing at the profile, which holds only the login and a few settings (auto memory and history off). Whatever you have piled into your own agents over time costs HaiveQueen's agents nothing. That is **very token-saving**, and you **run into provider limits much later**. Details: [`docs/PROFILE.md`](docs/PROFILE.md).
+
+**2. Only the project rules, and only from the repository.** Queens and Bees load the complete project rules: the instruction files (`AGENTS.md`, `CLAUDE.md`) checked in to the project repository, plus those of an upstream repository when the project setting `upstreamRepo` names one. The README and untracked workspace files never count. A Queen additionally loads her plan, its state file, the handoff of her predecessor and the decisions and owner answers of her Apiary; nothing else. The Queen selects no rules for a Bee.
+
+**3. Hives, one Queen and parallel Bees per plan.** Every plan gets a Hive. The Queen coordinates and never works a package herself; independent packages go to Bees of the right class, in parallel, and the Queen merges and integrates. Fresh, small contexts replace one huge one, and a context handoff lets a successor continue.
+
+**4. A plan is not done because an agent says so.** Before integration the Queen lists every requirement of the plan with evidence in the state file under `## Completeness`. `bzz ready` is refused for a missing, open or partial requirement, and then an independent **check agent** (fresh, not part of the plan, read-only) compares the plan as submitted with the list and the branch. Only `READY-CHECK: PASSED` accepts the branch.
+
+**5. A plan cutter with requirements and dependencies.** Hand over free text (`status = "SUBMITTED"`). The Queen first writes every requirement as `- <id>: <text>` into the state file, then cuts the plan into small packages with class, `depends_on` and the requirements each covers. `bzz plan check` refuses a cut in which a requirement belongs to no package.
+
+**6. Role files you can read and change without code.** What the Queen, a Bee, the plan cutter and the check agent are told lives in plain Markdown files in [`roles/`](roles).
+
+**7. Written for you, in your language.** The setting `language` (default English) decides the language of every free text agents write to you: questions, notes, final reports and state file entries. Protocol words stay fixed.
+
+**8. Answer once for the whole Apiary.** When you answer a question, a box applies the answer to the whole Apiary: it is stored as a decision for every plan of that Apiary (never another one) and the same question is not asked again. Queens read the decisions first and close a question that a decision already settles.
+
+**9. Control from one window.** The `hives` button lists the plans of all Apiaries with their status, including plans that never had a Hive, and starts, pauses, rejects or puts a plan back to draft on a right click. The Queen menu restarts a Queen, also on another provider.
+
+**10. Integration to your integration branch.** The Queen merges the project's integration branch (setting `integrationBranch`, default `main`) into her branch, runs the project check and integrates one Hive at a time per project. After deploy you accept with an owner check, or the next Queen fixes exactly what you reject.
+
+Also: the manager is not a model (the Beekeeper is a plain program loop that costs no tokens), providers are chosen by the free weekly limit and a Hive rests until the reset, and state lives in one local SQLite database, so after a crash the next start re-attaches to agents that are still alive.
 
 ## Words
 
@@ -177,6 +194,7 @@ Every list that does not fit has a scroll bar (or use the mouse wheel).
 | state button (bottom left) | shows RUNNING, PAUSED, STOPPING or STOPPED and opens a menu with the actions that fit: pause or resume, stop, start |
 | `apiaries` | filter by Apiary (key `F`) |
 | `questions` | answer the open owner questions (key `Q`); for an owner check, tick the steps you do not accept: they become rejected and the Queen reworks exactly those; inbox files still work |
+| `hives` | list of all plans of all Apiaries with status; right click: start, pause, reject, back to draft |
 | `config` | settings editor, see below |
 | `help` | the keys |
 | `Tab` | switch between the Hives table and the Queens-and-Bees table; `Up`/`Down` move the selection in the active table |
@@ -196,7 +214,7 @@ A click on the repository name in the header opens the GitHub page. Pause, resum
 
 ## Configuration
 
-Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedProviders`, provider `slots`, provider `classes` and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. Per provider, `beeMode` chooses how the Bees of that provider's Queen run: `subagent` (embedded, small context, no extra slot; default for Claude) or `process` (a separate agent each; default for Codex); it can also be changed in the settings window. `escalateAfter` defaults to 3. `contextLimitTokens` defaults to 300000: set it once for all Apiaries; a project may override it, and a model entry under `[providers.classes]` may carry its own value that wins for Queens and Bees running with that model. Project settings override machine settings except the machine-wide ones. See [`examples/config.example.toml`](examples/config.example.toml) and [`examples/project.example.toml`](examples/project.example.toml).
+Machine `config.toml` holds `hives` (default 2), `preferredProvider`, `excludedProviders`, provider `slots`, provider `classes` and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. Per provider, `beeMode` chooses how the Bees of that provider's Queen run: `subagent` (embedded, small context, no extra slot; default for Claude) or `process` (a separate agent each; default for Codex); it can also be changed in the settings window. `escalateAfter` defaults to 3. `contextLimitTokens` defaults to 300000: set it once for all Apiaries; a project may override it, and a model entry under `[providers.classes]` may carry its own value that wins for Queens and Bees running with that model. Project settings override machine settings except the machine-wide ones. Per project (`.haivequeen/project.toml`): `integrationBranch` (default `main`), `language` (default English; the language of all free text written to you), `upstreamRepo` (folder of an upstream repository whose checked-in `AGENTS.md` and `CLAUDE.md` are project rules too) and `codeRepo`. See [`examples/config.example.toml`](examples/config.example.toml) and [`examples/project.example.toml`](examples/project.example.toml).
 
 - **Quotas.** Claude subscription quotas are refreshed at most once per minute with the local CLI `/usage` metadata command, without model turns, hooks, MCP servers or saved sessions. The dashboard and scheduling share the verified account windows; a failed refresh hides the old percentage in the dashboard and stores what went wrong. Starts keep using the last verified reading for up to 6 hours; with an older or no reading automatic Claude selection pauses until a refresh succeeds. A Hive that waits for a provider shows why (quota used up, usage unknown, or too few slots). A provider whose slots can never fit a Queen plus a Bee process (`beeMode = "process"`) raises one owner question instead of restarting Queens in a loop.
 - **Reload.** Saved changes to the machine `config.toml` and to registered projects' `.haivequeen/project.toml` are reloaded at the next poll, also while idle, without restarting running agents. Valid changes wake scheduling at once; an invalid or temporarily missing file keeps the complete last valid settings. An explicit `--round-minutes` still takes precedence.
@@ -229,6 +247,7 @@ Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the
 | `bzz bee start`, `bzz bee result`, `bzz bee wait` | Queen | start a Bee (a refused start answers `waiting` with a `reason`), record an attempt or wait for its provider; a failed result needs evidence (`--open-requirements` or `--error`) or `--blocked-by question\|build\|owner\|package\|provider` (a question also needs `--blocked-ref <id>`), which is no failure and sets the package to waiting |
 | `bzz package --project p --plan f --package id --state working\|waiting\|implemented\|done\|rejected [--reason ...]` | Queen | report the progress of a package; `waiting` needs `--reason` (`question:<id>`, `build`, `owner`, `package` or `provider`); the window's progress bar counts the done ones |
 | `bzz integration acquire` / `release` | Queen or external window | acquire or release the per-project integration place; external windows provide a stable owner process id |
+| `bzz self-update` | owner | for a HaiveQueen checkout that is itself a project named HaiveQueen: waits until all agents have ended, then fast-forwards its `main` from `origin/<integrationBranch>` of that project's settings (default `main`) |
 | `bzz done`, `bzz ready`, `bzz ask`, `bzz note` | agents | final report, branch ready for integration, question, note ([`docs/RUNTIME-API.md`](docs/RUNTIME-API.md)) |
 
 ## Good to know
@@ -244,6 +263,8 @@ Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the
 | File | Content |
 |---|---|
 | [`docs/AGENT-RULES.md`](docs/AGENT-RULES.md) | the hard rules every Queen and Bee follows |
+| [`roles/`](roles) | the role texts of Queen, Bee, plan cutter and check agent, plain Markdown |
+| [`docs/PROFILE.md`](docs/PROFILE.md) | the separate agent profile and the private files it keeps out |
 | [`docs/RUNTIME-API.md`](docs/RUNTIME-API.md) | the JSON commands agents use to read and write state |
 | [`docs/MIGRATION-v1.md`](docs/MIGRATION-v1.md) | moving from version 1 (PowerShell) to version 2 (Python) |
 | [`examples/`](examples) | machine and project settings, a plan, an inbox file and an `AGENTS.md` |
