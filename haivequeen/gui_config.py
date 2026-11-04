@@ -325,6 +325,8 @@ class ConfigWindow:
         data = self.target()
         shown = {k: v for k, v in data.items() if kind != "general" or k not in ("providers", "projects")}
         self.position = None
+        if kind == "general":
+            shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
         if kind == "providers":
             rest, tools, self.position = split_args(shown.get("args"))
             shown = {k: v for k, v in shown.items() if k != "args"}

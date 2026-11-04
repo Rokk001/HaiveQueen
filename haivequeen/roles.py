@@ -15,3 +15,8 @@ def role_text(name, values=None, roles_dir=None):
     text = text.rstrip("\n")
     vals = {k: str(v) for k, v in (values or {}).items()}
     return re.sub(r"\{\{(\w+)\}\}", lambda m: vals.get(m.group(1), m.group(0)), text)
+
+
+def language(settings):
+    """The language of the free text to the owner: the `language` setting, English without one."""
+    return str((settings or {}).get("language") or "").strip() or "English"

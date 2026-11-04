@@ -485,10 +485,10 @@ def _do_start(c, a, forced_pick=None) -> int:
     pf = run_dir / "prompt.md"
     hf = run_dir / "HANDOFF"
     if phase == "bee":
-        hdr = roles.role_text("bee-start") + "\n\n"
+        hdr = roles.role_text("bee-start", {"language": roles.language(env.settings)}) + "\n\n"
     elif phase == "queen":
         rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"
-        hdr = roles.role_text("queen-start", {"rules_doc": rules_doc}) + "\n\n"
+        hdr = roles.role_text("queen-start", {"rules_doc": rules_doc, "language": roles.language(env.settings)}) + "\n\n"
     elif protocol == "claude":
         flow_doc = env.settings.get("buildFlowDoc", "")
         hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of AGENT-RULES.md and the rule sections you need) are "

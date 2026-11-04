@@ -191,6 +191,17 @@ class WindowTest(unittest.TestCase):
         win.save()
         self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["providers"][1]["beeMode"], "subagent")
 
+    # The language of the free text to the owner.
+    def test_general_offers_the_language_and_saves_it(self):
+        """General shows a language field (English without an entry); a typed language is written to the file."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(0)
+        getters = {path: getter for path, getter, _like in win.getters}
+        self.assertEqual(getters[("language",)](), "English")
+        self.type_into_entry(win, "English", "Deutsch")
+        win.save()
+        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["language"], "Deutsch")
+
     # Editing the allowed tools list and a number, then saving.
     def test_edit_allowed_tools_and_save(self):
         """Changing the allowed tools and the slots of a provider writes both; everything else in the file stays."""

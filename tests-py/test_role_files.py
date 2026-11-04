@@ -82,3 +82,35 @@ class RoleStartTests(RoundCase):
         with mock.patch("haivequeen.bees.valid_bee_worktree", return_value=True), mock.patch.object(roles, "ROLES_DIR", tmp):
             self.assertTrue(bees.start_process(self.env(), REL, "P1", "Ada", "heavy", "do first", ["one"], ["source.py"], ["work rule"], cwd=str(bee_wt)))
         self.assertTrue(self.prompt("Ada").startswith("You are a changed Bee.\n\nTASK\n\n"))
+
+
+class LanguageTests(RoundCase):
+    """The language of the free text to the owner comes from the settings; English without a setting."""
+
+    def queen_prompt(self):
+        self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.round()
+        queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")
+        return (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8-sig")
+
+    def test_helper_defaults_to_english(self):
+        self.assertEqual(roles.language({}), "English")
+        self.assertEqual(roles.language({"language": "  "}), "English")
+        self.assertEqual(roles.language({"language": "Deutsch"}), "Deutsch")
+
+    def test_queen_is_told_english_without_a_setting(self):
+        text = self.queen_prompt()
+        self.assertIn("state file entries) in English", text)
+        self.assertNotIn("{{", text)
+
+    def test_queen_is_told_the_configured_language(self):
+        self.machine["language"] = "Deutsch"
+        text = self.queen_prompt()
+        self.assertIn("state file entries) in Deutsch", text)
+        self.assertNotIn("in English", text.split("Keep token use")[0])
+
+    def test_bee_is_told_the_configured_language(self):
+        self.machine["language"] = "Deutsch"
+        for name in ("bee-start", "queen-start", "ready-check"):
+            self.assertIn("{{language}}", read(name), name)
+        self.assertIn("{{language}}", read("queen"))
