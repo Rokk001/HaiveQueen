@@ -105,6 +105,23 @@ class SnapshotTest(unittest.TestCase):
         self.assertFalse(row["paused"])
         self.assertNotIn("paused", row["status"])
 
+    # Active Hives show running and waiting Hives only.
+    def test_rejected_and_done_hives_are_not_active(self):
+        """A Hive of a REJECTED or DONE plan, also one set in the plan file and synced, is absent from the active list; a done Hive state too."""
+        plan = "docs/plans/AI-LEVELS-PLAN.md"
+        def active():
+            snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+            return snap["hives"], snap["tiles"]["hives"]
+        self.assertEqual(len(active()[0]), 1)
+        for status in ("REJECTED", "DONE"):
+            self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP',?,'AI',?,'2026-11-01T12:00:00')", (plan, status))
+            self.conn.commit()
+            self.assertEqual(active(), ([], 0), status)
+        self.conn.execute("UPDATE plans SET status='READY'")
+        self.conn.execute("UPDATE hives SET state='done'")
+        self.conn.commit()
+        self.assertEqual(active()[0], [])
+
     # Only a running Queen starts Bees, so the assignments of a Hive without one are not waiting Bees.
     def test_assignments_of_a_hive_without_a_running_queen_are_not_waiting_bees(self):
         """With the Queen ended, the stored Bee assignment of the Hive is not shown as a waiting Bee and does not count as a Bee of the Hive."""

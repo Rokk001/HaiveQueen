@@ -125,6 +125,36 @@ class ActionTests(RoundCase):
         self.assertEqual(self.conn.execute("SELECT status FROM plans WHERE path=?", (OTHER,)).fetchone()[0], "READY")
 
 
+class StyleTests(RoundCase):
+    """The list looks like the other windows."""
+
+    def test_treeview_has_the_dashboard_colours_and_font(self):
+        """After apply_style the table and its heading use the COL colours and the mono font, and the window is built under that style."""
+        import tkinter as tk
+        from tkinter import ttk
+        from haivequeen import gui_dialog
+        try:
+            root = tk.Tk()
+        except tk.TclError:
+            self.skipTest("no display")
+        self.addCleanup(root.destroy)
+        root.withdraw()
+        gui_dialog.apply_style(root, "Consolas")
+        style = ttk.Style(root)
+        col = gui.COL
+        for name in ("Treeview", "Treeview.Heading"):
+            self.assertIn("Consolas", str(style.lookup(name, "font")))
+        self.assertEqual((style.lookup("Treeview", "background"), style.lookup("Treeview", "fieldbackground"), style.lookup("Treeview", "foreground")),
+                         (col["panel"], col["panel"], col["text"]))
+        self.assertEqual((style.lookup("Treeview.Heading", "foreground"), style.lookup("Treeview.Heading", "relief")), (col["gold"], "flat"))
+        self.assertEqual(style.lookup("Treeview", "background", ("selected",)), col["select"])
+        self.assertEqual(style.lookup("Treeview", "foreground", ("selected",)), col["gold"])
+        window = gui_hives.HivesWindow(root, self.conn, "Consolas")
+        self.addCleanup(window.win.destroy)
+        self.assertEqual(window.tree.winfo_class(), "Treeview")
+        self.assertEqual(window.win.cget("bg"), col["bg"])
+
+
 class WindowTests(unittest.TestCase):
     """The button and the window."""
 

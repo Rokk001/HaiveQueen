@@ -519,6 +519,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     waiting = waiting_map(conn)
     paused = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='PAUSED'")}
     plan_rejected = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='REJECTED'")}
+    plan_done = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='DONE'")}   # rejected and done Hives only show in the Hives window
     embedded = embedded_rows(conn)
     hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected, waiting, embedded, plan_rejected) for h in hives.hive_data(conn, project, agents)]
     live = [a for a in agents if a.get("status") in runtime.ACTIVE_STATUSES]
@@ -542,9 +543,9 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     except Exception:   # a broken lock file must not stop the window: show the run state alone
         orchestrator = orchestrator_state(d["run"]["state"], 1, False)
     return {"now": now, "project": project, "run_state": d["run"]["state"], "orchestrator": orchestrator, "version": _version(),
-            "tiles": {"apiaries": len(apiaries), "hives": sum(1 for h in hive_rows if h["live"]), "queens": len(queens), "bees": sum(1 for b in workers if b["status"] == "running"),
+            "tiles": {"apiaries": len(apiaries), "hives": sum(1 for h in hive_rows if h["live"] and not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done), "queens": len(queens), "bees": sum(1 for b in workers if b["status"] == "running"),
                       "bee_capacity": max(len(workers), slots), "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today)},
-            "hives": hive_rows, "bees": bees, "apiaries": apiaries,
+            "hives": [h for h in hive_rows if not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done], "bees": bees, "apiaries": apiaries,
             "projects": [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")],
             "log": [log_line(e, who) for e in reversed(events)], "log_ids": [e["id"] for e in reversed(events)], "log_meta": [log_meta(e, plan_of) for e in reversed(events)], "activity": activity_rows(agents_all, now),
             "system": sysinfo if sysinfo is not None else system_info(d["sysinfo"]), "queue": queue_panel(conn, project),
