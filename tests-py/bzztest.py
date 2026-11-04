@@ -62,6 +62,8 @@ def write_plan(path, status, packages=(), title="Dummy plan"):
             if p.get(k):
                 t += '%s = "%s"\n' % (k, p[k])
         t += "depends_on = [%s]\n" % ", ".join('"%s"' % d for d in p.get("depends", []) if d)
+        if p.get("requirements"):
+            t += "requirements = [%s]\n" % ", ".join('"%s"' % r for r in p["requirements"])
     path.write_text(t + "+++\n# %s\n" % title, encoding="utf-8")
 
 

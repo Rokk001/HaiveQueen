@@ -270,7 +270,7 @@ def cmd_requeen(args, conn):
 
 # Check the plan the calling Queen has cut into packages.
 def cmd_plan(args, conn):
-    """Check the header of the Queen's own plan (packages, unique ids, titles, dependencies without cycle, capabilities some provider offers). On success a SUBMITTED plan becomes READY and the packages are read into the database; otherwise the problems are reported and nothing changes."""
+    """Check the header of the Queen's own plan (packages, unique ids, titles, dependencies without cycle, capabilities some provider offers, every requirement the Queen wrote in the state file belongs to a package). On success a SUBMITTED plan becomes READY and the packages are read into the database; otherwise the problems are reported and nothing changes."""
     from haivequeen import plans as plan_mod, scheduler
     agent = os.environ.get("BZZ_AGENT")
     queen = runtime.get_agent(conn, args.project, agent) if agent else None
@@ -284,7 +284,7 @@ def cmd_plan(args, conn):
     if not path.is_file():
         return fail("plan file not found: %s" % plan)
     parsed = plan_mod.load_plan(str(path))
-    problems = plan_mod.check_plan(parsed, {c for p in env.providers for c in p.get("capabilities", [])})
+    problems = plan_mod.check_plan(parsed, {c for p in env.providers for c in p.get("capabilities", [])}, plan_mod.load_requirements(str(path)))
     if problems:
         return fail("the plan is not cut properly: " + "; ".join(problems))
     status = parsed.status

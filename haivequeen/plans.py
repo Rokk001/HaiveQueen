@@ -23,6 +23,7 @@ class Package:
     capability: str = ""
     verify: str = "code"
     depends_on: list = field(default_factory=list)
+    requirements: list = field(default_factory=list)   # ids of the requirements in the Queen's state file this package covers
 
 
 @dataclass
@@ -114,6 +115,7 @@ def parse_plan_text(text, path=""):
                 capability=str(row.get("capability", "")),
                 verify=verify,
                 depends_on=_depends(row.get("depends_on")),
+                requirements=_depends(row.get("requirements")),
             ))
     owner_check = "none" if str(header.get("owner_check", "")).strip().lower() in ("none", "false", "no", "off") else "ask"
     return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings, owner_check=owner_check)
@@ -158,11 +160,63 @@ def package_dependencies(plan, package):
     return deps
 
 
-def check_plan(plan, capabilities):
+REQUIREMENTS_HEADING = re.compile(r"(?im)^#{1,6}\s*requirements\s*$")
+REQUIREMENT_LINE = re.compile(r"^\s*[-*]\s*([A-Za-z0-9_.-]+)\s*:\s*(.*\S)\s*$")
+
+
+def state_file_path(plan_path):
+    """Path of the Queen's state file beside a plan: <name>-STATE.md, a trailing -PLAN of the name dropped."""
+    base, name = os.path.split(plan_path)
+    stem = re.sub(r"-PLAN$", "", os.path.splitext(name)[0])
+    return os.path.join(base, stem + "-STATE.md")
+
+
+def parse_requirements(text):
+    """Requirements of a state file as a list of (id, text): the lines '- <id>: <text>' under a heading 'Requirements' up to the next heading."""
+    found, inside = [], False
+    for line in text.replace("\r\n", "\n").split("\n"):
+        if line.lstrip().startswith("#"):
+            inside = bool(REQUIREMENTS_HEADING.match(line.strip()))
+            continue
+        m = REQUIREMENT_LINE.match(line) if inside else None
+        if m:
+            found.append((m.group(1), m.group(2)))
+    return found
+
+
+def load_requirements(plan_path):
+    """Requirements the Queen wrote into the state file beside the plan; empty when there is no file or no such section."""
+    try:
+        with open(state_file_path(plan_path), encoding="utf-8-sig") as f:
+            return parse_requirements(f.read())
+    except OSError:
+        return []
+
+
+def requirement_problems(plan, requirements):
+    """Problems between the requirement list and the packages: a requirement no package covers, a package naming an unknown requirement, a repeated id."""
+    problems = []
+    ids = [r[0] for r in requirements]
+    for dup in sorted({i for i in ids if ids.count(i) > 1}):
+        problems.append("requirement id %s is used more than once in the state file" % dup)
+    covered = {r for p in plan.packages for r in p.requirements}
+    for rid in ids:
+        if rid not in covered:
+            problems.append("requirement %s belongs to no package: cut the plan again and add it to the requirements of a package" % rid)
+    if requirements:
+        for p in plan.packages:
+            for r in p.requirements:
+                if r not in ids:
+                    problems.append("package %s names requirement %s, which is not in the state file" % (p.id, r))
+    return problems
+
+
+def check_plan(plan, capabilities, requirements=()):
     """Problems that keep a cut plan from running, as a list of texts (empty when it is fine).
 
     `capabilities` is the set of capability names the configured providers offer. Checked: at least one package, unique ids, a title per
-    package, every dependency names a package of the plan (or all), no dependency cycle and every named capability is offered by a provider."""
+    package, every dependency names a package of the plan (or all), no dependency cycle and every named capability is offered by a provider.
+    `requirements` is the list (id, text) the Queen wrote down; each must belong to at least one package."""
     problems = []
     ids = [p.id for p in plan.packages]
     if not plan.packages:
@@ -196,6 +250,7 @@ def check_plan(plan, capabilities):
 
     for i in ids:
         visit(i, [i])
+    problems.extend(requirement_problems(plan, list(requirements)))
     return problems
 
 
