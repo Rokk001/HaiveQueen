@@ -181,10 +181,10 @@ class RowsTest(unittest.TestCase):
         self.assertEqual((mona["step"], mona["step_frac"], mona["task"]), ("3/5", 0.6, "P2"))
 
     # The footer only offers what has a purpose.
-    def test_footer_has_five_buttons(self):
-        """The state button, the apiary filter, questions, config and help are the only clickable parts of the footer."""
+    def test_footer_has_six_buttons(self):
+        """The state button, the apiary filter, hives, questions, config and help are the only clickable parts of the footer."""
         footer = [h for h in self.win.hits if h[1] >= 860 * self.win.scale]
-        self.assertEqual(len(footer), 5)
+        self.assertEqual(len(footer), 6)
 
     # Tab picks the table, the arrow keys move in it.
     def test_tab_and_arrow_keys_work_on_the_active_table(self):

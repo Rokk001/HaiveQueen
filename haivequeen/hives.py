@@ -534,12 +534,39 @@ def stop_hive(conn, project, plan, stop=None):
         dequeen(conn, project, plan, stop=stop)
 
 
-# Reject a stopped plan; nothing is deleted.
+# Is the Hive of a plan stopped?
+def is_stopped(conn, project, plan):
+    """True when the plan is PAUSED and no live Queen or Bee of it runs."""
+    if _plan_status(conn, project, plan) != 'PAUSED':
+        return False
+    return not any(a.get('plan_path') == plan and a.get('phase') in ('queen', 'bee') and agent_process.counts(a) for a in runtime.list_agents(conn, project, 'active'))
+
+
+# Reject a stopped plan or a draft; nothing is deleted.
 def reject_plan(conn, project, plan):
-    """Set a stopped plan (PAUSED without a live Queen) to REJECTED."""
-    if _plan_status(conn, project, plan) != 'PAUSED' or any(a.get('plan_path') == plan and a.get('phase') in ('queen', 'bee') and agent_process.counts(a) for a in runtime.list_agents(conn, project, 'active')):
-        raise ValueError('only a stopped Hive can be rejected')
+    """Set a stopped plan (PAUSED without a live Queen) or a DRAFT plan to REJECTED."""
+    if _plan_status(conn, project, plan) != 'DRAFT' and not is_stopped(conn, project, plan):
+        raise ValueError('only a stopped Hive or a draft can be rejected')
     runtime.set_plan_status(conn, project, plan, 'REJECTED')
+    runtime.kv_delete(conn, project, 'plan-prepause:' + plan)
+
+
+# Put a stopped or rejected plan back to draft.
+def back_to_draft(conn, project, plan):
+    """Set a stopped (PAUSED without a live Queen) or REJECTED plan to DRAFT."""
+    if _plan_status(conn, project, plan) != 'REJECTED' and not is_stopped(conn, project, plan):
+        raise ValueError('only a stopped or rejected plan can go back to draft')
+    runtime.set_plan_status(conn, project, plan, 'DRAFT')
+    runtime.kv_delete(conn, project, 'plan-prepause:' + plan)
+
+
+# Start a plan from the Hives list.
+def start_plan(conn, project, plan):
+    """A DRAFT plan becomes READY; a PAUSED or REJECTED plan is started again (start_again)."""
+    if _plan_status(conn, project, plan) == 'DRAFT':
+        runtime.set_plan_status(conn, project, plan, 'READY')
+    else:
+        start_again(conn, project, plan)
 
 
 # Start a paused or rejected plan again.
