@@ -238,10 +238,14 @@ class RunnerAndHeaderTest(CodeRepoCase):
         self.assertIn("FLOW.md", self.start_agent("claude"))
 
     # Verify the workspace rule path reaches a Codex Queen.
-    def test_codex_header_names_workspace_rules(self):
-        """A code-repo project identifies its workspace rules."""
+    def test_codex_queen_loads_the_rules_of_the_code_repo_not_the_workspace(self):
+        """A code-repo project: the project rules are the checked-in instruction files of the code repo; an internal workspace file is no rule."""
+        from test_loading import git_repo
+        git_repo(self.dev, {"AGENTS.md": "CODE-REPO-RULE"})
+        (self.repo / "AGENTS.md").write_text("WORKSPACE-INTERNAL", encoding="utf-8")
         text = self.start_agent("codex")
-        self.assertIn(str(self.repo / "AGENTS.md"), text)
+        self.assertIn("CODE-REPO-RULE", text)
+        self.assertNotIn("WORKSPACE-INTERNAL", text)
 
 
 # Verify the default project rule file remains available to Codex Queens.
@@ -251,14 +255,16 @@ class CodeRepoCodexUnchangedTest(CodeRepoCase):
     with_code = False
 
     # Verify the project rule file is named in the Queen prompt.
-    def test_codex_header_names_claude_md(self):
-        """The Queen prompt identifies CLAUDE.md for a normal workspace."""
+    def test_codex_queen_loads_the_checked_in_claude_md(self):
+        """The Queen prompt contains the CLAUDE.md checked in to a normal workspace repository."""
+        from test_loading import git_repo
+        git_repo(self.repo, {"CLAUDE.md": "CHECKED-IN-RULE"})
         self.machine["preferredProvider"] = "codex"
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]
         self.assertEqual(len(active), 1)
-        self.assertIn("CLAUDE.md", self.prompt_of(active[0]["name"]))
+        self.assertIn("CHECKED-IN-RULE", self.prompt_of(active[0]["name"]))
 
 
 class RunnerVariablesTest(RunnerBase):

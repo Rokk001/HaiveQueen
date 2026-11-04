@@ -42,7 +42,8 @@ class RoleFileTests(unittest.TestCase):
 
     def test_bee_prompt_comes_from_the_file(self):
         text = bees.bee_prompt("Ada", "P1", "do it", ["a", "b"], ["x.py", "y.py"], ["r1", "r2"])
-        self.assertTrue(text.startswith("Work only package P1: do it\nSteps:\n1. a\n2. b\nPaths: x.py, y.py\nRules: r1\nr2\n"))
+        self.assertTrue(text.startswith("Work only package P1: do it\nSteps:\n1. a\n2. b\nPaths: x.py, y.py\nUse your own worktree"))
+        self.assertNotIn("r1", text)
         self.assertIn("bzz note: Ada P1: step n/2 <short text>.", text)
 
 
@@ -63,7 +64,7 @@ class RoleStartTests(RoundCase):
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")
         text = self.prompt(queen["name"])
-        head = read("queen-start").split("{{rules_doc}}")[0]
+        head = read("queen-start").split("{{language}}")[0]
         self.assertTrue(text.startswith(head), text[:200])
         self.assertIn("Keep token use economical.", text)
 

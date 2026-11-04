@@ -171,7 +171,7 @@ def next_attempt(conn, project, plan, package, cls, providers, excluded, thresho
     return next_class(providers, cls, excluded)
 
 
-# Write only the package task, relevant paths and rules to a Bee.
+# Write only the package task and relevant paths to a Bee; the complete project rules are loaded by the runner, a `rules` argument never replaces them.
 def bee_prompt(name, package, task, steps, paths, rules):
     """Build a slim Bee task with numbered progress reports."""
     return roles.role_text('bee', {'package': package, 'task': task, 'steps': '\n'.join('%d. %s' % (i + 1, s) for i, s in enumerate(steps)), 'paths': ', '.join(paths), 'rules': '\n'.join(rules), 'name': name, 'step_count': len(steps)})

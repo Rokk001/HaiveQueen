@@ -798,8 +798,8 @@ def run_agent(a, out=None):
         prompt = report_prompt(a.prompt_file, a.project, agent_row["id"] if agent_row else "?", a.phase)
         rules_file = run_dir / "rules.md"
         if protocol == "claude":
-            if a.phase == "bee":
-                rules_file.write_text("", encoding="utf-8")
+            if a.phase in ("bee", "queen"):   # complete project rules (checked-in instruction files, upstream ones when set), no selection
+                rules_file.write_text(profile.rules_text(profile.project_rules(pcfg, pcfg.get("codeRepo") or workspace or a.cwd, protocol, a.cwd)), encoding="utf-8")
             else:
                 write_phase_rules(pcfg, workspace, a.phase, rules_file)
         vars_ = {"model": model, "effort": effort, "repo": pcfg.get("codeRepo") or workspace or a.cwd, "workspace": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,

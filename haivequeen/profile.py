@@ -136,3 +136,97 @@ def notify_missing(conn, providers) -> list:
         runtime.kv_set(conn, GLOBAL, key, "told")
         told.append(p["name"])
     return told
+
+
+# ---------------------------------------------------------------- what Queen and Bee load
+
+RULE_FILES = ("AGENTS.md", "CLAUDE.md")   # the instruction files of a repository that count as project rules (nothing else does, the README never)
+OWN_FILES = {"claude": ("CLAUDE.md",), "codex": ("AGENTS.md",), "opencode": ("AGENTS.md",)}   # per protocol: the instruction files its CLI loads by itself from its folder
+UPSTREAM_KEY = "upstreamRepo"   # setting of the Apiary (project.toml): folder of the upstream repository whose instruction files are project rules too
+
+
+def tracked(repo, name) -> bool:
+    """True when `name` is a file checked in to the git repository at `repo` (an untracked or internal workspace file is not)."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(repo), "ls-files", "--error-unmatch", "--", name], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and (Path(repo) / name).is_file()
+
+
+def project_rules(settings, repo, protocol=None, cwd=None) -> dict:
+    """The complete project rules: the instruction files checked in to the project repository `repo` plus those of the upstream repository when the
+    Apiary's settings name one (`upstreamRepo`); without that setting there are none. Returns {"inline": [(label, text)], "byProvider": [label]}.
+    A file that the provider loads by itself from `cwd` (checked in there) is listed under byProvider and not copied again; files with the same text count once."""
+    sources = [("", Path(repo))] if repo else []
+    up = str((settings or {}).get(UPSTREAM_KEY) or "").strip()
+    if up:
+        sources.append(("upstream ", Path(up)))
+    inline, by_provider, seen = [], [], set()
+    for prefix, root in sources:
+        for name in RULE_FILES:
+            if not tracked(root, name):
+                continue
+            text = (root / name).read_text(encoding="utf-8-sig").strip()
+            label = prefix + name
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            if not prefix and cwd and name in OWN_FILES.get(str(protocol or ""), ()) and tracked(cwd, name):
+                by_provider.append(label)
+            else:
+                inline.append((label, text))
+    return {"inline": inline, "byProvider": by_provider}
+
+
+def rules_text(rules) -> str:
+    """The project rules as one text for the system prompt or the prompt file; empty when nothing is to be copied."""
+    if not rules["inline"]:
+        return ""
+    return "# Project rules\n\n" + "\n\n".join("## %s\n\n%s" % (label, text) for label, text in rules["inline"]) + "\n"
+
+
+def section(text, heading_part) -> str:
+    """The markdown section whose heading contains `heading_part` (up to the next heading of the same or a higher level), or ''."""
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        m = re.match(r"^(#+)\s", ln)
+        if m and heading_part.lower() in ln.lower():
+            end = len(lines)
+            for j in range(i + 1, len(lines)):
+                n = re.match(r"^(#+)\s", lines[j])
+                if n and len(n.group(1)) <= len(m.group(1)):
+                    end = j
+                    break
+            return "\n".join(lines[i:end]).strip()
+    return ""
+
+
+def queen_load(conn, project, workspace, plan, predecessor=None) -> str:
+    """What a Queen loads besides her role file and the project rules: the plan, the plan's state file, the handoff of her predecessor (if any), and the
+    decisions and the owner answers of her Apiary. Nothing else."""
+    from . import plans
+    base = Path(workspace)
+    plan_file = base / plan
+    state_file = base / plans.state_file_path(plan)
+    parts = []
+
+    def read(path):
+        try:
+            return path.read_text(encoding="utf-8-sig").strip()
+        except OSError:
+            return ""
+    state = read(state_file)
+    handoff = section(state, "handoff " + str(predecessor)) if predecessor and state else ""
+    if handoff:
+        state = state.replace(handoff, "").strip()
+    parts.append("# Plan %s\n\n%s" % (plan, read(plan_file)))
+    parts.append("# State file %s\n\n%s" % (state_file.name, state or "(none yet)"))
+    if predecessor:
+        parts.append("# Handoff of your predecessor %s\n\n%s" % (predecessor, handoff or "(none written)"))
+    decisions = runtime.list_decisions(conn, project, active_only=True)
+    parts.append("# Decisions of this Apiary\n\n" + ("\n".join("- #%s%s: %s" % (d["id"], " (plan %s)" % d["plan_path"] if d.get("plan_path") else "", d["text"]) for d in decisions) or "(none)"))
+    answered = [q for q in runtime.list_questions(conn, project, status="answered")]
+    parts.append("# Owner answers of this Apiary\n\n" + ("\n".join("- #%s%s: %s -> %s" % (q["id"], " (plan %s)" % q["plan_path"] if q.get("plan_path") else "", q["question"], q["answer"]) for q in answered) or "(none)"))
+    return "\n\n".join(parts) + "\n"

@@ -487,8 +487,7 @@ def _do_start(c, a, forced_pick=None) -> int:
     if phase == "bee":
         hdr = roles.role_text("bee-start", {"language": roles.language(env.settings)}) + "\n\n"
     elif phase == "queen":
-        rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"
-        hdr = roles.role_text("queen-start", {"rules_doc": rules_doc, "language": roles.language(env.settings)}) + "\n\n"
+        hdr = roles.role_text("queen-start", {"language": roles.language(env.settings)}) + "\n\n"
     elif protocol == "claude":
         flow_doc = env.settings.get("buildFlowDoc", "")
         hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of AGENT-RULES.md and the rule sections you need) are "
@@ -503,8 +502,14 @@ def _do_start(c, a, forced_pick=None) -> int:
     if phase == "queen":
         handoff = ("After each completed step check %s. When it exists, do not start new Bees, "
                    "wait for running Bees, finish your current step, record the handoff in the plan state and end." % hf)
-    pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff, encoding="utf-8")
-    predecessors = [a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('phase') == 'queen' and a.get('plan_path') == plan and a.get('person')]
+    predecessors = [x for x in runtime.list_agents(env.conn, env.name, 'all') if x.get('phase') == 'queen' and x.get('plan_path') == plan and x.get('person')]
+    loaded = ""
+    if phase in ("bee", "queen"):   # what a Queen and a Bee load is defined in profile.py; the project rules are complete, never a selection
+        if protocol != "claude":   # Claude gets the rules in its system prompt file (rules.md); every other provider reads them from its prompt
+            loaded = profile.rules_text(profile.project_rules(env.settings, env.code_repo, protocol, a["cwd"]))
+        if phase == "queen":
+            loaded += "\n" + profile.queen_load(env.conn, env.name, env.workspace, plan, predecessors[-1]["person"] if predecessors else None)
+    pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff + ("\n\n" + loaded.strip() + "\n" if loaded.strip() else ""), encoding="utf-8")
     ident = agent_identity(env.conn, [predecessors[-1]['person']] if phase == 'queen' and predecessors else ())
     if phase in ("bee", "queen"):   # a Bee and a Queen are named by their short female name (A2); the number of a repeated row key is not part of it
         base = re.sub(r"-\d+$", "", nm)
