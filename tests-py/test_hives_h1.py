@@ -1059,6 +1059,7 @@ class HiveRoundTests(RoundCase):
         from haivequeen import cli
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.allow_ready()
         self.round()
         queen = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"][0]
         saved = os.environ.get("BZZ_AGENT")
@@ -1220,6 +1221,7 @@ class HiveRoundTests(RoundCase):
         from haivequeen import cli, hives
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.allow_ready()
         self.round()
         queen = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"][0]
         saved = os.environ.get("BZZ_AGENT")
@@ -1369,6 +1371,7 @@ class HiveRoundTests(RoundCase):
         from haivequeen import cli
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.allow_ready()
         self.round()
         queen = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"][0]
         saved = os.environ.get("BZZ_AGENT")

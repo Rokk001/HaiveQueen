@@ -133,6 +133,18 @@ class RoundCase(unittest.TestCase):
         write_plan(ws / rel, status, packages, title)
         runtime.sync_plans(self.conn, project, str(ws))
 
+    def allow_ready(self, project="testproj", rel=REL):
+        """Let a Queen's `bzz ready` pass the ready gate: the plan names one requirement, the state file lists it done, the check agent passes."""
+        from unittest import mock
+        from haivequeen import readygate
+        ws = self.repo if project == "testproj" else self.base / ("repo-" + project)
+        with (ws / rel).open("a", encoding="utf-8") as f:
+            f.write("\n## Requirements\n\n- T-1: dummy requirement\n")
+        (ws / rel.replace("-PLAN.md", "-STATE.md")).write_text("# State\n\n## Completeness\n\n- T-1: done | test evidence\n", encoding="utf-8")
+        patcher = mock.patch.object(readygate, "CHECK_RUNNER", lambda request: ("passed", ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def agent(self, name, project="testproj", **f):
         """Create or update an agent row; `started`/`ended` are minutes ago. Defaults: claude, the dummy plan, phase work, cwd = wt, status done."""
         row = {"type": "claude", "provider": "claude", "plan_path": REL, "phase": "work", "cwd": str(self.wt), "status": "done"}

@@ -54,7 +54,7 @@ def cmd_ready(args, conn) -> int:
     """Register a branch as ready; a Queen may register only her own Hive plan."""
     agent = os.environ.get("BZZ_AGENT")
     if agent:
-        from haivequeen import hives, routine, scheduler as sch
+        from haivequeen import hives, readygate, routine, scheduler as sch
         row = runtime.get_agent(conn, args.project, agent)
         if row and row.get("phase") == "queen":
             plan = row.get("plan_path")
@@ -65,6 +65,15 @@ def cmd_ready(args, conn) -> int:
             rejected = bees.rejected_packages(conn, args.project, plan)
             if rejected:
                 return fail("ready refused: package(s) %s rejected by the owner; rework them and set their state with bzz package" % ", ".join(rejected))
+            env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
+            if env is None:
+                return fail("ready refused: unknown project")
+            accepted, message, waiting = readygate.gate(env, plan, row)   # requirement list first, then the fresh check agent
+            if not accepted:
+                if waiting:
+                    out({"ok": False, "error": message, "waiting": True})
+                    return 1
+                return fail("ready refused: " + message)
         else:
             env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
             why = routine.ready_refusal(env, agent) if env is not None else ""
