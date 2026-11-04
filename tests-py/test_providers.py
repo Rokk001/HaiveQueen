@@ -96,7 +96,7 @@ class SelectTest(unittest.TestCase):
         self.assertEqual(sch.class_model(ps, "dummy", "heavy")["Model"], "dummy-medium")
         with self.assertRaisesRegex(ValueError, "use must be"):
             sch.get_providers(settings(provider("X", 1, "sometimes")))
-        with self.assertRaisesRegex(ValueError, "protocol must be"):
+        with self.assertRaisesRegex(ValueError, "is not supported"):
             sch.get_providers(settings(provider("X", 1, proto="other")))
 
     def test_needs_and_endpoint(self):

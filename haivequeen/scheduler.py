@@ -15,7 +15,6 @@ from . import platform as osplat
 
 CLASS_NAMES = ("light", "medium", "heavy")
 USES = ("preferred", "fallback", "capability-only")
-PROTOCOLS = ("claude", "codex")
 BEE_MODES = ("subagent", "process")   # how the Queen of a provider runs her Bees: embedded subagents or separate agent processes
 GLOBAL = "*"   # project value of machine-wide kv rows
 ACTIVE = ("running", "starting")
@@ -152,14 +151,13 @@ def get_providers(settings: dict) -> list:
         if use not in USES:
             raise ValueError("provider %s: use must be preferred, fallback or capability-only, not '%s'" % (name, use))
         proto = str(p.get("protocol") or name)
-        if proto not in PROTOCOLS:
-            raise ValueError("provider %s: protocol must be claude or codex, not '%s'" % (name, proto))
-        bee_mode = str(p.get("beeMode") or ("process" if proto == "codex" else "subagent"))
+        fmt = profile.check_protocol(name, proto, p.get("outputFormat"))   # a CLI HaiveQueen cannot read is refused here, with a clear message
+        bee_mode = str(p.get("beeMode") or ("subagent" if proto == "claude" else "process"))   # the embedded Bee mode is a Claude Code feature
         if bee_mode not in BEE_MODES:
             raise ValueError("provider %s: beeMode must be subagent or process, not '%s'" % (name, bee_mode))
         limit = p.get("limit")
         out.append({
-            "name": name, "protocol": proto, "command": str(p.get("command") or proto), "beeMode": bee_mode,
+            "name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto), "beeMode": bee_mode,
             "args": [str(a) for a in (p.get("args") or [])],
             "slots": int(p.get("slots", settings.get("slots", 0)) or 0), "use": use,
             "capabilities": [str(c) for c in (p.get("capabilities") or [])],

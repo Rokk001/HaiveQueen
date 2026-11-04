@@ -91,9 +91,8 @@ def get_providers(cfg):
         if not name:
             raise ValueError("a provider entry has no name")
         proto = str(p.get("protocol") or name)
-        if proto not in ("claude", "codex"):
-            raise ValueError("provider %s: protocol must be claude or codex, not '%s'" % (name, proto))
-        out.append({"name": name, "protocol": proto, "command": str(p.get("command") or proto),
+        fmt = profile.check_protocol(name, proto, p.get("outputFormat"))
+        out.append({"name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto),
                     "args": [str(x) for x in (p.get("args") or [])], "classes": p.get("classes") or {},
                     "endpoint": p.get("endpoint") or None, **profile.custom_fields(p)})
     return out
@@ -457,6 +456,7 @@ class AgentRun:
         """Remember the run parameters; `out` is where the plain milestone text goes (default stdout)."""
         self.conn, self.project, self.name = conn, project, name
         self.provider, self.type = provider, protocol
+        self.format = profile.FORMATS.get(protocol, protocol)   # the output format the events are read in; run_agent sets the one of the provider entry
         self.cwd, self.run_dir = str(cwd), Path(run_dir)
         self.plan, self.package, self.phase = plan, package, phase
         self.out = out or sys.stdout
@@ -585,9 +585,11 @@ class AgentRun:
     # --- event stream
 
     def handle_event(self, e):
-        """Handle one parsed JSON event of either CLI."""
-        if self.type == "claude":
+        """Handle one parsed JSON event of any CLI, read in the output format of the provider (claude, codex or opencode)."""
+        if self.format == "claude":
             self._claude_event(e)
+        elif self.format == "opencode":
+            self._opencode_event(e)
         else:
             self._codex_event(e)
         self.push_state(False)
@@ -661,6 +663,32 @@ class AgentRun:
             if e.get("is_error"):
                 self.api_errors.append(self.final)
             self.last = short(self.final)
+
+    def _opencode_event(self, e):
+        """Handle one event of the OpenCode `run --format json` format (also written by Kilo Code): `text`, `tool_use`, `step_finish` with the token counts, `error`.
+        There is no result event: the run counts as done when a step finished and no error event came."""
+        et = e.get("type")
+        part = e.get("part") if isinstance(e.get("part"), dict) else {}
+        if et == "text":
+            text = str(part.get("text") or "")
+            if text.strip():   # an empty closing message must not wipe the last real answer
+                self.final = text
+                self.last = short(text)
+                self.say(text, "White")
+        elif et == "tool_use":
+            self.last = "tool: " + str(part.get("tool"))
+        elif et == "step_finish":
+            tokens = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
+            cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+            c1 = int(tokens.get("input") or 0) + int(cache.get("read") or 0) + int(cache.get("write") or 0)
+            self.tin += c1
+            self.tout += int(tokens.get("output") or 0)
+            self.ctx = c1   # the size of the latest context
+            self.ok = not self.api_errors
+        elif et == "error":
+            self.ok = False
+            self.last = "error: " + short(json.dumps(e.get("error"), separators=(",", ":")))
+            self.api_errors.append(json.dumps(e.get("error"), separators=(",", ":")))
 
     def _codex_event(self, e):
         """Handle one event of the Codex exec --json format."""
@@ -764,6 +792,7 @@ def run_agent(a, out=None):
     queue_name = pcfg.get("integrationStateFile")
     queue_re = re.escape(Path(str(queue_name)).stem) if queue_name else None
     run = AgentRun(conn, a.project, a.name, a.provider, protocol, a.cwd, run_dir, a.plan, a.package, a.phase, out, queue_re)
+    run.format = prov["format"]
     run.context_limit = scheduler.context_limit({"contextLimitTokens": CONTEXT_LIMIT, **scheduler.build_settings(cfg, pcfg)}, [{**prov, "name": a.provider}], a.provider, cls)
     run.model = model_label(model)
     plan_short = re.sub(r"-?PLAN$", "", Path(a.plan).stem) if a.plan else ""

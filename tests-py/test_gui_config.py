@@ -226,6 +226,24 @@ class WindowTest(unittest.TestCase):
             win.refresh_login()
             self.assertEqual(win.login_status.cget("text"), "Login present")
 
+    # The provider page offers the CLI choice.
+    def test_provider_page_offers_the_cli_choice(self):
+        """The page shows the CLI of the provider; choosing another CLI sets all its values, Custom CLI keeps them and offers the output format."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(1)   # provider claude
+        self.assertEqual(win.cli_var.get(), "Claude Code")
+        win.choose_cli("OpenCode")
+        target = win.target()
+        self.assertEqual((target["protocol"], target["command"], target["beeMode"]), ("opencode", "opencode", "process"))
+        self.assertEqual(win.cli_var.get(), "OpenCode")
+        self.assertEqual(target["name"], "claude")   # the provider name and its slots stay
+        self.assertEqual(target["slots"], 5)
+        win.save()
+        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["providers"][0]["protocol"], "opencode")
+        win.choose_cli("Custom CLI")
+        self.assertEqual(win.target()["protocol"], "opencode")
+        self.assertIn("outputFormat", {path[0] for path, _g, _l in win.getters})
+
     # Every provider offers the Bee mode with the value that applies when the file has no entry.
     def test_provider_offers_the_bee_mode_with_its_default(self):
         """A claude provider shows subagent and a codex provider shows process; choosing a value and saving writes it to the file."""

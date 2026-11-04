@@ -1,0 +1,65 @@
+"""The CLIs a provider can be set to in the settings window. Choosing one sets every value HaiveQueen needs to start it; the owner can change the values afterwards.
+
+Only CLIs that really run are listed: HaiveQueen reads their output (see `profile.FORMATS`), knows their profile variables, login command and login file
+(`profile.SPECS`) and has a test for each. The values come from the official documentation or the official repository of each CLI (sources: docs/PROFILE.md).
+"""
+
+CUSTOM = "custom"   # key of the entry for a CLI that is not in the list
+CUSTOM_LABEL = "Custom CLI"
+CUSTOM_KEYS = ("profileEnv", "loginCommand", "loginFiles", "outputFormat")   # entry fields of a custom CLI; a built-in CLI brings its own values
+
+PRESETS = {
+    "claude": {
+        "label": "Claude Code", "protocol": "claude", "command": "claude", "beeMode": "subagent",
+        "args": ["--output-format", "stream-json", "--verbose", "--model", "{model}", "--permission-mode", "auto", "--effort", "{effort}", "--add-dir", "{repo}",
+                 "--add-dir", "{tools}", "--disable-slash-commands", "--strict-mcp-config", "--tools", "{claudeTools}", "--setting-sources", "",
+                 "--append-system-prompt-file", "{rules}"],
+    },
+    "codex": {
+        "label": "Codex CLI", "protocol": "codex", "command": "codex", "beeMode": "process",
+        "args": ["exec", "--json", "--skip-git-repo-check", "-m", "{model}", "-c", "model_reasoning_effort={effort}", "--dangerously-bypass-approvals-and-sandbox",
+                 "--ignore-user-config", "-C", "{cwd}"],
+    },
+    "opencode": {
+        "label": "OpenCode", "protocol": "opencode", "command": "opencode", "beeMode": "process",
+        "args": ["run", "--format", "json", "--auto", "--model", "{model}", "--dir", "{cwd}"],
+    },
+    "kilo": {
+        "label": "Kilo Code", "protocol": "kilo", "command": "kilo", "beeMode": "process",
+        "args": ["run", "--format", "json", "--auto", "--model", "{model}", "--dir", "{cwd}"],
+    },
+}
+
+
+def labels() -> list:
+    """The labels of the choice list in display order, the custom entry last."""
+    return [p["label"] for p in PRESETS.values()] + [CUSTOM_LABEL]
+
+
+def key_of_label(label) -> str:
+    """The key of a choice label (the custom key for Custom CLI or an unknown label)."""
+    return next((k for k, p in PRESETS.items() if p["label"] == label), CUSTOM)
+
+
+def label_of(key) -> str:
+    """The label of a choice key."""
+    return PRESETS[key]["label"] if key in PRESETS else CUSTOM_LABEL
+
+
+def key_for(entry) -> str:
+    """The key of the CLI a provider entry is set to: the custom key when the entry carries the fields of an own CLI, else the preset whose protocol it has."""
+    if any(field in entry for field in CUSTOM_KEYS):
+        return CUSTOM
+    proto = str(entry.get("protocol") or entry.get("name") or "")
+    return next((k for k, p in PRESETS.items() if p["protocol"] == proto), CUSTOM)
+
+
+def apply(entry, key) -> None:
+    """Set the entry to the CLI `key`: protocol, command, arguments and Bee mode, and remove the custom-CLI fields (a built-in CLI brings its own).
+    The custom key changes nothing. Provider name, slots, use, classes and capabilities stay as they are."""
+    preset = PRESETS.get(key)
+    if not preset:
+        return
+    for field in CUSTOM_KEYS:
+        entry.pop(field, None)
+    entry.update(protocol=preset["protocol"], command=preset["command"], args=list(preset["args"]), beeMode=preset["beeMode"])

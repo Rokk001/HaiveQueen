@@ -45,7 +45,31 @@ SPECS = {
         "sessions": ["data/opencode/storage"],
         "loginArgs": "auth login",
     },
+    # Kilo Code (official docs: `kilo run`, `kilo auth login`; official source packages/core/src/global.ts: XDG folders below "kilo", KILO_CONFIG_DIR moves the
+    # config folder, credentials in <data>/auth.json, sessions in <data>/kilo.db which must never be pruned, logs in <data>/log).
+    "kilo": {
+        "env": {"KILO_CONFIG_DIR": "{home}/config", "XDG_CONFIG_HOME": "{home}/config", "XDG_DATA_HOME": "{home}/data",
+                "XDG_STATE_HOME": "{home}/state", "XDG_CACHE_HOME": "{home}/cache"},
+        "login": ["data/kilo/auth.json"],
+        "settings": {},
+        "sessions": ["data/kilo/log"],
+        "loginArgs": "auth login",
+    },
 }
+
+# The output formats the agent runner can read, and which one each built-in protocol writes. Kilo Code is a fork of OpenCode and writes the same JSONL events.
+FORMAT_NAMES = ("claude", "codex", "opencode")
+FORMATS = {"claude": "claude", "codex": "codex", "opencode": "opencode", "kilo": "opencode"}
+
+
+def check_protocol(name, proto, declared=None) -> str:
+    """Return the output format of a provider entry: the one of a built-in protocol, else the `outputFormat` the entry declares.
+    Raises ValueError with a clear message when a custom CLI names no output format HaiveQueen understands."""
+    fmt = FORMATS.get(str(proto)) or (str(declared) if str(declared) in FORMAT_NAMES else "")
+    if not fmt:
+        raise ValueError("provider %s: protocol '%s' is not supported. A custom CLI is accepted only when it writes one of the output formats HaiveQueen "
+                         "understands; set outputFormat to one of: %s" % (name, proto, ", ".join(FORMAT_NAMES)))
+    return fmt
 
 
 def profile_dir() -> Path:

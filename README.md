@@ -21,7 +21,7 @@ HaiveQueen is a local orchestrator for coding agents ([Claude Code](https://clau
 
 ## Why
 
-**1. It runs in its own profile, so your private instructions never reach its agents.** HaiveQueen is a development environment of its own. Every agent it starts (Claude, Codex, OpenCode) works with one profile folder in HaiveQueen's data folder, never with your private files: your global `CLAUDE.md` or `AGENTS.md`, your memory, your settings and plugins stay beside it, untouched, and are not loaded. Each CLI is started with its config-dir variable pointing at the profile, which holds only the login and a few settings (auto memory and history off). Whatever you have piled into your own agents over time costs HaiveQueen's agents nothing. That is **very token-saving**, and you **run into provider limits much later**. Details: [`docs/PROFILE.md`](docs/PROFILE.md).
+**1. It runs in its own profile, so your private instructions never reach its agents.** HaiveQueen is a development environment of its own. Every agent it starts (Claude, Codex, OpenCode, Kilo Code) works with one profile folder in HaiveQueen's data folder, never with your private files: your global `CLAUDE.md` or `AGENTS.md`, your memory, your settings and plugins stay beside it, untouched, and are not loaded. Each CLI is started with its config-dir variable pointing at the profile, which holds only the login and a few settings (auto memory and history off). Whatever you have piled into your own agents over time costs HaiveQueen's agents nothing. That is **very token-saving**, and you **run into provider limits much later**. Details: [`docs/PROFILE.md`](docs/PROFILE.md).
 
 **2. Only the project rules, and only from the repository.** Queens and Bees load the complete project rules: the instruction files (`AGENTS.md`, `CLAUDE.md`) checked in to the project repository, plus those of an upstream repository when the project setting `upstreamRepo` names one. The README and untracked workspace files never count. A Queen additionally loads her plan, its state file, the handoff of her predecessor and the decisions and owner answers of her Apiary; nothing else. The Queen selects no rules for a Bee.
 
@@ -92,7 +92,7 @@ stateDiagram-v2
 **Requirements**
 
 - Python 3.11 or newer, with tkinter (part of the standard Python installers) for the dashboard window
-- the [Claude Code](https://claude.com/claude-code) CLI (`claude`) and/or the Codex CLI (`codex`)
+- at least one of the supported CLIs: [Claude Code](https://claude.com/claude-code) (`claude`), the Codex CLI (`codex`), [OpenCode](https://opencode.ai) (`opencode`) or [Kilo Code](https://kilo.ai) (`kilo`)
 - Git (Hives work in worktrees)
 
 **Steps**
@@ -117,6 +117,8 @@ $env:CLAUDE_CONFIG_DIR = "$env:LOCALAPPDATA\HaiveQueen\profile\claude"; claude a
 $env:CODEX_HOME = "$env:LOCALAPPDATA\HaiveQueen\profile\codex"; codex login
 # OpenCode
 $p = "$env:LOCALAPPDATA\HaiveQueen\profile\opencode"; $env:OPENCODE_CONFIG_DIR = "$p\config"; $env:XDG_CONFIG_HOME = "$p\config"; $env:XDG_DATA_HOME = "$p\data"; $env:XDG_STATE_HOME = "$p\state"; $env:XDG_CACHE_HOME = "$p\cache"; opencode auth login
+# Kilo Code
+$p = "$env:LOCALAPPDATA\HaiveQueen\profile\kilo"; $env:KILO_CONFIG_DIR = "$p\config"; $env:XDG_CONFIG_HOME = "$p\config"; $env:XDG_DATA_HOME = "$p\data"; $env:XDG_STATE_HOME = "$p\state"; $env:XDG_CACHE_HOME = "$p\cache"; kilo auth login
 ```
 
 bash (Linux):
@@ -128,9 +130,11 @@ CLAUDE_CONFIG_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/claud
 CODEX_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/codex" codex login
 # OpenCode
 p="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/opencode"; OPENCODE_CONFIG_DIR="$p/config" XDG_CONFIG_HOME="$p/config" XDG_DATA_HOME="$p/data" XDG_STATE_HOME="$p/state" XDG_CACHE_HOME="$p/cache" opencode auth login
+# Kilo Code
+p="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/kilo"; KILO_CONFIG_DIR="$p/config" XDG_CONFIG_HOME="$p/config" XDG_DATA_HOME="$p/data" XDG_STATE_HOME="$p/state" XDG_CACHE_HOME="$p/cache" kilo auth login
 ```
 
-Without a login a provider counts as not available and its packages wait; all others go on. You can also do this from the dashboard: the settings window shows "Login present" or "Login missing" on every provider's page, and its **Login** button opens a terminal window with the variables set and the login command running. For a CLI HaiveQueen does not know, set `profileEnv`, `loginCommand` and `loginFiles` in its provider entry (see [`examples/config.example.toml`](examples/config.example.toml)); the same status, profile and button then work for it.
+Without a login a provider counts as not available and its packages wait; all others go on. You can also do this from the dashboard: the settings window shows "Login present" or "Login missing" on every provider's page, and its **Login** button opens a terminal window with the variables set and the login command running. For a CLI HaiveQueen does not know, set `outputFormat` (the format it writes: `claude`, `codex` or `opencode`; without one of them the provider is rejected with a clear message), `profileEnv`, `loginCommand` and `loginFiles` in its provider entry (see [`examples/config.example.toml`](examples/config.example.toml)); the same status, profile and button then work for it.
 
 ```bash
 bzz start                             # starts the loop in the background and opens the dashboard window
@@ -312,7 +316,7 @@ CI runs the suite on Windows and Linux with Python 3.11 and 3.14, plus a tmux sm
 
 **Does HaiveQueen call a model all the time?** No. The Beekeeper runs without a model; Queens and their Bees use models for plan work.
 
-**Which agents can I use?** Claude Code and the Codex CLI out of the box; any other command through the `providers` list.
+**Which agents can I use?** Claude Code, the Codex CLI, OpenCode and Kilo Code out of the box (the settings window lists exactly these, plus "Custom CLI"); any other command through the `providers` list, as long as it writes one of the output formats HaiveQueen reads (`claude`, `codex`, `opencode`; set `outputFormat`). Other CLIs are not offered until their documentation allows a run, a login and a profile of their own; the reasons are in [`docs/PROFILE.md`](docs/PROFILE.md).
 
 **Why did my package escalate to a bigger model?** Only when the current model tried the same thing repeatedly and did not get it done. Waiting for an answer, a build or you never counts, see [Failures and escalation](#failures-and-escalation).
 

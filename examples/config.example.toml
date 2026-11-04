@@ -48,11 +48,13 @@ light = { model = "gpt-6-luna", effort = "medium" }
 medium = { model = "gpt-6.1-terra", effort = "medium" }
 heavy = { model = "gpt-6.1-sol", effort = "medium" }
 
-# A CLI HaiveQueen does not know brings its profile values itself (Claude, Codex and OpenCode have them built in). Example, kept as a comment:
+# A CLI HaiveQueen does not know brings its profile values itself (Claude, Codex, OpenCode and Kilo Code have them built in). It is accepted only when it
+# writes one of the output formats HaiveQueen reads: "claude", "codex" or "opencode". Example, kept as a comment:
 # [[providers]]
 # name = "mycli"
 # protocol = "mycli"
 # command = "mycli"
+# outputFormat = "opencode"                      # the output format the CLI writes: "claude", "codex" or "opencode"; any other value is rejected
 # slots = 1
 # use = "fallback"
 # profileEnv = { MYCLI_HOME = "{home}/cfg" }   # variable(s) that point the CLI to its profile folder; {home} = <data folder>/profile/mycli

@@ -12,7 +12,7 @@ import tomllib
 from pathlib import Path
 
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
-CHOICES = {"protocol": ("claude", "codex"), "use": ("preferred", "fallback", "capability-only"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
+CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "use": ("preferred", "fallback", "capability-only"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
 CLASSES = ("light", "medium", "heavy")
 
 
@@ -327,12 +327,15 @@ class ConfigWindow:
         self.position = None
         self.login_status = self.login_button = None
         if kind == "providers":
-            from . import profile
-            if profile.SPECS.get(str(data.get("protocol") or data.get("name") or "")) is None:
+            from . import cli_presets
+            key = cli_presets.key_for(data)
+            if key == cli_presets.CUSTOM:
                 data.setdefault("profileEnv", {})   # an own CLI: the variables that point it to the profile folder ({home} = its profile folder)
                 shown["profileEnv"] = data["profileEnv"]
                 shown.setdefault("loginCommand", "")   # the command that makes the login
                 shown.setdefault("loginFiles", [])   # the login files, relative to the profile folder of the CLI
+                shown.setdefault("outputFormat", "")   # the output format the CLI writes: claude, codex or opencode
+            self.cli_row(key)
             self.login_row()
         if kind == "general":
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
@@ -352,6 +355,31 @@ class ConfigWindow:
         name = str(raw.get("name") or "")
         proto = str(raw.get("protocol") or name)
         return {"name": name, "protocol": proto, "command": str(raw.get("command") or proto), **profile.custom_fields(raw)}
+
+    # The CLI choice of a provider page.
+    def cli_row(self, key):
+        """Add the list of the CLIs that run (and Custom CLI) at the top of a provider page; choosing one sets all its values."""
+        from . import cli_presets
+        tk = self.tk
+        row = tk.Frame(self.form)
+        row.pack(fill="x", pady=(0, 8), anchor="w")
+        tk.Label(row, text="cli", width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+        self.cli_var = tk.StringVar(value=cli_presets.label_of(key))
+        self.dialog.option_menu(row, self.cli_var, cli_presets.labels(), self.mono, self.choose_cli).pack(side="left")
+
+    # A CLI was chosen in the list.
+    def choose_cli(self, label):
+        """Set the shown provider to the chosen CLI (protocol, command, arguments, Bee mode); Custom CLI keeps the values and offers the fields of an own CLI."""
+        from . import cli_presets
+        if not self.collect():
+            return
+        data = self.target()
+        key = cli_presets.key_of_label(label)
+        if key == cli_presets.CUSTOM:
+            data.setdefault("outputFormat", "")
+        else:
+            cli_presets.apply(data, key)
+        self.build_form()
 
     # Status line and Login button of a provider page.
     def login_row(self):
