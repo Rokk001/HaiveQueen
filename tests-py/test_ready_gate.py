@@ -187,6 +187,20 @@ class GateTests(RoundCase):
         self.assertIn("DUMMY-PLAN.md", request["prompt"])
         self.assertEqual(len(self.queued()), 1)
 
+    def test_check_agent_is_told_the_language(self):
+        """The ready-check prompt names English by default and the configured language otherwise."""
+        self.state(*FULL)
+        with self.runner("passed"):
+            self.ready()
+        self.assertIn("state file entries) in English", self.requests[0]["prompt"])
+
+    def test_check_agent_is_told_the_configured_language(self):
+        """A language setting reaches the ready-check prompt."""
+        self.state(*FULL)
+        with self.runner("passed"), mock.patch("haivequeen.config.load_config", return_value=self.machine | {"language": "Deutsch"}):
+            self.ready()
+        self.assertIn("state file entries) in Deutsch", self.requests[0]["prompt"])
+
     def test_failed_result_returns_missing_points(self):
         """A failed check agent sends its points back to the Queen and registers nothing."""
         self.state(*FULL)

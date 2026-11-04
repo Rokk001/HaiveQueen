@@ -120,7 +120,7 @@ def gate(env, plan, queen):
     if res.no_ids or res.blocking:
         return False, refusal_text(res), False
     skipped = ", ".join(res.owner + res.aside) or "none"
-    prompt = roles.role_text("ready-check", {"plan_file": plan_file, "state_file": state_file, "cwd": queen.get("cwd") or str(env.workspace), "skipped": skipped})
+    prompt = roles.role_text("ready-check", {"plan_file": plan_file, "state_file": state_file, "cwd": queen.get("cwd") or str(env.workspace), "skipped": skipped, "language": roles.language(env.settings)})
     request = {"env": env, "queen": queen, "plan": plan, "cwd": queen.get("cwd") or str(env.workspace), "prompt": prompt}
     runner = CHECK_RUNNER or (lambda r: start_check_agent(r["env"], r["queen"], r))
     verdict, text = runner(request)

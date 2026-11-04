@@ -181,9 +181,9 @@ PACKAGE_STATES = ('working', 'waiting', 'implemented', 'done', 'rejected')   # p
 
 
 # Describe the plan's Queen and Bee workflow with configured limits.
-def queen_instructions(queen_class, bee_limit, threshold, context_limit):
+def queen_instructions(queen_class, bee_limit, threshold, context_limit, language=None):
     """Return Queen task instructions for the configured classes and limits."""
-    return roles.role_text('queen', {'class': queen_class, 'bee_limit': bee_limit, 'escalate_after': threshold, 'context_limit': context_limit})
+    return roles.role_text('queen', {'class': queen_class, 'bee_limit': bee_limit, 'escalate_after': threshold, 'context_limit': context_limit, 'language': language or roles.language({})})
 
 
 # Packages of a plan that can still start although one provider is missing.
