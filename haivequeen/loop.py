@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import config, db, events, export, faults, inbox, reattach, routine, runstate, runtime, usage, views
+from . import config, db, events, export, faults, inbox, reattach, roles, routine, runstate, runtime, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -484,11 +484,10 @@ def _do_start(c, a, forced_pick=None) -> int:
     pf = run_dir / "prompt.md"
     hf = run_dir / "HANDOFF"
     if phase == "bee":
-        hdr = "You are a Bee. Follow only the task and rules provided below.\n\nTASK\n\n"
+        hdr = roles.role_text("bee-start") + "\n\n"
     elif phase == "queen":
         rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"
-        hdr = ("You are the Queen of this Hive. Work the plan, preserve its state, and use the project work rules (%s). "
-               "Before integration follow the project's integration rules.\n\nTASK\n\n" % rules_doc)
+        hdr = roles.role_text("queen-start", {"rules_doc": rules_doc}) + "\n\n"
     elif protocol == "claude":
         flow_doc = env.settings.get("buildFlowDoc", "")
         hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of AGENT-RULES.md and the rule sections you need) are "
