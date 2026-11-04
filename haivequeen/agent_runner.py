@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import buildjobs, config, db, interrupt, overview, runtime, scheduler
+from . import buildjobs, config, db, interrupt, overview, profile, runtime, scheduler
 from . import platform as osplat
 
 TOOL_ROOT = Path(__file__).resolve().parent.parent
@@ -212,7 +212,7 @@ def codex_sessions_dir():
     env = os.environ.get("BZZ_CODEX_SESSIONS")
     if env:
         return Path(env)
-    return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")) / "sessions"
+    return profile.sessions_dir("codex")
 
 
 def get_codex_tokens(thread_id, sessions=None):
@@ -806,6 +806,12 @@ def run_agent(a, out=None):
                  "claudeTools": pcfg.get("claudeTools", cfg.get("claudeTools", "")), "rules": str(rules_file)}
         if protocol == "claude" and not str(vars_["claudeTools"] or "").strip():
             raise ValueError("claudeTools missing")
+        if not profile.prepare(prov):
+            if not runtime.list_questions(conn, a.project, status="open", plan=a.plan, item=a.package or "profile"):
+                db.add_question(conn, a.project, a.plan, a.package or "profile",
+                                "Provider %s (protocol %s) cannot be kept to the HaiveQueen profile, so it would read private files. This package is stopped. Which provider may run it?" % (a.provider, protocol),
+                                "Give the package to a provider that can be kept to the profile.")
+            raise ValueError("provider %s cannot be kept to the HaiveQueen profile" % a.provider)
         arg_list = build_args(prov, vars_)
         if a.phase == "bee" and protocol == "claude":
             if "--setting-sources" in arg_list:
@@ -827,7 +833,7 @@ def run_agent(a, out=None):
     bj_raw = cfg.get("buildJobs")
     bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release", "queen") else None
     bj_jobs, bj_start_mb, samples, stop, sampler = 0, 0.0, run_dir / "build-samples.txt", threading.Event(), None
-    env = with_bzz_on_path(dict(os.environ))   # the agent and everything it starts finds `bzz`, also without a PATH entry of the pip Scripts folder
+    env = with_bzz_on_path(profile.environment(prov))   # the agent and everything it starts finds `bzz`, also without a PATH entry of the pip Scripts folder
     env["BZZ_AGENT"] = a.name   # tells `bzz ready` which agent calls it (only the release phase may register a branch as ready)
     if bj:
         bj_start_mb = float(osplat.free_ram_mb())

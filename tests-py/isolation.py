@@ -34,6 +34,7 @@ def snapshot_real(bases=None) -> dict:
 
 
 REAL_BEFORE = snapshot_real()
+os.environ.setdefault("BZZ_NO_LOGIN_CHECK", "1")   # providers of the tests need no login in the profile (test_profile.py removes this)
 ROOT = Path(tempfile.mkdtemp(prefix="hq-tests-appdata-"))
 REDIRECTED = {"LOCALAPPDATA": ROOT / "local", "APPDATA": ROOT / "roaming", "XDG_DATA_HOME": ROOT / "local", "XDG_CONFIG_HOME": ROOT / "roaming"}
 ORIGINAL = {_var: os.environ.get(_var) for _var in REDIRECTED}  # real values for read-only live-loop checks

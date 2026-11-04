@@ -220,7 +220,7 @@ class UsageTableTest(unittest.TestCase):
 
     def test_retention_reads_settings_and_never_writes_them(self):
         """cleanupPeriodDays comes from the (temp) home settings file, which stays byte-identical."""
-        settings = self.home / ".claude" / "settings.json"
+        settings = self.home / "claude" / "settings.json"
         settings.parent.mkdir()
         raw = b'{"cleanupPeriodDays": 7}'
         settings.write_bytes(raw)
@@ -436,11 +436,11 @@ class PathTest(unittest.TestCase):
     """Default folders per OS."""
 
     def test_default_roots(self):
-        """Log folders hang below the home folder; the cache sits in the data folder."""
+        """Log folders hang below the profile folder, not the user's home folder; the cache sits in the data folder."""
         with mock.patch.object(usage, "home_dir", lambda: Path("/h")):
-            self.assertEqual(usage.claude_root(), Path("/h/.claude/projects"))
-            self.assertEqual(usage.codex_root(), Path("/h/.codex/sessions"))
-            self.assertEqual(usage.claude_settings_path(), Path("/h/.claude/settings.json"))
+            self.assertEqual(usage.claude_root(), Path("/h/claude/projects"))
+            self.assertEqual(usage.codex_root(), Path("/h/codex/sessions"))
+            self.assertEqual(usage.claude_settings_path(), Path("/h/claude/settings.json"))
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": "/d"}):
             self.assertEqual(usage.default_cache_dir(), Path("/d/usage-cache"))
 
