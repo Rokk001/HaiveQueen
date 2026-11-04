@@ -631,7 +631,7 @@ class Dashboard:
         x = right + 50
         self.text(x - 22, 886, "|", 17, "dim", "w")
         for name, action in (("apiaries" if not self.project else "apiary:" + self.project, self.next_project),
-                             ("questions", self.open_questions), ("config", self.open_config), ("help", self.help)):
+                             ("hives", self.open_hives), ("questions", self.open_questions), ("config", self.open_config), ("help", self.help)):
             w = 13 * len(name)
             self.text(x, 886, name, 17, "text", "w")
             self.hit(x - 8, 866, x + w + 8, 908, lambda _a, f=action: f())
@@ -1026,6 +1026,16 @@ class Dashboard:
             current.win.lift()
             return
         self.questions_window = gui_questions.QuestionsWindow(self.root, self.conn, self.mono, on_answered=self.refresh)
+
+    # Open the list of all plans.
+    def open_hives(self):
+        """Open the list of the plans of all Apiaries with their status and the right-click actions; a second click brings the open window to the front."""
+        from . import gui_hives
+        current = getattr(self, "hives_window", None)
+        if current is not None and current.win.winfo_exists():
+            current.win.lift()
+            return
+        self.hives_window = gui_hives.HivesWindow(self.root, self.conn, self.mono, on_changed=self.refresh)
 
     # Open the settings editor.
     def open_config(self):
