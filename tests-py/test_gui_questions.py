@@ -3,7 +3,9 @@ import unittest
 from unittest import mock
 
 from bzztest import REL, RoundCase
-from haivequeen import bees, db, gui_questions
+from pathlib import Path
+
+from haivequeen import bees, db, gui_questions, runtime, triage
 
 
 class AnswerTest(RoundCase):
@@ -104,6 +106,55 @@ class WindowTest(RoundCase):
         win.send()
         self.assertIn("answer", win.status.cget("text").lower())
         self.assertEqual(win.list.size(), 2)
+
+    # The checkbox sits below the answer field, off by default, and is read when answering.
+    def test_apiary_checkbox(self):
+        """The checkbox is off, packed right after the answer field, resets after an answer and stores the Apiary decision when set."""
+        win = gui_questions.QuestionsWindow(self.root, self.conn)
+        self.assertFalse(win.apiary_var.get())
+        self.assertIn('whole Apiary', win.apiary_box.cget('text'))
+        slaves = win.reply.master.pack_slaves()
+        self.assertIs(slaves[slaves.index(win.reply) + 1], win.apiary_box)
+        win.list.selection_clear(0, "end")
+        win.list.selection_set(1)
+        win.show()
+        win.apiary_var.set(True)
+        win.reply.insert("1.0", 'Blue.')
+        win.send()
+        self.assertFalse(win.apiary_var.get())
+        self.assertEqual([d['plan_path'] for d in runtime.list_decisions(self.conn, 'testproj', item='colour')], [None])
+
+
+class ApiaryDecisionTest(RoundCase):
+    """The checkbox stores the answer as a decision of the whole Apiary."""
+
+    def test_apiary_answer_is_found_again_in_another_plan(self):
+        """Checked: decision without plan, found for the same item in another plan (worded differently); not seen in another Apiary."""
+        qid = db.add_question(self.conn, 'testproj', REL, 'colour', 'Which colour?', 'Red.')
+        gui_questions.answer(self.conn, qid, 'Blue.', apiary=True)
+        decisions = runtime.list_decisions(self.conn, 'testproj')
+        self.assertEqual([d['plan_path'] for d in decisions], [None])
+        known = triage._known_answer(self.conn, 'testproj', 'docs/plans/other/OTHER.md', 'colour')
+        self.assertEqual(known[0], 'decision')
+        self.assertIn('Blue.', known[2])
+        self.assertIsNone(triage._known_answer(self.conn, 'otherproj', 'docs/plans/other/OTHER.md', 'colour'))
+        self.assertEqual(runtime.list_decisions(self.conn, 'otherproj'), [])
+
+    def test_without_checkbox_only_the_plan_decision(self):
+        """Not checked: the decision keeps its plan, another plan of the Apiary is not answered."""
+        qid = db.add_question(self.conn, 'testproj', REL, 'colour', 'Which colour?', 'Red.')
+        gui_questions.answer(self.conn, qid, 'Blue.')
+        self.assertEqual([d['plan_path'] for d in runtime.list_decisions(self.conn, 'testproj')], [REL])
+        self.assertIsNone(triage._known_answer(self.conn, 'testproj', 'docs/plans/other/OTHER.md', 'colour'))
+
+    def test_queen_instructions_name_both_rules(self):
+        """roles/queen.md tells the Queen to check Apiary decisions first and to ask once on contradicting settings and rules."""
+        text = (Path(__file__).resolve().parent.parent / 'roles' / 'queen.md').read_text(encoding='utf-8')
+        self.assertIn('check the decisions of your Apiary (bzz decisions list)', text)
+        self.assertIn('name the decision', text)
+        self.assertIn('settings of the Apiary and its project rules contradict each other', text)
+        self.assertIn('his answer decides', text)
+        self.assertIn('asked again in another plan', text)
 
 
 if __name__ == "__main__":
