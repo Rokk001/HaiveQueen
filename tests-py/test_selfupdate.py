@@ -360,7 +360,25 @@ class UpdateTest(SelfUpdateBase):
         run.inner = inner
         self.update(run)
         self.assertIn(["git", "-C", str(self.live), "push", "origin", "main"], seen)
-        self.assertIn(["git", "-C", str(self.live), "merge", "--ff-only", "origin/v2"], seen)
+        self.assertIn(["git", "-C", str(self.live), "merge", "--ff-only", "origin/main"], seen)
+
+    def test_fast_forward_comes_from_the_integration_branch_of_the_settings(self):
+        """The merge is `--ff-only origin/<integrationBranch>` read from the project.toml of project HaiveQueen, never origin/v2."""
+        ws = Path(self.tmp.name) / "HaiveQueen-workspace"
+        (ws / ".haivequeen").mkdir(parents=True)
+        (ws / ".haivequeen" / "project.toml").write_text('integrationBranch = "trunk"\n', encoding="utf-8")
+        db.upsert_project(self.conn, selfupdate.PROJECT, str(ws))
+        seen = []
+        inner = FakeGit(self.conn)
+
+        def run(argv, cwd):
+            """Record the argv, then answer like the scripted runner."""
+            seen.append(argv)
+            return inner(argv, cwd)
+        run.inner = inner
+        self.update(run)
+        self.assertIn(["git", "-C", str(self.live), "merge", "--ff-only", "origin/trunk"], seen)
+        self.assertFalse(any("origin/v2" in argv for argv in seen))
 
     def test_pip_only_when_pyproject_changed(self):
         """pip install -e runs when pyproject.toml is in the diff, before the start."""
@@ -369,7 +387,7 @@ class UpdateTest(SelfUpdateBase):
         self.assertEqual(git.words()[-2:], ["pip", "start"])
 
     def test_already_current_pushes_nothing(self):
-        """When origin/v2 brings nothing new the loop is started again without push or pip, result ok."""
+        """When the integration branch brings nothing new the loop is started again without push or pip, result ok."""
         git = FakeGit(self.conn, target=OLD)
         res = self.update(git)
         self.assertEqual(res["result"], "ok")

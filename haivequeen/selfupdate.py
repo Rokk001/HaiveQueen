@@ -1,7 +1,8 @@
 """Self-update of the live folder: `python -m haivequeen self-update` only spawns a detached worker and returns at once.
 
 The worker (`self-update --worker`) takes the lock file, writes the STOP flag, waits until the loop and every running agent (all projects)
-ended by themselves (it ends nothing), fast-forwards main of the live folder to origin/v2, pushes main, installs the package again only when
+ended by themselves (it ends nothing), fast-forwards main of the live folder to origin/<integrationBranch> of the settings of project HaiveQueen
+(main when unset), pushes main, installs the package again only when
 pyproject.toml changed, starts the loop and checks the first round. A failure after the merge is rolled back with `git reset --keep`
 (rollback) and filed as an open question of project HaiveQueen. Every run is one row of the table self_updates.
 The live folder is the folder of this package: no path of a machine is written into the tool.
@@ -13,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import db, loop, runstate
+from . import config, db, loop, runstate
 from . import platform as osplat
 
 PROJECT = "HaiveQueen"
@@ -36,6 +37,13 @@ def live_folder() -> Path:
 def lock_path() -> Path:
     """Path of the self-update lock file (the process id of the running worker) in the machine data folder."""
     return osplat.data_dir() / "self-update.lock"
+
+
+def integration_branch(conn) -> str:
+    """The integrationBranch setting of project HaiveQueen (its project.toml, read fresh); "main" when the project or the setting is missing."""
+    from . import scheduler
+    env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == PROJECT), None)
+    return str((env.settings if env else {}).get("integrationBranch") or "main")
 
 
 # ---- starting the detached worker ----
@@ -161,7 +169,7 @@ def changed_files(live, old: str, new: str, run) -> list:
 def rollback(conn, live, old: str, new: str, why: str, run, restart) -> tuple:
     """Reset the live folder to `old` (git reset --keep), install again when pyproject.toml differed, start the loop, file the open question.
 
-    Returns (result, note): "rollback" when the old state runs again, else "failed" with what went wrong. v2 and origin are not touched.
+    Returns (result, note): "rollback" when the old state runs again, else "failed" with what went wrong. origin is not touched.
     """
     pyproject = "pyproject.toml" in changed_files(live, old, new, run)
     code, out = run(["git", "-C", str(live), "reset", "--keep", old], live)
@@ -210,7 +218,8 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
             code, out = run([osplat.python_executable(), "-m", "haivequeen", "start", "--keep-pause"], live)
             return code == 0, out.strip()
 
-        for argv in (["fetch", "origin"], ["merge", "--ff-only", "origin/v2"]):
+        branch = integration_branch(conn)
+        for argv in (["fetch", "origin"], ["merge", "--ff-only", "origin/" + branch]):
             code, out = run(["git", "-C", str(live)] + argv, live)
             if code != 0:
                 ok, why = restart()   # nothing was changed: only the stopped loop is started again
