@@ -877,8 +877,21 @@ class Dashboard:
             return
         items = [("Restart Queen of %s" % hive["name"], lambda: self.queen_action(hive, "requeen"))]
         items += [("Restart Queen of %s on %s" % (hive["name"], name), lambda name=name: self.queen_action(hive, "requeen", name)) for name in self.queen_providers(hive)]
-        gui_dialog.popup_menu(self.root, items + [("End Queen and Bees of %s" % hive["name"], lambda: self.queen_action(hive, "dequeen")), None,
-                                                  (("Resume plan %s" if hive["paused"] else "Pause plan %s") % hive["name"], lambda: self.toggle_hive_pause(hive))], self.mono)
+        items.append(("End Queen and Bees of %s" % hive["name"], lambda: self.queen_action(hive, "dequeen")))
+        items.append(None)
+        gui_dialog.popup_menu(self.root, items + [(label + " " + hive["name"], lambda action=action: self.plan_control(hive, action)) for label, action in self.control_items(hive)], self.mono)
+
+    # The plan control entries a Hive offers now.
+    @staticmethod
+    def control_items(hive) -> list:
+        """(label, action) of the plan control: Pause and Stop for a running plan, Start again and Stop for a paused plan with a live Queen, Start again and Reject for a stopped Hive (paused, no live Queen), Start again for a rejected plan."""
+        if hive.get("plan_rejected"):
+            return [("Start again", "start")]
+        if not hive["paused"]:
+            return [("Pause", "pause"), ("Stop", "stop")]
+        if hive["live"]:
+            return [("Start again", "start"), ("Stop", "stop")]
+        return [("Start again", "start"), ("Reject", "reject")]
 
     # The providers a replacement Queen of a Hive could run on instead of its own.
     def queen_providers(self, hive) -> list:
@@ -895,18 +908,28 @@ class Dashboard:
         return [p["name"] for p in env.providers if p["name"] not in excluded and p["name"] != current and not p.get("endpoint")
                 and (p.get("classes", {}).get(queen_class) or {}).get("model")]
 
-    # Pause or resume the plan of a Hive.
-    def toggle_hive_pause(self, hive=None):
-        """Set the status of the Hive's plan file to PAUSED (no new Queen or Bee is started for it; a running Queen keeps working) or back to READY; key Space acts on the selected Hive."""
-        from . import runtime
-        hive = hive or self.selected_hive()
-        if hive is None:
+    # Pause, stop, reject or start again the plan of a Hive.
+    def plan_control(self, hive, action):
+        """After a confirmation: pause (no new Queen or Bee starts, a running Queen keeps working), stop (end the Queen and her Bees, plan paused), reject (a stopped Hive) or start again (a paused plan gets its earlier status back, a rejected plan becomes a draft). Nothing is deleted."""
+        from . import hives, loop
+        ask = {"pause": "Pause %s? Running agents keep working, no new Queen or Bee starts.", "stop": "Stop %s? The Queen and her Bees are ended and the plan is paused. Handoff, packages, branch and worktrees stay.",
+               "reject": "Reject %s? The plan never starts again by itself; starting it again makes it a draft. Nothing is deleted.", "start": "Start %s again?"}[action]
+        if not self.confirm(ask % hive["name"]):
             return
         try:
-            runtime.set_plan_status(self.conn, hive["apiary"], hive["plan_path"], "READY" if hive["paused"] else "PAUSED")
+            with loop.hive_schedule_lock():
+                key = (hive["apiary"], hive["plan_path"])
+                {"pause": hives.pause_plan, "stop": hives.stop_hive, "reject": hives.reject_plan, "start": hives.start_again}[action](self.conn, *key)
         except Exception as exc:
-            self.complain("Could not change the plan status: %s" % exc)
+            self.complain("Could not change the plan: %s" % exc)
         self.refresh()
+
+    # Pause or resume the plan of a Hive (key Space).
+    def toggle_hive_pause(self, hive=None):
+        """Key Space on the selected Hive: pause a running plan or start a paused one again, after a confirmation."""
+        hive = hive or self.selected_hive()
+        if hive is not None and not hive.get("plan_rejected"):
+            self.plan_control(hive, "start" if hive["paused"] else "pause")
 
     # Restart or end the Queen of a Hive through the bzz command.
     def queen_action(self, hive, command, provider=None):

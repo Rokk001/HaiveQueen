@@ -507,6 +507,55 @@ def dequeen(conn, project, plan, stop=None):
         conn.execute("DELETE FROM hive_integration WHERE project=? AND plan_path=?", (project, plan))
 
 
+# The status a plan had before it was paused is kept in the kv table (survives a restart).
+def _plan_status(conn, project, plan):
+    """The status of a plan in the table, or raise ValueError for an unknown plan."""
+    row = conn.execute("SELECT status FROM plans WHERE project=? AND path=?", (project, plan)).fetchone()
+    if row is None:
+        raise ValueError('unknown plan')
+    return row[0]
+
+
+# Pause a plan: no new Queen or Bee starts, a running Queen keeps working.
+def pause_plan(conn, project, plan):
+    """Set the plan to PAUSED and keep its earlier status; a plan that is already PAUSED or REJECTED stays as it is."""
+    status = _plan_status(conn, project, plan)
+    if status in ('PAUSED', 'REJECTED'):
+        return
+    runtime.kv_set(conn, project, 'plan-prepause:' + plan, status)
+    runtime.set_plan_status(conn, project, plan, 'PAUSED')
+
+
+# Stop a Hive: end its Queen and Bees and pause the plan; handoff, package states, branch and worktrees stay.
+def stop_hive(conn, project, plan, stop=None):
+    """End the Queen and the own-process Bees of the Hive (as dequeen does) and set the plan to PAUSED."""
+    pause_plan(conn, project, plan)
+    if get(conn, project, plan) is not None:
+        dequeen(conn, project, plan, stop=stop)
+
+
+# Reject a stopped plan; nothing is deleted.
+def reject_plan(conn, project, plan):
+    """Set a stopped plan (PAUSED without a live Queen) to REJECTED."""
+    if _plan_status(conn, project, plan) != 'PAUSED' or any(a.get('plan_path') == plan and a.get('phase') in ('queen', 'bee') and agent_process.counts(a) for a in runtime.list_agents(conn, project, 'active')):
+        raise ValueError('only a stopped Hive can be rejected')
+    runtime.set_plan_status(conn, project, plan, 'REJECTED')
+
+
+# Start a paused or rejected plan again.
+def start_again(conn, project, plan):
+    """A PAUSED plan gets the status it had before the pause (READY when unknown), a REJECTED plan becomes DRAFT."""
+    status = _plan_status(conn, project, plan)
+    if status == 'REJECTED':
+        runtime.set_plan_status(conn, project, plan, 'DRAFT')
+    elif status == 'PAUSED':
+        before = runtime.kv_get(conn, project, 'plan-prepause:' + plan)
+        runtime.set_plan_status(conn, project, plan, before if before in ('DRAFT', 'SUBMITTED', 'READY', 'IN_PROGRESS', 'DONE') else 'READY')
+        runtime.kv_delete(conn, project, 'plan-prepause:' + plan)
+    else:
+        raise ValueError('the plan is neither paused nor rejected')
+
+
 # Request a replacement Queen, preserving the provider unless explicitly changed.
 def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen_class="medium", excluded=()):
     """Request a replacement Queen, preserving the provider unless explicitly changed."""
