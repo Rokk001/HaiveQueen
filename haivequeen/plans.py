@@ -5,7 +5,7 @@ import re
 import tomllib
 from dataclasses import dataclass, field
 
-STATUSES = ("DRAFT", "SUBMITTED", "READY", "IN_PROGRESS", "DONE", "PAUSED")
+STATUSES = ("DRAFT", "SUBMITTED", "READY", "IN_PROGRESS", "DONE", "PAUSED", "REJECTED")
 CLASSES = ("light", "medium", "heavy")
 VERIFIES = ("code", "build", "owner")   # who closes the last requirements of a package: the Bee (code), the build, or the owner
 DEFAULT_GLOBS = ("docs/plans/*.md",)

@@ -217,7 +217,7 @@ class RowsTest(unittest.TestCase):
             self.win.hive_menu()
             self.assertEqual(popup.call_count, 2)
             items = popup.call_args[0][1]
-            self.assertEqual([i if i is None else i[0].split(" ")[0] for i in items], ["Restart", "End", None, "Pause"])
+            self.assertEqual([i if i is None else i[0].split(" ")[0] for i in items], ["Restart", "End", None, "Pause", "Stop"])
             self.key("Down")
             self.win.hive_menu()
             self.assertEqual(popup.call_count, 2)
