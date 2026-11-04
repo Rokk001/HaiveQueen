@@ -20,6 +20,7 @@ class PackageProgressTest(RoundCase):
         self.plan('IN_PROGRESS', [{'id': 'P1'}, {'id': 'P2'}, {'id': 'P3'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        self.allow_ready()
 
     # Run the real `bzz package` handler as the Queen (or as another agent).
     def report(self, package, state, agent='queen'):

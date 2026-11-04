@@ -18,7 +18,8 @@ ONE = [{"id": "P1", "title": "first"}]
 # The fake provider CLI: finds the agent name in the prompt file, does what that kind of agent does and prints a Claude stream-json result.
 FAKE_CLI = r'''import argparse, contextlib, io, json, os, sys
 sys.path.insert(0, os.environ["FAKE_TOOLS"])
-from haivequeen import cli, config, db, runtime
+from haivequeen import cli, config, db, readygate, runtime
+readygate.gate = lambda env, plan, queen: (True, '', False)   # this test is about the loop; the ready gate has its own tests
 name = os.environ["BZZ_AGENT"]
 conn = db.connect(config.db_path())
 plan = os.environ["FAKE_PLAN"]
