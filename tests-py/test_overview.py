@@ -79,9 +79,9 @@ class OverviewTest(unittest.TestCase):
 
     # Check that Codex usage is read from the session logs.
     def test_codex_limits_from_session_logs(self):
-        """Invented Codex session logs in a temp home: collect writes kv usage-codex and returns the 5 hour percent."""
+        """Invented Codex session logs in a temp profile: collect writes kv usage-codex and returns the 5 hour percent."""
         home = Path(self.tmp.name) / "home"
-        day = home / ".codex" / "sessions" / "2026" / "10" / "28"
+        day = home / "codex" / "sessions" / "2026" / "10" / "28"
         day.mkdir(parents=True)
         t = int(datetime.now().timestamp())
         rl = {"primary": {"used_percent": 37.0, "window_minutes": 300, "resets_at": t + 3600},

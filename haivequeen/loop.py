@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import config, db, events, export, faults, inbox, reattach, roles, routine, runstate, runtime, usage, views
+from . import config, db, events, export, faults, inbox, profile, reattach, roles, routine, runstate, runtime, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -321,6 +321,7 @@ def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
     if not dry_run:
         # Fetch account metadata before taking the Hive scheduling lock.
         usage.refresh_claude_usage(conn, sch.get_providers(machine))
+        profile.notify_missing(conn, sch.get_providers(machine))
         from . import worktrees
         for env in envs:
             try:

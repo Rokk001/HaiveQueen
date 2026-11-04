@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from haivequeen import platform as osplat
+from haivequeen import profile
 from haivequeen import runtime
 
 GLOBAL_PROJECT = "*"        # kv project value for machine-wide state
@@ -40,23 +41,23 @@ TOKEN_COUNT_TAG = b'"token_count"'
 # ---------------------------------------------------------------- paths
 
 def home_dir() -> Path:
-    """Return the user's home folder (the per-OS base of the CLI log folders)."""
-    return Path.home()
+    """Return the base of the CLI log and settings folders: the HaiveQueen profile, never the user's home folder."""
+    return profile.profile_dir()
 
 
 def claude_root() -> Path:
-    """Return the folder with the Claude Code session logs (~/.claude/projects)."""
-    return home_dir() / ".claude" / "projects"
+    """Return the folder with the Claude Code session logs (in the profile)."""
+    return home_dir() / "claude" / "projects"
 
 
 def codex_root() -> Path:
-    """Return the folder with the Codex session logs (~/.codex/sessions)."""
-    return home_dir() / ".codex" / "sessions"
+    """Return the folder with the Codex session logs (in the profile)."""
+    return home_dir() / "codex" / "sessions"
 
 
 def claude_settings_path() -> Path:
     """Return the Claude Code settings file (read only, never written)."""
-    return home_dir() / ".claude" / "settings.json"
+    return home_dir() / "claude" / "settings.json"
 
 
 def default_cache_dir() -> Path:
@@ -805,7 +806,7 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
         argv = [executable, '-p', '/usage', '--output-format', 'stream-json', '--verbose',
                 '--no-session-persistence', '--setting-sources', '', '--settings', '{"disableAllHooks":true}',
                 '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--tools', '']
-        child_env = dict(os.environ)
+        child_env = profile.environment({**provider, 'protocol': 'claude'})
         child_env.pop('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', None)
         kwargs = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.PIPE, 'stderr': subprocess.DEVNULL,
                   'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'timeout': 20, 'env': child_env}
@@ -955,7 +956,7 @@ def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min
 
     Cheap: the logs are read at most once per `min_interval` seconds per folder; by default usage_interval decides (one minute,
     ten minutes after a read that found no window: Codex not reachable). Nothing is written when no window is known
-    (the old value stays). Without an explicit folder it does nothing in a test runtime (BZZ_DATA_DIR set). Only reads ~/.codex.
+    (the old value stays). Without an explicit folder it does nothing in a test runtime (BZZ_DATA_DIR set). Only reads the profile.
     """
     if codex_dir is None and os.environ.get("BZZ_DATA_DIR"):
         return False

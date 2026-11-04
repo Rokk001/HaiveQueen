@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, db, runtime
+from . import config, db, profile, runtime
 from . import platform as osplat
 
 CLASS_NAMES = ("light", "medium", "heavy")
@@ -167,6 +167,7 @@ def get_providers(settings: dict) -> list:
             "limit": str(limit.get("source", "")) if isinstance(limit, dict) else str(limit or ""),
             "endpoint": p.get("endpoint"),
         })
+        out[-1]["login"] = profile.has_login(out[-1])   # the login in the HaiveQueen profile; without it the provider counts as not available
     return out
 
 
@@ -197,7 +198,7 @@ def provider_free(providers: list, rows: list) -> dict:
     for p in providers:
         used = sum(1 for r in rows if r.get("status") in ACTIVE
                    and row_provider(r) == p["name"])
-        free[p["name"]] = max(0, p["slots"] - used)
+        free[p["name"]] = max(0, p["slots"] - used) if p.get("login", True) else 0
     return free
 
 
@@ -250,7 +251,7 @@ def claude_usage(conn) -> dict:
 def codex_usage(sessions_dir=None) -> dict:
     """Return {FiveHour, SevenDay} of Codex from the newest session logs (last rate_limits block; windows by window_minutes)."""
     res = {"FiveHour": None, "SevenDay": None}
-    base = Path(sessions_dir) if sessions_dir else Path.home() / ".codex" / "sessions"
+    base = Path(sessions_dir) if sessions_dir else profile.sessions_dir("codex")
     try:
         files = sorted(base.rglob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)[:3]
         for f in files:
