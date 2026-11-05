@@ -165,9 +165,9 @@ class WindowTest(unittest.TestCase):
         """Today shows the system time, another day the system date and time, and no value an empty text."""
         self.assertEqual(usage.format_reset_time(None), "")
         now = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
-        self.assertEqual(usage.format_reset_time(now.timestamp()), now.strftime("%X"))
+        self.assertEqual(usage.format_reset_time(now.timestamp()), usage.localtime.time(now))
         later = now + timedelta(days=2)
-        self.assertEqual(usage.format_reset_time(later.timestamp()), later.strftime("%x %X"))
+        self.assertEqual(usage.format_reset_time(later.timestamp()), usage.localtime.date_time(later))
 
 
 
