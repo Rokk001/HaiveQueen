@@ -115,7 +115,9 @@ CREATE TABLE IF NOT EXISTS build_measurements (
     free_start_mb REAL,
     free_min_mb REAL,
     per_job_mb REAL,
-    duration_s REAL
+    duration_s REAL,
+    peak_mb REAL,
+    parallel INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_build_key ON build_measurements (project, host, ts);

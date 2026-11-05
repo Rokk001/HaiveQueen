@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+import types
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -149,29 +150,26 @@ def blocked_tasks(agents, now=None) -> list:
 
 
 def build_jobs_line(conn, cfg, projects, agents, sysinfo) -> str:
-    """SYSTEM line for build jobs, or None without a buildJobs setting.
+    """SYSTEM line for build jobs, or None without a buildJobs setting or without a project that has buildProcessNames.
 
-    "Build jobs N of M cores (next build) | per job X MB | active: N cores"; the active part appears while a build
-    agent runs or a compiler process (buildProcessNames of project.toml) is alive; no names = no display (C8)."""
-    bj = cfg.get("buildJobs") or 0
-    if not bj:
+    "Build jobs N of M cores (running|next build) | per job X MB | active: N cores": N is the running job count during a build, else the count
+    `bzz integration acquire` would hand out now; X is the median per job of the project. With several such projects every project gets its
+    part, named by the project, in this one line. `sysinfo["build_projects"]` names the projects with buildProcessNames (default: all shown)."""
+    if cfg.get("buildJobs") is None:
         return None
-    cores = sysinfo["cores"]
-    settings = buildjobs.settings_from(bj)
-    marks = ",".join("?" * len(projects)) if projects else ""
-    sql = "SELECT MAX(per_job_mb) FROM build_measurements WHERE host=?" + (" AND project IN (%s)" % marks if projects else "")
-    per = conn.execute(sql, [sysinfo["host"]] + list(projects)).fetchone()[0]
-    if settings["PerJobMB"] is not None:
-        per = settings["PerJobMB"]
-    running = [a for a in agents if a["status"] == "running" and a.get("buildJobs")]
-    if running:
-        text = "Build jobs %s of %d cores (running)" % (running[0]["buildJobs"], cores)
-    else:
-        text = "Build jobs 1 of %d cores (next build)" % cores   # the owner's rule: one job, the same value bzz integration acquire hands out
-    text += " | per job " + ("%.0f MB" % per if per else "not measured yet")
-    if sysinfo.get("compiler_count") is not None and (running or sysinfo["compiler_count"] > 0):
-        text += " | active: %d cores" % sysinfo["compiler_count"]
-    return text
+    settings = {"buildJobs": cfg.get("buildJobs")}
+    shown = [p for p in projects if p in (sysinfo.get("build_projects") if sysinfo.get("build_projects") is not None else projects)]
+    parts = []
+    for name in shown:
+        mine = [a for a in agents if a.get("project") == name]
+        env = types.SimpleNamespace(conn=conn, name=name, settings=settings)
+        part = buildjobs.jobs_line(env, [a for a in mine if a["status"] == "running"], sysinfo.get("compiler_count") if len(shown) == 1 else 0,
+                                   cores=sysinfo["cores"], free_mb=sysinfo.get("free_mb"), host=sysinfo.get("host"))
+        if part and len(shown) > 1:
+            part = name + ": " + part
+        if part:
+            parts.append(part)
+    return "  ||  ".join(parts) if parts else None
 
 
 def usage_models(conn, agents_all, today) -> list:
@@ -358,18 +356,21 @@ def live_sysinfo(conn, project=None) -> dict:
     (names from buildProcessNames of the project.toml of the shown projects; none = no count)."""
     if os.environ.get("BZZ_DASH_SYSINFO"):   # fixed values for the demo picture and tests
         return json.loads(os.environ["BZZ_DASH_SYSINFO"])
-    names = []
+    names, build_projects = [], []
     rows = conn.execute("SELECT name, workspace FROM projects" + (" WHERE name=?" if project else ""),
                         (project,) if project else ()).fetchall()
     for r in rows:
         try:
             if r["workspace"]:
-                names += list(config.load_project(r["workspace"]).get("buildProcessNames") or [])
+                mine = list(config.load_project(r["workspace"]).get("buildProcessNames") or [])
+                names += mine
+                if mine:
+                    build_projects.append(r["name"])
         except Exception:   # a broken project file must not stop the dashboard
             continue
     names = sorted(set(names))
     return {"cores": osplat.logical_cores(), "free_mb": osplat.free_ram_mb(), "total_mb": _total_ram_mb(),
-            "host": osplat.host_name(), "compiler_count": osplat.count_processes(names) if names else None}
+            "host": osplat.host_name(), "compiler_count": osplat.count_processes(names) if names else None, "build_projects": build_projects}
 
 
 def _total_ram_mb() -> int:

@@ -56,11 +56,11 @@ class QueenOrderTest(RoundCase):
         self.assertNotIn("Register your own branch with bzz ready, then", text)
 
 
-class OneBuildJobTest(unittest.TestCase):
-    """The owner's rule is one build job (--parallel 1): the value that bzz integration acquire hands out is always 1."""
+class PlannedBuildJobsTest(unittest.TestCase):
+    """The job count that bzz integration acquire hands out is the computed one (cores, RAM, measurements), never a fixed 1."""
 
-    def test_the_planned_build_always_gets_one_job(self):
-        """Whatever the cores, the free RAM and the measured use per job say, plan_build returns one job."""
+    def test_the_planned_build_gets_the_computed_count(self):
+        """plan_build follows the core selection and the RAM limit: more cores and RAM give more jobs than one."""
         from haivequeen import buildjobs
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -69,13 +69,14 @@ class OneBuildJobTest(unittest.TestCase):
             class Env:
                 """Just enough of a project environment for plan_build."""
                 name = "ODP"
-                settings = {"buildJobs": {"envVar": "BUILD_MP_JOBS", "perJobMB": 300}}
+                settings = {"buildJobs": {"envVar": "BUILD_MP_JOBS", "perJobMB": 300, "cores": 8}}
 
             Env.conn = conn
-            for cores, free in ((12, 32000), (6, 4096), (2, 100000)):
+            for cores, free, jobs in ((12, 32000, 8), (6, 4096, 6), (2, 100000, 2), (12, 1500, 1)):
                 plan = buildjobs.plan_build(Env, free_mb=free, cores=cores)
-                self.assertEqual(plan["Jobs"], 1, (cores, free))
+                self.assertEqual(plan["Jobs"], jobs, (cores, free))
                 self.assertEqual(plan["EnvVar"], "BUILD_MP_JOBS")
+                self.assertEqual(plan["Environment"]["BUILD_MP_JOBS"], str(jobs))
             conn.close()
 
 

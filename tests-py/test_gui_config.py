@@ -328,5 +328,74 @@ class WindowTest(unittest.TestCase):
         self.assertEqual([p["name"] for p in gui_config.load_raw(self.folder / "config.toml")["providers"]], ["claude", "codex"])
 
 
+    # The block "Build" of the General page.
+    def test_general_shows_one_block_build_with_three_fields(self):
+        """The General page of config.toml has one block "Build" with exactly the three fields and one sentence each; nothing is named buildJobs."""
+        with mock.patch.object(gui_config, "machine_cores", return_value=8):
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            texts = [w.cget("text") for w in descendants(win.form) if w.winfo_class() in ("Label", "Labelframe")]
+            self.assertEqual(texts.count("Build"), 1)
+            self.assertEqual([t for t, *_ in [(f[1],) for f in gui_config.BUILD_FIELDS]], ["CPU cores per build", "Parallel builds", "Minimum free RAM before a build"])
+            for _key, label, explanation in gui_config.BUILD_FIELDS:
+                self.assertIn(label, texts)
+                self.assertIn(explanation, texts)
+                self.assertEqual(explanation.count(". "), 0)   # one sentence
+            blob = " ".join(texts).lower()
+            for word in ("buildjobs", "coreshare", "reservemb", "perjobmb", "firstjobs", "envvar", "measurements"):
+                self.assertNotIn(word, blob)
+            self.assertNotIn("buildJobs", [path[0] for path, _g, _l in win.getters])   # no raw field of the table either
+            menu = next(w for w in descendants(win.form) if w.winfo_class() == "Menubutton")
+            self.assertTrue(menu.cget("text").startswith("6"))   # the default of 8 cores
+            popup = win.root.nametowidget(menu["menu"])
+            choices = [popup.entrycget(i, "label") for i in range(popup.index("end") + 1)]
+            self.assertEqual(choices, [str(n) for n in range(1, 9)])   # 1 to the 8 logical cores, a selection
+
+    def test_build_block_defaults_and_old_values(self):
+        """Without a setting the block shows two thirds of the cores rounded up, parallel 1 and 2 GB; an old coreShare shows the count it gives today."""
+        with mock.patch.object(gui_config, "machine_cores", return_value=8):
+            (self.folder / "config.toml").write_text("slots = 2\n", encoding="utf-8")
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            self.assertEqual([v.get() for v in win.build_vars], ["6", "1", "2"])
+            win.win.destroy()
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win.data["buildJobs"] = {"coreShare": "1/2", "envVar": "BUILD_MP_JOBS"}
+            win.build_form()
+            self.assertEqual([v.get() for v in win.build_vars], ["4", "1", "2"])
+
+    def test_saving_the_build_block_rewrites_the_old_entries(self):
+        """Saving writes cores, parallel and minimum RAM into the table, removes coreShare, fixed and a plain number, keeps the other keys."""
+        with mock.patch.object(gui_config, "machine_cores", return_value=8):
+            for old in ('buildJobs = { envVar = "BUILD_MP_JOBS", coreShare = "2/3", fixed = 3, reserveMB = 1024 }', 'buildJobs = 4'):
+                (self.folder / "config.toml").write_text("slots = 2\n" + old + "\n", encoding="utf-8")
+                win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+                win.build_vars[0].set("5")
+                win.build_vars[1].set("2")
+                win.build_vars[2].set("3")
+                win.save()
+                saved = gui_config.load_raw(self.folder / "config.toml")["buildJobs"]
+                self.assertEqual((saved["cores"], saved["parallel"], saved["minFreeRamGB"]), (5, 2, 3))
+                for gone in ("coreShare", "fixed"):
+                    self.assertNotIn(gone, saved)
+                if "envVar" in old:
+                    self.assertEqual((saved["envVar"], saved["reserveMB"]), ("BUILD_MP_JOBS", 1024))
+                win.win.destroy()
+
+    def test_a_wrong_build_value_is_refused(self):
+        """A parallel value of 0 stays on screen with its message and nothing is written."""
+        with mock.patch.object(gui_config, "machine_cores", return_value=8):
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win.build_vars[1].set("0")
+            before = (self.folder / "config.toml").read_text(encoding="utf-8")
+            win.save()
+            self.assertIn("Parallel builds", win.status.cget("text"))
+            self.assertEqual((self.folder / "config.toml").read_text(encoding="utf-8"), before)
+
+    def test_project_file_has_no_build_block(self):
+        """The build block belongs to the machine settings only."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.pick_file("project.toml (ODP)")
+        self.assertIsNone(win.build_vars)
+
+
 if __name__ == "__main__":
     unittest.main()

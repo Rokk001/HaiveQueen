@@ -253,17 +253,27 @@ def nofollow_remove(conn, project, key) -> int:
 
 # ---- builds, usage ----
 
-def build_add(conn, project, host, jobs, free_start_mb, free_min_mb, per_job_mb, duration_s) -> None:
-    """Store one build measurement."""
+def build_add(conn, project, host, jobs, free_start_mb, free_min_mb, per_job_mb, duration_s, peak_mb=None, parallel=1) -> None:
+    """Store one build measurement: `peak_mb` is the highest RAM sum of the build processes (without it the row counts as an old whole-machine
+    value; the per job value is taken as use of `jobs` x `parallel` jobs)."""
+    peak = float(peak_mb) if peak_mb is not None else float(per_job_mb or 0) * max(1, int(jobs or 1)) * max(1, int(parallel or 1))
     with db.transaction(conn):
         conn.execute(
-            "INSERT INTO build_measurements (host, project, ts, jobs, free_start_mb, free_min_mb, per_job_mb, duration_s) "
-            "VALUES (?,?,?,?,?,?,?,?)", (host, project, db.now(), jobs, free_start_mb, free_min_mb, per_job_mb, duration_s))
+            "INSERT INTO build_measurements (host, project, ts, jobs, free_start_mb, free_min_mb, per_job_mb, duration_s, peak_mb, parallel) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)", (host, project, db.now(), jobs, free_start_mb, free_min_mb, per_job_mb, duration_s, peak, parallel))
+
+
+def build_recent_per_job(conn, project, host, count=10) -> list:
+    """The RAM use per job (MB) of the last `count` valid measurements of this host and project, newest first. Measurements stored before the
+    RAM of the build processes was measured (no peak_mb) are never returned."""
+    rows = conn.execute("SELECT per_job_mb FROM build_measurements WHERE project=? AND host=? AND peak_mb IS NOT NULL AND per_job_mb IS NOT NULL "
+                        "ORDER BY ts DESC, rowid DESC LIMIT ?", (project, host, max(1, int(count)))).fetchall()
+    return [float(r[0]) for r in rows]
 
 
 def build_max_per_job(conn, project, host):
-    """Highest measured RAM use per job (MB) of this host and project, or None."""
-    row = conn.execute("SELECT MAX(per_job_mb) FROM build_measurements WHERE project=? AND host=?",
+    """Highest valid measured RAM use per job (MB) of this host and project, or None (old whole-machine values do not count)."""
+    row = conn.execute("SELECT MAX(per_job_mb) FROM build_measurements WHERE project=? AND host=? AND peak_mb IS NOT NULL",
                        (project, host)).fetchone()
     return row[0]
 

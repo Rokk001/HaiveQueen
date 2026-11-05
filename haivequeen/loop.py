@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import config, db, events, export, faults, inbox, profile, reattach, roles, routine, runstate, runtime, usage, views
+from . import buildjobs, config, db, events, export, faults, inbox, profile, reattach, roles, routine, runstate, runtime, usage, views
 from . import platform as osplat
 from . import scheduler as sch
 from .routine import view
@@ -372,6 +372,14 @@ def run_hook(env, summary: dict) -> None:
     events.invoke_hook(env, summary["all_plans"], qrows, lambda n: routine.verify_zero(env, n), routine.question_rows(env))
 
 
+def build_ram_wait(env, phase, free_gb):
+    """The text why an agent of this phase must wait, or None: an integrate or release agent starts only while at least the minimum free RAM before a
+    build (setting of the build block, default 2 GB) is free; the next round asks again, nothing is held meanwhile."""
+    if phase not in ("integrate", "release"):
+        return None
+    return buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get("buildJobs")), float(free_gb) * 1024.0)
+
+
 def _reject_reason(c, a):
     """Validation of a start_agent action in the order of the rules; returns (reason or None, picked provider or None)."""
     env, st, pool, dry = c["env"], c["state"], c["pool"], c["dry"]
@@ -441,6 +449,8 @@ def _reject_reason(c, a):
                     why = "no free slot" + (" for the capability %s" % ", ".join(need) if need else " in a fitting provider (class %s)" % cls0)
     if not why and not dry and c["free_ram"]() < c["min_ram"]:
         why = "free RAM %.2f GB is below %s GB" % (c["free_ram"](), c["min_ram"])
+    if not why and not dry:
+        why = build_ram_wait(env, phase, c["free_ram"]())   # the start of an integrate or release agent waits for the minimum free RAM before a build
     if not why and not dry and c["pilot"] and _build_names(env):
         why = "a build process runs (pilot waits): " + ", ".join(_build_names(env))
     return why, pick

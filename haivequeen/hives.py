@@ -3,7 +3,7 @@ import json
 import os
 import re
 import subprocess
-from . import db, roles, runtime, agent_process, interrupt
+from . import buildjobs, db, roles, runtime, agent_process, interrupt
 from . import plans as plan_mod
 from . import platform as osplat
 
@@ -997,6 +997,10 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     not_started(env, path, 'no provider with a free slot and a free limit offers class %s' % cls)
                     continue
                 if hive and hive['state'] == 'integration_wait':
+                    low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get('buildJobs')), free_ram() * 1024.0)
+                    if low:   # below the minimum free RAM before a build: the place is not taken, the Queen waits and is asked again next round (also after a restart)
+                        not_started(env, path, 'waiting for the build: ' + low)
+                        continue
                     if not take_integration(conn, env.name, path):
                         not_started(env, path, 'waiting for the integration place')
                         continue
@@ -1028,7 +1032,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     row_key = '%s-%d' % (name, k)
                 name = row_key
                 questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
-                prompt = 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and the owner answers of your Apiary are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --fields using a JSON object with the absolute cwd. Work independent packages, answer the completeness question and integrate only when no requirements remain. Then follow this order. 1. Use bzz integration acquire --project %s --plan %s. Use the returned buildJobs EnvVar and Jobs for the integration build. If it reports waiting for integration, write a handoff and end until restarted. After acquiring the place, abort any unfinished merge in the project integration checkout before integrating again. 2. If the release worktree of the project is missing, create it again and build it according to the integration rules of the project; only the Queen who holds the integration place may do this. 3. Run the compile check of the project, then register your own branch with bzz ready. 4. Integrate your own branch, then release the integration place with bzz integration release --project %s --plan %s. If only open owner questions remain, write a handoff and end your final report with WAITING_FOR_OWNER.' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name, env.name, path, env.name, path)
+                prompt = 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and the owner answers of your Apiary are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --fields using a JSON object with the absolute cwd. Work independent packages, answer the completeness question and integrate only when no requirements remain. Then follow this order. 1. Use bzz integration acquire --project %s --plan %s. Use the returned buildJobs EnvVar and Jobs for the integration build and the plan build, and the returned Parallel as the --parallel value of the build command (also in the variable named by ParallelVar); the build starts only while the free RAM is at least MinFreeGB. These values win over a --parallel value or RAM minimum in a project rule: do not ask a question about that difference. If it reports waiting for integration, write a handoff and end until restarted. After acquiring the place, abort any unfinished merge in the project integration checkout before integrating again. 2. If the release worktree of the project is missing, create it again and build it according to the integration rules of the project; only the Queen who holds the integration place may do this. 3. Run the compile check of the project, then register your own branch with bzz ready. 4. Integrate your own branch, then release the integration place with bzz integration release --project %s --plan %s. If only open owner questions remain, write a handoff and end your final report with WAITING_FOR_OWNER.' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name, env.name, path, env.name, path)
                 integration = {key: env.settings.get(key) for key in ('integrationBranch', 'compileCheck', 'integratorInstructions', 'buildFlowDoc') if env.settings.get(key)}
                 configured_prompt = (env.settings.get('prompts') or {}).get('integrator')
                 if configured_prompt:

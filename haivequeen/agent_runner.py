@@ -245,18 +245,18 @@ def get_codex_tokens(thread_id, sessions=None, first=False):
 
 # ---------------------------------------------------------------- build jobs
 
-def sample_once(path, process_names):
-    """Append one sample line "ISO time;free MB;compiler process count" to the sample file."""
-    line = "%s;%d;%d\n" % (datetime.now().isoformat(), osplat.free_ram_mb(), osplat.count_processes(process_names) if process_names else 0)
+def sample_once(path, process_names, root_pid=None):
+    """Append one sample line "ISO time;free MB;build process count;build process RAM MB" to the sample file; only the build processes
+    below `root_pid` (the process tree of the building agent) are counted, never other processes of the same name."""
     with open(str(path), "a", encoding="utf-8") as handle:
-        handle.write(line)
+        handle.write(buildjobs.sample_line(process_names, root_pid) + "\n")
 
 
-def sampler_loop(path, process_names, stop, seconds):
-    """Sample free RAM and compiler processes every `seconds` seconds until `stop` is set (BZZ_SAMPLE_SEC overrides, tests only)."""
+def sampler_loop(path, process_names, stop, seconds, root_pid=None):
+    """Sample free RAM and the build processes of `root_pid` every `seconds` seconds until `stop` is set (BZZ_SAMPLE_SEC overrides, tests only)."""
     while True:
         try:
-            sample_once(path, process_names)
+            sample_once(path, process_names, root_pid)
         except Exception:
             pass
         if stop.wait(seconds):
@@ -265,8 +265,9 @@ def sampler_loop(path, process_names, stop, seconds):
 
 
 # Measure Queen builds only while integration or a compiler process is active.
-def queen_build_monitor(project, plan, name, jobs, sample_file, process_names, stop, interval):
-    """Measure Queen builds only while integration or a compiler process is active."""
+def queen_build_monitor(project, plan, name, jobs, sample_file, process_names, stop, interval, parallel=1, root_pid=None, count=buildjobs.DEFAULT_MEASUREMENTS):
+    """Measure Queen builds only while integration or a compiler process is active. The job count of `bzz integration acquire` (stored in the
+    integration slot) replaces the one of the Queen start, and the measurement divides by it."""
     conn = db.connect(config.db_path())
     started = None
     start_free = None
@@ -282,15 +283,15 @@ def queen_build_monitor(project, plan, name, jobs, sample_file, process_names, s
                     start_free = float(osplat.free_ram_mb())
                     Path(sample_file).write_text("", encoding="utf-8")
                     runtime.upsert_agent(conn, project, name, {"buildJobs": jobs})
-                sample_once(sample_file, process_names)
+                sample_once(sample_file, process_names, root_pid)
             elif started is not None:
-                use = complete_build_measure(conn, project, name, jobs, start_free, sample_file, started)
+                use = complete_build_measure(conn, project, name, jobs, start_free, sample_file, started, parallel, count)
                 runtime.upsert_agent(conn, project, name, {"buildUseMB": use, "buildJobs": None})
                 started = None
             if stop.wait(min(float(interval), 1.0)):
                 break
         if started is not None:
-            use = complete_build_measure(conn, project, name, jobs, start_free, sample_file, started)
+            use = complete_build_measure(conn, project, name, jobs, start_free, sample_file, started, parallel, count)
             runtime.upsert_agent(conn, project, name, {"buildUseMB": use, "buildJobs": None})
     finally:
         conn.close()
@@ -928,16 +929,16 @@ def run_agent(a, out=None):
 
     # Build jobs: an agent that builds (integrate, release) gets the job count of this machine as environment variable and its RAM use is measured while it runs.
     bj_raw = cfg.get("buildJobs")
-    bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release", "queen") else None
+    bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release", "queen", "bee") else None   # every agent that builds, Bees included
     bj_jobs, bj_start_mb, samples, stop, sampler = 0, 0.0, run_dir / "build-samples.txt", threading.Event(), None
     env = with_bzz_on_path(profile.environment(prov))   # the agent and everything it starts finds `bzz`, also without a PATH entry of the pip Scripts folder
     env["BZZ_AGENT"] = a.name   # tells `bzz ready` which agent calls it (only the release phase may register a branch as ready)
     if bj:
         bj_start_mb = float(osplat.free_ram_mb())
-        measured = buildjobs.stored_per_job(conn, a.project)
-        calc = buildjobs.job_count(bj, osplat.logical_cores(), bj_start_mb, measured)
+        measured = buildjobs.stored_per_job(conn, a.project, count=bj["Measurements"])
+        calc = buildjobs.job_count(bj, osplat.logical_cores(), bj_start_mb, measured, concurrent=len(buildjobs.running_builds(conn, a.name)))
         bj_jobs, why = calc["Jobs"], calc["Why"]
-        env[bj["EnvVar"]] = str(bj_jobs)
+        env.update(buildjobs.build_environment(bj, bj_jobs))   # the job count (configured name), the parallel value and the minimum free RAM
         try:
             samples.unlink()
         except OSError:
@@ -945,13 +946,17 @@ def run_agent(a, out=None):
         process_names = [str(x) for x in pcfg.get("buildProcessNames") or []]
         if a.phase == "queen":
             sampler = threading.Thread(target=queen_build_monitor, daemon=True, args=(
-                a.project, a.plan, a.name, bj_jobs, samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or 10)))
+                a.project, a.plan, a.name, bj_jobs, samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or 10),
+                bj["Parallel"], os.getpid(), bj["Measurements"]))
+        elif a.phase == "bee":
+            sampler = None   # a Bee only gets the variables: no sampler and no job count in its row (it is no build agent of its own)
         else:
             sampler = threading.Thread(target=sampler_loop, daemon=True, args=(
-                samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or 10)))
+                samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or 10), os.getpid()))
             runtime.upsert_agent(conn, a.project, a.name, {"buildJobs": bj_jobs})
             run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
-        sampler.start()
+        if sampler:
+            sampler.start()
 
     code = 0
     clock_jumps = []   # filled when the wall clock jumps by more than interrupt.JUMP_SECONDS during the run (laptop sleep)
@@ -1005,12 +1010,13 @@ def run_agent(a, out=None):
         code = 99
         run.last = "runner error: " + str(exc)
         run.say(run.last, "Red")
-    if bj_jobs > 0:
+    if bj_jobs > 0 and sampler:
         stop.set()
         sampler.join(timeout=5)
         if a.phase != "queen":
-            use = complete_build_measure(conn, a.project, a.name, bj_jobs, bj_start_mb, samples, started)
-            runtime.upsert_agent(conn, a.project, a.name, {"buildUseMB": use})
+            use = complete_build_measure(conn, a.project, a.name, bj_jobs, bj_start_mb, samples, started, bj["Parallel"], bj["Measurements"])
+            if use is not None:
+                runtime.upsert_agent(conn, a.project, a.name, {"buildUseMB": use})
 
     # Success is judged by the agent's own result event (claude: type result without error; codex: completed turn), not by the exit code: a failing plugin hook after the end must not fail the task.
     status = "done" if run.ok else "failed"
@@ -1059,16 +1065,22 @@ def clock_watch(jumps: list, step: float = 5.0, now=time.time, sleep=time.sleep,
         done += 1
 
 
-def complete_build_measure(conn, project, name, jobs, start_free_mb, sample_file, started):
-    """End the measurement of one build: take the lowest free RAM from the samples, store the use per job and log one line. Returns the use per job in MB."""
-    low = buildjobs.read_samples_min(sample_file, start_free_mb)
-    use = buildjobs.use_mb(start_free_mb, low, jobs)
+def complete_build_measure(conn, project, name, jobs, start_free_mb, sample_file, started, parallel=1, count=buildjobs.DEFAULT_MEASUREMENTS):
+    """End the measurement of one build: take the highest RAM sum of the build processes from the samples, store the use per job (that sum divided
+    by the jobs and the parallel value) and log one line. A build in which no build process was seen stores nothing.
+    Returns the use per job in MB, or None when nothing was stored."""
+    smp = buildjobs.read_samples(sample_file)
+    low = start_free_mb if smp["FreeMin"] is None else min(start_free_mb, smp["FreeMin"])
     dur = (datetime.now() - started).total_seconds()
-    stored = buildjobs.save_per_job(conn, project, use, jobs, start_free_mb, low, dur)
     secs = int(dur)
-    runtime.append_event(conn, project, "build %s: jobs=%d, duration=%02d:%02d:%02d, lowest free RAM=%d MB, use per job=%d MB (stored maximum %s MB)" % (
-        name, jobs, secs // 3600, secs % 3600 // 60, secs % 60, low, use, int(stored) if stored is not None else use),
-        kind="rounds", agent=name, mirror="rounds")
+    head = "build %s: jobs=%d, duration=%02d:%02d:%02d" % (name, jobs, secs // 3600, secs % 3600 // 60, secs % 60)
+    if smp["Seen"] <= 0 or smp["PeakMB"] <= 0:
+        runtime.append_event(conn, project, head + ", no build process seen, nothing stored", kind="rounds", agent=name, mirror="rounds")
+        return None
+    use = buildjobs.use_mb(smp["PeakMB"], jobs, parallel)
+    stored = buildjobs.save_per_job(conn, project, use, jobs, start_free_mb, low, dur, peak_mb=smp["PeakMB"], parallel=parallel, count=count)
+    runtime.append_event(conn, project, "%s, build process RAM peak=%d MB, use per job=%d MB (median %d MB)" % (head, smp["PeakMB"], use, stored),
+                         kind="rounds", agent=name, mirror="rounds")
     return use
 
 

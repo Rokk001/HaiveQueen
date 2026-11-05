@@ -96,16 +96,22 @@ class OverviewTest(unittest.TestCase):
         self.assertEqual(d["xu"]["FiveHour"]["pct"], 37)
 
     def test_build_jobs_line(self):
-        """The build-jobs line shows jobs, cores, per-job use and the active cores of a running build."""
-        self.assertIn("Build jobs 4 of 12 cores (running) | per job not measured yet", self.data()["bj"])
+        """The build line shows the running job count during a build, else the count acquire would hand out and the median per job; old measurements are not shown."""
+        self.assertIn("Build jobs 4 of 12 cores (running) | per job not measured yet", self.data(project="alpha")["bj"])
         with db.transaction(self.conn):
-            self.conn.execute("INSERT INTO build_measurements (host, project, ts, jobs, per_job_mb) VALUES ('h1','alpha','x',2,900)")
+            self.conn.execute("INSERT INTO build_measurements (host, project, ts, jobs, per_job_mb) VALUES ('h1','alpha','x',2,900)")   # old whole-machine value: ignored
         s = dict(SYS, compiler_count=3)
         self.assertIn("Build jobs 1 of 12 cores (next build) | per job not measured yet", self.data(sysinfo=s, project="beta")["bj"])
         with db.transaction(self.conn):
             self.conn.execute("UPDATE agents SET status='done', ended_at=? WHERE project='alpha'", (iso(1),))
-        bj = self.data(sysinfo=s, cfg={"buildJobs": {"coreShare": "1/2", "reserveMB": 1024}})["bj"]
-        self.assertIn("Build jobs 1 of 12 cores (next build) | per job 900 MB | active: 3 cores", bj)   # the owner's rule: the next build always gets one job
+            for ts, per in (("a", 900), ("b", 700), ("c", 800)):
+                self.conn.execute("INSERT INTO build_measurements (host, project, ts, jobs, per_job_mb, peak_mb, parallel) VALUES ('h1','alpha',?,2,?,?,1)", (ts, per, per * 2))
+        bj = self.data(sysinfo=s, project="alpha", cfg={"buildJobs": {"cores": 5, "reserveMB": 1024}})["bj"]
+        self.assertIn("Build jobs 5 of 12 cores (next build) | per job 800 MB | active: 3 cores", bj)
+        both = self.data(sysinfo=s, cfg={"buildJobs": {"cores": 5, "perJobMB": "auto"}})["bj"]   # one line, every project with its own median
+        self.assertIn("alpha: Build jobs 5 of 12 cores (next build) | per job 800 MB", both)
+        self.assertIn("beta: Build jobs 2 of 12 cores (next build) | per job not measured yet", both)
+        self.assertIsNone(self.data(sysinfo=dict(s, build_projects=[]))["bj"])   # no project with buildProcessNames: no build line
         self.assertIsNone(self.data(cfg={})["bj"])
 
     def test_project_filter(self):

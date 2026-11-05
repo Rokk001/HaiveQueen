@@ -2,7 +2,7 @@
 import json
 import re
 
-from . import db, roles, runtime, scheduler
+from . import buildjobs, db, roles, runtime, scheduler
 
 
 # Return the next available configured class above the current one.
@@ -180,9 +180,9 @@ def next_attempt(conn, project, plan, package, cls, providers, excluded, thresho
 
 
 # Write only the package task and relevant paths to a Bee; the complete project rules are loaded by the runner, a `rules` argument never replaces them.
-def bee_prompt(name, package, task, steps, paths, rules):
+def bee_prompt(name, package, task, steps, paths, rules, build_rules=''):
     """Build a slim Bee task with numbered progress reports."""
-    return roles.role_text('bee', {'package': package, 'task': task, 'steps': '\n'.join('%d. %s' % (i + 1, s) for i, s in enumerate(steps)), 'paths': ', '.join(paths), 'rules': '\n'.join(rules), 'name': name, 'step_count': len(steps)})
+    return roles.role_text('bee', {'package': package, 'task': task, 'steps': '\n'.join('%d. %s' % (i + 1, s) for i, s in enumerate(steps)), 'paths': ', '.join(paths), 'rules': '\n'.join(rules), 'name': name, 'step_count': len(steps), 'build_rules': build_rules}).rstrip()
 
 
 PACKAGE_STATES = ('working', 'waiting', 'implemented', 'done', 'rejected')   # progress states of a package; a package without a row is open; waiting = needs an answer, a build or the owner (the reason says which); rejected = the owner did not accept it
@@ -418,7 +418,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''))
             record_step_count(env.conn, env.name, plan, package, len(steps))
             # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
-            prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules)
+            prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')))
             return {'kind': 'subagent', 'provider': provider, 'class': selected_class, 'cwd': cwd, 'prompt': prompt}
         if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
             return refuse(env, package, 'a Bee process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
@@ -428,7 +428,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         existing = [a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')]
         state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'IN_PROGRESS'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
         ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
-        action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules), 'class': selected_class}
+        action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs'))), 'class': selected_class}
         if not loop._do_start(ctx, action, forced_pick=pick):
             return refuse(env, package, 'the agent runner could not start the Bee process')
         env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))

@@ -24,9 +24,9 @@ class BuildJobsTest(RoundCase):
         """Defaults when the block only names the variable; no block = no build jobs."""
         d = bj.settings_from({"envVar": "X"})
         self.assertAlmostEqual(d["CoreShare"], 2 / 3)
-        self.assertEqual((d["ReserveMB"], d["FirstJobs"], d["PerJobMB"], d["Fixed"]), (1024, 2, None, None))
+        self.assertEqual((d["ReserveMB"], d["FirstJobs"], d["PerJobMB"], d["Cores"]), (1024, 2, None, None))
         self.assertIsNone(bj.settings_from(None))
-        self.assertEqual(bj.settings_from(4)["Fixed"], 4)
+        self.assertEqual(bj.settings_from(4)["Cores"], 4)
         self.assertEqual(bj.settings_from(0)["EnvVar"], "BUILD_JOBS")
 
     def test_job_count(self):
@@ -39,43 +39,44 @@ class BuildJobsTest(RoundCase):
         self.assertEqual(bj.job_count(settings(), 12, 1500, 1000)["Jobs"], 1)
         r = bj.job_count(settings(), 10, 64000, 500)
         self.assertEqual((r["Jobs"], r["Why"]), (7, "cores"))
-        r = bj.job_count(settings(fixed=5), 4, 1200, 2000)
-        self.assertEqual((r["Jobs"], r["Why"]), (5, "fixed"))
+        r = bj.job_count(settings(fixed=5), 4, 1200, 2000)   # the old fixed is the core count (capped to the machine); the RAM limit still lowers it
+        self.assertEqual((r["Jobs"], r["Why"]), (1, "ram"))
+        self.assertEqual(bj.job_count(settings(fixed=5), 4, 64000, 100)["Jobs"], 4)
         self.assertEqual(bj.job_count(settings(perJobMB=2000), 12, 6144, 100)["Jobs"], 2)
         self.assertEqual((bj.job_count(settings(), 12, 3072, 1000)["Jobs"], bj.job_count(settings(reserveMB=2048), 12, 3072, 1000)["Jobs"]), (2, 1))
 
-    def test_stored_maximum(self):
-        """A higher measured value replaces the old one, a lower one does not; the stored value feeds the next count."""
+    def test_stored_median(self):
+        """The stored value is the median of the last measurements, not the maximum; the stored value feeds the next count."""
         c = self.conn
         self.assertIsNone(bj.stored_per_job(c, "testproj"))
         self.assertEqual(bj.save_per_job(c, "testproj", 600), 600)
-        self.assertEqual(bj.save_per_job(c, "testproj", 900), 900)
-        self.assertEqual(bj.save_per_job(c, "testproj", 400), 900)
-        self.assertEqual(bj.job_count(settings(), 12, 4096, bj.stored_per_job(c, "testproj"))["Jobs"], 3)
-        self.assertEqual((bj.use_mb(8000, 5000, 3), bj.use_mb(3000, 4000, 2)), (1000, 0))
+        self.assertEqual(bj.save_per_job(c, "testproj", 900), 750)
+        self.assertEqual(bj.save_per_job(c, "testproj", 400), 600)
+        self.assertEqual(bj.job_count(settings(), 12, 4096, bj.stored_per_job(c, "testproj"))["Jobs"], 5)
+        self.assertEqual((bj.use_mb(3000, 3), bj.use_mb(0, 2)), (1000, 0))
 
     def test_measure_and_line(self):
-        """End of a build: lowest sample, use per job, one ROUNDS.log line; dashboard line while a build runs and without."""
+        """End of a build: peak RAM of the build processes, use per job, one ROUNDS.log line; dashboard line while a build runs and without."""
         samples = self.base / "samples.txt"
-        samples.write_text("2026-01-01T00:00:00;8000;0\n2026-01-01T00:00:10;6500;4\n2026-01-01T00:00:20;5000;4\n2026-01-01T00:00:30;7000;1\n", encoding="utf-8")
+        samples.write_text("2026-01-01T00:00:00;8000;0;0\n2026-01-01T00:00:10;6500;4;2400\n2026-01-01T00:00:20;5000;4;3000\n2026-01-01T00:00:30;7000;1;500\n", encoding="utf-8")
         env = self.env()
         m = bj.complete_measure(env, "TEST-build", 3, 8000, samples, datetime.now() - timedelta(seconds=42))
         self.assertEqual((m["MinFreeMB"], m["UseMB"], m["StoredMB"]), (5000, 1000, 1000))
-        self.assertRegex(self.log(), r"build TEST-build: jobs=3, duration=00:00:4\d, lowest free RAM=5000 MB, use per job=1000 MB")
-        env.settings["buildJobs"] = {"envVar": "BUILD_JOBS", "fixed": 4}
-        self.assertEqual(bj.jobs_line(env, [{"status": "running", "buildJobs": 4}], 5, cores=8),
+        self.assertRegex(self.log(), r"build TEST-build: jobs=3, duration=00:00:4\d, build process RAM peak=3000 MB, use per job=1000 MB")
+        env.settings["buildJobs"] = {"envVar": "BUILD_JOBS", "cores": 4, "perJobMB": 1000}
+        self.assertEqual(bj.jobs_line(env, [{"status": "running", "buildJobs": 4}], 5, cores=8, free_mb=64000),
                          "Build jobs 4 of 8 cores (running) | per job 1000 MB | active: 5 cores")
-        self.assertEqual(bj.jobs_line(env, [], 0, cores=8), "Build jobs 1 of 8 cores (next build) | per job 1000 MB")   # the owner's rule: the next build always gets one job
-        self.assertTrue(bj.jobs_line(env, [], 3, cores=8).endswith("| active: 3 cores"))
+        self.assertEqual(bj.jobs_line(env, [], 0, cores=8, free_mb=64000), "Build jobs 4 of 8 cores (next build) | per job 1000 MB")   # the count acquire would hand out now
+        self.assertTrue(bj.jobs_line(env, [], 3, cores=8, free_mb=64000).endswith("| active: 3 cores"))
         self.assertIsNone(bj.jobs_line(type("E", (), {"settings": {}, "conn": self.conn, "name": "testproj"})(), []))
 
     def test_sampler(self):
-        """The sampler writes `time;free MB;count` lines and ends with the parent."""
+        """The sampler writes `time;free MB;count;RAM` lines and ends with the parent."""
         out = self.base / "s.txt"
         n = bj.sample_loop(out, 0, 0.01, [], max_samples=2)
         lines = out.read_text(encoding="utf-8").splitlines()
         self.assertEqual((n, len(lines)), (2, 2))
-        self.assertEqual(len(lines[0].split(";")), 3)
+        self.assertEqual(len(lines[0].split(";")), 4)   # time;free MB;build process count;their RAM MB
 
 
 class EventHookTest(RoundCase):

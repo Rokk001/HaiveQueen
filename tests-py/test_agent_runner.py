@@ -15,7 +15,8 @@ from haivequeen import agent_runner as ar  # noqa: E402
 from haivequeen import buildjobs, db, runtime  # noqa: E402
 
 FAKE_CLI = '''import json, os, sys
-rec = {"argv": sys.argv[1:], "build_jobs": os.environ.get("BUILD_JOBS"), "cwd": os.getcwd(), "bzz_agent": os.environ.get("BZZ_AGENT")}
+rec = {"argv": sys.argv[1:], "build_jobs": os.environ.get("BUILD_JOBS"), "cwd": os.getcwd(), "bzz_agent": os.environ.get("BZZ_AGENT"),
+       "parallel": os.environ.get("BUILD_PARALLEL"), "min_ram": os.environ.get("BUILD_MIN_FREE_RAM_GB"), "mp_jobs": os.environ.get("BUILD_MP_JOBS")}
 with open(os.environ["FAKE_RECORD"], "w", encoding="utf-8") as f:
     json.dump(rec, f)
 with open(os.environ["FAKE_STREAM"], encoding="utf-8") as f:
@@ -111,21 +112,21 @@ class HelperTest(unittest.TestCase):
             return r["Jobs"], r["Why"]
         self.assertFalse(hasattr(ar, "build_job_count") or hasattr(ar, "build_jobs_cfg") or hasattr(ar, "build_use_mb"))
         d = buildjobs.settings_from({"envVar": "X"})
-        self.assertTrue(abs(d["CoreShare"] - 2 / 3) < 1e-9 and d["ReserveMB"] == 1024 and d["FirstJobs"] == 2 and d["PerJobMB"] is None and d["Fixed"] is None)
+        self.assertTrue(abs(d["CoreShare"] - 2 / 3) < 1e-9 and d["ReserveMB"] == 1024 and d["FirstJobs"] == 2 and d["PerJobMB"] is None and d["Cores"] is None)
         self.assertEqual(count(bj(), 12, 32000, None), (2, "first"))
         self.assertEqual(count(bj(firstJobs=10), 6, 32000, None)[0], 4)
         self.assertEqual(count(bj(), 12, 4096, 1000), (3, "ram"))
         self.assertEqual(count(bj(), 12, 1500, 1000)[0], 1)
         self.assertEqual(count(bj(), 10, 64000, 500), (7, "cores"))
-        self.assertEqual(count(bj(fixed=5), 4, 1200, 2000), (5, "fixed"))
+        self.assertEqual(count(bj(fixed=5), 4, 1200, 2000), (1, "ram"))   # the old fixed is the core count now; the RAM limit can still lower it
         self.assertEqual(count(bj(perJobMB=2000), 12, 6144, 100)[0], 2)
         self.assertEqual(count(bj(), 12, 3072, 1000)[0], 2)
         self.assertEqual(count(bj(reserveMB=2048), 12, 3072, 1000)[0], 1)
-        self.assertEqual(buildjobs.use_mb(8000, 5000, 3), 1000)
-        self.assertEqual(buildjobs.use_mb(3000, 4000, 2), 0)
+        self.assertEqual(buildjobs.use_mb(3000, 3), 1000)
+        self.assertEqual(buildjobs.use_mb(0, 2), 0)
         self.assertIsNone(buildjobs.settings_from(None))
-        self.assertEqual(buildjobs.settings_from(0)["Fixed"], None)
-        self.assertEqual(buildjobs.settings_from(4)["Fixed"], 4)
+        self.assertEqual(buildjobs.settings_from(0)["Cores"], None)
+        self.assertEqual(buildjobs.settings_from(4)["Cores"], 4)
 
     def test_args_and_endpoint(self):
         """Argument templates are filled; an endpoint adds the model_provider arguments."""
@@ -551,18 +552,19 @@ class BuildJobsTest(RunnerBase):
     """Build jobs variable and measurement for the integrate and release phases."""
 
     def test_build_jobs(self):
-        """An integrator agent gets the job count as variable; the measurement is stored; a work agent gets none."""
-        self.write_config("buildJobs = 3\nramReserveMb = 2048\n")
+        """An integrator agent gets the job count, the parallel value and the minimum RAM as variables; a build without build process stores nothing; a work agent gets none."""
+        self.write_config("ramReserveMb = 2048\n[buildJobs]\ncores = 3\nperJobMB = 1\nparallel = 1\nminFreeRamGB = 0.5\n")
         self.prepare("E-1")
         self.run_runner("E-1", "claude", claude_stream(), phase="integrate", env={"BZZ_SAMPLE_SEC": "0.2"})
         row = self.row("E-1")
         self.assertEqual(row["status"], "done")
-        self.assertEqual(row["buildJobs"], 3)
-        self.assertIn("buildUseMB", row)
-        self.assertEqual(self.record()["build_jobs"], "3")
+        expected = min(3, os.cpu_count() or 1)
+        self.assertEqual(row["buildJobs"], expected)
+        self.assertEqual(self.record()["build_jobs"], str(expected))
+        self.assertEqual((self.record()["parallel"], self.record()["min_ram"]), ("1", "0.5"))
         self.assertTrue((self.runs / "E-1" / "build-samples.txt").read_text(encoding="utf-8").strip())
-        meas = self.conn.execute("SELECT jobs FROM build_measurements WHERE project='demo'").fetchall()
-        self.assertEqual([m[0] for m in meas], [3])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM build_measurements WHERE project='demo'").fetchone()[0], 0)   # no build process was seen: nothing stored
+        self.assertNotIn("buildUseMB", row)
         kinds = [e["kind"] for e in runtime.list_events(self.conn, "demo")]
         self.assertIn("build", kinds)
         self.prepare("E-2")

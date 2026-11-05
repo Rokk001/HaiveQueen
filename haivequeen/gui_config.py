@@ -15,6 +15,61 @@ from pathlib import Path
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
 CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "use": ("preferred", "fallback", "capability-only"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
 CLASSES = ("light", "medium", "heavy")
+# The block "Build" of the General page: exactly these three fields, each with one sentence of explanation (key in the buildJobs table, label, explanation).
+BUILD_FIELDS = (
+    ("cores", "CPU cores per build", "How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short."),
+    ("parallel", "Parallel builds", "How many targets the build command builds at the same time (the number after --parallel); each target gets the cores divided by this number."),
+    ("minFreeRamGB", "Minimum free RAM before a build", "A build only starts while at least this many GB of RAM are free, otherwise it waits."),
+)
+
+
+# The number of logical cores of this machine.
+def machine_cores() -> int:
+    """The number of logical cores (the largest choice of "CPU cores per build")."""
+    from . import platform as osplat
+    return osplat.logical_cores()
+
+
+# The values the block "Build" shows for a settings dict.
+def build_values(data, cores=None) -> dict:
+    """The shown values {cores, parallel, minFreeRamGB} of the block "Build": the core count that applies now (an old coreShare, `fixed` or number gives the
+    count it gives today, a count above the cores of the machine is shown as the cores of the machine, none gives two thirds rounded up), the parallel value
+    (default 1) and the minimum free RAM in GB (default 2)."""
+    from . import buildjobs
+    cores = cores or machine_cores()
+    raw = data.get("buildJobs")
+    bj = buildjobs.settings_from(raw if raw is not None else 0)
+    return {"cores": buildjobs.core_limit(bj, cores), "parallel": bj["Parallel"], "minFreeRamGB": bj["MinFreeGB"]}
+
+
+# Write the three values of the block "Build" into a settings dict.
+def apply_build(data, cores_text, parallel_text, ram_text, cores=None):
+    """Check the three typed values and write them into `data["buildJobs"]`: the core count (a whole number from 1 to the cores of the machine), the
+    parallel value (a whole number from 1) and the minimum free RAM in GB (a number above 0). The old keys coreShare and fixed and an old number
+    buildJobs are removed (the new core count replaces them); the other keys of the table stay. A wrong value raises ValueError with the message."""
+    cores = cores or machine_cores()
+
+    def whole(text, label, low, high=None):
+        """A whole number between low and high."""
+        try:
+            value = int(str(text).strip())
+        except ValueError:
+            raise ValueError("%s: a whole number is expected" % label)
+        if value < low or (high is not None and value > high):
+            raise ValueError("%s: a whole number from %d%s is expected" % (label, low, " to %d" % high if high is not None else " up"))
+        return value
+    n_cores = whole(cores_text, "CPU cores per build", 1, cores)
+    parallel = whole(parallel_text, "Parallel builds", 1)
+    try:
+        ram = float(str(ram_text).strip().replace(",", "."))
+    except ValueError:
+        raise ValueError("Minimum free RAM before a build: a number is expected")
+    if not math.isfinite(ram) or ram <= 0:
+        raise ValueError("Minimum free RAM before a build: a number above 0 is expected")
+    old = data.get("buildJobs")
+    table = {k: v for k, v in old.items() if k not in ("coreShare", "fixed", "cores", "parallel", "minFreeRamGB")} if isinstance(old, dict) else {}
+    table.update({"cores": n_cores, "parallel": parallel, "minFreeRamGB": int(ram) if ram == int(ram) else ram})
+    data["buildJobs"] = table
 
 
 # Read a TOML file into a dict.
@@ -220,6 +275,7 @@ class ConfigWindow:
         self.dialog = gui_dialog
         self.files = settings_files(conn, config_dir)
         self.index, self.data, self.node, self.getters, self.entries, self.position = 0, {}, ("general", None), [], [], None
+        self.build_vars = None
         self.win = tk.Toplevel(root)
         self.win.title("HaiveQueen settings")
         self.win.geometry("1100x700")
@@ -327,6 +383,7 @@ class ConfigWindow:
         shown = {k: v for k, v in data.items() if kind != "general" or k not in ("providers", "projects")}
         self.position = None
         self.login_status = self.login_button = self.benchmark_button = self.benchmark_status = None
+        self.build_vars = None   # the three variables of the block "Build" while the General page of config.toml is shown
         if kind == "providers":
             from . import cli_presets
             key = cli_presets.key_for(data)
@@ -338,6 +395,9 @@ class ConfigWindow:
                 shown.setdefault("outputFormat", "")   # the output format the CLI writes: claude, codex or opencode
             self.cli_row(key)
             self.login_row()
+        if kind == "general" and self.machine():
+            shown.pop("buildJobs", None)   # the build settings are the block "Build" below, never the raw table
+            self.build_block()
         if kind == "general":
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
         if kind == "providers":
@@ -347,6 +407,27 @@ class ConfigWindow:
             shown.setdefault("beeMode", "process" if shown.get("protocol") == "codex" else "subagent")   # always offer the setting, with the value that applies without an entry
         self.fields(self.form, shown, ())
         self.add_row(self.form, ())
+
+    # The block "Build" of the General page.
+    def build_block(self):
+        """Add the block "Build" at the top of the General page: CPU cores per build (a choice from 1 to the cores of the machine), Parallel builds and
+        Minimum free RAM before a build (GB), each with one sentence of explanation."""
+        tk = self.tk
+        cores = machine_cores()
+        shown = build_values(self.data, cores)
+        box = tk.LabelFrame(self.form, text="Build", padx=6, pady=4)
+        box.pack(fill="x", pady=(0, 10), anchor="w")
+        cores_var, parallel_var, ram_var = tk.StringVar(value=str(shown["cores"])), tk.StringVar(value=str(shown["parallel"])), tk.StringVar(value="%g" % shown["minFreeRamGB"])
+        self.build_vars = (cores_var, parallel_var, ram_var)
+        for (key, label, explanation), var in zip(BUILD_FIELDS, self.build_vars):
+            row = tk.Frame(box)
+            row.pack(fill="x", pady=2, anchor="w")
+            tk.Label(row, text=label, width=32, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+            if key == "cores":
+                self.dialog.option_menu(row, var, [str(n) for n in range(1, cores + 1)], self.mono).pack(side="left")
+            else:
+                tk.Entry(row, textvariable=var, width=8, font=(self.mono, 10)).pack(side="left")
+            tk.Label(row, text=explanation, anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=620).pack(side="left", padx=12)
 
     # The provider of the shown page in the form the profile functions read.
     def login_provider(self) -> dict:
@@ -600,6 +681,12 @@ class ConfigWindow:
         except (ValueError, TypeError) as exc:
             self.status.config(text="%s: %s" % (".".join(where), exc), fg=self.col["red"])
             return False
+        if self.build_vars is not None:
+            try:
+                apply_build(self.data, *[v.get() for v in self.build_vars], cores=machine_cores())
+            except ValueError as exc:
+                self.status.config(text=str(exc), fg=self.col["red"])
+                return False
         for path, raw in values.items():
             if self.node[0] == "providers" and path in (("allowedTools",), ("args",)):
                 continue

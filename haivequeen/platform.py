@@ -432,6 +432,102 @@ def count_processes(names) -> int:
     return len(list_processes(names))
 
 
+# ---------------------------------------------------------------- RAM of a process tree (build measurement)
+
+def _win_working_set_mb(pid: int) -> float:
+    """Windows: the working set (RAM in use) of one process in MB; 0 when the process is gone or not accessible."""
+    from ctypes import wintypes
+
+    class Counters(ctypes.Structure):
+        """PROCESS_MEMORY_COUNTERS of psapi.h."""
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD), ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t), ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t), ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t), ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+
+    kernel = ctypes.windll.kernel32
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel.K32GetProcessMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.POINTER(Counters), wintypes.DWORD]
+    handle = kernel.OpenProcess(0x1000, False, int(pid))   # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return 0.0
+    try:
+        counters = Counters()
+        counters.cb = ctypes.sizeof(Counters)
+        if not kernel.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            return 0.0
+        return counters.WorkingSetSize / (1024.0 * 1024.0)
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _linux_parent_rows(proc: str = "/proc") -> list:
+    """Linux: all (pid, parent pid, comm) triples from /proc/<pid>/stat."""
+    rows = []
+    for entry in os.listdir(proc):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, entry, "stat"), encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        left, right = text.find("("), text.rfind(")")
+        if left < 0 or right < left:
+            continue
+        fields = text[right + 2:].split()
+        if len(fields) >= 2:
+            rows.append((int(entry), int(fields[1]), text[left + 1:right]))
+    return rows
+
+
+def _linux_rss_mb(pid: int, proc: str = "/proc") -> float:
+    """Linux: resident memory of one process in MB (statm pages x page size); 0 when the process is gone."""
+    try:
+        with open(os.path.join(proc, str(pid), "statm"), encoding="utf-8") as handle:
+            pages = int(handle.read().split()[1])
+        return pages * os.sysconf("SC_PAGE_SIZE") / (1024.0 * 1024.0)
+    except (OSError, ValueError, IndexError, AttributeError):
+        return 0.0
+
+
+def process_tree_ram(root_pid, names) -> tuple:
+    """(RAM in MB, number of processes) of the processes below `root_pid` (children, grandchildren, ...) whose name is in `names`.
+
+    Only the tree of the one process counts: a process with the same name that another program started is not part of it. The root itself
+    counts when its name matches. Without a root, without names or when the process list cannot be read the result is (0.0, 0)."""
+    wanted = {str(n).lower() for n in (names or []) if n}
+    try:
+        root = int(root_pid)
+    except (TypeError, ValueError):
+        return 0.0, 0
+    if not wanted or root <= 0:
+        return 0.0, 0
+    try:
+        rows = _win_snapshot() if is_windows() else _linux_parent_rows()
+    except (OSError, subprocess.SubprocessError):
+        return 0.0, 0
+    children = {}
+    for pid, parent, _name in rows:
+        children.setdefault(parent, []).append(pid)
+    names_by_pid = {pid: name for pid, _parent, name in rows}
+    short = {w[:15] for w in wanted}
+    seen, stack, total, count = {root}, [root], 0.0, 0
+    while stack:
+        pid = stack.pop()
+        name = names_by_pid.get(pid, "").lower()
+        if name in wanted or (not is_windows() and name in short):
+            total += _win_working_set_mb(pid) if is_windows() else _linux_rss_mb(pid)
+            count += 1
+        for child in children.get(pid, ()):
+            if child not in seen:
+                seen.add(child)
+                stack.append(child)
+    return total, count
+
+
 # ---------------------------------------------------------------- network drives (C3)
 
 DRIVE_REMOTE = 4   # GetDriveTypeW result for a network drive

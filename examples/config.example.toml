@@ -7,7 +7,7 @@ queenClass = "medium"     # project may override
 beesPerQueen = 3          # project may override
 escalateAfter = 3         # failures per class before escalation
 contextLimitTokens = 300000   # context size at which a Queen or Bee is asked to hand off; valid for all Apiaries, a project.toml or a model entry under [providers.classes] may set its own
-buildJobs = 0            # 0 = choose automatically
+buildJobs = { cores = 6, parallel = 1, minFreeRamGB = 2 }   # builds: CPU cores in total, the number after --parallel, minimum free RAM in GB before a build (the settings window edits these; omit for the defaults)
 ramReserveMb = 2048       # RAM that must stay free
 agentStallSeconds = 3600  # an agent that prints nothing for this long is marked as stalled, never ended (0 = off)
 exportDir = "%LOCALAPPDATA%\\HaiveQueen\\exports"

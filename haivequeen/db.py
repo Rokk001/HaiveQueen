@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 11   # 11: start contexts and start benchmarks; 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
+SCHEMA_VERSION = 12   # 12: build measurements from the RAM of the build processes (peak_mb, parallel); 11: start contexts and start benchmarks; 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -38,6 +38,11 @@ V5_COLUMNS = (
 # Columns added in schema version 8 (who closes the last requirements of a package: code, build or owner).
 V8_COLUMNS = (
     ("packages", "verify", "TEXT NOT NULL DEFAULT 'code'"),
+)
+# Columns added in schema version 12 (a build measurement from the RAM of the build processes; rows without peak_mb are old whole-machine values that are never used).
+V12_COLUMNS = (
+    ("build_measurements", "peak_mb", "REAL"),
+    ("build_measurements", "parallel", "INTEGER"),
 )
 
 
@@ -152,7 +157,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         rebuild_queue_table(conn, schema_text)
         rebuild_plans_table(conn, schema_text)
         conn.executescript(schema_text)
-        for table, column, decl in V2_COLUMNS + V3_COLUMNS + V5_COLUMNS + V8_COLUMNS:
+        for table, column, decl in V2_COLUMNS + V3_COLUMNS + V5_COLUMNS + V8_COLUMNS + V12_COLUMNS:
             have = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
             if column not in have:
                 try:

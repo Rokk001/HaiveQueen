@@ -10,7 +10,7 @@ import re
 import subprocess
 from datetime import datetime, timedelta
 
-from . import db, interrupt, runtime
+from . import buildjobs, db, interrupt, runtime
 from . import scheduler as sch
 from .scheduler import ACTIVE, norm_plan
 
@@ -753,7 +753,7 @@ def base_values(env) -> dict:
     s = env.settings
     return {"owner": s.get("owner", "Owner"), "integrationBranch": s.get("integrationBranch", "main"), "compileCheck": s.get("compileCheck", ""),
             "queueFile": "the integration queue", "queueName": "integration queue", "integratorInstructions": s.get("integratorInstructions", ""),
-            "buildFlowDoc": s.get("buildFlowDoc", ""), "project": env.name, "runsDir": str(env.run_dir("")).replace("\\", "/")}
+            "buildFlowDoc": s.get("buildFlowDoc", ""), "buildRules": buildjobs.rule_text(s.get("buildJobs")), "project": env.name, "runsDir": str(env.run_dir("")).replace("\\", "/")}
 
 
 def prompt(env, name: str, values: dict) -> str:

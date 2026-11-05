@@ -226,8 +226,15 @@ def cmd_integration(args, conn):
     if not owner_pid or int(owner_pid) <= 0:
         return fail("external integration requires the window process ID via --owner-pid")
     from haivequeen import buildjobs, scheduler
+    from haivequeen import platform as osplat
     env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
-    job = buildjobs.plan_build(env) if env else None
+    free_mb = float(osplat.free_ram_mb())
+    low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get("buildJobs")), free_mb) if env else None
+    if low:   # below the minimum free RAM before a build: wait like for an occupied place, without taking the place; the next round asks again
+        if row:
+            conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
+        return fail("waiting for integration: " + low)
+    job = buildjobs.plan_build(env, free_mb=free_mb, exclude=agent) if env else None   # the count of this moment replaces the one set at the Queen start
     if not hives.take_integration(conn, args.project, args.plan, owner_pid=owner_pid, build_jobs=job["Jobs"] if job else None):
         if row:
             conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
