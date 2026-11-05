@@ -52,8 +52,6 @@ def _transition(conn, allowed_from, new, kind, text, source: str = "") -> dict:
         cur = _read(conn)["state"]
         if cur != new and (allowed_from is None or cur in allowed_from):
             _write(conn, new, kind, text, source)
-        if new == "RUNNING":
-            conn.execute("UPDATE kv SET value='armed',updated_at=? WHERE project=? AND key='hives-migration' AND value='pending'", (db.now(), GLOBAL_PROJECT))
     return get_state(conn)
 
 
@@ -76,9 +74,9 @@ def request_handoff(conn) -> list:
     return names
 
 
-# Lift the pause and arm the one-time Hive migration.
+# Lift the pause.
 def resume(conn, source: str = "") -> dict:
-    """Lift the pause and arm the one-time Hive migration."""
+    """Lift the pause."""
     return _transition(conn, None, "RUNNING", "resume", "resumed", source)
 
 

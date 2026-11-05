@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 12   # 12: build measurements from the RAM of the build processes (peak_mb, parallel); 11: start contexts and start benchmarks; 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
+SCHEMA_VERSION = 13   # 13: remove the retired one-time Hive migration; 12: build measurements from the RAM of the build processes (peak_mb, parallel); 11: start contexts and start benchmarks; 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -167,8 +167,7 @@ def migrate(conn: sqlite3.Connection) -> None:
                         raise
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_archived ON agents (project, archived)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_kind ON providers_usage (kind, ts)")
-        if version < 7:
-            conn.execute("INSERT OR IGNORE INTO kv(project,key,value,updated_at) VALUES ('*','hives-migration','pending',?)", (now(),))
+        conn.execute("DELETE FROM kv WHERE key IN ('hives-migration','hives-migrated')")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

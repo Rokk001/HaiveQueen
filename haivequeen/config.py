@@ -15,6 +15,7 @@ DEFAULT_CONFIG = {
     "ramReserveMb": 2048,
     "exportDir": "",
     "projects": [],
+    "retention": {"logsDays": 30, "runsDays": 30, "databaseDays": 90, "inboxDays": 30},
 }
 
 DEFAULT_PROJECT = {

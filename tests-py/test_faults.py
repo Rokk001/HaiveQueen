@@ -176,16 +176,12 @@ class FaultsTest(RoundCase):
             self.assertEqual(len(notes), 1, q["item"])
             self.assertIn(q["item"], notes[0]["text"])
 
-    # Skipped and deferred rounds still check fault questions without starting work.
+    # A skipped round still checks fault questions without starting work.
     def test_skipped_and_deferred_rounds_check_faults(self):
-        """Low RAM and deferred migration do not skip fault checking."""
+        """Low RAM does not skip fault checking."""
         from unittest.mock import patch
-        from haivequeen import hives
         with patch("haivequeen.faults.check_round") as check:
             self.round(free_ram=lambda: 0.0)
-            self.assertTrue(any(call.args[0].name == "testproj" and call.args[1:] == (0, False) for call in check.call_args_list))
-        with patch("haivequeen.hives.migrate_once", return_value={"testproj": "deferred"}), patch("haivequeen.faults.check_round") as check:
-            self.round()
             self.assertTrue(any(call.args[0].name == "testproj" and call.args[1:] == (0, False) for call in check.call_args_list))
 
     # Pending fault reports are checked privately before they reach the owner.

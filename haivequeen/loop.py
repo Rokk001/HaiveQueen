@@ -683,6 +683,12 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
                 env.log("ROUND ERROR %s" % exc)
                 env.event("Round error: %s" % exc, True)
         daily_export(envs)
+        try:
+            from . import retention
+            retention.cleanup(conn, machine)
+        except Exception as exc:
+            for env in envs[:1]:
+                env.log("RETENTION ERROR %s" % exc)
         done += 1
         nxt = datetime.fromtimestamp(time.time() + minutes * 60)
         state.update(busy=False, since=datetime.now(), next_at=nxt)

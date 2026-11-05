@@ -678,73 +678,6 @@ def hive_data(conn, project, agents, plan=None):
 # German words for the state of a Hive that has no running Queen.
 
 
-# Resolve the four named migration plans from the existing plan source.
-def migration_targets(env):
-    """Return uniquely named migration plan paths, or None when the source is unclear."""
-    import re
-    from pathlib import Path
-    rows = runtime.list_plans(env.conn, env.name)
-    pattern = re.compile(r'(?i)\b(?:HaiveQueen|HQ)\s+plans\s+in\s+work\s*\(([^)]*)\)')
-    lists = []
-    for row in rows:
-        try:
-            lines = (env.workspace / row['path']).read_text(encoding='utf-8-sig').splitlines()
-        except OSError:
-            return None
-        for line in lines:
-            if re.match(r'^\s*-\s*D25\b', line):
-                lists.extend(m.group(1) for m in pattern.finditer(line))
-    if len(lists) != 1:
-        return None
-    names = [name.strip().casefold() for name in lists[0].split(',')]
-    if len(names) != 4 or len(set(names)) != 4 or not all(names):
-        return None
-    targets = []
-    for name in names:
-        matches = [row['path'] for row in rows if re.sub(r'(?i)-plan$', '', Path(row['path']).stem).casefold() == name]
-        if len(matches) != 1:
-            return None
-        targets.append(matches[0])
-    return targets
-
-
-# Pause only the named tool plans and clear obsolete locks after the first resume.
-def migrate_once(conn, envs):
-    """Migrate the specified plans once after resume, preserving all other plans."""
-    if runtime.kv_get(conn, '*', 'hives-migration') != 'armed':
-        return {}
-    registered = {row['name'] for row in db.rows(conn, "SELECT name FROM projects")}
-    loaded = {env.name for env in envs}
-    missing = registered - loaded
-    targets = {}
-    deferred = {}
-    pending = [env for env in envs if runtime.kv_get(conn, env.name, 'hives-migrated') != 'done']
-    for env in pending:
-        runtime.sync_plans(conn, env.name, str(env.workspace))
-        if env.name.lower() in ('haivequeen', 'hq'):
-            legacy = conn.execute("SELECT 1 FROM agents WHERE project=? AND phase IN ('work','verify','release','integrate') LIMIT 1", (env.name,)).fetchone()
-            targets[env.name] = migration_targets(env)
-            if targets[env.name] is None and legacy:
-                env.log('migration target list is missing or ambiguous')
-                deferred[env.name] = 'migration target list missing or ambiguous'
-                continue
-            if targets[env.name] is None:
-                targets[env.name] = []
-    for env in pending:
-        if env.name in deferred:
-            continue
-        for plan in runtime.list_plans(conn, env.name):
-            if plan['path'] in targets.get(env.name, ()) and plan['status'] == 'IN_PROGRESS':
-                runtime.set_plan_status(conn, env.name, plan['path'], 'PAUSED', str(env.workspace))
-        with db.transaction(conn):
-            conn.execute("UPDATE packages SET locked=0,lock_reason=NULL WHERE project=?", (env.name,))
-            conn.execute("DELETE FROM kv WHERE project=? AND (key LIKE 'stall:%' OR key LIKE 'planstall:%')", (env.name,))
-            conn.execute("INSERT INTO kv(project,key,value,updated_at) VALUES(?, 'hives-migrated', 'done', ?) ON CONFLICT(project,key) DO UPDATE SET value='done',updated_at=excluded.updated_at", (env.name, db.now()))
-    if not missing and not deferred:
-        runtime.kv_set(conn, '*', 'hives-migration', 'done')
-    return deferred
-
-
 # Run one machine-wide scheduling round for Hives without a language model.
 def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None, settle=3.0, plan_files=None):
     """Run one machine-wide scheduling round for Hives without a language model."""
@@ -786,16 +719,9 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
     if not dry_run:
         for env in envs:   # the global gates are open: a start blocker written while HaiveQueen was paused or stopped is stale
             conn.execute("UPDATE kv SET value='' WHERE project=? AND key LIKE 'hive-blocker:%' AND value IN ('PAUSED','STOP')", (env.name,))
-    deferred = {}
     if not dry_run:
-        deferred = migrate_once(conn, envs)
         reap_integrations(conn, alive=alive)
         wake_due(conn, db.now())
-    if not dry_run:
-        for env in envs:
-            if env.name in deferred:
-                faults.check_round(env, 0, False)
-    envs = [env for env in envs if env.name not in deferred]
     for env in envs:
         runtime.sync_plans(conn, env.name, str(env.workspace))
         if not dry_run:
@@ -821,7 +747,6 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
     preferred = str(machine.get('preferredProvider') or '')
     projects = sch.order_projects(envs)
     result['projects'] = {env.name: {'report': [], 'started': 0, 'actions': 0} for env in projects}
-    result['projects'].update({name: {'report': [reason], 'started': 0, 'actions': 0} for name, reason in deferred.items()})
     skipped = {env.name: [] for env in projects}
 
     # Remember why a plan got no Queen this round; the reasons are logged with the round line.
