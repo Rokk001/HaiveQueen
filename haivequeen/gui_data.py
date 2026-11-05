@@ -452,10 +452,18 @@ def limit_bars(d) -> list:
         out.append({"label": "Claude", "pct": None, "note": tr("Claude limit unknown") + ": " + d["claude_error"], "level": "bad"})
     for p in d["provider_limits"]:
         marker = tr("  ◀ next") if p["next"] else ""
+        if p.get("five_hour"):
+            five = p["five_hour"]
+            note = tr("resets %s", five["reset"]).strip()
+            if p.get("age_minutes") is not None:
+                note = tr("Reading age: %d minutes", p["age_minutes"]) + " | " + note
+            out.append({"label": tr("%s 5h", p["name"].capitalize()), "pct": five["pct"], "note": note, "level": level(five["pct"])})
         if p["has_limit"]:
             reset = sch.format_reset_time(p["reset_at"]) if p["reset_at"] else ""
             quota = "" if p["ratio"] is None else i18n.decimal(tr("quota %.2fx", p["ratio"]))
             note = " | ".join(part for part in (tr("resets %s", reset) if reset else tr("reset unknown"), quota) if part)
+            if p.get("error"):
+                note = (tr("Claude limit unknown") + ": " + p["error"]) if p.get("age_minutes") is None else tr("Reading age: %d minutes", p["age_minutes"]) + " | " + note
             out.append({"label": tr("%s 7d", p["name"].capitalize()), "pct": None if p["used_pct"] is None else round(p["used_pct"]), "note": note, "level": level(p["used_pct"])})
         total = int(p["total_slots"] or 0)
         out.append({"label": tr("%s slots", p["name"].capitalize()), "pct": round(100 * p["used_slots"] / total) if total else None,

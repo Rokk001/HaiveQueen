@@ -31,7 +31,7 @@ def route_candidates(providers, hive_provider, capability, escalated):
 
 def capable_providers(providers, need) -> list:
     """The providers that offer every capability in `need`."""
-    return [p for p in providers if all(scheduler.canonical_capability(n) in [scheduler.canonical_capability(c) for c in p.get('capabilities', [])] for n in need)]
+    return [p for p in providers if ('Confidential data' not in [scheduler.canonical_capability(n) for n in need] or scheduler._local_confidential(p)) and all(scheduler.canonical_capability(n) in [scheduler.canonical_capability(c) for c in p.get('capabilities', [])] for n in need)]
 
 
 def select_route(providers, free, hive_provider, package_class, capability, excluded, escalated, limited=()):

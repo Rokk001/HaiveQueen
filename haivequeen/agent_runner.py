@@ -789,7 +789,7 @@ class AgentRun:
         if not w:
             return
         try:
-            runtime.kv_set(self.conn, "*", "usage-claude", json.dumps({"saved": datetime.now().isoformat(), "fiveHour": w.get("five_hour"), "sevenDay": w.get("seven_day")}))
+            runtime.kv_set(self.conn, "*", "usage-claude:" + str(self.provider), json.dumps({"saved": datetime.now().isoformat(), "fiveHour": w.get("five_hour"), "sevenDay": w.get("seven_day")}))
         except Exception:
             pass
 

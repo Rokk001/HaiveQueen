@@ -121,7 +121,7 @@ class WindowTest(unittest.TestCase):
 
     def test_provider_limit_sources(self):
         """Weekly limit per provider: claude from kv, codex from logs, none/unknown = 100 % free in 168 h."""
-        usage.save_claude_usage(self.conn, self.event(self.now + 3600, self.now + 7200, seven=0.75))
+        usage.save_claude_usage(self.conn, self.event(self.now + 3600, self.now + 7200, seven=0.75), provider={"name": "c"})
         d = Path(self.tmp.name) / "codex"
         d.mkdir()
         line = {"payload": {"rate_limits": {"secondary": {"used_percent": 40, "window_minutes": 10080,
@@ -142,7 +142,7 @@ class WindowTest(unittest.TestCase):
 
     def test_provider_limit_test_runtime_reads_nothing(self):
         """With a test runtime (BZZ_DATA_DIR) and no limits file nothing is read from this PC."""
-        usage.save_claude_usage(self.conn, self.event(self.now + 3600, self.now + 7200, seven=0.75))
+        usage.save_claude_usage(self.conn, self.event(self.now + 3600, self.now + 7200, seven=0.75), provider={"name": "c"})
         env = {"BZZ_DATA_DIR": self.tmp.name}
         with mock.patch.dict(os.environ, env):
             os.environ.pop("BZZ_PROVIDER_LIMITS_FILE", None)

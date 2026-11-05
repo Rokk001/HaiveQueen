@@ -8,6 +8,14 @@ class CapabilityTests(unittest.TestCase):
         return {"name": "p", "protocol": "codex", "slots": 1,
                 "classes": {"medium": {"model": "m"}}, **values}
 
+    def test_confidential_work_only_routes_to_loopback_endpoint(self):
+        remote = sch.get_providers({"providers": [self.provider(capabilitiesVersion=1, capabilities=["Confidential data"])]})[0]
+        local = dict(remote, name="local", endpoint={"baseUrl": "http://127.0.0.1:1234/v1"})
+        external = dict(remote, name="external", endpoint={"baseUrl": "https://example.com/v1"})
+        self.assertEqual(bees.route_candidates([remote, local, external], "p", ["Confidential data"], False), [local])
+        self.assertFalse(sch.capability_available([remote, external], ["Confidential data"]))
+        self.assertIs(sch.select_provider([remote, local, external], "medium", ["Confidential data"], {"p": 1, "local": 1, "external": 1}), local)
+
     def test_legacy_mapping_and_queen_defaults(self):
         p = sch.get_providers({"providers": [self.provider(use="capability-only", capabilities=["images", "blender", "build"])]})[0]
         self.assertEqual(p["capabilities"], ["Image generation", "3D modelling", "Build", "Queen"])

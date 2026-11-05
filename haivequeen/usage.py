@@ -143,34 +143,38 @@ class ScanState:
 # ---------------------------------------------------------------- 5h / 7d windows and weekly limits
 
 # Read the canonical quota snapshot without exposing malformed cached data.
-def _claude_snapshot(conn, project=GLOBAL_PROJECT):
+def _claude_key(provider=None):
+    return CLAUDE_USAGE_KEY + ":" + str(provider["name"]) if provider and provider.get("name") else CLAUDE_USAGE_KEY
+
+
+def _claude_snapshot(conn, project=GLOBAL_PROJECT, provider=None):
     """Return the saved quota object, or an empty object when unavailable."""
     try:
-        value = json.loads(runtime.kv_get(conn, project, CLAUDE_USAGE_KEY) or '{}')
+        value = json.loads(runtime.kv_get(conn, project, _claude_key(provider)) or '{}')
         return value if isinstance(value, dict) else {}
     except (ValueError, TypeError):
         return {}
 
 
 # Expose a failed authoritative refresh independently of retained historical percentages.
-def claude_refresh_failed(conn, project=GLOBAL_PROJECT):
+def claude_refresh_failed(conn, project=GLOBAL_PROJECT, provider=None):
     """Return whether current Claude quota could not be verified."""
-    return bool(_claude_snapshot(conn, project).get('refresh_error'))
+    return bool(_claude_snapshot(conn, project, provider).get('refresh_error'))
 
 
 # Why the newest Claude usage check failed.
-def claude_refresh_error(conn, project=GLOBAL_PROJECT) -> str:
+def claude_refresh_error(conn, project=GLOBAL_PROJECT, provider=None) -> str:
     """The text stored with the failed check (what went wrong), or an empty string when the newest check worked."""
-    return str(_claude_snapshot(conn, project).get('refresh_error') or '')
+    return str(_claude_snapshot(conn, project, provider).get('refresh_error') or '')
 
 
 RETAIN_HOURS = 6   # a verified Claude reading younger than this still counts for starts and ranking while the newest check failed
 
 
 # The last verified Claude reading while a failed check must not block every start.
-def retained_claude(conn, project=GLOBAL_PROJECT):
+def retained_claude(conn, project=GLOBAL_PROJECT, provider=None):
     """The last verified reading (the snapshot without its error) when the newest check failed but that reading is younger than RETAIN_HOURS and has a window; else None."""
-    snap = _claude_snapshot(conn, project)
+    snap = _claude_snapshot(conn, project, provider)
     if not snap.get('refresh_error') or not (snap.get('fiveHour') or snap.get('sevenDay')):
         return None
     try:
@@ -185,9 +189,9 @@ def retained_claude(conn, project=GLOBAL_PROJECT):
 
 
 # The weekly part of the retained reading.
-def retained_weekly(conn, project=GLOBAL_PROJECT):
+def retained_weekly(conn, project=GLOBAL_PROJECT, provider=None):
     """(used percent, reset epoch or None) of the weekly window of the retained reading, or None when there is none or its window has already reset."""
-    kept = retained_claude(conn, project)
+    kept = retained_claude(conn, project, provider)
     window = _claude_window(kept.get('sevenDay'), True, int(datetime.now(timezone.utc).timestamp())) if kept else None
     return (window['pct'], window.get('at')) if window and window.get('pct') is not None else None
 
@@ -215,7 +219,6 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
     candidates = [p for p in providers if (p.get('limit', {}).get('source') if isinstance(p.get('limit'), dict) else p.get('limit')) == 'claude']
     if not candidates:
         return False
-    old = _claude_snapshot(conn)
     now = datetime.now(timezone.utc)
     provider = None
     check_key = CLAUDE_CHECK_KEY
@@ -229,7 +232,7 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
         try:
             checked_text = runtime.kv_get(conn, GLOBAL_PROJECT, key)
             if not candidate.get('name'):
-                checked_text = checked_text or old.get('checked_at')
+                checked_text = checked_text or _claude_snapshot(conn).get('checked_at')
             checked = datetime.fromisoformat(checked_text or '').astimezone(timezone.utc)
             if not force and 0 <= (now - checked).total_seconds() < interval:
                 continue
@@ -240,6 +243,7 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
     if provider is None:
         return False
     checked_at = now.isoformat()
+    old = _claude_snapshot(conn, provider=provider)
     try:
         executable = shutil.which(str(provider.get('command') or 'claude'))
         if not executable:
@@ -288,15 +292,15 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
             raise ValueError('missing global quotas')
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
         value = {**old, 'checked_at': checked_at, 'refresh_error': 'Claude usage refresh failed: %s' % ((str(exc) or type(exc).__name__)[:160])}
-        runtime.kv_set(conn, GLOBAL_PROJECT, CLAUDE_USAGE_KEY, json.dumps(value))
+        runtime.kv_set(conn, GLOBAL_PROJECT, _claude_key(provider), json.dumps(value))
         runtime.kv_set(conn, GLOBAL_PROJECT, check_key, checked_at)
         return False
-    runtime.kv_set(conn, GLOBAL_PROJECT, CLAUDE_USAGE_KEY, json.dumps(value))
+    runtime.kv_set(conn, GLOBAL_PROJECT, _claude_key(provider), json.dumps(value))
     runtime.kv_set(conn, GLOBAL_PROJECT, check_key, checked_at)
     return True
 
 
-def save_claude_usage(conn, event, project: str = GLOBAL_PROJECT) -> bool:
+def save_claude_usage(conn, event, project: str = GLOBAL_PROJECT, provider=None) -> bool:
     """Remember the newest Claude usage windows of a rate_limit_event in kv (key usage-claude); False if none."""
     info = event.get("rate_limit_info") if isinstance(event, dict) else None
     w = info.get("unifiedWindows") if isinstance(info, dict) else None
@@ -304,7 +308,7 @@ def save_claude_usage(conn, event, project: str = GLOBAL_PROJECT) -> bool:
         return False
     value = {"saved": datetime.now().astimezone().isoformat(), "fiveHour": w.get("five_hour"),
              "sevenDay": w.get("seven_day")}
-    runtime.kv_set(conn, project, CLAUDE_USAGE_KEY, json.dumps(value))
+    runtime.kv_set(conn, project, _claude_key(provider), json.dumps(value))
     return True
 
 
@@ -327,14 +331,14 @@ def _claude_window(w, with_at: bool, now: int):
 
 
 # Hide historical quota readings after an unsuccessful authoritative refresh.
-def get_claude_usage(conn, project: str = GLOBAL_PROJECT) -> dict:
+def get_claude_usage(conn, project: str = GLOBAL_PROJECT, provider=None) -> dict:
     """Return Claude's 5h/7d usage {five_hour, seven_day} each {pct, reset[, at]} or None when unknown.
 
     A window that has already reset gives pct None and reset 'new window'.
     """
     res = {"five_hour": None, "seven_day": None}
     try:
-        raw = runtime.kv_get(conn, project, CLAUDE_USAGE_KEY)
+        raw = runtime.kv_get(conn, project, _claude_key(provider))
         if not raw or not raw.strip():
             return res
         j = json.loads(raw)
@@ -457,15 +461,15 @@ def get_provider_limit(conn, provider: dict, project: str = GLOBAL_PROJECT, read
         t = json.loads(Path(lf).read_text(encoding="utf-8-sig"))
         if name in t:
             used, hours = t[name].get("usedPercent"), t[name].get("resetHours")
-    elif source == "claude" and claude_refresh_failed(conn, project):
-        kept = retained_weekly(conn, project)   # the last verified weekly reading while it is recent; without one the quota counts as unavailable
+    elif source == "claude" and claude_refresh_failed(conn, project, provider):
+        kept = retained_weekly(conn, project, provider)   # the last verified weekly reading while it is recent; without one the quota counts as unavailable
         if kept is None:
             return {"used_pct": None, "free_pct": 0.0, "hours": 168.0, "reset_epoch": None}
         used, at = kept
         if at:
             hours = (at - datetime.now(timezone.utc).timestamp()) / 3600
     elif read_pc and source in ("claude", "codex"):
-        u = (get_claude_usage(conn, project) if source == "claude" else (get_codex_usage(codex_dir) if codex_dir else cached_codex_usage(conn, project, provider)))["seven_day"]
+        u = (get_claude_usage(conn, project, provider) if source == "claude" else (get_codex_usage(codex_dir) if codex_dir else cached_codex_usage(conn, project, provider)))["seven_day"]
         if u and u.get("pct") is not None:
             used = u["pct"]
             if u.get("at"):
@@ -512,15 +516,15 @@ def limit_windows(conn, provider: dict, project: str = GLOBAL_PROJECT, read_pc=N
         for w in wins:
             hours = w.get("resetHours")
             out.append({"used_pct": float(w["usedPercent"]), "reset_epoch": now + float(hours) * 3600 if hours is not None else None})
-    elif source == "claude" and claude_refresh_failed(conn, project):
-        kept = retained_claude(conn, project) or {}   # a reading that is still recent counts; without one nothing is known and nothing starts
+    elif source == "claude" and claude_refresh_failed(conn, project, provider):
+        kept = retained_claude(conn, project, provider) or {}   # a reading that is still recent counts; without one nothing is known and nothing starts
         for w in (kept.get("fiveHour"), kept.get("sevenDay")):
             if w and (w.get("resetsAt") is None or int(w["resetsAt"]) > now):
                 out.append({"used_pct": 100 * float(w["utilization"]), "reset_epoch": int(w["resetsAt"]) if w.get("resetsAt") is not None else None})
         return out or [{"used_pct": 100, "reset_epoch": None, "unknown": True}]
     elif read_pc and source == "claude":
         try:
-            j = json.loads(runtime.kv_get(conn, project, CLAUDE_USAGE_KEY) or "{}")
+            j = json.loads(runtime.kv_get(conn, project, _claude_key(provider)) or "{}")
         except ValueError:
             j = {}
         for w in (j.get("fiveHour"), j.get("sevenDay")):

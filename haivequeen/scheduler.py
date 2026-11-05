@@ -306,12 +306,12 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
         kept = None
         if provider["limit"] == "claude" and conn is not None:
             from . import usage
-            if usage.claude_refresh_failed(conn):
-                kept = usage.retained_weekly(conn)   # the last verified weekly reading while it is recent; without one the quota counts as unavailable
+            if usage.claude_refresh_failed(conn, provider=provider):
+                kept = usage.retained_weekly(conn, provider=provider)   # the last verified weekly reading while it is recent; without one the quota counts as unavailable
                 if kept is None:
                     return {"FreePct": 0.0, "Hours": 168.0}
         u = ({"Pct": kept[0], "At": kept[1]} if kept else
-             claude_usage(conn)["SevenDay"] if provider["limit"] == "claude" and conn is not None
+             ({"Pct": w.get("pct"), "At": w.get("at")} if w else None) if provider["limit"] == "claude" and conn is not None and (w := usage.get_claude_usage(conn, provider=provider).get("seven_day"))
              else ({"Pct": w.get("pct"), "At": w.get("at")} if w else None) if provider["limit"] == "codex" and conn is not None and (w := usage.cached_codex_usage(conn, provider=provider).get("seven_day")) else None)
         if u and u.get("Pct") is not None:
             used = u["Pct"]
@@ -347,9 +347,20 @@ def package_needs(settings: dict, content: str, capability: str = "") -> list:
     return need
 
 
+def _local_confidential(provider):
+    from urllib.parse import urlparse
+    import ipaddress
+    endpoint = provider.get("endpoint") or {}
+    try:
+        host = urlparse(endpoint.get("baseUrl", "")).hostname if isinstance(endpoint, dict) else None
+        return host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except (ValueError, TypeError):
+        return False
+
+
 def capability_available(providers: list, needs: list) -> bool:
     """True when at least one provider with ALL the capabilities has slots above 0 (slots 0 = off for everything)."""
-    return any(p["slots"] > 0 and all(canonical_capability(n) in [canonical_capability(c) for c in p["capabilities"]] for n in needs) for p in providers)
+    return any(p["slots"] > 0 and ("Confidential data" not in [canonical_capability(n) for n in needs] or _local_confidential(p)) and all(canonical_capability(n) in [canonical_capability(c) for c in p["capabilities"]] for n in needs) for p in providers)
 
 
 def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "", prefer: str = "",
@@ -372,6 +383,8 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
             continue
         model = (p["classes"] or {}).get(cname)
         if not (model and model.get("model")):
+            continue
+        if "Confidential data" in needs and not _local_confidential(p):
             continue
         if any(n not in p["capabilities"] for n in needs):
             continue

@@ -8,7 +8,7 @@ import os
 import re
 import time
 import types
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import buildjobs, config, db, i18n, localtime, platform as osplat, runstate, runtime, scheduler as sch, usage
@@ -274,8 +274,8 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "now": now, "project": project, "projects": scope, "colours": colours, "cfg": cfg, "sysinfo": sysinfo,
         "run": runstate.get_state(conn), "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all, now),
         "provider_limits": provider_lines(conn, cfg, agents_all),
-        "claude_error": usage.claude_refresh_error(conn) if not usage.retained_claude(conn) else "",
-        "cu": window_usage(usage.retained_claude(conn) or _kv(conn, "usage-claude"), now), "xu": window_usage(_kv(conn, "usage-codex"), now),
+        "claude_error": usage.claude_refresh_error(conn) if not sch.get_providers(cfg or {}) and not usage.retained_claude(conn) else "",
+        "cu": window_usage((usage.retained_claude(conn) or _kv(conn, "usage-claude")) if not sch.get_providers(cfg or {}) else None, now), "xu": window_usage(_kv(conn, "usage-codex"), now),
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
         "qs": db.open_questions(conn, project, only_open=True),
@@ -308,7 +308,7 @@ def provider_lines(conn, cfg, agents) -> list:
                     if hours is not None:
                         reset_at = time.time() + float(hours) * 3600
             elif not os.environ.get("BZZ_RUNTIME_OVERRIDE"):
-                window = (sch.claude_usage(conn).get("SevenDay") if source == "claude" else {"Pct": w.get("pct"), "At": w.get("at")} if (w := usage.cached_codex_usage(conn, provider=provider).get("seven_day")) else None)
+                window = (({"Pct": w.get("pct"), "At": w.get("at")} if w else None) if (w := usage.get_claude_usage(conn, provider=provider).get("seven_day")) else None) if source == "claude" else {"Pct": w.get("pct"), "At": w.get("at")} if (w := usage.cached_codex_usage(conn, provider=provider).get("seven_day")) else None
                 if window and window.get("Pct") is not None:
                     used = float(window["Pct"])
                     if window.get("At"):
@@ -319,7 +319,16 @@ def provider_lines(conn, cfg, agents) -> list:
             remaining_week = max(0.0, float(hours)) / 168.0
             remaining_quota = max(0.0, 100.0 - used) / 100.0
             ratio = remaining_quota / remaining_week if remaining_week else float("inf")
-        rows.append({"name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
+        kept = usage.retained_claude(conn, provider=provider) if source == "claude" else None
+        if kept:
+            window = window_usage(kept, datetime.now(timezone.utc)).get("SevenDay")
+            if window and window.get("pct") is not None:
+                used = window["pct"]
+        saved = _parse_time(kept.get("saved")) if kept else None
+        age_minutes = max(0, int((datetime.now(timezone.utc) - saved.astimezone(timezone.utc)).total_seconds() // 60)) if saved else None
+        error = usage.claude_refresh_error(conn, provider=provider) if source == "claude" else ""
+        five = window_usage(kept or usage._claude_snapshot(conn, provider=provider), datetime.now(timezone.utc)).get("FiveHour") if source == "claude" else None
+        rows.append({"five_hour": five, "error": error, "age_minutes": age_minutes, "name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
                      "has_limit": source in ("claude", "codex"),
                      "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
                      "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),

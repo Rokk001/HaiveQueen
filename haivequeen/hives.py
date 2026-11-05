@@ -224,7 +224,7 @@ def provider_wait_check(conn, env, hive, provider, free, plan):
     full = [w for w in usage.limit_windows(conn, provider) if w['used_pct'] >= 100]
     if full:
         if any(w.get('unknown') for w in full):
-            return False, 'usage unknown, no recent reading (%s)' % (usage.claude_refresh_error(conn) or 'check failed')
+            return False, 'usage unknown, no recent reading (%s)' % (usage.claude_refresh_error(conn, provider=provider) or 'check failed')
         return False, 'quota used up'
     needed = 1 + (1 if provider['name'] == hive['provider'] and provider.get('beeMode') == 'process' and not provider.get('endpoint') else 0)
     if provider['slots'] < needed:

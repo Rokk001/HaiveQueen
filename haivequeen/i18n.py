@@ -307,6 +307,8 @@ GERMAN = {
     "Image generation": "Bilderzeugung", "3D modelling": "3D-Modellierung", "Audio generation": "Audioerzeugung",
     "Video generation": "Videoerzeugung", "Vision": "Bildverständnis", "Browser automation": "Browserautomatisierung",
     "Web research": "Webrecherche", "GPU workloads": "GPU-Aufgaben", "Confidential data": "Vertrauliche Daten",
+    "%s 5h": "%s 5 Std.",
+    "Reading age: %d minutes": "Alter des Messwerts: %d Minuten",
     "Claude limit unknown": "Claude-Limit unbekannt", "Add own": "Eigene hinzufügen",
     # ---- desktop messages
     "Error: %s": "Fehler: %s",

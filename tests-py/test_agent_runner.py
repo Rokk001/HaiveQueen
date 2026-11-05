@@ -343,7 +343,7 @@ class ClaudeRunTest(RunnerBase):
         self.assertIn("End: done (exit 0)", ms)
         self.assertEqual(len((run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()), 7)   # raw stream incl. the non-JSON line
         self.assertIn("fake stderr line", (run_dir / "stderr.txt").read_text(encoding="utf-8"))
-        usage = json.loads(runtime.kv_get(self.conn, "*", "usage-claude"))
+        usage = json.loads(runtime.kv_get(self.conn, "*", "usage-claude:claude"))
         self.assertEqual(usage["fiveHour"]["utilization"], 0.4)
         self.assertFalse((run_dir / "HANDOFF").exists())
         rec = self.record()
