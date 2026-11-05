@@ -440,6 +440,8 @@ class QueenIntegrationTests(RoundCase):
         with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
             result = bees.start_process(env, REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], cwd=str(first))
             self.assertEqual((result['kind'], result['cwd']), ('subagent', str(first)))
+            self.assertFalse(bees.start_process(env, REL, 'P1', 'Bea', 'medium', 'task', ['one'], [], [], cwd=str(other)))   # Ada's end is not confirmed yet (owner answer 220)
+            bees.report_attempt(env, REL, 'P1', 'medium', 'interrupted', 'Ada')
             result = bees.start_process(env, REL, 'P1', 'Bea', 'medium', 'task', ['one'], [], [], cwd=str(other))
             self.assertEqual(result['cwd'], str(first))
             for i in range(4):

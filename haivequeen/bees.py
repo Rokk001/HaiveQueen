@@ -64,6 +64,8 @@ def ensure_attempts(conn):
     if 'reason' not in [r[1] for r in conn.execute('PRAGMA table_info(package_progress)')]:
         conn.execute("ALTER TABLE package_progress ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE TABLE IF NOT EXISTS embedded_bees (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, name TEXT NOT NULL, class TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', effort TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, ended_at TEXT, outcome TEXT NOT NULL DEFAULT '')")
+    if 'queen' not in [r[1] for r in conn.execute('PRAGMA table_info(embedded_bees)')]:
+        conn.execute("ALTER TABLE embedded_bees ADD COLUMN queen TEXT NOT NULL DEFAULT ''")   # the Queen whose native subagent the Bee is
     conn.execute('CREATE TABLE IF NOT EXISTS bee_step_counts (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, steps INTEGER NOT NULL, PRIMARY KEY(project,plan_path,package))')
 
 
@@ -75,12 +77,14 @@ def record_step_count(conn, project, plan, package, steps):
 
 
 # Remember a Bee that runs as an embedded subagent of the Queen.
-def record_embedded_start(conn, project, plan, package, name, cls, provider, model='', effort=''):
-    """An embedded Bee has no agent row of its own: store it so the window can show it under its Queen. An older open row of the package is closed first."""
+def record_embedded_start(conn, project, plan, package, name, cls, provider, model='', effort='', queen=''):
+    """An embedded Bee has no agent row of its own: store it so the window can show it under its Queen `queen`.
+
+    An older open row of the package is never closed here: a new start does not prove that the older subagent ended (owner answer 220), so
+    start_process refuses a new Bee while one is open."""
     ensure_attempts(conn)
-    close_embedded(conn, project, plan, package, 'replaced', keep_stopping=True)
-    conn.execute('INSERT INTO embedded_bees(project,plan_path,package,name,class,provider,model,effort,started_at) VALUES (?,?,?,?,?,?,?,?,?)',
-                 (project, plan, package, name, cls, provider, model, effort, db.now()))
+    conn.execute('INSERT INTO embedded_bees(project,plan_path,package,name,class,provider,model,effort,started_at,queen) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                 (project, plan, package, name, cls, provider, model, effort, db.now(), queen or ''))
 
 
 # Names that open embedded Bees hold.
@@ -113,6 +117,51 @@ def close_embedded(conn, project, plan, package=None, outcome='done', keep_stopp
 
 # An embedded Bee the owner stopped keeps its row and its Bee place until its end is confirmed.
 STOPPING = 'stopping'
+
+
+def unconfirmed_embedded(conn, project, plan, package=None):
+    """The open embedded Bee rows (dicts) of the plan or one of its packages, oldest first: none of them has a confirmed end."""
+    ensure_attempts(conn)
+    sql, args = 'SELECT * FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', [project, plan]
+    if package:
+        sql += ' AND package=?'
+        args.append(package)
+    cur = conn.execute(sql + ' ORDER BY started_at', args)
+    names = [c[0] for c in cur.description]
+    return [dict(zip(names, r)) for r in cur.fetchall()]
+
+
+def own_embedded(row, queen) -> bool:
+    """True when the open embedded Bee row is a native subagent of the running Queen `queen` (agent dict): only she sees its end directly.
+    A row without a recorded Queen (written before the Queen was recorded) counts as hers when it started after her."""
+    if not queen:
+        return False
+    if row.get('queen'):
+        return row['queen'] == queen.get('name')
+    return bool(queen.get('started_at')) and str(row.get('started_at') or '') >= str(queen['started_at'])
+
+
+def release_refusal(conn, project, plan, package, queen, evidence=''):
+    """Why the result of `queen` for the package may not close its open embedded Bees; empty when it may.
+
+    The Queen that started a subagent Bee sees it return, which confirms its end. A later Queen only inherits the row: a Queen ending or missing progress
+    proves no end (owner answer 220), so she needs trustworthy evidence, a file the Bee wrote at its end (its final report) after its start."""
+    from pathlib import Path
+    foreign = [r for r in unconfirmed_embedded(conn, project, plan, package) if not own_embedded(r, queen)]
+    if not foreign:
+        return ''
+    row = foreign[-1]
+    who = 'the subagent Bee %s (%s) of the earlier Queen %s' % (row['name'], package, row.get('queen') or 'unknown')
+    if not evidence:
+        return ('%s has no confirmed end; record its result only with --ended-evidence <file the Bee wrote at its end, such as its final report>. '
+                'Without such evidence leave it open: it keeps its Bee place' % who)
+    path = Path(evidence)
+    if not path.is_file():
+        return 'the evidence %s for %s does not exist or is no file' % (evidence, who)
+    started = max(db.parse_time(r['started_at']) for r in foreign)
+    if path.stat().st_mtime < started.timestamp():
+        return 'the evidence %s was written before %s started, so it proves no end of it' % (evidence, who)
+    return ''
 
 
 def stopping_embedded(conn, project, plan=None, package=None):
@@ -245,6 +294,20 @@ def stop_notice_text(conn, project, plan):
     return text
 
 
+OPEN_BEES_FILE = 'OPEN-BEES'
+
+
+def open_bees_text(conn, project, plan, queen):
+    """The text of OPEN-BEES for the Queen `queen`: the subagent Bees of earlier Queens of the plan whose end is not confirmed; empty when none."""
+    inherited = [r for r in unconfirmed_embedded(conn, project, plan) if not own_embedded(r, queen)]
+    if not inherited:
+        return ''
+    return ('These subagent Bees of an earlier Queen of your plan have no confirmed end: %s. Each keeps its Bee place and its package gets no new Bee. '
+            'Do not start them again. When a file the Bee wrote at its end (its final report) proves that it ended, record its result with bzz bee result '
+            '--ended-evidence <that file> for its package; otherwise leave it open and go on with the other packages.\n') % ', '.join(
+        '%s (%s, Queen %s)' % (r['name'], r['package'], r.get('queen') or 'unknown') for r in inherited)
+
+
 def write_stop_notice(conn, project, plan):
     """Tell every running Queen of the plan (file STOP-PACKAGES in her run folder) which packages the owner stopped: she ends their subagent Bees,
     confirms each ended subagent Bee and starts none of them again. An embedded Bee has no process of its own, so only its Queen can end it.
@@ -254,13 +317,24 @@ def write_stop_notice(conn, project, plan):
     for queen in runtime.list_agents(conn, project, 'active'):
         if queen.get('plan_path') != plan or queen.get('phase') != 'queen' or queen.get('status') not in runtime.ACTIVE_STATUSES:
             continue
-        target = osplat.runs_dir() / project / queen['name'] / STOP_NOTICE_FILE
-        if text:
-            if not target.is_file() or target.read_text(encoding='utf-8') != text:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(text, encoding='utf-8')
-        elif target.exists():
-            target.unlink()
+        for name, body in ((STOP_NOTICE_FILE, text), (OPEN_BEES_FILE, open_bees_text(conn, project, plan, queen))):
+            target = osplat.runs_dir() / project / queen['name'] / name
+            if body:
+                if not target.is_file() or target.read_text(encoding='utf-8') != body:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(body, encoding='utf-8')
+            elif target.exists():
+                target.unlink()
+
+
+def after_queen_start(conn, project, plan):
+    """A new Queen of the plan has started. The embedded Bees of her predecessor stay open with their Bee places: a Queen ending proves no end of her
+    native Bees (owner answer 220). The new Queen is told of them (OPEN-BEES) and of stopped packages (STOP-PACKAGES)."""
+    inherited = unconfirmed_embedded(conn, project, plan)
+    if inherited:
+        runtime.append_event(conn, project, 'New Queen of %s: subagent Bees %s keep their Bee places until their end is confirmed' % (
+            plan, ', '.join('%s (%s)' % (r['name'], r['package']) for r in inherited)), kind='note', mirror='none')
+    write_stop_notice(conn, project, plan)
 
 
 def stop_package(conn, project, plan, package):
@@ -432,8 +506,10 @@ def escalation_providers(env, plan, package):
 # Record an attempt and file one owner question when the top class is exhausted.
 def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked=''):
     """Record an outcome and ask once after the highest class fails repeatedly. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
+    had_open = bool(unconfirmed_embedded(env.conn, env.name, plan, package))
     if close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome):   # the embedded Bee of this package has reported
         runtime.append_event(env.conn, env.name, 'The stopped subagent Bee of package %s has ended; its Bee place is free' % package, kind='note', mirror='none')
+    if had_open:   # the notices of the running Queens no longer name it
         write_stop_notice(env.conn, env.name, plan)
     if blocked:
         set_package_state(env.conn, env.name, plan, package, 'waiting', 'queen', blocked)
@@ -527,6 +603,12 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         pending = stopping_embedded(env.conn, env.name, plan, package)
         if pending:
             return refuse(env, package, 'the stopped subagent Bee %s of this package has not confirmed its end; once it has ended, report it with bzz bee result --outcome interrupted' % pending[0][2])
+        unconfirmed = unconfirmed_embedded(env.conn, env.name, plan, package)
+        if unconfirmed:   # owner answer 220: no replacement while the earlier subagent Bee may still run
+            if own_embedded(unconfirmed[0], queen):
+                return refuse(env, package, 'the subagent Bee %s of this package has not confirmed its end; record its result with bzz bee result first' % unconfirmed[0]['name'])
+            return refuse(env, package, 'the subagent Bee %s of the earlier Queen %s has not confirmed its end; record its result with bzz bee result --ended-evidence first' % (
+                unconfirmed[0]['name'], unconfirmed[0].get('queen') or 'unknown'))
         requested_class = package_row['cls']
         threshold = int(env.settings.get('escalateAfter', 3))
         excluded = env.settings.get('excludedProviders', [])
@@ -610,7 +692,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
                 env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(Path(cwd).absolute())))
                 cwd = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()[0]
             entry = (pick.get('classes') or {}).get(selected_class) or {}
-            record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''))
+            record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''), queen['name'])
             record_step_count(env.conn, env.name, plan, package, len(steps))
             # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
             prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')))

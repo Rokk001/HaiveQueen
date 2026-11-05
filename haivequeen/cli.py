@@ -422,6 +422,9 @@ def cmd_bee(args, conn):
             refused = integration.result_refusal(conn, args.project, plan, args.package)
             if refused:
                 return fail(refused)
+        refused = bees.release_refusal(conn, args.project, plan, args.package, queen, getattr(args, "ended_evidence", "") or "")
+        if refused:   # owner answer 220: only trustworthy evidence ends a subagent Bee of an earlier Queen
+            return fail(refused)
         bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked)
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
@@ -470,6 +473,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--error", default="")
     p.add_argument("--blocked-by", choices=["question", "build", "owner", "package", "provider"], default="")
     p.add_argument("--blocked-ref", default="")
+    p.add_argument("--ended-evidence", default="", help="file the subagent Bee of an earlier Queen wrote at its end (its final report)")
     p.add_argument("--no-subagents", action="store_true")
     p.set_defaults(fn=cmd_bee)
 

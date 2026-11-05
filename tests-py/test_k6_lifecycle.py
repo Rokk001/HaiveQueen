@@ -355,11 +355,93 @@ class StoppedPackageTests(RoundCase):
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
         bees.record_embedded_start(self.conn, "testproj", REL, "P2", "Dia", "medium", "claude")
         bees.stop_package(self.conn, "testproj", REL, "P1")
-        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Eva", "medium", "claude")
-        bees.close_embedded(self.conn, "testproj", REL, None, "queen replaced", keep_stopping=True)
+        self.assertFalse(self.start("P1"))   # no replacement Bee
+        bees.after_queen_start(self.conn, "testproj", REL)
         self.assertEqual(bees.stopping_embedded(self.conn, "testproj"), [(REL, "P1", "Cia")])
-        outcomes = dict(self.conn.execute("SELECT name, outcome FROM embedded_bees").fetchall())
-        self.assertEqual(outcomes, {"Cia": "stopping", "Dia": "queen replaced", "Eva": "queen replaced"})
+        outcomes = dict(self.conn.execute("SELECT name, outcome FROM embedded_bees WHERE ended_at IS NULL").fetchall())
+        self.assertEqual(outcomes, {"Cia": "stopping", "Dia": ""})   # an unconfirmed Bee that was not stopped survives the restart too
+
+    def queen_notice(self, name="Queen-A"):
+        f = self.env().run_dir(name) / bees.OPEN_BEES_FILE
+        return f.read_text(encoding="utf-8") if f.is_file() else ""
+
+    def restart_queen(self, new="Queen-B"):
+        """The old Queen ends without confirming her subagent Bees; a new Queen of the plan starts."""
+        self.conn.execute("UPDATE agents SET status='done' WHERE project='testproj' AND name='Queen-A'")
+        later = (datetime.now() + timedelta(seconds=5)).isoformat(timespec="seconds")
+        self.agent(new, phase="queen", status="running", pid=__import__("os").getpid(), cwd=str(self.wt), started_at=later)
+        bees.after_queen_start(self.conn, "testproj", REL)
+
+    def test_a_queen_restart_keeps_every_unconfirmed_subagent_bee(self):
+        """Owner answer 220: a Queen ending proves no end of her native Bees: every open row keeps its place, running or stopping, and the new Queen is told."""
+        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
+        bees.record_embedded_start(self.conn, "testproj", REL, "P2", "Dia", "medium", "claude", queen="Queen-A")
+        bees.stop_package(self.conn, "testproj", REL, "P1")
+        self.restart_queen()
+        rows = {r["name"]: r["outcome"] for r in gui_data.embedded_rows(self.conn)}
+        self.assertEqual(rows, {"Cia": "stopping", "Dia": ""})
+        self.assertEqual(bees.free_bee_places(self.env(), REL, 5), 1)
+        self.assertNotIn("P2", bees.startable_not_started(self.env(), REL))
+        notice = self.queen_notice("Queen-B")
+        self.assertIn("Dia (P2", notice)
+        self.assertIn("Cia (P1", notice)
+        self.assertIn("--ended-evidence", notice)
+
+    def test_a_new_bee_start_is_refused_while_an_unconfirmed_bee_holds_the_package(self):
+        """No replacement for a subagent Bee whose end is not confirmed: the start is refused and the old row stays open."""
+        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
+        self.assertFalse(self.start("P1"))
+        self.assertIn("Cia", bees.LAST_REFUSAL)
+        self.assertIn("not confirmed", bees.LAST_REFUSAL)
+        self.assertEqual([r["name"] for r in gui_data.embedded_rows(self.conn)], ["Cia"])
+        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Eva", "medium", "claude", queen="Queen-A")
+        self.assertEqual(sorted(r["name"] for r in gui_data.embedded_rows(self.conn)), ["Cia", "Eva"])   # recording never closes an older row
+
+    def test_the_own_queen_confirms_her_subagent_bee_without_further_evidence(self):
+        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
+        queen = runtime.get_agent(self.conn, "testproj", "Queen-A")
+        self.assertEqual(bees.release_refusal(self.conn, "testproj", REL, "P1", queen, ""), "")
+        bees.report_attempt(self.env(), REL, "P1", "medium", "interrupted", "Cia")
+        self.assertEqual(gui_data.embedded_rows(self.conn), [])
+
+    def test_a_later_queen_releases_an_orphaned_bee_only_with_evidence_written_after_its_start(self):
+        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
+        self.conn.execute("UPDATE embedded_bees SET started_at=? WHERE name='Cia'", ((datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds"),))
+        self.restart_queen()
+        queen = runtime.get_agent(self.conn, "testproj", "Queen-B")
+        refused = bees.release_refusal(self.conn, "testproj", REL, "P1", queen, "")
+        self.assertIn("--ended-evidence", refused)
+        self.assertIn("Queen-A", refused)
+        self.assertIn("does not exist", bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(self.wt / "missing.md")))
+        old = self.wt / "old.md"
+        old.write_text("x", encoding="utf-8")
+        stamp = (datetime.now() - timedelta(minutes=20)).timestamp()
+        __import__("os").utime(old, (stamp, stamp))
+        self.assertIn("before", bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(old)))
+        report = self.wt / "result.md"
+        report.write_text("done", encoding="utf-8")
+        self.assertEqual(bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(report)), "")
+        self.assertEqual(len(gui_data.embedded_rows(self.conn)), 1)   # checking alone releases nothing
+
+    def test_bee_result_without_evidence_for_an_orphaned_bee_is_refused_by_the_cli(self):
+        from haivequeen import cli
+        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
+        self.restart_queen()
+        args = __import__("types").SimpleNamespace(project="testproj", plan=REL, package="P1", cls="medium", action="result", outcome="interrupted", attempt="Cia",
+                         open_requirements="[]", error="", blocked_by="", blocked_ref="", ended_evidence="")
+        env = self.env()
+        with mock.patch.dict("os.environ", {"BZZ_AGENT": "Queen-B"}), mock.patch.object(scheduler, "load_projects", return_value=[env]), \
+                mock.patch("haivequeen.config.load_config", return_value={}), mock.patch.object(cli, "fail", side_effect=lambda text: text) as fail:
+            self.assertIn("--ended-evidence", cli.cmd_bee(args, self.conn))
+        self.assertEqual(len(gui_data.embedded_rows(self.conn)), 1)
+        report = self.wt / "result.md"
+        report.write_text("done", encoding="utf-8")
+        args.ended_evidence = str(report)
+        with mock.patch.dict("os.environ", {"BZZ_AGENT": "Queen-B"}), mock.patch.object(scheduler, "load_projects", return_value=[env]), \
+                mock.patch("haivequeen.config.load_config", return_value={}), mock.patch.object(cli, "out"):
+            self.assertEqual(cli.cmd_bee(args, self.conn), 0)
+        self.assertEqual(gui_data.embedded_rows(self.conn), [])
+        self.assertEqual(self.queen_notice("Queen-B"), "")
 
     def test_stop_bee_on_an_embedded_bee_stops_it_and_tells_its_queen(self):
         """An embedded (subagent) Bee has no process of its own: X stops its package and tells the Queen to end the subagent."""

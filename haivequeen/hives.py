@@ -1025,9 +1025,8 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
                     raise
                 if count:
-                    # embedded Bees of the old Queen are gone with her; a stopped one whose end was never confirmed keeps its place (owner answer 220)
-                    bees.close_embedded(conn, env.name, path, None, 'queen replaced', keep_stopping=True)
-                    bees.write_stop_notice(conn, env.name, path)
+                    # the embedded Bees of the old Queen keep their rows and places until their end is confirmed (owner answer 220)
+                    bees.after_queen_start(conn, env.name, path)
                     runtime.kv_set(conn, env.name, 'hive-blocker:' + path, '')
                     for package in runtime.list_packages(conn, env.name, path):
                         runtime.kv_delete(conn, env.name, "wait:%s|%s" % (path, package["id"]))
