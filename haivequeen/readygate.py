@@ -11,6 +11,7 @@
 """
 import os
 import re
+import subprocess
 import time
 
 from . import plans, roles, runtime
@@ -49,12 +50,13 @@ def _names(decision, rid):
     return str(decision.get("item") or "").strip().upper() == rid.upper()
 
 
-def evaluate(plan_text, state_text, decisions, assignments=None):
+def evaluate(plan_text, state_text, decisions, assignments=None, versions=()):
     """Check the requirement list of the state file against the requirement ids of the plan and the state file; returns a Result."""
     res = Result()
     required = {}
-    for rid, text in plans.parse_requirements(plan_text) + plans.parse_requirements(state_text):
-        required.setdefault(rid, text)
+    for source in (plan_text, state_text, *versions):
+        for rid, text in plans.parse_requirements(source):
+            required.setdefault(rid, text)
     res.ids = list(required)
     if not required:
         res.no_ids = True
@@ -111,6 +113,22 @@ def _read(paths):
     return "", paths[0]
 
 
+def plan_versions(path, current):
+    """Read the current plan and its committed versions, if it has Git history."""
+    folder = os.path.dirname(os.path.abspath(path))
+    try:
+        root = subprocess.run(['git', '-C', folder, 'rev-parse', '--show-toplevel'], capture_output=True, text=True, check=True).stdout.strip()
+        relative = os.path.relpath(path, root).replace('\\', '/')
+        commits = subprocess.run(['git', '-C', root, 'log', '--format=%H', '--', relative], capture_output=True, text=True, check=True).stdout.splitlines()
+        versions = [current]
+        for commit in commits:
+            result = subprocess.run(['git', '-C', root, 'show', '%s:%s' % (commit, relative)], capture_output=True, check=True)
+            versions.append(result.stdout.decode('utf-8-sig', errors='replace'))
+        return versions
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return [current]
+
+
 def gate(env, plan, queen):
     """Run the whole gate for the Queen's `bzz ready`; returns (accepted, message, waiting)."""
     folders = [f for f in (queen.get("cwd"), str(env.workspace)) if f]
@@ -119,11 +137,14 @@ def gate(env, plan, queen):
     decisions = [d for d in runtime.list_decisions(env.conn, env.name, active_only=True) if not d["plan_path"] or d["plan_path"] == plan]
     assignments = runtime.cut_assignments(env.conn, env.name, plan, plan_text)
     # No trustworthy cut record (older worked plan, reused path, another plan title): require evidence; requirements added after the cut need evidence too.
-    res = evaluate(plan_text, state_text, decisions, assignments if assignments is not None else [])
+    versions = plan_versions(plan_file, plan_text)
+    res = evaluate(plan_text, state_text, decisions, assignments if assignments is not None else [], versions)
     if res.no_ids or res.blocking:
         return False, refusal_text(res), False
     skipped = ", ".join(res.owner + res.aside) or "none"
     prompt = roles.role_text("ready-check", {"plan_file": plan_file, "state_file": state_file, "cwd": queen.get("cwd") or str(env.workspace), "skipped": skipped, "language": roles.language(env.settings)})
+    historical = dict.fromkeys(pair for text in versions for pair in plans.parse_requirements(text))
+    prompt += "\n\nRequirements from all plan versions:\n" + "\n".join("- %s: %s" % pair for pair in historical)
     request = {"env": env, "queen": queen, "plan": plan, "cwd": queen.get("cwd") or str(env.workspace), "prompt": prompt}
     runner = CHECK_RUNNER or (lambda r: start_check_agent(r["env"], r["queen"], r))
     verdict, text = runner(request)

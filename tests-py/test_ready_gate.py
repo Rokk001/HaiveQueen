@@ -5,7 +5,10 @@ import contextlib
 import io
 import json
 import os
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from bzztest import REL, RoundCase, runtime
@@ -83,6 +86,24 @@ class ListTests(unittest.TestCase):
         decision = {"item": "other", "text": "G-3 is discussed", "status": "active"}
         res = self.check(completeness(*FULL[:2]), decisions=[decision])
         self.assertEqual([i for i, _ in res.blocking], ["G-3"])
+
+    def test_plan_history_includes_removed_and_current_requirements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            plan = root / 'PLAN.md'
+            plan.write_text('# Plan\n\n## Requirements\n\n- G-1: old\n', encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
+            current = '# Plan\n\n## Requirements\n\n- G-2: new\n'
+            plan.write_text(current, encoding='utf-8')
+            texts = readygate.plan_versions(str(plan), current)
+            ids = {rid for text in texts for rid, _ in plans.parse_requirements(text)}
+            self.assertEqual(ids, {'G-1', 'G-2'})
+            res = readygate.evaluate(current, '## Completeness\n- G-2: done | test\n', [], [], texts)
+            self.assertEqual([rid for rid, _ in res.blocking], ['G-1'])
 
     def test_plan_without_ids_is_refused(self):
         """No requirement id anywhere: refused with the hint that requirements need ids."""
