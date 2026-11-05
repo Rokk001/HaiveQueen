@@ -201,10 +201,34 @@ def queen_instructions(queen_class, bee_limit, threshold, context_limit, languag
 STOP_KEY = 'package-stopped:'
 
 
+STOP_NOTICE_FILE = 'STOP-PACKAGES'
+
+
+def write_stop_notice(conn, project, plan):
+    """Tell every running Queen of the plan (file STOP-PACKAGES in her run folder) which packages the owner stopped: she ends their subagent Bees
+    and starts none of them again. An embedded Bee has no process of its own, so only its Queen can end it. Without a stopped package the file is removed."""
+    from . import platform as osplat
+    names = [p for (_, pl, p) in stopped_packages(conn, project) if pl == plan]
+    for queen in runtime.list_agents(conn, project, 'active'):
+        if queen.get('plan_path') != plan or queen.get('phase') != 'queen' or queen.get('status') not in runtime.ACTIVE_STATUSES:
+            continue
+        target = osplat.runs_dir() / project / queen['name'] / STOP_NOTICE_FILE
+        if names:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('The owner stopped these packages: %s. End their Bees now (a subagent Bee too), start none of them again '
+                              'and leave them open; the owner resumes them.\n' % ', '.join(names), encoding='utf-8')
+        elif target.exists():
+            target.unlink()
+
+
 def stop_package(conn, project, plan, package):
-    """Mark the package as stopped by the owner; no Bee of it starts again until resume_package."""
+    """Mark the package as stopped by the owner; no Bee of it starts again until resume_package.
+
+    An open embedded (subagent) Bee of the package is closed with the outcome stopped, so it holds no Bee place, and the running Queen is told to end it."""
     runtime.kv_set(conn, project, STOP_KEY + '%s|%s' % (plan, package), db.now())
+    close_embedded(conn, project, plan, package, 'stopped')
     runtime.append_event(conn, project, 'Package %s stopped by the owner; it stays stopped until the owner resumes it' % package, kind='note', mirror='none')
+    write_stop_notice(conn, project, plan)
 
 
 def package_stopped(conn, project, plan, package):
@@ -232,6 +256,7 @@ def resume_package(conn, project, plan, package):
         raise ValueError('the package %s is not stopped' % package)
     runtime.kv_delete(conn, project, STOP_KEY + '%s|%s' % (plan, package))
     runtime.append_event(conn, project, 'Package %s resumed by the owner' % package, kind='note', mirror='none')
+    write_stop_notice(conn, project, plan)
 
 
 # Packages a running Queen could start now but has not started (H-47): their dependencies are done and Bee places are free.
@@ -274,11 +299,12 @@ def free_bee_places(env, plan, free_slots, alive=None):
 def notify_startable(env, plan, queen, free_slots, alive=None):
     """Tell the running Queen in this round which packages to start now (file START-PACKAGES in her run folder) and store them for the dashboard.
 
-    Returns the package ids named; none when no package waits or no Bee place is free (the file and the stored list are then cleared)."""
-    places = free_bee_places(env, plan, free_slots, alive)
+    Returns the package ids named; none when no package waits, no Bee place is free or the Queen has her HANDOFF file (the file and the stored list are then cleared)."""
+    target = env.run_dir(queen['name']) / NOTICE_FILE
+    handoff = (target.parent / 'HANDOFF').exists()   # a Queen at her context limit starts no new Bees
+    places = 0 if handoff else free_bee_places(env, plan, free_slots, alive)
     names = startable_not_started(env, plan, alive)[:places] if places else []
     runtime.kv_set(env.conn, env.name, STARTABLE_KEY + plan, json.dumps(names))
-    target = env.run_dir(queen['name']) / NOTICE_FILE
     if names:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text('Start these packages now, each with its own Bee (%d Bee place(s) free): %s\n' % (places, ', '.join(names)), encoding='utf-8')

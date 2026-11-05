@@ -309,6 +309,45 @@ class StoppedPackageTests(RoundCase):
         kill.assert_called_once_with(999999)
         self.assertTrue(bees.package_stopped(self.conn, "testproj", REL, "P1"))
 
+    def stop_notice(self):
+        f = self.env().run_dir("Queen-A") / bees.STOP_NOTICE_FILE
+        return f.read_text(encoding="utf-8") if f.is_file() else ""
+
+    def test_stop_bee_on_an_embedded_bee_stops_it_and_tells_its_queen(self):
+        """An embedded (subagent) Bee has no process of its own: X stops its package, frees its place and tells the Queen to end the subagent."""
+        from haivequeen import gui
+        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
+        queen = dict(runtime.list_agents(self.conn, "testproj", "active")[0])
+        row = next(r for r in gui_data.bee_list([queen], {}, set(), datetime.now(), embedded=gui_data.embedded_rows(self.conn)) if r["name"] == "Cia")
+        self.assertTrue(row.get("embedded"))
+        cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "stop_bee"))
+        app = mock.Mock(conn=self.conn, confirm=lambda text: True, selected=lambda table: row)
+        with mock.patch("haivequeen.platform.kill_process_tree") as kill:
+            cls.stop_bee(app)
+        kill.assert_not_called()   # the Queen's process must survive
+        app.inform.assert_not_called()   # no "has not started yet"
+        self.assertTrue(bees.package_stopped(self.conn, "testproj", REL, "P1"))
+        self.assertEqual(gui_data.embedded_rows(self.conn), [])
+        self.assertEqual(self.conn.execute("SELECT outcome FROM embedded_bees WHERE name='Cia'").fetchone()[0], "stopped")
+        self.assertEqual(bees.free_bee_places(self.env(), REL, 5), 3)
+        self.assertIn("P1", self.stop_notice())
+        self.assertFalse(self.start("P1"))   # the Queen cannot start it again as a subagent either
+        self.assertIn("owner stopped", bees.LAST_REFUSAL)
+        bees.resume_package(self.conn, "testproj", REL, "P1")
+        self.assertEqual(self.stop_notice(), "")
+
+    def test_the_stop_notice_names_every_stopped_package_of_the_plan(self):
+        bees.stop_package(self.conn, "testproj", REL, "P1")
+        bees.stop_package(self.conn, "testproj", REL, "P2")
+        self.assertIn("P1, P2", self.stop_notice())
+        bees.resume_package(self.conn, "testproj", REL, "P1")
+        self.assertNotIn("P1", self.stop_notice())
+        self.assertIn("P2", self.stop_notice())
+
+    def test_the_queen_rule_names_the_stop_notice(self):
+        from haivequeen import roles
+        self.assertIn("STOP-PACKAGES", roles.role_text("queen", {"class": "medium", "bee_limit": 3, "escalate_after": 3, "context_limit": 1, "language": "English"}))
+
 
 class StartableNoticeTests(RoundCase):
     """H-47: in the same round the Queen is told which startable packages to start when Bee places are free; the dashboard shows them."""
@@ -347,6 +386,17 @@ class StartableNoticeTests(RoundCase):
         env.settings["beesPerQueen"] = 3
         self.assertEqual(bees.notify_startable(env, REL, {"name": "Queen-A"}, 5), ["P2"])
         self.assertEqual(bees.notify_startable(env, REL, {"name": "Queen-A"}, 0), [])   # no free provider slot
+
+    def test_a_queen_told_to_hand_off_gets_no_start_notice(self):
+        """A Queen whose HANDOFF file is written must start no new Bees: the old START-PACKAGES notice and the dashboard list are cleared in that round."""
+        self.round()
+        self.assertIn("P1", self.notice())
+        (self.env().run_dir("Queen-A") / "HANDOFF").write_text("context limit", encoding="utf-8")   # written by an earlier round
+        self.round()
+        self.assertEqual(self.notice(), "")
+        self.assertNotIn(("testproj", REL), bees.startable_map(self.conn))
+        self.round()   # later rounds do not write it again
+        self.assertEqual(self.notice(), "")
 
     def test_the_queen_rule_names_the_notice(self):
         from haivequeen import roles

@@ -332,7 +332,7 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
                      "task": str(bee["package"]).strip(), "step": step, "step_frac": step_fraction(step),
                      "ctx": int((sub or {}).get("ctx") or 0), "ctx_limit": int(ctx_limit(queen)) if sub and ctx_limit else 0,
                      "tin": int((sub or {}).get("tin") or 0), "tout": int((sub or {}).get("tout") or 0),
-                     "status": "running", "runtime": fmt_elapsed(bee["started_at"], now)})
+                     "status": "running", "runtime": fmt_elapsed(bee["started_at"], now), "embedded": True, "package": bee["package"]})
         seen.add((bee["project"], bee["plan_path"], bee["package"]))
     for (project, plan, package) in sorted(assigned or {}):
         if (project, plan, package) in seen or (project, plan, package) in (completed or ()) or (hive_keys is not None and (project, plan) not in hive_keys):

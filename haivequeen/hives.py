@@ -849,7 +849,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     flagged = routine.set_handoff_flags(env, [routine.view(a) for a in running]) if not dry_run else []
                     if flagged and hive:
                         context_limit(conn, env.name, plan['path'])
-                    elif hive and not dry_run and plan['status'] not in plan_mod.CUT_STATUSES:
+                    if hive and not dry_run and plan['status'] not in plan_mod.CUT_STATUSES:
                         from . import bees
                         provider = sch.get_provider(env.providers, hive['provider'])
                         slots = sum(pool.free.values()) if provider and provider.get('beeMode') == 'process' else int(env.settings.get('beesPerQueen', 3))

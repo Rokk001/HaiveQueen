@@ -24,6 +24,31 @@ class IsolationActiveTest(unittest.TestCase):
         for rel in ("profile/claude/settings.json", "profile/codex/config.toml", "config.toml", "logs/notes.txt", "profile/stray.txt"):
             self.assertFalse(isolation.is_live(isolation.Path(rel)), rel)
 
+    def test_a_settings_file_rewritten_by_a_live_agent_start_is_not_a_change(self):
+        """The running loop rewrites profile/codex/config.toml at every Codex start (and Codex adds its own entries while it runs): when a run folder
+        of the real data folder was written at about the same time, the change is the live loop's, not a test's. Without such a run it still counts."""
+        import tempfile
+        import time
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            settings = base / "profile" / "codex" / "config.toml"
+            settings.parent.mkdir(parents=True)
+            settings.write_text("[history]\n", encoding="utf-8")
+            stray = base / "config.toml"
+            stray.write_text("a", encoding="utf-8")
+            before, since = isolation.snapshot_real([base]), time.time_ns()
+            settings.write_text("[history]\npersistence = \"none\"\n", encoding="utf-8")
+            stray.write_text("bb", encoding="utf-8")
+            self.assertEqual(isolation.real_folder_changes([base], before, since), sorted([str(settings), str(stray)]))   # nothing ran: a test wrote both
+            run = base / "runs" / "HaiveQueen" / "Tara-5" / "rules.md"
+            run.parent.mkdir(parents=True)
+            run.write_text("rules", encoding="utf-8")
+            self.assertEqual(isolation.real_folder_changes([base], before, since), [str(stray)])   # the settings file was the live start's
+            old = time.time() - 3600
+            os.utime(run, (old, old))   # a run folder written long before does not explain the change
+            self.assertEqual(isolation.real_folder_changes([base], before, since), sorted([str(settings), str(stray)]))
+
 
 if __name__ == "__main__":
     unittest.main()

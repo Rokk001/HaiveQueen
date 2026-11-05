@@ -7,6 +7,7 @@ so such a test is found and given its own folders.
 """
 import os
 import tempfile
+import time
 from pathlib import Path
 
 os.environ["BZZ_NO_DESKTOP"] = "1"   # desktop messages of the program (faults without an Apiary) are never shown during tests
@@ -43,6 +44,8 @@ def snapshot_real(bases=None) -> dict:
     return snap
 
 
+SESSION_START_NS = time.time_ns()
+LIVE_WINDOW_S = 120   # a profile settings file written this close to a live run folder write is the live loop's (see real_folder_changes)
 REAL_BEFORE = snapshot_real()
 os.environ.setdefault("BZZ_NO_LOGIN_CHECK", "1")   # providers of the tests need no login in the profile (test_profile.py removes this)
 ROOT = Path(tempfile.mkdtemp(prefix="hq-tests-appdata-"))
@@ -58,7 +61,45 @@ def leaked():
     return sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file())
 
 
-def real_folder_changes() -> list:
-    """Return the files of the real data and settings folders that a test added, removed or changed since this module was imported."""
-    now = snapshot_real()
-    return sorted(p for p in set(now) | set(REAL_BEFORE) if now.get(p) != REAL_BEFORE.get(p))
+def own_profile_setting(rel: Path) -> bool:
+    """True for a settings file HaiveQueen writes into a CLI's profile folder itself (profile/<cli>/<name of profile.SPECS>)."""
+    if len(rel.parts) != 3 or rel.parts[0] != "profile":
+        return False
+    from haivequeen import profile
+    return rel.parts[2] in {name for spec in profile.SPECS.values() for name in spec["settings"]}
+
+
+def run_write_times(base: Path, since_ns: int) -> list:
+    """mtimes (ns) of the files below <base>/runs written since `since_ns`: the run folders a running loop wrote during the session."""
+    runs = base / "runs"
+    times = []
+    for p in runs.rglob("*") if runs.is_dir() else ():
+        try:
+            if p.is_file() and p.stat().st_mtime_ns >= since_ns:
+                times.append(p.stat().st_mtime_ns)
+        except OSError:
+            pass
+    return times
+
+
+def real_folder_changes(bases=None, before=None, since_ns=None) -> list:
+    """Return the files of the real data and settings folders (or of `bases`) that a test added, removed or changed since this module was imported
+    (or since the snapshot `before` taken at `since_ns`).
+
+    A settings file HaiveQueen writes into a CLI profile is also rewritten by the running loop at every agent start (profile.prepare), and Codex adds
+    its own entries to it while it runs. Such a change is the live loop's when a run folder of the same data folder was written during the session
+    within LIVE_WINDOW_S of the file's new time; tests never write run folders of the real data folder."""
+    before = REAL_BEFORE if before is None else before
+    since_ns = SESSION_START_NS if since_ns is None else since_ns
+    now = snapshot_real(bases)
+    changed = sorted(p for p in set(now) | set(before) if now.get(p) != before.get(p))
+    found = []
+    for path in changed:
+        base = next((b for b in (REAL_FOLDERS if bases is None else bases) if Path(path).is_relative_to(b)), None)
+        if base is not None and path in now and own_profile_setting(Path(path).relative_to(base)):
+            mtime = now[path][1]
+            # file times on Windows can lag the clock by a few milliseconds, so a run written right after the session start still counts
+            if any(abs(t - mtime) <= LIVE_WINDOW_S * 10**9 for t in run_write_times(base, since_ns - 2 * 10**9)):
+                continue
+        found.append(path)
+    return found
