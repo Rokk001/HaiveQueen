@@ -1,16 +1,25 @@
 """Install the interactive inbox workflow into the user's CLI profiles."""
 from pathlib import Path
 
-PROMPT = """Handle the open HaiveQueen plan questions across all registered Apiaries.
-Run `bzz questions --open` and inspect the JSON. Report the open questions.
-Read the machine language from the HaiveQueen config.toml in BZZ_CONFIG_DIR,
-or in the operating system's HaiveQueen configuration directory when unset.
-For each Apiary, read its project.toml and apply its ownerTopics and language.
-For technical questions, investigate and answer them yourself with `bzz answer ID TEXT --by coordinator`.
-For questions about behaviour, content or design, ask the user one at a time,
-labelled Question X of Y in the user's configured language. After each answer,
-run `bzz answer ID TEXT --by owner`. Do not invent user answers. Respect any
-configured topics that must go to the owner. Report failures and unanswered questions.
+PROMPT = """Handle open HaiveQueen plan questions across all registered Apiaries.
+Run `bzz questions --open` and inspect the JSON; report the open plan questions.
+Find registered project names and workspaces in the `projects` list of the machine
+config.toml (use `haivequeen.config.load_config()`), and for each question read
+<workspace>/.haivequeen/project.toml for its language and ownerTopics. If a
+question's workspace cannot be found, report it and leave that question open.
+Investigate technical questions yourself. Questions about behaviour, content or
+design, and questions matching ownerTopics, must go to the user, one at a time.
+Number those owner questions "Question X of Y" in that Apiary's configured
+language. Never invent an owner answer.
+For each answer create a unique UTF-8 TOML file in the corresponding
+<workspace>/.haivequeen/inbox/ directory with one `[[answer]]` table containing
+`question_id` (integer), `text` (TOML string), and `by` ("coordinator" for your
+technical answers, "owner" for user answers). Write a temporary file first and
+rename it to a unique .toml name only when complete. Use a TOML serializer or
+correctly escape the text; never overwrite another file. Do not also call
+`bzz answer`: the inbox processor records the answer. Report file creation
+errors and unanswered questions; do not claim an inbox file has been processed
+until its result is known.
 """
 
 
@@ -34,7 +43,7 @@ def install(home=None):
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(body, encoding="utf-8")
-            result[name] = "installed: use /skills or $bzz" if name == "Codex CLI" else "installed"
+            result[name] = "installed: no literal /bzz; use /skills or $bzz" if name == "Codex CLI" else "installed"
         except OSError as exc:
             result[name] = str(exc)
     result["Custom CLI"] = "skipped: command mechanism is unknown"

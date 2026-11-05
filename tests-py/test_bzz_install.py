@@ -18,5 +18,6 @@ class InstallTests(unittest.TestCase):
             for path in (".agents/skills/bzz/SKILL.md", ".config/opencode/commands/bzz.md", ".config/kilo/commands/bzz.md"):
                 content = (home / path).read_text(encoding="utf-8")
                 self.assertIn("bzz questions --open", content)
-                self.assertIn("--by owner", content)
+                self.assertIn("[[answer]]", content)
+                self.assertIn(".haivequeen/inbox/", content)
             self.assertIn("skipped", result["Custom CLI"])
