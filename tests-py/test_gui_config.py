@@ -405,6 +405,23 @@ class WindowTest(unittest.TestCase):
                     self.assertLessEqual(note.winfo_x() + note.winfo_reqwidth(), avail + 2, geo)
                     self.assertGreaterEqual(note.winfo_reqheight(), 1)
 
+    def test_bottom_note_wraps_with_the_bar_width(self):
+        """The save note is a wrapping label: its wraplength follows the bar width and the buttons stay visible."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        widths = []
+        for geo in ("1130x800", "760x700"):
+            win.win.geometry(geo)
+            win.win.update()
+            note = win.bottom_note
+            wrap = int(note.cget("wraplength"))
+            self.assertGreaterEqual(wrap, 120)
+            self.assertLessEqual(wrap, note.winfo_width())
+            widths.append(wrap)
+            for child in win.bottom_buttons:
+                self.assertLessEqual(child.winfo_x() + child.winfo_width(), win.win.winfo_width(), geo)
+        self.assertLess(widths[1], widths[0])
+        win.win.destroy()
+
     def test_ram_reserve_is_not_offered_but_kept_on_save(self):
         """ramReserveMb is a machine-only setting of config.toml: no field on the General page, the stored value stays when saving."""
         path = self.folder / "config.toml"

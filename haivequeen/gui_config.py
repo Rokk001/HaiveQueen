@@ -310,9 +310,14 @@ class ConfigWindow:
         canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
         bottom = tk.Frame(self.win)
         bottom.pack(fill="x", padx=8, pady=6)
+        self.bottom_buttons = []
         for text, command in (("Save", self.save), ("Revert", self.reload), ("Open folder", self.open_folder), ("Close", self.win.destroy)):
-            tk.Button(bottom, text=text, width=12, command=command).pack(side="left", padx=4)
-        tk.Label(bottom, text="Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.", fg=COL["dim"]).pack(side="left", padx=12)
+            button = tk.Button(bottom, text=text, width=12, command=command)
+            button.pack(side="left", padx=4)
+            self.bottom_buttons.append(button)
+        self.bottom_note = tk.Label(bottom, text="Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.", fg=COL["dim"], justify="left", anchor="w")
+        self.bottom_note.pack(side="left", padx=12, fill="x", expand=True)
+        self.bottom_note.bind("<Configure>", lambda e: self.bottom_note.configure(wraplength=max(120, e.width)))
         self.reload()
 
     # Is the file shown a machine config (providers, projects)?
