@@ -485,14 +485,18 @@ def plan_worktree(env, plan):
         branch, worktree = state_branch(env, plan), None
     else:
         answers = runtime.list_questions(env.conn, env.name, status='answered', plan=plan, item='worktree')
-        if not answers:
-            return None
-        lines = (answers[-1].get('answer') or '').strip().splitlines()
-        if len(lines) != 2:
-            return None
-        branch, worktree = (line.strip() for line in lines)
-        if not branch or not worktree:
-            return None
+        if answers:
+            lines = (answers[-1].get('answer') or '').strip().splitlines()
+            if len(lines) != 2:
+                return None
+            branch, worktree = (line.strip() for line in lines)
+            if not branch or not worktree:
+                return None
+        else:
+            branch = re.sub(r'-plan$', '', Path(plan).stem, flags=re.I).lower()
+            if not branch:
+                return None
+            worktree = None
     return branch, Path(worktree) if worktree else Path(__import__('haivequeen.routine', fromlist=['new_worktree']).new_worktree(env, scheduler.to_slug(branch)))
 
 

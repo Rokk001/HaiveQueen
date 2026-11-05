@@ -42,13 +42,13 @@ class NoStartReasonTests(RoundCase):
     """Every Hive that does not start gets a reason in the log, and no technical question goes to the owner."""
 
     def test_unknown_branch_asks_nobody_and_logs_the_reason(self):
-        """A plan without a branch in plan or state file stays waiting, creates no owner question and says why."""
+        """A plan with an automatic branch logs a worktree preparation failure."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         loop.run_round(self.conn, self.machine, self.envs(), free_ram=lambda: 16.0, settle=0)
         self.assertEqual(runtime.list_questions(self.conn, "testproj", plan=REL, item="worktree"), [])
         self.assertEqual(hives.get(self.conn, "testproj", REL)["state"], "waiting")
         self.assertFalse(any(a["phase"] == "queen" for a in runtime.list_agents(self.conn, "testproj", "all")))
-        self.assertIn("DUMMY-PLAN not started: no branch or worktree named in the plan or its state file", self.log())
+        self.assertIn("DUMMY-PLAN not started: worktree for branch dummy could not be prepared", self.log())
 
     def test_worktree_that_cannot_be_prepared_is_logged(self):
         """A named branch whose worktree cannot be prepared stays waiting and the log names branch, worktree and plan."""
