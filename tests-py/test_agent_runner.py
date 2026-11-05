@@ -277,6 +277,19 @@ class RunnerBase(unittest.TestCase):
 class ClaudeRunTest(RunnerBase):
     """A full run with a fake Claude stream."""
 
+    def test_queen_receives_per_run_integration_settings(self):
+        (self.ws / ".haivequeen").mkdir()
+        (self.ws / ".haivequeen" / "project.toml").write_text("integrationBranch = 'release/next'\nremoteName = 'upstream'\n", encoding="utf-8")
+        self.prepare("QUEEN-RULES")
+        r = self.run_runner("QUEEN-RULES", "claude", claude_stream(), phase="queen")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        argv = self.record()["argv"]
+        settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text(encoding="utf-8"))
+        rules = settings["permissions"]["allow"]
+        self.assertIn("Bash(git push upstream HEAD:release/next)", rules)
+        self.assertIn("PowerShell(bzz integration acquire --project demo --plan plans/Demo-PLAN.md)", rules)
+        self.assertFalse(any("*" in rule for rule in rules))
+
     # Verify the project default reaches the Claude CLI.
     def test_default_claude_tools_reach_cli(self):
         """A project without claudeTools passes the default tool list to Claude."""

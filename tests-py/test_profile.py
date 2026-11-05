@@ -76,14 +76,30 @@ class ContentTest(ProfileCase):
         claude = provider("claude", 1)
         self.assertTrue(profile.prepare(claude))
         settings = self.data / "profile/claude/settings.json"
-        expected = {"%s(%s)" % (tool, command) for tool in ("Bash", "PowerShell")
-                    for command in ("bzz *", "*cli.py *", "git push origin HEAD:*")}
-        self.assertEqual(set(json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"]), expected)
+        self.assertFalse(json.loads(settings.read_text(encoding="utf-8")).get("permissions", {}).get("allow"))
         settings.write_text('{}', encoding="utf-8")
         self.assertTrue(profile.prepare(claude))
         restored = json.loads(settings.read_text(encoding="utf-8"))
         self.assertFalse(restored["autoMemoryEnabled"])
-        self.assertEqual(set(restored["permissions"]["allow"]), expected)
+        self.assertFalse(restored.get("permissions", {}).get("allow"))
+
+    def test_integration_permissions_are_exact_and_specific_to_run(self):
+        rules = profile.claude_integration_permissions("Hive", "plans/ONE-PLAN.md", "upstream", "release/next", "python", "/opt/hq/cli.py")
+        for tool in ("Bash", "PowerShell"):
+            self.assertIn(f"{tool}(git push upstream HEAD:release/next)", rules)
+            self.assertIn(f"{tool}(bzz integration acquire --project Hive --plan plans/ONE-PLAN.md)", rules)
+            self.assertIn(f"{tool}('python' -I '/opt/hq/cli.py' integration release --project Hive --plan plans/ONE-PLAN.md)", rules)
+        self.assertTrue(all("*" not in rule for rule in rules))
+        self.assertFalse(any("Other" in rule or "HEAD:main" in rule for rule in rules))
+        bash = {rule[5:-1] for rule in rules if rule.startswith("Bash(")}
+        self.assertIn("bzz integration acquire --project Hive --plan plans/ONE-PLAN.md", bash)
+        for command in ("bzz integration acquire --project Other --plan plans/ONE-PLAN.md",
+                        "bzz integration acquire --project Hive --plan plans/OTHER.md",
+                        "git push upstream HEAD:main", "git push upstream HEAD:release/next --force",
+                        "python -I /tmp/cli.py integration acquire --project Hive --plan plans/ONE-PLAN.md"):
+            self.assertNotIn(command, bash)
+        self.assertEqual(profile.claude_integration_permissions("Hive*", "plan", "upstream", "main", "python", "cli.py"),
+                         ["Bash(git push upstream HEAD:main)", "PowerShell(git push upstream HEAD:main)"])
 
     def test_prepare_writes_only_settings_and_copies_nothing(self):
         """The profile gets the settings of HaiveQueen only; private instruction and login files of the home folder stay out."""

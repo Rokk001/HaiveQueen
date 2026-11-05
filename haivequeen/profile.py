@@ -26,11 +26,7 @@ SPECS = {
     "claude": {
         "env": {"CLAUDE_CONFIG_DIR": "{home}", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"},
         "login": [".credentials.json"],
-        "settings": {"settings.json": json.dumps({"autoMemoryEnabled": False, "permissions": {"allow": [
-            "%s(%s)" % (tool, command)
-            for tool in ("Bash", "PowerShell")
-            for command in ("bzz *", "*cli.py *", "git push origin HEAD:*")
-        ]}}, indent=1) + "\n"},
+        "settings": {"settings.json": json.dumps({"autoMemoryEnabled": False}, indent=1) + "\n"},
         "sessions": ["projects"],
         "loginArgs": "auth login",
     },
@@ -122,6 +118,20 @@ def environment(prov, base=None) -> dict:
         for key, value in s["env"].items():
             env[key] = value.replace("{home}", home)
     return env
+
+
+def claude_integration_permissions(project, plan, remote, branch, python, cli):
+    """Exact command grants; unsafe shell or rule metacharacters disable the corresponding grants."""
+    safe = lambda value: bool(re.fullmatch(r"[A-Za-z0-9_./-]+", str(value)))
+    commands = []
+    if safe(remote) and safe(branch):
+        commands.append("git push %s HEAD:%s" % (remote, branch))
+    if safe(project) and safe(plan):
+        suffixes = ["integration %s --project %s --plan %s" % (action, project, plan) for action in ("acquire", "release")]
+        commands.extend("bzz " + suffix for suffix in suffixes)
+        if all(not any(c in str(value) for c in "'*\r\n()") for value in (python, cli)):
+            commands.extend("'%s' -I '%s' %s" % (python, cli, suffix) for suffix in suffixes)
+    return ["%s(%s)" % (tool, command) for tool in ("Bash", "PowerShell") for command in commands]
 
 
 def prepare(prov, now=None) -> bool:

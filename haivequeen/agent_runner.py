@@ -1004,6 +1004,16 @@ def run_agent(a, out=None):
                                 tr("Give the package to a provider that can be kept to the profile.", language=language))
             raise ValueError("provider %s cannot be kept to the HaiveQueen profile" % a.provider)
         arg_list = build_args(prov, vars_)
+        if protocol == "claude" and a.phase == "queen" and a.plan:
+            if "--settings" in arg_list:
+                raise ValueError("Claude provider --settings conflicts with per-run integration permissions")
+            settings = scheduler.build_settings(cfg, pcfg)
+            grants = profile.claude_integration_permissions(a.project, a.plan, settings.get("remoteName") or "origin",
+                                                             settings.get("integrationBranch") or "main", osplat.python_executable(),
+                                                             TOOL_ROOT / "haivequeen" / "cli.py")
+            permissions_file = run_dir / "claude-integration-settings.json"
+            permissions_file.write_text(json.dumps({"permissions": {"allow": grants}}, indent=1) + "\n", encoding="utf-8")
+            arg_list.extend(["--settings", str(permissions_file)])
         if a.phase == "bee" and protocol == "claude":
             if "--setting-sources" in arg_list:
                 i = arg_list.index("--setting-sources")
