@@ -72,6 +72,13 @@ class EnvironmentTest(ProfileCase):
 
 
 class ContentTest(ProfileCase):
+    def test_merge_claude_run_settings_preserves_provider_options_and_rules(self):
+        original = {"model": "example", "permissions": {"allow": ["Bash(existing)"], "deny": ["Bash(no)"]}}
+        merged = profile.claude_merge_run_settings(original, ["Bash(new)"])
+        self.assertEqual(merged["model"], "example")
+        self.assertEqual(merged["permissions"], {"allow": ["Bash(existing)", "Bash(new)"], "deny": ["Bash(no)"]})
+        self.assertEqual(original["permissions"]["allow"], ["Bash(existing)"])
+
     def test_claude_integration_permissions_are_restored_on_prepare(self):
         claude = provider("claude", 1)
         self.assertTrue(profile.prepare(claude))

@@ -134,6 +134,20 @@ def claude_integration_permissions(project, plan, remote, branch, python, cli):
     return ["%s(%s)" % (tool, command) for tool in ("Bash", "PowerShell") for command in commands]
 
 
+def claude_merge_run_settings(settings, grants):
+    """Add run grants without changing provider settings or their existing rules."""
+    if not isinstance(settings, dict) or not isinstance(settings.get("permissions", {}), dict):
+        raise ValueError("Claude settings and permissions must be objects")
+    result = dict(settings)
+    permissions = dict(result.get("permissions", {}))
+    allow = permissions.get("allow", [])
+    if not isinstance(allow, list):
+        raise ValueError("Claude permissions.allow must be a list")
+    permissions["allow"] = list(dict.fromkeys(allow + grants))
+    result["permissions"] = permissions
+    return result
+
+
 def prepare(prov, now=None) -> bool:
     """Create the provider's profile folder with its settings and remove old session logs; False when the CLI cannot be kept to the profile."""
     s = spec(prov)

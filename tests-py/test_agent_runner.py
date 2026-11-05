@@ -277,6 +277,21 @@ class RunnerBase(unittest.TestCase):
 class ClaudeRunTest(RunnerBase):
     """A full run with a fake Claude stream."""
 
+    def test_queen_merges_provider_settings_file(self):
+        cfg = self.base / "cfg" / "config.toml"
+        (self.ws / "custom.json").write_text(json.dumps({"model": "chosen", "permissions": {"allow": ["Bash(existing)"], "deny": ["Bash(no)"]}}), encoding="utf-8")
+        cfg.write_text(cfg.read_text(encoding="utf-8").replace("args = ['--model'", "args = ['--settings', 'custom.json', '--model'", 1), encoding="utf-8")
+        self.prepare("QUEEN-MERGE")
+        r = self.run_runner("QUEEN-MERGE", "claude", claude_stream(), phase="queen")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        argv = self.record()["argv"]
+        self.assertEqual(argv.count("--settings"), 1)
+        settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text(encoding="utf-8"))
+        self.assertEqual(settings["model"], "chosen")
+        self.assertIn("Bash(existing)", settings["permissions"]["allow"])
+        self.assertIn("Bash(git push origin HEAD:main)", settings["permissions"]["allow"])
+        self.assertEqual(settings["permissions"]["deny"], ["Bash(no)"])
+
     def test_queen_receives_per_run_integration_settings(self):
         (self.ws / ".haivequeen").mkdir()
         (self.ws / ".haivequeen" / "project.toml").write_text("integrationBranch = 'release/next'\nremoteName = 'upstream'\n", encoding="utf-8")

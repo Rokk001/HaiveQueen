@@ -1005,14 +1005,33 @@ def run_agent(a, out=None):
             raise ValueError("provider %s cannot be kept to the HaiveQueen profile" % a.provider)
         arg_list = build_args(prov, vars_)
         if protocol == "claude" and a.phase == "queen" and a.plan:
-            if "--settings" in arg_list:
-                raise ValueError("Claude provider --settings conflicts with per-run integration permissions")
             settings = scheduler.build_settings(cfg, pcfg)
             grants = profile.claude_integration_permissions(a.project, a.plan, settings.get("remoteName") or "origin",
                                                              settings.get("integrationBranch") or "main", osplat.python_executable(),
                                                              TOOL_ROOT / "haivequeen" / "cli.py")
             permissions_file = run_dir / "claude-integration-settings.json"
-            permissions_file.write_text(json.dumps({"permissions": {"allow": grants}}, indent=1) + "\n", encoding="utf-8")
+            provider_settings = {}
+            settings_args = [i for i, arg in enumerate(arg_list) if arg == "--settings" or arg.startswith("--settings=")]
+            if len(settings_args) > 1:
+                raise ValueError("multiple Claude --settings arguments cannot be merged")
+            if settings_args:
+                i = settings_args[0]
+                if arg_list[i] == "--settings":
+                    if i + 1 >= len(arg_list):
+                        raise ValueError("Claude --settings requires a value")
+                    raw = arg_list[i + 1]
+                    del arg_list[i:i + 2]
+                else:
+                    raw = arg_list.pop(i).split("=", 1)[1]
+                if raw.lstrip().startswith("{"):
+                    provider_settings = json.loads(raw)
+                else:
+                    path = Path(raw)
+                    if not path.is_absolute():
+                        path = Path(a.cwd) / path
+                    provider_settings = json.loads(path.read_text(encoding="utf-8"))
+            merged = profile.claude_merge_run_settings(provider_settings, grants)
+            permissions_file.write_text(json.dumps(merged, indent=1) + "\n", encoding="utf-8")
             arg_list.extend(["--settings", str(permissions_file)])
         if a.phase == "bee" and protocol == "claude":
             if "--setting-sources" in arg_list:
