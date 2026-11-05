@@ -46,12 +46,25 @@ def today_starts(conn, since) -> list:
     return out
 
 
-def approx_parts(role_text, rule_files, prompt_text) -> dict:
+def approx_parts(role_text, rule_files, task_text) -> dict:
     """The parts of HaiveQueen in a start context as approximate counts: the role file, every project rules file and the task.
-    `rule_files` = [(label, text)]; the task is what the prompt file holds besides the role file."""
-    role = approx_tokens(role_text)
-    return {"role": role, "rules": {label: approx_tokens(text) for label, text in rule_files},
-            "task": max(0, approx_tokens(prompt_text) - role)}
+    `rule_files` = [(label, text)]; the task is the message the CLI is started with (not the prompt file it reads afterwards: that is no part of the first turn)."""
+    return {"role": approx_tokens(role_text), "rules": {label: approx_tokens(text) for label, text in rule_files}, "task": approx_tokens(task_text)}
+
+
+def fit_parts(parts, tokens) -> dict:
+    """The parts of one start as {label: n}, scaled down together when they sum to more than the start context `tokens`, so no part and no sum exceeds it."""
+    flat = {}
+    if parts.get("role") is not None:
+        flat["role"] = int(parts["role"])
+    for label, n in (parts.get("rules") or {}).items():
+        flat["rules " + label] = int(n)
+    if parts.get("task") is not None:
+        flat["task"] = int(parts["task"])
+    total = sum(flat.values())
+    if total > tokens:
+        flat = {k: int(v * tokens / total) for k, v in flat.items()}
+    return flat
 
 
 # ---- the benchmark
@@ -101,12 +114,12 @@ def code_folder(conn, project) -> str:
         return ws
 
 
-def benchmark(conn, cfg, provider, measure=None) -> dict:
+def benchmark(conn, cfg, provider, measure=None, progress=None) -> dict:
     """Measure the start context of `provider` in every registered Apiary, once with the HaiveQueen profile and once without it.
 
     Returns {"excluded": bool, "errors": [text], "results": [{"project", "mode", "tokens"}]}. An excluded provider (machine-wide excludedProviders) is not measured.
     A failed run is reported in `errors` and stores nothing (an older value of it stays); the other run of the pair is stored. `measure(prov, cwd, hq, task)` is
-    the measurement (default measure_cli; tests pass a fake)."""
+    the measurement (default measure_cli; tests pass a fake). `progress(text)` is called before each run with '2/4: ODP with the HaiveQueen profile ...'."""
     out = {"excluded": False, "errors": [], "results": []}
     if provider in [str(x) for x in cfg.get("excludedProviders") or []]:
         out["excluded"] = True
@@ -117,14 +130,22 @@ def benchmark(conn, cfg, provider, measure=None) -> dict:
         out["errors"].append("provider %s is not in config.toml" % provider)
         return out
     measure = measure or measure_cli
-    for row in conn.execute("SELECT name FROM projects ORDER BY name").fetchall():
-        project = row[0]
+    names = [r[0] for r in conn.execute("SELECT name FROM projects ORDER BY name").fetchall()]
+    total, count = 2 * len(names), 0
+    for project in names:
         cwd = code_folder(conn, project)
         if not cwd or not Path(cwd).is_dir():
             out["errors"].append("%s: no code folder" % project)
+            count += 2
             continue
         for mode, hq in (("hq", True), ("own", False)):
+            count += 1
             label = "%s %s" % (project, "with the HaiveQueen profile" if hq else "without it")
+            if progress:
+                try:
+                    progress("%d/%d: %s ..." % (count, total, label))
+                except Exception:
+                    pass
             try:
                 tokens = int(measure(prov, cwd, hq, TASK))
             except Exception as exc:   # one failed run must not stop the others
@@ -146,60 +167,109 @@ def own_argv(prov, task) -> list:
     return [cmd, "run", "--format", "json", task]
 
 
+def kill_tree(proc) -> None:
+    """Kill the process of a run and its children (on Windows a .cmd shim runs the CLI as a child), then wait for it; never raises."""
+    try:
+        if os.name == "nt" and isinstance(getattr(proc, "pid", None), int):
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=20)
+    except Exception:
+        pass
+
+
+def remove_folder(path) -> None:
+    """Remove a temp folder; a file that is still held is retried a few times, then left to the system temp cleanup. Never raises: the temp folder is no part of the result."""
+    import shutil
+    import time
+    for _ in range(5):
+        try:
+            shutil.rmtree(path)
+            return
+        except Exception:
+            if not Path(path).exists():
+                return
+            time.sleep(0.3)
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except Exception:
+        pass
+
+
 def measure_cli(prov, cwd, hq, task) -> int:
     """Run the CLI of `prov` once in `cwd` with `task` and return the context size of its first model turn; raises with the reason when there is none.
 
-    hq=True runs it as a Bee is run (HaiveQueen profile folder and arguments), hq=False in the user's own configuration."""
+    hq=True runs it as a Bee is run (HaiveQueen profile folder and arguments), hq=False in the user's own configuration. The process tree is ended and waited
+    for before the temp folder is removed; a temp folder that cannot be removed never changes the result."""
+    tmp = tempfile.mkdtemp(prefix="hq-bench-")
+    try:
+        return _measure(prov, cwd, hq, task, tmp)
+    finally:
+        remove_folder(tmp)
+
+
+def _measure(prov, cwd, hq, task, tmp) -> int:
+    """The measurement of measure_cli in the temp folder `tmp`."""
     import shutil
     from . import agent_runner as ar, profile
-    with tempfile.TemporaryDirectory(prefix="hq-bench-") as tmp:
-        run = ar.AgentRun(None, "", "benchmark", prov["name"], prov["protocol"], cwd, tmp, phase="benchmark", out=open(os.devnull, "w"))
-        run.format = prov["format"]
-        cmd = shutil.which(prov["command"]) or prov["command"]
-        if hq:
-            if not profile.prepare(prov):
-                raise RuntimeError("the CLI cannot be kept to the HaiveQueen profile")
-            cfg = config.load_config()
-            model, effort = ar.class_model(prov, "medium")
-            rules = Path(tmp) / "rules.md"
-            rules.write_text("", encoding="utf-8")
-            vars_ = {"model": model, "effort": effort, "repo": cwd, "workspace": cwd, "tools": str(ar.TOOL_ROOT), "cwd": cwd,
-                     "claudeTools": cfg.get("claudeTools", ""), "rules": str(rules)}
-            args = ar.build_args(prov, vars_)
-            if prov["protocol"] == "claude":
-                if "--setting-sources" in args:
-                    args[args.index("--setting-sources") + 1] = ""
-                else:
-                    args += ["--setting-sources", ""]
-            argv = [cmd, "-p", task] + args if prov["protocol"] == "claude" else [cmd] + args + [task]
-            env = profile.environment(prov)
-        else:
-            argv, env = own_argv(prov, task), dict(os.environ)
-            argv[0] = cmd
-        err_path = Path(tmp) / "stderr.txt"
-        with open(str(err_path), "wb") as err:
-            proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
-            timer = threading.Timer(TIMEOUT_S, lambda: proc.kill())
-            timer.daemon = True
-            timer.start()
-            try:
-                for bline in proc.stdout:
-                    try:
-                        e = json.loads(bline.decode("utf-8", errors="replace"))
-                    except ValueError:
-                        continue
-                    if isinstance(e, dict):
-                        run.handle_event(e)
-                    if run.start_ctx:
-                        break   # the first turn is all that is measured; the task is not carried on
-                code = proc.wait() if not run.start_ctx else (proc.kill() or 0)
-            finally:
-                timer.cancel()
-        if run.start_ctx:
-            return int(run.start_ctx)
+    run = ar.AgentRun(None, "", "benchmark", prov["name"], prov["protocol"], cwd, tmp, phase="benchmark", out=open(os.devnull, "w"))
+    run.format = prov["format"]
+    cmd = shutil.which(prov["command"]) or prov["command"]
+    if hq:
+        if not profile.prepare(prov):
+            raise RuntimeError("the CLI cannot be kept to the HaiveQueen profile")
+        cfg = config.load_config()
+        model, effort = ar.class_model(prov, "medium")
+        rules = Path(tmp) / "rules.md"
+        rules.write_text("", encoding="utf-8")
+        vars_ = {"model": model, "effort": effort, "repo": cwd, "workspace": cwd, "tools": str(ar.TOOL_ROOT), "cwd": cwd,
+                 "claudeTools": cfg.get("claudeTools", ""), "rules": str(rules)}
+        args = ar.build_args(prov, vars_)
+        if prov["protocol"] == "claude":
+            if "--setting-sources" in args:
+                args[args.index("--setting-sources") + 1] = ""
+            else:
+                args += ["--setting-sources", ""]
+        argv = [cmd, "-p", task] + args if prov["protocol"] == "claude" else [cmd] + args + [task]
+        env = profile.environment(prov)
+    else:
+        argv, env = own_argv(prov, task), dict(os.environ)
+        argv[0] = cmd
+    err_path = Path(tmp) / "stderr.txt"
+    code = None
+    with open(str(err_path), "wb") as err:
+        proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
+        timer = threading.Timer(TIMEOUT_S, lambda: kill_tree(proc))
+        timer.daemon = True
+        timer.start()
+        try:
+            for bline in proc.stdout:
+                try:
+                    e = json.loads(bline.decode("utf-8", errors="replace"))
+                except ValueError:
+                    continue
+                if isinstance(e, dict):
+                    run.handle_event(e)
+                if run.start_ctx:
+                    break   # the first turn is all that is measured; the task is not carried on
+        finally:
+            timer.cancel()
+            kill_tree(proc)   # the whole tree is gone and waited for before the folder is removed
+            code = getattr(proc, "returncode", None)
+    if run.start_ctx:
+        return int(run.start_ctx)
+    try:
         tail = " ".join(err_path.read_text(encoding="utf-8", errors="replace").split()[-40:]) if err_path.is_file() else ""
-        why = "; ".join(run.api_errors[-1:]) or tail or "no model turn (exit %s)" % code
-        raise RuntimeError(why[:300])
+    except OSError:
+        tail = ""
+    why = "; ".join(run.api_errors[-1:]) or tail or "no model turn (exit %s)" % code
+    raise RuntimeError(why[:300])
 
 
 def started_today(now=None) -> str:

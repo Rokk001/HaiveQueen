@@ -234,8 +234,7 @@ class StartTileTest(Base):
         self.start("ODP", PLAN, "Mira", "subbee", "claude", 12000)
         self.start("ZED", PLAN2, "ZED__old", "bee", "claude", 99000, ago=60 * 30)   # an earlier day does not count
         s = self.snap()
-        tile = {r["provider"]: r["avg"] for r in s["tiles"]["start_ctx"]}
-        self.assertEqual(tile, {"claude": 14000, "codex": None, "opencode": None})
+        self.assertEqual(s["tiles"]["start_ctx"], {"avg": 14000, "n": 3})   # one value: the average over all of today's starts of all providers
         row = next(r for r in s["overlays"]["start"]["rows"] if r["provider"] == "claude")
         self.assertEqual(row["apiaries"][0]["name"], "ODP")
         self.assertEqual(row["apiaries"][0]["avg"], 14000)
@@ -244,6 +243,27 @@ class StartTileTest(Base):
         self.assertEqual(row["split"]["queen"]["rest"], 11000)   # 20000 minus the three parts: the CLI's own part
         self.assertEqual(row["split"]["bee"]["avg"], 11000)   # the process Bee and the subagent Bee
         self.assertTrue(row["split"]["queen"]["approximate"])
+
+    def test_tile_averages_over_all_providers(self):
+        """The tile value is the average of all starts of today over all providers; none = None."""
+        self.assertEqual(self.snap()["tiles"]["start_ctx"], {"avg": None, "n": 0})
+        self.start("ODP", PLAN, "ODP__queen", "queen", "claude", 10000)
+        self.start("ZED", PLAN2, "ZED__queen", "queen", "codex", 30000)
+        self.assertEqual(self.snap()["tiles"]["start_ctx"], {"avg": 20000, "n": 2})
+
+    def test_split_parts_never_exceed_the_start_context(self):
+        """Whatever was stored, no part and no sum of parts in the overlay exceeds the average start context."""
+        self.start("ODP", PLAN, "ODP__queen", "queen", "claude", 17000, {"role": 83, "rules": {"CLAUDE.md": 3000}, "task": 142000})
+        row = next(r for r in self.snap()["overlays"]["start"]["rows"] if r["provider"] == "claude")
+        sp = row["split"]["queen"]
+        self.assertLessEqual(sum(sp["parts"].values()), sp["avg"])
+        self.assertTrue(all(v <= sp["avg"] for v in sp["parts"].values()))
+        self.assertGreaterEqual(sp["rest"], 0)
+
+    def test_approx_parts_count_the_message_sent_not_the_prompt_file(self):
+        """The task part is the first message of the run (tiny), the role and rules are counted once."""
+        parts = startctx.approx_parts("r" * 332, [("CLAUDE.md", "c" * 400)], "t" * 40)
+        self.assertEqual(parts, {"role": 83, "rules": {"CLAUDE.md": 100}, "task": 10})
 
     def test_benchmark_comparison_or_no_benchmark_yet(self):
         """Per CLI and Apiary the benchmark shows 'HaiveQueen 18k, own profile 61k, -70 %' or 'no benchmark yet'."""
@@ -339,6 +359,54 @@ class BenchmarkTest(unittest.TestCase):
         self.assertIn(startctx.TASK, popen.call_args[0][0])
 
 
+class TempCleanupTest(unittest.TestCase):
+    """U-8: a temp folder that cannot be removed must not discard the measured value."""
+
+    def test_held_temp_file_keeps_the_value_and_the_process_is_waited_for(self):
+        stream = "\n".join(__import__("json").dumps(e) for e in [claude_msg("m1", (10, 90, 900))]) + "\n"
+        proc = mock.Mock()
+        proc.stdout = [line.encode() for line in stream.splitlines(True)]
+        proc.wait.return_value = 0
+        proc.pid = 4242
+        prov = {"name": "claude", "protocol": "claude", "format": "claude", "command": "claude", "args": []}
+        cwd = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(cwd, ignore_errors=True))
+        locked = PermissionError(32, "being used by another process")
+        with mock.patch("subprocess.Popen", return_value=proc), mock.patch("subprocess.run"), mock.patch("shutil.rmtree", side_effect=locked), mock.patch("time.sleep"):
+            self.assertEqual(startctx.measure_cli(prov, cwd, False, startctx.TASK), 1000)
+        self.assertTrue(proc.wait.called)   # the process is waited for before the folder is removed
+
+    def test_real_held_file_on_windows(self):
+        """A file held open in the folder (as a child process would) does not make the run fail."""
+        import json
+        import subprocess
+        code = "import sys,json;print(json.dumps(%r));sys.stdout.flush();import time;time.sleep(30)" % claude_msg("m1", (10, 90, 900))
+        real = subprocess.Popen
+        holder = []
+
+        def popen(argv, **kw):
+            if argv[0] == "taskkill":
+                return real(argv, **kw)
+            p = real([sys.executable, "-c", code], **kw)
+            holder.append(p)
+            return p
+        prov = {"name": "claude", "protocol": "claude", "format": "claude", "command": "claude", "args": []}
+        cwd = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(cwd, ignore_errors=True))
+        with mock.patch("subprocess.Popen", side_effect=popen):
+            self.assertEqual(startctx.measure_cli(prov, cwd, False, startctx.TASK), 1000)
+        self.assertIsNotNone(holder[0].poll())   # nothing is left running
+
+
+class ProgressTest(BenchmarkTest):
+    """U-8: the progress text names each run."""
+
+    def test_progress_names_each_run(self):
+        seen = []
+        startctx.benchmark(self.conn, self.cfg, "claude", measure=lambda *a: 5, progress=seen.append)
+        self.assertEqual(seen, ["1/4: ODP with the HaiveQueen profile ...", "2/4: ODP without it ...", "3/4: ZED with the HaiveQueen profile ...", "4/4: ZED without it ..."])
+
+
 class ButtonTest(unittest.TestCase):
     """U-8: the button on the provider page."""
 
@@ -391,6 +459,69 @@ class ButtonTest(unittest.TestCase):
                 win.benchmark_click(wait=True)
                 self.assertEqual(bench.call_args[0][2], "claude")
             self.assertIn("not logged in", win.benchmark_status.cget("text"))
+
+
+class TileDrawTest(unittest.TestCase):
+    """U-7: the Start Context tile looks like the other five."""
+
+    def test_tile_has_icon_title_and_one_value(self):
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.attributes("-alpha", 0.0)
+        except tk.TclError:
+            self.skipTest("no display")
+        self.addCleanup(root.destroy)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        conn = db.connect(Path(tmp.name) / "o.db")
+        self.addCleanup(conn.close)
+        db.upsert_project(conn, "ODP", None, "cyan", 1)
+        startctx.record(conn, "ODP", PLAN, "ODP__queen", "queen", "claude", 12000, {}, started_at=datetime.now().isoformat(timespec="seconds"))
+        from haivequeen import gui
+        gui.REFRESH_MS = 10 ** 9
+        root.geometry("1672x901")
+        win = gui.Dashboard(root, conn)
+        root.update()
+        box = next(b for b in win.tile_boxes if b[0] == "start")
+        x0, y0, x1, y1 = (win.px(v) for v in box[1:])
+        images = [i for i in win.canvas.find_all() if win.canvas.type(i) == "image" and x0 <= win.canvas.coords(i)[0] <= x1 and y0 <= win.canvas.coords(i)[1] <= y1]
+        self.assertEqual(len(images), 1)
+        texts = [win.canvas.itemcget(i, "text") for i in win.canvas.find_overlapping(x0 + 2, y0 + 2, x1 - 2, y1 - 2) if win.canvas.type(i) == "text"]
+        self.assertIn("START CONTEXT", texts)
+        self.assertTrue(any("12" in t and "claude" not in t for t in texts), texts)
+        self.assertFalse(any("claude" in t for t in texts), texts)
+
+
+class ProgressButtonTest(ButtonTest):
+    """U-8: the page shows the progress while the benchmark runs."""
+
+    def test_progress_is_shown_on_the_page_until_the_result(self):
+        import threading
+        from haivequeen import gui_config
+        release = threading.Event()
+
+        def fake(conn, cfg, name, measure=None, progress=None):
+            progress("2/4: ODP with the HaiveQueen profile ...")
+            release.wait(20)
+            return {"excluded": False, "errors": [], "results": []}
+        with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win.select(1)
+            with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", side_effect=fake):
+                win.benchmark_click()
+                import time
+                end = time.time() + 10
+                while time.time() < end and "2/4" not in win.benchmark_status.cget("text"):
+                    self.root.update()
+                    time.sleep(0.05)
+                self.assertIn("2/4: ODP with the HaiveQueen profile ...", win.benchmark_status.cget("text"))
+                release.set()
+                end = time.time() + 10
+                while time.time() < end and "2/4" in win.benchmark_status.cget("text"):
+                    self.root.update()
+                    time.sleep(0.05)
+                self.assertNotIn("2/4", win.benchmark_status.cget("text"))
 
 
 class HoverTest(unittest.TestCase):

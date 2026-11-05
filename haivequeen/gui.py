@@ -387,14 +387,15 @@ class Dashboard:
             self.text(x0 + 74, 208, value, max(12, min(28, (x1 - x0 - 80) / (0.62 * len(value)))), "cyan", "nw")
             self.text(x0 + 74, 236, sub, min(15, (x1 - x0 - 80) / (0.6 * len(sub))), "dim", "nw")
             self.tile_boxes.append((key, x0, 165, x1, 255))
-        x0, x1 = 830, 1035   # the Start Context tile: the average start context of today's starts per CLI
+        sc = t["start_ctx"]   # the Start Context tile: one value, the average start context of all of today's starts; the split is in the overlay
+        x0, x1 = 830, 1035
         self.rect(x0, 165, x1, 255, fill="panel", outline="edge", width=2)
-        self.text(x0 + 12, 172, "START CONTEXT", 16, "text", "nw")
-        rows = t["start_ctx"][:4]
-        for i, r in enumerate(rows):
-            self.text(x0 + 12, 195 + i * 15, self.fit("%s %s" % (r["provider"], gui_data.fmt_tokens(r["avg"]) if r["avg"] is not None else "–"), x1 - x0 - 20, 13), 13, "cyan", "nw")
-        if len(t["start_ctx"]) > 4:
-            self.text(x1 - 10, 172, "+%d" % (len(t["start_ctx"]) - 4), 13, "dim", "ne")
+        self.pic("t_start", x0 + 6, 172)
+        self.text(x0 + 74, 183, "START CONTEXT", 16, "text", "nw")
+        value = gui_data.fmt_tokens(sc["avg"]) if sc["avg"] is not None else "–"
+        self.text(x0 + 74, 208, value, max(12, min(28, (x1 - x0 - 80) / (0.62 * len(value)))), "cyan", "nw")
+        sub = "average today"
+        self.text(x0 + 74, 236, sub, min(15, (x1 - x0 - 80) / (0.6 * len(sub))), "dim", "nw")
         self.tile_boxes.append(("start", x0, 165, x1, 255))
 
     # ---- overlays ----

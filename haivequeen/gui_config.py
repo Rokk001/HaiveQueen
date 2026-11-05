@@ -468,7 +468,7 @@ class ConfigWindow:
             """Measure on an own connection (SQLite connections belong to one thread)."""
             conn = self.conn if wait else db.connect(path)
             try:
-                box["result"] = startctx.benchmark(conn, cfg, name)
+                box["result"] = startctx.benchmark(conn, cfg, name, progress=lambda text: box.__setitem__("progress", text))
             except Exception as exc:
                 box["result"] = {"excluded": False, "errors": [str(exc)], "results": []}
             finally:
@@ -495,6 +495,8 @@ class ConfigWindow:
                 if "result" in box:
                     finish()
                 else:
+                    if box.get("progress"):
+                        self.benchmark_status.config(text=box["progress"], fg=self.col["dim"])   # e.g. "2/4: ODP with the HaiveQueen profile ..."
                     self.win.after(300, poll)
             except self.tk.TclError:
                 pass

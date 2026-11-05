@@ -817,7 +817,7 @@ def build_args(prov, vars_):
 
 
 # Estimate the parts of HaiveQueen in the start context of a Queen or Bee.
-def approx_start_parts(a, pcfg, cfg, workspace, protocol):
+def approx_start_parts(a, pcfg, cfg, workspace, protocol, message=""):
     """{"role": n, "rules": {file: n}, "task": n} as approximate token counts (4 characters per token) of the role file, every project rules file and the task;
     empty when a file cannot be read (the start context is stored without its split then)."""
     try:
@@ -825,8 +825,7 @@ def approx_start_parts(a, pcfg, cfg, workspace, protocol):
         settings = scheduler.build_settings(cfg, pcfg)
         role = roles.role_text("queen-start" if a.phase == "queen" else "bee-start", {"language": roles.language(settings)})
         rules = profile.project_rules(pcfg, pcfg.get("codeRepo") or workspace or a.cwd, protocol, a.cwd)
-        prompt = Path(a.prompt_file).read_text(encoding="utf-8", errors="replace")
-        return startctx.approx_parts(role, rules["inline"], prompt)
+        return startctx.approx_parts(role, rules["inline"], message)   # the message the CLI starts with; the prompt file it reads afterwards is not in the first turn
     except Exception:
         return {}
 
@@ -899,7 +898,7 @@ def run_agent(a, out=None):
             else:
                 write_phase_rules(pcfg, workspace, a.phase, rules_file)
         if a.phase in ("bee", "queen"):
-            run.start_parts = approx_start_parts(a, pcfg, cfg, workspace, protocol)
+            run.start_parts = approx_start_parts(a, pcfg, cfg, workspace, protocol, prompt)
         vars_ = {"model": model, "effort": effort, "repo": pcfg.get("codeRepo") or workspace or a.cwd, "workspace": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
                  "claudeTools": pcfg.get("claudeTools", cfg.get("claudeTools", "")), "rules": str(rules_file)}
         if protocol == "claude" and not str(vars_["claudeTools"] or "").strip():

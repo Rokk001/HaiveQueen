@@ -39,8 +39,8 @@ def io_rows(usage, agents_today) -> list:
 
 
 def start_rows(conn, providers, apiaries, hive_names, since) -> tuple:
-    """(tile rows, overlay rows) of the Start Context tile: per provider as named in the settings the average start context of today's starts ('avg' None = none),
-    per Apiary and Hive, the split per file for Queens and Bees, and the benchmark comparison per Apiary."""
+    """(tile value, overlay rows) of the Start Context tile: the tile is {"avg", "n"} = the average start context of all of today's starts of all providers (avg None = none);
+    the overlay has per provider as named in the settings the average, per Apiary and Hive, the split per file for Queens and Bees, and the benchmark comparison per Apiary."""
     starts = startctx.today_starts(conn, since)
     names = list(dict.fromkeys(list(providers) + [s["provider"] for s in starts]))
     bench = {}
@@ -52,25 +52,22 @@ def start_rows(conn, providers, apiaries, hive_names, since) -> tuple:
         return round(sum(r["tokens"] for r in rows) / len(rows)) if rows else None
 
     def split(rows):
-        """Average start context of a group of starts, the average approximate parts of HaiveQueen and the rest (the CLI's own part)."""
+        """Average start context of a group of starts, the average approximate parts of HaiveQueen and the rest (the CLI's own part). The parts of one start are
+        scaled down together when they sum to more than its start context, so no part and no sum exceeds the average shown."""
         if not rows:
             return {"n": 0, "avg": None, "parts": {}, "rest": None, "approximate": False}
         withparts = [r for r in rows if r["parts"]]
         parts = {}
         for r in withparts:
-            if r["parts"].get("role") is not None:
-                parts["role"] = parts.get("role", 0) + r["parts"]["role"]
-            for label, n in (r["parts"].get("rules") or {}).items():
-                parts["rules " + label] = parts.get("rules " + label, 0) + n
-            if r["parts"].get("task") is not None:
-                parts["task"] = parts.get("task", 0) + r["parts"]["task"]
+            for label, n in startctx.fit_parts(r["parts"], r["tokens"]).items():
+                parts[label] = parts.get(label, 0) + n
         parts = {k: round(v / len(withparts)) for k, v in parts.items()}
         mean = avg(rows)
-        return {"n": len(rows), "avg": mean, "parts": parts, "rest": max(0, mean - sum(parts.values())) if withparts else None, "approximate": bool(withparts)}
-    tile, overlay = [], []
+        rest = max(0, round(sum(r["tokens"] for r in withparts) / len(withparts)) - sum(parts.values())) if withparts else None
+        return {"n": len(rows), "avg": mean, "parts": parts, "rest": rest, "approximate": bool(withparts)}
+    tile, overlay = {"avg": avg(starts), "n": len(starts)}, []   # the tile: one value over all providers
     for name in names:
         mine = [s for s in starts if s["provider"] == name]
-        tile.append({"provider": name, "avg": avg(mine), "n": len(mine)})
         if not mine and name not in bench:
             continue
         projects = sorted({s["project"] for s in mine} | bench.get(name, set()))
