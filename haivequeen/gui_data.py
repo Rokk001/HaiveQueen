@@ -573,7 +573,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
             "hives": [h for h in hive_rows if not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done], "bees": bees, "apiaries": apiaries,
             "projects": [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")],
             "log": [log_line(e, who) for e in reversed(events)], "log_ids": [e["id"] for e in reversed(events)], "log_meta": [log_meta(e, plan_of) for e in reversed(events)], "activity": activity_rows(agents_all, now),
-            "system": sysinfo if sysinfo is not None else system_info(d["sysinfo"]), "queue": queue_panel(conn, project),
+            "system": sysinfo if sysinfo is not None else system_info(d["sysinfo"]), "build_line": d["bj"] or "", "queue": queue_panel(conn, project),
             "info": info_sections(d), "limits": limit_bars(d)}
 
 

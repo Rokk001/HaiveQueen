@@ -390,6 +390,31 @@ class WindowTest(unittest.TestCase):
             self.assertIn("Parallel builds", win.status.cget("text"))
             self.assertEqual((self.folder / "config.toml").read_text(encoding="utf-8"), before)
 
+    def test_build_notes_wrap_within_the_window(self):
+        """The explanations of the Build block sit under their field and wrap to the available width, at the normal and at a small window size."""
+        with mock.patch.object(gui_config, "machine_cores", return_value=8):
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            for geo in ("1130x800", "640x700"):
+                win.win.geometry(geo)
+                win.win.update()
+                avail = win.form.winfo_width()
+                self.assertGreater(avail, 100)
+                self.assertEqual(len(win.build_notes), 3)
+                for note in win.build_notes:
+                    self.assertLessEqual(int(note.cget("wraplength")), avail)
+                    self.assertLessEqual(note.winfo_x() + note.winfo_reqwidth(), avail + 2, geo)
+                    self.assertGreaterEqual(note.winfo_reqheight(), 1)
+
+    def test_ram_reserve_is_not_offered_but_kept_on_save(self):
+        """ramReserveMb is a machine-only setting of config.toml: no field on the General page, the stored value stays when saving."""
+        path = self.folder / "config.toml"
+        path.write_text(path.read_text(encoding="utf-8").replace("hives = 10", "hives = 10" + chr(10) + "ramReserveMb = 3072"), encoding="utf-8")
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        self.assertNotIn("ramReserveMb", [p[0] for p, _g, _l in win.getters])
+        self.assertIn("ramReserveMb", win.data)
+        win.save()
+        self.assertEqual(gui_config.load_raw(path)["ramReserveMb"], 3072)
+
     def test_project_file_has_no_build_block(self):
         """The build block belongs to the machine settings only."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)

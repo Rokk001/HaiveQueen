@@ -112,7 +112,18 @@ class OverviewTest(unittest.TestCase):
         self.assertIn("alpha: Build jobs 5 of 12 cores (next build) | per job 800 MB", both)
         self.assertIn("beta: Build jobs 2 of 12 cores (next build) | per job not measured yet", both)
         self.assertIsNone(self.data(sysinfo=dict(s, build_projects=[]))["bj"])   # no project with buildProcessNames: no build line
-        self.assertIsNone(self.data(cfg={})["bj"])
+
+    def test_build_line_without_build_table(self):
+        """No buildJobs table (or 0) means the defaults: the line stays, with and without a stored measurement."""
+        for cfg in ({}, {"buildJobs": 0}):
+            line = self.data(cfg=cfg, project="beta")["bj"]
+            self.assertIsNotNone(line)
+            self.assertIn("Build jobs 2 of 12 cores (next build) | per job not measured yet", line)
+        with db.transaction(self.conn):
+            for ts, per in (("a", 900), ("b", 700), ("c", 800)):
+                self.conn.execute("INSERT INTO build_measurements (host, project, ts, jobs, per_job_mb, peak_mb, parallel) VALUES ('h1','beta',?,2,?,?,1)", (ts, per, per * 2))
+        self.assertIn("per job 800 MB", self.data(cfg={}, project="beta")["bj"])
+        self.assertIsNone(self.data(cfg={}, sysinfo=dict(SYS, build_projects=[]))["bj"])
 
     def test_project_filter(self):
         """With a project filter only its agents, plans and questions remain."""

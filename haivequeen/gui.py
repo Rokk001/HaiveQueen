@@ -600,12 +600,14 @@ class Dashboard:
         rows = (("CPU", m["cpu"], "(%d cores)" % m["cores"], load(m["cpu"]), "icon_cpu"), ("RAM", m["ram_pct"], "%.1f/%.0f GB" % (m["ram_used_gb"], m["ram_total_gb"]), load(m["ram_pct"]), "icon_ram"),
                 ("Disk", m["disk_pct"], "%.1f/%.1f TB" % (m["disk_used_tb"], m["disk_total_tb"]), load(m["disk_pct"]), "icon_disk"))
         for i, (name, pct, note, colour, icon) in enumerate(rows):
-            y = y0 + 66 + i * 27
+            y = y0 + 62 + i * 24
             self.pic(icon, x0 + 10, y, "w")
             self.text(x0 + 46, y, name, 15, "text", "w")
             self.text(x0 + 92, y, "%d%%" % pct, 15, "cyan", "w")
             self.text(x0 + 134, y, note, 13, "text", "w")
             self.bar(x1 - 82, y - 8, 70, 16, pct / 100, colour)
+        if s.get("build_line"):   # the build line: job count, median RAM per job (B-10)
+            self.text(x0 + 12, y0 + 62 + 3 * 24 - 4, self.fit(s["build_line"], x1 - x0 - 24, 12), 12, "cyan", "w")
 
     # Draw open questions and queued integrations.
     def queue(self, s, x0, y0, x1, y1):
