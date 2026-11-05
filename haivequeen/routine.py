@@ -12,7 +12,6 @@ from .scheduler import ACTIVE, norm_plan
 
 QUEUE_PLAN_ID = "integration-queue"   # pseudo plan name of the fix tasks for blocked queue rows that name no plan
 WORDS = {"ready": "ready", "in_run": "in progress", "blocked": "blocked", "integrated": "integrated", "withdrawn": "withdrawn"}   # status words the routine and the brain know
-HANDOFF_TAIL = "Prüfe nach jedem"   # start of the handoff sentence of an agent prompt (cut off when a follow-up agent reuses the task)
 
 
 # ---- snapshot helpers ----
@@ -173,7 +172,7 @@ RUNNER_FILES = {"final.txt", "prompt.md", "rules.md", "milestones.txt", "stderr.
 def read_final(env, name: str) -> str:
     """Text of the final answer of an agent run ('' when missing).
 
-    That is final.txt (the last complete answer of the agent). When it has no 'Offene Anforderungen: <n>' line, the report the agent wrote into
+    That is final.txt (the last complete answer of the agent). When it has no 'Open requirements: <n>' line, the report the agent wrote into
     its run folder is read as well, and its text is appended when it has such a line (a Codex run often ends with only an introductory
     sentence and puts its answer into a report file). Agents name that file as they like (report.txt, result.md, final-report.txt,
     verify-report.txt ...), so every .md or .txt file of the run folder counts except the files the runner itself writes; the newest one with a
@@ -202,7 +201,7 @@ def read_final(env, name: str) -> str:
 
 
 def verify_zero(env, name: str) -> bool:
-    """True when the LAST 'Offene Anforderungen: N' line of the final answer says 0 (lines after it do not matter) and no partial item is listed.
+    """True when the LAST 'Open requirements: N' line (the German form is still read) of the final answer says 0 (lines after it do not matter) and no partial item is listed.
 
     A partial item is a list or table line (starting with -, *, | or a box-drawing frame character) that says "teilweise", "partial" or "partially" in any case.
     """
@@ -257,7 +256,7 @@ def package_failures(env, agents: list, plan: str, pkg: str) -> int:
 def ready_refusal(env, name: str) -> str:
     """Why `bzz ready` of the agent `name` is refused; '' when it is allowed.
 
-    Only the release phase registers a branch as ready, and only after the whole-plan verify (package ALL) ended with 'Offene Anforderungen: 0'.
+    Only the release phase registers a branch as ready, and only after the whole-plan verify (package ALL) ended with 'Open requirements: 0'.
     The one other case is the fix of a blocked queue row (work phase, package FIX-<tip>), which registers its branch again. An unknown agent
     name is not judged (the call comes from a person or a test).
     """

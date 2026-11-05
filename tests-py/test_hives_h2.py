@@ -51,7 +51,7 @@ class BeePolicyTests(unittest.TestCase):
     # Check queen prompt includes completeness and handoff.
     def test_queen_prompt_includes_completeness_and_handoff(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000)
-        for text in ('Offene Anforderungen:', '300000', '3', 'integration', 'subagent'):
+        for text in ('Open requirements:', '300000', '3', 'integration', 'subagent'):
             self.assertIn(text.lower(), prompt.lower())
 
     # The Bee mode of a provider defaults by protocol and rejects unknown values.
@@ -137,7 +137,7 @@ class BeePolicyTests(unittest.TestCase):
     # Check queen prompt requires completeness evidence before integrating.
     def test_queen_prompt_requires_completeness_evidence_before_integrating(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
-        for text in ('requirement', 'evidence', 'offene anforderungen: 0', 'integrat'):
+        for text in ('requirement', 'evidence', 'open requirements: 0', 'integrat'):
             self.assertIn(text, prompt)
 
     # Check bee prompt requires step reports and own worktree.
@@ -205,7 +205,7 @@ class QueenIntegrationTests(RoundCase):
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, 'testproj', 'all') if a['phase'] == 'queen')
         prompt = (self.env().run_dir(queen['name']) / 'prompt.md').read_text(encoding='utf-8-sig').lower()
-        for text in ('escalat', 'dependencies', 'bees', 'offene anforderungen: 0'):
+        for text in ('escalat', 'dependencies', 'bees', 'open requirements: 0'):
             self.assertIn(text, prompt)
 
     # Check actual queen starts in separate worktree.

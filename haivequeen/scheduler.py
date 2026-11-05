@@ -13,6 +13,7 @@ from pathlib import Path
 from . import config, db, profile, runtime
 from . import platform as osplat
 from . import localtime
+from .i18n import tr
 
 CLASS_NAMES = ("light", "medium", "heavy")
 USES = ("preferred", "fallback", "capability-only")
@@ -137,15 +138,15 @@ def get_providers(settings: dict) -> list:
     for p in settings.get("providers") or []:
         name = str(p.get("name") or "")
         if not name:
-            raise ValueError("a provider entry has no name")
+            raise ValueError(tr("a provider entry has no name"))
         use = str(p.get("use") or "preferred")
         if use not in USES:
-            raise ValueError("provider %s: use must be preferred, fallback or capability-only, not '%s'" % (name, use))
+            raise ValueError(tr("provider %s: use must be preferred, fallback or capability-only, not '%s'", name, use))
         proto = str(p.get("protocol") or name)
         fmt = profile.check_protocol(name, proto, p.get("outputFormat"))   # a CLI HaiveQueen cannot read is refused here, with a clear message
         bee_mode = str(p.get("beeMode") or ("subagent" if proto == "claude" else "process"))   # the embedded Bee mode is a Claude Code feature
         if bee_mode not in BEE_MODES:
-            raise ValueError("provider %s: beeMode must be subagent or process, not '%s'" % (name, bee_mode))
+            raise ValueError(tr("provider %s: beeMode must be subagent or process, not '%s'", name, bee_mode))
         limit = p.get("limit")
         out.append({
             "name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto), "beeMode": bee_mode,

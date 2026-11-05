@@ -84,7 +84,7 @@ def cmd_ready(args, conn) -> int:
         conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (res["id"], args.project, args.plan))
         from haivequeen import bees
         for (package,) in conn.execute("SELECT id FROM packages WHERE project=? AND plan_path=?", (args.project, args.plan)).fetchall():
-            bees.set_package_state(conn, args.project, args.plan, package, 'done', agent)   # ready means the Queen answered Offene Anforderungen: 0, so every package is done
+            bees.set_package_state(conn, args.project, args.plan, package, 'done', agent)   # ready means the Queen answered Open requirements: 0, so every package is done
     out({"ok": True, **res})
     return 0
 

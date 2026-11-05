@@ -8,6 +8,8 @@ from pathlib import Path
 
 from . import db, runtime
 
+SUPERSEDED = ("superseded", "ueberholt", "überholt")   # the reason of a withdraw whose tip need not be in the target; English protocol word, German input still read
+
 WHO = ("owner", "coordinator")
 ANSWER_KEYS = {"question_id", "text", "by"}
 DECISION_KEYS = {"text", "source", "plan", "item"}
@@ -57,7 +59,7 @@ def is_ancestor(repo, tip: str, ref: str) -> bool:
 def _queue_order(entry: dict, where: str, project: str, conn, repo, ref: str) -> dict:
     """Check one [[queue]] entry against the queue and git without writing anything; return {action, branch, reason, ids}.
 
-    withdraw needs the tip of every selected row to be in `ref` unless the reason is exactly "ueberholt"; requeue selects the newest open row only.
+    withdraw needs the tip of every selected row to be in `ref` unless the reason is exactly "superseded" (the German words are still read); requeue selects the newest open row only.
     """
     extra = set(entry) - QUEUE_KEYS
     if extra:
@@ -79,7 +81,7 @@ def _queue_order(entry: dict, where: str, project: str, conn, repo, ref: str) ->
         raise InboxError("%s: branch %s has no ready or blocked row%s" % (where, branch, " with tip " + tip if tip else ""))
     if action == "requeue":
         return {"action": action, "branch": branch, "reason": reason, "ids": [rows[-1]["id"]]}
-    if reason.strip().lower() not in ("superseded", "ueberholt", "überholt"):
+    if reason.strip().lower() not in SUPERSEDED:
         for r in rows:
             if not r["tip"]:
                 raise InboxError("%s: row %d of branch %s has no tip to check against %s" % (where, r["id"], branch, ref))

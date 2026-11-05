@@ -161,7 +161,7 @@ class WindowTests(unittest.TestCase):
     def test_footer_has_a_hives_button(self):
         """The footer names the button and the Dashboard opens the list through open_hives."""
         self.assertTrue(callable(gui.Dashboard.open_hives))
-        self.assertIn('"hives", self.open_hives', inspect.getsource(gui.Dashboard.footer))
+        self.assertIn('tr("hives"), self.open_hives', inspect.getsource(gui.Dashboard.footer))
 
     def test_open_hives_creates_the_window_once(self):
         """A second click brings the open window to the front."""

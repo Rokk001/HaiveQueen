@@ -1157,8 +1157,11 @@ class HiveRoundTests(RoundCase):
         import argparse
         import contextlib
         import io
+        import os
+        from unittest import mock
         from haivequeen import cli
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.dict(os.environ):
+            os.environ.pop("BZZ_AGENT", None)   # an external window is no agent, also when the suite itself runs inside one
             self.assertEqual(cli.cmd_integration(argparse.Namespace(action="acquire", project="testproj", plan="outside", owner_pid=987654), self.conn), 0)
         self.round(alive=lambda pid: False)
         from haivequeen import hives

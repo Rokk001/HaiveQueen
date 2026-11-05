@@ -26,7 +26,7 @@ What the runner must do for the loop:
 - Set `pid` (its own process id) and `status` running in the row at once: `routine.repair_stale_agents` marks rows without a pid after 2 minutes as `pane never started (no runner process)`.
 - Keep `ctxTokens` (current context size) in the row: the routine writes the `HANDOFF` flag file at `contextLimitTokens` (default 300000).
 - Run folder: `scheduler.ProjectEnv.run_dir(name)` = `<data>/runs/<project>/<name>/` with `prompt.md` (written by the loop), `final.txt` (the final answer; the routine
-  reads the LAST line `Offene Anforderungen: N`), `HANDOFF`, `milestones.txt` (the live text the dashboard shows), `runner.log`, `events.jsonl`, `stderr.txt`, `build-samples.txt`.
+  reads the LAST line `Open requirements: N`), `HANDOFF`, `milestones.txt` (the live text the dashboard shows), `runner.log`, `events.jsonl`, `stderr.txt`, `build-samples.txt`.
 - End with status `done` or `failed`, `ended_at`, `exit_code`, `tokens_in`, `tokens_out`, `last_line`.
 - Build jobs for phases integrate and release: `buildjobs.plan_build(env)` gives `{Jobs, Why, EnvVar, FreeMB}` (set the env var, start the sampler
   `python -m haivequeen.buildjobs sample --parent-pid N --out build-samples.txt`), at the end `buildjobs.complete_measure(env, name, jobs, start_free_mb, sample_file, started)`.

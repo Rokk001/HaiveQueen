@@ -192,8 +192,8 @@ class LoopIgnoresWithdrawnTest(RoundCase):
         self.round()
         self.assertEqual(runtime.list_agents(self.conn, "testproj"), [])
         for r in routine.queue_rows(self.env()).values():
-            self.assertEqual(r["status"], "zurückgezogen")
-            self.assertIsNone(re.match(r"^(ready|in Lauf|blockiert)", r["status"]))
+            self.assertEqual(r["status"], "withdrawn")
+            self.assertIsNone(re.match(r"^(ready|in progress|blocked)", r["status"]))
 
 
 if __name__ == "__main__":

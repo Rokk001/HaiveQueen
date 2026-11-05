@@ -1,39 +1,24 @@
 """Visible results for start and stop shortcuts; ordinary CLI output stays JSON."""
 import sys
 
+from .i18n import tr
+
 
 # Describe the start or stop result without suggesting agents were terminated.
 def result_text(command, result, language=None):
-    """Return desktop feedback in the configured language, with English fallback."""
-    if language is None:
-        from . import config
-        language = config.load_config().get("language", "English")
-    code = str(language).strip().lower().replace("_", "-")
-    if code not in ("german", "deutsch", "de") and not code.startswith("de-"):
-        if not result.get("ok"):
-            return "Error: " + str(result.get("error") or "HQ could not execute the command.")
-        if command == "stop" or result.get("stopping"):
-            count = int(result.get("running_agents") or 0)
-            if count:
-                return "Stop requested. HQ is waiting for %d running agents; they continue working." % count
-            return "Stop requested. HQ is stopping the scheduler; no new agents will start."
-        if result.get("starting"):
-            return "HQ is already starting."
-        if result.get("running"):
-            return "HQ is already running. The dashboard is open."
-        return "HQ has started."
+    """Return desktop feedback in `language` (default: the machine language), with English fallback."""
     if not result.get("ok"):
-        return "Fehler: " + str(result.get("error") or "HQ konnte den Befehl nicht ausführen.")
+        return tr("Error: %s", result.get("error") or tr("HQ could not execute the command.", language=language), language=language)
     if command == "stop" or result.get("stopping"):
         count = int(result.get("running_agents") or 0)
         if count:
-            return "Stopp angefordert. HQ wartet auf %d laufende Agenten; sie arbeiten ununterbrochen weiter." % count
-        return "Stopp angefordert. HQ beendet die Steuerung; es werden keine neuen Agenten gestartet."
+            return tr("Stop requested. HQ is waiting for %d running agents; they continue working.", count, language=language)
+        return tr("Stop requested. HQ is stopping the scheduler; no new agents will start.", language=language)
     if result.get("starting"):
-        return "HQ wird bereits gestartet."
+        return tr("HQ is already starting.", language=language)
     if result.get("running"):
-        return "HQ läuft bereits. Das Dashboard ist geöffnet."
-    return "HQ wurde gestartet."
+        return tr("HQ is already running. The dashboard is open.", language=language)
+    return tr("HQ has started.", language=language)
 
 
 # Keep shortcut feedback visible after the command's temporary console closes.

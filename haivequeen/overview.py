@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import buildjobs, config, db, localtime, platform as osplat, runstate, runtime, scheduler as sch, usage
+from .i18n import N_, tr
 
 FINISHED_HOURS = 1
 ORCHESTRATOR_KINDS = ("agent", "brain")   # providers_usage kinds written by the orchestrator itself (the "all plans" row)
@@ -120,7 +121,7 @@ def window_usage(raw, now):
             elif int(w.get("resetsAt") or 0) > t:
                 res[name] = {"pct": round(100 * float(w.get("utilization"))), "reset": format_reset(w["resetsAt"], now)}
             else:
-                res[name] = {"pct": None, "reset": "new window"}
+                res[name] = {"pct": None, "reset": N_("new window")}
         except (TypeError, ValueError):
             continue
     return res
@@ -262,9 +263,9 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     loop = _kv(conn, "loop-state") or {}
     since = _parse_time(loop.get("since")) if isinstance(loop, dict) else None
     if since:
-        orch_status = "idle since " + localtime.time(since)
+        orch_status = tr("idle since %s", localtime.time(since))
     else:
-        orch_status = "idle"
+        orch_status = tr("idle")
     last_round = conn.execute("SELECT ts FROM events WHERE kind='round'" + (" AND project=?" if project else "")
                               + " ORDER BY id DESC LIMIT 1", pa).fetchone()
     return {
@@ -346,9 +347,9 @@ def self_update_line(su) -> list:
     when = _parse_time(su.get("ended")) or _parse_time(su.get("started"))
     text = "  " + (localtime.date_time(when) if when else "-") + "  " + (su.get("new_commit") or "-")[:7]
     if result == "rollback":
-        text += " (back to " + (su.get("old_commit") or "-")[:7] + ")"
+        text += tr(" (back to %s)", (su.get("old_commit") or "-")[:7])
     col = {"ok": "green", "rollback": "yellow"}.get(result, "red")
-    return [("self-update ", "gray"), (result, col), (text, "gray")]
+    return [(tr("self-update "), "gray"), (tr(result), col), (text, "gray")]
 
 
 def live_sysinfo(conn, project=None) -> dict:

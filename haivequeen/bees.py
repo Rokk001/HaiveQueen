@@ -3,6 +3,7 @@ import json
 import re
 
 from . import buildjobs, db, roles, runtime, scheduler
+from .i18n import tr
 
 
 # Return the next available configured class above the current one.
@@ -262,9 +263,10 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
     threshold = int(env.settings.get('escalateAfter', 3))
     excluded = env.settings.get('excludedProviders', [])
     if outcome == 'failed' and next_attempt(env.conn, env.name, plan, package, cls, escalation_providers(env, plan, package), excluded, threshold) is None:
-        text = 'The package remains unsolved at the highest available class. How should it continue?'
+        language = roles.language(env.settings)
+        text = tr('The package remains unsolved at the highest available class. How should it continue?', language=language)
         if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, plan=plan, item=package)):
-            db.add_question(env.conn, env.name, plan, package, text, 'Review the failed attempts and choose the next approach.')
+            db.add_question(env.conn, env.name, plan, package, text, tr('Review the failed attempts and choose the next approach.', language=language))
 
 
 # Verify the Bee has a distinct worktree in the same repository.
@@ -352,10 +354,11 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
                                if any((p.get('classes', {}).get(name) or {}).get('model') for p in others)), None)
             use_other_provider = base_class is not None
         if base_class is None:
-            text = ('No configured provider offers the capability %s. How should this package continue?' % ', '.join(need) if need
-                    else 'No configured provider offers the required class or a higher class. How should this package continue?')
+            language = roles.language(env.settings)
+            text = (tr('No configured provider offers the capability %s. How should this package continue?', ', '.join(need), language=language) if need
+                    else tr('No configured provider offers the required class or a higher class. How should this package continue?', language=language))
             if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, plan=plan, item=package)):
-                db.add_question(env.conn, env.name, plan, package, text, 'Configure an eligible provider.')
+                db.add_question(env.conn, env.name, plan, package, text, tr('Configure an eligible provider.', language=language))
             return refuse(env, package, 'no configured provider offers the required class or the capability %s (question filed)' % ', '.join(need) if need else 'no configured provider offers the required class (question filed)')
         current = base_class
         queen_class = env.settings.get('queenClass', 'medium')

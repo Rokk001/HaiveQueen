@@ -4,7 +4,7 @@
    requirement: `- <id>: done | <evidence>` (evidence is a file, commit or test). Every requirement id of the plan (section Requirements of the
    plan, lines `- <id>: <text>`) and of the state file (its own section Requirements) must appear there exactly once with status done and an
    evidence. Requirements the plan names as an owner check, and ids an active decision of the owner names (set aside), are listed separately
-   and do not block. The count line `Offene Anforderungen: <n>` does not decide here.
+   and do not block. The count line `Open requirements: <n>` does not decide here.
 2. The check agent. A fresh agent (class medium, provider chosen like a Bee's, loads like a Bee, took no part in the plan) compares the plan as
    submitted with the list and the branch and ends with `READY-CHECK: PASSED` or `READY-CHECK: FAILED` plus the missing points. Only a passed
    result accepts the branch. When the agent cannot run, `bzz ready` waits and the Queen calls it again next round.

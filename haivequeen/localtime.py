@@ -2,6 +2,8 @@
 import locale
 import os
 
+TIME_NOSECONDS = 2   # Windows flag: the regional time format without seconds
+
 if os.name != "nt":
     try:
         locale.setlocale(locale.LC_TIME, "")
@@ -21,19 +23,25 @@ def _windows_format(value, date):
     value = SYSTEMTIME(value.year, value.month, (value.weekday() + 1) % 7, value.day,
                        value.hour, value.minute, value.second, value.microsecond // 1000)
     function = ctypes.windll.kernel32.GetDateFormatEx if date else ctypes.windll.kernel32.GetTimeFormatEx
-    args = (None, 0, ctypes.byref(value), None, None, 0)
+    flags = 0 if date else TIME_NOSECONDS
+    args = (None, flags, ctypes.byref(value), None, None, 0)
     if date:
         args += (None,)
     size = function(*args)
     if not size:
         raise OSError("Windows regional format unavailable")
     buffer = ctypes.create_unicode_buffer(size)
-    args = (None, 0, ctypes.byref(value), None, buffer, size)
+    args = (None, flags, ctypes.byref(value), None, buffer, size)
     if date:
         args += (None,)
     if not function(*args):
         raise OSError("Windows regional format unavailable")
     return buffer.value
+
+
+def _without_seconds(pattern):
+    """The time pattern without its seconds; the windows show minutes."""
+    return pattern.replace("%T", "%H:%M").replace("%r", "%I:%M %p").replace(":%S", "")
 
 
 def _format(value, date):
@@ -42,12 +50,16 @@ def _format(value, date):
             return _windows_format(value, date)
         except (OSError, AttributeError):
             pass
-    # nl_langinfo respects the environment without globally changing LC_TIME.
     try:
         pattern = locale.nl_langinfo(locale.D_FMT if date else locale.T_FMT)
     except (AttributeError, ValueError):
-        pattern = "%x" if date else "%X"
-    return value.strftime(pattern)
+        pattern = "%x" if date else "%H:%M"
+    return value.strftime(_without_seconds(pattern))
+
+
+def date(value):
+    """Format a local datetime as a date using the system convention."""
+    return _format(value, True)
 
 
 def date_time(value):

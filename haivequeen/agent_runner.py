@@ -22,8 +22,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import buildjobs, config, db, interrupt, overview, profile, runtime, scheduler, startctx
+from . import buildjobs, config, db, interrupt, localtime, overview, profile, roles, runtime, scheduler, startctx
 from . import platform as osplat
+from .i18n import tr
 
 TOOL_ROOT = Path(__file__).resolve().parent.parent
 CLASSES = ("light", "medium", "heavy")
@@ -496,7 +497,7 @@ class AgentRun:
         text = str(text)
         if len(text) > 1500:
             text = text[:1500] + "..."
-        ts = datetime.now().strftime("%H:%M") + " "
+        ts = localtime.time(datetime.now()) + " "
         try:
             with open(str(self.ms_file), "ab") as handle:
                 handle.write((colour + "\t" + ts + " ".join(text.split()) + "\n").encode("utf-8"))
@@ -906,9 +907,10 @@ def run_agent(a, out=None):
             raise ValueError("claudeTools missing")
         if not profile.prepare(prov):
             if not runtime.list_questions(conn, a.project, status="open", plan=a.plan, item=a.package or "profile"):
+                language = roles.language(scheduler.build_settings(cfg, pcfg))
                 db.add_question(conn, a.project, a.plan, a.package or "profile",
-                                "Provider %s (protocol %s) cannot be kept to the HaiveQueen profile, so it would read private files. This package is stopped. Which provider may run it?" % (a.provider, protocol),
-                                "Give the package to a provider that can be kept to the profile.")
+                                tr("Provider %s (protocol %s) cannot be kept to the HaiveQueen profile, so it would read private files. This package is stopped. Which provider may run it?", a.provider, protocol, language=language),
+                                tr("Give the package to a provider that can be kept to the profile.", language=language))
             raise ValueError("provider %s cannot be kept to the HaiveQueen profile" % a.provider)
         arg_list = build_args(prov, vars_)
         if a.phase == "bee" and protocol == "claude":

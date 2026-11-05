@@ -6,6 +6,7 @@ import subprocess
 from . import buildjobs, db, roles, runtime, agent_process, interrupt
 from . import plans as plan_mod
 from . import platform as osplat
+from .i18n import tr
 
 
 # Return the persisted Hive for one project and plan, or None.
@@ -229,9 +230,9 @@ def provider_wait_check(conn, env, hive, provider, free, plan):
     if provider['slots'] < needed:
         if not runtime.list_questions(conn, env.name, status='open', plan=plan, item='provider-slots'):
             db.add_question(conn, env.name, plan, 'provider-slots',
-                            'Provider %s has %d slot(s), but its Queen plus a Bee that runs as a separate process needs %d, so no Bee of this Hive can ever start. '
-                            'Raise the slots of %s, or set beeMode = "subagent" for it so its Bees need no slot of their own.' % (provider['name'], provider['slots'], needed, provider['name']),
-                            'Raise slots to %d, or set beeMode to subagent if the provider can run subagents.' % needed)
+                            tr('Provider %s has %d slot(s), but its Queen plus a Bee that runs as a separate process needs %d, so no Bee of this Hive can ever start. '
+                               'Raise the slots of %s, or set beeMode = "subagent" for it so its Bees need no slot of their own.', provider['name'], provider['slots'], needed, provider['name'], language=roles.language(env.settings)),
+                            tr('Raise slots to %d, or set beeMode to subagent if the provider can run subagents.', needed, language=roles.language(env.settings)))
         return False, 'needs %d slots (Queen and Bee process) but has %d' % (needed, provider['slots'])
     if free < needed:
         return False, 'no free slot (needs %d, %d free)' % (needed, free)
@@ -265,10 +266,11 @@ def file_owner_check(conn, env, plan):
             final = (env.run_dir(last['name']) / 'final.txt').read_text(encoding='utf-8', errors='replace').strip()[:800]
         except OSError:
             final = ''
-    text = 'Plan %s is integrated and deployed. Please test the integrated build in the game: answer ok, or say what is not right and the next Queen fixes exactly that.' % plan
+    language = roles.language(env.settings)
+    text = tr('Plan %s is integrated and deployed. Please test the integrated build in the game: answer ok, or say what is not right and the next Queen fixes exactly that.', plan, language=language)
     if final:
-        text += '\n\nReport of the Queen:\n' + final
-    qid = db.add_question(conn, env.name, plan, 'owner-check', text, 'Test it in the game, then answer ok or describe what is wrong.')
+        text += tr('\n\nReport of the Queen:\n', language=language) + final
+    qid = db.add_question(conn, env.name, plan, 'owner-check', text, tr('Test it in the game, then answer ok or describe what is wrong.', language=language))
     wait_for_owner_check(conn, env.name, plan, [qid])
     return qid
 
@@ -480,9 +482,10 @@ def ended_without_work(env, agent):
 # File the automatic owner question for a Queen that ended without work and return its id.
 def ask_about_end(conn, env, plan, agent, final_report):
     """File the automatic owner question for a Queen that ended without work and return its id; the question holds her last text."""
-    text = (final_report or '').strip() or 'no final text (status %s)' % agent.get('status')
-    question = 'Queen %s of this Hive ended without new work (no commit, no changed file, no question). Her last text: %s How should the Hive continue?' % (agent['name'], text[:1500])
-    return db.add_question(conn, env.name, plan, 'queen-ended', question, 'Answer what blocks her, or say how she should count or decide it; then the next Queen starts.')
+    language = roles.language(env.settings)
+    text = (final_report or '').strip() or tr('no final text (status %s)', agent.get('status'), language=language)
+    question = tr('Queen %s of this Hive ended without new work (no commit, no changed file, no question). Her last text: %s How should the Hive continue?', agent['name'], text[:1500], language=language)
+    return db.add_question(conn, env.name, plan, 'queen-ended', question, tr('Answer what blocks her, or say how she should count or decide it; then the next Queen starts.', language=language))
 
 
 # Return whether all independent Bee processes of the Hive have finished.
@@ -670,12 +673,6 @@ def hive_data(conn, project, agents, plan=None):
         hive['blocker'] = runtime.kv_get(conn, hive['project'], 'hive-blocker:' + hive['plan_path'])
         hive['pending_questions'] = [q['id'] for q in runtime.list_questions(conn, hive['project'], plan=hive['plan_path']) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
     return rows
-
-
-# Translate recorded scheduler blockers into German text.
-
-
-# German words for the state of a Hive that has no running Queen.
 
 
 # Run one machine-wide scheduling round for Hives without a language model.

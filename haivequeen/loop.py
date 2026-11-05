@@ -801,9 +801,9 @@ def start_boot_command(args) -> list:
 # Start a session: the loop as a hidden process and the graphical window.
 def cmd_start(args, conn) -> int:
     """`bzz start`: run the loop in this process (--foreground), or start it as a hidden background process (no terminal window) and open the graphical dashboard once."""
-    from . import config, gui
+    from . import config, gui, i18n
     if args.foreground and getattr(args, "desktop", False):
-        raise ValueError("Die Desktop-Rückmeldung unterstützt nur den Hintergrundstart.")
+        raise ValueError(i18n.tr("The desktop message supports only the background start."))
     machine = config.load_config()
     pid = loop_running()
     if pid:

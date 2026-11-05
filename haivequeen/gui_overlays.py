@@ -5,9 +5,10 @@ without units has no rows and the window writes "none". The tokens of a Bee that
 (gui_data.hive_row takes them from the Queen's row), so every sum counts them once."""
 from . import runtime, scheduler as sch, startctx
 from . import overview
+from .i18n import N_, tr
 
 KEYS = ("apiaries", "hives", "queens", "bees", "io", "start")
-TITLES = {"apiaries": "APIARIES", "hives": "HIVES", "queens": "QUEENS", "bees": "BUSY BEES", "io": "TOTAL I/O", "start": "START CONTEXT"}
+TITLES = {"apiaries": N_("APIARIES"), "hives": N_("HIVES"), "queens": N_("QUEENS"), "bees": N_("BUSY BEES"), "io": N_("TOTAL I/O"), "start": N_("START CONTEXT")}
 
 
 def _tokens(agent) -> tuple:
@@ -113,38 +114,46 @@ def _tok(n) -> str:
     return "–" if n is None else overview.fmt_tok0(n)
 
 
+def _part_label(label) -> str:
+    """The name of one part of a start context: role, task, or rules with the file name."""
+    if label.startswith("rules "):
+        return tr("rules %s", label[len("rules "):])
+    return tr(label)
+
+
 def lines(snap, key) -> list:
     """The lines of the overlay of tile `key` as (text, colour name) pairs, the first being the heading; 'none' for a tile without units."""
     rows = (snap.get("overlays") or {}).get(key, {}).get("rows", [])
-    out = [(TITLES[key] + " (now)", "gold")]
+    out = [(tr("%s (now)", tr(TITLES[key])), "gold")]
     if not rows:
-        return out + [("none", "dim")]
+        return out + [(tr("none"), "dim")]
     if key == "io":
-        out.append(("model | in / out | fresh in | cached in", "dim"))
+        out.append((tr("model | in / out | fresh in | cached in"), "dim"))
         out += [("%s | %s / %s | %s | %s" % (r["model"], _tok(r["tin"]), _tok(r["tout"]), _tok(r["fresh"]), _tok(r["cached"])), "text") for r in rows]
     elif key == "apiaries":
-        out.append(("Apiary | in / out today", "dim"))
+        out.append((tr("Apiary | in / out today"), "dim"))
         out += [("%s | %s / %s" % (r["name"], _tok(r["tin"]), _tok(r["tout"])), "text") for r in rows]
     elif key == "hives":
-        out.append(("Hive | in / out today | per finished package", "dim"))
+        out.append((tr("Hive | in / out today | per finished package"), "dim"))
         out += [("%s (%s) | %s / %s | %s" % (r["name"], r["apiary"], _tok(r["tin"]), _tok(r["tout"]),
                                               "%s / %s" % (_tok(r["per_package"][0]), _tok(r["per_package"][1])) if r["per_package"] else "–"), "text") for r in rows]
     elif key in ("queens", "bees"):
-        out.append(("%s | Hive | run in / out" % ("Queen" if key == "queens" else "Bee"), "dim"))
+        out.append((tr("Queen | Hive | run in / out") if key == "queens" else tr("Bee | Hive | run in / out"), "dim"))
         out += [("%s | %s (%s) | %s / %s" % (r["name"], r["hive"], r["apiary"], _tok(r["tin"]), _tok(r["tout"])), "text") for r in rows]
     else:
         for r in rows:
-            out.append(("%s | average %s over %d start%s today" % (r["provider"], _tok(r["avg"]), r["n"], "" if r["n"] == 1 else "s"), "cyan"))
+            out.append(((tr("%s | average %s over %d start today", r["provider"], _tok(r["avg"]), r["n"]) if r["n"] == 1 else tr("%s | average %s over %d starts today", r["provider"], _tok(r["avg"]), r["n"])), "cyan"))
             for a in r["apiaries"]:
-                out.append(("  Apiary %s: %s | %s" % (a["name"], _tok(a["avg"]), a["benchmark"]), "text"))
+                out.append((tr("  Apiary %s: %s | %s", a["name"], _tok(a["avg"]), a["benchmark"]), "text"))
             for h in r["hives"]:
-                out.append(("  Hive %s (%s): %s" % (h["name"], h["apiary"], _tok(h["avg"])), "text"))
+                out.append((tr("  Hive %s (%s): %s", h["name"], h["apiary"], _tok(h["avg"])), "text"))
             for who in ("queen", "bee"):
                 s = r["split"][who]
                 if not s["n"]:
                     continue
-                out.append(("  %ss: average %s%s" % (who.capitalize(), _tok(s["avg"]), " (parts of HaiveQueen approximate)" if s["approximate"] else ""), "dim"))
-                out += [("    %s %s" % (k, _tok(v)), "text") for k, v in s["parts"].items()]
+                note = tr(" (parts of HaiveQueen approximate)") if s["approximate"] else ""
+                out.append(((tr("  Queens: average %s%s", _tok(s["avg"]), note) if who == "queen" else tr("  Bees: average %s%s", _tok(s["avg"]), note)), "dim"))
+                out += [("    %s %s" % (_part_label(k), _tok(v)), "text") for k, v in s["parts"].items()]
                 if s["rest"] is not None:
-                    out.append(("    CLI's own part %s" % _tok(s["rest"]), "text"))
+                    out.append((tr("    CLI's own part %s", _tok(s["rest"])), "text"))
     return out

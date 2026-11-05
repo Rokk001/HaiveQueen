@@ -260,14 +260,16 @@ class WindowTest(unittest.TestCase):
 
     # The language of the free text to the owner.
     def test_general_offers_the_language_and_saves_it(self):
-        """General shows a language field (English without an entry); a typed language is written to the file."""
+        """General offers English and German (English without an entry); the picked language is written to the file."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.select(0)
         getters = {path: getter for path, getter, _like in win.getters}
         self.assertEqual(getters[("language",)](), "English")
-        self.type_into_entry(win, "English", "Deutsch")
+        button = next(w for w in descendants(win.form) if w.winfo_class() == "Menubutton" and "English" in w.cget("text"))
+        menu = button.nametowidget(button.cget("menu"))
+        menu.invoke(menu.index("German"))
         win.save()
-        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["language"], "Deutsch")
+        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["language"], "German")
 
     # Editing the allowed tools list and a number, then saving.
     def test_edit_allowed_tools_and_save(self):

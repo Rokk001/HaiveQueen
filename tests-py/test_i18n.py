@@ -1,0 +1,340 @@
+"""H-2 to H-5: GUI and desktop texts follow the machine language, agent instructions and protocol words stay English, dates follow the system."""
+import ast
+import os
+import re
+import tempfile
+import types
+import unittest
+from datetime import datetime
+from pathlib import Path
+from unittest import mock
+
+from bzztest import RoundCase, ROOT
+from haivequeen import bees, db, desktop, gui, gui_config, gui_data, gui_dialog, gui_hives, gui_overlays, gui_questions, hives, i18n, inbox, localtime, loop, overview, readygate, routine, startctx, views
+
+PACKAGE = ROOT / "haivequeen"
+GUI_FILES = ("gui.py", "gui_data.py", "gui_config.py", "gui_dialog.py", "gui_hives.py", "gui_overlays.py", "gui_questions.py")
+TRANSLATED_FILES = GUI_FILES + ("desktop.py", "overview.py", "buildjobs.py", "startctx.py", "bees.py", "hives.py", "agent_runner.py", "scheduler.py", "loop.py")
+CONTROL = "[" + chr(0) + "-" + chr(8) + chr(11) + chr(12) + chr(14) + "-" + chr(31) + "]"
+NOT_TEXT = {"bzz", "HaiveQueen", "Rokk001/HaiveQueen", "OK", "CPU", "RAM", "Disk", "cli", "v%s  |  bzz  |  "}   # names, the same in every language
+
+
+def literal(node):
+    """The string of a constant node, else None."""
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def wrapped_texts():
+    """(file, text) of every literal handed to i18n.tr or i18n.N_ in the translated modules."""
+    for name in TRANSLATED_FILES:
+        for node in ast.walk(ast.parse((PACKAGE / name).read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) in ("tr", "N_") and node.args and literal(node.args[0]) is not None:
+                yield name, literal(node.args[0])
+
+
+def has_words(text):
+    """True when the text holds a word once format fields are removed."""
+    return bool(re.search(r"[A-Za-zÄÖÜäöü]{2}", re.sub(r"%[-+0-9.]*[a-zA-Z]", "", text))) and text not in NOT_TEXT
+
+
+class CatalogTest(unittest.TestCase):
+    def test_every_marked_text_has_a_german_entry_with_the_same_fields(self):
+        missing, broken = [], []
+        for name, text in wrapped_texts():
+            if text not in i18n.GERMAN:
+                missing.append((name, text))
+            elif re.findall(r"%[-+0-9.]*[a-zA-Z%]", text) != re.findall(r"%[-+0-9.]*[a-zA-Z%]", i18n.GERMAN[text]):
+                broken.append(text)
+        self.assertEqual(missing, [])
+        self.assertEqual(broken, [])
+
+    def test_no_literal_goes_to_a_display_call_without_translation(self):
+        """A plain English literal handed to a drawing call, a widget text, a window title or a message is a missed translation."""
+        calls = {"text": 2, "title": 0, "inform": 0, "complain": 0, "confirm": 0, "ask_path": 1, "info": 2, "error": 2, "ask": 2, "panel": 4, "insert": 1}
+        found = []
+        for name in GUI_FILES:
+            for node in ast.walk(ast.parse((PACKAGE / name).read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = getattr(node.func, "attr", getattr(node.func, "id", ""))
+                args = list(node.args[calls[func]:calls[func] + 1]) if func in calls else []
+                args += [kw.value for kw in node.keywords if kw.arg == "text"]
+                for arg in args:
+                    for part in ([arg] if not isinstance(arg, ast.BinOp) else [arg.left]):
+                        text = literal(part)
+                        if text and has_words(text) and text not in ("end", "1.0"):
+                            found.append((name, node.lineno, text))
+        self.assertEqual(found, [])
+
+    def test_table_texts_are_in_the_catalog(self):
+        tables = [label for _key, label, _text in gui_config.BUILD_FIELDS] + [text for _key, _label, text in gui_config.BUILD_FIELDS]
+        tables += list(gui_hives.LABELS.values()) + list(gui_hives.ASK.values()) + list(gui_overlays.TITLES.values())
+        self.assertEqual([text for text in tables if text not in i18n.GERMAN], [])
+
+
+class LanguageChoiceTest(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.path = Path(folder.name) / "config.toml"
+        patcher = mock.patch.dict(os.environ, {"BZZ_CONFIG_DIR": folder.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def write(self, text):
+        self.path.write_text(text, encoding="utf-8")
+        os.utime(self.path, (self.path.stat().st_atime, self.path.stat().st_mtime + len(text)))
+
+    def test_machine_setting_selects_the_language_with_english_fallback(self):
+        self.assertEqual(i18n.tr("Close"), "Close")   # no setting
+        for value in ("German", "Deutsch", "de", "de-CH", "de_AT"):
+            self.write('language = "%s"\n' % value)
+            self.assertEqual(i18n.tr("Close"), "Schließen", value)
+        for value in ("French", "en-US", ""):
+            self.write('language = "%s"\n' % value)
+            self.assertEqual(i18n.tr("Close"), "Close", value)
+
+    def test_broken_settings_file_gives_english(self):
+        self.write("language = [")
+        self.assertEqual(i18n.tr("Close"), "Close")
+
+    def test_explicit_language_wins_for_owner_texts_of_an_apiary(self):
+        self.write('language = "English"\n')
+        self.assertEqual(i18n.tr("Close", language="German"), "Schließen")
+        self.write('language = "German"\n')
+        self.assertEqual(i18n.tr("Close", language="English"), "Close")
+
+    def test_unknown_text_and_fields_pass_through(self):
+        self.write('language = "German"\n')
+        self.assertEqual(i18n.tr("not in the catalog"), "not in the catalog")
+        self.assertEqual(i18n.tr("Stop bee %s (%s)?", "Ada", "K1"), "Bee Ada (K1) stoppen?")
+
+    def test_desktop_uses_the_machine_language_also_for_error_prefix_and_shortcut_texts(self):
+        self.write('language = "German"\n')
+        self.assertEqual(desktop.result_text("start", {"ok": True}), "HQ wurde gestartet.")
+        self.assertEqual(desktop.result_text("start", {"ok": False, "error": "boom"}), "Fehler: boom")
+        self.assertEqual(desktop.result_text("stop", {"ok": True, "running_agents": 2}), "Stopp angefordert. HQ wartet auf 2 laufende Agenten; sie arbeiten ununterbrochen weiter.")
+        self.assertIn("Dashboard", desktop.result_text("start", {"ok": True, "running": True}))
+
+
+class GermanTextsTest(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(i18n, "machine_language", return_value="German")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_hive_status_words(self):
+        self.assertEqual(gui_data.status_text({"state": "queenless"}), "Ohne Queen")
+        self.assertEqual(gui_data.status_text({"state": "answer", "pending_questions": [3]}), "Wartet auf Antwort (#3)")
+        self.assertEqual(gui_data.blocker_text("Hive limit 2 of something"), "Hive-Limit 2 erreicht")
+        self.assertEqual(gui_data.blocker_text("free RAM 1.00 GB is below the minimum 2.00 GB"), "Zu wenig freier RAM: 1.00 GB")
+        self.assertEqual(gui_data.blocker_text("STOP"), "HaiveQueen gestoppt")
+        self.assertEqual(gui_data.blocker_text("waiting for provider codex: quota used up"), "Wartet auf Anbieter codex: Kontingent aufgebraucht")
+        self.assertEqual(gui_data.blocker_text("waiting for the build: x"), "Wartet auf den Build: x")
+
+    def test_idle_kind_does_not_depend_on_the_language(self):
+        row = gui_data.hive_row({"project": "A", "plan_path": "docs/plans/X-PLAN.md", "state": "other"}, [], {}, datetime(2026, 1, 1))
+        self.assertEqual((row["status"], row["kind"]), ("Untätig", "idle"))
+
+    def test_menus_keep_their_actions_and_translate_their_labels(self):
+        self.assertEqual(gui.state_actions("STOPPED"), [("HaiveQueen starten", "start")])
+        self.assertEqual(gui_hives.actions({"status": "DRAFT"})[0], ("Starten", "start"))
+        self.assertEqual(gui.Dashboard.control_items({"paused": False})[0], ("Pausieren", "pause"))
+
+    def test_overlay_lines(self):
+        snap = {"overlays": {"queens": {"rows": []}, "apiaries": {"rows": [{"name": "A", "tin": 1, "tout": 2}]}}}
+        self.assertEqual(gui_overlays.lines(snap, "queens"), [("QUEENS (jetzt)", "gold"), ("keine", "dim")])
+        self.assertEqual(gui_overlays.lines(snap, "apiaries")[1][0], "Apiary | ein / aus heute")
+
+    def test_benchmark_comparison(self):
+        self.assertEqual(startctx.comparison(None, None), "noch kein Benchmark")
+        self.assertIn("eigenes Profil", startctx.comparison(18000, 60000))
+
+    def test_settings_errors(self):
+        with self.assertRaises(ValueError) as caught:
+            gui_config.apply_build({}, "x", "1", "2", cores=8)
+        self.assertEqual(str(caught.exception), "CPU-Kerne pro Build: eine ganze Zahl wird erwartet")
+
+    def test_typed_settings_errors(self):
+        with self.assertRaises(ValueError) as caught:
+            gui_config.parse_typed("x", 1)
+        self.assertEqual(str(caught.exception), "eine Zahl wird erwartet")
+        self.assertEqual(gui_questions.error_text(KeyError("question 4 is already answered")), "Frage 4 ist bereits beantwortet")
+
+    def test_questions_window_errors(self):
+        with self.assertRaises(ValueError) as caught:
+            gui_questions.answer(None, 1, "  ")
+        self.assertEqual(str(caught.exception), "Schreibe zuerst eine Antwort.")
+
+    def test_program_log_lines_are_translated_on_display_and_noise_stays_recognised(self):
+        event = {"ts": "2026-01-01T10:00:00", "agent": None, "project": "A", "kind": "rounds", "text": "round done: 0 Queen(s) started"}
+        self.assertEqual(gui_data.log_line(event)[2], "Runde fertig: 0 Queen(s) gestartet")
+        self.assertTrue(gui_data.is_noise(event))
+        self.assertEqual(i18n.log_text("an agent note in any language"), "an agent note in any language")
+        self.assertEqual(i18n.log_text("ROUND ERROR boom"), "RUNDENFEHLER boom")
+        self.assertEqual(i18n.log_text("no free slot (needs 2, 1 free)"), "kein freier Slot (braucht 2, 1 frei)")
+        self.assertEqual(i18n.log_text("restart: re-attached 3 running agent(s), 1 gone"), "Neustart: 3 laufende(r) Agent(en) wieder verbunden, 1 verschwunden")
+        self.assertEqual(i18n.log_text("Provider codex needs its login in the HaiveQueen profile (once). Run `x y` with the environment A=b. Its packages wait until then, all others go on."),
+                         "Anbieter codex braucht einmalig seinen Login im HaiveQueen-Profil. Führe `x y` mit der Umgebung A=b aus. Seine Pakete warten bis dahin, alle anderen laufen weiter.")
+
+    def test_catalog_has_no_control_characters(self):
+        self.assertNotRegex((PACKAGE / "i18n.py").read_text(encoding="utf-8"), CONTROL)
+
+    def test_plan_status_words_stay_the_protocol_words(self):
+        self.assertNotIn("DRAFT", i18n.GERMAN)
+        self.assertNotIn("IN_PROGRESS", i18n.GERMAN)
+
+
+class LogicIndependentOfLanguageTest(RoundCase):
+    def test_dashboard_draws_german_only(self):
+        """The whole main window in German, drawn on a real canvas: no text of the catalog stays English."""
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
+        except tk.TclError:
+            self.skipTest("no display")
+        self.addCleanup(root.destroy)
+        with mock.patch.object(i18n, "machine_language", return_value="German"), mock.patch.object(gui, "REFRESH_MS", 10 ** 9):
+            root.geometry("1672x912")
+            root.update()
+            dash = gui.Dashboard(root, self.conn)
+            dash.snap = gui_data.snapshot(self.conn, cfg={"slots": 2, "providers": [{"name": "claude"}]},
+                                          sysinfo={"cores": 8, "cpu": 38, "ram_used_gb": 25.2, "ram_total_gb": 32.0, "ram_pct": 80, "disk_used_tb": 1.2, "disk_total_tb": 2.7, "disk_pct": 45})
+            dash.draw()
+            drawn = [dash.canvas.itemcget(item, "text") for item in dash.canvas.find_all() if dash.canvas.type(item) == "text"]
+            for key in ("hives", "start"):
+                dash.overlay_key = key
+                dash.draw_overlay()
+        changed = {english for english, german in i18n.GERMAN.items() if english != german and "%" not in english and len(english) > 2}
+        self.assertEqual(sorted(set(drawn) & changed), [])
+        self.assertIn("AKTIVE HIVES", drawn)
+        self.assertIn("MODELL-LIMITS", drawn)
+        self.assertIn("KI-AGENTEN-ORCHESTRATOR", drawn)
+
+    def test_german_dialog_yes_button_still_answers_true(self):
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
+        except tk.TclError:
+            self.skipTest("no display")
+        self.addCleanup(root.destroy)
+        pressed = {}
+
+        def press():
+            window = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)][0]
+            found = []
+
+            def walk(widget):
+                for child in widget.winfo_children():
+                    if isinstance(child, tk.Button):
+                        found.append(child)
+                    walk(child)
+            walk(window)
+            pressed["labels"] = [b.cget("text") for b in found]
+            yes = next((b for b in found if b.cget("text") == "Ja"), None)
+            if yes is None:
+                window.destroy()   # a missing button must fail the test, not leave the modal dialog waiting
+            else:
+                yes.invoke()
+        with mock.patch.object(i18n, "machine_language", return_value="German"):
+            root.after(50, press)
+            self.assertTrue(gui_dialog.ask(root, "T", "Text", "Consolas"))
+        self.assertEqual(sorted(pressed["labels"]), ["Ja", "Nein"])
+
+
+class DateTest(unittest.TestCase):
+    NOW = datetime(2026, 3, 9, 16, 7, 45)
+
+    def test_time_has_no_seconds_and_keeps_the_system_format(self):
+        self.assertNotIn("45", localtime.time(self.NOW))
+        self.assertIn("07", localtime.time(self.NOW))
+
+    @unittest.skipUnless(os.name == "nt", "Windows regional API")
+    def test_windows_uses_the_regional_short_date(self):
+        import ctypes
+        buffer = ctypes.create_unicode_buffer(80)
+        self.assertTrue(ctypes.windll.kernel32.GetLocaleInfoEx(None, 0x1F, buffer, 80))   # LOCALE_SSHORTDATE
+        pattern = buffer.value
+        expected = pattern
+        for token, value in (("yyyy", "2026"), ("yy", "26"), ("MM", "03"), ("M", "3"), ("dd", "09"), ("d", "9")):
+            expected = expected.replace(token, value) if "ddd" not in pattern and "MMM" not in pattern else expected
+        if "ddd" not in pattern and "MMM" not in pattern:
+            self.assertEqual(localtime.date(self.NOW), expected.replace("'", ""))
+        self.assertTrue(localtime.date_time(self.NOW).startswith(localtime.date(self.NOW)))
+
+    def test_shown_stamps_use_the_system_format(self):
+        self.assertEqual(gui_data.fmt_stamp("2026-03-09T16:07:45"), localtime.date_time(self.NOW))
+        self.assertEqual(gui_data.fmt_stamp("broken"), "broken")
+        self.assertEqual(gui_data.fmt_stamp(None), "")
+        status = gui_data.status_text({"state": "resting", "reset_at": "2026-03-09T16:07:45"})
+        self.assertEqual(status, "Resting until " + localtime.date_time(self.NOW))
+
+    def test_views_show_the_system_format(self):
+        conn = mock.Mock()
+        row = {"id": 1, "plan_path": "p", "item": "i", "question": "q", "recommendation": "r", "created_at": "2026-03-09T16:07:45", "status": "open"}
+        with mock.patch.object(db, "open_questions", return_value=[row]):
+            self.assertIn(localtime.date_time(self.NOW), views.render_questions(conn, "A"))
+
+    def test_no_shown_date_is_cut_from_an_iso_text_or_has_a_fixed_format(self):
+        for name in GUI_FILES + ("agent_runner.py", "overview.py", "scheduler.py", "usage.py"):
+            text = (PACKAGE / name).read_text(encoding="utf-8")
+            self.assertNotRegex(text, r'strftime\("%H:%M|%d\.%m|replace\("T", " "\)', name)
+
+
+class ProtocolTest(unittest.TestCase):
+    def test_german_input_is_still_recognised(self):
+        plan = "## Requirements\n- A-1: text\n"
+        for word in ("done", "erledigt"):
+            res = readygate.evaluate(plan, "## Completeness\n- A-1: %s | test_x\n" % word, [])
+            self.assertEqual(res.blocking, [], word)
+        for word in ("partial", "teilweise", "open"):
+            self.assertTrue(readygate.evaluate(plan, "## Completeness\n- A-1: %s | test_x\n" % word, []).blocking, word)
+        for text in ("- K1: partial", "- K1: teilweise"):
+            self.assertRegex(text, r"(?im)^\s*[-*|].*(?:teilweise|\bpartial)")
+        for reason in ("superseded", "ueberholt", "überholt"):
+            self.assertIn(reason, inbox.__dict__.get("SUPERSEDED", ()))
+
+    def test_no_german_instruction_is_left_for_agents(self):
+        german = re.compile(r"Wurden alle|Offene Anforderungen|Prüfe nach|Pruefe nach|Arbeitsschritt|Übergabe|erledigt,", re.I)
+        for path in list((ROOT / "roles").glob("*.md")) + [ROOT / "docs" / "AGENT-RULES.md", ROOT / "docs" / "S13-S14-INTERFACE.md", ROOT / "haivequeen" / "loop.py", ROOT / "haivequeen" / "bees.py"]:
+            self.assertNotRegex(path.read_text(encoding="utf-8"), german, path.name)
+        self.assertFalse(hasattr(routine, "HANDOFF_TAIL"))
+
+    def test_desktop_start_refusal_follows_the_machine_language(self):
+        args = types.SimpleNamespace(foreground=True, desktop=True)
+        with mock.patch.object(i18n, "machine_language", return_value="English"), self.assertRaises(ValueError) as caught:
+            loop.cmd_start(args, None)
+        self.assertEqual(str(caught.exception), "The desktop message supports only the background start.")
+        with mock.patch.object(i18n, "machine_language", return_value="German"), self.assertRaises(ValueError) as caught:
+            loop.cmd_start(args, None)
+        self.assertIn("Hintergrundstart", str(caught.exception))
+
+    def test_handoff_instruction_is_english(self):
+        text = (PACKAGE / "loop.py").read_text(encoding="utf-8")
+        self.assertIn("After each completed step", text)
+
+    def test_owner_questions_of_the_program_follow_the_apiary_language(self):
+        env = types.SimpleNamespace(name="A", settings={"language": "German"})
+        with mock.patch.object(db, "add_question", return_value=7) as add:
+            hives.ask_about_end(None, env, "p", {"name": "Q", "status": "failed"}, "last")
+        self.assertIn("ohne neue Arbeit", add.call_args[0][4])
+        env.settings["language"] = "English"
+        with mock.patch.object(db, "add_question", return_value=7) as add:
+            hives.ask_about_end(None, env, "p", {"name": "Q", "status": "failed"}, "last")
+        self.assertIn("without new work", add.call_args[0][4])
+
+    def test_agent_instructions_stay_english_in_a_german_apiary(self):
+        self.assertIn("Language: write all free text", bees.queen_instructions("medium", 3, 3, 1000, "German"))
+        self.assertIn("in German", bees.queen_instructions("medium", 3, 3, 1000, "German"))
+        self.assertIn("Were all tasks in the plan implemented?", bees.queen_instructions("medium", 3, 3, 1000, "German"))
+
+
+class ViewsOverviewStillEnglishTest(unittest.TestCase):
+    def test_english_default_is_unchanged(self):
+        self.assertEqual(overview.window_usage({"fiveHour": {"utilization": 0.1, "resetsAt": 1}}, datetime(2026, 1, 1))["FiveHour"]["reset"], "new window")
+
+
+if __name__ == "__main__":
+    unittest.main()

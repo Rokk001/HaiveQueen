@@ -4,6 +4,7 @@
 is dark; `show`, `info`, `error` and `ask` replace tkinter.messagebox, `popup_menu` replaces the tk.Menu pop-ups. Only the file dialog stays the system one.
 """
 from .gui import COL
+from .i18n import tr
 
 
 # Give every tk widget that is created from now on the colours of the dashboard.
@@ -76,8 +77,8 @@ def ask_path(parent, title, initial, mono):
         """Keep the typed path (Save) or nothing (Cancel) and close the window."""
         result["path"] = var.get().strip() or None if save else None
         win.destroy()
-    tk.Button(row, text="Cancel", font=(mono, 11), command=lambda: close(False)).pack(side="right", padx=(8, 0))
-    tk.Button(row, text="Save", font=(mono, 11), command=lambda: close(True)).pack(side="right")
+    tk.Button(row, text=tr("Cancel"), font=(mono, 11), command=lambda: close(False)).pack(side="right", padx=(8, 0))
+    tk.Button(row, text=tr("Save"), font=(mono, 11), command=lambda: close(True)).pack(side="right")
     win.bind("<Return>", lambda _e: close(True))
     win.bind("<Escape>", lambda _e: close(False))
     win.protocol("WM_DELETE_WINDOW", lambda: close(False))
@@ -190,7 +191,8 @@ def error(parent, title, text, mono):
 # Ask a yes/no question.
 def ask(parent, title, text, mono) -> bool:
     """True when the user pressed Yes; Escape and closing the window answer No."""
-    return show(parent, title, text, mono, ("Yes", "No")) == "Yes"
+    yes = tr("Yes")
+    return show(parent, title, text, mono, (yes, tr("No"))) == yes
 
 
 # A small menu in the dashboard look.

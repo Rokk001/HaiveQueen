@@ -12,14 +12,17 @@ import threading
 import tomllib
 from pathlib import Path
 
+from . import gui_data, localtime
+from .i18n import N_, tr
+
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
 CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "use": ("preferred", "fallback", "capability-only"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
 CLASSES = ("light", "medium", "heavy")
 # The block "Build" of the General page: exactly these three fields, each with one sentence of explanation (key in the buildJobs table, label, explanation).
 BUILD_FIELDS = (
-    ("cores", "CPU cores per build", "How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short."),
-    ("parallel", "Parallel builds", "How many targets the build command builds at the same time (the number after --parallel); each target gets the cores divided by this number."),
-    ("minFreeRamGB", "Minimum free RAM before a build", "A build only starts while at least this many GB of RAM are free, otherwise it waits."),
+    ("cores", N_("CPU cores per build"), N_("How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short.")),
+    ("parallel", N_("Parallel builds"), N_("How many targets the build command builds at the same time (the number after --parallel); each target gets the cores divided by this number.")),
+    ("minFreeRamGB", N_("Minimum free RAM before a build"), N_("A build only starts while at least this many GB of RAM are free, otherwise it waits.")),
 )
 
 
@@ -54,18 +57,18 @@ def apply_build(data, cores_text, parallel_text, ram_text, cores=None):
         try:
             value = int(str(text).strip())
         except ValueError:
-            raise ValueError("%s: a whole number is expected" % label)
+            raise ValueError(tr("%s: a whole number is expected", tr(label)))
         if value < low or (high is not None and value > high):
-            raise ValueError("%s: a whole number from %d%s is expected" % (label, low, " to %d" % high if high is not None else " up"))
+            raise ValueError(tr("%s: a whole number from %d to %d is expected", tr(label), low, high) if high is not None else tr("%s: a whole number from %d up is expected", tr(label), low))
         return value
-    n_cores = whole(cores_text, "CPU cores per build", 1, cores)
-    parallel = whole(parallel_text, "Parallel builds", 1)
+    n_cores = whole(cores_text, N_("CPU cores per build"), 1, cores)
+    parallel = whole(parallel_text, N_("Parallel builds"), 1)
     try:
         ram = float(str(ram_text).strip().replace(",", "."))
     except ValueError:
-        raise ValueError("Minimum free RAM before a build: a number is expected")
+        raise ValueError(tr("Minimum free RAM before a build: a number is expected"))
     if not math.isfinite(ram) or ram <= 0:
-        raise ValueError("Minimum free RAM before a build: a number above 0 is expected")
+        raise ValueError(tr("Minimum free RAM before a build: a number above 0 is expected"))
     old = data.get("buildJobs")
     table = {k: v for k, v in old.items() if k not in ("coreShare", "fixed", "cores", "parallel", "minFreeRamGB")} if isinstance(old, dict) else {}
     table.update({"cores": n_cores, "parallel": parallel, "minFreeRamGB": int(ram) if ram == int(ram) else ram})
@@ -136,7 +139,7 @@ def _value(value) -> str:
         return str(value)
     if isinstance(value, float):
         if not math.isfinite(value):
-            raise ValueError("a number must be finite")
+            raise ValueError(tr("a number must be finite"))
         return repr(value)
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
@@ -144,7 +147,7 @@ def _value(value) -> str:
         return "[" + ", ".join(_value(v) for v in value) + "]"
     if isinstance(value, dict):
         return "{ " + ", ".join("%s = %s" % (_key(k), _value(v)) for k, v in value.items()) + " }" if value else "{}"
-    raise ValueError("cannot write %r as TOML" % (value,))
+    raise ValueError(tr("cannot write %r as TOML", value))
 
 
 # A dict that must become its own [table] because it holds other dicts.
@@ -190,7 +193,7 @@ def check(data, machine=True) -> list:
     problems = []
     try:
         if tomllib.loads(dumps(data)) != data:
-            problems.append("the settings cannot be written as TOML without changing them")
+            problems.append(tr("the settings cannot be written as TOML without changing them"))
     except (ValueError, tomllib.TOMLDecodeError) as exc:
         problems.append(str(exc))
     if machine and not problems:
@@ -200,10 +203,10 @@ def check(data, machine=True) -> list:
             int(data.get("hives", 2))
             minutes = float(data.get("roundMinutes", 5))
             if not math.isfinite(minutes) or minutes <= 0:
-                problems.append("roundMinutes must be greater than zero")
+                problems.append(tr("roundMinutes must be greater than zero"))
             names = [p.get("name") for p in data.get("providers") or []]
             if len(set(names)) != len(names):
-                problems.append("provider names must be unique")
+                problems.append(tr("provider names must be unique"))
         except (ValueError, TypeError, AttributeError) as exc:
             problems.append(str(exc))
     return problems
@@ -232,12 +235,12 @@ def save_file(path, data):
 # Settings files the editor offers.
 def settings_files(conn, config_dir) -> list:
     """[(label, path, is_machine)]: config.toml first, then the project.toml of every registered Apiary that has one."""
-    out = [("config.toml (machine)", Path(config_dir) / "config.toml", True)]
+    out = [(tr("config.toml (machine)"), Path(config_dir) / "config.toml", True)]
     for name, workspace in conn.execute("SELECT name, workspace FROM projects ORDER BY name"):
         if workspace:
             path = Path(workspace) / ".haivequeen" / "project.toml"
             if path.is_file():
-                out.append(("project.toml (%s)" % name, path, False))
+                out.append((tr("project.toml (%s)", name), path, False))
     return out
 
 
@@ -249,8 +252,11 @@ def parse_typed(text, like=None):
         if isinstance(like, bool):
             if text.lower() in ("true", "false"):
                 return text.lower() == "true"
-            raise ValueError("true or false expected")
-        return type(like)(text)
+            raise ValueError(tr("true or false expected"))
+        try:
+            return type(like)(text)
+        except ValueError:
+            raise ValueError(tr("a number is expected"))
     if like is None:
         if text.lower() in ("true", "false"):
             return text.lower() == "true"
@@ -277,12 +283,12 @@ class ConfigWindow:
         self.index, self.data, self.node, self.getters, self.entries, self.position = 0, {}, ("general", None), [], [], None
         self.build_vars = None
         self.win = tk.Toplevel(root)
-        self.win.title("HaiveQueen settings")
+        self.win.title(tr("HaiveQueen settings"))
         self.win.geometry("1100x700")
         top = tk.Frame(self.win)
         top.pack(fill="x", padx=8, pady=6)
         self.file_var = tk.StringVar(value=self.files[0][0])
-        tk.Label(top, text="File:").pack(side="left")
+        tk.Label(top, text=tr("File:")).pack(side="left")
         self.dialog.option_menu(top, self.file_var, [f[0] for f in self.files], self.mono, self.pick_file).pack(side="left", padx=6)
         from .gui import COL
         self.col = COL   # the dashboard colours, also for the status texts
@@ -295,7 +301,7 @@ class ConfigWindow:
         self.nodes = tk.Listbox(side, width=28, exportselection=False, font=(mono, 10))
         self.nodes.pack(fill="y", expand=True)
         self.nodes.bind("<<ListboxSelect>>", self.pick_node)
-        for text, command in (("Add provider", self.add_provider), ("Add project", self.add_project), ("Remove entry", self.remove_node)):
+        for text, command in ((tr("Add provider"), self.add_provider), (tr("Add project"), self.add_project), (tr("Remove entry"), self.remove_node)):
             tk.Button(side, text=text, command=command).pack(fill="x", pady=1)
         canvas = tk.Canvas(body, highlightthickness=0)
         scroll = self.dialog.scrollbar(body, canvas.yview)
@@ -310,9 +316,9 @@ class ConfigWindow:
         canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
         bottom = tk.Frame(self.win)
         bottom.pack(fill="x", padx=8, pady=6)
-        for text, command in (("Save", self.save), ("Revert", self.reload), ("Open folder", self.open_folder), ("Close", self.win.destroy)):
-            tk.Button(bottom, text=text, width=12, command=command).pack(side="left", padx=4)
-        tk.Label(bottom, text="Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.", fg=COL["dim"]).pack(side="left", padx=12)
+        for text, command in ((tr("Save"), self.save), (tr("Revert"), self.reload), (tr("Open folder"), self.open_folder), (tr("Close"), self.win.destroy)):
+            tk.Button(bottom, text=text, command=command).pack(side="left", padx=4)
+        tk.Label(bottom, text=tr("Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak."), fg=COL["dim"]).pack(side="left", padx=12)
         self.reload()
 
     # Is the file shown a machine config (providers, projects)?
@@ -333,11 +339,11 @@ class ConfigWindow:
         """Rebuild the left list: General, then every provider and project."""
         self.nodes.delete(0, "end")
         self.entries = [("general", None)]
-        self.nodes.insert("end", "General")
+        self.nodes.insert("end", tr("General"))
         for kind in ("providers", "projects"):
             for i, item in enumerate(self.data.get(kind) or []):
                 self.entries.append((kind, i))
-                self.nodes.insert("end", "%s: %s" % (kind[:-1], item.get("name", "?")))
+                self.nodes.insert("end", tr("provider: %s", item.get("name", "?")) if kind == "providers" else tr("project: %s", item.get("name", "?")))
 
     # Change the selected file.
     def pick_file(self, label):
@@ -415,19 +421,19 @@ class ConfigWindow:
         tk = self.tk
         cores = machine_cores()
         shown = build_values(self.data, cores)
-        box = tk.LabelFrame(self.form, text="Build", padx=6, pady=4)
+        box = tk.LabelFrame(self.form, text=tr("Build"), padx=6, pady=4)
         box.pack(fill="x", pady=(0, 10), anchor="w")
         cores_var, parallel_var, ram_var = tk.StringVar(value=str(shown["cores"])), tk.StringVar(value=str(shown["parallel"])), tk.StringVar(value="%g" % shown["minFreeRamGB"])
         self.build_vars = (cores_var, parallel_var, ram_var)
         for (key, label, explanation), var in zip(BUILD_FIELDS, self.build_vars):
             row = tk.Frame(box)
             row.pack(fill="x", pady=2, anchor="w")
-            tk.Label(row, text=label, width=32, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+            tk.Label(row, text=tr(label), width=38, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
             if key == "cores":
                 self.dialog.option_menu(row, var, [str(n) for n in range(1, cores + 1)], self.mono).pack(side="left")
             else:
                 tk.Entry(row, textvariable=var, width=8, font=(self.mono, 10)).pack(side="left")
-            tk.Label(row, text=explanation, anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=620).pack(side="left", padx=12)
+            tk.Label(row, text=tr(explanation), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=620).pack(side="left", padx=12)
 
     # The provider of the shown page in the form the profile functions read.
     def login_provider(self) -> dict:
@@ -469,12 +475,12 @@ class ConfigWindow:
         tk = self.tk
         row = tk.Frame(self.form)
         row.pack(fill="x", pady=(0, 8), anchor="w")
-        tk.Label(row, text="login", width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+        tk.Label(row, text=tr("login"), width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
         self.login_status = tk.Label(row, anchor="w", font=(self.mono, 10, "bold"))
         self.login_status.pack(side="left")
-        self.login_button = tk.Button(row, text="Login", width=12, command=self.login_click)
+        self.login_button = tk.Button(row, text=tr("Login"), width=12, command=self.login_click)
         self.login_button.pack(side="left", padx=12)
-        self.benchmark_button = tk.Button(row, text="Benchmark Start Context", command=self.benchmark_click)
+        self.benchmark_button = tk.Button(row, text=tr("Benchmark Start Context"), command=self.benchmark_click)
         self.benchmark_button.pack(side="left")
         self.benchmark_status = tk.Label(self.form, anchor="w", justify="left", font=(self.mono, 9), wraplength=900)
         self.benchmark_status.pack(fill="x", pady=(0, 8), anchor="w")
@@ -488,7 +494,7 @@ class ConfigWindow:
         if self.login_status is None:
             return
         present = profile.has_login(self.login_provider())
-        self.login_status.config(text="Login present" if present else "Login missing", fg=self.col["green"] if present else self.col["red"])
+        self.login_status.config(text=tr("Login present") if present else tr("Login missing"), fg=self.col["green"] if present else self.col["red"])
 
     # The Login button.
     def login_click(self):
@@ -498,14 +504,14 @@ class ConfigWindow:
             return
         prov = self.login_provider()
         if not profile.login_command(prov):
-            self.dialog.info(self.win, "HaiveQueen", "No login is set up for this provider. For a CLI that is not built in, set the profile variables, "
-                             "the login command and the login files on this page.", self.mono)
+            self.dialog.info(self.win, "HaiveQueen", tr("No login is set up for this provider. For a CLI that is not built in, set the profile variables, "
+                                                "the login command and the login files on this page."), self.mono)
             return
-        if not self.dialog.ask(self.win, "HaiveQueen", "Open a terminal window and run `%s` for provider %s in the HaiveQueen profile?" % (profile.login_command(prov), prov["name"]), self.mono):
+        if not self.dialog.ask(self.win, "HaiveQueen", tr("Open a terminal window and run `%s` for provider %s in the HaiveQueen profile?", profile.login_command(prov), prov["name"]), self.mono):
             return
         proc = profile.login_run(prov)
         if proc is None:
-            self.dialog.error(self.win, "HaiveQueen", "The login window could not be opened (no terminal program found).", self.mono)
+            self.dialog.error(self.win, "HaiveQueen", tr("The login window could not be opened (no terminal program found)."), self.mono)
             return
         self.watch_login(proc)
 
@@ -517,8 +523,9 @@ class ConfigWindow:
         out = []
         for project in sorted({r["project"] for r in rows}):
             mine = [r for r in rows if r["project"] == project]
-            out.append("%s: %s (%s)" % (project, startctx.benchmark_text(self.conn, name, project), max(r["measured_at"] for r in mine)[:10]))
-        return out or ["Start context: no benchmark yet"]
+            measured = db.parse_time(max(r["measured_at"] for r in mine))
+            out.append("%s: %s (%s)" % (project, startctx.benchmark_text(self.conn, name, project), localtime.date(measured) if measured else "-"))
+        return out or [tr("Start context: no benchmark yet")]
 
     # Show the stored benchmark and an error line on the page.
     def show_benchmark(self, notes=(), error=False):
@@ -535,13 +542,13 @@ class ConfigWindow:
         if not self.collect():
             return
         name = self.login_provider()["name"]
-        if not self.dialog.ask(self.win, "HaiveQueen", "Measure the start context of provider %s in every registered Apiary, twice: once with the HaiveQueen profile and once "
-                               "with your own configuration? This starts the CLI %d times and uses a few tokens of your login." % (
-                                   name, 2 * self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]), self.mono):
+        if not self.dialog.ask(self.win, "HaiveQueen", tr("Measure the start context of provider %s in every registered Apiary, twice: once with the HaiveQueen profile and once "
+                                                  "with your own configuration? This starts the CLI %d times and uses a few tokens of your login.",
+                                                  name, 2 * self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]), self.mono):
             return
         cfg = dict(self.data)
         self.benchmark_button.config(state="disabled")
-        self.benchmark_status.config(text="measuring …", fg=self.col["dim"])
+        self.benchmark_status.config(text=tr("measuring …"), fg=self.col["dim"])
         box = {}
         path = next((r[2] for r in self.conn.execute("PRAGMA database_list") if r[1] == "main"), "")
 
@@ -562,9 +569,9 @@ class ConfigWindow:
             try:
                 self.benchmark_button.config(state="normal")
                 if res["excluded"]:
-                    self.show_benchmark(["Provider %s is excluded (excludedProviders): nothing was measured." % name], True)
+                    self.show_benchmark([tr("Provider %s is excluded (excludedProviders): nothing was measured.", name)], True)
                 else:
-                    self.show_benchmark(["Error: " + e for e in res["errors"]], bool(res["errors"]))
+                    self.show_benchmark([tr("Error: %s", e) for e in res["errors"]], bool(res["errors"]))
             except self.tk.TclError:
                 pass   # the page was closed meanwhile
 
@@ -647,7 +654,13 @@ class ConfigWindow:
             return lambda: [line.strip() for line in text.get("1.0", "end").splitlines() if line.strip()]
         text.insert("1.0", json.dumps(value))
         text.pack(side="left", fill="x", expand=True)
-        return lambda: json.loads(text.get("1.0", "end"))
+        def read_json():
+            """The typed JSON value; a wrong one raises ValueError with the message."""
+            try:
+                return json.loads(text.get("1.0", "end"))
+            except ValueError:
+                raise ValueError(tr("valid JSON is expected"))
+        return read_json
 
     # A row to add one setting.
     def add_row(self, parent, path):
@@ -656,7 +669,7 @@ class ConfigWindow:
         row = tk.Frame(parent)
         row.pack(fill="x", pady=(6, 2), anchor="w")
         key, value = tk.StringVar(), tk.StringVar()
-        tk.Label(row, text="new setting", width=22, anchor="w", fg=self.col["dim"], font=(self.mono, 10)).pack(side="left")
+        tk.Label(row, text=tr("new setting"), width=22, anchor="w", fg=self.col["dim"], font=(self.mono, 10)).pack(side="left")
         tk.Entry(row, textvariable=key, width=22, font=(self.mono, 10)).pack(side="left")
         tk.Entry(row, textvariable=value, width=40, font=(self.mono, 10)).pack(side="left", padx=4)
 
@@ -669,7 +682,7 @@ class ConfigWindow:
                 target = target[step]
             target[key.get().strip()] = parse_typed(value.get())
             self.build_form()
-        tk.Button(row, text="Add", command=add).pack(side="left")
+        tk.Button(row, text=tr("Add"), command=add).pack(side="left")
 
     # Read the typed values back into the data.
     def collect(self) -> bool:
@@ -727,7 +740,7 @@ class ConfigWindow:
         if kind == "general":
             return
         from . import gui_dialog
-        if gui_dialog.ask(self.win, "HaiveQueen", "Remove this %s from the settings?" % kind[:-1], self.mono):
+        if gui_dialog.ask(self.win, "HaiveQueen", tr("Remove this provider from the settings?") if kind == "providers" else tr("Remove this project from the settings?"), self.mono):
             del self.data[kind][i]
             self.fill_nodes()
             self.select(0)
@@ -742,7 +755,7 @@ class ConfigWindow:
             self.status.config(text="; ".join(problems)[:300], fg=self.col["red"])
             return
         save_file(self.files[self.index][1], self.data)
-        self.status.config(text="Saved.", fg=self.col["green"])
+        self.status.config(text=tr("Saved."), fg=self.col["green"])
         if self.on_saved:
             self.on_saved()
 

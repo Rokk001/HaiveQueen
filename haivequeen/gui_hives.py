@@ -6,12 +6,13 @@ import os
 
 from . import config, db, gui_data, hives, loop, runtime
 from . import plans as plan_mod
+from .i18n import N_, tr
 
 REFRESH_MS = 5000
-LABELS = {"start": "Start", "pause": "Pause", "reject": "Reject", "draft": "Back to draft"}
-ASK = {"pause": "Pause %s? Running agents keep working, no new Queen or Bee starts.",
-       "reject": "Reject %s? The plan never starts again by itself; starting it again makes it a draft. Nothing is deleted.",
-       "start": "Start %s?", "draft": "Put %s back to draft? Nothing is deleted."}
+LABELS = {"start": N_("Start"), "pause": N_("Pause"), "reject": N_("Reject"), "draft": N_("Back to draft")}
+ASK = {"pause": N_("Pause %s? Running agents keep working, no new Queen or Bee starts."),
+       "reject": N_("Reject %s? The plan never starts again by itself; starting it again makes it a draft. Nothing is deleted."),
+       "start": N_("Start %s?"), "draft": N_("Put %s back to draft? Nothing is deleted.")}
 
 
 # Every plan of every Apiary.
@@ -55,13 +56,13 @@ def actions(row) -> list:
         names.append("reject")
     if status == "REJECTED" or stopped:
         names.append("draft")
-    return [(LABELS[n], n) for n in names]
+    return [(tr(LABELS[n]), n) for n in names]
 
 
 # Ask, then change the plan.
 def run_action(conn, row, action, confirm) -> bool:
     """After `confirm(text)` agrees, run the plan control `action` for the row; False when declined. Errors are raised."""
-    if not confirm(ASK[action] % row["name"]):
+    if not confirm(tr(ASK[action], row["name"])):
         return False
     key = (row["apiary"], row["plan_path"])
     with loop.hive_schedule_lock():
@@ -83,10 +84,10 @@ class HivesWindow:
         self.tk, self.conn, self.mono, self.on_changed, self.rows = tk, conn, mono, on_changed, []
         self.root = root
         self.win = tk.Toplevel(root)
-        self.win.title("HaiveQueen Hives")
+        self.win.title(tr("HaiveQueen Hives"))
         self.win.geometry("900x560")
         self.tree = ttk.Treeview(self.win, columns=("apiary", "hive", "status", "has"), show="headings", selectmode="browse")
-        for column, title, width in (("apiary", "Apiary", 160), ("hive", "Hive", 420), ("status", "Status", 130), ("has", "Has Hive", 80)):
+        for column, title, width in (("apiary", tr("Apiary"), 160), ("hive", tr("Hive"), 420), ("status", tr("Status"), 130), ("has", tr("Has Hive"), 80)):
             self.tree.heading(column, text=title)
             self.tree.column(column, width=width, anchor="w")
         bar = gui_dialog.scrollbar(self.win, self.tree.yview)
@@ -109,7 +110,7 @@ class HivesWindow:
         self.rows = plan_rows(self.conn)
         self.tree.delete(*self.tree.get_children())
         for n, row in enumerate(self.rows):
-            self.tree.insert("", "end", iid=str(n), values=(row["apiary"], row["name"], row["status"].lower(), "yes" if row["has_hive"] else "no"))
+            self.tree.insert("", "end", iid=str(n), values=(row["apiary"], row["name"], row["status"].lower(), tr("yes") if row["has_hive"] else tr("no")))
         if picked and picked[0] in self.tree.get_children():
             self.tree.selection_set(picked[0])
 
@@ -128,7 +129,7 @@ class HivesWindow:
         try:
             run_action(self.conn, row, action, self.confirm)
         except Exception as exc:
-            gui_dialog.error(self.win, "HaiveQueen", "Could not change the plan: %s" % exc, self.mono)
+            gui_dialog.error(self.win, "HaiveQueen", tr("Could not change the plan: %s", exc), self.mono)
         self.refresh()
         if self.on_changed:
             self.on_changed()

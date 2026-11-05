@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import config, db
 from . import platform as osplat
+from .i18n import tr
 
 TASK = "Reply with the single word OK. Do not use any tool and do not read any file."   # the same minimal task for every run: it does no work
 KINDS = ("queen", "bee", "subbee")   # a Bee that runs as a subagent of its Queen is "subbee"
@@ -92,8 +93,8 @@ def _tok(n) -> str:
 def comparison(hq, own) -> str:
     """'HaiveQueen 18k, own profile 61k, -70 %' for the two values, or 'no benchmark yet' when one of them is missing."""
     if not hq or not own:
-        return "no benchmark yet"
-    return "HaiveQueen %s, own profile %s, %+d %%" % (_tok(hq), _tok(own), round(100 * (hq - own) / own))
+        return tr("no benchmark yet")
+    return tr("HaiveQueen %s, own profile %s, %+d %%", _tok(hq), _tok(own), round(100 * (hq - own) / own))
 
 
 def benchmark_text(conn, provider, project) -> str:
@@ -135,12 +136,12 @@ def benchmark(conn, cfg, provider, measure=None, progress=None) -> dict:
     for project in names:
         cwd = code_folder(conn, project)
         if not cwd or not Path(cwd).is_dir():
-            out["errors"].append("%s: no code folder" % project)
+            out["errors"].append(tr("%s: no code folder", project))
             count += 2
             continue
         for mode, hq in (("hq", True), ("own", False)):
             count += 1
-            label = "%s %s" % (project, "with the HaiveQueen profile" if hq else "without it")
+            label = tr("%s with the HaiveQueen profile", project) if hq else tr("%s without it", project)
             if progress:
                 try:
                     progress("%d/%d: %s ..." % (count, total, label))

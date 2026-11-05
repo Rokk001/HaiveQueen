@@ -141,7 +141,7 @@ class DesktopCommandsTest(RoundCase):
     def test_windows_dialog_displays_result(self):
         """The Windows presenter actually invokes a visible native dialog."""
         with mock.patch.object(desktop.sys, 'platform', 'win32'), \
-                mock.patch('haivequeen.config.load_config', return_value={'language': 'German'}), \
+                mock.patch('haivequeen.i18n.machine_language', return_value='German'), \
                 mock.patch('ctypes.windll', create=True) as dll:
             desktop.show_result('stop', {'ok': True, 'running_agents': 1})
         dll.user32.MessageBoxW.assert_called_once()

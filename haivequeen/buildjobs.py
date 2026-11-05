@@ -15,6 +15,7 @@ from datetime import datetime
 
 from . import runtime
 from . import platform as osplat
+from .i18n import tr
 
 DEFAULT_ENV_VAR = "BUILD_JOBS"                 # name of the job count variable; a configured envVar (e.g. BUILD_MP_JOBS) wins
 DEFAULT_PARALLEL_VAR = "BUILD_PARALLEL"        # name of the variable that carries the parallel value of the build command (--parallel)
@@ -243,14 +244,14 @@ def jobs_line(env, agents: list, compiler_count: int = None, cores: int = None, 
     per = stored_per_job(env.conn, env.name, host, bj["Measurements"])
     run = next((a for a in agents if a.get("status") == "running" and a.get("buildJobs")), None)
     if run:
-        txt = "Build jobs %s of %d cores (running)" % (run["buildJobs"], n_cores)
+        txt = tr("Build jobs %s of %d cores (running)", run["buildJobs"], n_cores)
     else:
-        txt = "Build jobs %d of %d cores (next build)" % (plan_build(env, free_mb=free_mb, cores=n_cores, host=host)["Jobs"], n_cores)
-    txt += " | per job " + ("%.0f MB" % per if per is not None else "not measured yet")
+        txt = tr("Build jobs %d of %d cores (next build)", plan_build(env, free_mb=free_mb, cores=n_cores, host=host)["Jobs"], n_cores)
+    txt += tr(" | per job %s", "%.0f MB" % per if per is not None else tr("not measured yet"))
     if compiler_count is None:
         compiler_count = osplat.count_processes(env.settings.get("buildProcessNames") or [])
     if run or compiler_count > 0:
-        txt += " | active: %d cores" % compiler_count
+        txt += tr(" | active: %d cores", compiler_count)
     return txt
 
 
