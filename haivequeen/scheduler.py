@@ -583,14 +583,14 @@ def waiting_since(env: ProjectEnv, plan_path: str, package_id: str, now_iso: str
 
 
 def oldest_waiting(env: ProjectEnv) -> str:
-    """ISO time of the oldest package of a READY or IN_PROGRESS plan that waits for an agent ('' when none waits).
+    """ISO time of the oldest package of a QUEUED, RUNNING or WAITING plan that waits for an agent ('' when none waits).
 
     A package waits when it is not done and no active agent works on it. An agent that exists for it clears its marker.
     """
     active = {(norm_plan(a.get("plan_path")), str(a.get("package"))) for a in env.agents() if a.get("status") in ACTIVE}
     oldest = ""
     for plan in runtime.list_plans(env.conn, env.name):
-        if plan["status"] not in ("READY", "IN_PROGRESS"):
+        if plan["status"] not in ("QUEUED", "RUNNING", "WAITING"):
             continue
         for p in runtime.list_packages(env.conn, env.name, plan["path"]):
             key = "wait:%s|%s" % (plan["path"], p["id"])

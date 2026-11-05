@@ -9,6 +9,8 @@ import os
 import tempfile
 from pathlib import Path
 
+os.environ["BZZ_NO_DESKTOP"] = "1"   # desktop messages of the program (faults without an Apiary) are never shown during tests
+
 REAL_FOLDERS = [Path(os.environ[_v]) / "HaiveQueen" for _v in ("LOCALAPPDATA", "APPDATA") if os.environ.get(_v)]
 LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-update.lock", "hive-schedule.lock", "start.lock", "start.pending", "gui.pid", "worktree-cleanup.lock")  # written by a running loop (STOP: set by a self-update) or an open graphical dashboard (gui.pid), not by tests
 

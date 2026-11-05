@@ -362,7 +362,7 @@ class ClaudeRunTest(RunnerBase):
         self.prepare("A-2")
         self.run_runner("A-2", "claude", claude_stream())
         self.assertEqual(self.row("A-2")["task"], "Do the demo task now")
-        self.conn.execute("INSERT INTO plans (project, path, title, status) VALUES ('demo','plans/Demo-PLAN.md','Demo','READY')")
+        self.conn.execute("INSERT INTO plans (project, path, title, status) VALUES ('demo','plans/Demo-PLAN.md','Demo','QUEUED')")
         self.conn.execute("INSERT INTO packages (project, plan_path, id, title, phase, locked) VALUES ('demo','plans/Demo-PLAN.md','P1','Build the thing','work',0)")
         self.prepare("A-3")
         self.run_runner("A-3", "claude", claude_stream())

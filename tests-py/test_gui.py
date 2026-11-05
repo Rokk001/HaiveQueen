@@ -99,7 +99,7 @@ class SnapshotTest(unittest.TestCase):
         row = snap["hives"][0]
         self.assertTrue(row["paused"])
         self.assertIn("paused", row["status"])
-        self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','READY','2026-11-01T12:00:00')")
+        self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','QUEUED','2026-11-01T12:00:00')")
         self.conn.commit()
         row = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)["hives"][0]
         self.assertFalse(row["paused"])
@@ -113,11 +113,11 @@ class SnapshotTest(unittest.TestCase):
             snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
             return snap["hives"], snap["tiles"]["hives"]
         self.assertEqual(len(active()[0]), 1)
-        for status in ("REJECTED", "DONE"):
+        for status in ("CANCELLED", "DONE"):
             self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP',?,'AI',?,'2026-11-01T12:00:00')", (plan, status))
             self.conn.commit()
             self.assertEqual(active(), ([], 0), status)
-        self.conn.execute("UPDATE plans SET status='READY'")
+        self.conn.execute("UPDATE plans SET status='QUEUED'")
         self.conn.execute("UPDATE hives SET state='done'")
         self.conn.commit()
         self.assertEqual(active()[0], [])

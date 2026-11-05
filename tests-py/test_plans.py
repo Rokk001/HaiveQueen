@@ -35,7 +35,7 @@ class FrontMatterTests(unittest.TestCase):
     def test_parse_header(self):
         """Fields of header and packages are read."""
         p = plans.parse_plan_text(plan_text(), "x.md")
-        self.assertEqual(p.status, "READY")
+        self.assertEqual(p.status, "QUEUED")
         self.assertEqual(p.title, "Sample Plan")
         self.assertEqual([k.id for k in p.packages], ["A1", "A2"])
         self.assertEqual(p.packages[0].cls, "heavy")
@@ -81,7 +81,7 @@ class DiscoveryTests(unittest.TestCase):
             with open(os.path.join(d, "other", "two.md"), "w", encoding="utf-8") as f:
                 f.write(plan_text("DONE"))
             found = plans.discover_plans(d)
-            self.assertEqual([p.status for p in found], ["READY"])
+            self.assertEqual([p.status for p in found], ["QUEUED"])
             self.assertTrue(found[0].path.endswith("one.md"))
             found = plans.discover_plans(d, ["other/*.md"])
             self.assertEqual([p.status for p in found], ["DONE"])
@@ -178,7 +178,7 @@ class LegacyTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self.TEXT)
             p = plans.read_legacy_plan(path)
-        self.assertEqual(p.status, "IN_PROGRESS")
+        self.assertEqual(p.status, "RUNNING")
         self.assertEqual(p.title, "Old Plan")
         self.assertEqual([k.id for k in p.packages], ["P1", "P2", "P3", "P4"])
         self.assertEqual([k.cls for k in p.packages], ["light", "heavy", "medium", "medium"])

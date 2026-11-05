@@ -110,13 +110,14 @@ class RunStateTest(RoundCase):
 
     # Verify the Queen-based loop behavior.
     def test_stop_flag_and_low_ram(self):
-        """The STOP flag and low free RAM skip the round, too."""
+        """The STOP flag skips the round; low free RAM skips only the project whose minimum it is below (H-24), not the round."""
         loop.stop_flag().parent.mkdir(parents=True, exist_ok=True)
         loop.stop_flag().write_text("x")
         self.assertEqual(self.round()["skipped"], "STOP")
         loop.stop_flag().unlink()
         res = self.round(free_ram=lambda: 0.5)
-        self.assertIn("free RAM", res["skipped"])
+        self.assertIsNone(res["skipped"])
+        self.assertIn("free RAM", runtime.kv_get(self.conn, "testproj", "hive-blocker:" + REL))
         self.assertIsNone(next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None))
 
 

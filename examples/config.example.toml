@@ -5,6 +5,7 @@ excludedProviders = []    # provider names never used
 queenClass = "medium"     # project may override
 beesPerQueen = 3          # project may override
 escalateAfter = 3         # failures per class before escalation
+readyCheckClass = "medium"   # class of the check agent of bzz ready
 contextLimitTokens = 300000   # context size at which a Queen or Bee is asked to hand off; valid for all Apiaries, a project.toml or a model entry under [providers.classes] may set its own
 buildJobs = { cores = 6, parallel = 1, minFreeRamGB = 2 }   # builds: CPU cores in total, the number after --parallel, minimum free RAM in GB before a build (the settings window edits these; omit for the defaults)
 ramReserveMb = 2048       # RAM that must stay free

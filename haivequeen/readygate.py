@@ -139,6 +139,8 @@ def plan_versions(path, current):
                 commit = line[7:]
             elif line and commit:
                 fields = line.split('\t')
+                if fields[0].startswith('D'):
+                    break   # the file was deleted here: older versions at this path belong to an earlier plan
                 result = subprocess.run(['git', '-C', root, 'show', '%s:%s' % (commit, relative)], capture_output=True, check=True)
                 versions.append(result.stdout.decode('utf-8-sig', errors='replace'))
                 if fields[0].startswith('R') and len(fields) == 3 and fields[2] == relative:
@@ -199,7 +201,7 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
         return "unavailable", "no provider with a free slot and class %s" % check_class
     provider, cls = route
     existing = [a["name"] for a in runtime.list_agents(env.conn, env.name, "all")]
-    state = {"names": existing, "busy": [], "plan_status": {scheduler.norm_plan(plan): "IN_PROGRESS"}, "by_path": {scheduler.norm_plan(plan): {"path": plan}}}
+    state = {"names": existing, "busy": [], "plan_status": {scheduler.norm_plan(plan): "RUNNING"}, "by_path": {scheduler.norm_plan(plan): {"path": plan}}}
     ctx = {"env": env, "state": state, "pool": loop.Pool(free, 0), "report": [], "dry": False, "settle": 0}
     action = {"name": "%s-ready-check" % re.sub(r"-\d+$", "", str(queen["name"])), "type": provider, "phase": "verify", "plan": plan, "package": "READY-CHECK",
               "cwd": request["cwd"], "prompt": request["prompt"], "class": cls}

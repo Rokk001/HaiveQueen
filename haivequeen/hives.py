@@ -190,7 +190,7 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
         if plan['status'] == 'DONE':
             finish_hive(conn, env.name, plan['path'])
             continue
-        if plan['status'] not in ('READY', 'IN_PROGRESS'):
+        if plan['status'] not in plan_mod.STARTABLE_STATUSES:
             continue
         integrated = integrated_ready(conn, env, hive)
         if not integrated:
@@ -199,9 +199,11 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
         step = owner_check_step(conn, env.name, plan['path'])
         if step and step[0] == 'wait':
             wait_for_owner_check(conn, env.name, plan['path'], step[1])
+            _move_status(conn, env, plan['path'], 'REVIEW')
         elif step and step[0] == 'fix':
             runtime.kv_set(conn, env.name, 'hive-rejected-ready:' + plan['path'], str(integrated['id']))
             reopen_after_owner_check(conn, env.name, plan['path'])
+            _move_status(conn, env, plan['path'], 'RUNNING')
         else:
             questions = [q['id'] for q in runtime.list_questions(conn, env.name, plan=plan['path'])
                          if q['status'] in ('open', 'triage') and q['item'] != 'queen-ended' and not str(q['item']).upper().startswith('STALL-')]
@@ -213,9 +215,55 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
             if (not owner_check_questions(conn, env.name, plan['path']) and not owner_accepted(conn, env.name, plan['path'], integrated.get('updated_at'))
                     and owner_check_wanted(env, plan['path'])):
                 file_owner_check(conn, env, plan['path'])   # the system asks for the acceptance itself; the Queen is not relied on to do it
+                _move_status(conn, env, plan['path'], 'REVIEW')
                 continue
             runtime.set_plan_status(conn, env.name, plan['path'], 'DONE', str(env.workspace))
             finish_hive(conn, env.name, plan['path'])
+
+
+# Change the status of a plan in the course of its life cycle; a plan file that cannot be written keeps its status.
+def _move_status(conn, env, plan, status):
+    """Set the plan status unless it already has it; a failure is logged, never raised."""
+    row = conn.execute("SELECT status FROM plans WHERE project=? AND path=?", (env.name, plan)).fetchone()
+    if row is None or row[0] == status:
+        return
+    try:
+        runtime.set_plan_status(conn, env.name, plan, status, str(env.workspace))
+    except runtime.CmdError as exc:
+        env.log('plan %s: status change to %s failed: %s' % (plan, status, exc))
+
+
+# Hive states in which every open package of the plan waits (for an answer, a provider, the owner check, ...).
+WAIT_STATES = ('answer', 'resting', 'codex_wait', 'provider_wait', 'integration_wait', 'queenless', 'owner_check')
+
+
+# RUNNING <-> WAITING: a plan without a live Queen or Bee whose Hive waits is WAITING; a live Queen or Bee makes it RUNNING again.
+def update_waiting(conn, env, alive=None):
+    """Move RUNNING plans whose Hive waits and that have no live agent to WAITING, and QUEUED or WAITING plans with a live agent to RUNNING."""
+    agents = runtime.list_agents(conn, env.name, 'active')
+    for plan in runtime.list_plans(conn, env.name):
+        if plan['status'] not in ('QUEUED', 'RUNNING', 'WAITING'):
+            continue
+        hive = get(conn, env.name, plan['path'])
+        if not hive or hive['state'] == 'done':
+            continue
+        live = any(a.get('plan_path') == plan['path'] and a.get('phase') in ('queen', 'bee') and agent_process.counts(a, alive) for a in agents)
+        blocker = runtime.kv_get(conn, env.name, 'hive-blocker:' + plan['path']) or ''
+        waits = not live and (hive['state'] in WAIT_STATES or bool(blocker))
+        if plan['status'] == 'RUNNING' and waits:
+            _move_status(conn, env, plan['path'], 'WAITING')
+        elif plan['status'] in ('QUEUED', 'WAITING') and live:   # the Queen that cut the plan works on, or a waiting plan got its agent again
+            _move_status(conn, env, plan['path'], 'RUNNING')
+
+
+# What a WAITING plan waits for, as shown in the Hive status column.
+def waiting_for(conn, project, plan):
+    """The reason a plan waits: the start blocker of the last round, else the Hive state; '' when nothing is known."""
+    blocker = runtime.kv_get(conn, project, 'hive-blocker:' + plan) or ''
+    if blocker:
+        return blocker
+    hive = get(conn, project, plan)
+    return 'Hive state "%s"' % hive['state'] if hive and hive['state'] in WAIT_STATES else ''
 
 
 # Check whether a provider can take a waiting Hive again.
@@ -526,9 +574,9 @@ def _plan_status(conn, project, plan):
 
 # Pause a plan: no new Queen or Bee starts, a running Queen keeps working.
 def pause_plan(conn, project, plan):
-    """Set the plan to PAUSED and keep its earlier status; a plan that is already PAUSED or REJECTED stays as it is."""
+    """Set the plan to PAUSED and keep its earlier status; a plan that is already PAUSED or CANCELLED stays as it is."""
     status = _plan_status(conn, project, plan)
-    if status in ('PAUSED', 'REJECTED'):
+    if status in ('PAUSED', 'CANCELLED'):
         return
     runtime.kv_set(conn, project, 'plan-prepause:' + plan, status)
     runtime.set_plan_status(conn, project, plan, 'PAUSED')
@@ -550,21 +598,24 @@ def is_stopped(conn, project, plan):
     return not any(a.get('plan_path') == plan and a.get('phase') in ('queen', 'bee') and agent_process.counts(a) for a in runtime.list_agents(conn, project, 'active'))
 
 
-# Reject a stopped plan or a draft; nothing is deleted.
-def reject_plan(conn, project, plan):
-    """Set a stopped plan (PAUSED without a live Queen) or a DRAFT plan to REJECTED."""
+# Cancel a stopped plan or a draft; nothing is deleted.
+def cancel_plan(conn, project, plan):
+    """Set a stopped plan (PAUSED without a live Queen) or a DRAFT plan to CANCELLED."""
     if _plan_status(conn, project, plan) != 'DRAFT' and not is_stopped(conn, project, plan):
-        raise ValueError('only a stopped Hive or a draft can be rejected')
-    runtime.set_plan_status(conn, project, plan, 'REJECTED')
-    runtime.reset_cut_assignments(conn, project, plan)   # a rejected plan's cut no longer applies
+        raise ValueError('only a stopped Hive or a draft can be cancelled')
+    runtime.set_plan_status(conn, project, plan, 'CANCELLED')
+    runtime.reset_cut_assignments(conn, project, plan)   # a cancelled plan's cut no longer applies
     runtime.kv_delete(conn, project, 'plan-prepause:' + plan)
 
 
-# Put a stopped or rejected plan back to draft.
+reject_plan = cancel_plan   # the earlier name of the action
+
+
+# Put a stopped or cancelled plan back to draft.
 def back_to_draft(conn, project, plan):
-    """Set a stopped (PAUSED without a live Queen) or REJECTED plan to DRAFT."""
-    if _plan_status(conn, project, plan) != 'REJECTED' and not is_stopped(conn, project, plan):
-        raise ValueError('only a stopped or rejected plan can go back to draft')
+    """Set a stopped (PAUSED without a live Queen) or CANCELLED plan to DRAFT."""
+    if _plan_status(conn, project, plan) != 'CANCELLED' and not is_stopped(conn, project, plan):
+        raise ValueError('only a stopped or cancelled plan can go back to draft')
     runtime.set_plan_status(conn, project, plan, 'DRAFT')
     runtime.reset_cut_assignments(conn, project, plan)   # the owner redrafts the plan: a new generation is cut again
     runtime.kv_delete(conn, project, 'plan-prepause:' + plan)
@@ -572,29 +623,28 @@ def back_to_draft(conn, project, plan):
 
 # Start a plan from the Hives list.
 def start_plan(conn, project, plan):
-    """A DRAFT plan becomes READY; a PAUSED or REJECTED plan is started again (start_again)."""
+    """A DRAFT plan becomes SENT and is prepared like any sent plan (its Queen cuts it, bzz plan check records the cut); a PAUSED or CANCELLED plan is started again (start_again)."""
     if _plan_status(conn, project, plan) == 'DRAFT':
-        runtime.set_plan_status(conn, project, plan, 'READY')
-        # the owner starts the header as written: that is the cut of this generation
-        text = (runtime._workspace(conn, project) / plan).read_text(encoding='utf-8-sig')
-        runtime.save_cut_assignments(conn, project, plan, plan_mod.parse_plan_text(text).packages, text, source='start', replace=True)
+        runtime.reset_cut_assignments(conn, project, plan)   # a new generation: its cut is recorded when the Queen's cut passes the plan check
+        runtime.set_plan_status(conn, project, plan, 'SENT')
     else:
         start_again(conn, project, plan)
 
 
 # Start a paused or rejected plan again.
 def start_again(conn, project, plan):
-    """A PAUSED plan gets the status it had before the pause (READY when unknown), a REJECTED plan becomes DRAFT."""
+    """A PAUSED plan gets the status it had before the pause (QUEUED when unknown), a CANCELLED plan becomes DRAFT."""
     status = _plan_status(conn, project, plan)
-    if status == 'REJECTED':
+    if status == 'CANCELLED':
         runtime.set_plan_status(conn, project, plan, 'DRAFT')
         runtime.reset_cut_assignments(conn, project, plan)
     elif status == 'PAUSED':
         before = runtime.kv_get(conn, project, 'plan-prepause:' + plan)
-        runtime.set_plan_status(conn, project, plan, before if before in ('DRAFT', 'SUBMITTED', 'READY', 'IN_PROGRESS', 'DONE') else 'READY')
+        before = plan_mod.normalize_status(before) if plan_mod.status_known(before) else ''
+        runtime.set_plan_status(conn, project, plan, before if before and before not in ('PAUSED', 'CANCELLED') else 'QUEUED')
         runtime.kv_delete(conn, project, 'plan-prepause:' + plan)
     else:
-        raise ValueError('the plan is neither paused nor rejected')
+        raise ValueError('the plan is neither paused nor cancelled')
 
 
 # Request a replacement Queen, preserving the provider unless explicitly changed.
@@ -799,6 +849,14 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     flagged = routine.set_handoff_flags(env, [routine.view(a) for a in running]) if not dry_run else []
                     if flagged and hive:
                         context_limit(conn, env.name, plan['path'])
+                    elif hive and not dry_run and plan['status'] not in plan_mod.CUT_STATUSES:
+                        from . import bees
+                        provider = sch.get_provider(env.providers, hive['provider'])
+                        slots = sum(pool.free.values()) if provider and provider.get('beeMode') == 'process' else int(env.settings.get('beesPerQueen', 3))
+                        try:   # H-47: in this round, tell the Queen which startable packages to start while Bee places are free
+                            bees.notify_startable(env, plan['path'], running[-1], slots, is_alive)
+                        except Exception as exc:
+                            env.log('startable packages not reported: %s' % exc)
                     continue
                 if hive and hive['state'] == 'handoff':
                     if not can_handoff(conn, env.name, plan['path']):
@@ -906,8 +964,8 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     continue
                 if not hive:
                     from . import bees
-                    if bees.foreign_plan_branch(env, path):
-                        not_started(env, path, 'its branch %s is held by work outside the Beekeeper' % bees.plan_worktree(env, path)[0])
+                    if bees.foreign_plan_branch(env, path) and not bees.resolve_existing_branch(env, path):
+                        not_started(env, path, 'its branch %s exists without Hive history: waiting for the owner to take it over or create a new one' % bees.plan_worktree(env, path)[0])
                         continue
                     used = {r['colour'] for r in db.rows(conn, "SELECT colour FROM hives WHERE state != 'done'")}
                     colour = next((c for c in loop.AGENT_COLOURS if c not in used), None)
@@ -929,7 +987,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
                 prompt = 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and owner answers of your plan and those released for the whole Apiary are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --fields using a JSON object with the absolute cwd. Work independent packages, answer the completeness question and integrate only when no requirements remain. ' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name)
                 prompt += integration_steps.start_text(env, path, pick['name'])
-                if plan['status'] != 'SUBMITTED':   # a plan still to be cut gets its step packages when it is integrated
+                if plan['status'] not in plan_mod.CUT_STATUSES:   # a plan still to be cut gets its step packages when it is integrated
                     integration_steps.sync(env, path, pick['name'])
                 from . import bees
                 prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls), roles.language(env.settings))
@@ -938,11 +996,12 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     prompt += '\n' + topics
                 prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)
                 prompt += ' Project integration configuration: ' + json.dumps(integration_steps.configuration(env, path), ensure_ascii=False)
-                if plan['status'] == 'SUBMITTED':   # a plan the owner submitted as free text: the Queen cuts it into packages before any Bee starts
+                if plan['status'] in plan_mod.CUT_STATUSES:   # a plan the owner sent as free text: the Queen cuts it into packages before any Bee starts
                     prompt += '\n' + roles.role_text('queen-cut', {'project': env.name, 'plan': path})
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
                 cwd = routine.pick_cwd(prior, str(env.code_repo), workspace=routine.other_workspace(env)) if prior else str(env.code_repo)
-                if bees.plan_worktree(env, path) or not bees.valid_queen_worktree(env, cwd):
+                keep = bool(prior) and bees.valid_queen_worktree(env, cwd) and bees.branch_is_derived(env, path)   # a Hive with a worktree keeps it; the derived branch is only for a plan without one
+                if (bees.plan_worktree(env, path) and not keep) or not bees.valid_queen_worktree(env, cwd):
                     try:
                         cwd = bees.prepare_queen_worktree(env, path)
                     except (OSError, ValueError) as exc:
@@ -981,6 +1040,10 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
             eligible = any(p['status'] in plan_mod.QUEEN_STATUSES and ((get(conn, env.name, p['path']) or {}).get('state') in (None, 'waiting', 'requeen')) for p in runtime.list_plans(conn, env.name))
             can_start = eligible and queen_count < limit and bool(sch.select_provider(providers, str(env.settings.get('queenClass', 'medium')), ['Queen'], pool.free, conn=conn))
             env.log('round done: %d Queen(s) started%s' % (result['projects'][env.name]['started'], ''.join('; ' + text for text in skipped[env.name])))
+            try:
+                update_waiting(conn, env, alive)
+            except Exception as exc:
+                env.log('plan status not updated: %s' % exc)
             faults.check_round(env, result['projects'][env.name]['started'], can_start)
             try:
                 views.write_views(conn, env.name)

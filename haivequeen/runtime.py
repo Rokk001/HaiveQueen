@@ -276,7 +276,7 @@ def reset_cut_assignments(conn, project, plan):
 
 
 def _recover_cut(conn, project, plan, plan_text):
-    """Inside a transaction: an older READY plan without a cut record gets its current header as record only when no Queen or
+    """Inside a transaction: an older QUEUED plan without a cut record gets its current header as record only when no Queen or
     Bee of this generation has started yet, so no agent can have changed the header after the owner wrote it."""
     if _cut_record(kv_get(conn, project, CUT_KEY + plan)) is not None:
         return False
@@ -420,7 +420,7 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
             before = conn.execute("SELECT status FROM plans WHERE project=? AND path=?", (project, rel)).fetchone()
             if before is not None and before[0] == "DONE" and plan.status != "DONE":
                 _reset_cut(conn, project, rel)   # a finished plan's path is used again: a new plan generation
-            if plan.status == "READY":
+            if plan.status == "QUEUED":
                 try:
                     _recover_cut(conn, project, rel, Path(plan.path).read_text(encoding="utf-8-sig"))
                 except OSError:
@@ -492,8 +492,9 @@ def set_package(conn, project, plan, pid, phase=None, locked=None, reason=None) 
 
 
 def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
-    """Set a plan status in the table and in the plan file (front matter 'status =' line or the v1 'Status:' line 2)."""
+    """Set a plan status in the table and in the plan file (front matter 'status =' line or the v1 'Status:' line 2); an old status name is taken as its new name."""
     status = status.strip().upper()
+    status = plan_mod.LEGACY_STATUSES.get(status, status)
     if status not in plan_mod.STATUSES:
         raise CmdError(f"unknown status {status}")
     path = _workspace(conn, project, workspace) / plan

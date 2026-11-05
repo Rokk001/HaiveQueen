@@ -310,7 +310,7 @@ def cmd_requeen(args, conn):
 
 # Check the plan the calling Queen has cut into packages.
 def cmd_plan(args, conn):
-    """Check the header of the Queen's own plan (packages, unique ids, titles, dependencies without cycle, capabilities some provider offers, every requirement the Queen wrote in the state file belongs to a package). On success a SUBMITTED plan becomes READY and the packages are read into the database; otherwise the problems are reported and nothing changes."""
+    """Check the header of the Queen's own plan (packages, unique ids, titles, dependencies without cycle, capabilities some provider offers, every requirement the Queen wrote in the state file belongs to a package). On success a SENT or PREPARING plan becomes QUEUED and the packages are read into the database; otherwise the problems are reported and nothing changes."""
     from haivequeen import plans as plan_mod, scheduler
     agent = os.environ.get("BZZ_AGENT")
     queen = runtime.get_agent(conn, args.project, agent) if agent else None
@@ -328,9 +328,9 @@ def cmd_plan(args, conn):
     if problems:
         return fail("the plan is not cut properly: " + "; ".join(problems))
     status = parsed.status
-    if status == "SUBMITTED":
+    if status in plan_mod.CUT_STATUSES:
         runtime.save_cut_assignments(conn, args.project, plan, parsed.packages, path.read_text(encoding="utf-8-sig"))
-        status = runtime.set_plan_status(conn, args.project, plan, "READY")["status"]
+        status = runtime.set_plan_status(conn, args.project, plan, "QUEUED")["status"]
     runtime.sync_plans(conn, args.project)
     out({"ok": True, "plan": plan, "status": status, "packages": [p.id for p in parsed.packages], "warnings": plan_mod.plan_warnings(parsed)})
     return 0

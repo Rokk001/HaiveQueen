@@ -3,6 +3,7 @@ import json
 import re
 
 from . import buildjobs, db, roles, runtime, scheduler
+from . import plans as plan_mod
 from .i18n import tr
 
 
@@ -196,6 +197,110 @@ def queen_instructions(queen_class, bee_limit, threshold, context_limit, languag
     return roles.role_text('queen', {'class': queen_class, 'bee_limit': bee_limit, 'escalate_after': threshold, 'context_limit': context_limit, 'language': language or roles.language({})})
 
 
+# Packages the owner stopped with "Stop Bee": they stay stopped until the owner resumes them.
+STOP_KEY = 'package-stopped:'
+
+
+def stop_package(conn, project, plan, package):
+    """Mark the package as stopped by the owner; no Bee of it starts again until resume_package."""
+    runtime.kv_set(conn, project, STOP_KEY + '%s|%s' % (plan, package), db.now())
+    runtime.append_event(conn, project, 'Package %s stopped by the owner; it stays stopped until the owner resumes it' % package, kind='note', mirror='none')
+
+
+def package_stopped(conn, project, plan, package):
+    """True when the owner stopped the package and has not resumed it."""
+    return bool(runtime.kv_get(conn, project, STOP_KEY + '%s|%s' % (plan, package)))
+
+
+def stopped_packages(conn, project=None):
+    """(project, plan, package) of every package the owner stopped and has not resumed, sorted."""
+    sql, args = "SELECT project, key FROM kv WHERE substr(key,1,?)=? AND value!=''", [len(STOP_KEY), STOP_KEY]
+    if project:
+        sql += ' AND project=?'
+        args.append(project)
+    found = []
+    for row in conn.execute(sql, args):
+        plan, _, package = row[1][len(STOP_KEY):].rpartition('|')
+        if plan and package:
+            found.append((row[0], plan, package))
+    return sorted(found)
+
+
+def resume_package(conn, project, plan, package):
+    """Release a stopped package again (GUI action "Resume package"); its Queen may start a Bee for it again."""
+    if not package_stopped(conn, project, plan, package):
+        raise ValueError('the package %s is not stopped' % package)
+    runtime.kv_delete(conn, project, STOP_KEY + '%s|%s' % (plan, package))
+    runtime.append_event(conn, project, 'Package %s resumed by the owner' % package, kind='note', mirror='none')
+
+
+# Packages a running Queen could start now but has not started (H-47): their dependencies are done and Bee places are free.
+NOTICE_FILE = 'START-PACKAGES'
+STARTABLE_KEY = 'hive-startable:'
+
+
+def startable_not_started(env, plan, alive=None):
+    """Ids of the packages of the plan that are not finished, waiting, stopped or worked by a live or embedded Bee and whose dependencies are done."""
+    from . import agent_process
+    ensure_attempts(env.conn)
+    states = {r[0]: r[1] for r in env.conn.execute('SELECT package,state FROM package_progress WHERE project=? AND plan_path=?', (env.name, plan))}
+    worked = {a.get('package') for a in runtime.list_agents(env.conn, env.name, 'active')
+              if a.get('plan_path') == plan and a.get('phase') == 'bee' and agent_process.counts(a, alive)}
+    worked |= {r[0] for r in env.conn.execute('SELECT package FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', (env.name, plan))}
+    locked = {p['id'] for p in runtime.list_packages(env.conn, env.name, plan) if p['locked'] or p['phase'] == 'done'}
+    packages = env.packages(plan)
+    ids = {p['id'] for p in packages}
+    found = []
+    for p in packages:
+        if p['id'] in worked or p['id'] in locked or states.get(p['id']) in ('done', 'implemented', 'waiting'):
+            continue
+        if package_done(env.conn, env.name, plan, p['id']) or package_stopped(env.conn, env.name, plan, p['id']):
+            continue
+        if all(dep in ids and (package_done(env.conn, env.name, plan, dep) or states.get(dep) in ('done', 'implemented')) for dep in p['depends']):
+            found.append(p['id'])
+    return found
+
+
+def free_bee_places(env, plan, free_slots, alive=None):
+    """Bee places the Queen of the plan has free now: beesPerQueen minus her live and embedded Bees, at most the free provider slots."""
+    from . import agent_process
+    ensure_attempts(env.conn)
+    live = sum(1 for a in runtime.list_agents(env.conn, env.name, 'active')
+               if a.get('plan_path') == plan and a.get('phase') == 'bee' and agent_process.counts(a, alive))
+    live += env.conn.execute('SELECT COUNT(*) FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', (env.name, plan)).fetchone()[0]
+    return max(0, min(int(env.settings.get('beesPerQueen', 3)) - live, int(free_slots)))
+
+
+def notify_startable(env, plan, queen, free_slots, alive=None):
+    """Tell the running Queen in this round which packages to start now (file START-PACKAGES in her run folder) and store them for the dashboard.
+
+    Returns the package ids named; none when no package waits or no Bee place is free (the file and the stored list are then cleared)."""
+    places = free_bee_places(env, plan, free_slots, alive)
+    names = startable_not_started(env, plan, alive)[:places] if places else []
+    runtime.kv_set(env.conn, env.name, STARTABLE_KEY + plan, json.dumps(names))
+    target = env.run_dir(queen['name']) / NOTICE_FILE
+    if names:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('Start these packages now, each with its own Bee (%d Bee place(s) free): %s\n' % (places, ', '.join(names)), encoding='utf-8')
+        env.log('Queen %s told to start the startable packages %s' % (queen['name'], ', '.join(names)))
+    elif target.exists():
+        target.unlink()
+    return names
+
+
+def startable_map(conn):
+    """{(project, plan): [package ids]} of the startable packages a running Queen has not started yet (as stored by the last round)."""
+    found = {}
+    for row in conn.execute("SELECT project, key, value FROM kv WHERE substr(key,1,?)=?", (len(STARTABLE_KEY), STARTABLE_KEY)):
+        try:
+            names = json.loads(row[2] or '[]')
+        except ValueError:
+            continue
+        if names:
+            found[(row[0], row[1][len(STARTABLE_KEY):])] = list(names)
+    return found
+
+
 # Packages of a plan that can still start although one provider is missing.
 def runnable_packages(env, plan, provider) -> list:
     """Ids of the packages that are not finished or waiting, whose dependencies are done and that do not need a capability only the missing provider has (a capability another provider offers too does not count): the Queen must work them before the Hive waits."""
@@ -336,11 +441,13 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         if embedded_count + sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
             return refuse(env, package, 'the Queen already has %s Bees running' % env.settings.get('beesPerQueen', 3))
         plan_row = next((p for p in runtime.list_plans(env.conn, env.name) if p['path'] == plan), None)
-        if plan_row and plan_row['status'] == 'SUBMITTED':
+        if plan_row and plan_row['status'] in plan_mod.CUT_STATUSES:
             return refuse(env, package, 'the plan is not cut yet: write its packages into the header and run bzz plan check first')
         package_row = next((p for p in env.packages(plan) if p['id'] == package), None)
         if not package_row:
             return refuse(env, package, 'the package is not in the plan')
+        if package_stopped(env.conn, env.name, plan, package):
+            return refuse(env, package, 'the owner stopped this package; it starts again only after the owner resumes it')
         requested_class = package_row['cls']
         threshold = int(env.settings.get('escalateAfter', 3))
         excluded = env.settings.get('excludedProviders', [])
@@ -435,7 +542,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         if not cwd or not valid_bee_worktree(env, path, queen.get('cwd')):
             return refuse(env, package, 'no valid separate worktree for the Bee was given')
         existing = [a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')]
-        state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'IN_PROGRESS'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
+        state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'RUNNING'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
         ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
         action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs'))), 'class': selected_class}
         if not loop._do_start(ctx, action, forced_pick=pick):
@@ -462,11 +569,35 @@ def state_branch(env, plan):
     return ''
 
 
+# The branch HaiveQueen creates for a plan that names none (H-22).
+def derived_branch(plan):
+    """The plan file name in lower case without -PLAN and .md (docs/plans/Feature-X-PLAN.md gives feature-x)."""
+    from pathlib import Path
+    return re.sub(r'-plan$', '', Path(plan).stem, flags=re.I).lower()
+
+
+def branch_is_derived(env, plan):
+    """True when the plan's branch is only the derived name of H-22: the plan, its state file and the owner name none."""
+    resolved = plan_worktree(env, plan)
+    if not resolved or resolved[0] != derived_branch(plan):
+        return False
+    conn = getattr(env, 'conn', None)
+    if conn is not None and runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan):
+        return False
+    text = (env.workspace / plan).read_text(encoding='utf-8-sig')
+    return not re.search(r'(?im)feature[ -]branch\s*:|\bbranch(?:es)?\b\s*:?\s*`|^\s*[-*]?\s*git\s*:\s*branch', text) and not state_branch(env, plan) and \
+        not (conn is not None and runtime.list_questions(conn, env.name, status='answered', plan=plan, item='worktree'))
+
+
 # Resolve the plan's named branch and optional named worktree.
 def plan_worktree(env, plan):
     """Read an unambiguous branch and worktree, including numbered Branches rules."""
     import re
     from pathlib import Path
+    conn = getattr(env, 'conn', None)
+    chosen = runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan) if conn is not None else None
+    if chosen:   # the owner chose a new branch instead of an existing one (H-23)
+        return chosen, Path(__import__('haivequeen.routine', fromlist=['new_worktree']).new_worktree(env, scheduler.to_slug(chosen)))
     text = (env.workspace / plan).read_text(encoding='utf-8-sig')
     text = re.sub(r'\*\*([^*\n]+)\*\*', r'\1', text)
     feature = re.search(r'(?im)^\s*[-*]?\s*feature[ -]branch\s*:\s*`?([\w./-]+)`?', text)
@@ -493,7 +624,7 @@ def plan_worktree(env, plan):
             if not branch or not worktree:
                 return None
         else:
-            branch = re.sub(r'-plan$', '', Path(plan).stem, flags=re.I).lower()
+            branch = derived_branch(plan)
             if not branch:
                 return None
             worktree = None
@@ -508,6 +639,8 @@ def foreign_plan_branch(env, plan):
     if not resolved:
         return False
     branch, _ = resolved
+    if runtime.kv_get(env.conn, env.name, TAKEOVER_KEY + plan) == branch:   # the owner said: take over the existing branch
+        return False
     if env.conn.execute("SELECT 1 FROM queue WHERE project=? AND branch=? AND status IN ('ready','blocked','in_run') LIMIT 1", (env.name, branch)).fetchone():
         return True
     if any(a.get('plan_path') == plan for a in runtime.list_agents(env.conn, env.name, 'all')):
@@ -518,6 +651,60 @@ def foreign_plan_branch(env, plan):
         if result.returncode == 0:
             return True
     return False
+
+
+# The plan's branch exists but the plan has no Hive history (H-23): the owner decides whether the Hive takes it over or creates a new one.
+TAKEOVER_KEY, NEW_BRANCH_KEY, BRANCH_ITEM = 'branch-takeover:', 'plan-branch:', 'branch-takeover'
+TAKE_OVER_WORDS = ('take over', 'takeover', 'existing', 'use it', 'übernehmen', 'uebernehmen', 'bestehend')
+NEW_WORDS = ('new', 'create', 'neu', 'neuen', 'anlegen')
+
+
+def branch_choice(answer):
+    """'take over', 'new' or '' for an owner answer to the branch question (English protocol words, German still recognised)."""
+    text = str(answer or '').strip().lower()
+    if any(word in text for word in TAKE_OVER_WORDS):
+        return 'take over'
+    if any(re.search(r'(?<![a-zäöü])%s(?![a-zäöü])' % re.escape(word), text) for word in NEW_WORDS):
+        return 'new'
+    return ''
+
+
+def free_branch_name(env, branch):
+    """The first of <branch>-2, <branch>-3, ... that is neither a local nor a remote branch."""
+    import subprocess
+    remote_name = str(env.settings.get('remoteName') or 'origin')
+    n = 2
+    while True:
+        name = '%s-%d' % (branch, n)
+        refs = ('refs/heads/' + name, 'refs/remotes/%s/%s' % (remote_name, name))
+        if all(subprocess.run(['git', '-C', str(env.code_repo), 'show-ref', '--verify', '--quiet', ref], capture_output=True).returncode for ref in refs):
+            return name
+        n += 1
+
+
+def resolve_existing_branch(env, plan):
+    """For a plan whose branch exists without Hive history: apply the owner's answer, else ask once.
+
+    Returns 'take over' or 'new' when the owner decided (the Hive may start), else '' (the plan waits for the answer)."""
+    from .i18n import tr
+    branch = plan_worktree(env, plan)[0]
+    for q in reversed(runtime.list_questions(env.conn, env.name, status='answered', plan=plan, item=BRANCH_ITEM)):
+        choice = branch_choice(q.get('answer'))
+        if choice == 'take over':
+            runtime.kv_set(env.conn, env.name, TAKEOVER_KEY + plan, branch)
+            env.log('plan %s: the owner takes over the existing branch %s' % (plan, branch))
+            return choice
+        if choice == 'new':
+            name = free_branch_name(env, branch)
+            runtime.kv_set(env.conn, env.name, NEW_BRANCH_KEY + plan, name)
+            env.log('plan %s: the owner wants a new branch; %s is created instead of %s' % (plan, name, branch))
+            return choice
+    if not runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=BRANCH_ITEM):
+        language = roles.language(env.settings)
+        db.add_question(env.conn, env.name, plan, BRANCH_ITEM,
+                        tr('The branch %s of this plan already exists, but the plan has no Hive history. Take over the existing branch or create a new one?', branch, language=language),
+                        tr('Answer "take over" to continue on %s, or "new" to create a new branch from the integration branch.', branch, language=language))
+    return ''
 
 
 # Reuse or create the explicitly named branch in a separate Git worktree.

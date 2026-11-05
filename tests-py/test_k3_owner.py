@@ -66,7 +66,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         self.queen_of('SUBMITTED', self.OWNER)
         self.assertEqual(self.check()[0], 0)
         self.assertEqual(self.stored(), [['R-1', 'owner']])
-        edited = self.text().replace('status = "READY"', 'status = "IN_PROGRESS"') + '\nReworded text.\n\n## Requirements\n\n- R-1: changed wording\n- R-2: added later\n'
+        edited = self.text().replace('status = "QUEUED"', 'status = "RUNNING"') + '\nReworded text.\n\n## Requirements\n\n- R-1: changed wording\n- R-2: added later\n'
         (self.repo / REL).write_text(edited, encoding='utf-8')
         runtime.sync_plans(self.conn, 'testproj')
         self.assertEqual(self.stored(), [['R-1', 'owner']])
@@ -102,7 +102,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         self.assertEqual(self.stored(), [['R-1', 'code']])
 
     def test_owner_reject_and_restart_start_a_new_generation(self):
-        """Rejecting a stopped plan drops its cut; starting the redrafted plan records the header the owner started."""
+        """Cancelling a stopped plan drops its cut; starting the redrafted plan sends it (H-21) and its Queen's checked cut is the new record."""
         from haivequeen import hives
         self.queen_of('SUBMITTED', self.CODE)
         self.assertEqual(self.check()[0], 0)
@@ -113,6 +113,10 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         hives.start_again(self.conn, 'testproj', REL)
         self.plan('DRAFT', self.OWNER)
         hives.start_plan(self.conn, 'testproj', REL)
+        self.assertIn('status = "SENT"', self.text())
+        self.assertIsNone(self.stored())   # Start records no cut: the plan is prepared like any sent plan
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        self.assertEqual(self.check()[0], 0)
         self.assertEqual(self.stored(), [['R-1', 'owner']])
 
     def test_unworked_ready_plan_is_recovered(self):

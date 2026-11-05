@@ -473,11 +473,13 @@ def _do_start(c, a, forced_pick=None) -> int:
     env.event("%s started (%s)" % (ident["Person"] if phase in ("bee", "queen") else nm, {"codex": "Codex", "claude": "Claude"}.get(prov, prov)))
     if phase != "integrate":
         pk0 = norm_plan(plan)
-        if st["plan_status"].get(pk0) == "READY":
+        before = st["plan_status"].get(pk0)
+        after = {"SENT": "PREPARING" if phase == "queen" else None, "QUEUED": "RUNNING", "WAITING": "RUNNING"}.get(before)
+        if after:   # a Queen starts on a sent plan: it is prepared; any start on a prepared or waiting plan: it runs
             try:
-                runtime.set_plan_status(env.conn, env.name, str(st["by_path"][pk0]["path"]), "IN_PROGRESS", str(env.workspace))
-                st["plan_status"][pk0] = "IN_PROGRESS"
-                env.log("plan %s: READY -> IN_PROGRESS" % plan)
+                runtime.set_plan_status(env.conn, env.name, str(st["by_path"][pk0]["path"]), after, str(env.workspace))
+                st["plan_status"][pk0] = after
+                env.log("plan %s: %s -> %s" % (plan, before, after))
             except runtime.CmdError as exc:
                 env.log("plan %s: status change failed: %s" % (plan, exc))
     runtime.kv_delete(env.conn, env.name, "wait:%s|%s" % (plan, pkg))
@@ -507,7 +509,7 @@ def report_loop_failure(conn, text: str) -> None:
     runtime.append_event(conn, "HaiveQueen", text, mirror="rounds", error=True)
     runtime.append_event(conn, "HaiveQueen", text, mirror="events", error=True)
     runtime.kv_set(conn, sch.GLOBAL, "loop-unexpected-end-at", datetime.now().isoformat(timespec="seconds"))
-    faults.file_fault(conn, "HaiveQueen", "loop_vanished", text)
+    faults.file_global_fault(conn, "loop_vanished", text)   # belongs to no Apiary: status panel and desktop message, no inbox question
 
 
 # Run rounds until the STOP flag exists (or `rounds` rounds are done), then wait for the running agents and end.

@@ -26,7 +26,7 @@ class S7Test(RoundCase):
         self.plan("READY", P12)
         self.round(self.start("DUMMY-P1-work"))
         self.assertEqual(self.calls(), 0)
-        self.assertEqual(self.plan_status(), "IN_PROGRESS")
+        self.assertEqual(self.plan_status(), "RUNNING")
         for _ in range(12):
             self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj") if a["status"] == "running"]

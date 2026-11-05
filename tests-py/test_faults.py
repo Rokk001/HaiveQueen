@@ -27,11 +27,14 @@ class FaultsTest(RoundCase):
         faults.check_round(self.env(), started, can_start, now=now or datetime(2026, 10, 29, 12, 0))
 
     def test_file_fault_files_an_open_question_with_the_fixed_plan(self):
-        """A fault becomes an open question of plan HQ-FAULTS with the kind as item."""
-        qid = faults.file_fault(self.conn, "HaiveQueen", "self_update_rollback", "rolled back")
-        q = self.faults_of("self_update_rollback")[0]
-        self.assertEqual((q["id"], q["status"], q["plan_path"], q["item"]), (qid, "open", "HQ-FAULTS", "self_update_rollback"))
-        self.assertIn("rolled back", q["question"])
+        """A fault of an Apiary becomes a question of plan HQ-FAULTS with the kind as item; a fault of the program itself is shown instead (H-46 g)."""
+        qid = faults.file_fault(self.conn, "testproj", "no_start", "Apiary testproj: no starts")
+        q = self.faults_of("no_start")[0]
+        self.assertEqual((q["id"], q["project"], q["status"], q["plan_path"], q["item"]), (qid, "testproj", "fault_check", "HQ-FAULTS", "no_start"))
+        record = faults.file_fault(self.conn, "HaiveQueen", "self_update_rollback", "rolled back")
+        self.assertEqual(self.faults_of("self_update_rollback"), [])
+        self.assertIn("rolled back", record["text"])
+        self.assertEqual([f["kind"] for f in faults.global_faults(self.conn)], ["self_update_rollback"])
 
     def test_duplicate_per_kind_and_day_is_not_filed(self):
         """The same kind twice on one day files one question; another kind or another day files a new one."""
@@ -132,36 +135,37 @@ class FaultsTest(RoundCase):
     # A restart must run continuously for an hour after the latest unexpected end.
     def test_loop_vanished_requires_continuous_runtime(self):
         """A later unexpected end resets the recovery observation."""
+        import json
         from haivequeen import scheduler
-        qid = faults.file_fault(self.conn, "HaiveQueen", "loop_vanished", "unexpected end")
-        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00' WHERE id=?", (qid,))
-        self.conn.commit()
+        faults.file_fault(self.conn, "HaiveQueen", "loop_vanished", "unexpected end")
+        self.assertEqual(self.faults_of("loop_vanished"), [])   # no inbox question: it belongs to no Apiary
+        record = json.loads(runtime.kv_get(self.conn, scheduler.GLOBAL, faults.GLOBAL_KEY + "loop_vanished"))
+        runtime.kv_set(self.conn, scheduler.GLOBAL, faults.GLOBAL_KEY + "loop_vanished", json.dumps({**record, "at": "2026-10-29T10:00:00"}))
+        shown = lambda now: [f["kind"] for f in faults.global_faults(self.conn, now)]
         runtime.kv_set(self.conn, scheduler.GLOBAL, "loop-unexpected-end-at", "2026-10-29T09:59:00")
         runtime.kv_set(self.conn, scheduler.GLOBAL, "loop-started-at", "2026-10-29T10:01:00")
         self.check(now=datetime(2026, 10, 29, 11, 0))
-        self.assertEqual(self.faults_of("loop_vanished")[0]["status"], "open")
+        self.assertEqual(shown(datetime(2026, 10, 29, 11, 0)), ["loop_vanished"])
         runtime.kv_set(self.conn, scheduler.GLOBAL, "loop-unexpected-end-at", "2026-10-29T10:50:00")
         self.check(now=datetime(2026, 10, 29, 11, 1))
-        self.assertEqual(self.faults_of("loop_vanished")[0]["status"], "open")
+        self.assertEqual(shown(datetime(2026, 10, 29, 11, 1)), ["loop_vanished"])
         runtime.kv_set(self.conn, scheduler.GLOBAL, "loop-started-at", "2026-10-29T11:02:00")
         self.check(now=datetime(2026, 10, 29, 12, 2))
-        self.assertEqual(self.faults_of("loop_vanished")[0]["status"], "answered")
+        self.assertEqual(shown(datetime(2026, 10, 29, 12, 2)), [])
 
     # Never automatically close verified self-update faults.
     def test_self_update_faults_stay_open(self):
-        """Rollback and pane failures are real regardless of elapsed time."""
+        """Rollback and pane failures are real regardless of elapsed recovery: they stay shown and are never closed by a round."""
         for kind in ("self_update_rollback", "self_update_pane"):
             faults.file_fault(self.conn, "HaiveQueen", kind, "real")
-        self.conn.execute("UPDATE questions SET created_at='2026-10-29T10:00:00'")
-        self.conn.commit()
-        self.check(now=datetime(2026, 10, 29, 12, 0))
-        self.assertTrue(all(q["status"] == "open" for q in self.faults_of()))
+        self.check(now=datetime.now())
+        self.assertEqual(sorted(f["kind"] for f in faults.global_faults(self.conn)), ["self_update_pane", "self_update_rollback"])
+        self.assertEqual(self.faults_of(), [])
 
     # Open reports retain coordinator-visible observations after an hour.
     def test_unresolved_faults_record_evidence_once(self):
         """Each unresolved kind stays open and records its observed recovery state."""
-        kinds = ("no_start", "runner_vanished", "agent_no_result",
-                 "loop_vanished", "self_update_rollback", "self_update_pane")
+        kinds = ("no_start", "runner_vanished", "agent_no_result")   # the faults of the program itself are no questions (H-46 g)
         for kind in kinds:
             faults.file_fault(self.conn, "HaiveQueen", kind,
                               "Agent DUMMY-A-work of Apiary testproj: failed. Apiary testproj:")

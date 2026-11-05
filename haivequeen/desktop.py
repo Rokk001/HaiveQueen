@@ -30,3 +30,17 @@ def show_result(command, result):
         ctypes.windll.user32.MessageBoxW(None, text, "HaiveQueen", 0x10 if not result.get("ok") else 0x40)
     else:
         print(text, file=sys.stderr)
+
+
+# Show a message on the desktop without waiting for the user (faults of the program itself, H-46 g).
+def notify(text):
+    """Open a non-blocking desktop message on Windows, print it elsewhere; with BZZ_NO_DESKTOP set (tests) nothing is shown."""
+    import os
+    if os.environ.get("BZZ_NO_DESKTOP"):
+        return
+    if sys.platform == "win32":
+        import ctypes
+        import threading
+        threading.Thread(target=lambda: ctypes.windll.user32.MessageBoxW(None, text, "HaiveQueen", 0x30 | 0x40000), daemon=True).start()
+    else:
+        print(text, file=sys.stderr)

@@ -1,4 +1,4 @@
-"""Window with the list of all plans of all registered Apiaries and their status, with start, pause, reject and back to draft on a right click.
+"""Window with the list of all plans of all registered Apiaries and their status, with start, pause, cancel and back to draft on a right click.
 
 The list also shows plans that never had a Hive. The actions reuse the plan control of hives.py; each one asks first.
 """
@@ -9,20 +9,21 @@ from . import plans as plan_mod
 from .i18n import N_, tr
 
 REFRESH_MS = 5000
-LABELS = {"start": N_("Start"), "pause": N_("Pause"), "reject": N_("Reject"), "draft": N_("Back to draft")}
+LABELS = {"start": N_("Start"), "pause": N_("Pause"), "reject": N_("Cancel plan"), "draft": N_("Back to draft")}
 ASK = {"pause": N_("Pause %s? Running agents keep working, no new Queen or Bee starts."),
-       "reject": N_("Reject %s? The plan never starts again by itself; starting it again makes it a draft. Nothing is deleted."),
+       "reject": N_("Cancel %s? The plan never starts again by itself; starting it again makes it a draft. Nothing is deleted."),
        "start": N_("Start %s?"), "draft": N_("Put %s back to draft? Nothing is deleted.")}
 
 
 # Every plan of every Apiary.
 def plan_rows(conn) -> list:
-    """One row per plan file of every registered Apiary (and per plan the table knows): apiary, plan_path, name, status, has_hive, stopped.
+    """One row per plan file of every registered Apiary (and per plan the table knows): apiary, plan_path, name, status, has_hive, stopped, error, waiting_for.
 
-    The status comes from the plans table when the plan is in it, else from the plan file."""
+    The status comes from the plans table when the plan is in it, else from the plan file. `error` names a broken plan header, an unknown status or class
+    (the plan is then not silently a DRAFT or medium); `waiting_for` says what a WAITING plan waits for."""
     known = {(r["project"], r["path"]): r["status"] for r in db.rows(conn, "SELECT project, path, status FROM plans")}
     hive_keys = {(r["project"], r["plan_path"]) for r in db.rows(conn, "SELECT project, plan_path FROM hives")}
-    found = {}
+    found, errors = {}, {}
     for project in db.rows(conn, "SELECT name, workspace FROM projects ORDER BY name"):
         ws = project["workspace"]
         if not ws or not os.path.isdir(ws):
@@ -30,7 +31,10 @@ def plan_rows(conn) -> list:
         try:
             pcfg = config.load_project(ws)
             for plan in plan_mod.discover_plans(str(ws), pcfg["planGlobs"], pcfg["planExclude"]):
-                found[(project["name"], os.path.relpath(plan.path, ws).replace("\\", "/"))] = plan.status
+                key = (project["name"], os.path.relpath(plan.path, ws).replace("\\", "/"))
+                found[key] = plan.status
+                if plan.errors:
+                    errors[key] = "; ".join(plan.errors)
         except Exception:   # an unreadable Apiary must not hide the others
             continue
     rows = []
@@ -38,23 +42,34 @@ def plan_rows(conn) -> list:
         status = known.get(key) or found.get(key) or "DRAFT"
         stopped = status == "PAUSED" and key in known and hives.is_stopped(conn, *key)
         rows.append({"apiary": key[0], "plan_path": key[1], "name": gui_data.hive_name(key[1]), "status": status,
-                     "has_hive": key in hive_keys, "stopped": stopped})
+                     "has_hive": key in hive_keys, "stopped": stopped, "error": errors.get(key, ""),
+                     "waiting_for": hives.waiting_for(conn, *key) if status == "WAITING" else ""})
     return rows
+
+
+# The text of the status column.
+def status_text(row) -> str:
+    """The status in lower case; a header error is shown instead of a silent status, a WAITING plan says what it waits for."""
+    if row.get("error"):
+        return tr("error: %s", row["error"])
+    if row.get("waiting_for"):
+        return "%s (%s)" % (row["status"].lower(), row["waiting_for"])
+    return row["status"].lower()
 
 
 # The actions a plan offers.
 def actions(row) -> list:
-    """(label, action) for a row: start for a draft, a paused or a rejected plan; pause for READY, SUBMITTED and IN_PROGRESS;
-    reject for a draft or a stopped Hive; back to draft for a stopped or rejected plan; nothing for DONE."""
+    """(label, action) for a row: start for a draft, a paused or a cancelled plan; pause for a sent, prepared or running plan;
+    cancel for a draft or a stopped Hive; back to draft for a stopped or cancelled plan; nothing for DONE."""
     status, stopped = row["status"], row.get("stopped")
     names = []
-    if status in ("DRAFT", "PAUSED", "REJECTED"):
+    if status in ("DRAFT", "PAUSED", "CANCELLED"):
         names.append("start")
-    if status in ("READY", "SUBMITTED", "IN_PROGRESS"):
+    if status in ("SENT", "PREPARING", "QUEUED", "RUNNING", "WAITING", "REVIEW"):
         names.append("pause")
     if status == "DRAFT" or stopped:
         names.append("reject")
-    if status == "REJECTED" or stopped:
+    if status == "CANCELLED" or stopped:
         names.append("draft")
     return [(tr(LABELS[n]), n) for n in names]
 
@@ -87,7 +102,7 @@ class HivesWindow:
         self.win.title(tr("HaiveQueen Hives"))
         self.win.geometry("900x560")
         self.tree = ttk.Treeview(self.win, columns=("apiary", "hive", "status", "has"), show="headings", selectmode="browse")
-        for column, title, width in (("apiary", tr("Apiary"), 160), ("hive", tr("Hive"), 420), ("status", tr("Status"), 130), ("has", tr("Has Hive"), 80)):
+        for column, title, width in (("apiary", tr("Apiary"), 160), ("hive", tr("Hive"), 300), ("status", tr("Status"), 250), ("has", tr("Has Hive"), 80)):
             self.tree.heading(column, text=title)
             self.tree.column(column, width=width, anchor="w")
         bar = gui_dialog.scrollbar(self.win, self.tree.yview)
@@ -110,7 +125,7 @@ class HivesWindow:
         self.rows = plan_rows(self.conn)
         self.tree.delete(*self.tree.get_children())
         for n, row in enumerate(self.rows):
-            self.tree.insert("", "end", iid=str(n), values=(row["apiary"], row["name"], row["status"].lower(), tr("yes") if row["has_hive"] else tr("no")))
+            self.tree.insert("", "end", iid=str(n), values=(row["apiary"], row["name"], status_text(row), tr("yes") if row["has_hive"] else tr("no")))
         if picked and picked[0] in self.tree.get_children():
             self.tree.selection_set(picked[0])
 

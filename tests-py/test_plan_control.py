@@ -1,4 +1,4 @@
-"""Plan status REJECTED and Hive control: pause, stop, reject and start again keep the status the plan had and ask first."""
+"""Plan status CANCELLED (formerly REJECTED) and Hive control: pause, stop, cancel and start again keep the status the plan had and ask first."""
 import sys
 import unittest
 from pathlib import Path
@@ -28,24 +28,24 @@ class PlanControlTests(RoundCase):
         return (self.repo / REL).read_text(encoding="utf-8")
 
     def test_rejected_is_read_and_written(self):
-        """REJECTED is a known status: read from the plan file, stored in the table and written back to the file."""
-        self.assertIn("REJECTED", plans.STATUSES)
-        self.assertEqual(plans.normalize_status("rejected"), "REJECTED")
+        """CANCELLED is a known status and the old name REJECTED is read as it: read from the plan file, stored in the table and written back to the file."""
+        self.assertIn("CANCELLED", plans.STATUSES)
+        self.assertEqual(plans.normalize_status("rejected"), "CANCELLED")
         self.plan("REJECTED", [{"id": "P1", "title": "First"}])
-        self.assertEqual(self.status(), "REJECTED")
+        self.assertEqual(self.status(), "CANCELLED")
         self.plan("READY", [{"id": "P1", "title": "First"}])
-        runtime.set_plan_status(self.conn, "testproj", REL, "REJECTED")
-        self.assertIn('status = "REJECTED"', self.file_text())
-        self.assertEqual(self.status(), "REJECTED")
+        runtime.set_plan_status(self.conn, "testproj", REL, "CANCELLED")
+        self.assertIn('status = "CANCELLED"', self.file_text())
+        self.assertEqual(self.status(), "CANCELLED")
 
     def test_old_database_accepts_rejected(self):
-        """A plans table created before REJECTED existed is rebuilt so that the status can be stored."""
+        """A plans table created before CANCELLED existed is rebuilt so that the status can be stored."""
         conn = db.connect(Path(self.base) / "old.db")
         conn.execute("DROP TABLE plans")
         conn.execute(OLD_PLANS_TABLE)
         conn.execute("PRAGMA user_version = 9")
         db.migrate(conn)
-        conn.execute("INSERT INTO plans (project, path, status) VALUES ('p','x.md','REJECTED')")
+        conn.execute("INSERT INTO plans (project, path, status) VALUES ('p','x.md','CANCELLED')")
         conn.close()
 
     def test_a_rejected_plan_never_starts(self):
@@ -66,15 +66,15 @@ class PlanControlTests(RoundCase):
         self.assertEqual(self.live(), [])
 
     def test_pause_keeps_the_earlier_status_and_start_again_restores_it(self):
-        """Pause sets PAUSED and keeps IN_PROGRESS (also over a second pause); start again gives IN_PROGRESS back."""
+        """Pause sets PAUSED and keeps RUNNING (also over a second pause); start again gives RUNNING back."""
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
         hives.pause_plan(self.conn, "testproj", REL)
         self.assertEqual(self.status(), "PAUSED")
         runtime.sync_plans(self.conn, "testproj", str(self.repo))   # as after a restart
         hives.pause_plan(self.conn, "testproj", REL)   # a second pause must not overwrite the kept status
         hives.start_again(self.conn, "testproj", REL)
-        self.assertEqual(self.status(), "IN_PROGRESS")
-        self.assertIn('status = "IN_PROGRESS"', self.file_text())
+        self.assertEqual(self.status(), "RUNNING")
+        self.assertIn('status = "RUNNING"', self.file_text())
 
     def test_pause_starts_nothing_new_but_keeps_the_queen(self):
         """After a pause a running Queen is not ended."""
@@ -90,7 +90,7 @@ class PlanControlTests(RoundCase):
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         self.agent("Bee1", plan_path=REL, phase="bee", status="running", pid=401)
-        before = self.status()   # a started plan is IN_PROGRESS
+        before = self.status()   # a started plan is RUNNING
         stopped = []
         hives.stop_hive(self.conn, "testproj", REL, stop=lambda pid: stopped.append(pid) or True)
         self.assertEqual(self.live(), [])
@@ -114,7 +114,7 @@ class PlanControlTests(RoundCase):
             hives.reject_plan(self.conn, "testproj", REL)
         hives.stop_hive(self.conn, "testproj", REL, stop=lambda pid: True)
         hives.reject_plan(self.conn, "testproj", REL)
-        self.assertEqual(self.status(), "REJECTED")
+        self.assertEqual(self.status(), "CANCELLED")
         self.assertIsNotNone(hives.get(self.conn, "testproj", REL))   # nothing is deleted
         self.round()
         self.assertEqual(self.live(), [])
