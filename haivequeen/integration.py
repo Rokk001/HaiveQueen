@@ -17,9 +17,9 @@ COMPILE_MILESTONE = re.compile(r"^(\w+)\t\S+ Compile test\b")
 
 # The three switches of an Apiary.
 def switches(settings):
-    """{compileCheck, build, deploy} of the settings; a missing key keeps the step on, as for an Apiary from before the switches."""
+    """{compileCheck, build, deploy} of the settings (scheduler.build_settings fills in the defaults, also for an Apiary from before the switches)."""
     return {"compileCheck": bool(settings.get("compileCheckEnabled", True)), "build": bool(settings.get("buildEnabled", True)),
-            "deploy": bool(settings.get("deployEnabled", True))}
+            "deploy": bool(settings.get("deployEnabled", False))}
 
 
 # Who does each step.
@@ -74,6 +74,29 @@ def open_steps(env, plan, capabilities=("Build", "Deploy")):
     done = {r[0] for r in env.conn.execute("SELECT package FROM package_progress WHERE project=? AND plan_path=? AND state='done'", (env.name, plan))}
     return [package for capability, package in plans.STEP_PACKAGES.items()
             if capability in capabilities and package in rows and package not in done and not bees.package_done(env.conn, env.name, plan, package)]
+
+
+# Who may close a step package.
+def done_refusal(conn, project, plan, package):
+    """Why the Queen may not set a step package done, or '': a Bee result closes it, by hand only after an answer of the owner to its question."""
+    from . import bees
+    if package not in plans.STEP_PACKAGES.values() or bees.package_done(conn, project, plan, package):
+        return ""
+    if any(q.get("answered_by") != "auto" for q in runtime.list_questions(conn, project, status="answered", plan=plan, item=package)):
+        return ""
+    return "integration step package %s is closed by the result of its Bee or after an answer of the owner; start a Bee for it" % package
+
+
+# Whether a Bee was started for a step package.
+def result_refusal(conn, project, plan, package):
+    """Why a succeeded result of a step package is refused, or '': it needs a started Bee."""
+    from . import bees
+    if package not in plans.STEP_PACKAGES.values() or bees.package_done(conn, project, plan, package):
+        return ""
+    bees.ensure_attempts(conn)
+    if conn.execute("SELECT 1 FROM bee_assignments WHERE project=? AND plan_path=? AND package=?", (project, plan, package)).fetchone():
+        return ""
+    return "no Bee was started for integration step package %s; start one with bzz bee start" % package
 
 
 # A new integration needs its steps again.

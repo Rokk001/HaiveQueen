@@ -28,8 +28,8 @@ BUILD_FIELDS = (
 )
 
 
-# The settings of the Apiary page, each with the value that applies without an entry (a missing switch means the behaviour from before the switches).
-APIARY_DEFAULTS = (("ownerTopics", []), ("ownerCheckText", ""), ("compileCheckEnabled", True), ("buildEnabled", True), ("deployEnabled", True),
+# The settings of the Apiary page, each with the value that applies without an entry (for an Apiary from before the switches deploy stays on, see apiary_settings).
+APIARY_DEFAULTS = (("ownerTopics", []), ("ownerCheckText", ""), ("compileCheckEnabled", True), ("buildEnabled", True), ("deployEnabled", False),
                    ("integrationBranch", "main"), ("remoteName", "origin"), ("worktreeLocation", ""), ("deleteFinishedWorktrees", True), ("deleteIntegratedBranches", False))
 SETTING_LABELS = {
     "ownerTopics": N_("Topics that always go to the owner (one per line)"), "ownerCheckText": N_("Owner-check question (empty: default text)"),
@@ -40,9 +40,11 @@ SETTING_LABELS = {
 
 
 # The values the Apiary page shows.
-def apiary_settings(shown):
-    """A copy of the settings of a project file with every setting of the Apiary page present."""
+def apiary_settings(shown, legacy_deploy=False):
+    """A copy of the settings of a project file with every setting of the Apiary page present; legacy_deploy: an Apiary from before the switches, whose deploy stays on without an entry."""
     out = dict(shown)
+    if legacy_deploy:
+        out.setdefault("deployEnabled", True)
     for key, default in APIARY_DEFAULTS:
         out.setdefault(key, list(default) if isinstance(default, list) else default)
     return out
@@ -276,13 +278,11 @@ def save_file(path, data):
 
 # Settings files the editor offers.
 def settings_files(conn, config_dir) -> list:
-    """[(label, path, is_machine)]: config.toml first, then the project.toml of every registered Apiary that has one."""
-    out = [(tr("config.toml (machine)"), Path(config_dir) / "config.toml", True)]
-    for name, workspace in conn.execute("SELECT name, workspace FROM projects ORDER BY name"):
-        if workspace:
-            path = Path(workspace) / ".haivequeen" / "project.toml"
-            if path.is_file():
-                out.append((tr("project.toml (%s)", name), path, False))
+    """[(label, path, is_machine, legacy_deploy)]: config.toml first, then the project.toml of every registered Apiary whose folder exists; a missing file is created at Save, so its switches can be set."""
+    out = [(tr("config.toml (machine)"), Path(config_dir) / "config.toml", True, False)]
+    for name, workspace, legacy_deploy in conn.execute("SELECT name, workspace, legacy_deploy FROM projects ORDER BY name"):
+        if workspace and Path(workspace).is_dir():
+            out.append((tr("project.toml (%s)", name), Path(workspace) / ".haivequeen" / "project.toml", False, bool(legacy_deploy)))
     return out
 
 
@@ -450,7 +450,7 @@ class ConfigWindow:
             shown.pop("preferredProvider", None)
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
             if not self.machine():
-                shown = apiary_settings(shown)
+                shown = apiary_settings(shown, self.files[self.index][3])
         if kind == "providers":
             from . import scheduler
             shown["capabilities"] = scheduler.provider_capabilities(data)
@@ -822,6 +822,9 @@ class ConfigWindow:
             self.status.config(text="; ".join(problems)[:300], fg=self.col["red"])
             return
         save_file(self.files[self.index][1], self.data)
+        if self.machine():
+            from . import init
+            init.register_listed(self.conn, self.data.get("projects"))   # a project added on this page is an Apiary from now on
         self.status.config(text=tr("Saved."), fg=self.col["green"])
         if self.on_saved:
             self.on_saved()

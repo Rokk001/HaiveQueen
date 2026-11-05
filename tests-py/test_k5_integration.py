@@ -27,6 +27,11 @@ class IntegrationCase(RoundCase):
 
     providers = [provider("claude", "Coding", "Queen", "Build", "Deploy")]
 
+    def setUp(self):
+        """The Apiary of these tests is one from before the switches, so its deploy is on without an entry."""
+        super().setUp()
+        self.conn.execute("UPDATE projects SET legacy_deploy=1")
+
     def hive(self, name="claude", status="IN_PROGRESS"):
         """Write the plan and create its Hive on provider `name`."""
         self.plan(status, [{"id": "P1", "title": "Work", "class": "medium"}])
@@ -483,7 +488,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(ticked["capabilities"], ["Coding", "Queen"])
 
     def test_existing_apiary_without_keys_keeps_all_steps(self):
-        self.assertEqual(integration.switches(scheduler.build_settings({}, {})), {"compileCheck": True, "build": True, "deploy": True})
+        self.assertEqual(integration.switches(scheduler.build_settings({}, {}, legacy_deploy=True)), {"compileCheck": True, "build": True, "deploy": True})
 
     def test_new_apiary_file_has_the_new_defaults(self):
         from haivequeen import init
@@ -623,7 +628,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(shown["ownerCheckText"], "")
         self.assertIs(shown["compileCheckEnabled"], True)
         self.assertIs(shown["buildEnabled"], True)
-        self.assertIs(shown["deployEnabled"], True)
+        self.assertIs(shown["deployEnabled"], False)
         self.assertIs(shown["deleteFinishedWorktrees"], True)
         self.assertIs(shown["deleteIntegratedBranches"], False)
 

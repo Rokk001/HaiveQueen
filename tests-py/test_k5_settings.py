@@ -13,7 +13,7 @@ class OwnerCheckSettingsTests(unittest.TestCase):
 class IntegrationSwitchDefaultsTests(unittest.TestCase):
     def test_existing_apiary_keeps_integration_steps(self):
         from haivequeen import scheduler
-        settings = scheduler.build_settings({}, {})
+        settings = scheduler.build_settings({}, {}, legacy_deploy=True)
         self.assertTrue(settings['compileCheckEnabled'])
         self.assertTrue(settings['buildEnabled'])
         self.assertTrue(settings['deployEnabled'])

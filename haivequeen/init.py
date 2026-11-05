@@ -1,5 +1,6 @@
 """Project setup: `bzz init` creates the project files, `bzz register` records a project."""
 import json
+import os
 from pathlib import Path
 
 from . import config, db
@@ -35,6 +36,24 @@ def init_project(folder) -> list:
         plans.mkdir(parents=True)
         report.append({"path": str(plans), "result": "created"})
     return report
+
+
+def register_listed(conn, entries) -> list:
+    """Register the projects of the settings page that have a name and an existing workspace and are not registered yet; returns their names. A registered row is never changed."""
+    added = []
+    known = {r["name"]: r["workspace"] for r in db.rows(conn, "SELECT name, workspace FROM projects")}
+    places = {os.path.normcase(str(Path(w).resolve())) for w in known.values() if w}
+    for entry in entries or []:
+        name, workspace = str(entry.get("name") or "").strip(), str(entry.get("workspace") or "").strip()
+        if not name or not workspace or name in known or not Path(workspace).is_dir():
+            continue
+        ws = Path(workspace).resolve()
+        if os.path.normcase(str(ws)) in places:
+            continue
+        proj = config.load_project(ws)
+        db.upsert_project(conn, name, str(ws), proj["colour"], proj["priority"])
+        added.append(name)
+    return added
 
 
 def register_project(conn, folder) -> dict:

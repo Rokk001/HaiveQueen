@@ -52,7 +52,7 @@ DEFAULT_SETTINGS = {
     "compileCheck": "",
     "compileCheckEnabled": True,
     "buildEnabled": True,
-    "deployEnabled": True,  # Existing Apiaries retain their behavior; new files opt out.
+    "deployEnabled": False,  # an Apiary from before the switches keeps it on: build_settings(legacy_deploy)
     "deleteFinishedWorktrees": True,
     "deleteIntegratedBranches": False,
     "buildFlowDoc": "",
@@ -86,9 +86,10 @@ def deep_merge(base: dict, over: dict) -> dict:
 
 
 # Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project.
-def build_settings(machine: dict, project_cfg: dict) -> dict:
-    """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project."""
-    merged = deep_merge(DEFAULT_SETTINGS, {k: v for k, v in machine.items() if k not in ("projects",)})
+def build_settings(machine: dict, project_cfg: dict, legacy_deploy: bool = False) -> dict:
+    """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project. With legacy_deploy (an Apiary from before the switches) the default of deployEnabled is on."""
+    defaults = {**DEFAULT_SETTINGS, "deployEnabled": True} if legacy_deploy else DEFAULT_SETTINGS
+    merged = deep_merge(defaults, {k: v for k, v in machine.items() if k not in ("projects",)})
     over = {k: v for k, v in project_cfg.items() if k not in MACHINE_ONLY}
     merged = deep_merge(merged, over)
     for key in ("progressVerifies", "planStallHours", "minClass", "bundle", "openMarker", "triage", "brain", "integratorSlots"):
@@ -569,7 +570,7 @@ def load_projects(conn, machine: dict) -> list:
         if not ws or not Path(ws).is_dir():
             continue
         pcfg = config.load_project(ws)
-        settings = build_settings(machine, pcfg)
+        settings = build_settings(machine, pcfg, bool(row["legacy_deploy"]))
         envs.append(ProjectEnv(conn, row["name"], ws, settings, pcfg.get("colour") or row["colour"] or "white",
                                int(pcfg.get("priority", row["priority"] or 0)), pcfg.get("planGlobs"), pcfg.get("planExclude")))
     return envs

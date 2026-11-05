@@ -353,6 +353,11 @@ def cmd_package(args, conn):
         return fail("waiting needs --reason (question:<id>, build, owner, package or provider)")
     if args.state == "waiting" and args.reason == "build" and _build_switched_off(conn, args.project):
         return fail("the build step is switched off for this Apiary: close the package like a code package")
+    if args.state == "done":
+        from haivequeen import integration
+        refused = integration.done_refusal(conn, args.project, plan, args.package)
+        if refused:
+            return fail(refused)
     bees.set_package_state(conn, args.project, plan, args.package, args.state, agent, args.reason)
     out({"ok": True, "package": args.package, "state": args.state})
     return 0
@@ -407,6 +412,11 @@ def cmd_bee(args, conn):
                 blocked = "question:" + args.blocked_ref
         elif args.outcome == "failed" and not requirements and not args.error:
             return fail("a failed attempt needs evidence: --open-requirements or --error; if the Bee only waits for an answer, a build or the owner use --blocked-by")
+        if args.outcome == "succeeded":
+            from haivequeen import integration
+            refused = integration.result_refusal(conn, args.project, plan, args.package)
+            if refused:
+                return fail(refused)
         bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked)
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
