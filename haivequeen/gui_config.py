@@ -693,8 +693,6 @@ class ConfigWindow:
             row.pack(fill="x")
             tk.Label(row, text=tr("Add own")).pack(side="left")
             tk.Entry(row, textvariable=custom).pack(side="left", fill="x", expand=True)
-            if not self.target().get("capabilitiesVersion") and not self.target().get("endpoint"):
-                tk.Label(box, text=tr("Until you change these ticks, the Queen of this provider does Build and Deploy herself, as before."), anchor="w", justify="left", wraplength=BUILD_TEXT_WIDTH).pack(anchor="w")
             return lambda: [name for name, var in variables if var.get()] + [name.strip() for name in custom.get().split(",") if name.strip()]
         if isinstance(value, bool):
             var = tk.BooleanVar(value=value)

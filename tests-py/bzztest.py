@@ -20,24 +20,24 @@ ENV_KEYS = ("BZZ_DATA_DIR", "BZZ_CONFIG_DIR", "BZZ_LOG_DIR", "BZZ_RUNTIME_OVERRI
 REL = "docs/plans/dummy/DUMMY-PLAN.md"
 
 
-def provider(name, slots, use="preferred", caps=(), limit="", classes=("light", "medium", "heavy"), proto="claude"):
-    """One provider entry as config.toml has it; the models are called <name>-<class>."""
+def provider(name, slots, use="preferred", caps=(), limit="", classes=("light", "medium", "heavy"), proto="claude", build=True):
+    """One provider entry as config.toml has it; the models are called <name>-<class>. It has the old build entry unless build=False, so its Queen may do the Build step (H-46(d))."""
     p = {"name": name, "protocol": proto, "command": proto, "args": ["--model", "{model}"], "slots": slots, "use": use,
-         "capabilities": list(caps), "classes": {c: {"model": "%s-%s" % (name, c), "effort": "medium"} for c in classes}}
+         "capabilities": list(dict.fromkeys(list(caps) + (["build"] if build else []))), "classes": {c: {"model": "%s-%s" % (name, c), "effort": "medium"} for c in classes}}
     if limit:
         p["limit"] = {"source": limit}
     return p
 
 
 def classic_providers():
-    """The two classic providers: claude (haiku/sonnet/opus) and codex (images), 2 slots each."""
+    """The two classic providers: claude (haiku/sonnet/opus, build) and codex (images, build), 2 slots each; their Queens may do Build because of the old build entry (H-46(d))."""
     return [
         {"name": "claude", "protocol": "claude", "command": "claude", "args": ["--model", "{model}"], "slots": 2, "use": "preferred",
-         "capabilities": [], "limit": {"source": "claude"},
+         "capabilities": ["build"], "limit": {"source": "claude"},
          "classes": {"light": {"model": "claude-haiku-5-5", "effort": "medium"}, "medium": {"model": "claude-sonnet-5-5", "effort": "medium"},
                      "heavy": {"model": "claude-opus-5-5", "effort": "medium"}}},
         {"name": "codex", "protocol": "codex", "command": "codex", "args": ["exec", "-m", "{model}"], "slots": 2, "use": "preferred",
-         "capabilities": ["images"], "limit": {"source": "codex"},
+         "capabilities": ["images", "build"], "limit": {"source": "codex"},
          "classes": {"light": {"model": "gpt-6-luna", "effort": "medium"}, "medium": {"model": "gpt-6.1-terra", "effort": "medium"},
                      "heavy": {"model": "gpt-6.1-sol", "effort": "medium"}}},
     ]
@@ -97,6 +97,13 @@ class RoundCase(unittest.TestCase):
         self.machine = {"providers": self.providers if self.providers is not None else classic_providers(), "slots": 2, "buildJobs": 0,
                         "ramReserveMb": 2048, "projects": []}
         self.machine.update(self.settings or {})
+        load_config = config.load_config
+        def machine_config():
+            """bzz commands called in the test read the same machine settings as its rounds, unless the test wrote a config.toml (their Queen's provider must exist, H-46(d))."""
+            return load_config() if (config.config_dir() / "config.toml").exists() else config._merge(config.DEFAULT_CONFIG, self.machine)
+        patcher = mock.patch("haivequeen.config.load_config", machine_config)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.wt = self.base / "wt"
         self.wt.mkdir()
         self.repo = self.add_project("testproj")

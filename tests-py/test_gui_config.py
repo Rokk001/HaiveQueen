@@ -459,7 +459,7 @@ class WindowTest(unittest.TestCase):
 
     def test_showing_and_saving_an_old_provider_changes_nothing_of_its_selection(self):
         win, path = self.legacy_page(capabilities=["build"], use="capability-only")
-        self.assertTrue(any("as before" in str(w.cget("text")) for w in descendants(win.form) if w.winfo_class() == "Label"))
+        self.assertFalse(any("as before" in str(w.cget("text")) for w in descendants(win.form) if w.winfo_class() == "Label"))   # H-46(d): no promise of implicit steps
         win.save()
         saved = gui_config.load_raw(path)["providers"][0]
         self.assertEqual(saved["capabilities"], ["build"])

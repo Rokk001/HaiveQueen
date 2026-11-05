@@ -56,9 +56,13 @@ class StepStateTests(IntegrationCase):
         integration.sync(env, REL, "claude")
         self.assertEqual([p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)], ["P1"])
 
-    def test_provider_no_longer_in_the_settings_goes_on_as_before(self):
+    def test_provider_no_longer_in_the_settings_has_no_ticks(self):
+        """H-46(d) without exceptions: a Queen whose provider is gone does no step herself; it goes to a provider with the tick."""
         env = self.hive()
-        self.assertEqual(integration.step_states(env, "removed"), {"Build": "queen", "Deploy": "queen"})
+        self.assertEqual(integration.step_states(env, "removed"), {"Build": "package", "Deploy": "package"})
+        self.use(provider("claude", "Coding", "Queen"))
+        env = self.env()
+        self.assertEqual(integration.step_states(env, "removed"), {"Build": "owner", "Deploy": "owner"})
 
     def test_step_package_title_follows_the_language(self):
         self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), deployEnabled=False, language="German")
@@ -131,13 +135,31 @@ class StepStateTests(IntegrationCase):
         self.assertEqual(integration.open_steps(env, REL), [])
         self.assertNotIn(integration.BUILD, [p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)])
 
-    def test_queen_of_an_existing_provider_keeps_her_steps_without_a_question(self):
+    def test_queen_of_an_existing_provider_does_only_the_steps_of_its_old_entries(self):
+        """H-46(d): an old `build` entry lets her Queen build; Deploy, never listed, is no exception and goes to the owner here."""
         old = {"name": "claude", "protocol": "claude", "slots": 2, "capabilities": ["blender", "build"], "classes": {"medium": {"model": "m"}}}
         self.use(old)
         env = self.hive()
-        self.assertEqual(integration.sync(env, REL, "claude"), {"Build": "queen", "Deploy": "queen"})
-        self.assertEqual(runtime.list_questions(self.conn, "testproj", plan=REL), [])
-        self.assertEqual([p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)], ["P1"])
+        self.assertEqual(integration.sync(env, REL, "claude"), {"Build": "queen", "Deploy": "owner"})
+        self.assertEqual([q["item"] for q in runtime.list_questions(self.conn, "testproj", plan=REL)], [integration.DEPLOY])
+        self.assertEqual([p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)], ["P1", integration.DEPLOY])
+
+    def test_queen_of_an_existing_provider_without_build_delegates_to_a_ticked_provider(self):
+        """H-46(d): an old entry without `build` gets no implicit Build or Deploy; both become packages routed to the provider with the ticks."""
+        old = {"name": "claude", "protocol": "claude", "slots": 2, "capabilities": ["images"], "classes": {"medium": {"model": "m"}}}
+        legacy_builder = {"name": "oldbuild", "protocol": "claude", "slots": 2, "capabilities": ["build"], "classes": {"medium": {"model": "m"}}}
+        self.use(old, legacy_builder, provider("deployer", "Deploy"))
+        env = self.hive()
+        self.assertEqual(integration.sync(env, REL, "claude"), {"Build": "package", "Deploy": "package"})
+        self.assertEqual([p["name"] for p in bees.escalation_providers(env, REL, integration.BUILD)], ["oldbuild"])
+        self.assertEqual([p["name"] for p in bees.escalation_providers(env, REL, integration.DEPLOY)], ["deployer"])
+
+    def test_queen_of_a_new_provider_without_the_ticks_delegates(self):
+        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), provider("deployer", "Deploy"))
+        env = self.hive()
+        self.assertEqual(integration.sync(env, REL, "claude"), {"Build": "package", "Deploy": "package"})
+        self.assertEqual([p["name"] for p in bees.escalation_providers(env, REL, integration.BUILD)], ["builder"])
+        self.assertEqual([p["name"] for p in bees.escalation_providers(env, REL, integration.DEPLOY)], ["deployer"])
 
     def test_existing_provider_without_the_tick_is_no_target_for_a_step_package(self):
         old = {"name": "old", "protocol": "claude", "slots": 2, "capabilities": ["images"], "classes": {"medium": {"model": "m"}}}
@@ -473,10 +495,11 @@ class MigrationTests(unittest.TestCase):
         offered = {c for c in self.old(capabilities=["build"])["capabilities"]}
         self.assertTrue(any("Deploy" in problem for problem in plans.check_plan(parsed, offered)))
 
-    def test_queen_steps_only_for_an_existing_provider_that_is_no_endpoint(self):
-        self.assertEqual(self.old()["queenSteps"], ["Build", "Deploy"])
-        self.assertEqual(self.old(endpoint={"baseUrl": "http://localhost"})["queenSteps"], [])
-        self.assertEqual(self.old(capabilitiesVersion=1, capabilities=["Queen"])["queenSteps"], [])
+    def test_existing_provider_has_no_implicit_integration_steps(self):
+        """H-46(d): no derived value lets the Queen of an old entry do a step she has no tick for."""
+        self.assertNotIn("queenSteps", self.old())
+        self.assertNotIn("Build", self.old()["capabilities"])
+        self.assertNotIn("Deploy", self.old(capabilities=["build"])["capabilities"])
 
     def test_existing_endpoint_provider_gets_no_integration_step(self):
         old = self.old(endpoint={"baseUrl": "http://localhost"})

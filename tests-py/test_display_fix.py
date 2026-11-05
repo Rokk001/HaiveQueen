@@ -46,6 +46,8 @@ class QueenOrderTest(RoundCase):
     def test_acquire_comes_before_the_release_worktree_the_compile_check_and_ready(self):
         """Order in the Queen prompt: acquire, then the release worktree, then the compile check, then bzz ready, then her own integration and release."""
         self.conn.execute("UPDATE projects SET legacy_deploy=1")   # the release worktree step is in the text only with deploy on
+        for entry in self.machine["providers"]:   # and only for a Queen whose provider has the Deploy tick (H-46(d))
+            entry.update(capabilitiesVersion=1, capabilities=["Coding", "Queen", "Build", "Deploy"])
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")
