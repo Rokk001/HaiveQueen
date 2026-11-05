@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import config, db, gui_overlays, hives, overview, runstate, runtime
 from . import platform as osplat
+from . import localtime
 from . import scheduler as sch
 
 LOG_LINES = 80         # newest event rows (without routine noise) shown in the log panel
@@ -347,7 +348,7 @@ def log_line(event, who=None) -> tuple:
 
     `who` maps an agent name to (phase, person) so the tag shows the Queen or Bee by the person's name."""
     when = db.parse_time(event["ts"])
-    stamp = when.strftime("%H:%M") if when else "--:--"
+    stamp = localtime.time(when) if when else "--:--"
     agent, project = event["agent"], event["project"]
     if agent:
         phase, person = (who or {}).get(agent, (str(agent).split("__")[-1], str(agent).split("__")[0]))
@@ -384,7 +385,7 @@ def activity_rows(agents_all, now) -> list:
         total = sum(v[0] + v[1] for v in sums[kind].values())
         for (apiary, name), (tin, tout, last) in sorted(sums[kind].items(), key=lambda kv: -(kv[1][0] + kv[1][1])):
             rows.append({"kind": kind, "name": name, "apiary": apiary, "pct": round(100 * (tin + tout) / total) if total else 0,
-                         "tin": tin, "tout": tout, "last": last.strftime("%d.%m. %H:%M")})
+                         "tin": tin, "tout": tout, "last": localtime.date_time(last)})
     return rows
 
 
@@ -476,7 +477,7 @@ def info_sections(d) -> list:
         qs = [("none open", "dim")]
     out.append(("QUESTIONS", qs))
     if d["round_errors"]:
-        out.append(("ROUND ERRORS", [((db.parse_time(e["ts"]).strftime("%H:%M") if db.parse_time(e["ts"]) else "--:--") + " " + e["project"] + " " + e["text"], "bad")
+        out.append(("ROUND ERRORS", [((localtime.time(db.parse_time(e["ts"])) if db.parse_time(e["ts"]) else "--:--") + " " + e["project"] + " " + e["text"], "bad")
                                      for e in d["round_errors"]]))
     if d["selfupdate"]:
         out.append(("SELF-UPDATE", [("".join(text for text, _ in overview.self_update_line(d["selfupdate"])), "text")]))

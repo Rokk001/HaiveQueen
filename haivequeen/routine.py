@@ -273,7 +273,7 @@ def ready_refusal(env, name: str) -> str:
     ver = sorted([x for x in all_agents(env) if norm_plan(x["plan"]) == norm_plan(a["plan"]) and str(x.get("package")) == "ALL"
                   and x.get("phase") == "verify" and x.get("status") == "done"], key=lambda x: x["started"])
     if not ver or not verify_zero(env, ver[-1]["name"]):
-        return 'the whole-plan verify did not end with "Offene Anforderungen: 0"'
+        return 'the whole-plan verify did not end with "Open requirements: 0"'
     return ""
 
 

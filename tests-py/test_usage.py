@@ -162,12 +162,12 @@ class WindowTest(unittest.TestCase):
         self.assertEqual((e["free_pct"], e["hours"]), (100.0, 168.0))
 
     def test_format_reset_time(self):
-        """Today shows HH:mm, another day dd.MM. HH:mm, no value an empty text."""
+        """Today shows the system time, another day the system date and time, and no value an empty text."""
         self.assertEqual(usage.format_reset_time(None), "")
         now = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
-        self.assertEqual(usage.format_reset_time(now.timestamp()), "12:30")
+        self.assertEqual(usage.format_reset_time(now.timestamp()), now.strftime("%X"))
         later = now + timedelta(days=2)
-        self.assertEqual(usage.format_reset_time(later.timestamp()), later.strftime("%d.%m. 12:30"))
+        self.assertEqual(usage.format_reset_time(later.timestamp()), later.strftime("%x %X"))
 
 
 

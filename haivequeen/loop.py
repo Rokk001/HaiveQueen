@@ -22,6 +22,7 @@ from pathlib import Path
 
 from . import buildjobs, config, db, events, export, faults, inbox, profile, reattach, roles, routine, runstate, runtime, usage, views
 from . import platform as osplat
+from . import localtime
 from . import scheduler as sch
 from .routine import view
 from .scheduler import ACTIVE, norm_plan
@@ -282,7 +283,7 @@ def _state_summary(env, quiet=False) -> dict:
         f = env.workspace / pr["path"]
         st = f.stat()
         plans.append({"path": pr["path"], "status": pr["status"], "sizeKB": int(st.st_size / 1024),
-                      "modified": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")})
+                      "modified": localtime.date_time(datetime.fromtimestamp(st.st_mtime))})
     plans.sort(key=lambda p: p["modified"], reverse=True)
     return {"all_plans": prows, "plans": plans}
 

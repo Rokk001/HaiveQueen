@@ -125,16 +125,17 @@ class DesktopCommandsTest(RoundCase):
     # Visible text explains that running agents are awaited and reports the actual error.
     def test_german_feedback_describes_wait_and_errors(self):
         """Visible text explains that running agents are awaited and reports the actual error."""
-        text = desktop.result_text('start', {'ok': True, 'stopping': True, 'running_agents': 2})
+        text = desktop.result_text('start', {'ok': True, 'stopping': True, 'running_agents': 2}, 'German')
         self.assertIn('2 laufende Agenten', text)
         self.assertIn('ununterbrochen', text)
-        self.assertEqual(desktop.result_text('start', {'ok': False, 'error': 'kaputt'}), 'Fehler: kaputt')
-        self.assertEqual(desktop.result_text('start', {'ok': True}), 'HQ wurde gestartet.')
+        self.assertEqual(desktop.result_text('start', {'ok': False, 'error': 'kaputt'}, 'German'), 'Fehler: kaputt')
+        self.assertEqual(desktop.result_text('start', {'ok': True}, 'German'), 'HQ wurde gestartet.')
 
     # The Windows presenter actually invokes a visible native dialog.
     def test_windows_dialog_displays_result(self):
         """The Windows presenter actually invokes a visible native dialog."""
         with mock.patch.object(desktop.sys, 'platform', 'win32'), \
+                mock.patch('haivequeen.config.load_config', return_value={'language': 'German'}), \
                 mock.patch('ctypes.windll', create=True) as dll:
             desktop.show_result('stop', {'ok': True, 'running_agents': 1})
         dll.user32.MessageBoxW.assert_called_once()

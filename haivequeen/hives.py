@@ -101,7 +101,7 @@ def can_start_bee(conn, project, plan, own_process=False, context_limit=300000):
 
 
 # Answers of the owner that mean the owner check is fine.
-OWNER_CHECK_OK = {'ok', 'okay', 'passt', 'gut', 'alles ok', 'alles gut', 'passt so', 'in ordnung', 'ja', 'ist ok'}
+OWNER_CHECK_OK = {'ok', 'okay', 'yes', 'good', 'all good', 'looks good', 'passt', 'gut', 'alles ok', 'alles gut', 'passt so', 'in ordnung', 'ja', 'ist ok'}
 
 
 # Normalize only the affirmative phrases recognized for an owner check.

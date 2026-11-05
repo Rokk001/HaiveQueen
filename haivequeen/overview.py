@@ -11,7 +11,7 @@ import types
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import buildjobs, config, db, platform as osplat, runstate, runtime, scheduler as sch, usage
+from . import buildjobs, config, db, localtime, platform as osplat, runstate, runtime, scheduler as sch, usage
 
 FINISHED_HOURS = 1
 ORCHESTRATOR_KINDS = ("agent", "brain")   # providers_usage kinds written by the orchestrator itself (the "all plans" row)
@@ -78,7 +78,7 @@ def format_reset(epoch, now) -> str:
     if not epoch:
         return ""
     d = datetime.fromtimestamp(int(epoch))
-    return d.strftime("%H:%M") if d.date() == now.date() else d.strftime("%d.%m. %H:%M")
+    return localtime.time(d) if d.date() == now.date() else localtime.date_time(d)
 
 
 
@@ -262,7 +262,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     loop = _kv(conn, "loop-state") or {}
     since = _parse_time(loop.get("since")) if isinstance(loop, dict) else None
     if since:
-        orch_status = "idle since " + since.strftime("%H:%M")
+        orch_status = "idle since " + localtime.time(since)
     else:
         orch_status = "idle"
     last_round = conn.execute("SELECT ts FROM events WHERE kind='round'" + (" AND project=?" if project else "")
@@ -279,7 +279,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "selfupdate": db.last_self_update(conn),
         "orch": {"status": orch_status},
         "round_errors": round_errors(conn, project, now),
-        "last_round": (_parse_time(last_round[0]).strftime("%H:%M:%S") if last_round and _parse_time(last_round[0]) else "-"),
+        "last_round": (localtime.time(_parse_time(last_round[0])) if last_round and _parse_time(last_round[0]) else "-"),
     }
 
 
@@ -344,7 +344,7 @@ def self_update_line(su) -> list:
     """Line parts of the last self-update: result in its colour, end (else start) time, new commit, and for a rollback the commit it went back to."""
     result = su.get("result") or "?"
     when = _parse_time(su.get("ended")) or _parse_time(su.get("started"))
-    text = "  " + (when.strftime("%d.%m. %H:%M") if when else "-") + "  " + (su.get("new_commit") or "-")[:7]
+    text = "  " + (localtime.date_time(when) if when else "-") + "  " + (su.get("new_commit") or "-")[:7]
     if result == "rollback":
         text += " (back to " + (su.get("old_commit") or "-")[:7] + ")"
     col = {"ok": "green", "rollback": "yellow"}.get(result, "red")

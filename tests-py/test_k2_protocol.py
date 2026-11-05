@@ -1,5 +1,5 @@
 import unittest
-from haivequeen import desktop, legacy, routine
+from haivequeen import desktop, hives, legacy, routine
 
 
 class ProtocolCompatibilityTests(unittest.TestCase):
@@ -19,3 +19,8 @@ class ProtocolCompatibilityTests(unittest.TestCase):
         self.assertEqual(desktop.result_text("start", result, "German"), "HQ wurde gestartet.")
         self.assertEqual(desktop.result_text("start", result, "English"), "HQ has started.")
         self.assertEqual(desktop.result_text("start", result, "French"), "HQ has started.")
+
+    def test_owner_acceptance_in_both_languages(self):
+        for answer in ("yes", "good", "looks good", "ja", "passt"):
+            self.assertTrue(hives.owner_check_ok(answer), answer)
+        self.assertFalse(hives.owner_check_ok("no"))

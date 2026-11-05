@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import config, db, profile, runtime
 from . import platform as osplat
+from . import localtime
 
 CLASS_NAMES = ("light", "medium", "heavy")
 USES = ("preferred", "fallback", "capability-only")
@@ -197,7 +198,7 @@ def format_reset_time(epoch) -> str:
     if not epoch:
         return ""
     d = datetime.fromtimestamp(int(epoch))
-    return d.strftime("%H:%M") if d.date() == datetime.now().date() else d.strftime("%d.%m. %H:%M")
+    return localtime.time(d) if d.date() == datetime.now().date() else localtime.date_time(d)
 
 
 def save_claude_usage(conn, event: dict) -> None:

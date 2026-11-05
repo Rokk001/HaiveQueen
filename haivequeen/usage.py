@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from haivequeen import platform as osplat
+from haivequeen import localtime
 from haivequeen import profile
 from haivequeen import runtime
 
@@ -83,7 +84,7 @@ def format_reset_time(epoch) -> str:
     if not epoch:
         return ""
     d = datetime.fromtimestamp(int(epoch))
-    return d.strftime("%H:%M") if d.date() == datetime.now().date() else d.strftime("%d.%m. %H:%M")
+    return localtime.time(d) if d.date() == datetime.now().date() else localtime.date_time(d)
 
 
 # ---------------------------------------------------------------- scanner state and cache
