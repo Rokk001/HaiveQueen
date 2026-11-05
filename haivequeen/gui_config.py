@@ -1,7 +1,7 @@
 """Editor for the TOML settings in the graphical window: config.toml of the machine and the project.toml of every Apiary.
 
 This file holds the data layer (read, split the allowed tools, write TOML, check, save with a backup); the window is `ConfigWindow` below.
-Only the standard library is used: Python can read TOML but not write it, so `dumps` writes the few TOML forms the settings use.
+TOML Kit preserves comments and layout when an existing settings file is saved.
 """
 import json
 import math
@@ -10,7 +10,9 @@ import re
 import shutil
 import threading
 import tomllib
+from collections import Counter
 from pathlib import Path
+import tomlkit
 
 from . import gui_data, localtime
 from .i18n import N_, decimal, tr
@@ -258,22 +260,103 @@ def keep_legacy_entry(data, old):
 
 # Write a settings file and keep the old one.
 def save_file(path, data):
-    """Write `data` to `path` as TOML: the comment lines at the top of the old file stay, the old file is kept as `<name>.bak`, the new one replaces it in one step."""
+    """Update a TOML document, preserving its formatting and comments where values remain."""
     path = Path(path)
-    header = ""
+    document = tomlkit.document()
+    original = ""
     if path.is_file():
-        kept = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("#") or not line.strip():
-                kept.append(line)
-            else:
-                break
-        header = "\n".join(kept).rstrip("\n") + "\n\n" if any(x.strip() for x in kept) else ""
+        original = path.read_text(encoding="utf-8")
+        document = tomlkit.parse(original)
         shutil.copy2(path, path.with_name(path.name + ".bak"))
+    _update_document(document, data)
+    result = tomlkit.dumps(document)
+    remaining = Counter(_comments(result))
+    for comment in _comments(original):
+        if remaining[comment]:
+            remaining[comment] -= 1
+        else:
+            result += "\n" + comment + "\n"
+    if tomllib.loads(result) != data:
+        raise ValueError("settings could not be written without changing their values")
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
-    temp.write_text(header + dumps(data), encoding="utf-8", newline="\n")
+    temp.write_text(result, encoding="utf-8", newline="\n")
     os.replace(temp, path)
+
+
+def _comments(text):
+    """Return TOML comments outside quoted strings, including multiline strings."""
+    comments, quote, multiline, escaped = [], None, False, False
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if quote == '"' and escaped:
+                escaped = False
+            elif quote == '"' and c == "\\":
+                escaped = True
+            elif multiline and text.startswith(quote * 3, i):
+                # TOML permits one or two literal quotes just before the closing
+                # delimiter. Consume the whole 3-5 quote run, not just three.
+                end = i + 3
+                while end < len(text) and text[end] == quote:
+                    end += 1
+                quote, multiline = None, False
+                i = end - 1
+            elif not multiline and c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+            multiline = text.startswith(c * 3, i)
+            if multiline:
+                i += 2
+        elif c == "#":
+            end = text.find("\n", i)
+            end = len(text) if end < 0 else end
+            comments.append(text[i:end].rstrip("\r"))
+            i = end - 1
+        i += 1
+    return comments
+
+
+def _update_document(document, data):
+    """Change retained tables in place so their comments and layout survive."""
+    from tomlkit.items import AoT, InlineTable, Table
+    for key in list(document):
+        if key not in data:
+            del document[key]
+    for key, value in data.items():
+        if key not in document:
+            document[key] = value
+            continue
+        old = document[key]
+        if isinstance(value, dict) and isinstance(old, (Table, InlineTable)):
+            _update_document(old, value)
+        elif isinstance(value, list) and isinstance(old, AoT) and all(isinstance(v, dict) for v in value):
+            # Provider/project names (or ids) identify entries even when the
+            # settings editor removes or reorders them. Never transfer their
+            # comments to a different named entry by position.
+            identity = next((field for field in ("name", "id")
+                             if all(isinstance(entry.get(field), str) for entry in [*old, *value])
+                             and len({entry[field] for entry in old}) == len(old)
+                             and len({entry[field] for entry in value}) == len(value)), None)
+            if identity:
+                entries = {entry[identity]: entry for entry in old}
+                updated_array = tomlkit.aot()
+                for updated in value:
+                    entry = entries.get(updated[identity])
+                    if entry is None:
+                        entry = tomlkit.table()
+                    _update_document(entry, updated)
+                    updated_array.append(entry)
+                document[key] = updated_array
+            elif len(old) == len(value):
+                for entry, updated in zip(old, value):
+                    _update_document(entry, updated)
+            elif old.unwrap() != value:
+                document[key] = value
+        elif old.unwrap() != value:
+            document[key] = value
 
 
 # Settings files the editor offers.
@@ -446,6 +529,7 @@ class ConfigWindow:
         if kind == "general" and self.machine():
             shown.pop("buildJobs", None)   # the build settings are the block "Build" below, never the raw table
             self.build_block()
+            self.bzz_row()
         if kind == "general":
             shown.pop("preferredProvider", None)
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
@@ -462,6 +546,18 @@ class ConfigWindow:
             shown.setdefault("beeMode", "process" if shown.get("protocol") == "codex" else "subagent")   # always offer the setting, with the value that applies without an entry
         self.fields(self.form, shown, ())
         self.add_row(self.form, ())
+
+    def bzz_row(self):
+        """Offer profile installation and show the result for each CLI."""
+        row = self.tk.Frame(self.form)
+        row.pack(fill="x", pady=4)
+        status = self.tk.Label(row, anchor="w", justify="left")
+        def install():
+            from . import bzz_install
+            result = bzz_install.install()
+            status.config(text="\n".join("%s: %s" % (tr(name), tr(message)) for name, message in result.items()))
+        self.tk.Button(row, text=tr("Install /bzz"), command=install).pack(anchor="w")
+        status.pack(anchor="w")
 
     # The block "Build" of the General page.
     def build_block(self):

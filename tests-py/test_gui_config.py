@@ -204,6 +204,21 @@ class WindowTest(unittest.TestCase):
             win.select(2)
             self.assertEqual(win.login_status.cget("text"), "Login missing")   # codex has no login yet
 
+    def test_bzz_install_button_reports_supported_and_skipped_clis(self):
+        from haivequeen import bzz_install
+        for language in ("English", "German"):
+            with self.subTest(language=language), mock.patch("haivequeen.i18n.machine_language", return_value=language):
+                win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+                button = next(w for w in descendants(win.form)
+                              if w.winfo_class() == "Button" and w.cget("text") == i18n.tr("Install /bzz"))
+                result = {"Claude Code": "installed", "Codex CLI": "skipped: literal /bzz is not supported"}
+                with mock.patch.object(bzz_install, "install", return_value=result) as install:
+                    button.invoke()
+                install.assert_called_once_with()
+                labels = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
+                self.assertIn("Claude Code: %s\nCodex CLI: %s" % (i18n.tr("installed"), i18n.tr(result["Codex CLI"])), labels)
+                win.win.destroy()
+
     # Own CLI: the three values are offered on its page and used for the status.
     def test_unknown_cli_offers_its_login_values(self):
         """A provider whose CLI is not built in shows profileEnv, loginCommand and loginFiles, and its status follows the login file."""

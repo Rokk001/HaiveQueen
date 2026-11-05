@@ -41,6 +41,14 @@ class InitTest(unittest.TestCase):
         self.assertIn("AGENTS.md", (self.ws / "CLAUDE.md").read_text(encoding="utf-8"))
         self.assertTrue((self.ws / "AGENTS.md").is_file())
         self.assertTrue((self.ws / "docs" / "plans").is_dir())
+        from haivequeen import plans
+        example = self.ws / "docs" / "plans" / "EXAMPLE-PLAN.md"
+        text = example.read_text(encoding="utf-8")
+        plan = plans.parse_plan_text(text)
+        self.assertEqual(plan.status, "DRAFT")
+        self.assertEqual(len(plan.packages), 1)
+        self.assertEqual([rid for rid, _ in plans.parse_requirements(text)], ["E-1", "E-2"])
+        self.assertIn("Feature branch:", text)
 
     def test_init_overwrites_nothing(self):
         """Existing files stay byte for byte, and are reported as kept."""
@@ -52,9 +60,12 @@ class InitTest(unittest.TestCase):
         self.assertEqual(kept, {"CLAUDE.md", "AGENTS.md"})
         self.assertEqual((self.ws / "CLAUDE.md").read_text(encoding="utf-8"), "mine\n")
         self.assertEqual((self.ws / "AGENTS.md").read_text(encoding="utf-8"), "my rules\n")
+        example = self.ws / "docs" / "plans" / "EXAMPLE-PLAN.md"
+        example.write_text("my plan\n", encoding="utf-8")
         (self.ws / ".haivequeen" / "project.toml").write_text('name = "changed"\n', encoding="utf-8")
         res = self.orch("init", str(self.ws))
         self.assertTrue(all(f["result"] == "exists, kept" for f in res["files"]))
+        self.assertEqual(example.read_text(encoding="utf-8"), "my plan\n")
         self.assertEqual((self.ws / ".haivequeen" / "project.toml").read_text(encoding="utf-8"),
                          'name = "changed"\n')
 
