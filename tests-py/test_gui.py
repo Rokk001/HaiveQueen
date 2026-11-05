@@ -223,6 +223,13 @@ class SnapshotTest(unittest.TestCase):
         titles = [t for t, _ in self.snap["info"]]
         self.assertEqual(titles[:5], ["STATE", "USAGE", "SYSTEM", "PLANS", "QUESTIONS"])
 
+    # The build line is part of the dashboard data and of the SYSTEM panel.
+    def test_build_line_in_snapshot_without_build_table(self):
+        """CFG has no buildJobs table: the snapshot still carries the build line (defaults, not measured yet) for the SYSTEM panel."""
+        self.assertNotIn("buildJobs", CFG)
+        self.assertRegex(self.snap["build_line"], r"^Build jobs \d+ of \d+ cores \((running|next build)\) \| per job not measured yet")
+        self.assertIn(self.snap["build_line"], [t for title, lines in self.snap["info"] if title == "SYSTEM" for t, _c in lines])
+
     # One state tells the user whether HaiveQueen runs, waits or stands still.
     def test_orchestrator_state(self):
         """No loop process is STOPPED, a pending stop is STOPPING, otherwise the run state decides the label and its colour level."""

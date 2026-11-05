@@ -150,14 +150,12 @@ def blocked_tasks(agents, now=None) -> list:
 
 
 def build_jobs_line(conn, cfg, projects, agents, sysinfo) -> str:
-    """SYSTEM line for build jobs, or None without a buildJobs setting or without a project that has buildProcessNames.
+    """SYSTEM line for build jobs, or None without a project that has buildProcessNames (a missing buildJobs table means the defaults).
 
     "Build jobs N of M cores (running|next build) | per job X MB | active: N cores": N is the running job count during a build, else the count
     `bzz integration acquire` would hand out now; X is the median per job of the project. With several such projects every project gets its
     part, named by the project, in this one line. `sysinfo["build_projects"]` names the projects with buildProcessNames (default: all shown)."""
-    if cfg.get("buildJobs") is None:
-        return None
-    settings = {"buildJobs": cfg.get("buildJobs")}
+    settings = {"buildJobs": cfg.get("buildJobs") if cfg.get("buildJobs") is not None else 0}   # no table or 0 = the defaults, the line stays
     shown = [p for p in projects if p in (sysinfo.get("build_projects") if sysinfo.get("build_projects") is not None else projects)]
     parts = []
     for name in shown:

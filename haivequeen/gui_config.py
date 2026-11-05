@@ -397,6 +397,7 @@ class ConfigWindow:
             self.login_row()
         if kind == "general" and self.machine():
             shown.pop("buildJobs", None)   # the build settings are the block "Build" below, never the raw table
+            shown.pop("ramReserveMb", None)   # machine-only, settable in config.toml only; not offered here, the stored value stays untouched on save
             self.build_block()
         if kind == "general":
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
@@ -419,15 +420,21 @@ class ConfigWindow:
         box.pack(fill="x", pady=(0, 10), anchor="w")
         cores_var, parallel_var, ram_var = tk.StringVar(value=str(shown["cores"])), tk.StringVar(value=str(shown["parallel"])), tk.StringVar(value="%g" % shown["minFreeRamGB"])
         self.build_vars = (cores_var, parallel_var, ram_var)
+        self.build_notes = []
         for (key, label, explanation), var in zip(BUILD_FIELDS, self.build_vars):
-            row = tk.Frame(box)
-            row.pack(fill="x", pady=2, anchor="w")
+            item = tk.Frame(box)
+            item.pack(fill="x", pady=2, anchor="w")
+            row = tk.Frame(item)
+            row.pack(fill="x", anchor="w")
             tk.Label(row, text=label, width=32, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
             if key == "cores":
                 self.dialog.option_menu(row, var, [str(n) for n in range(1, cores + 1)], self.mono).pack(side="left")
             else:
                 tk.Entry(row, textvariable=var, width=8, font=(self.mono, 10)).pack(side="left")
-            tk.Label(row, text=explanation, anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=620).pack(side="left", padx=12)
+            note = tk.Label(item, text=explanation, anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=300)
+            note.pack(fill="x", anchor="w", padx=(4, 0))   # under the field, wrapped to the width that is available (never cut off)
+            item.bind("<Configure>", lambda e, n=note: n.configure(wraplength=max(120, e.width - 12)))
+            self.build_notes.append(note)
 
     # The provider of the shown page in the form the profile functions read.
     def login_provider(self) -> dict:
