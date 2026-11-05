@@ -1,5 +1,6 @@
 """The HaiveQueen profile: every provider CLI is started with its user files in the profile folder, nothing private is read or copied."""
 import gc
+import json
 import os
 import tempfile
 import time
@@ -71,6 +72,19 @@ class EnvironmentTest(ProfileCase):
 
 
 class ContentTest(ProfileCase):
+    def test_claude_integration_permissions_are_restored_on_prepare(self):
+        claude = provider("claude", 1)
+        self.assertTrue(profile.prepare(claude))
+        settings = self.data / "profile/claude/settings.json"
+        expected = {"%s(%s)" % (tool, command) for tool in ("Bash", "PowerShell")
+                    for command in ("bzz *", "*cli.py *", "git push origin HEAD:*")}
+        self.assertEqual(set(json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"]), expected)
+        settings.write_text('{}', encoding="utf-8")
+        self.assertTrue(profile.prepare(claude))
+        restored = json.loads(settings.read_text(encoding="utf-8"))
+        self.assertFalse(restored["autoMemoryEnabled"])
+        self.assertEqual(set(restored["permissions"]["allow"]), expected)
+
     def test_prepare_writes_only_settings_and_copies_nothing(self):
         """The profile gets the settings of HaiveQueen only; private instruction and login files of the home folder stay out."""
         home = Path(self.tmp.name) / "home"

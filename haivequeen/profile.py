@@ -26,7 +26,11 @@ SPECS = {
     "claude": {
         "env": {"CLAUDE_CONFIG_DIR": "{home}", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"},
         "login": [".credentials.json"],
-        "settings": {"settings.json": json.dumps({"autoMemoryEnabled": False}, indent=1) + "\n"},
+        "settings": {"settings.json": json.dumps({"autoMemoryEnabled": False, "permissions": {"allow": [
+            "%s(%s)" % (tool, command)
+            for tool in ("Bash", "PowerShell")
+            for command in ("bzz *", "*cli.py *", "git push origin HEAD:*")
+        ]}}, indent=1) + "\n"},
         "sessions": ["projects"],
         "loginArgs": "auth login",
     },
