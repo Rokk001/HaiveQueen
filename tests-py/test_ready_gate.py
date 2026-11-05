@@ -79,6 +79,11 @@ class ListTests(unittest.TestCase):
         res = self.check(completeness(*FULL[:2]), decisions=[dict(decision, status="superseded")])
         self.assertEqual([i for i, _ in res.blocking], ["G-3"])
 
+    def test_decision_text_mention_does_not_set_aside(self):
+        decision = {"item": "other", "text": "G-3 is discussed", "status": "active"}
+        res = self.check(completeness(*FULL[:2]), decisions=[decision])
+        self.assertEqual([i for i, _ in res.blocking], ["G-3"])
+
     def test_plan_without_ids_is_refused(self):
         """No requirement id anywhere: refused with the hint that requirements need ids."""
         res = readygate.evaluate("# Plan\n\nDo things.\n", "# State\n", [])
@@ -240,6 +245,14 @@ class GateTests(RoundCase):
         with mock.patch("haivequeen.loop._do_start", return_value=0):
             verdict, text = readygate.start_check_agent(self.env(), self.queen, {"prompt": "x", "plan": REL, "cwd": str(self.wt)}, sleep=lambda s: None)
         self.assertEqual(verdict, "unavailable")
+
+    def test_ready_check_uses_configured_class(self):
+        env = self.env()
+        env.settings["readyCheckClass"] = "heavy"
+        with mock.patch("haivequeen.bees.select_route", return_value=None) as route:
+            verdict, text = readygate.start_check_agent(env, self.queen, {"prompt": "x", "plan": REL, "cwd": str(self.wt)})
+        self.assertEqual(route.call_args.args[3], "heavy")
+        self.assertIn("heavy", text)
 
 
 if __name__ == "__main__":

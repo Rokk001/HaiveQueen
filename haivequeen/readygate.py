@@ -45,10 +45,8 @@ def parse_completeness(text):
 
 
 def _names(decision, rid):
-    """True when a decision names the requirement id as its item or as a word of its text."""
-    if str(decision.get("item") or "").strip().upper() == rid.upper():
-        return True
-    return bool(re.search(r"(?<![A-Za-z0-9_.-])" + re.escape(rid) + r"(?![A-Za-z0-9_])", str(decision.get("text") or ""), re.I))
+    """Only a decision explicitly filed for this requirement sets it aside."""
+    return str(decision.get("item") or "").strip().upper() == rid.upper()
 
 
 def evaluate(plan_text, state_text, decisions, assignments=None):
@@ -151,9 +149,10 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
     running = [{**a, "status": "running"} for a in active if agent_process.counts(a)]
     free = scheduler.provider_free(env.providers, running)
     limited = [p["name"] for p in env.providers if any(w["used_pct"] >= 100 for w in usage.limit_windows(env.conn, p))]
-    route = bees.select_route(env.providers, free, hive["provider"], "medium", (), env.settings.get("excludedProviders", []), False, limited)
+    check_class = str(env.settings.get("readyCheckClass", "medium"))
+    route = bees.select_route(env.providers, free, hive["provider"], check_class, (), env.settings.get("excludedProviders", []), False, limited)
     if not route:
-        return "unavailable", "no provider with a free slot and class medium"
+        return "unavailable", "no provider with a free slot and class %s" % check_class
     provider, cls = route
     existing = [a["name"] for a in runtime.list_agents(env.conn, env.name, "all")]
     state = {"names": existing, "busy": [], "plan_status": {scheduler.norm_plan(plan): "IN_PROGRESS"}, "by_path": {scheduler.norm_plan(plan): {"path": plan}}}

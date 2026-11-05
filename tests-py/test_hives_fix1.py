@@ -72,7 +72,16 @@ class NoStartReasonTests(RoundCase):
         """Too little free RAM is a logged reason, not a silent skip."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round(free_ram=lambda: 1.0)
-        self.assertIn("round skipped (free RAM 1.00 GB is below the minimum 2.00 GB)", self.log())
+        self.assertIn("free RAM 1.00 GB is below the minimum 2.00 GB", self.log())
+
+    def test_low_ram_for_one_project_does_not_skip_another(self):
+        self.add_project('other', extra='minFreeRamGB = 8\n')
+        self.plan('READY', [{'id': 'P1', 'title': 'First'}])
+        self.plan('READY', [{'id': 'P1', 'title': 'First'}], project='other')
+        result = self.round(free_ram=lambda: 4.0)
+        self.assertIsNone(result['skipped'])
+        self.assertTrue(any(a['phase'] == 'queen' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
+        self.assertFalse(any(a['phase'] == 'queen' for a in runtime.list_agents(self.conn, 'other', 'all')))
 
     def test_every_round_is_logged(self):
         """A round that starts nothing still leaves a line, so a standing loop is told from a working one."""

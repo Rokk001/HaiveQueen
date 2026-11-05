@@ -331,7 +331,9 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         from . import platform as osplat
         from . import agent_process
         running = [{**a, 'status': 'running'} for a in active if agent_process.counts(a)]
-        if sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
+        ensure_attempts(env.conn)
+        embedded_count = env.conn.execute('SELECT COUNT(*) FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', (env.name, plan)).fetchone()[0]
+        if embedded_count + sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
             return refuse(env, package, 'the Queen already has %s Bees running' % env.settings.get('beesPerQueen', 3))
         plan_row = next((p for p in runtime.list_plans(env.conn, env.name) if p['path'] == plan), None)
         if plan_row and plan_row['status'] == 'SUBMITTED':
@@ -369,9 +371,12 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             if current is None:
                 return refuse(env, package, 'the package failed %d times at the Queen class %s and no higher class is offered' % (threshold, queen_class))
         while failure_count(env.conn, env.name, plan, package, current) >= threshold:
+            previous = current
             current = next_class(escalation_providers(env, plan, package), current, excluded)
             if current is None:
                 return refuse(env, package, 'the package failed %d times and no higher class is offered' % threshold)
+            if scheduler.class_index(previous) < scheduler.class_index(queen_class) <= scheduler.class_index(current):
+                env.log('Package %s raised to Queen class %s after failures' % (package, current))
         ensure_attempts(env.conn)
         stored = env.conn.execute('SELECT class FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
         if stored and stored[0] == cls and scheduler.class_index(cls) > scheduler.class_index(current):

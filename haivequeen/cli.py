@@ -106,7 +106,11 @@ def cmd_ask(args, conn) -> int:
     from haivequeen import triage
     open_questions = runtime.list_questions(conn, args.project, status="open", plan=args.plan, item=args.item)
     if open_questions:
-        out({"ok": True, "id": open_questions[-1]["id"], "status": "open"})
+        qid = open_questions[-1]["id"]
+        with db.transaction(conn):
+            conn.execute("UPDATE questions SET question=question || ? WHERE id=? AND status='open'", ("\n\n" + args.question, qid))
+            db.add_event(conn, args.project, "note", "Additional text for question %d: %s" % (qid, args.question), data={"question_id": qid})
+        out({"ok": True, "id": qid, "status": "open"})
         return 0
     known = triage._known_answer(conn, args.project, args.plan, args.item)
     if known:

@@ -711,10 +711,6 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
             result['skipped'] = 'STOP'
         elif not runstate.starts_allowed(conn):
             result['skipped'] = runstate.get_state(conn)['state']
-        else:
-            low = next((env for env in envs if free_ram() < loop._min_ram(env)), None)
-            if low:
-                result['skipped'] = 'free RAM %.2f GB is below the minimum %.2f GB' % (free_ram(), loop._min_ram(low))
         if result['skipped']:
             for env in envs:
                 agents = runtime.list_agents(conn, env.name, 'active')

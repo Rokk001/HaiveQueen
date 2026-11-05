@@ -406,6 +406,18 @@ class QueenIntegrationTests(RoundCase):
         self.assertEqual(result['kind'], 'subagent')
         self.assertFalse(any(a['phase'] == 'bee' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
 
+    def test_embedded_bees_count_toward_queen_limit(self):
+        from haivequeen import hives
+        from bzztest import REL
+        self.plan('READY', [{'id': 'P1', 'title': 'First'}, {'id': 'P2', 'title': 'Second'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        env = self.env()
+        env.settings['beesPerQueen'] = 1
+        bees.record_embedded_start(self.conn, 'testproj', REL, 'P1', 'Ada', 'medium', 'claude')
+        self.assertFalse(bees.start_process(env, REL, 'P2', 'Bea', 'medium', 'task', ['one'], [], []))
+        self.assertIn('already has', bees.LAST_REFUSAL)
+
     # Reuse the first package worktree across native retries and escalation.
     def test_bee_attempts_reuse_package_worktree(self):
         import subprocess
@@ -483,6 +495,19 @@ class QueenIntegrationTests(RoundCase):
         self.assertEqual((row['name'], row['class'], row['ended_at']), ('Ada', 'medium', None))
         bees.report_attempt(self.env(), REL, 'P1', 'medium', 'succeeded', 'Ada')
         self.assertIsNotNone(self.conn.execute('SELECT ended_at FROM embedded_bees').fetchone()['ended_at'])
+
+    def test_raise_to_queen_class_is_logged(self):
+        from haivequeen import hives
+        from bzztest import REL
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'light'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        env = self.env()
+        for i in range(4):
+            bees.report_attempt(env, REL, 'P1', 'light', 'failed', 'attempt-%s' % i, ['open'])
+        bees.start_process(env, REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [])
+        self.assertIn('P1', self.log())
+        self.assertIn('Queen class medium', self.log())
 
     # The provider setting beeMode process runs the Bee of the Queen's own provider as a separate agent.
     def test_bee_mode_process_starts_a_separate_agent(self):
