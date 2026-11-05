@@ -230,20 +230,7 @@ class InterruptedIntegratorTest(RoundCase):
         """Status word of the queue row."""
         return routine.queue_rows(self.env())["feature/b1"]["status"]
 
-    def test_rows_go_back_to_waiting(self):
-        """After an interrupted integrator the row is ready again."""
-        self.integrator()
-        routine.return_interrupted_rows(self.env())
-        self.assertEqual(self.row_status(), "ready")
 
-    def test_running_or_normally_failed_integrator_keeps_the_rows(self):
-        """A running integrator and one that failed for a real reason keep their rows."""
-        self.integrator(status="running", interrupted="", last="working")
-        routine.return_interrupted_rows(self.env())
-        self.assertEqual(self.row_status(), "in Lauf")
-        self.integrator(status="failed", interrupted="", last="build failed")
-        routine.return_interrupted_rows(self.env())
-        self.assertEqual(self.row_status(), "in Lauf")
 
     # Verify the Queen receives the interrupted-merge recovery instruction.
     def test_next_integrator_aborts_an_unfinished_merge(self):

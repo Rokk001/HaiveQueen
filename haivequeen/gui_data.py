@@ -96,7 +96,7 @@ def system_info(base) -> dict:
             "disk_pct": round(100 * disk.used / disk.total) if disk and disk.total else 0}
 
 
-# English text of a recorded start blocker (hives.blocker_label writes the terminal-era German words).
+# English text of a recorded start blocker.
 def blocker_text(reason) -> str:
     """English text of the reason why a Hive could not start its Queen."""
     reason = str(reason)
@@ -119,7 +119,7 @@ def blocker_text(reason) -> str:
             "the Hive is already claimed": "Start already reserved"}.get(reason, reason)
 
 
-# English state text of a Hive without a running Queen (hives.state_label writes German words).
+# English state text of a Hive without a running Queen.
 def status_text(hive) -> str:
     """English words for the persisted Hive state, the actual start blocker and the pending questions."""
     state = hive.get("state")

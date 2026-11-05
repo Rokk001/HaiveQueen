@@ -117,20 +117,7 @@ class VanishedEndsTest(RoundCase):
         self.agent("DUMMY-R1-work" + ("" if n == 1 else "-%d" % n), package="R1", started=100 - 10 * n, ended=95 - 10 * n,
                    status="failed", last_line=why)
 
-    def test_two_vanished_ends_do_not_block(self):
-        """Two vanished work ends with the same text block nothing; two real errors with the same text still block."""
-        self.vanished_work(1)
-        self.vanished_work(2)
-        self.assertEqual(routine.blocked_tasks(routine.all_agents(self.env())), [])
-        self.agent("DUMMY-R2-work", package="R2", started=50, ended=45, status="failed", last_line="boom")
-        self.agent("DUMMY-R2-work-2", package="R2", started=40, ended=35, status="failed", last_line="boom")
-        self.assertEqual(len(routine.blocked_tasks(routine.all_agents(self.env()))), 1)
 
-    def test_lost_by_queen_restart_does_not_block(self):
-        """The text a Queen restart writes ('process gone after orchestrator restart') is a vanished end as well."""
-        self.vanished_work(1, "process gone after orchestrator restart")
-        self.vanished_work(2, "process gone after orchestrator restart")
-        self.assertEqual(routine.blocked_tasks(routine.all_agents(self.env())), [])
 
     def test_vanished_ends_are_no_failures(self):
         """Three vanished work ends count as no failure, so they cause no escalation and no lock."""

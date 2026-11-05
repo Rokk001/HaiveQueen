@@ -358,12 +358,6 @@ def _min_ram(env) -> float:
     return float(s.get("pilotMinFreeRamGB", 2)) if s.get("pilot") else float(s.get("minFreeRamGB", 2))
 
 
-def _make_pool(conn, any_env) -> Pool:
-    """Free slots per provider across all projects (workers of every project count) and free integrator slots."""
-    active = [view(r) for r in runtime.list_agents(conn, None, "active") if r.get("status") in ACTIVE]
-    providers = any_env.providers if any_env else []
-    used_int = sum(1 for a in active if a.get("phase") == "integrate")
-    return Pool(sch.provider_free(providers, active), max(0, int((any_env.settings if any_env else {}).get("integratorSlots", 1)) - used_int))
 
 
 def run_hook(env, summary: dict) -> None:
@@ -380,100 +374,18 @@ def build_ram_wait(env, phase, free_gb):
     return buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get("buildJobs")), float(free_gb) * 1024.0)
 
 
-def _reject_reason(c, a):
-    """Validation of a start_agent action in the order of the rules; returns (reason or None, picked provider or None)."""
-    env, st, pool, dry = c["env"], c["state"], c["pool"], c["dry"]
-    providers = env.providers
-    name, plan, pkg, phase = a.get("name"), str(a.get("plan") or ""), str(a.get("package") or ""), a.get("phase")
-    key = "%s|%s|%s" % (plan, pkg, phase)
-    bundle = [str(b) for b in a.get("bundle") or []]
-    why = None
-    if not (a.get("name") and a.get("prompt") and a.get("cwd") and a.get("type") and a.get("phase")):
-        why = "missing field"
-    elif not sch.get_provider(providers, str(a["type"])):
-        why = "unknown provider %s" % a["type"]
-    elif phase not in PHASES:
-        why = "bad phase %s" % phase
-    elif not os.path.isdir(str(a["cwd"])):
-        why = "cwd missing: %s" % a["cwd"]
-    elif stop_flag().exists() and not dry:
-        why = "STOP flag"
-    elif not dry and not runstate.starts_allowed(env.conn):
-        why = "run state %s: no new agents" % runstate.get_state(env.conn)["state"]
-    elif any(b["Key"] == key for b in st["blocked"]):
-        bk = next(b for b in st["blocked"] if b["Key"] == key)
-        why = "blockiert: " + bk["Error"]
-        if not dry:
-            env.log("TECHNICAL NOTE: task %s failed 2 times with the same error and is not started again: %s" % (name, bk["Error"]))
-    elif (norm_plan(plan) + "|" + pkg) in st["busy"] or any((norm_plan(plan) + "|" + b) in st["busy"] for b in bundle):
-        why = "an agent already works on this package"
-    elif phase in ("work", "verify") and (routine.stall_open(env, plan, pkg) or routine.plan_stall_open(env, plan)):
-        why = "stopped by the progress guard: waiting for the answer of the owner"
-    elif phase == "work" and routine.package_locked(env, plan, pkg):
-        why = "package is locked: verifications reported open items too often (open question)"
-    elif routine.is_frozen(env, plan, pkg):
-        why = "package is frozen (nofollow list): no follow-up task"
-    elif (phase != "integrate" and not (phase == "work" and pkg.startswith("FIX-") and norm_plan(plan) == norm_plan(routine.QUEUE_PLAN_ID))
-          and not any(p["path"] == plan.replace("\\", "/") or p["path"] == plan for p in st["startable"])):
-        why = "rule 11: plan is not READY or IN_PROGRESS"
-    if not why and c["pilot"] and phase == "integrate":
-        why = "pilot mode: no integrator"
-    if not why and c["pilot"] and not plan.replace("/", "\\").endswith(str(env.settings.get("pilotPlan", "")).replace("/", "\\")):
-        why = "pilot mode: only packages of the pilot plan"
-    if not why and phase == "integrate" and c["plan_files"]:
-        why = "pilot/test mode (plan files): no integrator"
-    pick = None
-    if not why and phase == "integrate":
-        if not c["snapshot"].get("integration", {}).get("canStart"):
-            why = "integrator.canStart is false"
-        elif pool.int_free <= 0:
-            why = "no integrator slot"
-        else:
-            pick = next((p for p in providers if p["protocol"] == "claude" and p["slots"] > 0 and (p["classes"].get("medium") or {}).get("model")), None)   # the integrator is a Claude Code agent and uses no worker slot
-            if not pick:
-                why = "no free slot: no Claude Code provider is on (slots 0)"
-    elif not why:
-        if pool.workers() <= 0:
-            why = "no worker slot"
-        else:
-            # The package table decides what a package needs, not the "graphics" flag the brain happened to send; the flag still counts as "images".
-            need = routine.package_needs_for(env, plan, pkg) if phase == "work" else []
-            if a.get("graphics") is True and "images" not in need:
-                need = need + ["images"]
-            if need and not sch.capability_available(providers, need):
-                why = "no provider with the capability %s has slots above 0" % ", ".join(need)
-            else:
-                cls0 = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
-                pick = sch.select_provider(providers, cls0, need, pool.free, prefer=str(a["type"]), conn=env.conn)   # a busy slot never waits
-                if not pick:
-                    why = "no free slot" + (" for the capability %s" % ", ".join(need) if need else " in a fitting provider (class %s)" % cls0)
-    if not why and not dry and c["free_ram"]() < c["min_ram"]:
-        why = "free RAM %.2f GB is below %s GB" % (c["free_ram"](), c["min_ram"])
-    if not why and not dry:
-        why = build_ram_wait(env, phase, c["free_ram"]())   # the start of an integrate or release agent waits for the minimum free RAM before a build
-    if not why and not dry and c["pilot"] and _build_names(env):
-        why = "a build process runs (pilot waits): " + ", ".join(_build_names(env))
-    return why, pick
 
 
 # Action start_agent: validate, write the prompt and the agent row, start the runner. Returns 1 when an agent was started.
 def _do_start(c, a, forced_pick=None) -> int:
     """Action start_agent: validate, write the prompt and the agent row, start the runner. Returns 1 when an agent was started.
 
-    `forced_pick` is a provider chosen by the caller (triage agents): the validation is skipped.
+    `forced_pick` is the provider already selected by the Hive caller.
     """
     env, st, pool, report, dry = c["env"], c["state"], c["pool"], c["report"], c["dry"]
-    why, pick = (None, forced_pick) if forced_pick is not None else _reject_reason(c, a)
-    if why:
-        report.append("REJECT start_agent %s: %s" % (a.get("name"), why))
-        if not dry:
-            env.log("reject %s: %s" % (a.get("name"), why))
-        # A start that failed only for a temporary reason (slot, RAM, STOP) must not use up the brain event: it is asked again next round.
-        if TEMPORARY.match(why) and not dry:
-            for ev in c["rt_events"]:
-                if norm_plan(ev["plan"]) == norm_plan(str(a.get("plan"))):
-                    routine.remove_handled(env, ev["key"])
-        return 0
+    if forced_pick is None:
+        raise ValueError("a provider must be selected before starting an agent")
+    pick = forced_pick
     protocol, prov = pick["protocol"], pick["name"]
     nm, k = str(a["name"]), 1
     while nm in st["names"]:

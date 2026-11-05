@@ -22,24 +22,17 @@ ACTIVE = ("running", "starting")
 # Prompt templates of the agents the routine starts itself (placeholders {name}, see expand_template). A project may replace any of them
 # in the [prompts] table of its project.toml.
 DEFAULT_PROMPTS = {
-    "fixBlocked": "Plan: {plan}. The integrator blocked branch {branch} (tip {tip}). Fix exactly what the queue row says (integration queue of project {project}, row of {branch}): {status} Work in the worktree {cwd} on that branch, run {compileCheck} until exit 0 and the check scripts of the changed files, push normally and register the branch again with bzz ready (new tip, note 'Kompiliertest: Exit 0'). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the fix is finished.",
-    "fixBlockedNoPlan": "The integrator blocked branch {branch} (tip {tip}) and the queue row has no plan. The row says: {status} The main checkout ({cwd}) stays on {integrationBranch} and is never edited: create your own worktree for that branch next to it ({newWorktree}), fix exactly what the row says, run {compileCheck} until exit 0 and the check scripts of the changed files, push normally and register the branch again with bzz ready (new tip, note 'Kompiliertest: Exit 0'). Follow all rules in section 1 of AGENT-RULES.md, end when the fix is finished.",
     "answeredQuestion": "Plan: {plan}, item {item} (question {qid}). {owner} answered: {answer} Implement exactly this answer. {where} Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the item is finished.",
     "verifyOpenWork": "Plan: {plan}, package {pkg}. The independent verification {verifier} answered that requirements are open (answer: {answerPath}). Implement exactly the open requirements it lists, nothing else, and nothing the plan leaves to {owner}. Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state with evidence per requirement, end when all of them are done.",
     "restartWork": "Plan: {plan}, package {pkg}. The previous work agent {previous} never got a pane (technical failure of the window); start the package again from the plan (what is already done stays done). Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the package is finished.",
-    "workInMainCheckout": "The main checkout ({cwd}) stays on {integrationBranch} and is never edited. Work in your own worktree next to it ({newWorktree}) on a new sub-branch named {subBranch} of the feature branch that the plan names (create the feature branch from origin/{integrationBranch} if it does not exist, merge your sub-branch back into it locally when the package is finished).",
     "workInWorktree": "Work in the worktree {cwd} and the branch the plan names for this package (never invent them).",
-    "release": "Release of the branch of plan {plan} (worktree {cwd}): merge origin/{integrationBranch} (keep both sides of every conflict), run {compileCheck} until exit 0, run the check scripts for the changed files, push normally and register the branch with bzz ready (note 'Kompiliertest: Exit 0'; {buildFlowDoc} rules 3-5). {buildRules} Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the release is finished.",
-    "integrator": "You are the integrator. Follow {integratorInstructions} and {buildFlowDoc}: read the ready rows of the integration queue (bzz queue --project {project}), merge them, one Release build, check scripts, load test, push {integrationBranch}, deploy, set the rows to integrated (bzz queue upsert). {buildRules} Follow all rules in section 1 of AGENT-RULES.md.",
     "interruptedWork": "Plan: {plan}, package {pkg}. The previous work agent {previous} was interrupted (laptop sleep, network or API problem, or its process vanished), not finished. Continue exactly where it stopped: the work already in the worktree is kept, what is already done stays done. Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the package is finished.",
     "unfinishedWork": "Plan: {plan}, package {pkg}. The previous work agent {previous} ended without a new commit on its branch, so the package is not finished. Read its report ({answerPath}) and the handoff in the plan's state file, continue exactly where it stopped, commit your work and do not repeat what is already done. Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the package is finished.",
-    "lockQuestion": "{marker} - {tag}\n\nPackage {pkg} is locked: the checks repeatedly reported open items, also after the attempt with a higher class. Last check ({agent}): {text}\n\nQuestion: How should the package continue (other approach, change the requirement, check in the game)? Recommendation: {owner} decides after seeing the open items.",
 }
 
 # Settings every project gets; machine config.toml and project.toml overlay them (project over machine over these defaults).
 DEFAULT_SETTINGS = {
     "owner": "Owner",
-    "openMarker": "Open for Owner",
     "hives": 2,
     "preferredProvider": "",
     "excludedProviders": [],
@@ -83,7 +76,7 @@ def build_settings(machine: dict, project_cfg: dict) -> dict:
     merged = deep_merge(DEFAULT_SETTINGS, {k: v for k, v in machine.items() if k not in ("projects",)})
     over = {k: v for k, v in project_cfg.items() if k not in MACHINE_ONLY}
     merged = deep_merge(merged, over)
-    for key in ("progressVerifies", "planStallHours", "minClass", "bundle", "triage", "brain", "integratorSlots"):
+    for key in ("progressVerifies", "planStallHours", "minClass", "bundle", "openMarker", "triage", "brain", "integratorSlots"):
         merged.pop(key, None)
     if "minFreeRamGB" not in merged:
         merged["minFreeRamGB"] = float(machine.get("ramReserveMb", 2048)) / 1024.0
@@ -129,9 +122,6 @@ def resolve_agent_class(settings: dict, phase: str, requested: str, failures: in
     i = class_index(requested)
     every = max(1, int(settings.get("escalateAfter", 2)))
     i = min(2, i + failures // every)
-    minimum = (settings.get("minClass") or {}).get(phase)
-    if minimum:
-        i = max(i, class_index(minimum))
     return CLASS_NAMES[i]
 
 

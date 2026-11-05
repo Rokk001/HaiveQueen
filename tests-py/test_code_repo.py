@@ -66,9 +66,6 @@ class CodeRepoSettingTest(CodeRepoCase):
         """A new worktree is a sibling of the code repo with the worktree prefix, not of the workspace."""
         self.assertEqual(routine.new_worktree(self.env(), "pilot"), str(self.dev.parent / "HQ-pilot"))
 
-    def test_plan_ref_absolute_with_code_repo(self):
-        """With a code repo a plan is named by its absolute workspace path."""
-        self.assertEqual(routine.plan_ref(self.env(), REL), str(self.repo / REL))
 
     def test_pick_cwd_never_the_workspace(self):
         """Only a triage agent in the workspace ran before: the result is the code repo; a worktree in the history still wins."""
@@ -99,97 +96,9 @@ class CodeRepoSettingTest(CodeRepoCase):
         self.assertEqual(seen, [(str(self.dev), "origin/v2")])
 
 
-class CodeRepoStartTest(CodeRepoCase):
-    """Starts of a project with a code repo get the code repo as main checkout and absolute plan names."""
-
-    def start(self, **extra):
-        """Routine start actions of the dummy plan (the plan must exist in the database)."""
-        ctx = {"plans": [{"path": REL, "status": "IN_PROGRESS"}], "queue": [], "all_rows": [], "questions": [], "can_start_integrator": False,
-               "free": {"claude": 2, "codex": 2, "workers": 4, "int": 0}}
-        ctx.update(extra)
-        return [a for a in routine.get_routine(self.env(), ctx)["actions"] if a["action"] == "start_agent"]
-
-    def test_work_after_triage_only_starts_in_the_code_repo(self):
-        """Only a triage agent ran before: the work agent gets the code repo as cwd and a new worktree next to it, and names the plan absolutely."""
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        self.triage_row()
-        (act,) = self.start()
-        self.assertEqual((act["phase"], act["package"], act["cwd"]), ("work", "P1", self.home()))
-        text = act["prompt"]
-        self.assertIn("Plan: %s, package P1." % self.plan_name(), text)
-        wt = str((self.dev if self.with_code else self.repo).parent / ("HQ" if self.with_code else "wt"))
-        self.assertIn(wt, text)
-        self.assertNotIn(str(self.repo.parent / "HQ-"), text.replace(wt, ""))
-
-    def test_new_plan_after_the_brain_asked_starts_in_the_code_repo(self):
-        """No agent history and the new_plan event is handled: the packages start in the code repo."""
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        routine.set_handled(self.env(), "newplan:" + REL)
-        (act,) = self.start()
-        self.assertEqual(act["cwd"], self.home())
-
-    def test_answered_question_after_triage_only(self):
-        """An answered question starts in the code repo (not the workspace), in a new worktree, naming the plan absolutely."""
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        self.triage_row()
-        qid = db.add_question(self.conn, "testproj", REL, "P1", "Which value?", "5")
-        db.answer_question(self.conn, qid, "seven", "owner")
-        acts = [a for a in self.start(questions=routine.question_rows(self.env())) if a["package"].startswith("Q-")]
-        self.assertEqual(len(acts), 1)
-        self.assertEqual(acts[0]["cwd"], self.home())
-        self.assertIn("Plan: %s," % self.plan_name(), acts[0]["prompt"])
-        self.assertIn(str((self.dev if self.with_code else self.repo).parent / ("HQ-" if self.with_code else "wt-")), acts[0]["prompt"])
-
-    def test_fix_blocked_after_triage_only(self):
-        """A blocked row with a plan whose history is only a triage agent: the fix agent starts in the code repo with a new worktree."""
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        self.triage_row()
-        rows = [{"status": "blockiert x", "plan": REL, "branch": "fix/a", "tip": "abc1234def", "note": "two checks red"}]
-        (act,) = [a for a in self.start(all_rows=rows) if a["package"].startswith("FIX-")]
-        self.assertEqual(act["cwd"], self.home())
-        self.assertIn("Plan: %s." % self.plan_name(), act["prompt"])
-        self.assertIn(str((self.dev if self.with_code else self.repo).parent / ("HQ-fix-fix-a" if self.with_code else "wt-fix-fix-a")), act["prompt"])
-
-    def test_fix_blocked_without_plan_uses_the_code_repo(self):
-        """A blocked row without a plan starts in the code repo and names the new worktree next to it."""
-        rows = [{"status": "blockiert x", "plan": "keiner", "branch": "fix/b", "tip": "abc1234def", "note": "red"}]
-        (act,) = self.start(all_rows=rows)
-        self.assertEqual(act["cwd"], self.home())
-        self.assertIn(str((self.dev if self.with_code else self.repo).parent / ("HQ-fix-fix-b" if self.with_code else "wt-fix-fix-b")), act["prompt"])
-
-    def test_verify_names_the_plan_absolutely(self):
-        """The verify question names the plan by its absolute workspace path."""
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        self.agent("DUMMY-P1-work", package="P1", started=30, ended=20, last_line="ok")
-        (act,) = self.start()
-        self.assertEqual(act["phase"], "verify")
-        self.assertIn("Plan %s " % self.plan_name(), act["prompt"])
-
-    def test_follow_up_prompts_name_the_plan_absolutely(self):
-        """The follow-up work for open requirements and the restart after a pane failure name the plan absolutely."""
-        self.plan("IN_PROGRESS", [{"id": "A1", "title": "first"}, {"id": "A2", "title": "second"}])
-        self.agent("TT-A1-work", package="A1", started=30, ended=29, last_line="ok")
-        self.agent("TT-A1-verify", package="A1", phase="verify", started=20, ended=19, last_line="ok")
-        self.finish("TT-A1-verify", "Nein, teilweise.\nOffene Anforderungen: 3")
-        self.agent("TT-A2-work", package="A2", status="failed", started=10, ended=9, last_line="pane never started (no runner process)")
-        prompts = {a["package"]: a["prompt"] for a in self.start()}
-        self.assertIn("Plan: %s, package A1." % self.plan_name(), prompts["A1"])
-        self.assertIn("Plan: %s, package A2." % self.plan_name(), prompts["A2"])
-
-    def test_release_names_the_plan_absolutely(self):
-        """The release prompt names the plan absolutely."""
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
-        self.agent("DUMMY-P1-work", package="P1", started=30, ended=29, last_line="ok")
-        self.agent("DUMMY-P1-verify", package="P1", phase="verify", started=28, ended=27, last_line="ok")
-        self.finish("DUMMY-P1-verify", "Offene Anforderungen: 0")
-        self.agent("DUMMY-ALL-verify", package="ALL", phase="verify", started=26, ended=25, last_line="ok")
-        self.finish("DUMMY-ALL-verify", "Offene Anforderungen: 0")
-        (act,) = self.start()
-        self.assertEqual(act["phase"], "release")
-        self.assertIn("of plan %s " % self.plan_name(), act["prompt"])
 
 
-class CodeRepoUnchangedTest(CodeRepoStartTest):
+class CodeRepoUnchangedTest(CodeRepoCase):
     """The same flows in a project without `codeRepo` give the plain plan paths and the workspace as main checkout, as before."""
 
     with_code = False

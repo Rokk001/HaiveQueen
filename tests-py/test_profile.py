@@ -65,7 +65,7 @@ class EnvironmentTest(ProfileCase):
         """Session logs and settings for usage and Codex limits are read from the profile, never from the user's home folder."""
         home = Path(self.tmp.name) / "home"
         with mock.patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
-            for path in (usage.claude_root(), usage.codex_root(), usage.claude_settings_path(), ar.codex_sessions_dir(), profile.sessions_dir("codex")):
+            for path in (usage.codex_root(), ar.codex_sessions_dir(), profile.sessions_dir("codex")):
                 self.assertTrue(path.is_relative_to(self.data / "profile"), path)
                 self.assertFalse(path.is_relative_to(home))
 

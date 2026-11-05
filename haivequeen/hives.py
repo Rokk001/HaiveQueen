@@ -673,45 +673,9 @@ def hive_data(conn, project, agents, plan=None):
 
 
 # Translate recorded scheduler blockers into German text.
-def blocker_label(reason):
-    """Show the actual start blocker without exposing internal scheduling phrases."""
-    if reason.startswith('Hive limit '):
-        return 'Hive-Limit ' + reason.split()[2] + ' erreicht'
-    if reason.startswith('free RAM '):
-        return 'Zu wenig freier Arbeitsspeicher: ' + reason.split(' is below')[0][9:]
-    if reason.startswith('no provider with a free slot'):
-        return 'Kein freier Anbieter mit verf\u00fcgbarem Queen-Modell'
-    if reason.startswith('waiting for provider '):
-        return 'Wartet auf Anbieter ' + reason[len('waiting for provider '):]
-    return {'STOP': 'HaiveQueen gestoppt', 'PAUSED': 'HaiveQueen pausiert',
-            'waiting for the integration place': 'wartet auf Integration',
-            'handing off, Bee processes are still running': '\u00dcbergabe: Bees laufen noch',
-            'retry after an interrupted Queen is not due yet': 'Wartezeit nach unterbrochener Queen',
-            'no branch or worktree named in the plan or its state file': 'Plan-Branch oder Arbeitsverzeichnis fehlt',
-            'the Hive is already claimed': 'Start bereits reserviert'}.get(reason,
-            'Plan-Branch wird bereits anderweitig bearbeitet' if reason.startswith('its branch ') else
-            'Plan-Arbeitsverzeichnis konnte nicht vorbereitet werden' if reason.startswith('worktree for branch ') else reason)
 
 
 # German words for the state of a Hive that has no running Queen.
-def state_label(hive):
-    """Describe the persisted Hive state, actual start blocker and pending questions."""
-    state = hive.get('state')
-    questions = hive.get('pending_questions') or []
-    question_suffix = ' (#' + ', #'.join(map(str, questions)) + ')' if questions else ''
-    if state in ('answer', 'owner_check') and questions:
-        return ('wartet auf Owner-Pr\u00fcfung' if state == 'owner_check' else 'wartet auf Antwort') + ' (#' + ', #'.join(map(str, questions)) + ')'
-    if hive.get('blocker') and state in ('running', 'waiting', 'starting', 'requeen', 'codex_wait', 'provider_wait', 'integration_wait'):
-        return blocker_label(hive['blocker']) + question_suffix
-    if state == 'running':
-        return 'keine aktive Queen' + ('; offene Fragen #' + ', #'.join(map(str, questions)) if questions else '')
-    if state == 'done':
-        return 'abgeschlossen'
-    if state == 'resting':
-        return 'ruht bis ' + str(hive.get('reset_at') or '?').replace('T', ' ')[:16]
-    return {'queenless': 'weisellos', 'integration_wait': 'wartet auf Integration', 'answer': 'wartet auf Antwort', 'owner_check': 'wartet auf Owner-Prüfung', 'codex_wait': 'wartet auf Codex',
-            'provider_wait': 'wartet auf Anbieter', 'handoff': 'Übergabe', 'waiting': 'wartet auf Start', 'starting': 'wartet auf Start',
-            'requeen': 'wartet auf Start'}.get(state, '')
 
 
 # Resolve the four named migration plans from the existing plan source.
