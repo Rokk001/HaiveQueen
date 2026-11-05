@@ -43,7 +43,7 @@ class CutSnapshotTests(__import__('test_plan_submit').SubmittedPlanTests):
 
 
 class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
-    """H-9: a cut record belongs to one plan generation; a reused path or a changed plan text never inherits it, and an older plan is recovered only when no agent can have changed its header."""
+    """H-9: a cut record belongs to one plan generation and title; a reused path or another plan never inherits it, edits keep it, and an older plan is recovered only when no agent can have changed its header."""
     OWNER = [{'id': 'P1', 'title': 'First', 'verify': 'owner', 'requirements': ['R-1']}]
     CODE = [{'id': 'P1', 'title': 'First', 'verify': 'code', 'requirements': ['R-1']}]
 
@@ -61,13 +61,33 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         self.assertEqual(self.check()[0], 0)
         self.assertEqual(self.stored(), [['R-1', 'code']])
 
-    def test_changed_plan_text_invalidates_the_cut(self):
-        """The cut is bound to the plan text below the header: another text at the same path has no cut record."""
+    def test_edited_plan_text_keeps_the_cut(self):
+        """Edits below the header (wording, new requirement lines) and status changes keep the cut of this plan generation."""
         self.queen_of('SUBMITTED', self.OWNER)
         self.assertEqual(self.check()[0], 0)
         self.assertEqual(self.stored(), [['R-1', 'owner']])
-        self.assertEqual(runtime.cut_assignments(self.conn, 'testproj', REL, self.text().replace('status = "READY"', 'status = "IN_PROGRESS"')), [['R-1', 'owner']])
-        self.assertIsNone(runtime.cut_assignments(self.conn, 'testproj', REL, self.text() + '\nAnother plan.\n'))
+        edited = self.text().replace('status = "READY"', 'status = "IN_PROGRESS"') + '\nReworded text.\n\n## Requirements\n\n- R-1: changed wording\n- R-2: added later\n'
+        (self.repo / REL).write_text(edited, encoding='utf-8')
+        runtime.sync_plans(self.conn, 'testproj')
+        self.assertEqual(self.stored(), [['R-1', 'owner']])
+
+    def test_other_plan_title_at_the_path_has_no_cut(self):
+        """Another plan written over an active path (another title) does not inherit the cut, and a later check cannot record one."""
+        self.queen_of('SUBMITTED', self.OWNER)
+        self.assertEqual(self.check()[0], 0)
+        self.plan('SUBMITTED', self.OWNER, title='Another plan')
+        self.assertIsNone(self.stored())
+        self.assertEqual(self.check()[0], 0)
+        self.assertIsNone(self.stored())
+
+    def test_old_generation_record_is_not_used(self):
+        """A record written before the path's last reset does not apply even if it was not deleted."""
+        self.queen_of('SUBMITTED', self.OWNER)
+        self.assertEqual(self.check()[0], 0)
+        value = runtime.kv_get(self.conn, 'testproj', 'cut-verification:' + REL)
+        runtime.reset_cut_assignments(self.conn, 'testproj', REL)
+        runtime.kv_set(self.conn, 'testproj', 'cut-verification:' + REL, value)
+        self.assertIsNone(self.stored())
 
     def test_reused_path_after_done_gets_its_own_cut(self):
         """A finished plan's path written again with a new plan is cut afresh; the old record is gone at once."""
@@ -118,10 +138,40 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         self.plan('READY', self.OWNER, title='Second plan')
         self.assertEqual(self.stored(), [['R-1', 'owner']])
 
-    def test_gate_uses_the_cut_of_this_plan_text(self):
-        """The gate exempts by the cut record only while the plan text is the cut one."""
+    def gate_after_edit(self, packages, extra_header, requirement_lines):
+        """Cut the plan, then edit it as the owner may (a package gains a requirement, wording changes, new lines); return the gate result."""
+        from haivequeen import readygate
+        self.queen_of('SUBMITTED', packages)
+        self.assertEqual(self.check()[0], 0)
+        text = self.text()
+        for old, new in extra_header:
+            text = text.replace(old, new, 1)
+        (self.repo / REL).write_text(text + '\nReworded after the cut.\n\n## Requirements\n\n' + requirement_lines, encoding='utf-8')
+        runtime.sync_plans(self.conn, 'testproj')
+        (self.repo / REL.replace('-PLAN.md', '-STATE.md')).write_text('# State\n', encoding='utf-8')
+        return readygate.gate(self.env(), REL, {'cwd': ''})
+
+    def test_gate_keeps_owner_exemption_through_later_requirements(self):
+        """H-9 with H-27: the cut owner requirement stays exempt after edits; a requirement added later, even to the owner package, needs evidence."""
+        accepted, message, _ = self.gate_after_edit(self.OWNER, [('requirements = ["R-1"]', 'requirements = ["R-1", "R-2"]')],
+                                                    '- R-1: owner check, reworded\n- R-2: added later\n')
+        self.assertFalse(accepted)
+        self.assertIn('R-2 (missing in the list)', message)
+        self.assertNotIn('R-1', message)
+
+    def test_gate_keeps_mixed_cut_non_exempt_after_edits(self):
+        """A requirement the cut covered by an owner and a code package needs evidence also after edits and later additions."""
+        mixed = self.OWNER + [{'id': 'P2', 'title': 'Second', 'verify': 'code', 'requirements': ['R-1']}]
+        accepted, message, _ = self.gate_after_edit(mixed, [], '- R-1: mixed\n- R-3: added later\n')
+        self.assertFalse(accepted)
+        self.assertIn('R-1 (missing in the list)', message)
+        self.assertIn('R-3 (missing in the list)', message)
+
+    def test_gate_uses_the_cut_of_this_plan_title(self):
+        """The gate exempts by the cut record only while the plan at the path keeps its title."""
         from haivequeen import readygate
         self.plan('READY', self.OWNER)
+        self.plan('READY', self.OWNER, title='Another plan')
         with (self.repo / REL).open('a', encoding='utf-8') as f:
             f.write('\n## Requirements\n\n- R-1: owner check\n')
         state = self.repo / REL.replace('-PLAN.md', '-STATE.md')

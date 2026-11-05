@@ -1,5 +1,4 @@
 """Runtime queries and writes (used by the loop, the CLI and the agents): agents, events, kv, handled, nofollow, builds, usage, plans, queue."""
-import hashlib
 import json
 import os
 import platform
@@ -207,17 +206,13 @@ def kv_set(conn, project, key, value) -> None:
             (project, key, value, db.now()))
 
 
-CUT_KEY = "cut-verification:"   # + plan path: the requirement/verify pairs of the accepted cut and the hash of the plan text they belong to
+CUT_KEY = "cut-verification:"   # + plan path: the requirement/verify pairs of the accepted cut, its plan generation and plan title
 CUT_RESET_KEY = "cut-reset:"     # + plan path: when the owner or a reused path started a new plan generation
 
 
-def plan_body_hash(text):
-    """Identity of a plan generation: a hash of the plan text below the header (the status line and the header are not part of it)."""
-    header, body = plan_mod.split_front_matter(str(text or ""))
-    lines = body.splitlines()
-    if not header and len(lines) > 1 and re.match(r"^Status:", lines[1]):
-        lines = lines[:1] + lines[2:]   # v1 plan: line 2 is the status
-    return hashlib.sha256("\n".join(line.rstrip() for line in lines).strip().encode("utf-8")).hexdigest()
+def plan_identity(text):
+    """The plan title (first heading, spaces folded): with the generation of the path it tells an edited plan from another plan."""
+    return re.sub(r"\s+", " ", plan_mod.parse_plan_text(str(text or "")).title).strip()
 
 
 def _cut_record(value):
@@ -226,7 +221,7 @@ def _cut_record(value):
         record = json.loads(value) if value is not None else None
     except (ValueError, TypeError):
         return None
-    if not isinstance(record, dict) or not isinstance(record.get("body"), str):
+    if not isinstance(record, dict) or not isinstance(record.get("generation"), str) or not isinstance(record.get("title"), str):
         return None
     pairs = record.get("pairs")
     if not isinstance(pairs, list) or not all(isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) for p in pairs):
@@ -234,11 +229,17 @@ def _cut_record(value):
     return record
 
 
+def _generation(conn, project, plan):
+    """The current plan generation of a path: the time of its last reset, '' before any."""
+    return kv_get(conn, project, CUT_RESET_KEY + plan) or ""
+
+
 def cut_assignments(conn, project, plan, plan_text):
     """The requirement/verify pairs of the accepted cut of this plan generation, or None when there is no trustworthy record
-    (an older plan, a reused path or a plan text that is no longer the cut one)."""
+    (an older plan, a reused path, or another plan title at this path). Edits of the plan text and later requirements keep the
+    record: requirements added after the cut have no pair and so need evidence (H-27)."""
     record = _cut_record(kv_get(conn, project, CUT_KEY + plan))
-    if record is None or record["body"] != plan_body_hash(plan_text):
+    if record is None or record["generation"] != _generation(conn, project, plan) or record["title"] != plan_identity(plan_text):
         return None
     return record["pairs"]
 
@@ -247,8 +248,8 @@ def _write_cut(conn, project, plan, packages, plan_text, source, replace):
     """Inside a transaction: store the cut unless a record of this format exists and replace is False; returns True when stored."""
     if not replace and _cut_record(kv_get(conn, project, CUT_KEY + plan)) is not None:
         return False
-    record = {"pairs": [[rid, pkg.verify] for pkg in packages for rid in pkg.requirements], "body": plan_body_hash(plan_text),
-              "source": source, "at": db.now()}
+    record = {"pairs": [[rid, pkg.verify] for pkg in packages for rid in pkg.requirements], "generation": _generation(conn, project, plan),
+              "title": plan_identity(plan_text), "source": source, "at": db.now()}
     conn.execute("INSERT INTO kv (project, key, value, updated_at) VALUES (?,?,?,?) ON CONFLICT(project, key) DO UPDATE SET "
                  "value=excluded.value, updated_at=excluded.updated_at", (project, CUT_KEY + plan, json.dumps(record), db.now()))
     return True
