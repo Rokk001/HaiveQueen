@@ -90,7 +90,7 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(ar.classify_cmd("git commit -m 'Other thing'")["label"], "Commit: Other thing")
         self.assertEqual(ar.classify_cmd("git commit")["label"], "Commit")
         self.assertEqual(ar.classify_cmd("git push origin x")["kind"], "push")
-        self.assertEqual(ar.classify_cmd("pwsh scripts/compile-check-changed.ps1")["label"], "Compile test")
+        self.assertEqual(ar.classify_cmd("pwsh scripts/compile-check-changed.ps1", compile_check="pwsh scripts/compile-check-changed.ps1")["label"], "Compile test")
         self.assertEqual(ar.classify_cmd("python check-leaks.py")["label"], "Check check-leaks.py")
         self.assertEqual(ar.classify_cmd("python -I haivequeen/cli.py ready --branch x")["kind"], "ready")
         self.assertEqual(ar.classify_cmd("echo hi >> QUEUE.md", "QUEUE")["kind"], "ready")

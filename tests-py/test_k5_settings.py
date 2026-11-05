@@ -35,3 +35,8 @@ class CompileCommandTests(unittest.TestCase):
         from haivequeen.agent_runner import classify_cmd
         self.assertEqual(classify_cmd('cd src && npm test', compile_check='npm test')['label'], 'Compile test')
         self.assertIsNone(classify_cmd('echo npm test', compile_check='npm test'))
+
+    def test_old_filename_alone_is_not_compile_test(self):
+        from haivequeen.agent_runner import classify_cmd
+        result = classify_cmd('powershell -File compile-check-changed.ps1', compile_check='npm test')
+        self.assertNotEqual(result['label'], 'Compile test')

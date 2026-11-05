@@ -194,8 +194,6 @@ def classify_cmd(cmd, queue_re=None, compile_check=None):
     if compile_check and re.search(r'(?:^|[;&|\n])\s*(?:&\s*)?' + re.escape(str(compile_check).strip()) + r'(?=$|\s|[;&|])', cmd):
         return {"kind": "check", "label": "Compile test"}
     checks = executed_check_scripts(cmd)
-    if any(name.lower() == 'compile-check-changed.ps1' for name in checks):
-        return {"kind": "check", "label": "Compile test"}
     if checks:
         return {"kind": "check", "label": "Check " + checks[0]}
     if re.search(r"(?:bzz|cli.py)[\"']?\s+ready(\s|$)", cmd):
