@@ -1,4 +1,5 @@
 """Runtime queries and writes (used by the loop, the CLI and the agents): agents, events, kv, handled, nofollow, builds, usage, plans, queue."""
+import hashlib
 import json
 import os
 import platform
@@ -206,26 +207,83 @@ def kv_set(conn, project, key, value) -> None:
             (project, key, value, db.now()))
 
 
-def cut_assignments(conn, project, plan):
-    """Return preserved requirement/verification pairs, or None for an older plan."""
-    value = kv_get(conn, project, "cut-verification:" + plan)
-    if value is None:
-        return None
+CUT_KEY = "cut-verification:"   # + plan path: the requirement/verify pairs of the accepted cut and the hash of the plan text they belong to
+CUT_RESET_KEY = "cut-reset:"     # + plan path: when the owner or a reused path started a new plan generation
+
+
+def plan_body_hash(text):
+    """Identity of a plan generation: a hash of the plan text below the header (the status line and the header are not part of it)."""
+    header, body = plan_mod.split_front_matter(str(text or ""))
+    lines = body.splitlines()
+    if not header and len(lines) > 1 and re.match(r"^Status:", lines[1]):
+        lines = lines[:1] + lines[2:]   # v1 plan: line 2 is the status
+    return hashlib.sha256("\n".join(line.rstrip() for line in lines).strip().encode("utf-8")).hexdigest()
+
+
+def _cut_record(value):
+    """The stored cut record as a dict, or None when it is missing or not a record of this format."""
     try:
-        pairs = json.loads(value)
-        if not isinstance(pairs, list) or not all(isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) for p in pairs):
-            return None
-        return pairs
+        record = json.loads(value) if value is not None else None
     except (ValueError, TypeError):
         return None
+    if not isinstance(record, dict) or not isinstance(record.get("body"), str):
+        return None
+    pairs = record.get("pairs")
+    if not isinstance(pairs, list) or not all(isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) for p in pairs):
+        return None
+    return record
 
 
-def save_cut_assignments(conn, project, plan, packages):
-    """Preserve the first accepted cut; subsequent checks cannot change it."""
-    pairs = [[rid, pkg.verify] for pkg in packages for rid in pkg.requirements]
+def cut_assignments(conn, project, plan, plan_text):
+    """The requirement/verify pairs of the accepted cut of this plan generation, or None when there is no trustworthy record
+    (an older plan, a reused path or a plan text that is no longer the cut one)."""
+    record = _cut_record(kv_get(conn, project, CUT_KEY + plan))
+    if record is None or record["body"] != plan_body_hash(plan_text):
+        return None
+    return record["pairs"]
+
+
+def _write_cut(conn, project, plan, packages, plan_text, source, replace):
+    """Inside a transaction: store the cut unless a record of this format exists and replace is False; returns True when stored."""
+    if not replace and _cut_record(kv_get(conn, project, CUT_KEY + plan)) is not None:
+        return False
+    record = {"pairs": [[rid, pkg.verify] for pkg in packages for rid in pkg.requirements], "body": plan_body_hash(plan_text),
+              "source": source, "at": db.now()}
+    conn.execute("INSERT INTO kv (project, key, value, updated_at) VALUES (?,?,?,?) ON CONFLICT(project, key) DO UPDATE SET "
+                 "value=excluded.value, updated_at=excluded.updated_at", (project, CUT_KEY + plan, json.dumps(record), db.now()))
+    return True
+
+
+def save_cut_assignments(conn, project, plan, packages, plan_text, source="check", replace=False):
+    """Preserve the accepted cut of a plan generation; a later check of the same generation cannot change it (replace only for a
+    cut the owner starts). Returns True when the record was written."""
     with db.transaction(conn):
-        conn.execute("INSERT OR IGNORE INTO kv (project, key, value, updated_at) VALUES (?,?,?,?)",
-                     (project, "cut-verification:" + plan, json.dumps(pairs), db.now()))
+        return _write_cut(conn, project, plan, packages, plan_text, source, replace)
+
+
+def _reset_cut(conn, project, plan):
+    """Inside a transaction: a new plan generation starts at this path; the old cut record no longer applies."""
+    conn.execute("DELETE FROM kv WHERE project=? AND key=?", (project, CUT_KEY + plan))
+    conn.execute("INSERT INTO kv (project, key, value, updated_at) VALUES (?,?,?,?) ON CONFLICT(project, key) DO UPDATE SET "
+                 "value=excluded.value, updated_at=excluded.updated_at", (project, CUT_RESET_KEY + plan, db.now(), db.now()))
+
+
+def reset_cut_assignments(conn, project, plan):
+    """Start a new plan generation at this path (owner rejects or redrafts the plan)."""
+    with db.transaction(conn):
+        _reset_cut(conn, project, plan)
+
+
+def _recover_cut(conn, project, plan, plan_text):
+    """Inside a transaction: an older READY plan without a cut record gets its current header as record only when no Queen or
+    Bee of this generation has started yet, so no agent can have changed the header after the owner wrote it."""
+    if _cut_record(kv_get(conn, project, CUT_KEY + plan)) is not None:
+        return False
+    since = kv_get(conn, project, CUT_RESET_KEY + plan) or ""
+    if conn.execute("SELECT 1 FROM agents WHERE project=? AND plan_path=? AND (started_at IS NULL OR started_at>=?) LIMIT 1",
+                    (project, plan, since)).fetchone():
+        return False
+    return _write_cut(conn, project, plan, plan_mod.parse_plan_text(plan_text).packages, plan_text, "unworked", False)
 
 
 def kv_delete(conn, project, key) -> int:
@@ -358,6 +416,14 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
     with db.transaction(conn):
         for plan in found:
             rel = os.path.relpath(plan.path, ws).replace("\\", "/")
+            before = conn.execute("SELECT status FROM plans WHERE project=? AND path=?", (project, rel)).fetchone()
+            if before is not None and before[0] == "DONE" and plan.status != "DONE":
+                _reset_cut(conn, project, rel)   # a finished plan's path is used again: a new plan generation
+            if plan.status == "READY":
+                try:
+                    _recover_cut(conn, project, rel, Path(plan.path).read_text(encoding="utf-8-sig"))
+                except OSError:
+                    pass
             conn.execute(
                 "INSERT INTO plans (project, path, title, status, updated_at) VALUES (?,?,?,?,?) "
                 "ON CONFLICT(project, path) DO UPDATE SET title=excluded.title, status=excluded.status, "

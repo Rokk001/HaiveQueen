@@ -226,7 +226,7 @@ class GateTests(RoundCase):
         """An owner check of the plan and a set aside decision let the branch pass."""
         text = (self.repo / REL).read_text(encoding="utf-8").replace('[[packages]]', '[[packages]]\nverify = "owner"\nrequirements = ["G-2"]', 1)
         (self.repo / REL).write_text(text, encoding="utf-8")
-        runtime.save_cut_assignments(self.conn, "testproj", REL, plans.parse_plan_text(text).packages)
+        runtime.save_cut_assignments(self.conn, "testproj", REL, plans.parse_plan_text(text).packages, text, replace=True)
         runtime.add_decision(self.conn, "testproj", "owner", "G-3 is set aside", plan=REL, item="G-3")
         self.state(FULL[0])
         with self.runner("passed"):

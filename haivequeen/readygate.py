@@ -119,8 +119,8 @@ def gate(env, plan, queen):
     plan_text, plan_file = _read([os.path.join(f, plan) for f in folders])
     state_text, state_file = _read([plans.state_file_path(os.path.join(f, plan)) for f in folders])
     decisions = [d for d in runtime.list_decisions(env.conn, env.name, active_only=True) if not d["plan_path"] or d["plan_path"] == plan]
-    assignments = runtime.cut_assignments(env.conn, env.name, plan)
-    # Older plans have no reliable cut-time record: require evidence for them.
+    assignments = runtime.cut_assignments(env.conn, env.name, plan, plan_text)
+    # No trustworthy cut record (older worked plan, reused path, changed plan text): require evidence.
     res = evaluate(plan_text, state_text, decisions, assignments if assignments is not None else [])
     if res.no_ids or res.blocking:
         return False, refusal_text(res), False

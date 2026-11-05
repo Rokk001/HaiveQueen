@@ -325,7 +325,7 @@ def cmd_plan(args, conn):
         return fail("the plan is not cut properly: " + "; ".join(problems))
     status = parsed.status
     if status == "SUBMITTED":
-        runtime.save_cut_assignments(conn, args.project, plan, parsed.packages)
+        runtime.save_cut_assignments(conn, args.project, plan, parsed.packages, path.read_text(encoding="utf-8-sig"))
         status = runtime.set_plan_status(conn, args.project, plan, "READY")["status"]
     runtime.sync_plans(conn, args.project)
     out({"ok": True, "plan": plan, "status": status, "packages": [p.id for p in parsed.packages], "warnings": plan_mod.plan_warnings(parsed)})

@@ -556,6 +556,7 @@ def reject_plan(conn, project, plan):
     if _plan_status(conn, project, plan) != 'DRAFT' and not is_stopped(conn, project, plan):
         raise ValueError('only a stopped Hive or a draft can be rejected')
     runtime.set_plan_status(conn, project, plan, 'REJECTED')
+    runtime.reset_cut_assignments(conn, project, plan)   # a rejected plan's cut no longer applies
     runtime.kv_delete(conn, project, 'plan-prepause:' + plan)
 
 
@@ -565,6 +566,7 @@ def back_to_draft(conn, project, plan):
     if _plan_status(conn, project, plan) != 'REJECTED' and not is_stopped(conn, project, plan):
         raise ValueError('only a stopped or rejected plan can go back to draft')
     runtime.set_plan_status(conn, project, plan, 'DRAFT')
+    runtime.reset_cut_assignments(conn, project, plan)   # the owner redrafts the plan: a new generation is cut again
     runtime.kv_delete(conn, project, 'plan-prepause:' + plan)
 
 
@@ -573,6 +575,9 @@ def start_plan(conn, project, plan):
     """A DRAFT plan becomes READY; a PAUSED or REJECTED plan is started again (start_again)."""
     if _plan_status(conn, project, plan) == 'DRAFT':
         runtime.set_plan_status(conn, project, plan, 'READY')
+        # the owner starts the header as written: that is the cut of this generation
+        text = (runtime._workspace(conn, project) / plan).read_text(encoding='utf-8-sig')
+        runtime.save_cut_assignments(conn, project, plan, plan_mod.parse_plan_text(text).packages, text, source='start', replace=True)
     else:
         start_again(conn, project, plan)
 
@@ -583,6 +588,7 @@ def start_again(conn, project, plan):
     status = _plan_status(conn, project, plan)
     if status == 'REJECTED':
         runtime.set_plan_status(conn, project, plan, 'DRAFT')
+        runtime.reset_cut_assignments(conn, project, plan)
     elif status == 'PAUSED':
         before = runtime.kv_get(conn, project, 'plan-prepause:' + plan)
         runtime.set_plan_status(conn, project, plan, before if before in ('DRAFT', 'SUBMITTED', 'READY', 'IN_PROGRESS', 'DONE') else 'READY')
