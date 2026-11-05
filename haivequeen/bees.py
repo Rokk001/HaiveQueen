@@ -78,7 +78,7 @@ def record_step_count(conn, project, plan, package, steps):
 def record_embedded_start(conn, project, plan, package, name, cls, provider, model='', effort=''):
     """An embedded Bee has no agent row of its own: store it so the window can show it under its Queen. An older open row of the package is closed first."""
     ensure_attempts(conn)
-    close_embedded(conn, project, plan, package, 'replaced')
+    close_embedded(conn, project, plan, package, 'replaced', keep_stopping=True)
     conn.execute('INSERT INTO embedded_bees(project,plan_path,package,name,class,provider,model,effort,started_at) VALUES (?,?,?,?,?,?,?,?,?)',
                  (project, plan, package, name, cls, provider, model, effort, db.now()))
 
@@ -93,14 +93,40 @@ def open_embedded_names(conn, skip=None) -> set:
 
 
 # Mark embedded Bees as ended.
-def close_embedded(conn, project, plan, package=None, outcome='done'):
-    """Close the open embedded Bees of a package, or of the whole plan when no package is given, with the outcome that ended them."""
+def close_embedded(conn, project, plan, package=None, outcome='done', keep_stopping=False):
+    """Close the open embedded Bees of a package, or of the whole plan when no package is given, with the outcome that ended them.
+
+    A Bee whose stop is pending (outcome STOPPING) is closed only by a confirmation of its end (its result reported by its Queen), then with the outcome
+    stopped. `keep_stopping` leaves such a Bee open: a replacement or a Queen restart does not prove that the subagent ended (owner answer 220).
+    Returns the number of rows closed whose stop was pending."""
     ensure_attempts(conn)
-    sql, args = 'UPDATE embedded_bees SET ended_at=?, outcome=? WHERE project=? AND plan_path=? AND ended_at IS NULL', [db.now(), outcome, project, plan]
+    where, args = ' WHERE project=? AND plan_path=? AND ended_at IS NULL', [project, plan]
+    if package:
+        where += ' AND package=?'
+        args.append(package)
+    confirmed = 0
+    if not keep_stopping:
+        confirmed = conn.execute("UPDATE embedded_bees SET ended_at=?, outcome='stopped'" + where + ' AND outcome=?', [db.now()] + args + [STOPPING]).rowcount
+    conn.execute('UPDATE embedded_bees SET ended_at=?, outcome=?' + where + ' AND outcome!=?', [db.now(), outcome] + args + [STOPPING])
+    return confirmed
+
+
+# An embedded Bee the owner stopped keeps its row and its Bee place until its end is confirmed.
+STOPPING = 'stopping'
+
+
+def stopping_embedded(conn, project, plan=None, package=None):
+    """(plan, package, name) of the open embedded Bees whose stop is pending, oldest first."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedded_bees'").fetchone():
+        return []
+    sql, args = 'SELECT plan_path, package, name FROM embedded_bees WHERE project=? AND ended_at IS NULL AND outcome=?', [project, STOPPING]
+    if plan:
+        sql += ' AND plan_path=?'
+        args.append(plan)
     if package:
         sql += ' AND package=?'
         args.append(package)
-    conn.execute(sql, args)
+    return [tuple(r) for r in conn.execute(sql + ' ORDER BY started_at', args)]
 
 
 # Count a failed attempt, ignoring technical interruptions.
@@ -204,19 +230,35 @@ STOP_KEY = 'package-stopped:'
 STOP_NOTICE_FILE = 'STOP-PACKAGES'
 
 
-def write_stop_notice(conn, project, plan):
-    """Tell every running Queen of the plan (file STOP-PACKAGES in her run folder) which packages the owner stopped: she ends their subagent Bees
-    and starts none of them again. An embedded Bee has no process of its own, so only its Queen can end it. Without a stopped package the file is removed."""
-    from . import platform as osplat
+def stop_notice_text(conn, project, plan):
+    """The text of STOP-PACKAGES for the plan, empty when no package is stopped and no stop is pending."""
+    ensure_attempts(conn)
     names = [p for (_, pl, p) in stopped_packages(conn, project) if pl == plan]
+    pending = stopping_embedded(conn, project, plan)
+    names += [p for (_, p, _) in pending if p not in names]
+    if not names:
+        return ''
+    text = 'The owner stopped these packages: %s. End their Bees now (a subagent Bee too), start none of them again and leave them open; the owner resumes them.\n' % ', '.join(names)
+    if pending:
+        text += ('Stop pending until you confirm the end of these subagent Bees: %s. They keep their Bee place until then. As soon as a subagent Bee '
+                 'has ended, confirm it with bzz bee result --outcome interrupted for its package.\n') % ', '.join('%s (%s)' % (n, p) for (_, p, n) in pending)
+    return text
+
+
+def write_stop_notice(conn, project, plan):
+    """Tell every running Queen of the plan (file STOP-PACKAGES in her run folder) which packages the owner stopped: she ends their subagent Bees,
+    confirms each ended subagent Bee and starts none of them again. An embedded Bee has no process of its own, so only its Queen can end it.
+    Without a stopped package or a pending stop the file is removed; an unchanged file is not written again."""
+    from . import platform as osplat
+    text = stop_notice_text(conn, project, plan)
     for queen in runtime.list_agents(conn, project, 'active'):
         if queen.get('plan_path') != plan or queen.get('phase') != 'queen' or queen.get('status') not in runtime.ACTIVE_STATUSES:
             continue
         target = osplat.runs_dir() / project / queen['name'] / STOP_NOTICE_FILE
-        if names:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text('The owner stopped these packages: %s. End their Bees now (a subagent Bee too), start none of them again '
-                              'and leave them open; the owner resumes them.\n' % ', '.join(names), encoding='utf-8')
+        if text:
+            if not target.is_file() or target.read_text(encoding='utf-8') != text:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text, encoding='utf-8')
         elif target.exists():
             target.unlink()
 
@@ -224,10 +266,16 @@ def write_stop_notice(conn, project, plan):
 def stop_package(conn, project, plan, package):
     """Mark the package as stopped by the owner; no Bee of it starts again until resume_package.
 
-    An open embedded (subagent) Bee of the package is closed with the outcome stopped, so it holds no Bee place, and the running Queen is told to end it."""
+    An open embedded (subagent) Bee of the package has no process HaiveQueen could end: its stop is pending (outcome STOPPING), its row stays open and
+    keeps its Bee place, and the running Queen is told to end it and confirm its end; only that confirmation closes the row (owner answer 220)."""
+    ensure_attempts(conn)
     runtime.kv_set(conn, project, STOP_KEY + '%s|%s' % (plan, package), db.now())
-    close_embedded(conn, project, plan, package, 'stopped')
-    runtime.append_event(conn, project, 'Package %s stopped by the owner; it stays stopped until the owner resumes it' % package, kind='note', mirror='none')
+    pending = conn.execute('UPDATE embedded_bees SET outcome=? WHERE project=? AND plan_path=? AND package=? AND ended_at IS NULL',
+                           (STOPPING, project, plan, package)).rowcount
+    text = 'Package %s stopped by the owner; it stays stopped until the owner resumes it' % package
+    if pending:
+        text += '. Its subagent Bee keeps its Bee place until its Queen confirms that it ended'
+    runtime.append_event(conn, project, text, kind='note', mirror='none')
     write_stop_notice(conn, project, plan)
 
 
@@ -384,7 +432,9 @@ def escalation_providers(env, plan, package):
 # Record an attempt and file one owner question when the top class is exhausted.
 def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked=''):
     """Record an outcome and ask once after the highest class fails repeatedly. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
-    close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome)   # the embedded Bee of this package has reported
+    if close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome):   # the embedded Bee of this package has reported
+        runtime.append_event(env.conn, env.name, 'The stopped subagent Bee of package %s has ended; its Bee place is free' % package, kind='note', mirror='none')
+        write_stop_notice(env.conn, env.name, plan)
     if blocked:
         set_package_state(env.conn, env.name, plan, package, 'waiting', 'queen', blocked)
         return
@@ -474,6 +524,9 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             return refuse(env, package, 'the package is not in the plan')
         if package_stopped(env.conn, env.name, plan, package):
             return refuse(env, package, 'the owner stopped this package; it starts again only after the owner resumes it')
+        pending = stopping_embedded(env.conn, env.name, plan, package)
+        if pending:
+            return refuse(env, package, 'the stopped subagent Bee %s of this package has not confirmed its end; once it has ended, report it with bzz bee result --outcome interrupted' % pending[0][2])
         requested_class = package_row['cls']
         threshold = int(env.settings.get('escalateAfter', 3))
         excluded = env.settings.get('excludedProviders', [])

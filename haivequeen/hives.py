@@ -857,6 +857,10 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                             bees.notify_startable(env, plan['path'], running[-1], slots, is_alive)
                         except Exception as exc:
                             env.log('startable packages not reported: %s' % exc)
+                        try:   # H-31: a Queen that started later learns of stopped packages and pending stops too
+                            bees.write_stop_notice(conn, env.name, plan['path'])
+                        except Exception as exc:
+                            env.log('stopped packages not reported: %s' % exc)
                     continue
                 if hive and hive['state'] == 'handoff':
                     if not can_handoff(conn, env.name, plan['path']):
@@ -1021,7 +1025,9 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
                     raise
                 if count:
-                    bees.close_embedded(conn, env.name, path, None, 'queen replaced')   # embedded Bees of the old Queen are gone with her
+                    # embedded Bees of the old Queen are gone with her; a stopped one whose end was never confirmed keeps its place (owner answer 220)
+                    bees.close_embedded(conn, env.name, path, None, 'queen replaced', keep_stopping=True)
+                    bees.write_stop_notice(conn, env.name, path)
                     runtime.kv_set(conn, env.name, 'hive-blocker:' + path, '')
                     for package in runtime.list_packages(conn, env.name, path):
                         runtime.kv_delete(conn, env.name, "wait:%s|%s" % (path, package["id"]))

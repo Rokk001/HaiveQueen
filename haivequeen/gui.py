@@ -1067,7 +1067,8 @@ class Dashboard:
     # Stop the selected Bee.
     def stop_bee(self):
         """Kill the process tree of the selected Bee after a confirmation; its package stays stopped until the owner resumes it ("Resume package").
-        A Bee that runs as a subagent of its Queen has no process: its package is stopped, its place freed and its Queen told to end it.
+        A Bee that runs as a subagent of its Queen has no process: its package is stopped and its Queen told to end it; the stop stays pending and the Bee keeps
+        its place until the Queen confirms its end (owner answer 220).
 
         A Queen row is refused with a hint to the Queen menu, a stopped package is offered for resuming, and a Bee that has not started yet gets a hint that there is nothing to stop."""
         bee = self.selected("bees")
@@ -1079,7 +1080,10 @@ class Dashboard:
         if bee["kind"] == "queen":
             self.inform(tr("X stops Bees only. Use the Queen menu (M, or a right click on the Queen) to restart or end a Queen."))
             return
-        if bee.get("embedded"):   # a subagent of its Queen has no process of its own: its Queen is told to end it (STOP-PACKAGES)
+        if bee.get("stopping"):   # owner answer 220: the place stays held until the Queen confirms that her subagent ended
+            self.inform(tr("The stop of %s (%s) is pending: the Bee keeps its place until its Queen confirms that it has ended.", bee["name"], bee["task"]))
+            return
+        if bee.get("embedded"):   # a subagent of its Queen has no process of its own: its Queen is told to end it and confirm its end (STOP-PACKAGES)
             if self.confirm(tr("Stop bee %s (%s)? The package stays stopped until you resume it.", bee["name"], bee["task"])):
                 from . import bees
                 bees.stop_package(self.conn, bee["project"], bee["plan_path"], bee.get("package") or bee["task"])
