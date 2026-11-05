@@ -104,7 +104,12 @@ def apply_queue_order(conn, project: str, order: dict) -> None:
                 conn.execute("UPDATE queue SET status='ready', note=?, updated_at=? WHERE id=?", ("requeued: " + order["reason"], db.now(), qid))
 
 
-def parse_file(path: Path, project: str, conn, repo=None, ref: str = "origin/integration/all") -> tuple:
+def integration_ref(settings) -> str:
+    """The remote-tracking ref of the integration branch: <remoteName>/<integrationBranch>, by default origin/main."""
+    return str(settings.get("remoteName") or "origin") + "/" + str(settings.get("integrationBranch") or "main")
+
+
+def parse_file(path: Path, project: str, conn, repo=None, ref: str = "origin/main") -> tuple:
     """Parse and check one inbox file without writing anything; return (answers, decisions, queue orders) as lists of argument dicts.
 
     Raises InboxError for a parse error, an unknown table or key, a wrong value, an unknown or already answered question
@@ -191,7 +196,7 @@ def process_inbox(env) -> dict:
     for path in files:
         try:
             answers, decisions, orders = parse_file(path, env.name, env.conn, env.settings.get("codeRepo") or env.settings.get("repo") or env.workspace,
-                                                    str(env.settings.get("remoteName") or "origin") + "/" + str(env.settings.get("integrationBranch") or "main"))
+                                                    integration_ref(env.settings))
             for a in answers:
                 db.answer_question(env.conn, a["qid"], a["text"], a["by"])
             for d in decisions:

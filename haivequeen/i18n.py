@@ -122,6 +122,19 @@ def _worktree_cleanup(match):
     return head + ("; ".join("%s: %s" % (label, ", ".join(items)) for label, items in groups if items) or "nichts zu tun")
 
 
+def _branch_cleanup(match):
+    """The result of a branch cleanup in German words instead of its JSON; a text that is not such a result stays as written behind the translated head."""
+    head = "Branch-Bereinigung: "
+    places = {"local": "lokal", "remote": "Remote", "all": "alle"}
+    try:
+        result = json.loads(match.group(1))
+        deleted = ["%s %s" % (places.get(item.split(" ", 1)[0], item.split(" ", 1)[0]), item.split(" ", 1)[1]) for item in result["deleted"]]
+        kept = ["%s %s (%s)" % (places.get(row["where"], row["where"]), row["branch"], _worktree_reason(row["reason"])) for row in result["kept"]]
+    except (ValueError, KeyError, TypeError, IndexError):
+        return head + match.group(1)
+    return head + ("; ".join("%s: %s" % (label, ", ".join(items)) for label, items in (("gelöscht", deleted), ("behalten", kept)) if items) or "nichts zu tun")
+
+
 def _with_source(german):
     """A run state line with the source of the change when it has one."""
     return lambda match: german + (" (Quelle: %s)" % match.group(1) if match.group(1) else "")
@@ -167,6 +180,16 @@ _WORKTREE_REASONS = (
     ("process memory is inaccessible", "Prozessspeicher ist nicht zugänglich"),
     ("process information is inaccessible", "Prozessinformationen sind nicht zugänglich"),
     ("worktree cleanup is busy", "Worktree-Bereinigung läuft bereits"),
+    ("protected branch", "geschützter Branch"),
+    ("belongs to another open plan", "gehört zu einem anderen offenen Plan"),
+    ("branch has an open queue row", "Branch hat einen offenen Eintrag in der Warteschlange"),
+    ("has commits that are not in the integrated tip", "hat Commits, die nicht im integrierten Stand sind"),
+    ("checked out in a worktree", "in einem Worktree ausgecheckt"),
+    ("git branch -D failed", "git branch -D fehlgeschlagen"),
+    ("push failed: ", "Push fehlgeschlagen: "),
+    ("an agent of the plan is running", "ein Agent des Plans läuft"),
+    ("remote not readable: ", "Remote nicht lesbar: "),
+    ("the integrated tip is not in the integration branch", "der integrierte Stand ist nicht im Integrations-Branch"),
 )
 
 
@@ -174,6 +197,8 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     # ---- worktree cleanup, before the general patterns: its JSON holds free text
     (r"^Worktree cleanup failed: (.*)$", lambda m: "Worktree-Bereinigung fehlgeschlagen: " + _worktree_reason(m.group(1))),
     (r"^Worktree cleanup: (.*)$", _worktree_cleanup),
+    (r"^Branch cleanup failed: (.*)$", lambda m: "Branch-Bereinigung fehlgeschlagen: " + _worktree_reason(m.group(1))),
+    (r"^Branch cleanup: (.*)$", _branch_cleanup),
     # ---- rounds and the loop
     (r"^round done: (\d+) Queen\(s\) started((?:; .*)?)$", _round_done),
     (r"^round skipped \((.*)\)$", r"Runde übersprungen (\1)"),
@@ -382,7 +407,12 @@ GERMAN = {
     "Waiting for provider %s": "Wartet auf Anbieter %s", "Plan branch is used elsewhere": "Plan-Branch wird anderswo verwendet", "Plan worktree could not be prepared": "Plan-Worktree konnte nicht vorbereitet werden",
     "HaiveQueen stopped": "HaiveQueen gestoppt", "HaiveQueen paused": "HaiveQueen pausiert", "Waiting for integration": "Wartet auf Integration", "Handoff: Bees still running": "Übergabe: Bees laufen noch",
     "Waiting after interrupted Queen": "Wartet nach unterbrochener Queen", "Plan branch or worktree missing": "Plan-Branch oder Worktree fehlt", "Start already reserved": "Start bereits reserviert",
-    "Check the integrated result": "Das integrierte Ergebnis prüfen",
+    "Check the integrated result": "Das integrierte Ergebnis prüfen", "Integration step: %s": "Integrationsschritt: %s",
+    "Topics that always go to the owner (one per line)": "Themen, die immer an den Owner gehen (eines pro Zeile)", "Owner-check question (empty: default text)": "Frage der Owner-Prüfung (leer: Standardtext)",
+    "Run the compile check": "Compile-Check ausführen", "Run the build": "Build ausführen", "Run the deploy": "Deployment ausführen",
+    "Integration branch": "Integrations-Branch", "Remote name": "Name des Remotes", "Worktree location (empty: beside the repository)": "Ort der Worktrees (leer: neben dem Repository)",
+    "Delete finished worktrees automatically": "Fertige Worktrees automatisch löschen", "Delete integrated branches (local and remote)": "Integrierte Branches löschen (lokal und auf dem Remote)",
+    "%s: letters, digits and . / - _ are expected, starting with a letter or digit": "%s: Buchstaben, Ziffern und . / - _ werden erwartet, am Anfang ein Buchstabe oder eine Ziffer",
     "Waiting for owner check": "Wartet auf Owner-Prüfung", "Waiting for answer": "Wartet auf Antwort", "No active Queen": "Keine aktive Queen", "; open questions %s": "; offene Fragen %s", "Done": "Fertig", "Resting until %s": "Ruht bis %s",
     "Queenless": "Ohne Queen", "Waiting for Codex": "Wartet auf Codex", "Waiting for provider": "Wartet auf Anbieter", "Handoff": "Übergabe", "Waiting to start": "Wartet auf Start",
     "Plan rejected": "Plan abgelehnt", "Running, plan paused": "Läuft, Plan pausiert", "Plan paused": "Plan pausiert", "Running": "Läuft", "Idle": "Untätig",
@@ -447,9 +477,7 @@ GERMAN = {
     "Configure an eligible provider.": "Richte einen geeigneten Anbieter ein.",
     "Provider %s has %d slot(s), but its Queen plus a Bee that runs as a separate process needs %d, so no Bee of this Hive can ever start. Raise the slots of %s, or set beeMode = \"subagent\" for it so its Bees need no slot of their own.": "Anbieter %s hat %d Slot(s), aber seine Queen und eine Bee als eigener Prozess brauchen %d, daher kann nie eine Bee dieses Hives starten. Erhöhe die Slots von %s oder setze dort beeMode = \"subagent\", damit seine Bees keinen eigenen Slot brauchen.",
     "Raise slots to %d, or set beeMode to subagent if the provider can run subagents.": "Erhöhe die Slots auf %d oder setze beeMode auf subagent, wenn der Anbieter Subagenten ausführen kann.",
-    "Plan %s is integrated and deployed. Please test the integrated build in the game: answer ok, or say what is not right and the next Queen fixes exactly that.": "Plan %s ist integriert und ausgeliefert. Bitte teste den integrierten Build im Spiel: antworte ok oder sage, was nicht stimmt, und die nächste Queen behebt genau das.",
     "\n\nReport of the Queen:\n": "\n\nBericht der Queen:\n",
-    "Test it in the game, then answer ok or describe what is wrong.": "Teste es im Spiel und antworte dann ok oder beschreibe, was nicht stimmt.",
     "no final text (status %s)": "kein Abschlusstext (Status %s)",
     "Queen %s of this Hive ended without new work (no commit, no changed file, no question). Her last text: %s How should the Hive continue?": "Queen %s dieses Hives endete ohne neue Arbeit (kein Commit, keine geänderte Datei, keine Frage). Ihr letzter Text: %s Wie soll der Hive weitermachen?",
     "Answer what blocks her, or say how she should count or decide it; then the next Queen starts.": "Antworte, was sie blockiert, oder sage, wie sie es zählen oder entscheiden soll; dann startet die nächste Queen.",

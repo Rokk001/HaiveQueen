@@ -349,8 +349,9 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
                     "capability=excluded.capability, verify=excluded.verify, depends_on=excluded.depends_on",
                     (project, rel, pkg.id, pkg.title, pkg.cls, pkg.agent, pkg.capability, pkg.verify,
                      json.dumps(pkg.depends_on)))
-            conn.execute(f"DELETE FROM packages WHERE project=? AND plan_path=? AND id NOT IN ({','.join('?' * len(ids)) or 'NULL'})",
-                         [project, rel] + ids)
+            kept = ids + list(plan_mod.STEP_PACKAGES.values())   # step packages are not in the plan file
+            conn.execute(f"DELETE FROM packages WHERE project=? AND plan_path=? AND id NOT IN ({','.join('?' * len(kept))})",
+                         [project, rel] + kept)
             state = {r["id"]: r for r in conn.execute(
                 "SELECT id, phase, locked FROM packages WHERE project=? AND plan_path=?", (project, rel))}
             done = {i for i, r in state.items() if r["phase"] == "done"} | set(extra_done)

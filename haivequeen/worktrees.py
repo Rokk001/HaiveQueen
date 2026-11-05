@@ -416,9 +416,125 @@ def _process_busy(path):
     return False
 
 
-# Run the cleanup with the process working-directory safety check.
-def prune(env, dry=False):
-    """Serialize cleanup and retain worktrees with unknown process state."""
+# The branches of plans that are still being worked on.
+def _open_plan_branches(env, plan):
+    """Branches named by the other plans of the Apiary that are not finished; a branch of one of them, or below it, is never cleaned up with `plan`."""
+    from . import bees
+    found = set()
+    for other in runtime.list_plans(env.conn, env.name):
+        if other['path'] == plan or other['status'] in ('DONE', 'REJECTED'):
+            continue
+        try:
+            named = bees.plan_worktree(env, other['path'])
+        except (OSError, ValueError):
+            continue
+        if named:
+            found.add(named[0])
+    return found
+
+
+# Delete a branch on the remote only while it is still the checked commit.
+def _delete_remote(repo, remote, branch, sha):
+    """Delete refs/heads/<branch> on the remote; the lease refuses when it moved after the check, and Git never asks for a password here."""
+    import os
+    return subprocess.run(['git', '-C', str(repo), 'push', '--force-with-lease=refs/heads/%s:%s' % (branch, sha), remote, ':refs/heads/' + branch], capture_output=True, text=True, encoding='utf-8', errors='replace',
+                          timeout=120, env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'}, creationflags=subprocess.CREATE_NO_WINDOW if osplat.is_windows() else 0)
+
+
+# Clean up the branches of one integrated plan.
+def _delete_plan_branches(env, plan, row, remote_name, heads, local, checked_out, protected, result):
+    """Delete the plan branch and its sub-branches (`<branch>-...` or `<branch>/...`), local and remote, when each is contained in the integrated tip; everything else stays with its reason."""
+    branch, tip = row['branch'], row['tip']
+    def belongs(name):
+        """The plan branch itself or a branch below it."""
+        return name == branch or name.startswith((branch + '-', branch + '/'))
+    others = _open_plan_branches(env, plan) - {branch}
+    def blocker(name, commit):
+        """Why this branch stays, or an empty text."""
+        if name in protected:
+            return 'protected branch'
+        if any(name == other or name.startswith((other + '-', other + '/')) for other in others):
+            return 'belongs to another open plan'
+        if env.conn.execute("SELECT 1 FROM queue WHERE project=? AND branch=? AND status IN ('ready','in_run','blocked') LIMIT 1", (env.name, name)).fetchone():
+            return 'branch has an open queue row'
+        if _git(env.code_repo, 'merge-base', '--is-ancestor', commit, tip).returncode:   # also fails for a commit that is not here: unknown work stays
+            return 'has commits that are not in the integrated tip'
+        return ''
+    for name, commit in sorted(local.items()):
+        if not belongs(name):
+            continue
+        reason = blocker(name, commit) or ('checked out in a worktree' if name in checked_out else '')
+        if not reason and _git(env.code_repo, 'branch', '-D', name).returncode:
+            reason = 'git branch -D failed'
+        if reason:
+            result['kept'].append({'branch': name, 'where': 'local', 'reason': reason})
+        else:
+            result['deleted'].append('local ' + name)
+    for name, commit in sorted(heads.items()):
+        if not belongs(name):
+            continue
+        reason = blocker(name, commit)
+        if not reason:
+            pushed = _delete_remote(env.code_repo, remote_name, name, commit)
+            reason = 'push failed: ' + pushed.stderr.strip()[:200] if pushed.returncode else ''
+        if reason:
+            result['kept'].append({'branch': name, 'where': 'remote', 'reason': reason})
+        else:
+            result['deleted'].append('remote ' + name)
+
+
+# Find the integrated plans and clean up their branches.
+def _delete_branches_locked(env):
+    """Check every plan whose newest queue row is integrated and whose Hive knows that row; the integration branch is read fresh from the remote first."""
+    result = {'deleted': [], 'kept': []}
+    integration_branch = str(env.settings.get('integrationBranch') or 'main')
+    remote_name = str(env.settings.get('remoteName') or 'origin')
+    candidates = []
+    active = runtime.list_agents(env.conn, env.name, 'active')
+    for hive in db.rows(env.conn, 'SELECT * FROM hives WHERE project=?', (env.name,)):
+        plan = hive['plan_path']
+        row = env.conn.execute('SELECT * FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1', (env.name, plan)).fetchone()
+        if not row or row['status'] != 'integrated' or hive.get('ready_id') != row['id'] or not row['branch'] or not re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or ''):
+            continue   # without the ready link the Hive still needs the branch to prove the integration
+        if any(a.get('plan_path') == plan and a.get('status') in ('running', 'starting') for a in active):
+            result['kept'].append({'branch': row['branch'], 'where': 'all', 'reason': 'an agent of the plan is running'})
+            continue
+        candidates.append((plan, dict(row)))
+    if not candidates:
+        return result
+    fetched = _git(env.code_repo, 'fetch', remote_name, integration_branch)
+    listed = _git(env.code_repo, 'ls-remote', '--symref', remote_name) if not fetched.returncode else None
+    tip = _git(env.code_repo, 'rev-parse', '--verify', 'FETCH_HEAD^{commit}') if listed and not listed.returncode else None
+    if not tip or tip.returncode:
+        reason = (fetched.stderr or (listed.stderr if listed else '') or 'cannot read the remote').strip()[:200]
+        result['kept'].extend({'branch': row['branch'], 'where': 'all', 'reason': 'remote not readable: ' + reason} for _, row in candidates)
+        return result
+    remote_tip = tip.stdout.strip()
+    heads, protected = {}, {integration_branch, 'main', 'master'}
+    for line in listed.stdout.splitlines():
+        symref = re.match(r'ref: refs/heads/(\S+)\s+HEAD$', line)
+        if symref:
+            protected.add(symref.group(1))
+        match = re.match(r'([0-9a-f]+)\s+refs/heads/(\S+)$', line)
+        if match:
+            heads[match.group(2)] = match.group(1)
+    if heads.get(integration_branch) != remote_tip:
+        result['kept'].extend({'branch': row['branch'], 'where': 'all', 'reason': 'integration branch changed during fetch'} for _, row in candidates)
+        return result
+    refs = _git(env.code_repo, 'for-each-ref', '--format=%(objectname) %(refname:short)', 'refs/heads')
+    local = {name: commit for commit, name in (line.split(' ', 1) for line in refs.stdout.splitlines())} if not refs.returncode else {}
+    checked_out = {record.get('branch') for record in list_worktrees(env.code_repo)}
+    for plan, row in candidates:
+        if _git(env.code_repo, 'merge-base', '--is-ancestor', row['tip'], remote_tip).returncode:
+            result['kept'].append({'branch': row['branch'], 'where': 'all', 'reason': 'the integrated tip is not in the integration branch'})
+            continue
+        _delete_plan_branches(env, plan, row, remote_name, heads, local, checked_out, protected, result)
+    return result
+
+
+# Run a cleanup step alone: one at a time on this machine and no agent start meanwhile.
+def _serialized(step):
+    """Hold the cleanup lock and the scheduling lock while `step` runs and return its result."""
     import os
     import time
     from . import loop, platform
@@ -430,7 +546,37 @@ def prune(env, dry=False):
         time.sleep(0.1)
     try:
         with loop.hive_schedule_lock():
-            return _prune_with_checker(env, _process_busy, dry)
+            return step()
     finally:
         if lock.exists() and lock.read_text(encoding='ascii').strip() == str(os.getpid()):
             lock.unlink()
+
+
+# Delete the branches of integrated plans.
+def delete_integrated_branches(env):
+    """Delete local and remote plan and sub-branches of integrated plans when nothing can be lost; returns {deleted, kept}. The program does this, never an agent."""
+    return _serialized(lambda: _delete_branches_locked(env))
+
+
+# The cleanup after an integration and in every round.
+def cleanup(env):
+    """Run the cleanup steps the Apiary switched on and log each result; a failing step never stops the next one or the caller."""
+    import json
+    if env.settings.get('deleteFinishedWorktrees', True):
+        try:
+            env.log('Worktree cleanup: ' + json.dumps(prune(env), ensure_ascii=False))
+        except Exception as exc:
+            env.log('Worktree cleanup failed: ' + str(exc))
+    if env.settings.get('deleteIntegratedBranches', False):
+        try:
+            done = delete_integrated_branches(env)
+            if done.get('deleted') or done.get('kept'):
+                env.log('Branch cleanup: ' + json.dumps(done, ensure_ascii=False))
+        except Exception as exc:
+            env.log('Branch cleanup failed: ' + str(exc))
+
+
+# Run the cleanup with the process working-directory safety check.
+def prune(env, dry=False):
+    """Serialize cleanup and retain worktrees with unknown process state."""
+    return _serialized(lambda: _prune_with_checker(env, _process_busy, dry))

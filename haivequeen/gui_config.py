@@ -28,6 +28,26 @@ BUILD_FIELDS = (
 )
 
 
+# The settings of the Apiary page, each with the value that applies without an entry (a missing switch means the behaviour from before the switches).
+APIARY_DEFAULTS = (("ownerTopics", []), ("ownerCheckText", ""), ("compileCheckEnabled", True), ("buildEnabled", True), ("deployEnabled", True),
+                   ("integrationBranch", "main"), ("remoteName", "origin"), ("worktreeLocation", ""), ("deleteFinishedWorktrees", True), ("deleteIntegratedBranches", False))
+SETTING_LABELS = {
+    "ownerTopics": N_("Topics that always go to the owner (one per line)"), "ownerCheckText": N_("Owner-check question (empty: default text)"),
+    "compileCheckEnabled": N_("Run the compile check"), "buildEnabled": N_("Run the build"), "deployEnabled": N_("Run the deploy"),
+    "integrationBranch": N_("Integration branch"), "remoteName": N_("Remote name"), "worktreeLocation": N_("Worktree location (empty: beside the repository)"),
+    "deleteFinishedWorktrees": N_("Delete finished worktrees automatically"), "deleteIntegratedBranches": N_("Delete integrated branches (local and remote)"),
+}
+
+
+# The values the Apiary page shows.
+def apiary_settings(shown):
+    """A copy of the settings of a project file with every setting of the Apiary page present."""
+    out = dict(shown)
+    for key, default in APIARY_DEFAULTS:
+        out.setdefault(key, list(default) if isinstance(default, list) else default)
+    return out
+
+
 # The number of logical cores of this machine.
 def machine_cores() -> int:
     """The number of logical cores (the largest choice of "CPU cores per build")."""
@@ -198,6 +218,9 @@ def check(data, machine=True) -> list:
             problems.append(tr("the settings cannot be written as TOML without changing them"))
     except (ValueError, tomllib.TOMLDecodeError) as exc:
         problems.append(str(exc))
+    for key, label in (("remoteName", "Remote name"), ("integrationBranch", "Integration branch")):
+        if data.get(key) and not re.fullmatch(r"[\w][\w./-]*", str(data[key])):
+            problems.append(tr("%s: letters, digits and . / - _ are expected, starting with a letter or digit", tr(label)))
     if machine and not problems:
         from . import scheduler
         try:
@@ -410,8 +433,7 @@ class ConfigWindow:
             shown.pop("preferredProvider", None)
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
             if not self.machine():
-                for key, default in (("integrationBranch", "main"), ("remoteName", "origin"), ("worktreeLocation", ""), ("deleteFinishedWorktrees", True), ("deleteIntegratedBranches", False), ("compileCheckEnabled", True), ("buildEnabled", True), ("deployEnabled", True), ("ownerTopics", []), ("ownerCheckText", "")):
-                    shown.setdefault(key, default)
+                shown = apiary_settings(shown)
         if kind == "providers":
             from . import scheduler
             shown["capabilities"] = scheduler.provider_capabilities(data)
@@ -634,7 +656,7 @@ class ConfigWindow:
                 self.fields(box, value, path + (key,))
                 self.add_row(box, path + (key,))
                 continue
-            tk.Label(row, text=key, width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+            tk.Label(row, text=tr(SETTING_LABELS[key]) if key in SETTING_LABELS and self.node[0] == "general" and not self.machine() else key, width=22, anchor="nw", justify="left", wraplength=190, font=(self.mono, 10)).pack(side="left", anchor="n")
             self.getters.append((path + (key,), self.editor(row, key, value), value))
 
     # One editor widget for a value; returns the function that reads it back.

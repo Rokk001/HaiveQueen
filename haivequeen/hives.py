@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 from . import buildjobs, db, roles, runtime, agent_process, interrupt
+from . import integration as integration_steps
 from . import plans as plan_mod
 from . import platform as osplat
 from .i18n import tr
@@ -194,6 +195,7 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
         integrated = integrated_ready(conn, env, hive)
         if not integrated:
             continue
+        integration_steps.sync(env, plan['path'], hive['provider'])   # a Deploy step no provider can do becomes an owner question here
         step = owner_check_step(conn, env.name, plan['path'])
         if step and step[0] == 'wait':
             wait_for_owner_check(conn, env.name, plan['path'], step[1])
@@ -206,6 +208,8 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
             if questions:
                 wait_for_answers(conn, env.name, plan['path'], questions)
                 continue
+            if integration_steps.open_steps(env, plan['path']):
+                continue   # integrated, but a step package is open: the next Queen starts it, the plan stays open
             if (not owner_check_questions(conn, env.name, plan['path']) and not owner_accepted(conn, env.name, plan['path'], integrated.get('updated_at'))
                     and owner_check_wanted(env, plan['path'])):
                 file_owner_check(conn, env, plan['path'])   # the system asks for the acceptance itself; the Queen is not relied on to do it
@@ -258,9 +262,18 @@ def owner_check_wanted(env, plan):
 
 # Ask the owner to accept an integrated plan.
 def file_owner_check(conn, env, plan):
-    """File the owner check question of an integrated plan (with the final report of its last Queen) and park the Hive until the owner answers; returns the question id."""
+    """File the owner check question of an integrated plan (the configured text or its default, with the final report of its last Queen) and park the Hive until the owner answers; returns the question id."""
+    final = ''
+    last = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all')) if a.get('plan_path') == plan and a.get('phase') == 'queen'), None)
+    if last:
+        try:
+            final = (env.run_dir(last['name']) / 'final.txt').read_text(encoding='utf-8', errors='replace').strip()[:800]
+        except OSError:
+            final = ''
     language = roles.language(env.settings)
     text = str(env.settings.get('ownerCheckText') or tr('Check the integrated result', language=language))
+    if final:
+        text += tr('\n\nReport of the Queen:\n', language=language) + final
     qid = db.add_question(conn, env.name, plan, 'owner-check', text, '')
     wait_for_owner_check(conn, env.name, plan, [qid])
     return qid
@@ -277,6 +290,7 @@ def wait_for_owner_check(conn, project, plan, questions):
 # Reopen a Hive after a owner check answer that says something is not right: the old ready row no longer closes the plan and the next Queen fixes exactly that.
 def reopen_after_owner_check(conn, project, plan):
     """Reopen a Hive after a owner check answer that says something is not right: the old ready row no longer closes the plan and the next Queen fixes exactly that."""
+    integration_steps.reset(conn, project, plan)
     with db.transaction(conn):
         conn.execute("UPDATE questions SET item='owner-check-answered' WHERE project=? AND plan_path=? AND (item='owner-check' OR (item LIKE 'owner-check-%' AND item!='owner-check-answered')) AND status='answered'", (project, plan))
         conn.execute("UPDATE hives SET state='waiting',ready_id=NULL,questions_json=NULL WHERE project=? AND plan_path=?", (project, plan))
@@ -875,7 +889,8 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     not_started(env, path, 'no provider with a free slot and a free limit offers class %s' % cls)
                     continue
                 if hive and hive['state'] == 'integration_wait':
-                    low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get('buildJobs')), free_ram() * 1024.0)
+                    on = integration_steps.switches(env.settings)
+                    low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get('buildJobs')), free_ram() * 1024.0) if on['build'] or on['deploy'] else None
                     if low:   # below the minimum free RAM before a build: the place is not taken, the Queen waits and is asked again next round (also after a restart)
                         not_started(env, path, 'waiting for the build: ' + low)
                         continue
@@ -910,27 +925,17 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     row_key = '%s-%d' % (name, k)
                 name = row_key
                 questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
-                prompt = 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and owner answers of your plan and those released for the whole Apiary are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --fields using a JSON object with the absolute cwd. Work independent packages, answer the completeness question and integrate only when no requirements remain. Then follow this order. 1. Use bzz integration acquire --project %s --plan %s. Use the returned buildJobs EnvVar and Jobs for the integration build and the plan build, and the returned Parallel as the --parallel value of the build command (also in the variable named by ParallelVar); the build starts only while the free RAM is at least MinFreeGB. These values win over a --parallel value or RAM minimum in a project rule: do not ask a question about that difference. If it reports waiting for integration, write a handoff and end until restarted. After acquiring the place, abort any unfinished merge in the project integration checkout before integrating again. 2. If the release worktree of the project is missing, create it again and build it according to the integration rules of the project; only the Queen who holds the integration place may do this. 3. Run the compile check of the project, then register your own branch with bzz ready. 4. Integrate your own branch, then release the integration place with bzz integration release --project %s --plan %s. If only open owner questions remain, write a handoff and end your final report with WAITING_FOR_OWNER.' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name, env.name, path, env.name, path)
-                if not env.settings.get('deployEnabled', True):
-                    prompt = prompt.replace('2. If the release worktree of the project is missing, create it again and build it according to the integration rules of the project; only the Queen who holds the integration place may do this. ', '')
-                if not env.settings.get('compileCheckEnabled', True):
-                    prompt = prompt.replace('Run the compile check of the project, then register', 'Register')
-                for capability, setting in (('Build', 'buildEnabled'), ('Deploy', 'deployEnabled')):
-                    if env.settings.get(setting, True):
-                        prompt += ' The %s step is enabled. If your provider lacks %s, delegate it as a package requiring %s; if no provider has it, ask the owner once.' % (capability, capability, capability)
-                    else:
-                        prompt += ' The %s step is disabled; do not perform it.' % capability
-                if not env.settings.get('buildEnabled', True):
-                    prompt += ' Verify packages marked build like code packages, with compile check and evidence.'
-                integration = {key: env.settings.get(key) for key in ('integrationBranch', 'compileCheck', 'integratorInstructions', 'buildFlowDoc') if env.settings.get(key)}
-                configured_prompt = (env.settings.get('prompts') or {}).get('integrator')
-                if configured_prompt:
-                    integration['steps'] = sch.expand_template(str(configured_prompt), {**routine.base_values(env), 'plan': path})
+                prompt = 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and owner answers of your plan and those released for the whole Apiary are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --fields using a JSON object with the absolute cwd. Work independent packages, answer the completeness question and integrate only when no requirements remain. ' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name)
+                prompt += integration_steps.start_text(env, path, pick['name'])
+                if plan['status'] != 'SUBMITTED':   # a plan still to be cut gets its step packages when it is integrated
+                    integration_steps.sync(env, path, pick['name'])
                 from . import bees
                 prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls), roles.language(env.settings))
-                prompt += '\nAlways refer questions on these Apiary topics to the owner: ' + json.dumps(env.settings.get('ownerTopics') or [], ensure_ascii=False)
+                topics = integration_steps.owner_topics_text(env)
+                if topics:
+                    prompt += '\n' + topics
                 prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)
-                prompt += ' Project integration configuration: ' + json.dumps(integration, ensure_ascii=False)
+                prompt += ' Project integration configuration: ' + json.dumps(integration_steps.configuration(env, path), ensure_ascii=False)
                 if plan['status'] == 'SUBMITTED':   # a plan the owner submitted as free text: the Queen cuts it into packages before any Bee starts
                     prompt += '\n' + roles.role_text('queen-cut', {'project': env.name, 'plan': path})
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]

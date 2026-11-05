@@ -698,6 +698,7 @@ class CleanupSchedulingTests(unittest.TestCase):
         args = SimpleNamespace(action='release', project='test', plan='plan')
         order = []
         with mock.patch.dict(os.environ, {'BZZ_AGENT': ''}), \
+             mock.patch.object(hives, 'get', return_value=None), \
              mock.patch.object(hives, 'release_integration', side_effect=lambda *args: order.append('release')), \
              mock.patch.object(config, 'load_config', return_value={}), \
              mock.patch.object(scheduler, 'load_projects', return_value=[env]), \

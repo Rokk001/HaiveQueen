@@ -85,4 +85,4 @@ class OwnerCheckTests(RoundCase):
         """The Queen instructions say how to ask for the owner check after integration and deploy."""
         text = bees.queen_instructions("medium", 3, 3, 300000)
         self.assertIn("--item owner-check", text)
-        self.assertIn("after integration and deploy", text.lower())
+        self.assertIn("after integration and a switched-on deploy", text.lower())

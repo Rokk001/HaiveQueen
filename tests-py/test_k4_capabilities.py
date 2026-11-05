@@ -18,7 +18,7 @@ class CapabilityTests(unittest.TestCase):
 
     def test_legacy_mapping_and_queen_defaults(self):
         p = sch.get_providers({"providers": [self.provider(use="capability-only", capabilities=["images", "blender", "build"])]})[0]
-        self.assertEqual(p["capabilities"], ["Image generation", "3D modelling", "Build", "Queen"])
+        self.assertEqual(p["capabilities"], ["Image generation", "3D modelling", "Build", "Queen", "Deploy"])
         self.assertEqual(p["use"], "preferred")
         self.assertEqual(sch.package_needs({}, "", "images, blender, build"), ["Image generation", "3D modelling", "Build"])
         self.assertEqual(bees.route_candidates([p], "p", [], False), [])

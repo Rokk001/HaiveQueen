@@ -434,7 +434,8 @@ def plan_tag(env, plan: str) -> str:
 def base_values(env) -> dict:
     """Placeholder values every prompt template gets."""
     s = env.settings
-    return {"owner": s.get("owner", "Owner"), "integrationBranch": s.get("integrationBranch", "main"), "compileCheck": s.get("compileCheck", ""),
+    return {"owner": s.get("owner", "Owner"), "integrationBranch": s.get("integrationBranch") or "main", "remoteName": s.get("remoteName") or "origin",
+            "compileCheck": s.get("compileCheck", "") if s.get("compileCheckEnabled", True) else "no compile check (switched off)",
             "queueFile": "the integration queue", "queueName": "integration queue", "integratorInstructions": s.get("integratorInstructions", ""),
             "buildFlowDoc": s.get("buildFlowDoc", ""), "buildRules": buildjobs.rule_text(s.get("buildJobs")), "project": env.name, "runsDir": str(env.run_dir("")).replace("\\", "/")}
 
@@ -444,8 +445,10 @@ def base_values(env) -> dict:
 
 
 def new_worktree(env, middle: str) -> str:
-    """Folder of a new worktree next to the code repo (the workspace when the project has no `codeRepo`): <parent>/<worktreePrefix>-<middle>."""
-    parent = env.settings.get("worktreeLocation") or os.path.dirname(str(env.code_repo).rstrip("\\/"))
+    """Folder of a new worktree: <parent>/<worktreePrefix>-<middle>, where parent is the setting worktreeLocation (a relative one counts from the code repo)
+    or, without it, the folder beside the code repo (the workspace when the project has no `codeRepo`)."""
+    location = os.path.expanduser(str(env.settings.get("worktreeLocation") or ""))
+    parent = os.path.join(str(env.code_repo), location) if location else os.path.dirname(str(env.code_repo).rstrip("\\/"))
     return os.path.join(str(parent), "%s-%s" % (env.settings.get("worktreePrefix", "wt"), middle))
 
 

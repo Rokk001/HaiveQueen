@@ -226,6 +226,28 @@ class WindowTest(unittest.TestCase):
             win.refresh_login()
             self.assertEqual(win.login_status.cget("text"), "Login present")
 
+    # H-15 to H-19: the Apiary page of a project file.
+    def test_apiary_page_shows_edits_and_saves_its_settings(self):
+        """The General page of a project file offers every Apiary setting with its default under a readable label; a changed value is saved."""
+        import tomllib
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        index, label = next((i, f[0]) for i, f in enumerate(win.files) if not f[2])
+        win.pick_file(label)
+        keys = {path[0]: like for path, _getter, like in win.getters}
+        for key, default in gui_config.APIARY_DEFAULTS:
+            self.assertEqual(keys[key], default, key)
+        texts = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
+        self.assertIn("Run the deploy", texts)
+        self.assertNotIn("deployEnabled", texts)
+        win.collect()
+        win.target().update({"deployEnabled": False, "remoteName": "upstream", "ownerTopics": ["pricing"]})
+        win.build_form()
+        win.save()
+        saved = tomllib.loads(win.files[index][1].read_text(encoding="utf-8"))
+        self.assertIs(saved["deployEnabled"], False)
+        self.assertEqual(saved["remoteName"], "upstream")
+        self.assertEqual(saved["ownerTopics"], ["pricing"])
+
     # The provider page offers the CLI choice.
     def test_provider_page_offers_the_cli_choice(self):
         """The page shows the CLI of the provider; choosing another CLI sets all its values, Custom CLI keeps them and offers the output format."""

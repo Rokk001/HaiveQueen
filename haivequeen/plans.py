@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 STATUSES = ("DRAFT", "SUBMITTED", "READY", "IN_PROGRESS", "DONE", "PAUSED", "REJECTED")
 CLASSES = ("light", "medium", "heavy")
 VERIFIES = ("code", "build", "owner")   # who closes the last requirements of a package: the Bee (code), the build, or the owner
+STEP_PACKAGES = {"Build": "INTEGRATION-BUILD", "Deploy": "INTEGRATION-DEPLOY"}   # package ids HaiveQueen itself adds to a plan for an integration step (see integration.py)
 DEFAULT_GLOBS = ("docs/plans/*.md",)
 STARTABLE_STATUSES = ("READY", "IN_PROGRESS")
 QUEEN_STATUSES = ("SUBMITTED",) + STARTABLE_STATUSES   # plans that get a Hive and a Queen; a SUBMITTED plan is cut into packages by its Queen first
@@ -223,6 +224,8 @@ def check_plan(plan, capabilities, requirements=()):
         problems.append("the header lists no package")
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
         problems.append("package id %s is used more than once" % dup)
+    for reserved in sorted(set(ids) & set(STEP_PACKAGES.values())):
+        problems.append("package id %s is reserved for an integration step" % reserved)
     deps = {p.id: package_dependencies(plan, p) for p in plan.packages}
     for p in plan.packages:
         if not p.title.strip():

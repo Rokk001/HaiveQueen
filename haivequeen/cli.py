@@ -68,6 +68,14 @@ def cmd_ready(args, conn) -> int:
             env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
             if env is None:
                 return fail("ready refused: unknown project")
+            from haivequeen import integration
+            integration.sync(env, plan, hives.get(conn, args.project, plan)["provider"])
+            held = integration.open_steps(env, plan, ("Build",))
+            if held:
+                return fail("ready refused: integration step package %s is not done; start a Bee for it, or wait for the answer of the owner" % ", ".join(held))
+            missing = integration.compile_check_missing(env, row["name"])
+            if missing:
+                return fail("ready refused: " + missing)
             accepted, message, waiting = readygate.gate(env, plan, row)   # requirement list first, then the fresh check agent
             if not accepted:
                 if waiting:
@@ -83,7 +91,10 @@ def cmd_ready(args, conn) -> int:
     if agent and row and row.get("phase") == "queen":
         conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (res["id"], args.project, args.plan))
         from haivequeen import bees
+        from haivequeen import plans as plan_mod
         for (package,) in conn.execute("SELECT id FROM packages WHERE project=? AND plan_path=?", (args.project, args.plan)).fetchall():
+            if package == plan_mod.STEP_PACKAGES["Deploy"]:
+                continue   # the Deploy step comes after the integration
             bees.set_package_state(conn, args.project, args.plan, package, 'done', agent)   # ready means the Queen answered Open requirements: 0, so every package is done
     out({"ok": True, **res})
     return 0
@@ -211,15 +222,18 @@ def cmd_integration(args, conn):
         return fail("integration refused: not this Hive's Queen")
     if row:
         args.plan = row['plan_path']
+    from haivequeen import integration
     if args.action == "release":
-        hives.release_integration(conn, args.project, args.plan)
         from haivequeen import scheduler, worktrees
         env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
-        if env and env.settings.get('deleteFinishedWorktrees', True):
-            try:
-                env.log('Worktree cleanup: ' + json.dumps(worktrees.prune(env), ensure_ascii=False))
-            except Exception as exc:
-                env.log('Worktree cleanup failed: ' + str(exc))
+        hive = hives.get(conn, args.project, args.plan)
+        if env and hive:
+            last = conn.execute("SELECT status FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (args.project, args.plan)).fetchone()
+            if last and last["status"] == "integrated" and integration.sync(env, args.plan, hive["provider"])["Deploy"] == "package" and integration.open_steps(env, args.plan, ("Deploy",)):
+                return fail("release refused: integration step package %s is not done; start a Bee for it first" % integration.DEPLOY)
+        hives.release_integration(conn, args.project, args.plan)
+        if env:
+            worktrees.cleanup(env)
         out({"ok": True})
         return 0
     owner_pid = (row.get("pid") if row else None) or getattr(args, "owner_pid", None)
@@ -229,17 +243,23 @@ def cmd_integration(args, conn):
     from haivequeen import platform as osplat
     env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
     free_mb = float(osplat.free_ram_mb())
-    low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get("buildJobs")), free_mb) if env else None
+    switches = integration.switches(env.settings) if env else {}
+    builds = bool(switches.get("build") or switches.get("deploy"))   # with both switched off the integration builds nothing, so it needs no RAM and no job count
+    low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get("buildJobs")), free_mb) if builds else None
     if low:   # below the minimum free RAM before a build: wait like for an occupied place, without taking the place; the next round asks again
         if row:
             conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
         return fail("waiting for integration: " + low)
-    job = buildjobs.plan_build(env, free_mb=free_mb, exclude=agent) if env else None   # the count of this moment replaces the one set at the Queen start
+    job = buildjobs.plan_build(env, free_mb=free_mb, exclude=agent) if builds else None   # the count of this moment replaces the one set at the Queen start
     if not hives.take_integration(conn, args.project, args.plan, owner_pid=owner_pid, build_jobs=job["Jobs"] if job else None):
         if row:
             conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
         return fail("waiting for integration")
-    out({"ok": True, "buildJobs": job})
+    result = {"ok": True, "buildJobs": job}
+    hive = hives.get(conn, args.project, args.plan)
+    if env and hive:
+        result["integrationSteps"] = {"compileCheck": switches["compileCheck"], **integration.sync(env, args.plan, hive["provider"])}
+    out(result)
     return 0
 
 
@@ -312,6 +332,13 @@ def cmd_plan(args, conn):
 
 
 # Record the progress state of one package of the calling Queen's Hive.
+def _build_switched_off(conn, project):
+    """True when the build switch of the Apiary is off."""
+    from haivequeen import scheduler
+    env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == project), None)
+    return bool(env) and not env.settings.get("buildEnabled", True)
+
+
 def cmd_package(args, conn):
     """Store the state (working, waiting, implemented, done, rejected) of a package of the Queen's own plan; shown as progress in the window."""
     from haivequeen import bees
@@ -324,6 +351,8 @@ def cmd_package(args, conn):
         return fail("unknown package %s of this plan" % args.package)
     if args.state == "waiting" and not args.reason:
         return fail("waiting needs --reason (question:<id>, build, owner, package or provider)")
+    if args.state == "waiting" and args.reason == "build" and _build_switched_off(conn, args.project):
+        return fail("the build step is switched off for this Apiary: close the package like a code package")
     bees.set_package_state(conn, args.project, plan, args.package, args.state, agent, args.reason)
     out({"ok": True, "package": args.package, "state": args.state})
     return 0
@@ -369,6 +398,8 @@ def cmd_bee(args, conn):
             if args.outcome == "succeeded":
                 return fail("--blocked-by cannot go with the outcome succeeded")
             blocked = args.blocked_by
+            if blocked == "build" and not env.settings.get("buildEnabled", True):
+                return fail("the build step is switched off for this Apiary: close the package like a code package")
             if blocked == "question":
                 open_ids = [str(q["id"]) for q in runtime.list_questions(conn, args.project, status="open", plan=plan)]
                 if args.blocked_ref not in open_ids:

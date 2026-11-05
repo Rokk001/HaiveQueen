@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, db, profile, runtime
+from . import config, db, plans, profile, runtime
 from . import platform as osplat
 from . import localtime
 from .i18n import tr
@@ -66,6 +66,12 @@ DEFAULT_SETTINGS = {
     "capabilityRules": [],
 }
 MACHINE_ONLY = ("hives", "excludedProviders", "providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
+
+
+def effective_verify(settings: dict, verify) -> str:
+    """Who closes a package: its verify value, except that with the build switch off a package marked build is closed like a code package."""
+    value = str(verify or "code")
+    return "code" if value == "build" and not settings.get("buildEnabled", True) else value
 
 
 def deep_merge(base: dict, over: dict) -> dict:
@@ -141,8 +147,8 @@ def provider_capabilities(p):
     if not p.get("capabilitiesVersion"):
         if p.get("use") != "capability-only" and "Coding" not in capabilities:
             capabilities.append("Coding")
-        if not p.get("endpoint") and "Queen" not in capabilities:
-            capabilities.append("Queen")
+        if not p.get("endpoint"):   # a provider from before the ticks keeps what its Queen did: she coordinated, built and deployed
+            capabilities.extend(c for c in ("Queen", "Build", "Deploy") if c not in capabilities)
     return list(dict.fromkeys(capabilities))
 
 
@@ -541,10 +547,12 @@ class ProjectEnv:
             res.append({"id": str(p["id"]), "cls": cls.lower() if re.match(r"(?i)^(light|medium|heavy)$", cls) else "medium",
                         "content": str(p["title"] or ""), "depends": deps, "phase": str(p["phase"] or ""),
                         "depends_all": any(re.match(r"(?i)^all(e)?$", str(d)) for d in p["depends_on"]),
-                        "capability": str(p["capability"] or ""), "verify": str(p.get("verify") or "code")})
+                        "capability": str(p["capability"] or ""), "verify": effective_verify(self.settings, p.get("verify"))})
+        steps = list(plans.STEP_PACKAGES.values())
+        rank = lambda package: steps.index(package) + 1 if package in steps else 0   # plan packages, then the Build step, then the Deploy step: "all" means what comes before
         for r in res:
             if r["depends_all"]:
-                r["depends"] += [x["id"] for x in res if x["id"] != r["id"] and x["id"] not in r["depends"]]
+                r["depends"] += [x["id"] for x in res if x["id"] != r["id"] and x["id"] not in r["depends"] and (rank(x["id"]) < rank(r["id"]) or rank(x["id"]) == rank(r["id"]) == 0)]
         return res
 
 

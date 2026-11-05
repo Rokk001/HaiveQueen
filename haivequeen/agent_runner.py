@@ -177,6 +177,86 @@ def executed_check_scripts(cmd, wrapped=False):
     return checks
 
 
+SHELLS = re.compile(r'(?:pwsh|powershell|bash|sh|zsh|dash|cmd)(?:\.exe)?$', re.I)
+COMMAND_PREFIXES = re.compile(r'(?:exec|command|call|time)$', re.I)
+SHELL_VALUE_FLAGS = ('-executionpolicy', '-ep', '-version', '-inputformat', '-outputformat', '-workingdirectory', '-wd', '-configurationname', '-settingsfile')
+
+
+# Split a command line into its commands, each a list of words without their quotes.
+def _shell_commands(cmd):
+    """Commands of a command line in any common shell; the separators are ; & && | || and a line end, a comment ends at the line end."""
+    commands, current = [], []
+    for token in re.findall(r'''"[^"]*"|'[^']*'|\#[^\r\n]*|&&|\|\||[;&|\n]|[^\s;&|]+''', str(cmd or '')) + [';']:
+        if token.startswith('#'):
+            continue
+        if token in (';', '&', '&&', '|', '||', '\n'):
+            if current:
+                commands.append(current)
+                current = []
+        else:
+            current.append(token[1:-1] if len(token) > 1 and token[0] in '"\'' and token[-1] == token[0] else token)
+    return commands
+
+
+# Open shell wrappers and leave out what only prepares a command.
+def _plain_commands(cmd, depth=0):
+    """The commands that really run, each as a list of words: `pwsh -Command "x"`, `bash -lc 'x'` and `cmd /c x` count as x; `env`, `FOO=1` and the like are left out."""
+    plain = []
+    for words in _shell_commands(cmd):
+        while words and (re.fullmatch(r'\w+=\S*', words[0]) or COMMAND_PREFIXES.fullmatch(words[0]) or re.split(r'[/\\]', words[0])[-1].lower() in ('env', 'env.exe')):
+            words = words[1:]
+        if not words:
+            continue
+        shell = SHELLS.fullmatch(re.split(r'[/\\]', words[0])[-1])
+        flag = next((i for i, word in enumerate(words) if i and re.fullmatch(r'(?:-(?:command|[a-z]*c)|/[ck])', word, re.I)), None) if shell else None
+        if flag is not None and flag + 1 < len(words) and depth < 3:
+            tail = words[flag + 1:]
+            plain.extend(_plain_commands(tail[0] if len(tail) == 1 else ' '.join('"%s"' % w if re.search(r'\s', w) else w for w in tail), depth + 1))
+        else:
+            plain.append(words)
+            if shell:   # `pwsh -File x.ps1` and `bash x.sh` also count as running x
+                index = 1
+                while index < len(words) and words[index][:1] in ('-', '/') and not re.match(r'/[a-zA-Z]/|/\w+/', words[index]):
+                    index += 2 if words[index].lower() in SHELL_VALUE_FLAGS else 1
+                if index < len(words):
+                    plain.append(words[index:])
+    return plain
+
+
+# Compare words of a command whatever way the shell wrote its program.
+def _same_word(a, b, program=False):
+    """True when two words are equal; a path counts in any slash form (also /c/x for C:/x); a program also without .exe and in any case."""
+    def norm(word):
+        """The comparable form of a word."""
+        word = re.sub(r'^/([a-zA-Z])/', r'\1:/', word.replace('\\', '/'))
+        if program:
+            word = re.sub(r'\.exe$', '', word, flags=re.I).casefold()
+        return word
+    return norm(a) == norm(b)
+
+
+# The compile check command that applies to a run.
+def configured_compile_check(machine, project):
+    """The setting compileCheck as the Queen and bzz ready read it: the project over the machine settings."""
+    return scheduler.build_settings(machine, project).get("compileCheck") or ""
+
+
+# Whether a command line runs the configured command.
+def runs_configured_command(cmd, configured):
+    """True when `cmd` runs the configured command in command position, in any shell, with or without further arguments; all its parts in their order when it has several."""
+    wanted = _plain_commands(configured)
+    if not wanted:
+        return False
+    position = 0
+    for words in _plain_commands(cmd):
+        want = wanted[position]
+        if len(words) >= len(want) and all(_same_word(w, x, i == 0) for i, (w, x) in enumerate(zip(words, want))):
+            position += 1
+            if position == len(wanted):
+                return True
+    return False
+
+
 # Classify requested operations while treating read and search arguments as data.
 def classify_cmd(cmd, queue_re=None, compile_check=None):
     """Recognise a milestone command (commit, push, compile test, check, ready line, file write); returns {kind, label} or None.
@@ -184,15 +264,13 @@ def classify_cmd(cmd, queue_re=None, compile_check=None):
     A call of `bzz ready` is the ready line; queue_re (optional) additionally marks writes into a legacy queue file.
     """
     cmd = str(cmd or "")
+    if compile_check and runs_configured_command(cmd, compile_check):   # first: `check && git commit` is evidence of the check; text in a search, echo or message is not
+        return {"kind": "check", "label": "Compile test"}
     if re.search(r"git\s+commit", cmd):
         m = re.search(r'-m\s+"([^"\r\n$]{3,})"', cmd) or re.search(r"-m\s+'([^'\r\n]{3,})'", cmd)
         return {"kind": "commit", "label": ("Commit: " + short(m.group(1), 100)) if m else "Commit"}
     if re.search(r"git\s+push", cmd):
         return {"kind": "push", "label": "Push"}
-    # A configured command is a milestone only in command position, not when it
-    # occurs as text in a search, echo or file write.
-    if compile_check and re.search(r'(?:^|[;&|\n])\s*(?:&\s*)?' + re.escape(str(compile_check).strip()) + r'(?=$|\s|[;&|])', cmd):
-        return {"kind": "check", "label": "Compile test"}
     checks = executed_check_scripts(cmd)
     if checks:
         return {"kind": "check", "label": "Check " + checks[0]}
@@ -863,7 +941,7 @@ def run_agent(a, out=None):
     queue_name = pcfg.get("integrationStateFile")
     queue_re = re.escape(Path(str(queue_name)).stem) if queue_name else None
     run = AgentRun(conn, a.project, a.name, a.provider, protocol, a.cwd, run_dir, a.plan, a.package, a.phase, out, queue_re)
-    run.compile_check = pcfg.get("compileCheck")
+    run.compile_check = configured_compile_check(cfg, pcfg)
     run.format = prov["format"]
     run.context_limit = scheduler.context_limit({"contextLimitTokens": CONTEXT_LIMIT, **scheduler.build_settings(cfg, pcfg)}, [{**prov, "name": a.provider}], a.provider, cls)
     run.model = model_label(model)
