@@ -472,6 +472,8 @@ GERMAN = {
     "Give the package to a provider that can be kept to the profile.": "Gib das Paket einem Anbieter, der sich auf das Profil beschränken lässt.",
     "The package remains unsolved at the highest available class. How should it continue?": "Das Paket bleibt auf der höchsten verfügbaren Klasse ungelöst. Wie soll es weitergehen?",
     "Review the failed attempts and choose the next approach.": "Prüfe die gescheiterten Versuche und wähle das weitere Vorgehen.",
+    "No longer needed: the step is switched off or a provider can do it now.": "Nicht mehr nötig: Der Schritt ist ausgeschaltet oder ein Anbieter kann ihn jetzt ausführen.",
+    "Until you change these ticks, the Queen of this provider does Build and Deploy herself, as before.": "Solange du diese Häkchen nicht änderst, führt die Queen dieses Anbieters Build und Deployment wie bisher selbst aus.",
     "No configured provider offers the capability %s. How should this package continue?": "Kein eingerichteter Anbieter bietet die Fähigkeit %s. Wie soll dieses Paket weitergehen?",
     "No configured provider offers the required class or a higher class. How should this package continue?": "Kein eingerichteter Anbieter bietet die nötige oder eine höhere Klasse. Wie soll dieses Paket weitergehen?",
     "Configure an eligible provider.": "Richte einen geeigneten Anbieter ein.",

@@ -34,7 +34,7 @@ def step_states(env, provider_name):
     for capability, enabled in (("Build", on["build"]), ("Deploy", on["deploy"])):
         if not enabled:
             states[capability] = "off"
-        elif own is None or bees.capable_providers([own], [capability]):   # a provider no longer in the settings has no ticks to read: its Queen goes on as before
+        elif own is None or capability in own.get("queenSteps", ()) or bees.capable_providers([own], [capability]):   # a provider no longer in the settings has no ticks to read and one from before the ticks made no selection: its Queen goes on as before
             states[capability] = "queen"
         else:
             states[capability] = "package" if bees.capable_providers(offered, [capability]) else "owner"
@@ -48,6 +48,9 @@ def sync(env, plan, provider_name):
     existing = {p["id"] for p in runtime.list_packages(env.conn, env.name, plan)}
     language = roles.language(env.settings)
     for capability, package in plans.STEP_PACKAGES.items():
+        if states[capability] != "owner":   # the owner need not answer any more, and an open question would hold the plan
+            for question in runtime.list_questions(env.conn, env.name, status="open", plan=plan, item=package):
+                db.answer_question(env.conn, question["id"], tr("No longer needed: the step is switched off or a provider can do it now.", language=language), "auto")
         if states[capability] in ("off", "queen"):
             if package in existing:
                 env.conn.execute("DELETE FROM packages WHERE project=? AND plan_path=? AND id=?", (env.name, plan, package))
@@ -82,6 +85,7 @@ def reset(conn, project, plan):
         conn.execute("DELETE FROM packages WHERE project=? AND plan_path=? AND id=?", (project, plan, package))
         conn.execute("DELETE FROM package_progress WHERE project=? AND plan_path=? AND package=?", (project, plan, package))
         conn.execute("DELETE FROM bee_completed WHERE project=? AND plan_path=? AND package=?", (project, plan, package))
+        conn.execute("UPDATE questions SET item=? WHERE project=? AND plan_path=? AND item=? AND status='answered'", (package + "-answered", project, plan, package))   # the new integration asks again
 
 
 # Whether the Queen's run shows a passed compile check.
@@ -121,7 +125,8 @@ def start_text(env, plan, provider_name):
     if not on["compileCheck"]:
         text += " The compile check is switched off for this Apiary: do not run it."
     text += " " + _step_sentence("Build", BUILD, states["Build"], "before bzz ready", "bzz ready is refused")
-    text += " " + _step_sentence("Deploy", DEPLOY, states["Deploy"], "after you integrated and before you release the integration place", "bzz integration release and the end of the plan are held back")
+    deploy_held = "the end of the plan is held back" if states["Deploy"] == "owner" else "bzz integration release and the end of the plan are held back"   # the place is not held for an owner answer
+    text += " " + _step_sentence("Deploy", DEPLOY, states["Deploy"], "after you integrated and before you release the integration place", deploy_held)
     if not on["build"]:
         text += " A package marked verify build is closed like a code package (compile check and evidence); never report build as a wait."
     text += " These switches win over project rules and over the configured integration steps below."
@@ -134,7 +139,7 @@ def _step_sentence(capability, package, state, when, held):
     if state == "off":
         return "The %s step is switched off for this Apiary: do not perform it." % capability
     if state == "queen":
-        return "The %s step is switched on and your provider has %s: do it yourself %s, according to the integration rules of the project." % (capability, capability, when)
+        return "The %s step is switched on and it is yours: do it yourself %s, according to the integration rules of the project." % (capability, when)
     if state == "package":
         return ("The %s step is switched on but your provider lacks %s: it is package %s of this plan, for a provider that has %s. Start a Bee for it with bzz bee start %s; until it is done %s."
                 % (capability, capability, package, capability, when, held))

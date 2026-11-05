@@ -237,6 +237,23 @@ def check(data, machine=True) -> list:
     return problems
 
 
+# Whether the values of a provider page are a selection of the owner.
+def keep_legacy_entry(data, old):
+    """A provider from before the ticks stays one until the owner changes its ticks or its old use capability-only: then the ticks are the selection of the owner. Showing and saving the page changes nothing."""
+    from . import scheduler
+    if old.get("capabilitiesVersion"):
+        return
+    use_kept = old.get("use") != "capability-only" or data.get("use") == "preferred"
+    if set(data.get("capabilities") or []) != set(scheduler.provider_capabilities(old)) or not use_kept:
+        data["capabilitiesVersion"] = 1
+        return
+    for key in ("capabilities", "use"):
+        if key in old:
+            data[key] = old[key]
+        else:
+            data.pop(key, None)
+
+
 # Write a settings file and keep the old one.
 def save_file(path, data):
     """Write `data` to `path` as TOML: the comment lines at the top of the old file stay, the old file is kept as `<name>.bak`, the new one replaces it in one step."""
@@ -676,6 +693,8 @@ class ConfigWindow:
             row.pack(fill="x")
             tk.Label(row, text=tr("Add own")).pack(side="left")
             tk.Entry(row, textvariable=custom).pack(side="left", fill="x", expand=True)
+            if not self.target().get("capabilitiesVersion") and not self.target().get("endpoint"):
+                tk.Label(box, text=tr("Until you change these ticks, the Queen of this provider does Build and Deploy herself, as before."), anchor="w", justify="left", wraplength=BUILD_TEXT_WIDTH).pack(anchor="w")
             return lambda: [name for name, var in variables if var.get()] + [name.strip() for name in custom.get().split(",") if name.strip()]
         if isinstance(value, bool):
             var = tk.BooleanVar(value=value)
@@ -750,6 +769,7 @@ class ConfigWindow:
             except ValueError as exc:
                 self.status.config(text=str(exc), fg=self.col["red"])
                 return False
+        old_entry = dict(data) if self.node[0] == "providers" else None
         for path, raw in values.items():
             if self.node[0] == "providers" and path in (("allowedTools",), ("args",)):
                 continue
@@ -758,7 +778,7 @@ class ConfigWindow:
                 target = target[step]
             target[path[-1]] = raw
         if self.node[0] == "providers":
-            data["capabilitiesVersion"] = 1
+            keep_legacy_entry(data, old_entry)
             data["args"] = join_args(values.get(("args",), []), values.get(("allowedTools",), []), self.position)
         self.status.config(text="")
         return True

@@ -446,11 +446,45 @@ class WindowTest(unittest.TestCase):
             self.assertIn("Parallel builds", win.status.cget("text"))
             self.assertEqual((self.folder / "config.toml").read_text(encoding="utf-8"), before)
 
+    # H-10, H-17: looking at a provider is no selection; changing its ticks is.
+    def legacy_page(self, **entry):
+        """The window on a provider entry from before the ticks."""
+        path = self.folder / "config.toml"
+        data = gui_config.load_raw(path)
+        data["providers"] = [{"name": "old", "protocol": "claude", "command": "claude", "classes": {"medium": {"model": "m"}}, **entry}]
+        gui_config.save_file(path, data)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(1)
+        return win, path
+
+    def test_showing_and_saving_an_old_provider_changes_nothing_of_its_selection(self):
+        win, path = self.legacy_page(capabilities=["build"], use="capability-only")
+        self.assertTrue(any("as before" in str(w.cget("text")) for w in descendants(win.form) if w.winfo_class() == "Label"))
+        win.save()
+        saved = gui_config.load_raw(path)["providers"][0]
+        self.assertEqual(saved["capabilities"], ["build"])
+        self.assertEqual(saved["use"], "capability-only")
+        self.assertNotIn("capabilitiesVersion", saved)
+
+    def test_changing_the_ticks_of_an_old_provider_makes_them_the_selection(self):
+        win, path = self.legacy_page(capabilities=["build"])
+        next(w for w in descendants(win.form) if w.winfo_class() == "Checkbutton" and w.cget("text") == "Deploy").invoke()
+        win.save()
+        saved = gui_config.load_raw(path)["providers"][0]
+        self.assertEqual(saved["capabilitiesVersion"], 1)
+        self.assertEqual(sch_capabilities(saved), ["Coding", "Queen", "Build", "Deploy"])
+
     def test_project_file_has_no_build_block(self):
         """The build block belongs to the machine settings only."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.pick_file("project.toml (ODP)")
         self.assertIsNone(win.build_vars)
+
+
+def sch_capabilities(entry):
+    """The ticks of a saved provider entry as the program reads them."""
+    from haivequeen import scheduler
+    return scheduler.provider_capabilities(entry)
 
 
 if __name__ == "__main__":

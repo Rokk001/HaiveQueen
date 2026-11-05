@@ -340,4 +340,4 @@ CI runs the suite on Windows and Linux with Python 3.11 and 3.14, plus a tmux sm
 
 MIT, see [LICENSE](LICENSE).
 
-Providers select capabilities in the settings. Coding permits ordinary packages; Queen permits coordination, including on endpoint providers. Legacy capabilities `images`, `blender`, and `build` are mapped automatically. For manual configuration, set `capabilitiesVersion = 1` to make the list authoritative. Set `limit.interval` in seconds (default 60), or `limit.source = "none"` to disable usage checks.
+Providers select capabilities in the settings. Coding permits ordinary packages; Queen permits coordination, including on endpoint providers. Legacy capabilities `images`, `blender`, and `build` are mapped automatically. For manual configuration, set `capabilitiesVersion = 1` to make the list authoritative. Set `limit.interval` in seconds (default 60), or `limit.source = "none"` to disable usage checks. A provider entry from before these ticks gets no capability it did not list; its Queen still does Build and Deploy herself until you change its ticks, and then the ticks decide.

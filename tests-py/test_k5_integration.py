@@ -126,6 +126,44 @@ class StepStateTests(IntegrationCase):
         self.assertEqual(integration.open_steps(env, REL), [])
         self.assertNotIn(integration.BUILD, [p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)])
 
+    def test_queen_of_an_existing_provider_keeps_her_steps_without_a_question(self):
+        old = {"name": "claude", "protocol": "claude", "slots": 2, "capabilities": ["blender", "build"], "classes": {"medium": {"model": "m"}}}
+        self.use(old)
+        env = self.hive()
+        self.assertEqual(integration.sync(env, REL, "claude"), {"Build": "queen", "Deploy": "queen"})
+        self.assertEqual(runtime.list_questions(self.conn, "testproj", plan=REL), [])
+        self.assertEqual([p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)], ["P1"])
+
+    def test_existing_provider_without_the_tick_is_no_target_for_a_step_package(self):
+        old = {"name": "old", "protocol": "claude", "slots": 2, "capabilities": ["images"], "classes": {"medium": {"model": "m"}}}
+        self.use(provider("claude", "Coding", "Queen"), old, deployEnabled=False)
+        env = self.hive()
+        self.assertEqual(integration.sync(env, REL, "claude")["Build"], "owner")
+
+    def test_ticks_chosen_by_the_owner_decide_for_the_queen(self):
+        self.use(provider("claude", "Coding", "Queen", "Build"), deployEnabled=True)
+        env = self.hive()
+        self.assertEqual(integration.step_states(env, "claude"), {"Build": "queen", "Deploy": "owner"})
+
+    def test_open_question_goes_when_the_step_no_longer_needs_the_owner(self):
+        self.use(provider("claude", "Coding", "Queen"), deployEnabled=False)
+        env = self.hive()
+        integration.sync(env, REL, "claude")
+        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item=integration.BUILD)), 1)
+        env.settings["buildEnabled"] = False
+        integration.sync(env, REL, "claude")
+        self.assertEqual(runtime.list_questions(self.conn, "testproj", status="open", plan=REL), [])
+
+    def test_a_new_integration_asks_the_owner_again(self):
+        self.use(provider("claude", "Coding", "Queen"), deployEnabled=False)
+        env = self.hive()
+        integration.sync(env, REL, "claude")
+        asked = runtime.list_questions(self.conn, "testproj", plan=REL, item=integration.BUILD)
+        db.answer_question(self.conn, asked[0]["id"], "done by hand", "owner")
+        integration.reset(self.conn, "testproj", REL)
+        integration.sync(env, REL, "claude")
+        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item=integration.BUILD)), 1)
+
     def test_done_step_is_not_open_and_reopening_needs_it_again(self):
         self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), deployEnabled=False)
         env = self.hive()
@@ -327,6 +365,13 @@ class StartTextTests(IntegrationCase):
         self.hive()
         self.assertIn("WAITING_FOR_OWNER", self.text())
 
+    def test_deploy_without_a_provider_does_not_promise_a_refused_release(self):
+        self.use(provider("claude", "Coding", "Queen", "Build"))
+        self.hive()
+        text = self.text()
+        self.assertIn("the end of the plan is held back", text)
+        self.assertNotIn("bzz integration release and the end of the plan", text)
+
     def test_build_off_states_the_verify_rule(self):
         self.use(self.providers[0], buildEnabled=False)
         self.hive()
@@ -400,13 +445,36 @@ class OwnerCheckTextTests(IntegrationCase):
 class MigrationTests(unittest.TestCase):
     """H-17: at the change existing Apiaries and providers keep today's behaviour; new ones get the defaults."""
 
-    def test_existing_provider_keeps_doing_build_and_deploy(self):
-        old = scheduler.get_providers({"providers": [{"name": "p", "protocol": "claude", "slots": 1, "capabilities": ["build"], "classes": {"medium": {"model": "m"}}}]})[0]
-        self.assertIn("Build", old["capabilities"])
-        self.assertIn("Deploy", old["capabilities"])
+    @staticmethod
+    def old(**extra):
+        """A provider entry from before the ticks, read as the program reads it."""
+        return scheduler.get_providers({"providers": [{"name": "p", "protocol": "claude", "slots": 1, "classes": {"medium": {"model": "m"}}, **extra}]})[0]
+
+    def test_existing_provider_gains_no_capability_it_did_not_select(self):
+        self.assertEqual(self.old(capabilities=["images"])["capabilities"], ["Image generation", "Coding", "Queen"])
+        self.assertEqual(self.old(capabilities=["build"])["capabilities"], ["Build", "Coding", "Queen"])
+
+    def test_existing_provider_gets_no_package_for_a_capability_it_did_not_select(self):
+        selected, other = self.old(capabilities=["build"]), self.old(name="q", capabilities=["images"])
+        self.assertEqual(bees.capable_providers([selected, other], ["Build"]), [selected])
+        self.assertEqual(bees.capable_providers([selected, other], ["Deploy"]), [])
+        self.assertEqual(bees.route_candidates([other], "q", ["Build"], False), [])
+        self.assertIsNone(scheduler.select_provider([other], "medium", ["Build"], {"q": 1}))
+        self.assertIs(scheduler.select_provider([selected, other], "medium", ["Build"], {"p": 1, "q": 1}), selected)
+        self.assertFalse(scheduler.capability_available([selected, other], ["Deploy"]))
+
+    def test_plan_may_not_declare_a_capability_only_the_old_rule_would_have_given(self):
+        parsed = plans.Plan(path="x", title="x", status="READY", packages=[plans.Package(id="P1", title="Ship", capability="Deploy")])
+        offered = {c for c in self.old(capabilities=["build"])["capabilities"]}
+        self.assertTrue(any("Deploy" in problem for problem in plans.check_plan(parsed, offered)))
+
+    def test_queen_steps_only_for_an_existing_provider_that_is_no_endpoint(self):
+        self.assertEqual(self.old()["queenSteps"], ["Build", "Deploy"])
+        self.assertEqual(self.old(endpoint={"baseUrl": "http://localhost"})["queenSteps"], [])
+        self.assertEqual(self.old(capabilitiesVersion=1, capabilities=["Queen"])["queenSteps"], [])
 
     def test_existing_endpoint_provider_gets_no_integration_step(self):
-        old = scheduler.get_providers({"providers": [{"name": "p", "protocol": "claude", "slots": 1, "endpoint": {"baseUrl": "http://localhost"}, "classes": {"medium": {"model": "m"}}}]})[0]
+        old = self.old(endpoint={"baseUrl": "http://localhost"})
         self.assertNotIn("Build", old["capabilities"])
         self.assertNotIn("Deploy", old["capabilities"])
 
@@ -489,6 +557,25 @@ class CommandRecognitionTests(unittest.TestCase):
         self.assertEqual(agent_runner.configured_compile_check({"compileCheck": "make"}, {}), "make")
         self.assertEqual(agent_runner.configured_compile_check({"compileCheck": "make"}, {"compileCheck": "npm test"}), "npm test")
         self.assertEqual(agent_runner.configured_compile_check({}, {}), "")
+
+    def opencode_run(self, folder, status, exit_code):
+        """Feed a compile check of an OpenCode Queen to the runner and return the milestone lines."""
+        run = agent_runner.AgentRun.__new__(agent_runner.AgentRun)
+        run.ms_file, run.out, run.queue_re, run.compile_check = Path(folder) / "milestones.txt", io.StringIO(), None, "npm test"
+        state = {"status": status, "input": {"command": "npm test"}, "output": "out", "metadata": {"exit": exit_code} if exit_code is not None else {}}
+        run._opencode_event({"type": "tool_use", "part": {"type": "tool", "tool": "bash", "state": state}})
+        return run.ms_file.read_text(encoding="utf-8").splitlines() if run.ms_file.exists() else []
+
+    def test_opencode_queen_reports_her_compile_check(self):
+        """Otherwise bzz ready would wait for ever for a check it cannot see."""
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(integration.COMPILE_MILESTONE.match(self.opencode_run(folder, "completed", 0)[-1]).group(1), "Green")
+            self.assertEqual(integration.COMPILE_MILESTONE.match(self.opencode_run(folder, "completed", 1)[-1]).group(1), "Red")
+            self.assertEqual(integration.COMPILE_MILESTONE.match(self.opencode_run(folder, "error", None)[-1]).group(1), "Red")
+
+    def test_opencode_command_still_running_is_no_result(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(self.opencode_run(folder, "running", None), [])
 
     def test_without_a_configured_command_nothing_is_a_compile_test(self):
         self.assertNotRecognised("powershell -File compile-check-changed.ps1", "")

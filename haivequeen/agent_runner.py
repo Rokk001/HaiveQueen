@@ -804,6 +804,15 @@ class AgentRun:
                 self.say(text, "White")
         elif et == "tool_use":
             self.last = "tool: " + str(part.get("tool"))
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            command = (state.get("input") or {}).get("command") if isinstance(state.get("input"), dict) else None
+            if command and state.get("status") in ("completed", "error"):
+                info = classify_cmd(str(command), self.queue_re, self.compile_check)
+                if info and info["kind"] == "edit":
+                    self.say(info["label"], "Cyan")
+                elif info:
+                    metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+                    self.say_result(info, str(state.get("output") or state.get("error") or ""), metadata.get("exit"), state.get("status") == "error")
         elif et == "step_finish":
             tokens = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
             cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}

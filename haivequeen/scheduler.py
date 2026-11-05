@@ -147,9 +147,14 @@ def provider_capabilities(p):
     if not p.get("capabilitiesVersion"):
         if p.get("use") != "capability-only" and "Coding" not in capabilities:
             capabilities.append("Coding")
-        if not p.get("endpoint"):   # a provider from before the ticks keeps what its Queen did: she coordinated, built and deployed
-            capabilities.extend(c for c in ("Queen", "Build", "Deploy") if c not in capabilities)
+        if not p.get("endpoint") and "Queen" not in capabilities:
+            capabilities.append("Queen")
     return list(dict.fromkeys(capabilities))
+
+
+def queen_steps(p):
+    """The integration steps the Queen of a provider from before the ticks keeps doing herself, as she did then (H-17). This is no capability: a package that needs Build or Deploy still goes only to a provider with that tick (H-10)."""
+    return [] if p.get("capabilitiesVersion") or p.get("endpoint") else ["Build", "Deploy"]
 
 
 def get_providers(settings: dict) -> list:
@@ -179,7 +184,7 @@ def get_providers(settings: dict) -> list:
             "name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto), "beeMode": bee_mode,
             "args": [str(a) for a in (p.get("args") or [])],
             "slots": int(p.get("slots", settings.get("slots", 0)) or 0), "use": use,
-            "capabilities": capabilities, "capabilitiesVersion": 1,
+            "capabilities": capabilities, "capabilitiesVersion": 1, "queenSteps": queen_steps(p),
             "classes": p.get("classes") or {},
             "limit": str(limit.get("source", "")) if isinstance(limit, dict) else str(limit or ""),
             "usageInterval": float(limit.get("interval", 60)) if isinstance(limit, dict) else 60,
