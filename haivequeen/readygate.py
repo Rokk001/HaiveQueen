@@ -113,11 +113,23 @@ def _read(paths):
     return "", paths[0]
 
 
+class PlanHistoryError(Exception):
+    """The plan history could not be read reliably."""
+
+
 def plan_versions(path, current):
     """Read the current plan and its committed versions, if it has Git history."""
     folder = os.path.dirname(os.path.abspath(path))
     try:
-        root = subprocess.run(['git', '-C', folder, 'rev-parse', '--show-toplevel'], capture_output=True, text=True, check=True).stdout.strip()
+        probe = subprocess.run(['git', '-C', folder, 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if probe.returncode:
+            if 'not a git repository' in probe.stderr.lower():
+                return [current]
+            raise PlanHistoryError('cannot locate the plan repository')
+        root = probe.stdout.strip()
+        shallow = subprocess.run(['git', '-C', root, 'rev-parse', '--is-shallow-repository'], capture_output=True, text=True, check=True).stdout.strip()
+        if shallow != 'false':
+            raise PlanHistoryError('the plan repository has incomplete history')
         relative = os.path.relpath(path, root).replace('\\', '/')
         history = subprocess.run(['git', '-C', root, '-c', 'core.quotePath=false', 'log', '--follow', '--format=COMMIT:%H', '--name-status', '--', relative], capture_output=True, text=True, encoding='utf-8', check=True).stdout
         versions = [current]
@@ -133,8 +145,8 @@ def plan_versions(path, current):
                     relative = fields[1]
                 commit = None
         return versions
-    except (OSError, subprocess.CalledProcessError, ValueError):
-        return [current]
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+        raise PlanHistoryError('cannot read the plan history') from exc
 
 
 def gate(env, plan, queen):
@@ -145,7 +157,10 @@ def gate(env, plan, queen):
     decisions = [d for d in runtime.list_decisions(env.conn, env.name, active_only=True) if not d["plan_path"] or d["plan_path"] == plan]
     assignments = runtime.cut_assignments(env.conn, env.name, plan, plan_text)
     # No trustworthy cut record (older worked plan, reused path, another plan title): require evidence; requirements added after the cut need evidence too.
-    versions = plan_versions(plan_file, plan_text)
+    try:
+        versions = plan_versions(plan_file, plan_text)
+    except PlanHistoryError as exc:
+        return False, str(exc), True
     res = evaluate(plan_text, state_text, decisions, assignments if assignments is not None else [], versions)
     if res.no_ids or res.blocking:
         return False, refusal_text(res), False

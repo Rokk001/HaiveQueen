@@ -128,6 +128,40 @@ class ListTests(unittest.TestCase):
             texts = readygate.plan_versions(str(plan), current)
             self.assertEqual({rid for text in texts for rid, _ in plans.parse_requirements(text)}, {'G-0', 'G-1', 'G-2'})
 
+    def test_plan_history_read_error_is_not_silently_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            plan = root / 'PLAN.md'
+            plan.write_text(PLAN_BODY, encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
+            real_run = subprocess.run
+            def fail_show(args, **kwargs):
+                if 'show' in args:
+                    raise subprocess.CalledProcessError(1, args)
+                return real_run(args, **kwargs)
+            with mock.patch('haivequeen.readygate.subprocess.run', side_effect=fail_show):
+                with self.assertRaises(readygate.PlanHistoryError):
+                    readygate.plan_versions(str(plan), PLAN_BODY)
+
+    def test_shallow_plan_history_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            plan = root / 'PLAN.md'
+            plan.write_text(PLAN_BODY, encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
+            head = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True)
+            (root / '.git' / 'shallow').write_text(head, encoding='ascii')
+            with self.assertRaises(readygate.PlanHistoryError):
+                readygate.plan_versions(str(plan), PLAN_BODY)
+
     def test_plan_without_ids_is_refused(self):
         """No requirement id anywhere: refused with the hint that requirements need ids."""
         res = readygate.evaluate("# Plan\n\nDo things.\n", "# State\n", [])
