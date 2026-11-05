@@ -63,12 +63,12 @@ class ListTests(unittest.TestCase):
         res = self.check("# State\n\nOffene Anforderungen: 0\n")
         self.assertEqual(sorted(i for i, _ in res.blocking), ["G-1", "G-2", "G-3"])
 
-    def test_owner_check_does_not_block(self):
-        """A requirement the plan names as an owner check is listed separately."""
+    def test_owner_check_words_do_not_exempt(self):
+        """Words in the requirement do not exempt it from evidence."""
         plan = PLAN_BODY.replace("third thing", "third thing (owner check)")
         res = self.check(completeness(*FULL[:2]), plan=plan)
-        self.assertEqual(res.blocking, [])
-        self.assertEqual(res.owner, ["G-3"])
+        self.assertEqual([i for i, _ in res.blocking], ["G-3"])
+        self.assertEqual(res.owner, [])
 
     def test_set_aside_does_not_block(self):
         """An active decision naming the id sets it aside; a superseded one does not."""
@@ -224,7 +224,7 @@ class GateTests(RoundCase):
 
     def test_owner_check_and_set_aside_do_not_block(self):
         """An owner check of the plan and a set aside decision let the branch pass."""
-        text = (self.repo / REL).read_text(encoding="utf-8").replace("second thing", "second thing (owner check)")
+        text = (self.repo / REL).read_text(encoding="utf-8").replace('[[packages]]', '[[packages]]\nverify = "owner"\nrequirements = ["G-2"]', 1)
         (self.repo / REL).write_text(text, encoding="utf-8")
         runtime.add_decision(self.conn, "testproj", "owner", "G-3 is set aside", plan=REL, item="G-3")
         self.state(FULL[0])

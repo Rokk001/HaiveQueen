@@ -3,7 +3,7 @@
 1. The requirement list. The Queen answers the completeness question in the state file beside the plan, in a section `## Completeness`, one line per
    requirement: `- <id>: done | <evidence>` (evidence is a file, commit or test). Every requirement id of the plan (section Requirements of the
    plan, lines `- <id>: <text>`) and of the state file (its own section Requirements) must appear there exactly once with status done and an
-   evidence. Requirements the plan names as an owner check, and ids an active decision of the owner names (set aside), are listed separately
+   evidence. Requirements covered only by owner-verified packages, and ids an active decision of the owner names (set aside), are listed separately
    and do not block. The count line `Open requirements: <n>` does not decide here.
 2. The check agent. A fresh agent (class medium, provider chosen like a Bee's, loads like a Bee, took no part in the plan) compares the plan as
    submitted with the list and the branch and ends with `READY-CHECK: PASSED` or `READY-CHECK: FAILED` plus the missing points. Only a passed
@@ -19,7 +19,6 @@ CHECK_RUNNER = None   # tests replace this: callable(request dict) -> (verdict, 
 
 COMPLETENESS_HEADING = re.compile(r"(?im)^#{1,6}\s*completeness\s*$")
 LIST_LINE = re.compile(r"^\s*[-*]\s*([A-Za-z0-9_.-]+)\s*:\s*(.*?)\s*$")
-OWNER_CHECK = re.compile(r"(?i)owner[\s_-]*check")
 VERDICT_LINE = re.compile(r"(?im)^\s*READY-CHECK:\s*(PASSED|FAILED)\b.*$")
 DONE_STATUS = ("done", "erledigt")
 
@@ -63,10 +62,12 @@ def evaluate(plan_text, state_text, decisions):
         res.no_ids = True
         return res
     entries = parse_completeness(state_text)
+    packages = plans.parse_plan_text(plan_text).packages
     active = [d for d in decisions if str(d.get("status") or "active") == "active"]
     for rid, text in required.items():
         mine = [e for e in entries if e[0] == rid]
-        if OWNER_CHECK.search(text) or any(e[1].replace("_", "-").replace(" ", "-") == "owner-check" for e in mine):
+        covering = [p for p in packages if rid in p.requirements]
+        if covering and all(p.verify == "owner" for p in covering):
             res.owner.append(rid)
         elif any(_names(d, rid) for d in active):
             res.aside.append(rid)
