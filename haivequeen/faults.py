@@ -55,7 +55,7 @@ def _check_agents(env) -> None:
         else:
             kind, what = "agent_no_result", "it ended (%s) without a final result" % a["status"]
         if not first:
-            file_fault(conn, FAULT_PROJECT, kind, "Agent %s of Apiary %s: %s." % (a["name"], env.name, what))
+            file_fault(conn, env.name, kind, "Agent %s of Apiary %s: %s." % (a["name"], env.name, what))
     runtime.kv_set(conn, env.name, SEEN_KEY, json.dumps(sorted(seen)[-500:]))
 
 
@@ -72,7 +72,7 @@ def _check_idle(env, started: int, can_start: bool) -> None:
     n = int(runtime.kv_get(conn, env.name, IDLE_KEY) or 0) + 1 if stuck else 0
     runtime.kv_set(conn, env.name, IDLE_KEY, str(n))
     if n >= IDLE_ROUNDS:
-        file_fault(conn, FAULT_PROJECT, "no_start", "Apiary %s: %d rounds in a row with startable packages and no agent started." % (env.name, n))
+        file_fault(conn, env.name, "no_start", "Apiary %s: %d rounds in a row with startable packages and no agent started." % (env.name, n))
 
 
 # Resolve open fault reports only when subsequent observations establish recovery.
@@ -83,8 +83,9 @@ def _resolve_open(env, started: int, now: datetime) -> None:
     history = json.loads(runtime.kv_get(conn, env.name, key) or "[]")
     history = (history + [[now.isoformat(timespec="seconds"), started > 0]])[-2:]
     runtime.kv_set(conn, env.name, key, json.dumps(history))
-    questions = (runtime.list_questions(conn, FAULT_PROJECT, "open", FAULT_PLAN) +
-                 runtime.list_questions(conn, FAULT_PROJECT, "fault_check", FAULT_PLAN))
+    projects = {env.name, FAULT_PROJECT}  # Include legacy reports filed centrally.
+    questions = [q for project in projects for status in ("open", "fault_check")
+                 for q in runtime.list_questions(conn, project, status, FAULT_PLAN)]
     for q in questions:
         created = db.parse_time(q["created_at"])
         if created is None or created > now:
@@ -125,20 +126,18 @@ def _resolve_open(env, started: int, now: datetime) -> None:
             db.answer_question(conn, q["id"], answer, "coordinator")
         elif evidence and (confirmed or now - created >= timedelta(minutes=60)):
             evidence_key = "fault-evidence-%s" % q["id"]
-            if not runtime.kv_get(conn, FAULT_PROJECT, evidence_key):
-                runtime.append_event(conn, FAULT_PROJECT, "Fault question %s remains open (%s): %s" % (q["id"], kind, evidence), kind="note", data={"question_id": q["id"]}, mirror="none")
-                runtime.kv_set(conn, FAULT_PROJECT, evidence_key, "1")
+            if not runtime.kv_get(conn, q["project"], evidence_key):
+                runtime.append_event(conn, q["project"], "Fault question %s remains open (%s): %s" % (q["id"], kind, evidence), kind="note", data={"question_id": q["id"]}, mirror="none")
+                runtime.kv_set(conn, q["project"], evidence_key, "1")
             if q["status"] == "fault_check":
                 with db.transaction(conn):
                     conn.execute("UPDATE questions SET status='open' WHERE id=? AND status='fault_check'", (q["id"],))
-                    db.add_event(conn, FAULT_PROJECT, "question", q["question"], data={"question_id": q["id"]})
+                    db.add_event(conn, q["project"], "question", q["question"], data={"question_id": q["id"]})
 
 
 # Check and resolve fault reports for one project round.
 def check_round(env, started: int, can_start: bool, now: datetime = None) -> None:
     """Fault detection of one project round (called at the end of the round routine; never raises, a broken check must not stop a round)."""
-    if not _project_known(env.conn, FAULT_PROJECT):
-        return
     try:
         _resolve_open(env, started, now or datetime.now())
         _check_idle(env, started, can_start)

@@ -20,7 +20,7 @@ class FaultsTest(RoundCase):
     # Read all fault reports, including those awaiting automatic checks.
     def faults_of(self, kind=None):
         """Fault questions of the fault project (optionally of one kind)."""
-        return db.rows(self.conn, "SELECT * FROM questions WHERE project=? AND plan_path=?" + (" AND item=?" if kind else "") + " ORDER BY id", ("HaiveQueen", faults.FAULT_PLAN, kind) if kind else ("HaiveQueen", faults.FAULT_PLAN))
+        return db.rows(self.conn, "SELECT * FROM questions WHERE project IN (?, ?) AND plan_path=?" + (" AND item=?" if kind else "") + " ORDER BY id", ("HaiveQueen", "testproj", faults.FAULT_PLAN, kind) if kind else ("HaiveQueen", "testproj", faults.FAULT_PLAN))
 
     def check(self, started=1, can_start=True, now=None):
         """One fault check of the dummy project."""
