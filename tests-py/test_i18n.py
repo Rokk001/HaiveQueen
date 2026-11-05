@@ -1,5 +1,6 @@
 """H-2 to H-5: GUI and desktop texts follow the machine language, agent instructions and protocol words stay English, dates follow the system."""
 import ast
+import json
 import os
 import re
 import tempfile
@@ -65,6 +66,27 @@ def stored_lines():
                     for text in sample(node.args[LOG_CALLS[func]]):
                         if has_words(text):
                             yield path.name, node.lineno, text
+
+
+def worktree_reasons():
+    """Every literal reason worktrees.py can report: returned by _candidate_reason, put under 'reason' or into `reason`, or raised as an exception (its text becomes the reason)."""
+    tree = ast.parse((PACKAGE / "worktrees.py").read_text(encoding="utf-8"))
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_candidate_reason":
+            found += [item.value for item in ast.walk(node) if isinstance(item, ast.Return) and item.value is not None]
+        elif isinstance(node, ast.Dict):
+            found += [value for key, value in zip(node.keys, node.values) if literal(key) == "reason"]
+        elif isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "reason":
+            found.append(node.value)
+        elif isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) and node.exc.args:
+            found.append(node.exc.args[0])
+    for value in found:
+        value = value.values[-1] if isinstance(value, ast.BoolOp) else value
+        while isinstance(value, ast.BinOp):
+            value = value.left
+        if literal(value):
+            yield literal(value)
 
 
 class CatalogTest(unittest.TestCase):
@@ -233,6 +255,33 @@ class GermanTextsTest(unittest.TestCase):
         self.assertEqual(i18n.log_text(line), 'Runde fertig: 1 Queen(s) gestartet; A-PLAN nicht gestartet: Hive-Limit 2 erreicht; B-PLAN nicht gestartet: Wartet auf Anbieter codex: Kontingent aufgebraucht'
                                               '; C-PLAN nicht gestartet: freier RAM 1,50 GB liegt unter dem Mindestwert 2,00 GB; D-PLAN nicht gestartet: Hive-Zustand resting')
         self.assertEqual(i18n.log_text('Hive state "answer" (questions 3, 4)'), "Hive-Zustand answer (Fragen 3, 4)")
+
+    def test_round_line_keeps_a_reason_with_a_semicolon_together(self):
+        line = "round done: 0 Queen(s) started; A-PLAN not started: worktree for branch a could not be prepared (git: one; two); B-PLAN not started: quota used up"
+        self.assertEqual(i18n.log_text(line), "Runde fertig: 0 Queen(s) gestartet; A-PLAN nicht gestartet: Worktree für Branch a konnte nicht vorbereitet werden (git: one; two); B-PLAN nicht gestartet: Kontingent aufgebraucht")
+
+    def test_worktree_cleanup_line_has_no_english_or_json_left(self):
+        result = {"removed": ["C:\\wt\\a"], "kept": [{"path": "C:\\wt\\b", "reason": "protected worktree"}, {"path": "C:\\wt\\c", "reason": "ignored file: out/x.bin"}],
+                  "notRemovable": [{"path": "C:\\wt\\d", "reason": "fatal: git\nsays no"}], "dryRun": False}
+        self.assertEqual(i18n.log_text("Worktree cleanup: " + json.dumps(result, ensure_ascii=False)),
+                         "Worktree-Bereinigung: entfernt: C:\\wt\\a; behalten: C:\\wt\\b (geschützter Worktree), C:\\wt\\c (ignorierte Datei: out/x.bin); nicht entfernbar: C:\\wt\\d (fatal: git says no)")
+        self.assertEqual(i18n.log_text('Worktree cleanup: {"removed": [], "kept": [], "notRemovable": [], "dryRun": false}'), "Worktree-Bereinigung: nichts zu tun")
+        self.assertEqual(i18n.log_text("Worktree cleanup: [1]"), "Worktree-Bereinigung: [1]")   # not a result: as written
+        self.assertEqual(i18n.log_text("Worktree cleanup failed: worktree cleanup is busy"), "Worktree-Bereinigung fehlgeschlagen: Worktree-Bereinigung läuft bereits")
+        self.assertEqual(i18n.log_text("Worktree cleanup failed: fatal: x"), "Worktree-Bereinigung fehlgeschlagen: fatal: x")
+
+    def test_worktree_cleanup_line_stays_stored_in_english_and_noise_is_recognised_in_german(self):
+        text = 'Worktree cleanup: {"removed": [], "kept": [{"path": "p", "reason": "locked or missing"}], "notRemovable": [], "dryRun": false}'
+        event = {"ts": "2026-01-01T10:00:00", "agent": None, "project": "A", "kind": "rounds", "text": text}
+        self.assertTrue(gui_data.is_noise(event))
+        self.assertEqual(gui_data.log_line(event)[2], "Worktree-Bereinigung: behalten: p (gesperrt oder fehlt)")
+        self.assertEqual(i18n.log_text(text, "English"), text)
+
+    def test_every_worktree_reason_has_a_german_form(self):
+        """Scans worktrees.py: a new reason without a German form fails here."""
+        seen = set(worktree_reasons())
+        self.assertGreater(len(seen), 25)   # the scan really finds the reasons
+        self.assertEqual(sorted(reason for reason in seen if i18n._worktree_reason(reason) == reason), [])
 
     def test_words_of_agents_and_owner_stay_as_written_even_when_they_look_like_program_lines(self):
         line = "Ada started (the build)"

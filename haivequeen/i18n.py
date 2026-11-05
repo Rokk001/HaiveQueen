@@ -4,6 +4,7 @@ The English text is the key: `tr("Close")` gives it back unchanged for English a
 messages use the language of the machine settings (General page of config.toml); owner texts of an Apiary pass that Apiary's language. Fixed protocol
 words (plan statuses, the words in plan and state files) and the product names Apiary, Hive, Queen and Bee are never translated.
 """
+import json
 import re
 
 from . import config, platform as osplat
@@ -96,7 +97,29 @@ def _german_line(text):
 
 def _round_done(match):
     """The round line with each "<plan> not started: <reason>" in German."""
-    return "Runde fertig: %s Queen(s) gestartet%s" % (match.group(1), "".join("; " + _german_line(part) for part in match.group(2).split("; ")[1:]))
+    return "Runde fertig: %s Queen(s) gestartet%s" % (match.group(1), "".join("; " + _german_line(part) for part in re.split(r"; (?=[^;]* not started: )", match.group(2))[1:]))
+
+
+def _worktree_reason(reason):
+    """Why a worktree stays, in German on one line; the text of Git or the system and any path behind a known start stay as written."""
+    reason = " ".join(str(reason).split())
+    for english, german in _WORKTREE_REASONS:
+        if reason.startswith(english):
+            return german + reason[len(english):]
+    return reason
+
+
+def _worktree_cleanup(match):
+    """The result of a cleanup in German words instead of its JSON; a text that is not such a result stays as written behind the translated head."""
+    head = "Worktree-Bereinigung: "
+    try:
+        result = json.loads(match.group(1))
+        groups = (("entfernt", [str(path) for path in result["removed"]]),
+                  ("behalten", ["%s (%s)" % (row["path"], _worktree_reason(row["reason"])) for row in result["kept"]]),
+                  ("nicht entfernbar", ["%s (%s)" % (row["path"], _worktree_reason(row["reason"])) for row in result["notRemovable"]]))
+    except (ValueError, KeyError, TypeError):
+        return head + match.group(1)
+    return head + ("; ".join("%s: %s" % (label, ", ".join(items)) for label, items in groups if items) or "nichts zu tun")
 
 
 def _with_source(german):
@@ -113,7 +136,44 @@ _BUILD_WHY = {"first": "erster Build", "ram": "durch RAM begrenzt", "cores": "du
 _LIVE_LABEL = r"(Commit(?:: .*?)?|Push|Compile test|Check \S+|changed: .*?|ready line registered)"
 
 
+# Why a worktree cleanup kept a worktree or could not remove it: the start of the English text and its German form.
+_WORKTREE_REASONS = (
+    ("protected worktree", "geschützter Worktree"),
+    ("locked or missing", "gesperrt oder fehlt"),
+    ("branch has an open queue row", "Branch hat eine offene Zeile in der Warteschlange"),
+    ("branch has no current integrated queue row", "Branch hat keine aktuelle integrierte Zeile in der Warteschlange"),
+    ("integrated queue tip is invalid", "Commit der integrierten Zeile in der Warteschlange ist ungültig"),
+    ("current branch does not match the worktree inventory", "aktueller Branch passt nicht zur Worktree-Liste"),
+    ("HEAD does not match the integrated queue tip", "HEAD passt nicht zum Commit der integrierten Zeile in der Warteschlange"),
+    ("used by active agent", "von einem aktiven Agenten verwendet"),
+    ("used by assigned Bee", "von einer zugewiesenen Bee verwendet"),
+    ("git status failed", "git status fehlgeschlagen"),
+    ("uncommitted or untracked changes", "nicht committete oder nicht verfolgte Änderungen"),
+    ("ignored file: ", "ignorierte Datei: "),
+    ("HEAD is not in the integration branch", "HEAD ist nicht im Integrations-Branch"),
+    ("process working directory or unknown process state", "Arbeitsverzeichnis eines Prozesses oder unbekannter Prozesszustand"),
+    ("fetch failed: ", "fetch fehlgeschlagen: "),
+    ("cannot resolve fetched integration branch", "abgerufener Integrations-Branch lässt sich nicht auflösen"),
+    ("integration branch changed during fetch", "Integrations-Branch hat sich während des Abrufs geändert"),
+    ("link target changed: ", "Link-Ziel geändert: "),
+    ("link target changed; links retained at ", "Link-Ziel geändert; Links bleiben erhalten unter "),
+    ("link target is missing", "Link-Ziel fehlt"),
+    ("link target is inside the worktree", "Link-Ziel liegt im Worktree"),
+    ("nested link in target", "verschachtelter Link im Ziel"),
+    ("non-regular target file", "keine reguläre Datei im Ziel"),
+    ("new link appeared during cleanup", "neuer Link während der Bereinigung aufgetaucht"),
+    ("tracked link cannot be safely moved: ", "versionierter Link lässt sich nicht sicher verschieben: "),
+    ("unsupported reparse point: ", "nicht unterstützter Reparse-Point: "),
+    ("process memory is inaccessible", "Prozessspeicher ist nicht zugänglich"),
+    ("process information is inaccessible", "Prozessinformationen sind nicht zugänglich"),
+    ("worktree cleanup is busy", "Worktree-Bereinigung läuft bereits"),
+)
+
+
 _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
+    # ---- worktree cleanup, before the general patterns: its JSON holds free text
+    (r"^Worktree cleanup failed: (.*)$", lambda m: "Worktree-Bereinigung fehlgeschlagen: " + _worktree_reason(m.group(1))),
+    (r"^Worktree cleanup: (.*)$", _worktree_cleanup),
     # ---- rounds and the loop
     (r"^round done: (\d+) Queen\(s\) started((?:; .*)?)$", _round_done),
     (r"^round skipped \((.*)\)$", r"Runde übersprungen (\1)"),
@@ -141,8 +201,6 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     (r"^(\S+) started \((.*)\)$", r"\1 gestartet (\2)"),
     (r"^plan (.+?): READY -> IN_PROGRESS$", r"Plan \1: READY -> IN_PROGRESS"),
     (r"^plan (.+?): status change failed: ", r"Plan \1: Statuswechsel fehlgeschlagen: "),
-    (r"^Worktree cleanup failed: ", "Worktree-Bereinigung fehlgeschlagen: "),
-    (r"^Worktree cleanup: ", "Worktree-Bereinigung: "),
     (r"^cannot prepare (plan|Queen) worktree: ", r"Worktree (\1) kann nicht vorbereitet werden: "),
     (r"^event hook ok: (\d+) event\(s\)$", r"Event-Hook ok: \1 Ereignis(se)"),
     (r"^event hook failed \(exit (.*?)\): ", r"Event-Hook fehlgeschlagen (Exit \1): "),

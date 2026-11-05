@@ -8,7 +8,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from haivequeen import db, gui_config  # noqa: E402
+from haivequeen import db, gui_config, i18n  # noqa: E402
 
 SAMPLE = '''# Machine settings (kept at the top)
 slots = 8
@@ -381,6 +381,38 @@ class WindowTest(unittest.TestCase):
                 if "envVar" in old:
                     self.assertEqual((saved["envVar"], saved["reserveMB"]), ("BUILD_MP_JOBS", 1024))
                 win.win.destroy()
+
+    def test_build_ram_uses_the_decimal_comma_in_german_and_stores_a_toml_number(self):
+        """German shows and takes "2,5" (a point is still taken), the file always holds a number, a wrong value is refused with a German message."""
+        path = self.folder / "config.toml"
+        with mock.patch.object(gui_config, "machine_cores", return_value=8), mock.patch.object(i18n, "machine_language", return_value="German"):
+            path.write_text("slots = 2\n[buildJobs]\nminFreeRamGB = 2.5\n", encoding="utf-8")
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            self.assertEqual(win.build_vars[2].get(), "2,5")
+            for typed, stored, shown in (("3,25", 3.25, "3,25"), ("4.5", 4.5, "4,5"), ("6,0", 6, "6")):
+                win.build_vars[2].set(typed)
+                win.save()
+                self.assertEqual(gui_config.load_raw(path)["buildJobs"]["minFreeRamGB"], stored)
+                win.build_form()
+                self.assertEqual(win.build_vars[2].get(), shown)
+            before = path.read_text(encoding="utf-8")
+            win.build_vars[2].set("1,2,3")
+            win.save()
+            self.assertEqual(win.status.cget("text"), "Mindestens freier RAM vor einem Build: eine Zahl wird erwartet")
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+            win.win.destroy()
+
+    def test_build_ram_keeps_the_decimal_point_in_english(self):
+        """English shows the point; a comma is taken there too."""
+        path = self.folder / "config.toml"
+        with mock.patch.object(gui_config, "machine_cores", return_value=8), mock.patch.object(i18n, "machine_language", return_value="English"):
+            path.write_text("slots = 2\n[buildJobs]\nminFreeRamGB = 2.5\n", encoding="utf-8")
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            self.assertEqual(win.build_vars[2].get(), "2.5")
+            win.build_vars[2].set("3,5")
+            win.save()
+            self.assertEqual(gui_config.load_raw(path)["buildJobs"]["minFreeRamGB"], 3.5)
+            win.win.destroy()
 
     def test_a_wrong_build_value_is_refused(self):
         """A parallel value of 0 stays on screen with its message and nothing is written."""

@@ -13,7 +13,7 @@ import tomllib
 from pathlib import Path
 
 from . import gui_data, localtime
-from .i18n import N_, tr
+from .i18n import N_, decimal, tr
 
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
 CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "use": ("preferred", "fallback", "capability-only"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
@@ -424,7 +424,7 @@ class ConfigWindow:
         shown = build_values(self.data, cores)
         box = tk.LabelFrame(self.form, text=tr("Build"), padx=6, pady=4)
         box.pack(fill="x", pady=(0, 10), anchor="w")
-        cores_var, parallel_var, ram_var = tk.StringVar(value=str(shown["cores"])), tk.StringVar(value=str(shown["parallel"])), tk.StringVar(value="%g" % shown["minFreeRamGB"])
+        cores_var, parallel_var, ram_var = tk.StringVar(value=str(shown["cores"])), tk.StringVar(value=str(shown["parallel"])), tk.StringVar(value=decimal("%g" % shown["minFreeRamGB"]))
         self.build_vars = (cores_var, parallel_var, ram_var)
         for (key, label, explanation), var in zip(BUILD_FIELDS, self.build_vars):
             row = tk.Frame(box)
