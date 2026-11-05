@@ -438,8 +438,8 @@ def _do_start(c, a, forced_pick=None) -> int:
         rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"   # a project with a separate code repo keeps its rules in the workspace
         hdr = ("You are the agent %s (one task, then you end). Follow all rules in section 1 of %s and every rule of the repository (%s and the "
                "files it names). Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, TOOLS_DIR / "docs" / "AGENT-RULES.md", rules_doc))
-    handoff = ("Prüfe nach jedem abgeschlossenen Arbeitsschritt, ob die Datei %s existiert. Wenn ja: schreib den Stand (erledigt, offen, nächster Schritt, "
-               "Branch, Worktree) in die State-Datei des Plans unter 'Handoff %s' und beende dich." % (hf, nm))
+    handoff = ("After each completed step, check whether %s exists. If it does, record the status (completed, open, next step, "
+               "branch and worktree) in the plan state file under 'Handoff %s' and end." % (hf, nm))
     if phase == "queen":
         handoff = ("After each completed step check %s. When it exists, do not start new Bees, "
                    "wait for running Bees, finish your current step, record the handoff in the plan state and end." % hf)

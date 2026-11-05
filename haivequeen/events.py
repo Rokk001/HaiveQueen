@@ -48,7 +48,7 @@ def current_event_keys(env, plans: list, queue_rows: list, verify_zero, question
         word = str(r["status"]).strip().split(" ")[0]
         if word == "ready":
             cur["queue|%s|%s|ready" % (r["branch"], r["tip"])] = "ready %s" % r["branch"]
-        elif word == "integriert":
+        elif word in ("integrated", "integriert"):
             cur["queue|%s|%s|integrated" % (r["branch"], r["tip"])] = "integrated %s" % r["branch"]
     for q in questions:
         if q["status"] == "OPEN":

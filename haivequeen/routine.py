@@ -11,7 +11,7 @@ from . import scheduler as sch
 from .scheduler import ACTIVE, norm_plan
 
 QUEUE_PLAN_ID = "integration-queue"   # pseudo plan name of the fix tasks for blocked queue rows that name no plan
-WORDS = {"ready": "ready", "in_run": "in Lauf", "blocked": "blockiert", "integrated": "integriert", "withdrawn": "zurückgezogen"}   # status words the routine and the brain know
+WORDS = {"ready": "ready", "in_run": "in progress", "blocked": "blocked", "integrated": "integrated", "withdrawn": "withdrawn"}   # status words the routine and the brain know
 HANDOFF_TAIL = "Prüfe nach jedem"   # start of the handoff sentence of an agent prompt (cut off when a follow-up agent reuses the task)
 
 
@@ -166,7 +166,7 @@ def repair_stale_agents(env, now: datetime = None, alive=None) -> None:
 
 # ---- final answers of verify agents ----
 
-COUNT_RE = re.compile(r"Offene Anforderungen[^:\r\n]*:\s*(\d+)")   # the count line of a verify answer
+COUNT_RE = re.compile(r"(?:Open requirements|Offene Anforderungen)[^:\r\n]*:\s*(\d+)", re.I)   # the count line of a verify answer
 RUNNER_FILES = {"final.txt", "prompt.md", "rules.md", "milestones.txt", "stderr.txt", "build-samples.txt", "runner.log", "runner-error.txt"}   # files the runner writes itself, never a report
 
 
@@ -212,7 +212,7 @@ def verify_zero(env, name: str) -> bool:
 
 def verify_open_count(env, name: str) -> int:
     """Number of open requirements named at the end of a verify answer; -1 when the answer is missing or has no such line."""
-    found = re.findall(r"Offene Anforderungen[^:\r\n]*:\s*(\d+)", read_final(env, name))
+    found = COUNT_RE.findall(read_final(env, name))
     return int(found[-1]) if found else -1
 
 
@@ -223,7 +223,7 @@ def lock_reason(text: str) -> str:
     lines = []
     for ln in text.splitlines():
         ln = re.sub(r"^[\s\-*|]+", "", ln).strip().rstrip("|").strip()
-        if ln and not re.match(r"^Offene Anforderungen", ln):
+        if ln and not re.match(r"^(?:Open requirements|Offene Anforderungen)", ln, re.I):
             lines.append(ln)
     return "\n".join(lines)[:600]
 

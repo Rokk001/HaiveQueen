@@ -79,19 +79,19 @@ def _queue_order(entry: dict, where: str, project: str, conn, repo, ref: str) ->
         raise InboxError("%s: branch %s has no ready or blocked row%s" % (where, branch, " with tip " + tip if tip else ""))
     if action == "requeue":
         return {"action": action, "branch": branch, "reason": reason, "ids": [rows[-1]["id"]]}
-    if reason.strip().lower() != "ueberholt":
+    if reason.strip().lower() not in ("superseded", "ueberholt", "überholt"):
         for r in rows:
             if not r["tip"]:
                 raise InboxError("%s: row %d of branch %s has no tip to check against %s" % (where, r["id"], branch, ref))
             if not is_ancestor(repo, r["tip"], ref):
-                raise InboxError("%s: tip %s of branch %s is not in %s and the reason is not 'ueberholt'" % (where, r["tip"], branch, ref))
+                raise InboxError("%s: tip %s of branch %s is not in %s and the reason is not 'superseded'" % (where, r["tip"], branch, ref))
     return {"action": action, "branch": branch, "reason": reason, "ids": [r["id"] for r in rows]}
 
 
 def apply_queue_order(conn, project: str, order: dict) -> None:
     """Carry out a checked queue order: withdraw (status withdrawn, note keeps the old status word and the reason), mark_cleanup (kv mark) or requeue (status ready)."""
     if order["action"] == "mark_cleanup":
-        runtime.kv_set(conn, project, CLEANUP_PREFIX + order["branch"], "erledigt, Aufraeumen erlaubt: " + order["reason"])
+        runtime.kv_set(conn, project, CLEANUP_PREFIX + order["branch"], "done, cleanup allowed: " + order["reason"])
         return
     with db.transaction(conn):
         for qid in order["ids"]:
