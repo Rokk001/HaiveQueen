@@ -259,18 +259,9 @@ def owner_check_wanted(env, plan):
 # Ask the owner to accept an integrated plan.
 def file_owner_check(conn, env, plan):
     """File the owner check question of an integrated plan (with the final report of its last Queen) and park the Hive until the owner answers; returns the question id."""
-    final = ''
-    last = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all')) if a.get('plan_path') == plan and a.get('phase') == 'queen'), None)
-    if last:
-        try:
-            final = (env.run_dir(last['name']) / 'final.txt').read_text(encoding='utf-8', errors='replace').strip()[:800]
-        except OSError:
-            final = ''
     language = roles.language(env.settings)
-    text = tr('Plan %s is integrated and deployed. Please test the integrated build in the game: answer ok, or say what is not right and the next Queen fixes exactly that.', plan, language=language)
-    if final:
-        text += tr('\n\nReport of the Queen:\n', language=language) + final
-    qid = db.add_question(conn, env.name, plan, 'owner-check', text, tr('Test it in the game, then answer ok or describe what is wrong.', language=language))
+    text = str(env.settings.get('ownerCheckText') or tr('Check the integrated result', language=language))
+    qid = db.add_question(conn, env.name, plan, 'owner-check', text, '')
     wait_for_owner_check(conn, env.name, plan, [qid])
     return qid
 

@@ -382,6 +382,7 @@ GERMAN = {
     "Waiting for provider %s": "Wartet auf Anbieter %s", "Plan branch is used elsewhere": "Plan-Branch wird anderswo verwendet", "Plan worktree could not be prepared": "Plan-Worktree konnte nicht vorbereitet werden",
     "HaiveQueen stopped": "HaiveQueen gestoppt", "HaiveQueen paused": "HaiveQueen pausiert", "Waiting for integration": "Wartet auf Integration", "Handoff: Bees still running": "Übergabe: Bees laufen noch",
     "Waiting after interrupted Queen": "Wartet nach unterbrochener Queen", "Plan branch or worktree missing": "Plan-Branch oder Worktree fehlt", "Start already reserved": "Start bereits reserviert",
+    "Check the integrated result": "Das integrierte Ergebnis prüfen",
     "Waiting for owner check": "Wartet auf Owner-Prüfung", "Waiting for answer": "Wartet auf Antwort", "No active Queen": "Keine aktive Queen", "; open questions %s": "; offene Fragen %s", "Done": "Fertig", "Resting until %s": "Ruht bis %s",
     "Queenless": "Ohne Queen", "Waiting for Codex": "Wartet auf Codex", "Waiting for provider": "Wartet auf Anbieter", "Handoff": "Übergabe", "Waiting to start": "Wartet auf Start",
     "Plan rejected": "Plan abgelehnt", "Running, plan paused": "Läuft, Plan pausiert", "Plan paused": "Plan pausiert", "Running": "Läuft", "Idle": "Untätig",
