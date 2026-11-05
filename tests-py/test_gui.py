@@ -278,6 +278,11 @@ class StateButtonTest(unittest.TestCase):
         self.assertEqual(gui.REPO_URL, "https://github.com/Rokk001/HaiveQueen")
 
 
+def size_supported(width, height, screen_width, screen_height):
+    """Whether a requested window size fits on the available display."""
+    return width <= screen_width and height <= screen_height
+
+
 # Draw the window once when a display exists.
 class WindowTest(unittest.TestCase):
     """Smoke test: the window draws from the invented snapshot without an exception."""
@@ -364,40 +369,50 @@ class WindowTest(unittest.TestCase):
             conn.close()
             tmp.cleanup()
 
+    def test_size_supported(self):
+        """Both dimensions must fit on the available display."""
+        self.assertTrue(size_supported(1000, 600, 1280, 800))
+        self.assertTrue(size_supported(1280, 800, 1280, 800))
+        self.assertFalse(size_supported(1366, 768, 1280, 800))
+        self.assertFalse(size_supported(800, 801, 1280, 800))
+
     # Draw at many window sizes and check that nothing is drawn outside the canvas.
     def test_sizes(self):
         """At six window sizes the picture scale never exceeds its layout slot and every canvas item stays inside the canvas."""
         import tkinter as tk
         from haivequeen import gui
         gui.REFRESH_MS = 10 ** 9
-        checked = 0
         for width, height in ((800, 500), (1000, 600), (1366, 768), (1600, 900), (1920, 1050), (2400, 1300)):
-            try:
-                root = tk.Tk()
-                root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
-            except tk.TclError:
-                self.skipTest("no display")
-            tmp = tempfile.TemporaryDirectory()
-            conn = db.connect(Path(tmp.name) / "o.db")
-            try:
-                root.geometry("%dx%d+0+0" % (width, height))
-                win = gui.Dashboard(root, conn)
-                root.update()
-                canvas_w, canvas_h = win.canvas.winfo_width(), win.canvas.winfo_height()
-                if abs(canvas_w - width) > 0.05 * width:
-                    continue   # the window manager clamped this size (small screen): nothing to check
-                zoom, sub = win.fraction
-                self.assertLessEqual(zoom / sub, win.scale * 1.005)
-                left, top, right, bottom = win.canvas.bbox("all")
-                self.assertGreaterEqual((left, top), (-1, -1), (width, height))
-                self.assertLessEqual(right, canvas_w + 2, (width, height))
-                self.assertLessEqual(bottom, canvas_h + 2, (width, height))
-                checked += 1
-            finally:
-                root.destroy()
-                conn.close()
-                tmp.cleanup()
-        self.assertGreaterEqual(checked, 3)
+            with self.subTest(width=width, height=height):
+                try:
+                    root = tk.Tk()
+                    root.attributes("-alpha", 0.0)   # fully transparent: do not flash on the user's screen
+                except tk.TclError:
+                    self.skipTest("no display")
+                try:
+                    screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
+                    if not size_supported(width, height, screen_w, screen_h):
+                        self.skipTest("%dx%d exceeds display %dx%d" % (width, height, screen_w, screen_h))
+                    with tempfile.TemporaryDirectory() as tmp:
+                        conn = db.connect(Path(tmp) / "o.db")
+                        try:
+                            root.geometry("%dx%d+0+0" % (width, height))
+                            win = gui.Dashboard(root, conn)
+                            root.update()
+                            self.assertAlmostEqual(root.winfo_width(), width, delta=0.05 * width)
+                            self.assertAlmostEqual(root.winfo_height(), height, delta=0.05 * height)
+                            canvas_w, canvas_h = win.canvas.winfo_width(), win.canvas.winfo_height()
+                            zoom, sub = win.fraction
+                            self.assertLessEqual(zoom / sub, win.scale * 1.005)
+                            left, top, right, bottom = win.canvas.bbox("all")
+                            self.assertGreaterEqual((left, top), (-1, -1), (width, height))
+                            self.assertLessEqual(right, canvas_w + 2, (width, height))
+                            self.assertLessEqual(bottom, canvas_h + 2, (width, height))
+                        finally:
+                            conn.close()
+                finally:
+                    root.destroy()
+
 
 
 if __name__ == "__main__":
