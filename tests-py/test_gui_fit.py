@@ -93,6 +93,21 @@ class FitTest(unittest.TestCase):
             for t in texts:
                 self.assertNotIn("TURN-STALL-CRASH-FIX", t.replace("…", "") + "x" if t.endswith("…") else "")
 
+    # U1: the Queen row shows the crown of the Queens tile, Bee rows the bee icon.
+    def test_queen_row_uses_the_crown_icon(self):
+        """In the Queens and Bees table the Queen row is drawn with the row_queen icon and every Bee row with the row_icon bee icon."""
+        win = self.open(1660, 950)
+        drawn = []
+        real = win.pic
+        win.pic = lambda name, x, y, anchor="nw": (drawn.append((y, name)), real(name, x, y, anchor))
+        win.draw()
+        rows = sorted(d for d in drawn if d[1].startswith("row_") and d[0] * win.scale > 0 and d[0] > 560)
+        self.assertGreaterEqual(len(rows), 3)
+        kinds = [n.replace("_dim", "") for _y, n in rows]
+        self.assertEqual(kinds.count("row_queen"), 1, kinds)
+        self.assertEqual(kinds.count("row_icon"), len(kinds) - 1, kinds)
+        self.assertTrue((self.gui.ASSETS / "row_queen.png").exists() and (self.gui.ASSETS / "row_queen_dim.png").exists())
+
     # U-2: the subtitle is whole at the usual size.
     def test_subtitle_of_active_hives_is_whole_at_1660_wide(self):
         """At about 1660 x 950 the subtitle shows fully; it never touches the key hints."""

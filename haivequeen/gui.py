@@ -545,7 +545,8 @@ class Dashboard:
             self.hit(x0 + 8, y - 10, x1 - 22, y + 10, self.select, ("bees", i))
             colour = "green" if r["status"] == "running" else "amber"
             self.text(x0 + 24, y, str(i + 1), 14, "dim", "w")
-            self.pic("row_icon" if chosen else "row_icon_dim", x0 + 50, y, "w")
+            icon = "row_queen" if r["kind"] == "queen" else "row_icon"   # the Queen shows the crown of the Queens tile, a Bee the bee
+            self.pic(icon if chosen else icon + "_dim", x0 + 50, y, "w")
             # Every cell is shortened with an ellipsis inside its own column (the width up to the next column minus a gap), so columns never overlap.
             if r["kind"] == "queen":
                 self.text(x0 + 80, y, self.fit(r["name"], 84, 14), 14, "gold", "w")
