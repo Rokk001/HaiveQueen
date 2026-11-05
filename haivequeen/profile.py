@@ -300,8 +300,14 @@ def queen_load(conn, project, workspace, plan, predecessor=None) -> str:
     parts.append("# State file %s\n\n%s" % (state_file.name, state or "(none yet)"))
     if predecessor:
         parts.append("# Handoff of your predecessor %s\n\n%s" % (predecessor, handoff or "(none written)"))
-    decisions = runtime.list_decisions(conn, project, active_only=True)
-    parts.append("# Decisions of this Apiary\n\n" + ("\n".join("- #%s%s: %s" % (d["id"], " (plan %s)" % d["plan_path"] if d.get("plan_path") else "", d["text"]) for d in decisions) or "(none)"))
-    answered = [q for q in runtime.list_questions(conn, project, status="answered")]
-    parts.append("# Owner answers of this Apiary\n\n" + ("\n".join("- #%s%s: %s -> %s" % (q["id"], " (plan %s)" % q["plan_path"] if q.get("plan_path") else "", q["question"], q["answer"]) for q in answered) or "(none)"))
+    all_decisions = runtime.list_decisions(conn, project, active_only=False)
+    decisions = [d for d in all_decisions if d["status"] == "active" and (not d["plan_path"] or d["plan_path"] == plan)]
+    parts.append("# Decisions of this plan and Apiary\n\n" + ("\n".join("- #%s%s: %s" % (d["id"], " (plan %s)" % d["plan_path"] if d.get("plan_path") else "", d["text"]) for d in decisions) or "(none)"))
+    # Answered questions normally have a decision containing the question and answer.
+    # Keep older orphan answers, without reviving answers whose decision was superseded.
+    decision_texts = {d["text"] for d in all_decisions}
+    answered = [q for q in runtime.list_questions(conn, project, status="answered")
+                if q.get("answered_by") == "owner" and q.get("plan_path") == plan
+                and ("%s -> %s" % (q["question"], q["answer"])) not in decision_texts]
+    parts.append("# Other owner answers of this plan\n\n" + ("\n".join("- #%s: %s -> %s" % (q["id"], q["question"], q["answer"]) for q in answered) or "(none)"))
     return "\n\n".join(parts) + "\n"

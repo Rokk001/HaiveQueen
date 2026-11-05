@@ -3,6 +3,9 @@ import json
 import os
 import re
 import sys
+import tempfile
+from pathlib import Path
+from unittest import mock
 import time
 import unittest
 
@@ -226,6 +229,16 @@ class LoopTest(RoundCase):
                 with loop.start_lock(timeout=0.3):
                     pass
         self.assertFalse(loop.start_lock_file().exists())
+
+    def test_names_are_read_from_editable_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "names.txt"
+            path.write_text("First\nSecond\n", encoding="utf-8")
+            with mock.patch.object(loop, "names_file", return_value=path):
+                self.assertEqual(loop.load_agent_names(), ["First", "Second"])
+                self.assertEqual(loop.agent_identity(self.conn)["Person"], "First")
+                path.write_text("Changed\n", encoding="utf-8")
+                self.assertEqual(loop.load_agent_names(), ["Changed"])
 
     def test_agent_names(self):
         """At least 24 unique agent names and none is Queen."""

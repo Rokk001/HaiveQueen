@@ -62,6 +62,8 @@ Also: the manager is not a model (the Beekeeper is a plain program loop that cos
 5. **Integration.** She merges the current integration branch into her branch, runs the project check, registers her branch and performs the project's integration steps. Only one integration per project runs at a time; a waiting Hive hands off and resumes when its turn comes.
 6. **Acceptance and done.** After integration and deploy HaiveQueen itself files an owner check question (`owner-check`): you test the integrated build and answer `ok`, or say what is not right and the next Queen fixes exactly that. The plan status moves to DONE only after your `ok`; a plan whose header says `owner_check = "none"` skips the question and is done after integration.
 
+Agent names can be edited in `bee_names.txt` in the HaiveQueen configuration directory. Changes take effect when the next agent starts.
+
 Along the way:
 
 - **Handoffs.** At the context limit no new Bees start, running Bees finish and a new Queen continues from the handoff.

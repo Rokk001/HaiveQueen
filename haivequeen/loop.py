@@ -29,10 +29,28 @@ from .scheduler import ACTIVE, norm_plan
 TOOLS_DIR = Path(__file__).resolve().parent.parent
 PHASES = ("work", "verify", "release", "integrate")
 TEMPORARY = re.compile(r"^(no worker slot|no free slot|no integrator slot|free RAM|STOP flag|run state)")   # a start rejected for one of these is tried again next round
-AGENT_NAMES = ["Ada", "Bea", "Cleo", "Dina", "Ella", "Fia", "Gina", "Hana", "Ida", "Juna", "Kira", "Lea", "Mia", "Nora", "Ola",
-               "Pia", "Rita", "Sara", "Tara", "Uma", "Vera", "Wilma", "Yara", "Zoe",
-               "Anna", "Bella", "Clara", "Dora", "Eva", "Frida", "Greta", "Heidi", "Ines", "Jana", "Katja", "Lena", "Maja", "Nina", "Olga", "Paula",
-               "Rosa", "Sofia", "Tessa", "Ulla", "Vivi", "Wanda", "Xenia", "Zora"]   # short first names of the agents; the main agent is called Queen and is not in this list
+def names_file() -> Path:
+    """Editable list of agent names in the user's configuration directory."""
+    return osplat.config_dir() / "bee_names.txt"
+
+
+def load_agent_names() -> list:
+    """Read names on each selection so edits take effect without a restart."""
+    default = Path(__file__).with_name("bee_names.txt")
+    path = names_file()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with path.open("x", encoding="utf-8") as target:
+                target.write(default.read_text(encoding="utf-8"))
+        except FileExistsError:
+            pass
+    names = list(dict.fromkeys(line.strip() for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip() and not line.strip().startswith("#")))
+    return names or default.read_text(encoding="utf-8").splitlines()
+
+
+AGENT_NAMES = Path(__file__).with_name("bee_names.txt").read_text(encoding="utf-8").splitlines()
+
 AGENT_COLOURS = ["4FA8FF", "C77DFF", "FF6FB5", "3DDCDC", "FF9F43", "3DDC97", "2B6CB0", "8A3FD1", "C2306F", "1E9C9C", "C26A10", "1E9B5F"]   # 6 hues at least 25 degrees apart, each light then dark (the first 6 agents differ in hue), none of the status colours
 FORWARD_ENV = ("BZZ_DATA_DIR", "BZZ_CONFIG_DIR", "BZZ_LOG_DIR", "BZZ_RUNTIME_OVERRIDE", "BZZ_HOST", "BZZ_FAKE_AGENT", "BZZ_SAMPLE_SEC")
 
@@ -177,9 +195,10 @@ def agent_identity(conn, excluded_names=()) -> dict:
     used_c = [str(a.get("color")) for a in rows]
     run_c = [str(a.get("color")) for a in rows if a.get("status") in ACTIVE]
     running_names = {str(a.get("person")) for a in rows if a.get("status") in ACTIVE} | embedded_names
-    n = (next((x for x in AGENT_NAMES if x not in used_n), None)
-         or next((x for x in AGENT_NAMES if x not in running_names and x not in excluded_names), None)
-         or min(AGENT_NAMES, key=lambda x: sum(1 for a in rows if str(a.get("person")) == x and a.get("status") in ACTIVE)))   # all taken: the least used one
+    names = load_agent_names()
+    n = (next((x for x in names if x not in used_n), None)
+         or next((x for x in names if x not in running_names and x not in excluded_names), None)
+         or min(names, key=lambda x: sum(1 for a in rows if str(a.get("person")) == x and a.get("status") in ACTIVE)))   # all taken: the least used one
     # Colours of agents that ended within the last hour are given up first; a colour of a running agent repeats only with more running agents than colours (then the least used one).
     # The second shade of a hue is only taken when every hue is in use by a running agent: colours are compared by hue family (index modulo 6), not by exact value.
     run_hues = {AGENT_COLOURS.index(x) % 6 for x in run_c if x in AGENT_COLOURS}
@@ -435,7 +454,7 @@ def _do_start(c, a, forced_pick=None) -> int:
     ident = agent_identity(env.conn, [predecessors[-1]['person']] if phase == 'queen' and predecessors else ())
     if phase in ("bee", "queen"):   # a Bee and a Queen are named by their short female name (A2); the number of a repeated row key is not part of it
         base = re.sub(r"-\d+$", "", nm)
-        ident["Person"] = base if base in AGENT_NAMES else nm
+        ident["Person"] = base if base in load_agent_names() else nm
     cls = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
     cm = sch.class_model(env.providers, prov, cls)
     bundle = [str(b) for b in a.get("bundle") or []]

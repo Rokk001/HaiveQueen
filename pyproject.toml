@@ -15,3 +15,6 @@ bzz = "haivequeen.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["haivequeen*"]
+
+[tool.setuptools.package-data]
+haivequeen = ["bee_names.txt"]
