@@ -8,6 +8,38 @@ from haivequeen import gui_config
 
 
 class SettingsCommentsTest(unittest.TestCase):
+    def test_comments_survive_removed_entry_and_replaced_array(self):
+        source = 'removed = 1 # removed comment\nvalues = [\n  1, # first comment\n  2,\n]\n'
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.toml"
+            path.write_text(source, encoding="utf-8")
+            data = {"values": [3]}
+            gui_config.save_file(path, data)
+            saved = path.read_text(encoding="utf-8")
+            self.assertEqual(tomllib.loads(saved), data)
+            self.assertIn("# removed comment", saved)
+            self.assertIn("# first comment", saved)
+
+    def test_multiline_values_and_literal_hash_survive_other_edits(self):
+        source = '''title = """hello # not a comment
+world""" # title comment
+values = [
+  "# text", # array comment
+  "other",
+]
+count = 1
+'''
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.toml"
+            path.write_text(source, encoding="utf-8")
+            data = tomllib.loads(source)
+            data["count"] = 2
+            gui_config.save_file(path, data)
+            saved = path.read_text(encoding="utf-8")
+            self.assertEqual(tomllib.loads(saved), data)
+            self.assertIn("# title comment", saved)
+            self.assertIn("# array comment", saved)
+
     def test_save_retains_comments_and_updated_values(self):
         source = '''# top comment
 slots = 3 # slot comment

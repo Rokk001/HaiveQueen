@@ -459,6 +459,7 @@ GERMAN = {
     "HaiveQueen settings": "HaiveQueen Einstellungen", "File:": "Datei:", "Add provider": "Anbieter hinzufügen", "Add project": "Projekt hinzufügen", "Remove entry": "Eintrag entfernen",
     "Revert": "Verwerfen", "Open folder": "Ordner öffnen", "Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.": "Änderungen gelten ohne Neustart für das laufende HaiveQueen. Die alte Datei bleibt als <name>.bak erhalten.",
     "Custom CLI": "Eigene CLI", "General": "Allgemein", "provider: %s": "Anbieter: %s", "project: %s": "Projekt: %s", "Build": "Build", "login": "Login", "Login": "Login", "Benchmark Start Context": "Startkontext messen",
+    "Install /bzz": "/bzz installieren", "installed": "installiert", "installed: use /skills or $bzz": "installiert: /skills oder $bzz verwenden", "existing command was not replaced": "bestehender Befehl wurde nicht ersetzt", "skipped: command mechanism is unknown": "übersprungen: Befehlsmechanismus unbekannt",
     "Login present": "Login vorhanden", "Login missing": "Login fehlt",
     "No login is set up for this provider. For a CLI that is not built in, set the profile variables, the login command and the login files on this page.": "Für diesen Anbieter ist kein Login eingerichtet. Lege für eine nicht eingebaute CLI die Profilvariablen, den Login-Befehl und die Login-Dateien auf dieser Seite fest.",
     "Open a terminal window and run `%s` for provider %s in the HaiveQueen profile?": "Ein Terminalfenster öffnen und `%s` für Anbieter %s im HaiveQueen-Profil ausführen?",
