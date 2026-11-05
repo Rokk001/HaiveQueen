@@ -13,6 +13,12 @@ from haivequeen import cli, desktop, loop, runstate, runtime
 class DesktopCommandsTest(RoundCase):
     """Keep every command inside the disposable runtime with mocked UI."""
 
+    def test_desktop_language_regions_and_fallback(self):
+        for language in ('German', 'Deutsch', 'de', 'de-CH', 'de_AT'):
+            self.assertEqual(desktop.result_text('start', {'ok': True}, language), 'HQ wurde gestartet.')
+        for language in ('French', 'en-US', ''):
+            self.assertEqual(desktop.result_text('start', {'ok': True}, language), 'HQ has started.')
+
     # Run a CLI command and return its exit code and JSON output.
     def invoke(self, *arguments):
         """Run a CLI command and return its exit code and JSON output."""

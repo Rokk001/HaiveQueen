@@ -628,6 +628,10 @@ class ConfigWindow:
             var = tk.BooleanVar(value=value)
             tk.Checkbutton(parent, variable=var).pack(side="left")
             return var.get
+        if key == "language" and self.machine() and self.node[0] == "general":
+            var = tk.StringVar(value=value)
+            self.dialog.option_menu(parent, var, list(dict.fromkeys(("English", "German", value))), self.mono).pack(side="left")
+            return var.get
         if isinstance(value, str) and key in CHOICES:
             var = tk.StringVar(value=value)
             self.dialog.option_menu(parent, var, list(dict.fromkeys(CHOICES[key] + (value,))), self.mono).pack(side="left")

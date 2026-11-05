@@ -8,7 +8,8 @@ def result_text(command, result, language=None):
     if language is None:
         from . import config
         language = config.load_config().get("language", "English")
-    if str(language).strip().lower() not in ("german", "deutsch", "de", "de-de"):
+    code = str(language).strip().lower().replace("_", "-")
+    if code not in ("german", "deutsch", "de") and not code.startswith("de-"):
         if not result.get("ok"):
             return "Error: " + str(result.get("error") or "HQ could not execute the command.")
         if command == "stop" or result.get("stopping"):
