@@ -215,7 +215,7 @@ def cmd_integration(args, conn):
         hives.release_integration(conn, args.project, args.plan)
         from haivequeen import scheduler, worktrees
         env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
-        if env:
+        if env and env.settings.get('deleteFinishedWorktrees', True):
             try:
                 env.log('Worktree cleanup: ' + json.dumps(worktrees.prune(env), ensure_ascii=False))
             except Exception as exc:

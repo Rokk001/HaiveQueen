@@ -503,7 +503,8 @@ def foreign_plan_branch(env, plan):
         return True
     if any(a.get('plan_path') == plan for a in runtime.list_agents(env.conn, env.name, 'all')):
         return False
-    for ref in ('refs/heads/' + branch, 'refs/remotes/origin/' + branch):
+    remote_name = str(env.settings.get('remoteName') or 'origin')
+    for ref in ('refs/heads/' + branch, 'refs/remotes/' + remote_name + '/' + branch):
         result = subprocess.run(['git', '-C', str(env.code_repo), 'show-ref', '--verify', '--quiet', ref], capture_output=True)
         if result.returncode == 0:
             return True
@@ -537,8 +538,9 @@ def prepare_queen_worktree(env, plan):
     if exists:
         args = ['worktree', 'add', str(target), branch]
     else:
-        remote = subprocess.run(git + ['show-ref', '--verify', '--quiet', 'refs/remotes/origin/' + branch], capture_output=True).returncode == 0
-        base = 'origin/' + (branch if remote else str(env.settings.get('integrationBranch', 'main')))
+        remote_name = str(env.settings.get('remoteName') or 'origin')
+        remote = subprocess.run(git + ['show-ref', '--verify', '--quiet', 'refs/remotes/' + remote_name + '/' + branch], capture_output=True).returncode == 0
+        base = remote_name + '/' + (branch if remote else str(env.settings.get('integrationBranch') or 'main'))
         args = ['worktree', 'add', '-b', branch, str(target), base]
     result = subprocess.run(git + args, capture_output=True, text=True, encoding='utf-8', errors='replace')
     if result.returncode:

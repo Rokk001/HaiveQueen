@@ -917,6 +917,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     integration['steps'] = sch.expand_template(str(configured_prompt), {**routine.base_values(env), 'plan': path})
                 from . import bees
                 prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls), roles.language(env.settings))
+                prompt += '\nAlways refer questions on these Apiary topics to the owner: ' + json.dumps(env.settings.get('ownerTopics') or [], ensure_ascii=False)
                 prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)
                 prompt += ' Project integration configuration: ' + json.dumps(integration, ensure_ascii=False)
                 if plan['status'] == 'SUBMITTED':   # a plan the owner submitted as free text: the Queen cuts it into packages before any Bee starts

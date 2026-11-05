@@ -445,7 +445,8 @@ def base_values(env) -> dict:
 
 def new_worktree(env, middle: str) -> str:
     """Folder of a new worktree next to the code repo (the workspace when the project has no `codeRepo`): <parent>/<worktreePrefix>-<middle>."""
-    return os.path.join(os.path.dirname(str(env.code_repo).rstrip("\\/")), "%s-%s" % (env.settings.get("worktreePrefix", "wt"), middle))
+    parent = env.settings.get("worktreeLocation") or os.path.dirname(str(env.code_repo).rstrip("\\/"))
+    return os.path.join(str(parent), "%s-%s" % (env.settings.get("worktreePrefix", "wt"), middle))
 
 
 

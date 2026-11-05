@@ -66,6 +66,10 @@ class CodeRepoSettingTest(CodeRepoCase):
         """A new worktree is a sibling of the code repo with the worktree prefix, not of the workspace."""
         self.assertEqual(routine.new_worktree(self.env(), "pilot"), str(self.dev.parent / "HQ-pilot"))
 
+    def test_new_worktree_in_configured_location(self):
+        self.set_code('worktreeLocation = %s\n' % json.dumps(str(self.base / 'trees')))
+        self.assertEqual(routine.new_worktree(self.env(), 'pilot'), str(self.base / 'trees' / 'HQ-pilot'))
+
 
     def test_pick_cwd_never_the_workspace(self):
         """Only a triage agent in the workspace ran before: the result is the code repo; a worktree in the history still wins."""
@@ -94,6 +98,18 @@ class CodeRepoSettingTest(CodeRepoCase):
         with mock.patch.object(inbox, "is_ancestor", lambda repo, tip, ref: seen.append((str(repo), ref)) or True):
             inbox.process_inbox(self.env())
         self.assertEqual(seen, [(str(self.dev), "origin/v2")])
+
+    def test_inbox_withdraw_uses_configured_remote_and_default_branch(self):
+        env = self.env()
+        env.settings.update(remoteName='upstream', integrationBranch='')
+        box = inbox.inbox_dir(self.repo)
+        box.mkdir(parents=True)
+        runtime.queue_upsert(self.conn, 'testproj', 'fix/a', tip='abc1234', status='blocked', note='x')
+        (box / 'w.toml').write_text('[[queue]]\nbranch = "fix/a"\naction = "withdraw"\nreason = "integrated"\n', encoding='utf-8')
+        seen = []
+        with mock.patch.object(inbox, 'is_ancestor', lambda repo, tip, ref: seen.append(ref) or True):
+            inbox.process_inbox(env)
+        self.assertEqual(seen, ['upstream/main'])
 
 
 

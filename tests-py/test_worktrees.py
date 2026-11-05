@@ -683,7 +683,7 @@ class CleanupSchedulingTests(unittest.TestCase):
     def test_round_calls_cleanup_for_each_project(self):
         """A normal round checks old worktrees for every project."""
         from haivequeen import hives, loop
-        env = SimpleNamespace(name='test', log=mock.Mock())
+        env = SimpleNamespace(name='test', settings={}, log=mock.Mock())
         with mock.patch.object(hives, 'schedule_round', return_value={}), \
              mock.patch.object(worktrees, 'prune', create=True, return_value={'removed': [], 'kept': [], 'notRemovable': []}) as prune:
             loop.run_round(None, {}, envs=[env])
@@ -694,7 +694,7 @@ class CleanupSchedulingTests(unittest.TestCase):
         """Releasing the integration place triggers a cleanup afterwards."""
         import os
         from haivequeen import cli, config, hives, scheduler
-        env = SimpleNamespace(name='test', log=mock.Mock())
+        env = SimpleNamespace(name='test', settings={}, log=mock.Mock())
         args = SimpleNamespace(action='release', project='test', plan='plan')
         order = []
         with mock.patch.dict(os.environ, {'BZZ_AGENT': ''}), \
@@ -705,6 +705,14 @@ class CleanupSchedulingTests(unittest.TestCase):
              mock.patch('builtins.print'):
             self.assertEqual(cli.cmd_integration(args, None), 0)
         self.assertEqual(order, ['release', 'cleanup'])
+
+    def test_disabled_automatic_cleanup_is_skipped_in_round(self):
+        from haivequeen import hives, loop
+        env = SimpleNamespace(name='test', settings={'deleteFinishedWorktrees': False}, log=mock.Mock())
+        with mock.patch.object(hives, 'schedule_round', return_value={}), \
+             mock.patch.object(worktrees, 'prune') as prune:
+            loop.run_round(None, {}, envs=[env])
+        prune.assert_not_called()
 
 
 

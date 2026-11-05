@@ -112,7 +112,7 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
     ignored = _ignored_blocker(path, env.settings.get('ignoredBuildOutput', []))
     if ignored:
         return 'ignored file: ' + ignored
-    ref = integration_ref or 'origin/' + str(env.settings.get('integrationBranch') or 'main')
+    ref = integration_ref or str(env.settings.get('remoteName') or 'origin') + '/' + str(env.settings.get('integrationBranch') or 'main')
     ancestor = _git(env.code_repo, 'merge-base', '--is-ancestor', head.stdout.strip(), ref)
     if ancestor.returncode:
         return 'HEAD is not in the integration branch'
@@ -256,13 +256,14 @@ def _prune_with_checker(env, process_busy, dry):
     """Fetch the integration branch and evaluate its worktrees safely."""
     import os
     branch = str(env.settings.get('integrationBranch') or 'main')
+    remote_name = str(env.settings.get('remoteName') or 'origin')
     records = list_worktrees(env.code_repo)
     queue = db.queue_rows(env.conn, env.name)
     if not any(_may_be_removable(record, queue) for record in records[1:]):
         # No worktree belongs to a finished, integrated branch, so nothing can be removed: skip the network (fetch, ls-remote);
         # the usual checks still run and only report why each worktree stays.
         return _prune_candidates(env, records, queue, process_busy, dry)
-    fetched = _git(env.code_repo, 'fetch', 'origin', branch)
+    fetched = _git(env.code_repo, 'fetch', remote_name, branch)
     if fetched.returncode:
         return {'removed': [], 'kept': [{'path': os.path.normpath(record['worktree']),
                 'reason': 'fetch failed: ' + fetched.stderr.strip()} for record in records],
@@ -272,7 +273,7 @@ def _prune_with_checker(env, process_busy, dry):
         return {'removed': [], 'kept': [{'path': os.path.normpath(record['worktree']),
                 'reason': 'cannot resolve fetched integration branch'} for record in records],
                 'notRemovable': [], 'dryRun': bool(dry)}
-    remote = _git(env.code_repo, 'ls-remote', '--refs', 'origin', 'refs/heads/' + branch)
+    remote = _git(env.code_repo, 'ls-remote', '--refs', remote_name, 'refs/heads/' + branch)
     if remote.returncode or remote.stdout.strip().split('\t', 1)[0] != tip.stdout.strip():
         return {'removed': [], 'kept': [{'path': os.path.normpath(record['worktree']),
                 'reason': 'integration branch changed during fetch'} for record in records],

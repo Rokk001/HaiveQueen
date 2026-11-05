@@ -46,6 +46,9 @@ DEFAULT_SETTINGS = {
     "rateLimitWaitMinutes": 15,   # wait after a rate limit when no reset time of the limited provider is known
     "contextLimitTokens": 300000,
     "integrationBranch": "main",
+    "remoteName": "origin",
+    "worktreeLocation": "",
+    "ownerTopics": [],
     "compileCheck": "",
     "buildFlowDoc": "",
     "integratorInstructions": "",

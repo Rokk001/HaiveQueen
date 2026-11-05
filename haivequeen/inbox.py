@@ -191,7 +191,7 @@ def process_inbox(env) -> dict:
     for path in files:
         try:
             answers, decisions, orders = parse_file(path, env.name, env.conn, env.settings.get("codeRepo") or env.settings.get("repo") or env.workspace,
-                                                    "origin/" + str(env.settings.get("integrationBranch") or "integration/all"))
+                                                    str(env.settings.get("remoteName") or "origin") + "/" + str(env.settings.get("integrationBranch") or "main"))
             for a in answers:
                 db.answer_question(env.conn, a["qid"], a["text"], a["by"])
             for d in decisions:

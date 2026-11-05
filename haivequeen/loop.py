@@ -344,6 +344,8 @@ def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
         profile.notify_missing(conn, sch.get_providers(machine))
         from . import worktrees
         for env in envs:
+            if not env.settings.get('deleteFinishedWorktrees', True):
+                continue
             try:
                 env.log('Worktree cleanup: ' + json.dumps(worktrees.prune(env), ensure_ascii=False))
             except Exception as exc:
