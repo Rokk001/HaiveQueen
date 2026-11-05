@@ -119,11 +119,19 @@ def plan_versions(path, current):
     try:
         root = subprocess.run(['git', '-C', folder, 'rev-parse', '--show-toplevel'], capture_output=True, text=True, check=True).stdout.strip()
         relative = os.path.relpath(path, root).replace('\\', '/')
-        commits = subprocess.run(['git', '-C', root, 'log', '--format=%H', '--', relative], capture_output=True, text=True, check=True).stdout.splitlines()
+        history = subprocess.run(['git', '-C', root, '-c', 'core.quotePath=false', 'log', '--follow', '--format=COMMIT:%H', '--name-status', '--', relative], capture_output=True, text=True, encoding='utf-8', check=True).stdout
         versions = [current]
-        for commit in commits:
-            result = subprocess.run(['git', '-C', root, 'show', '%s:%s' % (commit, relative)], capture_output=True, check=True)
-            versions.append(result.stdout.decode('utf-8-sig', errors='replace'))
+        commit = None
+        for line in history.splitlines():
+            if line.startswith('COMMIT:'):
+                commit = line[7:]
+            elif line and commit:
+                fields = line.split('\t')
+                result = subprocess.run(['git', '-C', root, 'show', '%s:%s' % (commit, relative)], capture_output=True, check=True)
+                versions.append(result.stdout.decode('utf-8-sig', errors='replace'))
+                if fields[0].startswith('R') and len(fields) == 3 and fields[2] == relative:
+                    relative = fields[1]
+                commit = None
         return versions
     except (OSError, subprocess.CalledProcessError, ValueError):
         return [current]

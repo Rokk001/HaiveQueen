@@ -105,6 +105,29 @@ class ListTests(unittest.TestCase):
             res = readygate.evaluate(current, '## Completeness\n- G-2: done | test\n', [], [], texts)
             self.assertEqual([rid for rid, _ in res.blocking], ['G-1'])
 
+    def test_plan_history_follows_committed_rename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            old = root / 'OLD.md'
+            old.write_text('# Plan\n\n## Requirements\n\n- G-0: old\n', encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'OLD.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
+            old.write_text('# Plan\n\n## Requirements\n\n- G-1: revised\n', encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'OLD.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'revise'], check=True)
+            subprocess.run(['git', '-C', str(root), 'mv', 'OLD.md', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'rename'], check=True)
+            plan = root / 'PLAN.md'
+            current = '# Plan\n\n## Requirements\n\n- G-2: new\n'
+            plan.write_text(current, encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'update'], check=True)
+            texts = readygate.plan_versions(str(plan), current)
+            self.assertEqual({rid for text in texts for rid, _ in plans.parse_requirements(text)}, {'G-0', 'G-1', 'G-2'})
+
     def test_plan_without_ids_is_refused(self):
         """No requirement id anywhere: refused with the hint that requirements need ids."""
         res = readygate.evaluate("# Plan\n\nDo things.\n", "# State\n", [])
