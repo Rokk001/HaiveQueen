@@ -478,7 +478,7 @@ class ButtonTest(unittest.TestCase):
             with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", return_value=result) as bench:
                 win.benchmark_click(wait=True)
                 self.assertEqual(bench.call_args[0][2], "claude")
-            self.assertIn("not logged in", win.benchmark_status.cget("text"))
+            self.assertIn("not logged in", win.benchmark_win.error.cget("text"))
 
 
 class TileDrawTest(unittest.TestCase):
@@ -515,9 +515,9 @@ class TileDrawTest(unittest.TestCase):
 
 
 class ProgressButtonTest(ButtonTest):
-    """U-8: the page shows the progress while the benchmark runs."""
+    """U-8 / U2: the Benchmark window shows the progress while the benchmark runs."""
 
-    def test_progress_is_shown_on_the_page_until_the_result(self):
+    def test_progress_is_shown_in_the_window_until_the_result(self):
         import threading
         from haivequeen import gui_config
         release = threading.Event()
@@ -533,16 +533,16 @@ class ProgressButtonTest(ButtonTest):
                 win.benchmark_click()
                 import time
                 end = time.time() + 10
-                while time.time() < end and "2/4" not in win.benchmark_status.cget("text"):
+                while time.time() < end and "2/4" not in win.benchmark_win.progress.cget("text"):
                     self.root.update()
                     time.sleep(0.05)
-                self.assertIn("2/4: ODP with the HaiveQueen profile ...", win.benchmark_status.cget("text"))
+                self.assertIn("2/4: ODP with the HaiveQueen profile ...", win.benchmark_win.progress.cget("text"))
                 release.set()
                 end = time.time() + 10
-                while time.time() < end and "2/4" in win.benchmark_status.cget("text"):
+                while time.time() < end and win.benchmark_button.cget("state") != "normal":
                     self.root.update()
                     time.sleep(0.05)
-                self.assertNotIn("2/4", win.benchmark_status.cget("text"))
+                self.assertEqual(win.benchmark_button.cget("state"), "normal")
 
 
 class HoverTest(unittest.TestCase):

@@ -397,5 +397,87 @@ class WindowTest(unittest.TestCase):
         self.assertIsNone(win.build_vars)
 
 
+class BenchmarkWindowTest(WindowTest):
+    """U2: the buttons of the provider page always fit; the benchmark has its own window."""
+
+    def provider_page(self, size):
+        """Open the settings at `size` on the first provider page and return the window."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.win.geometry(size)
+        win.select(1)
+        self.root.update()
+        return win
+
+    def assert_buttons_fit(self, win):
+        """Login, Benchmark Start Context and the status text lie completely inside the form."""
+        self.root.update()
+        right = win.form.winfo_rootx() + win.form.winfo_width()
+        for widget in (win.login_status, win.login_button, win.benchmark_button):
+            self.assertTrue(widget.winfo_ismapped())
+            self.assertGreaterEqual(widget.winfo_rootx(), win.form.winfo_rootx())
+            self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(), right, widget.cget("text"))
+            self.assertGreaterEqual(widget.winfo_reqwidth(), 1)
+
+    def test_buttons_fit_at_the_default_and_every_smaller_size(self):
+        """Wrapped to a second row instead of cut, at 1130 px and at the smallest size the window allows."""
+        for size in ("1130x700", "900x600", "1x1"):
+            win = self.provider_page(size)
+            self.assert_buttons_fit(win)
+            self.assertGreater(win.win.minsize()[0], 1)
+            win.win.destroy()
+
+    def test_provider_page_has_only_the_button(self):
+        """No benchmark text on the provider page."""
+        win = self.provider_page("1130x700")
+        self.assertIsNone(win.benchmark_status)
+        for widget in descendants(win.form):
+            if widget.winfo_class() == "Label":
+                self.assertNotIn("no benchmark yet", str(widget.cget("text")))
+
+    def run_benchmark(self, result, progress=None, stored=False):
+        """Press the button with a fake measurement; returns (settings window, Benchmark window)."""
+        from haivequeen import startctx
+        if stored:
+            startctx.store_benchmark(self.conn, "claude", "ODP", "hq", 32000, when="2026-10-01T10:00:00")
+            startctx.store_benchmark(self.conn, "claude", "ODP", "own", 100000, when="2026-10-01T10:00:00")
+
+        def fake(conn, cfg, name, measure=None, progress=None):
+            if text:
+                progress(text)
+            return result
+        text = progress
+        win = self.provider_page("1130x700")
+        with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", side_effect=fake):
+            win.benchmark_click(wait=True)
+        self.root.update()
+        return win, win.benchmark_win
+
+    def test_window_shows_progress_and_results_table(self):
+        """The window is called Benchmark, shows the progress text and a table with HaiveQueen profile, own profile, saving and date per Apiary, also of earlier runs."""
+        win, bw = self.run_benchmark({"excluded": False, "errors": [], "results": []}, progress="2/4: ODP without it ...", stored=True)
+        self.assertEqual(bw.win.title(), "Benchmark")
+        self.assertIn("2/4: ODP without it ...", bw.progress.cget("text"))
+        heads = [bw.table.heading(c)["text"] for c in bw.table["columns"]]
+        self.assertEqual(heads, ["Apiary", "HaiveQueen profile", "Own profile", "Saving", "Date"])
+        rows = [bw.table.item(i)["values"] for i in bw.table.get_children()]
+        self.assertEqual([str(v) for v in rows[0]], ["ODP", "32k", "100k", "-68 %", "2026-10-01"])
+        self.assertEqual(win.benchmark_button.cget("state"), "normal")
+
+    def test_window_shows_error_and_excluded(self):
+        """A failed run shows its error in the window, an excluded provider says so."""
+        win, bw = self.run_benchmark({"excluded": False, "errors": ["ODP without profile: not logged in"], "results": []})
+        self.assertIn("not logged in", bw.error.cget("text"))
+        win, bw = self.run_benchmark({"excluded": True, "errors": [], "results": []})
+        self.assertIn("excluded", bw.error.cget("text"))
+
+    def test_declined_question_opens_no_window(self):
+        """No confirmation, no window and no measurement."""
+        win = self.provider_page("1130x700")
+        with mock.patch("haivequeen.gui_dialog.ask", return_value=False), mock.patch("haivequeen.startctx.benchmark") as bench:
+            win.benchmark_click(wait=True)
+            bench.assert_not_called()
+        self.assertIsNone(getattr(win, "benchmark_win", None))
+
+
 if __name__ == "__main__":
     unittest.main()
