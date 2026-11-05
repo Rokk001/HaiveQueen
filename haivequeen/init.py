@@ -7,6 +7,24 @@ from . import config, db
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 CLAUDE_LINE = "Read AGENTS.md in this folder first; it holds the rules for all agents.\n"
+EXAMPLE_PLAN = '''+++
+status = "DRAFT"
+
+[[packages]]
+id = "P1"
+title = "Implement the example"
+class = "medium"
+depends_on = []
+requirements = ["E-1", "E-2"]
++++
+# Example plan
+
+Feature branch: `example`
+
+## Requirements
+- E-1: Add a greeting.
+- E-2: Test the greeting.
+'''
 
 
 def _write_new(path: Path, text: str, report: list) -> None:
@@ -35,6 +53,7 @@ def init_project(folder) -> list:
     else:
         plans.mkdir(parents=True)
         report.append({"path": str(plans), "result": "created"})
+    _write_new(plans / "EXAMPLE-PLAN.md", EXAMPLE_PLAN, report)
     return report
 
 
