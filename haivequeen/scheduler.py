@@ -50,6 +50,11 @@ DEFAULT_SETTINGS = {
     "worktreeLocation": "",
     "ownerTopics": [],
     "compileCheck": "",
+    "compileCheckEnabled": True,
+    "buildEnabled": True,
+    "deployEnabled": True,  # Existing Apiaries retain their behavior; new files opt out.
+    "deleteFinishedWorktrees": True,
+    "deleteIntegratedBranches": False,
     "buildFlowDoc": "",
     "integratorInstructions": "",
     "worktreePrefix": "wt",

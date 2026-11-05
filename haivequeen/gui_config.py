@@ -410,7 +410,7 @@ class ConfigWindow:
             shown.pop("preferredProvider", None)
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
             if not self.machine():
-                for key, default in (("integrationBranch", "main"), ("remoteName", "origin"), ("worktreeLocation", ""), ("deleteFinishedWorktrees", True), ("ownerTopics", []), ("ownerCheckText", "")):
+                for key, default in (("integrationBranch", "main"), ("remoteName", "origin"), ("worktreeLocation", ""), ("deleteFinishedWorktrees", True), ("deleteIntegratedBranches", False), ("compileCheckEnabled", True), ("buildEnabled", True), ("deployEnabled", True), ("ownerTopics", []), ("ownerCheckText", "")):
                     shown.setdefault(key, default)
         if kind == "providers":
             from . import scheduler

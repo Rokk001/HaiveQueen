@@ -178,7 +178,7 @@ def executed_check_scripts(cmd, wrapped=False):
 
 
 # Classify requested operations while treating read and search arguments as data.
-def classify_cmd(cmd, queue_re=None):
+def classify_cmd(cmd, queue_re=None, compile_check=None):
     """Recognise a milestone command (commit, push, compile test, check, ready line, file write); returns {kind, label} or None.
 
     A call of `bzz ready` is the ready line; queue_re (optional) additionally marks writes into a legacy queue file.
@@ -189,6 +189,10 @@ def classify_cmd(cmd, queue_re=None):
         return {"kind": "commit", "label": ("Commit: " + short(m.group(1), 100)) if m else "Commit"}
     if re.search(r"git\s+push", cmd):
         return {"kind": "push", "label": "Push"}
+    # A configured command is a milestone only in command position, not when it
+    # occurs as text in a search, echo or file write.
+    if compile_check and re.search(r'(?:^|[;&|\n])\s*(?:&\s*)?' + re.escape(str(compile_check).strip()) + r'(?=$|\s|[;&|])', cmd):
+        return {"kind": "check", "label": "Compile test"}
     checks = executed_check_scripts(cmd)
     if any(name.lower() == 'compile-check-changed.ps1' for name in checks):
         return {"kind": "check", "label": "Compile test"}
@@ -468,6 +472,7 @@ class AgentRun:
         self.plan, self.package, self.phase = plan, package, phase
         self.out = out or sys.stdout
         self.queue_re, self.sessions = queue_re, sessions
+        self.compile_check = None
         self.thread = ""
         self.tin, self.tout = (None, None) if protocol == "codex" else (0, 0)   # Codex reports its token totals only in the session log
         self.ctx = 0
@@ -681,7 +686,7 @@ class AgentRun:
                         elif fp:
                             self.say("changed: " + self.rel_path(fp), "Cyan")
                     elif c.get("name") in ("Bash", "PowerShell"):
-                        info = classify_cmd(str(inp.get("command") or ""), self.queue_re)
+                        info = classify_cmd(str(inp.get("command") or ""), self.queue_re, self.compile_check)
                         if info:
                             if info["kind"] == "edit":
                                 self.say(info["label"], "Cyan")
@@ -755,7 +760,7 @@ class AgentRun:
                     self.say(self.final, "White")
             elif it == "command_execution":
                 self.last = "cmd: " + short(item.get("command"))
-                info = classify_cmd(str(item.get("command") or ""), self.queue_re)
+                info = classify_cmd(str(item.get("command") or ""), self.queue_re, self.compile_check)
                 if info:
                     if info["kind"] == "edit":
                         self.say(info["label"], "Cyan")
@@ -860,6 +865,7 @@ def run_agent(a, out=None):
     queue_name = pcfg.get("integrationStateFile")
     queue_re = re.escape(Path(str(queue_name)).stem) if queue_name else None
     run = AgentRun(conn, a.project, a.name, a.provider, protocol, a.cwd, run_dir, a.plan, a.package, a.phase, out, queue_re)
+    run.compile_check = pcfg.get("compileCheck")
     run.format = prov["format"]
     run.context_limit = scheduler.context_limit({"contextLimitTokens": CONTEXT_LIMIT, **scheduler.build_settings(cfg, pcfg)}, [{**prov, "name": a.provider}], a.provider, cls)
     run.model = model_label(model)
