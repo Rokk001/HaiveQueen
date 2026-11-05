@@ -240,7 +240,9 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         sysinfo = live_sysinfo(conn, project)
     host = sysinfo["host"]
     try:
-        usage.refresh_codex_usage(conn)
+        codex = [p for p in sch.get_providers(cfg) if p.get("limit") == "codex"]
+        for provider in codex:
+            usage.refresh_codex_usage(conn, min_interval=provider.get("usageInterval", 60), provider=provider)
     except Exception:
         pass
     all_rows = runtime.list_agents(conn, project, "active")
@@ -272,7 +274,8 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "now": now, "project": project, "projects": scope, "colours": colours, "cfg": cfg, "sysinfo": sysinfo,
         "run": runstate.get_state(conn), "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all, now),
         "provider_limits": provider_lines(conn, cfg, agents_all),
-        "cu": window_usage(_kv(conn, "usage-claude"), now), "xu": window_usage(_kv(conn, "usage-codex"), now),
+        "claude_error": usage.claude_refresh_error(conn) if not usage.retained_claude(conn) else "",
+        "cu": window_usage(usage.retained_claude(conn) or _kv(conn, "usage-claude"), now), "xu": window_usage(_kv(conn, "usage-codex"), now),
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
         "qs": db.open_questions(conn, project, only_open=True),
@@ -305,7 +308,7 @@ def provider_lines(conn, cfg, agents) -> list:
                     if hours is not None:
                         reset_at = time.time() + float(hours) * 3600
             elif not os.environ.get("BZZ_RUNTIME_OVERRIDE"):
-                window = (sch.claude_usage(conn) if source == "claude" else sch.codex_usage()).get("SevenDay")
+                window = (sch.claude_usage(conn).get("SevenDay") if source == "claude" else {"Pct": w.get("pct"), "At": w.get("at")} if (w := usage.cached_codex_usage(conn, provider=provider).get("seven_day")) else None)
                 if window and window.get("Pct") is not None:
                     used = float(window["Pct"])
                     if window.get("At"):

@@ -21,6 +21,7 @@ def route_candidates(providers, hive_provider, capability, escalated):
     """A package that needs capabilities only runs on providers that offer all of them, an escalated package may use any provider, else only the Queen's provider and endpoint providers."""
     if capability:
         return capable_providers(providers, capability)
+    providers = [p for p in providers if "Coding" in scheduler.provider_capabilities(p)]
     if escalated:
         return list(providers)
     candidates = [p for p in providers if p.get('endpoint') or p['name'] == hive_provider]
@@ -30,7 +31,7 @@ def route_candidates(providers, hive_provider, capability, escalated):
 
 def capable_providers(providers, need) -> list:
     """The providers that offer every capability in `need`."""
-    return [p for p in providers if all(n in p.get('capabilities', []) for n in need)]
+    return [p for p in providers if all(scheduler.canonical_capability(n) in [scheduler.canonical_capability(c) for c in p.get('capabilities', [])] for n in need)]
 
 
 def select_route(providers, free, hive_provider, package_class, capability, excluded, escalated, limited=()):

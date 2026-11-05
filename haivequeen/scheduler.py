@@ -16,7 +16,7 @@ from . import localtime
 from .i18n import tr
 
 CLASS_NAMES = ("light", "medium", "heavy")
-USES = ("preferred", "fallback", "capability-only")
+USES = ("preferred", "fallback")
 BEE_MODES = ("subagent", "process")   # how the Queen of a provider runs her Bees: embedded subagents or separate agent processes
 GLOBAL = "*"   # project value of machine-wide kv rows
 ACTIVE = ("running", "starting")
@@ -36,7 +36,6 @@ DEFAULT_PROMPTS = {
 DEFAULT_SETTINGS = {
     "owner": "Owner",
     "hives": 2,
-    "preferredProvider": "",
     "excludedProviders": [],
     "queenClass": "medium",
     "beesPerQueen": 3,
@@ -58,7 +57,7 @@ DEFAULT_SETTINGS = {
     "buildProcessNames": [],
     "capabilityRules": [],
 }
-MACHINE_ONLY = ("hives", "preferredProvider", "excludedProviders", "providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
+MACHINE_ONLY = ("hives", "excludedProviders", "providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
 
 
 def deep_merge(base: dict, over: dict) -> dict:
@@ -129,6 +128,16 @@ def resolve_agent_class(settings: dict, phase: str, requested: str, failures: in
 
 # ---- providers ----
 
+def provider_capabilities(p):
+    capabilities = [canonical_capability(c) for c in (p.get("capabilities") or [])]
+    if not p.get("capabilitiesVersion"):
+        if p.get("use") != "capability-only" and "Coding" not in capabilities:
+            capabilities.append("Coding")
+        if not p.get("endpoint") and "Queen" not in capabilities:
+            capabilities.append("Queen")
+    return list(dict.fromkeys(capabilities))
+
+
 def get_providers(settings: dict) -> list:
     """Return the provider entries as dicts (name, protocol, command, args, slots, use, capabilities, classes, limit, endpoint).
 
@@ -140,6 +149,9 @@ def get_providers(settings: dict) -> list:
         if not name:
             raise ValueError(tr("a provider entry has no name"))
         use = str(p.get("use") or "preferred")
+        old_capability_only = use == "capability-only"
+        if old_capability_only:
+            use = "preferred"
         if use not in USES:
             raise ValueError(tr("provider %s: use must be preferred, fallback or capability-only, not '%s'", name, use))
         proto = str(p.get("protocol") or name)
@@ -148,13 +160,15 @@ def get_providers(settings: dict) -> list:
         if bee_mode not in BEE_MODES:
             raise ValueError(tr("provider %s: beeMode must be subagent or process, not '%s'", name, bee_mode))
         limit = p.get("limit")
+        capabilities = provider_capabilities(p)
         out.append({
             "name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto), "beeMode": bee_mode,
             "args": [str(a) for a in (p.get("args") or [])],
             "slots": int(p.get("slots", settings.get("slots", 0)) or 0), "use": use,
-            "capabilities": [str(c) for c in (p.get("capabilities") or [])],
+            "capabilities": capabilities, "capabilitiesVersion": 1,
             "classes": p.get("classes") or {},
             "limit": str(limit.get("source", "")) if isinstance(limit, dict) else str(limit or ""),
+            "usageInterval": float(limit.get("interval", 60)) if isinstance(limit, dict) else 60,
             "endpoint": p.get("endpoint"), **profile.custom_fields(p),
         })
         out[-1]["login"] = profile.has_login(out[-1])   # the login in the HaiveQueen profile; without it the provider counts as not available
@@ -276,6 +290,8 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
     or the file in BZZ_PROVIDER_LIMITS_FILE replaces the real sources (tests); with a test runtime (BZZ_RUNTIME_OVERRIDE) and neither
     nothing is read from this PC.
     """
+    if provider.get("limit") == "none":
+        return {"FreePct": 100.0, "Hours": 168.0}
     used = hours = None
     table = limits
     lf = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
@@ -286,6 +302,7 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
         if entry:
             used, hours = entry.get("usedPercent"), entry.get("resetHours")
     elif not os.environ.get("BZZ_RUNTIME_OVERRIDE") and provider["limit"] in ("claude", "codex"):
+        from . import usage
         kept = None
         if provider["limit"] == "claude" and conn is not None:
             from . import usage
@@ -295,7 +312,7 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
                     return {"FreePct": 0.0, "Hours": 168.0}
         u = ({"Pct": kept[0], "At": kept[1]} if kept else
              claude_usage(conn)["SevenDay"] if provider["limit"] == "claude" and conn is not None
-             else codex_usage()["SevenDay"] if provider["limit"] == "codex" else None)
+             else ({"Pct": w.get("pct"), "At": w.get("at")} if w else None) if provider["limit"] == "codex" and conn is not None and (w := usage.cached_codex_usage(conn, provider=provider).get("seven_day")) else None)
         if u and u.get("Pct") is not None:
             used = u["Pct"]
             if u.get("At"):
@@ -307,26 +324,32 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
 
 # ---- capabilities and selection ----
 
-DEFAULT_CAPABILITY_RULE = {"capability": "images", "patterns": [
+CAPABILITY_ALIASES = {"images": "Image generation", "blender": "3D modelling", "build": "Build"}
+
+def canonical_capability(value):
+    value = str(value).strip()
+    return CAPABILITY_ALIASES.get(value.lower(), value)
+
+DEFAULT_CAPABILITY_RULE = {"capability": "Image generation", "patterns": [
     r"(?i)\b(models?|textures?|materials?|particles?|icons?|clips?|sounds?)\b", r"(?i)\b(Blender|assets?|graphics?)\b"]}
 
 
 def package_needs(settings: dict, content: str, capability: str = "") -> list:
     """Capabilities a package needs: those named in its plan header (comma separated) as they stand, else the capabilityRules matching its title."""
-    declared = [c.strip() for c in str(capability or "").split(",") if c.strip()]
+    declared = [canonical_capability(c) for c in str(capability or "").split(",") if c.strip()]
     if declared:
         return declared
     rules = settings.get("capabilityRules") or [DEFAULT_CAPABILITY_RULE]
     need = []
     for r in rules:
-        if all(re.search(pat, content or "") for pat in r.get("patterns", [])) and r["capability"] not in need:
-            need.append(str(r["capability"]))
+        if all(re.search(pat, content or "") for pat in r.get("patterns", [])) and canonical_capability(r["capability"]) not in need:
+            need.append(canonical_capability(r["capability"]))
     return need
 
 
 def capability_available(providers: list, needs: list) -> bool:
     """True when at least one provider with ALL the capabilities has slots above 0 (slots 0 = off for everything)."""
-    return any(p["slots"] > 0 and all(n in p["capabilities"] for n in needs) for p in providers)
+    return any(p["slots"] > 0 and all(canonical_capability(n) in [canonical_capability(c) for c in p["capabilities"]] for n in needs) for p in providers)
 
 
 def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "", prefer: str = "",
@@ -340,7 +363,7 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
     follow-up with an earlier provider when it is a candidate, `avoid` (verify) prefers another provider, `protocol` limits to claude or codex.
     """
     cname = CLASS_NAMES[class_index(cls)]
-    needs = [n for n in (needs or []) if n]
+    needs = [canonical_capability(n) for n in (needs or []) if n]
     cand = []
     for idx, p in enumerate(providers, 1):
         if p["slots"] <= 0 or int(free.get(p["name"], 0)) <= 0:
@@ -352,7 +375,7 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
             continue
         if any(n not in p["capabilities"] for n in needs):
             continue
-        if p["use"] == "capability-only" and not needs:
+        if "Coding" not in p["capabilities"] and not needs:
             continue
         lim = provider_limit(p, conn, limits)
         if not needs and lim["FreePct"] <= 0:

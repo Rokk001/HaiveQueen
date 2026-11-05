@@ -448,6 +448,8 @@ def limit_bars(d) -> list:
             out.append({"label": label, "pct": None, "note": tr(entry["reset"]), "level": "dim"})
         else:
             out.append({"label": label, "pct": entry["pct"], "note": tr("resets %s", entry["reset"]).strip(), "level": level(entry["pct"])})
+    if d.get("claude_error") and d["cu"]["FiveHour"] is None and d["cu"]["SevenDay"] is None:
+        out.append({"label": "Claude", "pct": None, "note": tr("Claude limit unknown") + ": " + d["claude_error"], "level": "bad"})
     for p in d["provider_limits"]:
         marker = tr("  ◀ next") if p["next"] else ""
         if p["has_limit"]:

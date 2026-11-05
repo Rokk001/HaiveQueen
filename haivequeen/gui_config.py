@@ -16,7 +16,8 @@ from . import gui_data, localtime
 from .i18n import N_, decimal, tr
 
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
-CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "use": ("preferred", "fallback", "capability-only"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
+CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "use": ("preferred", "fallback"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
+CAPABILITIES = ("Coding", "Queen", "Build", "Deploy", "Image generation", "3D modelling", "Audio generation", "Video generation", "Vision", "Browser automation", "Web research", "GPU workloads", "Confidential data")
 CLASSES = ("light", "medium", "heavy")
 # The block "Build" of the General page: exactly these three fields, each with one sentence of explanation (key in the buildJobs table, label, explanation).
 BUILD_TEXT_WIDTH = 470   # pixels of an explanation in the block "Build": what stays free beside the field in the window size below, in every language
@@ -406,8 +407,13 @@ class ConfigWindow:
             shown.pop("buildJobs", None)   # the build settings are the block "Build" below, never the raw table
             self.build_block()
         if kind == "general":
+            shown.pop("preferredProvider", None)
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
         if kind == "providers":
+            from . import scheduler
+            shown["capabilities"] = scheduler.provider_capabilities(data)
+            shown["use"] = "preferred" if data.get("use") == "capability-only" else data.get("use", "preferred")
+            shown.pop("capabilitiesVersion", None)
             rest, tools, self.position = split_args(shown.get("args"))
             shown = {k: v for k, v in shown.items() if k != "args"}
             shown["allowedTools"], shown["args"] = tools, rest
@@ -632,6 +638,20 @@ class ConfigWindow:
     def editor(self, parent, key, value):
         """Make the editor for `value` (check box, choice, line, one entry per line, or JSON for anything else) and return its getter."""
         tk = self.tk
+        if key == "capabilities" and self.node[0] == "providers":
+            box = tk.Frame(parent)
+            box.pack(side="left", fill="x", expand=True)
+            choices = list(dict.fromkeys(CAPABILITIES + tuple(value)))
+            variables = [(name, tk.BooleanVar(value=name in value)) for name in choices]
+            labels = {"Coding": "Coding (including tests, docs and review)", "Queen": "Queen (plan cutting and coordination)", "Build": "Build (with this machine’s tools)", "Vision": "Vision (understand images and screenshots)", "Confidential data": "Confidential data (local models only)"}
+            for name, var in variables:
+                tk.Checkbutton(box, text=tr(labels.get(name, name)), variable=var, anchor="w").pack(anchor="w")
+            custom = tk.StringVar()
+            row = tk.Frame(box)
+            row.pack(fill="x")
+            tk.Label(row, text=tr("Add own")).pack(side="left")
+            tk.Entry(row, textvariable=custom).pack(side="left", fill="x", expand=True)
+            return lambda: [name for name, var in variables if var.get()] + [name.strip() for name in custom.get().split(",") if name.strip()]
         if isinstance(value, bool):
             var = tk.BooleanVar(value=value)
             tk.Checkbutton(parent, variable=var).pack(side="left")
@@ -713,6 +733,7 @@ class ConfigWindow:
                 target = target[step]
             target[path[-1]] = raw
         if self.node[0] == "providers":
+            data["capabilitiesVersion"] = 1
             data["args"] = join_args(values.get(("args",), []), values.get(("allowedTools",), []), self.position)
         self.status.config(text="")
         return True
@@ -722,7 +743,7 @@ class ConfigWindow:
         """Append a new provider (claude protocol, one slot, fallback use) and show it."""
         if self.machine() and self.collect():
             self.data.setdefault("providers", []).append({"name": "new-provider", "protocol": "claude", "command": "claude", "args": [], "slots": 1, "use": "fallback",
-                                                          "classes": {"medium": {"model": "", "effort": "medium"}}})
+                                                          "capabilities": ["Coding", "Queen"], "capabilitiesVersion": 1, "classes": {"medium": {"model": "", "effort": "medium"}}})
             self.fill_nodes()
             self.select(1 + len(self.data["providers"]) - 1)
 

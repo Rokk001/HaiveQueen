@@ -91,7 +91,7 @@ class OverviewTest(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "BZZ_DATA_DIR"}
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(usage, "home_dir", return_value=home):
             usage._codex_refresh.clear()
-            d = overview.collect(self.conn, None, datetime.now(), {}, dict(SYS))
+            d = overview.collect(self.conn, None, datetime.now(), {"providers": [{"name": "codex", "protocol": "codex", "limit": {"source": "codex"}}]}, dict(SYS))
         self.assertIsNotNone(runtime.kv_get(self.conn, "*", "usage-codex"))
         self.assertEqual(d["xu"]["FiveHour"]["pct"], 37)
 

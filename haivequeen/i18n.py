@@ -298,6 +298,16 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
 
 
 GERMAN = {
+    "Coding (including tests, docs and review)": "Programmierung (einschließlich Tests, Dokumentation und Prüfung)",
+    "Queen (plan cutting and coordination)": "Queen (Planaufteilung und Koordination)",
+    "Build (with this machine’s tools)": "Build (mit den Werkzeugen dieses Rechners)",
+    "Vision (understand images and screenshots)": "Bildverständnis (Bilder und Screenshots verstehen)",
+    "Confidential data (local models only)": "Vertrauliche Daten (nur lokale Modelle)",
+    "Coding": "Programmierung", "Queen": "Queen", "Build": "Build", "Deploy": "Deployment",
+    "Image generation": "Bilderzeugung", "3D modelling": "3D-Modellierung", "Audio generation": "Audioerzeugung",
+    "Video generation": "Videoerzeugung", "Vision": "Bildverständnis", "Browser automation": "Browserautomatisierung",
+    "Web research": "Webrecherche", "GPU workloads": "GPU-Aufgaben", "Confidential data": "Vertrauliche Daten",
+    "Claude limit unknown": "Claude-Limit unbekannt", "Add own": "Eigene hinzufügen",
     # ---- desktop messages
     "Error: %s": "Fehler: %s",
     "HQ could not execute the command.": "HQ konnte den Befehl nicht ausführen.",

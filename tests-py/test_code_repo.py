@@ -126,7 +126,7 @@ class RunnerAndHeaderTest(CodeRepoCase):
     # Start one Queen on the selected provider and read her prompt.
     def start_agent(self, protocol):
         """Return the prompt of the Queen started for the plan."""
-        self.machine["preferredProvider"] = protocol
+        self.machine["excludedProviders"] = [p["name"] for p in self.machine["providers"] if p["protocol"] != protocol]
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]
@@ -168,7 +168,7 @@ class CodeRepoCodexUnchangedTest(CodeRepoCase):
         """The Queen prompt contains the CLAUDE.md checked in to a normal workspace repository."""
         from test_loading import git_repo
         git_repo(self.repo, {"CLAUDE.md": "CHECKED-IN-RULE"})
-        self.machine["preferredProvider"] = "codex"
+        self.machine["excludedProviders"] = [p["name"] for p in self.machine["providers"] if p["protocol"] != "codex"]
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]

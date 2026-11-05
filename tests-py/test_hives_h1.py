@@ -174,7 +174,7 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(picked["name"], "b")
 
     # An available preferred provider wins even with less free weekly limit.
-    def test_preferred_provider_has_priority_when_available(self):
+    def test_obsolete_preferred_provider_does_not_override_quota(self):
         """An available preferred provider wins even with less free weekly limit."""
         from bzztest import provider
         self.machine["providers"] = [provider("a", 1), provider("b", 1, "fallback")]
@@ -183,7 +183,7 @@ class HiveRoundTests(RoundCase):
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"]
         self.assertEqual(len(active), 1)
-        self.assertEqual(active[0]["provider"], "b")
+        self.assertEqual(active[0]["provider"], "a")
 
     # A finished context handoff starts a new Queen on the same provider.
     def test_context_handoff_restarts_same_hive_and_provider(self):

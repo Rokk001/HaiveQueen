@@ -110,17 +110,28 @@ class ClaudeRefreshTests(RoundCase):
         failing = mock.Mock(side_effect=subprocess.TimeoutExpired('claude', 20))
         self.assertFalse(self.refresh(run=failing, force=True))
         self.assertTrue(usage.claude_refresh_failed(self.conn))
-        runtime.kv_set(self.conn, '*', usage.CLAUDE_CHECK_KEY, (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat())
+        runtime.kv_set(self.conn, '*', usage.CLAUDE_CHECK_KEY, (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat())
         retry = mock.Mock(return_value=self.response())
         self.assertFalse(self.refresh(run=retry))
         retry.assert_not_called()
-        runtime.kv_set(self.conn, '*', usage.CLAUDE_CHECK_KEY, (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat())
+        runtime.kv_set(self.conn, '*', usage.CLAUDE_CHECK_KEY, (datetime.now(timezone.utc) - timedelta(seconds=61)).isoformat())
         self.assertTrue(self.refresh(run=retry))
         retry.assert_called_once()
         runtime.kv_set(self.conn, '*', usage.CLAUDE_CHECK_KEY, (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat())
         again = mock.Mock(return_value=self.response())
         self.assertTrue(self.refresh(run=again))   # reachable again: one minute interval
         again.assert_called_once()
+
+    def test_named_providers_have_independent_intervals(self):
+        self.seed()
+        providers = [{'name': 'slow', 'command': 'claude', 'limit': {'source': 'claude', 'interval': 3600}},
+                     {'name': 'fast', 'command': 'claude', 'limit': {'source': 'claude', 'interval': 60}}]
+        run = mock.Mock(return_value=self.response())
+        with mock.patch('haivequeen.usage.shutil.which', return_value='/fake/claude'):
+            self.assertTrue(usage.refresh_claude_usage(self.conn, providers, run=run))
+            self.assertTrue(usage.refresh_claude_usage(self.conn, providers, run=run))
+            self.assertFalse(usage.refresh_claude_usage(self.conn, providers, run=run))
+        self.assertEqual(run.call_count, 2)
 
     # The ten minute rule is the same for every model provider.
     def test_usage_interval_depends_only_on_reachability(self):
@@ -140,10 +151,10 @@ class ClaudeRefreshTests(RoundCase):
             usage._codex_unreachable.clear()
             usage.refresh_codex_usage(self.conn, folder)
             self.assertEqual(read.call_count, 1)
-            usage._codex_refresh[str(Path(folder))] -= 120
+            usage._codex_refresh[str(Path(folder))] -= 30
             usage.refresh_codex_usage(self.conn, folder)
             self.assertEqual(read.call_count, 1)
-            usage._codex_refresh[str(Path(folder))] -= 600
+            usage._codex_refresh[str(Path(folder))] -= 60
             read.return_value = window
             self.assertTrue(usage.refresh_codex_usage(self.conn, folder))
             self.assertEqual(read.call_count, 2)

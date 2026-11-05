@@ -230,8 +230,10 @@ def check_plan(plan, capabilities, requirements=()):
         for d in deps[p.id]:
             if d not in ids:
                 problems.append("package %s depends on %s, which is not in the plan" % (p.id, d))
-        for cap in [c.strip() for c in p.capability.split(",") if c.strip()]:
-            if cap not in capabilities:
+        from .scheduler import canonical_capability
+        available = {canonical_capability(c) for c in capabilities}
+        for cap in [canonical_capability(c) for c in p.capability.split(",") if c.strip()]:
+            if cap not in available:
                 problems.append("package %s needs the capability %s, which no configured provider offers" % (p.id, cap))
     state = {}
 

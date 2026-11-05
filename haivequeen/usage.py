@@ -212,19 +212,33 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
     (Claude not reachable)."""
     if run is None and (os.environ.get('BZZ_DATA_DIR') or os.environ.get('BZZ_RUNTIME_OVERRIDE')):
         return False
-    provider = next((p for p in providers if (p.get('limit', {}).get('source') if isinstance(p.get('limit'), dict) else p.get('limit')) == 'claude'), None)
-    if provider is None:
+    candidates = [p for p in providers if (p.get('limit', {}).get('source') if isinstance(p.get('limit'), dict) else p.get('limit')) == 'claude']
+    if not candidates:
         return False
     old = _claude_snapshot(conn)
-    if min_interval is None:
-        min_interval = usage_interval(bool(old.get('refresh_error')))
     now = datetime.now(timezone.utc)
-    try:
-        checked = datetime.fromisoformat(runtime.kv_get(conn, GLOBAL_PROJECT, CLAUDE_CHECK_KEY) or old.get('checked_at') or '').astimezone(timezone.utc)
-        if not force and 0 <= (now - checked).total_seconds() < min_interval:
-            return False
-    except (ValueError, TypeError):
-        pass
+    provider = None
+    check_key = CLAUDE_CHECK_KEY
+    for candidate in candidates:
+        limit = candidate.get('limit')
+        source = limit.get('source') if isinstance(limit, dict) else limit
+        if source != 'claude':
+            continue
+        interval = min_interval if min_interval is not None else float(limit.get('interval', 60) if isinstance(limit, dict) else candidate.get('usageInterval', 60))
+        key = CLAUDE_CHECK_KEY + ':' + str(candidate['name']) if candidate.get('name') else CLAUDE_CHECK_KEY
+        try:
+            checked_text = runtime.kv_get(conn, GLOBAL_PROJECT, key)
+            if not candidate.get('name'):
+                checked_text = checked_text or old.get('checked_at')
+            checked = datetime.fromisoformat(checked_text or '').astimezone(timezone.utc)
+            if not force and 0 <= (now - checked).total_seconds() < interval:
+                continue
+        except (ValueError, TypeError):
+            pass
+        provider, check_key = candidate, key
+        break
+    if provider is None:
+        return False
     checked_at = now.isoformat()
     try:
         executable = shutil.which(str(provider.get('command') or 'claude'))
@@ -275,10 +289,10 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
         value = {**old, 'checked_at': checked_at, 'refresh_error': 'Claude usage refresh failed: %s' % ((str(exc) or type(exc).__name__)[:160])}
         runtime.kv_set(conn, GLOBAL_PROJECT, CLAUDE_USAGE_KEY, json.dumps(value))
-        runtime.kv_set(conn, GLOBAL_PROJECT, CLAUDE_CHECK_KEY, checked_at)
+        runtime.kv_set(conn, GLOBAL_PROJECT, check_key, checked_at)
         return False
     runtime.kv_set(conn, GLOBAL_PROJECT, CLAUDE_USAGE_KEY, json.dumps(value))
-    runtime.kv_set(conn, GLOBAL_PROJECT, CLAUDE_CHECK_KEY, checked_at)
+    runtime.kv_set(conn, GLOBAL_PROJECT, check_key, checked_at)
     return True
 
 
@@ -378,7 +392,7 @@ _codex_refresh = {}   # codex folder -> time of the last read, so the logs are r
 _codex_unreachable = {}   # codex folder -> whether the last read found no usage window
 
 
-def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min_interval: float = None, force: bool = False) -> bool:
+def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min_interval: float = None, force: bool = False, provider=None) -> bool:
     """Write Codex's 5h/7d windows from the session logs into kv (key usage-codex, same form as usage-claude); True when written.
 
     Cheap: the logs are read at most once per `min_interval` seconds per folder; by default usage_interval decides (one minute,
@@ -388,8 +402,10 @@ def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min
     if codex_dir is None and os.environ.get("BZZ_DATA_DIR"):
         return False
     root = str(Path(codex_dir) if codex_dir else codex_root())
+    if provider:
+        root += "::" + str(provider.get("name", ""))
     if min_interval is None:
-        min_interval = usage_interval(_codex_unreachable.get(root, False))
+        min_interval = 60
     nowt = time.monotonic()
     last = _codex_refresh.get(root)
     if not force and last is not None and nowt - last < min_interval:
@@ -407,6 +423,8 @@ def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min
     if not found:
         return False
     runtime.kv_set(conn, project, CODEX_USAGE_KEY, json.dumps(value))
+    if provider and provider.get("name"):
+        runtime.kv_set(conn, project, CODEX_USAGE_KEY + ":" + str(provider["name"]), json.dumps(value))
     return True
 
 
@@ -429,6 +447,8 @@ def get_provider_limit(conn, provider: dict, project: str = GLOBAL_PROJECT, read
     name = provider.get("name")
     limit = provider.get("limit")
     source = limit.get("source") if isinstance(limit, dict) else limit
+    if source == "none":
+        return {"used_pct": None, "free_pct": 100.0, "hours": 168.0, "reset_epoch": None}
     used, hours, at = None, None, None
     lf = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
     if read_pc is None:
@@ -445,7 +465,7 @@ def get_provider_limit(conn, provider: dict, project: str = GLOBAL_PROJECT, read
         if at:
             hours = (at - datetime.now(timezone.utc).timestamp()) / 3600
     elif read_pc and source in ("claude", "codex"):
-        u = (get_claude_usage(conn, project) if source == "claude" else get_codex_usage(codex_dir))["seven_day"]
+        u = (get_claude_usage(conn, project) if source == "claude" else (get_codex_usage(codex_dir) if codex_dir else cached_codex_usage(conn, project, provider)))["seven_day"]
         if u and u.get("pct") is not None:
             used = u["pct"]
             if u.get("at"):
@@ -457,6 +477,20 @@ def get_provider_limit(conn, provider: dict, project: str = GLOBAL_PROJECT, read
             "hours": float(hours) if hours is not None else 168.0, "reset_epoch": at}
 
 
+def cached_codex_usage(conn, project=GLOBAL_PROJECT, provider=None):
+    """Return the last scheduled Codex reading without rescanning session logs."""
+    result = {"five_hour": None, "seven_day": None}
+    try:
+        key = CODEX_USAGE_KEY + ":" + str(provider["name"]) if provider and provider.get("name") else CODEX_USAGE_KEY
+        value = json.loads(runtime.kv_get(conn, project, key) or "{}")
+        now = int(datetime.now(timezone.utc).timestamp())
+        for key, name in (("fiveHour", "five_hour"), ("sevenDay", "seven_day")):
+            result[name] = _claude_window(value.get(key), True, now)
+    except (ValueError, TypeError, KeyError):
+        pass
+    return result
+
+
 # Block provider starts when Claude quota refresh fails without inventing usage.
 def limit_windows(conn, provider: dict, project: str = GLOBAL_PROJECT, read_pc=None, codex_dir=None) -> list:
     """Usage windows of a provider as the LIMITS display has them: [{used_pct, reset_epoch}] for the 5h and the weekly window (reset_epoch None
@@ -465,6 +499,8 @@ def limit_windows(conn, provider: dict, project: str = GLOBAL_PROJECT, read_pc=N
     name = provider.get("name")
     limit = provider.get("limit")
     source = limit.get("source") if isinstance(limit, dict) else limit
+    if source == "none":
+        return []
     now = datetime.now(timezone.utc).timestamp()
     lf = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
     if read_pc is None:
@@ -491,7 +527,7 @@ def limit_windows(conn, provider: dict, project: str = GLOBAL_PROJECT, read_pc=N
             if w and (w.get("resetsAt") is None or int(w["resetsAt"]) > now):
                 out.append({"used_pct": 100 * float(w["utilization"]), "reset_epoch": int(w["resetsAt"]) if w.get("resetsAt") is not None else None})
     elif read_pc and source == "codex":
-        for w in (get_codex_usage(codex_dir) or {}).values():
+        for w in ((get_codex_usage(codex_dir) if codex_dir else cached_codex_usage(conn, project, provider)) or {}).values():
             if w and w.get("pct") is not None:
                 out.append({"used_pct": float(w["pct"]), "reset_epoch": w.get("at")})
     return out

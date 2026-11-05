@@ -591,7 +591,7 @@ def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen
     """Request a replacement Queen, preserving the provider unless explicitly changed."""
     if get(conn, project, plan) is None:
         raise ValueError('unknown Hive')
-    if provider and (provider in excluded or providers is not None and not any(p['name'] == provider and not p.get('endpoint') and p.get('classes', {}).get(queen_class, {}).get('model') for p in providers)):
+    if provider and (provider in excluded or providers is not None and not any(p['name'] == provider and 'Queen' in p.get('capabilities', []) and p.get('classes', {}).get(queen_class, {}).get('model') for p in providers)):
         raise ValueError('provider does not offer the Queen class')
     if any(a.get('plan_path') == plan and a.get('phase') == 'queen' and agent_process.counts(a) for a in runtime.list_agents(conn, project, 'active')):
         dequeen(conn, project, plan, stop=stop)
@@ -688,7 +688,9 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
         for env in envs:
             reconcile_completed(conn, env, alive=alive, plan_files=plan_files)
         try:
-            usage.refresh_codex_usage(conn)
+            codex = [p for p in sch.get_providers(machine) if p.get("limit") == "codex"]
+            for provider in codex:
+                usage.refresh_codex_usage(conn, min_interval=provider.get("usageInterval", 60), provider=provider)
         except Exception:
             pass
         for env in envs:
@@ -741,7 +743,6 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
     limit = int(machine.get('hives', 2))
     queen_count = sum(1 for a in processes if a.get('phase') == 'queen')
     excluded = set(machine.get('excludedProviders') or [])
-    preferred = str(machine.get('preferredProvider') or '')
     projects = sch.order_projects(envs)
     result['projects'] = {env.name: {'report': [], 'started': 0, 'actions': 0} for env in projects}
     skipped = {env.name: [] for env in projects}
@@ -867,7 +868,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 if free_ram() < loop._min_ram(env):
                     not_started(env, path, 'free RAM %.2f GB is below the minimum %.2f GB' % (free_ram(), loop._min_ram(env)))
                     continue
-                providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and not p.get('endpoint')
+                providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and 'Queen' in p.get('capabilities', [])
                              and not any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, p))]
                 cls = str(env.settings.get('queenClass', 'medium'))
                 if hive:
@@ -876,9 +877,9 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                         cls = history[-1]['class']
                     requested = hive.get('requested_provider') or hive['provider']
                     providers = [p for p in providers if p['name'] == requested]
-                    pick = sch.select_provider(providers, cls, [], pool.free, prefer=requested, conn=conn)
+                    pick = sch.select_provider(providers, cls, ['Queen'], pool.free, prefer=requested, conn=conn)
                 else:
-                    pick = sch.select_provider(providers, cls, [], pool.free, prefer=preferred, conn=conn)
+                    pick = sch.select_provider(providers, cls, ['Queen'], pool.free, conn=conn)
                 if not pick:
                     not_started(env, path, 'no provider with a free slot and a free limit offers class %s' % cls)
                     continue
@@ -965,10 +966,10 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
             result['projects'][env.name]['actions'] += started
     if not dry_run:
         for env in projects:
-            providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and not p.get('endpoint')
+            providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and 'Queen' in p.get('capabilities', [])
                          and not any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, p))]
             eligible = any(p['status'] in plan_mod.QUEEN_STATUSES and ((get(conn, env.name, p['path']) or {}).get('state') in (None, 'waiting', 'requeen')) for p in runtime.list_plans(conn, env.name))
-            can_start = eligible and queen_count < limit and bool(sch.select_provider(providers, str(env.settings.get('queenClass', 'medium')), [], pool.free, prefer=preferred, conn=conn))
+            can_start = eligible and queen_count < limit and bool(sch.select_provider(providers, str(env.settings.get('queenClass', 'medium')), ['Queen'], pool.free, conn=conn))
             env.log('round done: %d Queen(s) started%s' % (result['projects'][env.name]['started'], ''.join('; ' + text for text in skipped[env.name])))
             faults.check_round(env, result['projects'][env.name]['started'], can_start)
             try:
