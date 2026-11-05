@@ -296,8 +296,13 @@ def _comments(text):
             elif quote == '"' and c == "\\":
                 escaped = True
             elif multiline and text.startswith(quote * 3, i):
+                # TOML permits one or two literal quotes just before the closing
+                # delimiter. Consume the whole 3-5 quote run, not just three.
+                end = i + 3
+                while end < len(text) and text[end] == quote:
+                    end += 1
                 quote, multiline = None, False
-                i += 2
+                i = end - 1
             elif not multiline and c == quote:
                 quote = None
         elif c in "\"'":
@@ -327,9 +332,29 @@ def _update_document(document, data):
         old = document[key]
         if isinstance(value, dict) and isinstance(old, (Table, InlineTable)):
             _update_document(old, value)
-        elif isinstance(value, list) and isinstance(old, AoT) and all(isinstance(v, dict) for v in value) and len(old) == len(value):
-            for entry, updated in zip(old, value):
-                _update_document(entry, updated)
+        elif isinstance(value, list) and isinstance(old, AoT) and all(isinstance(v, dict) for v in value):
+            # Provider/project names (or ids) identify entries even when the
+            # settings editor removes or reorders them. Never transfer their
+            # comments to a different named entry by position.
+            identity = next((field for field in ("name", "id")
+                             if all(isinstance(entry.get(field), str) for entry in [*old, *value])
+                             and len({entry[field] for entry in old}) == len(old)
+                             and len({entry[field] for entry in value}) == len(value)), None)
+            if identity:
+                entries = {entry[identity]: entry for entry in old}
+                updated_array = tomlkit.aot()
+                for updated in value:
+                    entry = entries.get(updated[identity])
+                    if entry is None:
+                        entry = tomlkit.table()
+                    _update_document(entry, updated)
+                    updated_array.append(entry)
+                document[key] = updated_array
+            elif len(old) == len(value):
+                for entry, updated in zip(old, value):
+                    _update_document(entry, updated)
+            elif old.unwrap() != value:
+                document[key] = value
         elif old.unwrap() != value:
             document[key] = value
 

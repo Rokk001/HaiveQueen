@@ -30,6 +30,25 @@ Every value above (non-interactive command, JSON output, profile variables, logi
 
 Kilo Code is a fork of OpenCode and writes the same JSON lines (`step_start`, `text`, `tool_use`, `step_finish`, `error`), so both use one reader.
 
+## Personal inbox command
+
+The machine settings page offers **Install /bzz**. It creates user commands in
+`~/.claude/commands/bzz.md`, `~/.config/opencode/commands/bzz.md` and
+`~/.config/kilo/commands/bzz.md`. Existing different files are kept and reported
+on the page. Codex CLI is skipped because it does not support a literal `/bzz`;
+custom CLIs with an unknown command mechanism are also skipped with a message.
+These are commands for the owner's personal CLI sessions.
+
+The command reads open plan questions across registered Apiaries, investigates
+technical questions, and asks behaviour, content, design and configured owner-topic
+questions one at a time in the Apiary's language. Answers are written as UTF-8
+TOML files to that Apiary's inbox and processed on the next round.
+
+Command mechanisms: [Claude Code](https://code.claude.com/docs/en/slash-commands),
+[OpenCode](https://opencode.ai/docs/commands/),
+[Kilo Code](https://kilo.ai/docs/customize/workflows),
+[Codex slash commands](https://learn.chatgpt.com/docs/reference/slash-commands).
+
 ## CLIs not offered yet
 
 The settings window lists a CLI only when HaiveQueen can really run it: it reads its output, keeps it to the profile folder, can log it in and has a test for it. For the CLIs below the official documentation does not give a value that is needed; nothing is guessed, so they stay out of the list until it does. A custom CLI that writes one of the three formats can still be added through its provider entry.

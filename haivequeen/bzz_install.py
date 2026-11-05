@@ -28,23 +28,21 @@ def install(home=None):
     home = Path(home) if home is not None else Path.home()
     paths = {
         "Claude Code": home / ".claude/commands/bzz.md",
-        "Codex CLI": home / ".agents/skills/bzz/SKILL.md",
         "OpenCode": home / ".config/opencode/commands/bzz.md",
         "Kilo Code": home / ".config/kilo/commands/bzz.md",
     }
     result = {}
     for name, path in paths.items():
         body = PROMPT
-        if name == "Codex CLI":
-            body = "---\nname: bzz\ndescription: Handle open HaiveQueen plan questions.\n---\n\n" + body
         try:
             if path.exists() and path.read_text(encoding="utf-8") != body:
                 result[name] = "existing command was not replaced"
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(body, encoding="utf-8")
-            result[name] = "installed: no literal /bzz; use /skills or $bzz" if name == "Codex CLI" else "installed"
+            result[name] = "installed"
         except OSError as exc:
             result[name] = str(exc)
+    result["Codex CLI"] = "skipped: literal /bzz is not supported"
     result["Custom CLI"] = "skipped: command mechanism is unknown"
     return result

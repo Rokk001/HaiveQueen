@@ -102,7 +102,7 @@ stateDiagram-v2
 ```bash
 git clone https://github.com/Rokk001/HaiveQueen
 cd HaiveQueen
-pip install -e .                      # optional: gives you the command `bzz` (else use `python -m haivequeen`)
+pip install -e .                      # installs dependencies and the command `bzz`
 
 bzz init /path/to/my-project          # creates .haivequeen/project.toml, AGENTS.md and an example plan
 bzz register /path/to/my-project      # adds the project to config.toml and the database
