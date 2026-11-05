@@ -206,6 +206,28 @@ def kv_set(conn, project, key, value) -> None:
             (project, key, value, db.now()))
 
 
+def cut_assignments(conn, project, plan):
+    """Return preserved requirement/verification pairs, or None for an older plan."""
+    value = kv_get(conn, project, "cut-verification:" + plan)
+    if value is None:
+        return None
+    try:
+        pairs = json.loads(value)
+        if not isinstance(pairs, list) or not all(isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) for p in pairs):
+            return None
+        return pairs
+    except (ValueError, TypeError):
+        return None
+
+
+def save_cut_assignments(conn, project, plan, packages):
+    """Preserve the first accepted cut; subsequent checks cannot change it."""
+    pairs = [[rid, pkg.verify] for pkg in packages for rid in pkg.requirements]
+    with db.transaction(conn):
+        conn.execute("INSERT OR IGNORE INTO kv (project, key, value, updated_at) VALUES (?,?,?,?)",
+                     (project, "cut-verification:" + plan, json.dumps(pairs), db.now()))
+
+
 def kv_delete(conn, project, key) -> int:
     """Delete a key; returns the number of deleted rows."""
     with db.transaction(conn):

@@ -51,7 +51,7 @@ def _names(decision, rid):
     return bool(re.search(r"(?<![A-Za-z0-9_.-])" + re.escape(rid) + r"(?![A-Za-z0-9_])", str(decision.get("text") or ""), re.I))
 
 
-def evaluate(plan_text, state_text, decisions):
+def evaluate(plan_text, state_text, decisions, assignments=None):
     """Check the requirement list of the state file against the requirement ids of the plan and the state file; returns a Result."""
     res = Result()
     required = {}
@@ -62,12 +62,14 @@ def evaluate(plan_text, state_text, decisions):
         res.no_ids = True
         return res
     entries = parse_completeness(state_text)
-    packages = plans.parse_plan_text(plan_text).packages
+    if assignments is None:
+        packages = plans.parse_plan_text(plan_text).packages
+        assignments = [(rid, p.verify) for p in packages for rid in p.requirements]
     active = [d for d in decisions if str(d.get("status") or "active") == "active"]
     for rid, text in required.items():
         mine = [e for e in entries if e[0] == rid]
-        covering = [p for p in packages if rid in p.requirements]
-        if covering and all(p.verify == "owner" for p in covering):
+        covering = [verify for requirement, verify in assignments if requirement == rid]
+        if covering and all(verify == "owner" for verify in covering):
             res.owner.append(rid)
         elif any(_names(d, rid) for d in active):
             res.aside.append(rid)
@@ -117,7 +119,9 @@ def gate(env, plan, queen):
     plan_text, plan_file = _read([os.path.join(f, plan) for f in folders])
     state_text, state_file = _read([plans.state_file_path(os.path.join(f, plan)) for f in folders])
     decisions = [d for d in runtime.list_decisions(env.conn, env.name, active_only=True) if not d["plan_path"] or d["plan_path"] == plan]
-    res = evaluate(plan_text, state_text, decisions)
+    assignments = runtime.cut_assignments(env.conn, env.name, plan)
+    # Older plans have no reliable cut-time record: require evidence for them.
+    res = evaluate(plan_text, state_text, decisions, assignments if assignments is not None else [])
     if res.no_ids or res.blocking:
         return False, refusal_text(res), False
     skipped = ", ".join(res.owner + res.aside) or "none"
