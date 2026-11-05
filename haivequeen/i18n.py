@@ -56,57 +56,186 @@ def tr(text, *args, language=None) -> str:
     return out % args if args else out
 
 
+# Write the decimal point of a formatted number in the language.
+def decimal(text, language=None) -> str:
+    """Formatted numbers of `text` with a decimal comma in German; other languages keep the point. Only a point between two digits changes."""
+    german = is_german_language(language) if language is not None else is_german()
+    return re.sub(r"(?<=\d)\.(?=\d)", ",", text) if german else text
+
+
 # Translate a log line the program wrote.
 def log_text(text, language=None) -> str:
     """A stored program log line in the language; a line of an agent, or any other text, stays as written."""
     german = is_german_language(language) if language is not None else is_german()
-    if not german:
+    return _german_line(text) if german else text
+
+
+# Translate one line of the live text of an agent.
+def live_text(colour, text, language=None) -> str:
+    """A program line of the live view ("<time> <text>") in the language. White lines are the words of the agent and stay as written; the time may be one or two words."""
+    german = is_german_language(language) if language is not None else is_german()
+    if not german or colour == "White":
         return text
-    for pattern, replacement in _LOG_LINES:
-        changed, count = pattern.subn(replacement, text, count=1)
-        if count:
-            return changed
+    parts = text.split(" ")
+    for count in (1, 2):
+        head, tail = " ".join(parts[:count]), " ".join(parts[count:])
+        changed = _german_line(tail) if tail else tail
+        if changed != tail:
+            return head + " " + changed
     return text
 
 
+def _german_line(text):
+    """The German form of the first pattern that fits; a pattern may end before the end of the line, the rest then stays as written."""
+    for pattern, replacement in _LOG_LINES:
+        match = pattern.match(text)
+        if match:
+            return (replacement(match) if callable(replacement) else match.expand(replacement)) + text[match.end():]
+    return text
+
+
+def _round_done(match):
+    """The round line with each "<plan> not started: <reason>" in German."""
+    return "Runde fertig: %s Queen(s) gestartet%s" % (match.group(1), "".join("; " + _german_line(part) for part in match.group(2).split("; ")[1:]))
+
+
+def _with_source(german):
+    """A run state line with the source of the change when it has one."""
+    return lambda match: german + (" (Quelle: %s)" % match.group(1) if match.group(1) else "")
+
+
+def _live_label(text):
+    """The label of a tool line of the live view in German."""
+    return "Kompiliertest" if text == "Compile test" else _german_line(text)
+
+
+_BUILD_WHY = {"first": "erster Build", "ram": "durch RAM begrenzt", "cores": "durch Kerne begrenzt"}
+_LIVE_LABEL = r"(Commit(?:: .*?)?|Push|Compile test|Check \S+|changed: .*?|ready line registered)"
+
+
 _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
-    (r"^round done: (\d+) Queen\(s\) started", r"Runde fertig: \1 Queen(s) gestartet"),
+    # ---- rounds and the loop
+    (r"^round done: (\d+) Queen\(s\) started((?:; .*)?)$", _round_done),
     (r"^round skipped \((.*)\)$", r"Runde übersprungen (\1)"),
+    (r"^(.*) not started: (.*)$", lambda m: "%s nicht gestartet: %s" % (m.group(1), _german_line(m.group(2)))),
     (r"^ROUND ERROR ", "RUNDENFEHLER "),
+    (r"^Round error: ", "Rundenfehler: "),
     (r"^RETENTION ERROR ", "AUFBEWAHRUNGSFEHLER "),
     (r"^EXPORT ERROR ", "EXPORTFEHLER "),
+    (r"^TECHNICAL NOTE: (.*?): (.*), marked failed$", lambda m: "TECHNISCHER HINWEIS: %s: %s, als fehlgeschlagen markiert" % (m.group(1), _german_line(m.group(2)))),
     (r"^TECHNICAL NOTE: ", "TECHNISCHER HINWEIS: "),
     (r"^loop started \(roundMinutes=(.*)\)$", r"Steuerung gestartet (roundMinutes=\1)"),
+    (r"^Beekeeper started \(round every (.*) minutes\)$", r"Beekeeper gestartet (Runde alle \1 Minuten)"),
     (r"^STOP found, loop ending$", "STOP gefunden, Steuerung endet"),
+    (r"^STOP file found: no new agents, waiting for running agents$", "STOP-Datei gefunden: keine neuen Agenten, warte auf laufende Agenten"),
     (r"^loop ending$", "Steuerung endet"),
+    (r"^Loop ending$", "Steuerung endet"),
     (r"^loop ended$", "Steuerung beendet"),
+    (r"^Loop ended: all agents are done$", "Steuerung beendet: alle Agenten sind fertig"),
     (r"^restart: re-attached (\d+) running agent\(s\), (\d+) gone$", r"Neustart: \1 laufende(r) Agent(en) wieder verbunden, \2 verschwunden"),
     (r"^TOML configuration reloaded; running agents retained\.$", "TOML-Einstellungen neu geladen; laufende Agenten bleiben."),
+    (r"^TOML configuration reload failed \((.*)\); keeping last valid settings\.$", r"TOML-Einstellungen nicht neu geladen (\1); die letzten gültigen bleiben."),
+    (r"^paused: no new agents are started(?: \(source: (.*)\))?$", _with_source("pausiert: es werden keine neuen Agenten gestartet")),
+    (r"^resumed(?: \(source: (.*)\))?$", _with_source("fortgesetzt")),
     (r"^start (\S+) \((.*), (.*)\)$", r"Start \1 (\2, \3)"),
+    (r"^(\S+) started \((.*)\)$", r"\1 gestartet (\2)"),
+    (r"^plan (.+?): READY -> IN_PROGRESS$", r"Plan \1: READY -> IN_PROGRESS"),
+    (r"^plan (.+?): status change failed: ", r"Plan \1: Statuswechsel fehlgeschlagen: "),
     (r"^Worktree cleanup failed: ", "Worktree-Bereinigung fehlgeschlagen: "),
     (r"^Worktree cleanup: ", "Worktree-Bereinigung: "),
     (r"^cannot prepare (plan|Queen) worktree: ", r"Worktree (\1) kann nicht vorbereitet werden: "),
-    (r"^Bee start refused for package (\S+): ", r"Bee-Start für Paket \1 abgelehnt: "),
     (r"^event hook ok: (\d+) event\(s\)$", r"Event-Hook ok: \1 Ereignis(se)"),
     (r"^event hook failed \(exit (.*?)\): ", r"Event-Hook fehlgeschlagen (Exit \1): "),
     (r"^event hook error: ", "Event-Hook-Fehler: "),
+    (r"^Event command failed \(again next round\): ", "Event-Befehl fehlgeschlagen (erneut nächste Runde): "),
+    (r"^Event command error: ", "Event-Befehl-Fehler: "),
     (r"^fault check failed: ", "Fehlerprüfung fehlgeschlagen: "),
+    (r"^Fault question (\S+) remains open \((.*?)\): ", r"Fehlerfrage \1 bleibt offen (\2): "),
     (r"^views not written: ", "Ansichten nicht geschrieben: "),
     (r"^database exported to ", "Datenbank exportiert nach "),
     (r"^inbox file (\S+) taken over: (\d+) answer\(s\), (\d+) decision\(s\), (\d+) queue order\(s\)$", r"Inbox-Datei \1 übernommen: \2 Antwort(en), \3 Entscheidung(en), \4 Warteschlangen-Auftrag/-Aufträge"),
+    (r"^inbox queue order (\S+): branch (\S+), rows (.*) \((.*)\)$", r"Inbox-Warteschlangen-Auftrag \1: Branch \2, Zeilen \3 (\4)"),
+    (r"^warning inbox file (\S+) rejected: ", r"Warnung: Inbox-Datei \1 abgelehnt: "),
     (r"^question (\d+) waits for fault checking$", r"Frage \1 wartet auf die Fehlerprüfung"),
     (r"^question (\d+) waits for triage$", r"Frage \1 wartet auf die Vorprüfung"),
+    (r"^Provider (\S+) needs its login in the HaiveQueen profile \(once\)\. Run `(.*)` with the environment (.*)\. Its packages wait until then, all others go on\.$", r"Anbieter \1 braucht einmalig seinen Login im HaiveQueen-Profil. Führe `\2` mit der Umgebung \3 aus. Seine Pakete warten bis dahin, alle anderen laufen weiter."),
+    (r"^Provider (\S+) cannot be kept to the HaiveQueen profile\.$", r"Anbieter \1 lässt sich nicht auf das HaiveQueen-Profil beschränken."),
+    (r"^self-update ok: (.*)$", lambda m: "Selbst-Update ok: " + _german_line(m.group(1))),
+    (r"^self-update (\S+): (.*)$", lambda m: "Selbst-Update %s: %s" % (m.group(1), _german_line(m.group(2)))),
+    (r"^updated to (\S+)$", r"aktualisiert auf \1"),
+    (r"^already current at (\S+)$", r"bereits aktuell auf \1"),
+    (r"^(.*); rolled back to (\S+)$", r"\1; zurückgesetzt auf \2"),
+    # ---- why a Hive got no Queen
     (r"^quota used up$", "Kontingent aufgebraucht"),
     (r"^not available$", "nicht verfügbar"),
+    (r"^provider unknown$", "Anbieter unbekannt"),
     (r"^no free slot \(needs (\d+), (\d+) free\)$", r"kein freier Slot (braucht \1, \2 frei)"),
     (r"^needs (\d+) slots \(Queen and Bee process\) but has (\d+)$", r"braucht \1 Slots (Queen und Bee-Prozess), hat aber \2"),
     (r"^usage unknown, no recent reading \((.*)\)$", r"Verbrauch unbekannt, keine aktuelle Messung (\1)"),
-    (r'^Hive state "(.*?)"(?: \(questions (.*)\))?$', r"Hive-Zustand \1 \2"),
-    (r"^waiting for the build: ", "Wartet auf den Build: "),
-    (r"^Provider (\S+) needs its login in the HaiveQueen profile \(once\)\. Run `(.*)` with the environment (.*)\. Its packages wait until then, all others go on\.$", r"Anbieter \1 braucht einmalig seinen Login im HaiveQueen-Profil. Führe `\2` mit der Umgebung \3 aus. Seine Pakete warten bis dahin, alle anderen laufen weiter."),
-    (r"^Provider (\S+) cannot be kept to the HaiveQueen profile\.$", r"Anbieter \1 lässt sich nicht auf das HaiveQueen-Profil beschränken."),
-    (r"^self-update ok: ", "Selbst-Update ok: "),
-    (r"^self-update (\S+): ", r"Selbst-Update \1: "),
+    (r'^Hive state "(.*?)"(?: \(questions (.*)\))?$', lambda m: "Hive-Zustand %s%s" % (m.group(1), " (Fragen %s)" % m.group(2) if m.group(2) else "")),
+    (r"^waiting for the build: (.*)$", lambda m: "Wartet auf den Build: " + _german_line(m.group(1))),
+    (r"^waiting for provider (\S+): (.*)$", lambda m: "Wartet auf Anbieter %s: %s" % (m.group(1), _german_line(m.group(2)))),
+    (r"^waiting for the integration place$", "Wartet auf den Integrationsplatz"),
+    (r"^handing off, Bee processes are still running$", "Übergabe, Bee-Prozesse laufen noch"),
+    (r"^retry after an interrupted Queen is not due yet$", "Neuer Versuch nach unterbrochener Queen ist noch nicht fällig"),
+    (r"^Hive limit (\d+) reached$", r"Hive-Limit \1 erreicht"),
+    (r"^free RAM (\S+) GB is below the minimum free RAM before a build of (\S+) GB$", lambda m: decimal("freier RAM %s GB liegt unter dem Mindestwert vor einem Build von %s GB" % m.groups(), "German")),
+    (r"^free RAM (\S+) GB is below the minimum (\S+) GB$", lambda m: decimal("freier RAM %s GB liegt unter dem Mindestwert %s GB" % m.groups(), "German")),
+    (r"^no provider with a free slot and a free limit offers class (\S+)$", r"kein Anbieter mit freiem Slot und freiem Limit bietet Klasse \1"),
+    (r"^no provider with a free slot offers class (\S+)$", r"kein Anbieter mit freiem Slot bietet Klasse \1"),
+    (r"^its branch (.+) is held by work outside the Beekeeper$", r"sein Branch \1 wird von Arbeit außerhalb des Beekeepers gehalten"),
+    (r"^the Hive is already claimed$", "der Hive ist bereits reserviert"),
+    (r"^worktree for branch (.+?) could not be prepared \((.*)\)$", r"Worktree für Branch \1 konnte nicht vorbereitet werden (\2)"),
+    (r"^no branch or worktree named in the plan or its state file$", "kein Branch oder Worktree in Plan oder State-Datei genannt"),
+    # ---- why a Bee did not start
+    (r"^Bee start refused for package (\S+): (.*)$", lambda m: "Bee-Start für Paket %s abgelehnt: %s" % (m.group(1), _german_line(m.group(2)))),
+    (r"^dependency (\S+) of package (\S+) not in plan$", r"Abhängigkeit \1 von Paket \2 ist nicht im Plan"),
+    (r"^dependency (\S+) of package (\S+) not done$", r"Abhängigkeit \1 von Paket \2 ist nicht fertig"),
+    (r"^the Hive may not start a Bee now \(Hive state (\S+), context limit or HANDOFF reached\)$", r"der Hive darf jetzt keine Bee starten (Hive-Zustand \1, Kontextgrenze oder HANDOFF erreicht)"),
+    (r"^no running Queen of this plan$", "keine laufende Queen dieses Plans"),
+    (r"^the name (\S+) is already held by a running Queen or Bee; use the free name (\S+)$", r"der Name \1 gehört bereits einer laufenden Queen oder Bee; nutze den freien Namen \2"),
+    (r"^the Queen already has (\S+) Bees running$", r"die Queen hat bereits \1 laufende Bees"),
+    (r"^the plan is not cut yet: write its packages into the header and run bzz plan check first$", "der Plan ist noch nicht aufgeteilt: schreibe zuerst seine Pakete in den Kopf und führe bzz plan check aus"),
+    (r"^the package is not in the plan$", "das Paket ist nicht im Plan"),
+    (r"^no configured provider offers the required class or the capability (.*) \(question filed\)$", r"kein eingerichteter Anbieter bietet die nötige Klasse oder die Fähigkeit \1 (Frage gestellt)"),
+    (r"^no configured provider offers the required class \(question filed\)$", "kein eingerichteter Anbieter bietet die nötige Klasse (Frage gestellt)"),
+    (r"^the package failed (\d+) times at the Queen class (\S+) and no higher class is offered$", r"das Paket scheiterte \1-mal auf der Queen-Klasse \2 und keine höhere Klasse wird angeboten"),
+    (r"^the package failed (\d+) times and no higher class is offered$", r"das Paket scheiterte \1-mal und keine höhere Klasse wird angeboten"),
+    (r"^class (\S+) was requested but the system computes class (\S+) \(plan class (\S+), no stored escalation\)$", r"Klasse \1 wurde angefordert, das System berechnet aber Klasse \2 (Planklasse \3, keine gespeicherte Eskalation)"),
+    (r"^the assigned provider (\S+) is unknown, excluded, at its limit or has no free slot$", r"der zugewiesene Anbieter \1 ist unbekannt, ausgeschlossen, am Limit oder hat keinen freien Slot"),
+    (r"^the worktree (.+) is not a valid separate worktree with a branch of this repository$", r"der Worktree \1 ist kein gültiger eigener Worktree mit einem Branch dieses Repositorys"),
+    (r"^a Bee process may not start now \(starts paused or stopped, too little free RAM, or no free slot of provider (\S+)\)$", r"ein Bee-Prozess darf jetzt nicht starten (Starts pausiert oder gestoppt, zu wenig freier RAM oder kein freier Slot von Anbieter \1)"),
+    (r"^no valid separate worktree for the Bee was given$", "für die Bee wurde kein gültiger eigener Worktree angegeben"),
+    (r"^the agent runner could not start the Bee process$", "der Agent-Runner konnte den Bee-Prozess nicht starten"),
+    # ---- agent runs: event lines and the last line of an agent row
+    (r"^warning (\S+) could not update its row after (\d+) tries, set to failed: ", r"Warnung: \1 konnte seine Zeile nach \2 Versuchen nicht aktualisieren, auf fehlgeschlagen gesetzt: "),
+    (r"^warning (\S+) exit code (\S+) after a finished task \(hook/stderr\), kept as done$", r"Warnung: \1 Exit-Code \2 nach fertiger Aufgabe (Hook/stderr), bleibt fertig"),
+    (r"^build (\S+): starting with (\d+) jobs \((\w+), free RAM (\d+) MB\)$", lambda m: "Build %s: startet mit %s Jobs (%s, freier RAM %s MB)" % (m.group(1), m.group(2), _BUILD_WHY.get(m.group(3), m.group(3)), m.group(4))),
+    (r"^build (\S+): jobs=(\d+), duration=([\d:]+), no build process seen, nothing stored$", r"Build \1: Jobs=\2, Dauer=\3, kein Build-Prozess gesehen, nichts gespeichert"),
+    (r"^build (\S+): jobs=(\d+), duration=([\d:]+), build process RAM peak=(\d+) MB, use per job=(\d+) MB \(median (\d+) MB\)$", r"Build \1: Jobs=\2, Dauer=\3, RAM-Spitze der Build-Prozesse=\4 MB, Nutzung pro Job=\5 MB (Median \6 MB)"),
+    (r"^(\S+) stalled: no output for (\d+) s \(still running, not ended\)$", r"\1 hängt: keine Ausgabe seit \2 s (läuft noch, nicht beendet)"),
+    (r"^(\S+) prints again$", r"\1 gibt wieder aus"),
+    (r"^process gone after orchestrator restart$", "Prozess nach Neustart der Steuerung verschwunden"),
+    (r"^runner process vanished \(ended by executor or crashed\)$", "Runner-Prozess verschwunden (von außen beendet oder abgestürzt)"),
+    (r"^pane never started \(no runner process\)$", "Fenster nie gestartet (kein Runner-Prozess)"),
+    (r"^queued$", "in der Warteschlange"),
+    (r"^starting$", "startet"),
+    (r"^runner error: ", "Runner-Fehler: "),
+    (r"^error: ", "Fehler: "),
+    (r"^tool: ", "Werkzeug: "),
+    (r"^cmd: ", "Befehl: "),
+    (r"^no result event, exit (\S*)", r"kein Ergebnis-Ereignis, Exit \1"),
+    (r"^agent row error after (\d+) tries \(wanted status '(.*?)'\): ", r"Fehler in der Agentenzeile nach \1 Versuchen (gewünschter Status '\2'): "),
+    # ---- program lines of the live view
+    (r"^ready line registered$", "ready-Zeile eingetragen"),
+    (r"^Stalled: no output for (\d+) s\. The agent is still running\.$", r"Hängt: keine Ausgabe seit \1 s. Der Agent läuft noch."),
+    (r"^Note: exit code (\S+) although the agent is done \(see stderr\.txt\)$", r"Hinweis: Exit-Code \1, obwohl der Agent fertig ist (siehe stderr.txt)"),
+    (r"^Final message: ", "Abschlussnachricht: "),
+    (r"^End: (\S+) \(exit (\S+)\), total input (\S+) / output (\S+)\.$", lambda m: decimal("Ende: %s (Exit %s), gesamt Eingabe %s / Ausgabe %s." % (GERMAN.get(m.group(1), m.group(1)), m.group(2), m.group(3), m.group(4)), "German")),
+    ("^" + _LIVE_LABEL + r" - (Exit \S+|OK|Error)(?=: |$)", lambda m: "%s - %s" % (_live_label(m.group(1)), "Fehler" if m.group(2) == "Error" else m.group(2))),
+    (r"^changed: ", "geändert: "),
+    (r"^Compile test$", "Kompiliertest"),
+    (r"^Check (\S+)$", r"Prüfung \1"),
 )]
 
 
@@ -145,7 +274,7 @@ GERMAN = {
     "stop": "stoppen", "queen": "Queen",
     "BEE": "BEE", "MODEL": "MODELL", "TASK": "AUFGABE", "CONTEXT": "KONTEXT", "TOKENS": "TOKENS",
     "no queens or bees": "keine Queens oder Bees",
-    "HIVE ACTIVITY": "HIVE-AKTIVITÄT", "tokens in/out, last 7 days": "Tokens ein/aus, letzte 7 Tage", "no usage yet": "noch keine Nutzung",
+    "HIVE ACTIVITY": "HIVE-AKTIVITÄT", "tokens in/out, last 7 days": "Tokens ein/aus, 7 Tage", "no usage yet": "noch keine Nutzung",
     "SYSTEM": "SYSTEM", "(%d cores)": "(%d Kerne)",
     "APIARY QUEUE": "WARTESCHLANGE", "questions: %d": "Fragen: %d", "queued: %d": "wartend: %d",
     "LOGS": "LOG", "all": "alle", "save": "speichern", "clear": "leeren", "Auto-scroll": "Auto-Scroll", "On": "An", "Off": "Aus", "no log lines": "keine Log-Zeilen",
@@ -187,7 +316,7 @@ GERMAN = {
     "Queenless": "Ohne Queen", "Waiting for Codex": "Wartet auf Codex", "Waiting for provider": "Wartet auf Anbieter", "Handoff": "Übergabe", "Waiting to start": "Wartet auf Start",
     "Plan rejected": "Plan abgelehnt", "Running, plan paused": "Läuft, Plan pausiert", "Plan paused": "Plan pausiert", "Running": "Läuft", "Idle": "Untätig",
     # ---- limits and status panel
-    "resets %s": "Rücksetzung %s", "new window": "neues Fenster", "quota %.2fx": "Kontingent %.2fx", "reset unknown": "Rücksetzung unbekannt", "no medium model": "kein medium-Modell", "  ◀ next": "  ◀ nächster", "%s slots": "%s Slots",
+    "resets %s": "Rücksetzung %s", "new window": "neues Fenster", "quota %.2fx": "Kontingent %.2fx", "reset unknown": "Rücksetzung unbekannt", "no medium model": "kein medium-Modell", "  ◀ next": "  ◀ nächster", "%s slots": "%s Slots", "%s 7d": "%s 7T",
     "%s  today %s  plans %s  total %s": "%s  heute %s  Pläne %s  gesamt %s",
     "no new agents": "keine neuen Agenten", "  Apiary: %s": "  Apiary: %s", "Beekeeper %s": "Beekeeper %s", "  (draft: %s)": "  (Entwurf: %s)",
     "STATE": "ZUSTAND", "USAGE": "NUTZUNG", "PLANS": "PLÄNE", "QUESTIONS": "FRAGEN", "ROUND ERRORS": "RUNDENFEHLER", "SELF-UPDATE": "SELBST-UPDATE",
@@ -228,7 +357,7 @@ GERMAN = {
     "config.toml (machine)": "config.toml (Rechner)", "project.toml (%s)": "project.toml (%s)", "true or false expected": "true oder false erwartet",
     "HaiveQueen settings": "HaiveQueen Einstellungen", "File:": "Datei:", "Add provider": "Anbieter hinzufügen", "Add project": "Projekt hinzufügen", "Remove entry": "Eintrag entfernen",
     "Revert": "Verwerfen", "Open folder": "Ordner öffnen", "Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.": "Änderungen gelten ohne Neustart für das laufende HaiveQueen. Die alte Datei bleibt als <name>.bak erhalten.",
-    "General": "Allgemein", "provider: %s": "Anbieter: %s", "project: %s": "Projekt: %s", "Build": "Build", "login": "Login", "Login": "Login", "Benchmark Start Context": "Startkontext messen",
+    "Custom CLI": "Eigene CLI", "General": "Allgemein", "provider: %s": "Anbieter: %s", "project: %s": "Projekt: %s", "Build": "Build", "login": "Login", "Login": "Login", "Benchmark Start Context": "Startkontext messen",
     "Login present": "Login vorhanden", "Login missing": "Login fehlt",
     "No login is set up for this provider. For a CLI that is not built in, set the profile variables, the login command and the login files on this page.": "Für diesen Anbieter ist kein Login eingerichtet. Lege für eine nicht eingebaute CLI die Profilvariablen, den Login-Befehl und die Login-Dateien auf dieser Seite fest.",
     "Open a terminal window and run `%s` for provider %s in the HaiveQueen profile?": "Ein Terminalfenster öffnen und `%s` für Anbieter %s im HaiveQueen-Profil ausführen?",

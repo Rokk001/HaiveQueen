@@ -10,11 +10,15 @@ from pathlib import Path
 from unittest import mock
 
 from bzztest import RoundCase, ROOT
-from haivequeen import bees, db, desktop, gui, gui_config, gui_data, gui_dialog, gui_hives, gui_overlays, gui_questions, hives, i18n, inbox, localtime, loop, overview, readygate, routine, startctx, views
+from haivequeen import bees, cli_presets, db, desktop, gui, gui_config, gui_data, gui_dialog, gui_hives, gui_overlays, gui_questions, hives, i18n, inbox, localtime, loop, overview, readygate, routine, startctx, views
 
 PACKAGE = ROOT / "haivequeen"
 GUI_FILES = ("gui.py", "gui_data.py", "gui_config.py", "gui_dialog.py", "gui_hives.py", "gui_overlays.py", "gui_questions.py")
-TRANSLATED_FILES = GUI_FILES + ("desktop.py", "overview.py", "buildjobs.py", "startctx.py", "bees.py", "hives.py", "agent_runner.py", "scheduler.py", "loop.py")
+TRANSLATED_FILES = GUI_FILES + ("desktop.py", "overview.py", "buildjobs.py", "startctx.py", "bees.py", "hives.py", "agent_runner.py", "scheduler.py", "loop.py", "cli_presets.py")
+LOG_CALLS = {"log": 0, "event": 0, "say": 0, "refuse": 2, "not_started": 2, "set_stalled": 2, "append_event": 2, "add_event": 3, "_transition": 4}   # calls that store a line: index of its text
+NOT_LOG_TEXT = {"Test milestone 1: this is a long line that should wrap in a narrow window so that the line wrapping becomes visible.",   # only with the fake agent of the tests
+                # the example cannot show the real line (a field holds a head, a word or a list); test_lines_built_from_a_variable and the round line test use real ones
+                "x1, build process RAM peak=1 MB, use per job=1 MB (median 1 MB)", "x1, no build process seen, nothing stored", "question 1 waits for x1", "round done: 1 Queen(s) startedx1", 'Hive state "x1"x1'}
 CONTROL = "[" + chr(0) + "-" + chr(8) + chr(11) + chr(12) + chr(14) + "-" + chr(31) + "]"
 NOT_TEXT = {"bzz", "HaiveQueen", "Rokk001/HaiveQueen", "OK", "CPU", "RAM", "Disk", "cli", "v%s  |  bzz  |  "}   # names, the same in every language
 
@@ -35,6 +39,32 @@ def wrapped_texts():
 def has_words(text):
     """True when the text holds a word once format fields are removed."""
     return bool(re.search(r"[A-Za-zÄÖÜäöü]{2}", re.sub(r"%[-+0-9.]*[a-zA-Z]", "", text))) and text not in NOT_TEXT
+
+
+def sample(node):
+    """Example lines a text argument can produce: both sides of a condition, format fields filled and a piece for an added variable; none for a plain variable."""
+    if isinstance(node, ast.IfExp):
+        return sample(node.body) + sample(node.orelse)
+    if isinstance(node, ast.BinOp):
+        added = " x1" if isinstance(node.op, ast.Add) and literal(node.left) and literal(node.left).endswith(" ") else "x1" if isinstance(node.op, ast.Add) else ""
+        return [text + added for text in sample(node.left)]
+    text = literal(node)
+    if text is None:
+        return []
+    text = re.sub(r"%0?\d*d", "1", text.replace("%%", "%"))
+    return [re.sub(r"%g|%\.\d+f", "1.50", text).replace("%s", "x1")]
+
+
+def stored_lines():
+    """(file, line, example) of every literal line the program stores as an event or a live line, in all modules."""
+    for path in PACKAGE.glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call):
+                func = getattr(node.func, "attr", getattr(node.func, "id", ""))
+                if func in LOG_CALLS and len(node.args) > LOG_CALLS[func]:
+                    for text in sample(node.args[LOG_CALLS[func]]):
+                        if has_words(text):
+                            yield path.name, node.lineno, text
 
 
 class CatalogTest(unittest.TestCase):
@@ -127,7 +157,7 @@ class GermanTextsTest(unittest.TestCase):
         self.assertEqual(gui_data.status_text({"state": "queenless"}), "Ohne Queen")
         self.assertEqual(gui_data.status_text({"state": "answer", "pending_questions": [3]}), "Wartet auf Antwort (#3)")
         self.assertEqual(gui_data.blocker_text("Hive limit 2 of something"), "Hive-Limit 2 erreicht")
-        self.assertEqual(gui_data.blocker_text("free RAM 1.00 GB is below the minimum 2.00 GB"), "Zu wenig freier RAM: 1.00 GB")
+        self.assertEqual(gui_data.blocker_text("free RAM 1.00 GB is below the minimum 2.00 GB"), "Zu wenig freier RAM: 1,00 GB")
         self.assertEqual(gui_data.blocker_text("STOP"), "HaiveQueen gestoppt")
         self.assertEqual(gui_data.blocker_text("waiting for provider codex: quota used up"), "Wartet auf Anbieter codex: Kontingent aufgebraucht")
         self.assertEqual(gui_data.blocker_text("waiting for the build: x"), "Wartet auf den Build: x")
@@ -177,6 +207,87 @@ class GermanTextsTest(unittest.TestCase):
         self.assertEqual(i18n.log_text("Provider codex needs its login in the HaiveQueen profile (once). Run `x y` with the environment A=b. Its packages wait until then, all others go on."),
                          "Anbieter codex braucht einmalig seinen Login im HaiveQueen-Profil. Führe `x y` mit der Umgebung A=b aus. Seine Pakete warten bis dahin, alle anderen laufen weiter.")
 
+    def test_every_line_the_program_stores_has_a_german_form(self):
+        """Scans the source: a new program log line without a pattern fails here, so the log cannot fall back to English unnoticed."""
+        seen = list(stored_lines())
+        self.assertGreater(len(seen), 40)   # the scan really finds the lines
+        untranslated = [line for line in seen if line[2] not in NOT_LOG_TEXT and i18n.log_text(line[2]) == line[2]]
+        self.assertEqual(untranslated, [])
+
+    def test_lines_built_from_a_variable_have_a_german_form(self):
+        """Lines the scan cannot see because the text is held in a variable first."""
+        for line, german in (("dependency K1 of package K2 not done", "Abhängigkeit K1 von Paket K2 ist nicht fertig"),
+                             ("dependency K1 of package K2 not in plan", "Abhängigkeit K1 von Paket K2 ist nicht im Plan"),
+                             ("process gone after orchestrator restart", "Prozess nach Neustart der Steuerung verschwunden"),
+                             ("build a: jobs=2, duration=00:01:02, no build process seen, nothing stored", "Build a: Jobs=2, Dauer=00:01:02, kein Build-Prozess gesehen, nichts gespeichert"),
+                             ("build a: jobs=2, duration=00:01:02, build process RAM peak=900 MB, use per job=450 MB (median 400 MB)", "Build a: Jobs=2, Dauer=00:01:02, RAM-Spitze der Build-Prozesse=900 MB, Nutzung pro Job=450 MB (Median 400 MB)"),
+                             ("TECHNICAL NOTE: Ada: runner process vanished (ended by executor or crashed), marked failed", "TECHNISCHER HINWEIS: Ada: Runner-Prozess verschwunden (von außen beendet oder abgestürzt), als fehlgeschlagen markiert"),
+                             ("self-update ok: updated to abc123", "Selbst-Update ok: aktualisiert auf abc123"),
+                             ("self-update rollback: boom; rolled back to abc123", "Selbst-Update rollback: boom; zurückgesetzt auf abc123"),
+                             ("no result event, exit 3 some stderr", "kein Ergebnis-Ereignis, Exit 3 some stderr")):
+            self.assertEqual(i18n.log_text(line), german)
+
+    def test_round_line_translates_each_reason_behind_the_head(self):
+        line = ('round done: 1 Queen(s) started; A-PLAN not started: Hive limit 2 reached; B-PLAN not started: waiting for provider codex: quota used up'
+                '; C-PLAN not started: free RAM 1.50 GB is below the minimum 2.00 GB; D-PLAN not started: Hive state "resting"')
+        self.assertEqual(i18n.log_text(line), 'Runde fertig: 1 Queen(s) gestartet; A-PLAN nicht gestartet: Hive-Limit 2 erreicht; B-PLAN nicht gestartet: Wartet auf Anbieter codex: Kontingent aufgebraucht'
+                                              '; C-PLAN nicht gestartet: freier RAM 1,50 GB liegt unter dem Mindestwert 2,00 GB; D-PLAN nicht gestartet: Hive-Zustand resting')
+        self.assertEqual(i18n.log_text('Hive state "answer" (questions 3, 4)'), "Hive-Zustand answer (Fragen 3, 4)")
+
+    def test_words_of_agents_and_owner_stay_as_written_even_when_they_look_like_program_lines(self):
+        line = "Ada started (the build)"
+        self.assertEqual(i18n.log_text(line), "Ada gestartet (the build)")   # the pattern fits: only the source of the line can protect it
+        for kind, agent in (("note", "Ada"), ("question", None), ("answer", None), ("done", "Ada"), ("ready", None)):
+            event = {"ts": "2026-01-01T10:00:00", "agent": agent, "project": "A", "kind": kind, "text": line}
+            self.assertEqual(gui_data.log_line(event)[2], line, kind)
+        program = {"ts": "2026-01-01T10:00:00", "agent": None, "project": "A", "kind": "events", "text": line}
+        self.assertEqual(gui_data.log_line(program)[2], "Ada gestartet (the build)")
+        waits = {"ts": "2026-01-01T10:00:00", "agent": None, "project": "A", "kind": "note", "text": "question 4 waits for triage"}
+        self.assertEqual(gui_data.log_line(waits)[2], "Frage 4 wartet auf die Vorprüfung")
+
+    def test_live_view_translates_program_lines_and_keeps_the_words_of_the_agent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "milestones.txt"
+            path.write_text("\n".join(("White\t16:07 Stalled: no output for 5 s. The agent is still running.",
+                                       "Yellow\t16:07 Stalled: no output for 5 s. The agent is still running.",
+                                       "Cyan\t4:07 PM changed: src/a.py",
+                                       "Green\t16:08 Commit: Fix - it (abc1234) - Exit 0: [main abc1234] Fix - it",
+                                       "Green\t16:08 Compile test - OK: Ran 3 tests",
+                                       "Red\t16:08 Push - Error: rejected",
+                                       "Green\t16:09 Final message: Open requirements: 0",
+                                       "Red\t16:09 End: failed (exit 1), total input 1.5M / output 12k.",
+                                       "Red\t16:09 anything else",
+                                       "no tab line")), encoding="utf-8")
+            self.assertEqual([text for _colour, text in gui_data.live_lines(path)], [
+                "16:07 Stalled: no output for 5 s. The agent is still running.",
+                "16:07 Hängt: keine Ausgabe seit 5 s. Der Agent läuft noch.",
+                "4:07 PM geändert: src/a.py",
+                "16:08 Commit: Fix - it (abc1234) - Exit 0: [main abc1234] Fix - it",
+                "16:08 Kompiliertest - OK: Ran 3 tests",
+                "16:08 Push - Fehler: rejected",
+                "16:09 Abschlussnachricht: Open requirements: 0",
+                "16:09 Ende: fehlgeschlagen (Exit 1), gesamt Eingabe 1,5M / Ausgabe 12k.",
+                "16:09 anything else",
+                "no tab line"])
+
+    def test_task_column_shows_the_last_program_line_in_german(self):
+        row = gui_data.bee_row({"name": "Ada", "last_line": "queued", "status": "starting"}, datetime(2026, 1, 1))
+        self.assertEqual(row["task"], "in der Warteschlange")
+
+    def test_cli_choice_has_a_german_custom_entry_and_product_names_unchanged(self):
+        self.assertEqual(cli_presets.labels(), ["Claude Code", "Codex CLI", "OpenCode", "Kilo Code", "Eigene CLI"])
+        self.assertEqual(cli_presets.label_of("custom"), "Eigene CLI")
+        self.assertEqual(cli_presets.label_of("codex"), "Codex CLI")
+        self.assertEqual([cli_presets.key_of_label(label) for label in cli_presets.labels()], ["claude", "codex", "opencode", "kilo", "custom"])
+
+    def test_numbers_get_a_decimal_comma(self):
+        self.assertEqual(gui_data.fmt_tokens(1_500_000), "1,5M")
+        self.assertEqual(overview.fmt_tok0(1_500_000), "1,5M")
+        self.assertEqual(overview.fmt_tok0(2_500_000_000), "2,5G")
+        self.assertEqual(i18n.decimal("RAM 80% 25.2/32 GB"), "RAM 80% 25,2/32 GB")
+        self.assertEqual(i18n.decimal("v1.2 a.b"), "v1,2 a.b")   # only for formatted numbers: callers pass nothing else
+        self.assertEqual(i18n.decimal("25.2", "English"), "25.2")
+
     def test_catalog_has_no_control_characters(self):
         self.assertNotRegex((PACKAGE / "i18n.py").read_text(encoding="utf-8"), CONTROL)
 
@@ -211,6 +322,79 @@ class LogicIndependentOfLanguageTest(RoundCase):
         self.assertIn("AKTIVE HIVES", drawn)
         self.assertIn("MODELL-LIMITS", drawn)
         self.assertIn("KI-AGENTEN-ORCHESTRATOR", drawn)
+
+    def test_german_covers_hide_the_english_words_of_the_header_picture_at_every_window_size(self):
+        """The picture scales by a coarser fraction than the layout (at some sizes about 12 % smaller): the covers must still lie over its English words."""
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
+        except tk.TclError:
+            self.skipTest("no display")
+        self.addCleanup(root.destroy)
+        with mock.patch.object(i18n, "machine_language", return_value="German"), mock.patch.object(gui, "REFRESH_MS", 10 ** 9):
+            dash = gui.Dashboard(root, self.conn)
+            dash.snap = gui_data.snapshot(self.conn, cfg={"slots": 2, "providers": [{"name": "claude"}]},
+                                          sysinfo={"cores": 8, "cpu": 38, "ram_used_gb": 25.2, "ram_total_gb": 32.0, "ram_pct": 80, "disk_used_tb": 1.2, "disk_total_tb": 2.7, "disk_pct": 45})
+            for factor in (0.5, 0.6, 0.77, 0.9, 0.99, 1.0, 1.1):
+                width, height = int(gui.DESIGN_W * factor), int(gui.DESIGN_H * factor)
+                with mock.patch.object(dash.canvas, "winfo_width", return_value=width), mock.patch.object(dash.canvas, "winfo_height", return_value=height):
+                    dash.draw()
+                picture = dash.fraction[0] / dash.fraction[1]
+                covers = [dash.canvas.coords(item) for item in dash.canvas.find_all() if dash.canvas.type(item) == "rectangle" and dash.canvas.itemcget(item, "fill") == "#02060a"]
+                for left, top, right, bottom in ((340, 100, 795, 124), (1462, 32, 1630, 128)):   # the English words in pixels of the picture
+                    self.assertTrue(any(c[0] <= left * picture and c[1] <= top * picture and c[2] >= right * picture and c[3] >= bottom * picture for c in covers), (factor, left, covers))
+
+    def test_other_windows_show_german_only_and_no_text_is_cut(self):
+        """Hives, questions and settings window built for real in German: no changed catalog text stays English, and no label or button is narrower than its text."""
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
+        except tk.TclError:
+            self.skipTest("no display")
+        self.addCleanup(root.destroy)
+
+        def widgets(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from widgets(child)
+
+        changed = {english for english, german in i18n.GERMAN.items() if english != german and "%" not in english and len(english) > 2}
+        db.add_question(self.conn, "A", "docs/plans/X-PLAN.md", "item", "A question?", "A recommendation.")
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(i18n, "machine_language", return_value="German"), mock.patch.dict(os.environ, {"BZZ_CONFIG_DIR": folder}):
+            (Path(folder) / "config.toml").write_text('language = "German"\nslots = 2\n\n[[providers]]\nname = "codex"\nprotocol = "codex"\ncommand = "codex"\n', encoding="utf-8")
+            windows = {"hives": gui_hives.HivesWindow(root, self.conn, "Consolas"), "questions": gui_questions.QuestionsWindow(root, self.conn), "settings": gui_config.ConfigWindow(root, self.conn, Path(folder))}
+            settings = windows["settings"]
+            root.update()
+            form_right = settings.form.winfo_rootx() + settings.form.winfo_width()
+            explanations = [w for w in widgets(settings.form) if w.winfo_class() == "Label" and w.cget("text") in [i18n.GERMAN[f[2]] for f in gui_config.BUILD_FIELDS]]
+            self.assertEqual(len(explanations), 3)
+            self.assertEqual([w.cget("text") for w in explanations if w.winfo_rootx() + w.winfo_reqwidth() > form_right], [])   # the whole sentence is visible
+            settings.select(next(index for index, node in enumerate(settings.entries) if node[0] == "providers"))   # the page with the CLI choice and the Login row
+            root.update()
+            found, cut, provider_labels = [], [], []
+            for name, window in windows.items():
+                top = window.win
+                found.append((name, top.title()))
+                for widget in [top] + list(widgets(top)):
+                    if widget.winfo_class() in ("Label", "Button", "Labelframe", "Menubutton", "Checkbutton") and widget.cget("text"):
+                        text = widget.cget("text")
+                        found.append((name, text))
+                        if widget.winfo_ismapped() and widget.winfo_class() in ("Button", "Menubutton", "Checkbutton") and widget.winfo_width() < widget.winfo_reqwidth():
+                            cut.append((name, text))
+                    if widget.winfo_class() == "Menubutton" and name == "settings":
+                        provider_labels.append(widget.cget("text"))
+                    if widget.winfo_class() == "Treeview":
+                        found.extend((name, widget.heading(column, "text")) for column in widget["columns"])
+                    if widget.winfo_class() == "Listbox":
+                        found.extend((name, item) for item in widget.get(0, "end"))
+        self.assertEqual(sorted({entry for entry in found if entry[1] in changed}), [])
+        self.assertEqual(cut, [])
+        self.assertIn(("settings", "HaiveQueen Einstellungen"), found)
+        self.assertIn(("settings", "Speichern"), found)
+        self.assertIn(("questions", "Deine Antwort"), found)
+        self.assertTrue(any(label.startswith("Codex CLI") for label in provider_labels), provider_labels)
 
     def test_german_dialog_yes_button_still_answers_true(self):
         import tkinter as tk

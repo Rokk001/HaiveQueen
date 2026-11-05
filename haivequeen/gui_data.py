@@ -45,7 +45,7 @@ def fmt_tokens(n) -> str:
     if n >= 100_000_000:
         return "%dM" % round(n / 1_000_000)
     if n >= 1_000_000:
-        return "%.1fM" % (n / 1_000_000)
+        return i18n.decimal("%.1fM" % (n / 1_000_000))
     return "%dk" % round(n / 1000) if n >= 1000 else str(n)
 
 
@@ -112,7 +112,7 @@ def blocker_text(reason) -> str:
     if reason.startswith("Hive limit "):
         return tr("Hive limit %s reached", reason.split()[2])
     if reason.startswith("free RAM "):
-        return tr("Not enough free RAM: %s", reason.split(" is below")[0][9:])
+        return tr("Not enough free RAM: %s", i18n.decimal(reason.split(" is below")[0][9:]))
     if reason.startswith("no provider with a free slot"):
         return tr("No free provider with a Queen model")
     if reason.startswith("waiting for provider "):
@@ -286,7 +286,7 @@ def bee_row(agent, now, steps=None, ctx_limit=None, package_steps=None) -> dict:
     return {"kind": "bee", "name": name, "agent": agent.get("name"), "project": agent.get("project"), "plan_path": agent.get("plan_path") or "",
             "model": overview.model_short(agent.get("provider"), agent.get("model"), agent.get("effort")),
             "hive": hive_name(agent.get("plan_path") or ""), "apiary": agent.get("project"),
-            "task": str(agent.get("task") or agent.get("package") or agent.get("last_line") or "")[:40].strip(), "step": step, "step_frac": step_fraction(step),
+            "task": str(agent.get("task") or agent.get("package") or i18n.log_text(str(agent.get("last_line") or "")))[:40].strip(), "step": step, "step_frac": step_fraction(step),
             "ctx": int(agent.get("ctxTokens") or 0), "ctx_limit": int(ctx_limit(agent)) if ctx_limit else 0, "tin": tin, "tout": tout,
             "status": "running" if agent.get("status") in runtime.ACTIVE_STATUSES else str(agent.get("status")), "runtime": fmt_elapsed(agent.get("started_at"), now)}
 
@@ -367,7 +367,14 @@ def log_line(event, who=None) -> tuple:
         tag = "APIARY " + str(project)
     else:
         tag = "SYSTEM"
-    return stamp, tag, i18n.log_text(str(event["text"] or event["kind"]).replace("\n", " "))
+    text = str(event["text"] or event["kind"]).replace("\n", " ")
+    return stamp, tag, text if free_text(event) else i18n.log_text(text)
+
+
+# Tell a line somebody wrote from a line of the program.
+def free_text(event) -> bool:
+    """True for words of an agent or the owner (a note of an agent, a question, an answer, a final report, a ready line): the log shows them as written, whatever they look like."""
+    return event["kind"] in ("question", "answer", "done", "ready") or (event["kind"] == "note" and bool(event["agent"]))
 
 
 # Sum the tokens of every Apiary and Hive over the activity window.
@@ -445,9 +452,9 @@ def limit_bars(d) -> list:
         marker = tr("  ◀ next") if p["next"] else ""
         if p["has_limit"]:
             reset = sch.format_reset_time(p["reset_at"]) if p["reset_at"] else ""
-            quota = "" if p["ratio"] is None else tr("quota %.2fx", p["ratio"])
+            quota = "" if p["ratio"] is None else i18n.decimal(tr("quota %.2fx", p["ratio"]))
             note = " | ".join(part for part in (tr("resets %s", reset) if reset else tr("reset unknown"), quota) if part)
-            out.append({"label": p["name"].capitalize() + " 7d", "pct": None if p["used_pct"] is None else round(p["used_pct"]), "note": note, "level": level(p["used_pct"])})
+            out.append({"label": tr("%s 7d", p["name"].capitalize()), "pct": None if p["used_pct"] is None else round(p["used_pct"]), "note": note, "level": level(p["used_pct"])})
         total = int(p["total_slots"] or 0)
         out.append({"label": tr("%s slots", p["name"].capitalize()), "pct": round(100 * p["used_slots"] / total) if total else None,
                     "note": "%d/%d | %s%s" % (p["used_slots"], total, p["model"] or tr("no medium model"), marker), "level": "slots"})
@@ -477,8 +484,8 @@ def info_sections(d) -> list:
         plans += tr("  (draft: %s)", ", ".join(d["drafts"]))
     out.append((tr("USAGE"), usage_lines(d)))
     system = [(d["bj"], "text")] if d["bj"] else []
-    out.append((tr("SYSTEM"), system + [("RAM %d%% %.1f/%.0f GB" % (round(100 * (1 - d["sysinfo"]["free_mb"] / d["sysinfo"]["total_mb"])) if d["sysinfo"]["total_mb"] else 0,
-                                                                  (d["sysinfo"]["total_mb"] - d["sysinfo"]["free_mb"]) / 1024.0, d["sysinfo"]["total_mb"] / 1024.0), "text")]))
+    out.append((tr("SYSTEM"), system + [(i18n.decimal("RAM %d%% %.1f/%.0f GB" % (round(100 * (1 - d["sysinfo"]["free_mb"] / d["sysinfo"]["total_mb"])) if d["sysinfo"]["total_mb"] else 0,
+                                                                  (d["sysinfo"]["total_mb"] - d["sysinfo"]["free_mb"]) / 1024.0, d["sysinfo"]["total_mb"] / 1024.0)), "text")]))
     out.append((tr("PLANS"), [(plans, "text")] + [(tr("%s %d / %d integrated (%d%%)", st["project"], st["integrated"], st["total"], st["percent"]), "dim")
                                                   for st in d["status"]]))
     if d["qs"]:
@@ -617,9 +624,10 @@ def tail_file(path, lines=LIVE_LINES, max_bytes=256 * 1024) -> list:
 
 # Turn live file lines into (colour, text) pairs.
 def live_lines(path, lines=LIVE_LINES) -> list:
-    """[(gui colour name, text)] of the last lines of an agent's live file: a line "<Colour><TAB><text>" gets that colour, any other line the plain text colour."""
+    """[(gui colour name, text)] of the last lines of an agent's live file: a line "<Colour><TAB><text>" gets that colour, any other line the plain text colour.
+    Program lines are shown in the language of the GUI; the words of the agent stay as written."""
     out = []
     for row in tail_file(path, lines):
         word, tab, rest = row.partition(chr(9))
-        out.append((LIVE_COLOURS.get(word, "text"), rest) if tab and word in LIVE_COLOURS else ("text", row))
+        out.append((LIVE_COLOURS[word], i18n.live_text(word, rest)) if tab and word in LIVE_COLOURS else ("text", row))
     return out

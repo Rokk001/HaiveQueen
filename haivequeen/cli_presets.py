@@ -2,10 +2,12 @@
 
 Only CLIs that really run are listed: HaiveQueen reads their output (see `profile.FORMATS`), knows their profile variables, login command and login file
 (`profile.SPECS`) and has a test for each. The values come from the official documentation or the official repository of each CLI (sources: docs/PROFILE.md).
+The preset labels are product names and stay as they are in every language; only the custom entry is translated, and the logic works on the keys.
 """
+from .i18n import N_, tr
 
 CUSTOM = "custom"   # key of the entry for a CLI that is not in the list
-CUSTOM_LABEL = "Custom CLI"
+CUSTOM_LABEL = N_("Custom CLI")
 CUSTOM_KEYS = ("profileEnv", "loginCommand", "loginFiles", "outputFormat")   # entry fields of a custom CLI; a built-in CLI brings its own values
 
 PRESETS = {
@@ -33,7 +35,7 @@ PRESETS = {
 
 def labels() -> list:
     """The labels of the choice list in display order, the custom entry last."""
-    return [p["label"] for p in PRESETS.values()] + [CUSTOM_LABEL]
+    return [p["label"] for p in PRESETS.values()] + [tr(CUSTOM_LABEL)]
 
 
 def key_of_label(label) -> str:
@@ -43,7 +45,7 @@ def key_of_label(label) -> str:
 
 def label_of(key) -> str:
     """The label of a choice key."""
-    return PRESETS[key]["label"] if key in PRESETS else CUSTOM_LABEL
+    return PRESETS[key]["label"] if key in PRESETS else tr(CUSTOM_LABEL)
 
 
 def key_for(entry) -> str:

@@ -11,7 +11,7 @@ import types
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import buildjobs, config, db, localtime, platform as osplat, runstate, runtime, scheduler as sch, usage
+from . import buildjobs, config, db, i18n, localtime, platform as osplat, runstate, runtime, scheduler as sch, usage
 from .i18n import N_, tr
 
 FINISHED_HOURS = 1
@@ -26,9 +26,9 @@ def fmt_tok0(n) -> str:
     if n is None:
         return "–"
     if n >= 1e9:
-        return "%.1fG" % (n / 1e9)
+        return i18n.decimal("%.1fG" % (n / 1e9))
     if n >= 1e6:
-        return "%.1fM" % (n / 1e6)
+        return i18n.decimal("%.1fM" % (n / 1e6))
     if n >= 1e3:
         return "%dk" % int(n / 1e3 + 0.5)
     return str(int(n))

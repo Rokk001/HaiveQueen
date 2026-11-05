@@ -368,11 +368,12 @@ class Dashboard:
         """Draw the header picture (logo, wordmark, honeycomb, slogan) and the version line over it."""
         self.pic("header", 0, 0)
         if i18n.is_german():   # the wording inside the header picture is English: cover it with the German wording
-            self.rect(335, 96, 830, 128, fill="#02060a")
-            self.text(342, 112, tr("AI AGENT ORCHESTRATOR"), 19, "text", "w")
-            self.rect(1445, 24, 1650, 134, fill="#02060a")
+            at = self.fraction[0] / self.fraction[1] / self.scale   # the picture scales by a coarser fraction than the layout: the covers follow the picture
+            self.rect(335 * at, 96 * at, 830 * at, 128 * at, fill="#02060a")
+            self.text(342 * at, 112 * at, tr("AI AGENT ORCHESTRATOR"), 19, "text", "w")
+            self.rect(1445 * at, 24 * at, 1650 * at, 134 * at, fill="#02060a")
             for n, part in enumerate(tr("A SWARM\nOF AGENTS.\nONE QUEEN.").split("\n")):
-                self.text(1455, 44 + n * 28, part, 18, "gold", "w")
+                self.text(1455 * at, (44 + n * 28) * at, part, 18, "gold", "w")
         first = self.text(342, 143, "v%s  |  bzz  |  " % s["version"], 17, "cyan", "w")
         left = self.canvas.bbox(first)[2] / self.scale   # the link starts where the first part ends (design units)
         link = self.text(left, 143, "Rokk001/HaiveQueen", 17, "cyan", "w", underline=True)
@@ -605,8 +606,8 @@ class Dashboard:
         self.panel(x0, y0, x1, y1, tr("SYSTEM"), icon="icon_system")
         m = s["system"]
         load = lambda pct: "green" if pct < 70 else "yellow" if pct <= 85 else "red"   # the colour follows the load, like the context bars
-        rows = (("CPU", m["cpu"], tr("(%d cores)", m["cores"]), load(m["cpu"]), "icon_cpu"), ("RAM", m["ram_pct"], "%.1f/%.0f GB" % (m["ram_used_gb"], m["ram_total_gb"]), load(m["ram_pct"]), "icon_ram"),
-                ("Disk", m["disk_pct"], "%.1f/%.1f TB" % (m["disk_used_tb"], m["disk_total_tb"]), load(m["disk_pct"]), "icon_disk"))
+        rows = (("CPU", m["cpu"], tr("(%d cores)", m["cores"]), load(m["cpu"]), "icon_cpu"), ("RAM", m["ram_pct"], i18n.decimal("%.1f/%.0f GB" % (m["ram_used_gb"], m["ram_total_gb"])), load(m["ram_pct"]), "icon_ram"),
+                ("Disk", m["disk_pct"], i18n.decimal("%.1f/%.1f TB" % (m["disk_used_tb"], m["disk_total_tb"])), load(m["disk_pct"]), "icon_disk"))
         for i, (name, pct, note, colour, icon) in enumerate(rows):
             y = y0 + 66 + i * 27
             self.pic(icon, x0 + 10, y, "w")

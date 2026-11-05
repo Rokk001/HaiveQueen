@@ -19,6 +19,7 @@ ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the 
 CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "use": ("preferred", "fallback", "capability-only"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
 CLASSES = ("light", "medium", "heavy")
 # The block "Build" of the General page: exactly these three fields, each with one sentence of explanation (key in the buildJobs table, label, explanation).
+BUILD_TEXT_WIDTH = 470   # pixels of an explanation in the block "Build": what stays free beside the field in the window size below, in every language
 BUILD_FIELDS = (
     ("cores", N_("CPU cores per build"), N_("How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short.")),
     ("parallel", N_("Parallel builds"), N_("How many targets the build command builds at the same time (the number after --parallel); each target gets the cores divided by this number.")),
@@ -433,7 +434,7 @@ class ConfigWindow:
                 self.dialog.option_menu(row, var, [str(n) for n in range(1, cores + 1)], self.mono).pack(side="left")
             else:
                 tk.Entry(row, textvariable=var, width=8, font=(self.mono, 10)).pack(side="left")
-            tk.Label(row, text=tr(explanation), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=620).pack(side="left", padx=12)
+            tk.Label(row, text=tr(explanation), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=BUILD_TEXT_WIDTH).pack(side="left", padx=12)
 
     # The provider of the shown page in the form the profile functions read.
     def login_provider(self) -> dict:
