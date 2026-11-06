@@ -134,8 +134,23 @@ def claude_integration_permissions(project, plan, remote, branch, python, cli):
     return ["%s(%s)" % (tool, command) for tool in ("Bash", "PowerShell") for command in commands]
 
 
-def claude_merge_run_settings(settings, grants):
-    """Add run grants without changing provider settings or their existing rules."""
+def claude_hook_command(python, hook_script, policy_file):
+    """Command line of the own-Hive PreToolUse hook (forward slashes and double quotes work in Bash and cmd)."""
+    for value in (python, hook_script, policy_file):
+        if any(c in str(value) for c in '"$`!\r\n'):
+            raise ValueError("unsupported character in Claude hook path: %s" % value)
+    fwd = lambda value: str(value).replace("\\", "/")
+    return '"%s" -I "%s" "%s"' % (fwd(python), fwd(hook_script), fwd(policy_file))
+
+
+def claude_hook_policy(project, plan, agent, remote, branch, python, cli):
+    """Values the own-Hive hook (haivequeen/claude_hook.py) compares each Bash or PowerShell command with."""
+    return {"project": str(project), "plan": str(plan), "agent": agent, "remote": str(remote),
+            "integrationBranch": str(branch), "python": str(python), "cli": str(cli)}
+
+
+def claude_merge_run_settings(settings, grants, hook_command=None):
+    """Add run grants and the own-Hive hook without changing provider settings, rules or hooks."""
     if not isinstance(settings, dict) or not isinstance(settings.get("permissions", {}), dict):
         raise ValueError("Claude settings and permissions must be objects")
     result = dict(settings)
@@ -145,6 +160,14 @@ def claude_merge_run_settings(settings, grants):
         raise ValueError("Claude permissions.allow must be a list")
     permissions["allow"] = list(dict.fromkeys(allow + grants))
     result["permissions"] = permissions
+    if hook_command:
+        hooks = result.get("hooks", {})
+        if not isinstance(hooks, dict) or not isinstance(hooks.get("PreToolUse", []), list):
+            raise ValueError("Claude hooks and hooks.PreToolUse must be an object and a list")
+        hooks = dict(hooks)
+        hooks["PreToolUse"] = list(hooks.get("PreToolUse", [])) + [
+            {"matcher": "Bash|PowerShell", "hooks": [{"type": "command", "command": hook_command, "timeout": 30}]}]
+        result["hooks"] = hooks
     return result
 
 

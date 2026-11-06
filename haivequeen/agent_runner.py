@@ -1030,7 +1030,13 @@ def run_agent(a, out=None):
                     if not path.is_absolute():
                         path = Path(a.cwd) / path
                     provider_settings = json.loads(path.read_text(encoding="utf-8"))
-            merged = profile.claude_merge_run_settings(provider_settings, grants)
+            policy_file = run_dir / "claude-hive-policy.json"
+            policy = profile.claude_hook_policy(a.project, a.plan, agent_row["id"] if agent_row else None,
+                                                settings.get("remoteName") or "origin", settings.get("integrationBranch") or "main",
+                                                osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py")
+            policy_file.write_text(json.dumps(policy, indent=1) + "\n", encoding="utf-8")
+            hook = profile.claude_hook_command(osplat.python_executable(), TOOL_ROOT / "haivequeen" / "claude_hook.py", policy_file)
+            merged = profile.claude_merge_run_settings(provider_settings, grants, hook)
             permissions_file.write_text(json.dumps(merged, indent=1) + "\n", encoding="utf-8")
             arg_list.extend(["--settings", str(permissions_file)])
         if a.phase == "bee" and protocol == "claude":

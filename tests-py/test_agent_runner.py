@@ -279,7 +279,9 @@ class ClaudeRunTest(RunnerBase):
 
     def test_queen_merges_provider_settings_file(self):
         cfg = self.base / "cfg" / "config.toml"
-        (self.ws / "custom.json").write_text(json.dumps({"model": "chosen", "permissions": {"allow": ["Bash(existing)"], "deny": ["Bash(no)"]}}), encoding="utf-8")
+        own_hook = {"matcher": "Bash", "hooks": [{"type": "command", "command": "provider-hook"}]}
+        (self.ws / "custom.json").write_text(json.dumps({"model": "chosen", "permissions": {"allow": ["Bash(existing)"], "deny": ["Bash(no)"]},
+                                                         "hooks": {"PreToolUse": [own_hook]}}), encoding="utf-8")
         cfg.write_text(cfg.read_text(encoding="utf-8").replace("args = ['--model'", "args = ['--settings', 'custom.json', '--model'", 1), encoding="utf-8")
         self.prepare("QUEEN-MERGE")
         r = self.run_runner("QUEEN-MERGE", "claude", claude_stream(), phase="queen")
@@ -291,6 +293,8 @@ class ClaudeRunTest(RunnerBase):
         self.assertIn("Bash(existing)", settings["permissions"]["allow"])
         self.assertIn("Bash(git push origin HEAD:main)", settings["permissions"]["allow"])
         self.assertEqual(settings["permissions"]["deny"], ["Bash(no)"])
+        self.assertEqual(settings["hooks"]["PreToolUse"][0], own_hook)
+        self.assertIn("claude_hook.py", settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"])
 
     def test_queen_receives_per_run_integration_settings(self):
         (self.ws / ".haivequeen").mkdir()
@@ -304,6 +308,22 @@ class ClaudeRunTest(RunnerBase):
         self.assertIn("Bash(git push upstream HEAD:release/next)", rules)
         self.assertIn("PowerShell(bzz integration acquire --project demo --plan plans/Demo-PLAN.md)", rules)
         self.assertFalse(any("*" in rule for rule in rules))
+        pre = settings["hooks"]["PreToolUse"]
+        self.assertEqual(len(pre), 1)
+        self.assertEqual(pre[0]["matcher"], "Bash|PowerShell")
+        command = pre[0]["hooks"][0]["command"]
+        self.assertIn("claude_hook.py", command)
+        policy_path = Path(argv[argv.index("--settings") + 1]).parent / "claude-hive-policy.json"
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        self.assertEqual((policy["project"], policy["plan"], policy["remote"], policy["integrationBranch"]),
+                         ("demo", "plans/Demo-PLAN.md", "upstream", "release/next"))
+        self.assertEqual(policy["agent"], self.row("QUEEN-RULES")["id"])
+        for text, allowed in (("bzz queue upsert --project demo --plan plans/Demo-PLAN.md --branch demo --status ready", True),
+                              ("bzz queue upsert --project other --plan plans/Demo-PLAN.md --branch demo", False)):
+            event = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": text}})
+            done = subprocess.run(command, shell=True, input=event, capture_output=True, text=True, timeout=60)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual('"allow"' in done.stdout, allowed, text)
 
     # Verify the project default reaches the Claude CLI.
     def test_default_claude_tools_reach_cli(self):
