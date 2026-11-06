@@ -884,31 +884,16 @@ class ConfigWindow:
         self.watch_login(proc)
 
     # The Benchmark Start Context button.
-    def benchmark_click(self, wait=False):
-        """After a safety question open the window Benchmark and measure the start context of the shown provider in every registered Apiary, with and without
-        the HaiveQueen profile (in a thread, so the windows stay usable; `wait` runs it here). The window shows progress, results and errors."""
+    def benchmark_click(self):
+        """Open the benchmark window for the selected provider."""
         from . import gui_benchmark
         if not self.collect():
             return
         name = self.login_provider()["name"]
-        if not self.dialog.ask(self.win, "HaiveQueen", tr("Measure the start context of provider %s in every registered Apiary, twice: once with the HaiveQueen profile and once "
-                                                  "with your own configuration? This starts the CLI %d times and uses a few tokens of your login.",
-                                                  name, 2 * self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]), self.mono):
-            return
         old = getattr(self, "benchmark_win", None)
         if old is not None and old.win.winfo_exists():
             old.win.destroy()
-        self.benchmark_win = gui_benchmark.BenchmarkWindow(self.root, self.conn, name, self.mono)
-        button = self.benchmark_button
-        button.config(state="disabled")
-
-        def done():
-            """Allow the next measurement (the page may have changed meanwhile)."""
-            try:
-                button.config(state="normal")
-            except self.tk.TclError:
-                pass
-        self.benchmark_win.run(dict(self.data), done, wait)
+        self.benchmark_win = gui_benchmark.BenchmarkWindow(self.root, self.conn, name, self.mono, dict(self.data))
 
     # Refresh the state when the terminal window is closed.
     def watch_login(self, proc):

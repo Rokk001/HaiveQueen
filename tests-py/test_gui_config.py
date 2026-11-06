@@ -1,6 +1,8 @@
 """Tests of the settings editor: TOML writing, the allowed tools list, checks, saving with a backup, and the window."""
 import sys
 import tempfile
+import threading
+import time
 import tomllib
 import unittest
 from pathlib import Path
@@ -795,49 +797,81 @@ class BenchmarkWindowTest(WindowTest):
             if widget.winfo_class() == "Label":
                 self.assertNotIn("no benchmark yet", str(widget.cget("text")))
 
-    def run_benchmark(self, result, progress=None, stored=False):
-        """Press the button with a fake measurement; returns (settings window, Benchmark window)."""
-        from haivequeen import startctx
-        if stored:
-            startctx.store_benchmark(self.conn, "claude", "ODP", "hq", 32000, when="2026-10-01T10:00:00")
-            startctx.store_benchmark(self.conn, "claude", "ODP", "own", 100000, when="2026-10-01T10:00:00")
-
-        def fake(conn, cfg, name, measure=None, progress=None):
-            if text:
-                progress(text)
-            return result
-        text = progress
-        win = self.provider_page("1130x700")
-        with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", side_effect=fake):
-            win.benchmark_click(wait=True)
-        self.root.update()
-        return win, win.benchmark_win
+    def wait_until(self, predicate):
+        """Pump Tk events while a background measurement reports its state."""
+        deadline = time.monotonic() + 5
+        while not predicate() and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(0.01)
+        self.assertTrue(predicate(), "Timed out waiting for the benchmark window")
 
     def test_window_shows_progress_and_results_table(self):
-        """The window is called Benchmark, shows the progress text and a table with HaiveQueen profile, own profile, saving and date per Apiary, also of earlier runs."""
-        win, bw = self.run_benchmark({"excluded": False, "errors": [], "results": []}, progress="2/4: ODP without it ...", stored=True)
-        self.assertEqual(bw.win.title(), "Benchmark")
-        self.assertIn("2/4: ODP without it ...", bw.progress.cget("text"))
-        heads = [bw.table.heading(c)["text"] for c in bw.table["columns"]]
-        self.assertEqual(heads, ["Apiary", "HaiveQueen profile", "Own profile", "Saving", "Date"])
-        rows = [bw.table.item(i)["values"] for i in bw.table.get_children()]
-        self.assertEqual([str(v) for v in rows[0]], ["ODP", "32k", "100k", "-68 %", "2026-10-01"])
-        self.assertEqual(win.benchmark_button.cget("state"), "normal")
+        """Opening is passive; starting shows live progress and refreshes stored results."""
+        from haivequeen import startctx
+        startctx.store_benchmark(self.conn, "claude", "ODP", "hq", 32000, when="2026-10-01T10:00:00")
+        startctx.store_benchmark(self.conn, "claude", "ODP", "own", 100000, when="2026-10-01T10:00:00")
+        entered, release = threading.Event(), threading.Event()
+
+        def fake(conn, cfg, name, progress=None):
+            progress("2/4: ODP without it ...")
+            entered.set()
+            release.wait(5)
+            startctx.store_benchmark(conn, name, "ODP", "hq", 40000, when="2026-10-02T10:00:00")
+            return {"excluded": False, "errors": [], "results": [], "completed": 4, "total": 4}
+
+        win = self.provider_page("1130x700")
+        with mock.patch("haivequeen.gui_dialog.ask", return_value=True) as ask, mock.patch("haivequeen.startctx.benchmark", side_effect=fake) as bench:
+            win.benchmark_button.invoke()
+            bw = win.benchmark_win
+            bench.assert_not_called()
+            ask.assert_not_called()
+            self.assertEqual(bw.win.title(), "Benchmark")
+            heads = [bw.table.heading(c)["text"] for c in bw.table["columns"]]
+            self.assertEqual(heads, ["Apiary", "HaiveQueen profile", "Own profile", "Saving", "Date"])
+            rows = [bw.table.item(i)["values"] for i in bw.table.get_children()]
+            self.assertEqual([str(v) for v in rows[0]], ["ODP", "32k", "100k", "-68 %", "2026-10-01"])
+            try:
+                bw.start_button.invoke()
+                self.wait_until(lambda: entered.is_set() and "2/4: ODP" in bw.progress.cget("text"))
+                self.assertEqual(bw.start_button.cget("state"), "disabled")
+                bw.start()  # A second start must not launch another measurement.
+                bench.assert_called_once()
+            finally:
+                release.set()
+            self.wait_until(lambda: not bw.running)
+            self.assertIn("Done: 4 of 4", bw.progress.cget("text"))
+            self.assertEqual(bw.start_button.cget("state"), "normal")
+            rows = [bw.table.item(i)["values"] for i in bw.table.get_children()]
+            self.assertEqual([str(v) for v in rows[0]], ["ODP", "40k", "100k", "-60 %", "2026-10-02"])
 
     def test_window_shows_error_and_excluded(self):
-        """A failed run shows its error in the window, an excluded provider says so."""
-        win, bw = self.run_benchmark({"excluded": False, "errors": ["ODP without profile: not logged in"], "results": []})
-        self.assertIn("not logged in", bw.error.cget("text"))
-        win, bw = self.run_benchmark({"excluded": True, "errors": [], "results": []})
-        self.assertIn("excluded", bw.error.cget("text"))
-
-    def test_declined_question_opens_no_window(self):
-        """No confirmation, no window and no measurement."""
+        """Starting a failed or excluded run reports it in the existing window."""
         win = self.provider_page("1130x700")
-        with mock.patch("haivequeen.gui_dialog.ask", return_value=False), mock.patch("haivequeen.startctx.benchmark") as bench:
-            win.benchmark_click(wait=True)
+        win.benchmark_button.invoke()
+        bw = win.benchmark_win
+        results = [{"excluded": False, "errors": ["ODP without profile: not logged in"], "results": []},
+                   {"excluded": True, "errors": [], "results": []}]
+        with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", side_effect=results):
+            for expected in ("not logged in", "excluded"):
+                bw.start_button.invoke()
+                self.wait_until(lambda: not bw.running)
+                self.assertIn(expected, bw.error.cget("text"))
+                self.assertEqual(bw.start_button.cget("state"), "normal")
+
+    def test_declined_question_keeps_window_without_measurement(self):
+        """Declining the in-window confirmation leaves the window and results intact."""
+        win = self.provider_page("1130x700")
+        with mock.patch("haivequeen.gui_dialog.ask", return_value=False) as ask, mock.patch("haivequeen.startctx.benchmark") as bench:
+            win.benchmark_button.invoke()
+            bw = win.benchmark_win
+            ask.assert_not_called()
+            bw.start_button.invoke()
+            ask.assert_called_once()
+            self.assertIs(ask.call_args.args[0], bw.win)
             bench.assert_not_called()
-        self.assertIsNone(getattr(win, "benchmark_win", None))
+        self.assertTrue(bw.win.winfo_exists())
+        self.assertFalse(bw.running)
+        self.assertEqual(bw.start_button.cget("state"), "normal")
 
 
 if __name__ == "__main__":
