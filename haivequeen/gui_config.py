@@ -320,9 +320,14 @@ def save_project_file(conn, path, data):
         raise ValueError("project is not registered")
     name = project[0]
     with db.transaction(conn):
-        before = [row[0] for row in conn.execute("SELECT id FROM queue WHERE project=? AND status='integrated'", (name,))]
-        conn.execute(publish._UPSERT, (name, publish.SINCE_KEY, db.now(), db.now()))
-        conn.execute(publish._UPSERT, (name, publish.BEFORE_KEY, json.dumps(before), db.now()))
+        # Keep the original boundary on re-enable: eligible integrations may
+        # still be awaiting discovery, while disabled ones are excluded when
+        # their queue rows are recorded.
+        if not conn.execute("SELECT 1 FROM kv WHERE project=? AND key=? AND value != ''",
+                            (name, publish.SINCE_KEY)).fetchone():
+            before = [row[0] for row in conn.execute("SELECT id FROM queue WHERE project=? AND status='integrated'", (name,))]
+            conn.execute(publish._UPSERT, (name, publish.SINCE_KEY, db.now(), db.now()))
+            conn.execute(publish._UPSERT, (name, publish.BEFORE_KEY, json.dumps(before), db.now()))
         save_file(path, data)
 
 

@@ -2,6 +2,7 @@
 import json
 import subprocess
 import unittest
+from unittest import mock
 from pathlib import Path
 from urllib.error import HTTPError
 
@@ -449,6 +450,26 @@ class IntegrationPointTests(PublishCase):
         self.retry()
         self.assertEqual([p[2] for p in self.published], [self.merge])
         self.assertIsNone(runtime.kv_get(self.conn, "testproj", publish.DONE_PREFIX + str(old["id"])))
+
+    def test_reenable_preserves_unprocessed_enabled_integration_and_excludes_disabled(self):
+        from haivequeen import config
+        path = self.repo / ".haivequeen" / "project.toml"
+        with mock.patch("haivequeen.db.now", return_value="2001-01-01T00:00:00"):
+            eligible = runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
+        data = config._load_toml(path)
+        data["publishReleases"] = False
+        gui_config.save_project_file(self.conn, path, data)
+        with mock.patch("haivequeen.db.now", return_value="2002-01-01T00:00:00"):
+            excluded = runtime.queue_upsert(self.conn, "testproj", "disabled", tip=self.tip, plan="disabled.md", status="integrated")
+        self.assertIsNone(self.after())
+        self.assertEqual(self.retry(), [])
+        data["publishReleases"] = True
+        with mock.patch("haivequeen.db.now", return_value="2003-01-01T00:00:00"):
+            gui_config.save_project_file(self.conn, path, data)
+        self.retry()
+        self.assertEqual([p[2] for p in self.published], [self.merge])
+        self.assertTrue(runtime.kv_get(self.conn, "testproj", publish.DONE_PREFIX + str(eligible["id"])))
+        self.assertIsNone(runtime.kv_get(self.conn, "testproj", publish.DONE_PREFIX + str(excluded["id"])))
 
     def test_the_switch_time_is_kept_at_the_first_loop_round(self):
         self.assertIsNone(runtime.kv_get(self.conn, "testproj", publish.SINCE_KEY))
