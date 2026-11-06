@@ -922,6 +922,56 @@ def approx_start_parts(a, pcfg, cfg, workspace, protocol, message=""):
         return {}
 
 
+# Find the one branch a Queen may register as ready or change in the queue.
+def queen_branch(conn, cfg, project, plan, cwd, integration_branch):
+    """The branch the plan (or its state file) names, else the branch checked out in the Queen's worktree;
+    None when neither is known or it is the integration branch."""
+    branch = None
+    try:
+        from . import bees
+        env = next((e for e in scheduler.load_projects(conn, cfg) if e.name == project), None)
+        named = bees.plan_worktree(env, plan) if env is not None else None
+        branch = named[0] if named else None
+    except Exception:
+        branch = None
+    if not branch and cwd:
+        try:
+            done = subprocess.run(["git", "-C", str(cwd), "symbolic-ref", "--quiet", "--short", "HEAD"],
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+            branch = done.stdout.strip() if done.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            branch = None
+    if not branch or branch == str(integration_branch):
+        return None
+    return branch
+
+
+# Look the Queen's plan branch up again for the own-Hive hook (the branch may be created after the start).
+def queen_branch_now(project, plan, name, integration_branch):
+    """The branch queen_branch finds now, with the worktree the Queen recorded as her cwd; None when it is
+    unknown, the integration branch, or a queue entry or an active agent of another plan in the same worktree
+    gives it to another plan."""
+    same_plan = lambda value: not value or Path(str(value)).as_posix() == Path(str(plan)).as_posix()
+    same_dir = lambda left, right: bool(left and right) and os.path.normcase(os.path.abspath(str(left))) == os.path.normcase(os.path.abspath(str(right)))
+    cfg = config.load_config()
+    conn = db.connect(config.db_path())
+    try:
+        row = runtime.get_agent(conn, project, name)
+        if not row or row.get("archived") or not same_plan(row.get("plan_path") or row.get("plan")):
+            return None
+        branch = queen_branch(conn, cfg, project, plan, row.get("cwd"), integration_branch or "main")
+        if not branch:
+            return None
+        if any(not same_plan(entry[0]) for entry in conn.execute("SELECT plan_path FROM queue WHERE project=? AND branch=?", (project, branch))):
+            return None
+        for other in conn.execute("SELECT plan_path, cwd FROM agents WHERE project=? AND archived=0 AND name<>?", (project, name)):
+            if same_dir(other[1], row.get("cwd")) and not same_plan(other[0]):
+                return None
+        return branch
+    finally:
+        conn.close()
+
+
 # Run one agent, rejecting empty Claude tool arguments before starting its CLI.
 def run_agent(a, out=None):
     """Run one agent as described by the parsed arguments; returns 0 (the status is in the agents table)."""
@@ -1004,6 +1054,43 @@ def run_agent(a, out=None):
                                 tr("Give the package to a provider that can be kept to the profile.", language=language))
             raise ValueError("provider %s cannot be kept to the HaiveQueen profile" % a.provider)
         arg_list = build_args(prov, vars_)
+        if protocol == "claude" and a.phase == "queen" and a.plan:
+            settings = scheduler.build_settings(cfg, pcfg)
+            grants = profile.claude_integration_permissions(a.project, a.plan, settings.get("remoteName") or "origin",
+                                                             settings.get("integrationBranch") or "main", osplat.python_executable(),
+                                                             TOOL_ROOT / "haivequeen" / "cli.py")
+            permissions_file = run_dir / "claude-integration-settings.json"
+            provider_settings = {}
+            settings_args = [i for i, arg in enumerate(arg_list) if arg == "--settings" or arg.startswith("--settings=")]
+            if len(settings_args) > 1:
+                raise ValueError("multiple Claude --settings arguments cannot be merged")
+            if settings_args:
+                i = settings_args[0]
+                if arg_list[i] == "--settings":
+                    if i + 1 >= len(arg_list):
+                        raise ValueError("Claude --settings requires a value")
+                    raw = arg_list[i + 1]
+                    del arg_list[i:i + 2]
+                else:
+                    raw = arg_list.pop(i).split("=", 1)[1]
+                if raw.lstrip().startswith("{"):
+                    provider_settings = json.loads(raw)
+                else:
+                    path = Path(raw)
+                    if not path.is_absolute():
+                        path = Path(a.cwd) / path
+                    provider_settings = json.loads(path.read_text(encoding="utf-8"))
+            policy_file = run_dir / "claude-hive-policy.json"
+            integration_branch = settings.get("integrationBranch") or "main"
+            policy = profile.claude_hook_policy(a.project, a.plan, agent_row["id"] if agent_row else None,
+                                                settings.get("remoteName") or "origin", integration_branch,
+                                                osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py",
+                                                queen_branch(conn, cfg, a.project, a.plan, a.cwd, integration_branch), a.name)
+            policy_file.write_text(json.dumps(policy, indent=1) + "\n", encoding="utf-8")
+            hook = profile.claude_hook_command(osplat.python_executable(), TOOL_ROOT / "haivequeen" / "claude_hook.py", policy_file)
+            merged = profile.claude_merge_run_settings(provider_settings, grants, hook)
+            permissions_file.write_text(json.dumps(merged, indent=1) + "\n", encoding="utf-8")
+            arg_list.extend(["--settings", str(permissions_file)])
         if a.phase == "bee" and protocol == "claude":
             if "--setting-sources" in arg_list:
                 i = arg_list.index("--setting-sources")

@@ -70,8 +70,11 @@ def h_agents_upsert(a, c):
 
 
 def h_agents_update(a, c):
-    """agents update-fields: like upsert, but the agent must exist."""
-    return runtime.upsert_agent(c, a.project, a.name, json_arg(a.fields), create=False)
+    """agents update-fields: like upsert, but the agent must exist; --cwd <path> sets only cwd without JSON quoting."""
+    if (a.fields is None) == (a.cwd is None):
+        raise CmdError("give exactly one of --fields or --cwd")
+    fields = json_arg(a.fields) if a.fields is not None else {"cwd": a.cwd}
+    return runtime.upsert_agent(c, a.project, a.name, fields, create=False)
 
 
 def h_agents_archive(a, c):
@@ -254,7 +257,7 @@ def register(sub) -> None:
                                  ("--status", {})]),
         "get": (h_agents_get, [P, ("--name", {"required": True})]),
         "upsert": (h_agents_upsert, [P, ("--name", {"required": True}), ("--fields", {"required": True})]),
-        "update-fields": (h_agents_update, [P, ("--name", {"required": True}), ("--fields", {"required": True})]),
+        "update-fields": (h_agents_update, [P, ("--name", {"required": True}), ("--fields", {}), ("--cwd", {})]),
         "archive": (h_agents_archive, [P, ("--hours", {"type": float, "default": 12.0}), ("--match", {})]),
     })
     actions(sub, "event", {

@@ -55,6 +55,10 @@ class RuntimeTest(unittest.TestCase):
         code, res = self.orch("agents", "update-fields", "--project", "p", "--name", "Nobody", "--fields", "{}")
         self.assertEqual(code, 1)
         self.assertFalse(res["ok"])
+        self.assertEqual(self.ok("agents", "update-fields", "--project", "p", "--name", "Max", "--cwd", "C:/w t")["cwd"], "C:/w t")
+        for extra in ([], ["--cwd", "C:/w", "--fields", "{}"]):
+            code, res = self.orch("agents", "update-fields", "--project", "p", "--name", "Max", *extra)
+            self.assertEqual((code, res["ok"]), (1, False), extra)
         self.ok("agents", "upsert", "--project", "p", "--name", "Fritz", "--fields", '{"status":"running"}')
         self.assertEqual(self.ok("agents", "archive", "--project", "p")["moved"], 1)
         self.assertEqual([r["name"] for r in self.ok("agents", "list", "--project", "p")], ["Fritz"])

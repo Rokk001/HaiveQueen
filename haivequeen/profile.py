@@ -120,6 +120,60 @@ def environment(prov, base=None) -> dict:
     return env
 
 
+def claude_integration_permissions(project, plan, remote, branch, python, cli):
+    """Exact command grants; unsafe shell or rule metacharacters disable the corresponding grants."""
+    safe = lambda value: bool(re.fullmatch(r"[A-Za-z0-9_./-]+", str(value)))
+    commands = []
+    if safe(remote) and safe(branch):
+        commands.append("git push %s HEAD:%s" % (remote, branch))
+    if safe(project) and safe(plan):
+        suffixes = ["integration %s --project %s --plan %s" % (action, project, plan) for action in ("acquire", "release")]
+        commands.extend("bzz " + suffix for suffix in suffixes)
+        if all(not any(c in str(value) for c in "'*\r\n()") for value in (python, cli)):
+            commands.extend("'%s' -I '%s' %s" % (python, cli, suffix) for suffix in suffixes)
+    return ["%s(%s)" % (tool, command) for tool in ("Bash", "PowerShell") for command in commands]
+
+
+def claude_hook_command(python, hook_script, policy_file):
+    """Command line of the own-Hive PreToolUse hook (forward slashes and double quotes work in Bash and cmd)."""
+    for value in (python, hook_script, policy_file):
+        if any(c in str(value) for c in '"$`!\r\n'):
+            raise ValueError("unsupported character in Claude hook path: %s" % value)
+    fwd = lambda value: str(value).replace("\\", "/")
+    return '"%s" -I "%s" "%s"' % (fwd(python), fwd(hook_script), fwd(policy_file))
+
+
+def claude_hook_policy(project, plan, agent, remote, branch, python, cli, own_branch=None, name=None):
+    """Values the own-Hive hook (haivequeen/claude_hook.py) compares each Bash or PowerShell command with;
+    own_branch is the Queen's plan branch known at the start (None: the hook looks it up again when it runs),
+    name the Queen's agent name (None: no `agents update-fields`, no later branch lookup)."""
+    return {"project": str(project), "plan": str(plan), "agent": agent, "name": str(name) if name else None,
+            "remote": str(remote), "integrationBranch": str(branch), "python": str(python), "cli": str(cli),
+            "branch": str(own_branch) if own_branch else None}
+
+
+def claude_merge_run_settings(settings, grants, hook_command=None):
+    """Add run grants and the own-Hive hook without changing provider settings, rules or hooks."""
+    if not isinstance(settings, dict) or not isinstance(settings.get("permissions", {}), dict):
+        raise ValueError("Claude settings and permissions must be objects")
+    result = dict(settings)
+    permissions = dict(result.get("permissions", {}))
+    allow = permissions.get("allow", [])
+    if not isinstance(allow, list):
+        raise ValueError("Claude permissions.allow must be a list")
+    permissions["allow"] = list(dict.fromkeys(allow + grants))
+    result["permissions"] = permissions
+    if hook_command:
+        hooks = result.get("hooks", {})
+        if not isinstance(hooks, dict) or not isinstance(hooks.get("PreToolUse", []), list):
+            raise ValueError("Claude hooks and hooks.PreToolUse must be an object and a list")
+        hooks = dict(hooks)
+        hooks["PreToolUse"] = list(hooks.get("PreToolUse", [])) + [
+            {"matcher": "Bash|PowerShell", "hooks": [{"type": "command", "command": hook_command, "timeout": 30}]}]
+        result["hooks"] = hooks
+    return result
+
+
 def prepare(prov, now=None) -> bool:
     """Create the provider's profile folder with its settings and remove old session logs; False when the CLI cannot be kept to the profile."""
     s = spec(prov)

@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -64,6 +65,29 @@ class WrapperParityTest(unittest.TestCase):
                     json.dumps({"status": "running", "lastLine": text}))
         self.assertEqual(a["last_line"], text)
         self.assertEqual(self.ok("agents", "get", "--project", "p", "--name", "Max")["last_line"], text)
+
+    def test_update_fields_cwd_survives_windows_powershell(self):
+        """The hook-allowed --cwd form records a folder with a space through Windows PowerShell 5.1; the JSON form fails there."""
+        shell = shutil.which("powershell.exe") if os.name == "nt" else None
+        if not shell:
+            self.skipTest("Windows PowerShell 5.1 not available")
+        from haivequeen import claude_hook, profile
+        folder = self.base / "plan wt"
+        folder.mkdir()
+        cli = ROOT / "haivequeen" / "cli.py"
+        policy = profile.claude_hook_policy("p", "plans/A.md", 1, "origin", "main", sys.executable, str(cli), "a", name="Max")
+        self.ok("agents", "upsert", "--project", "p", "--name", "Max", "--fields", '{"status":"running"}')
+
+        def run(args):
+            """Run one command through Windows PowerShell 5.1 after the hook allowed it; return the agent row."""
+            command = "& '%s' -I '%s' agents update-fields --project p --name Max %s" % (sys.executable, cli, args)
+            event = {"hook_event_name": "PreToolUse", "tool_name": "PowerShell", "tool_input": {"command": command}}
+            self.assertIsNotNone(claude_hook.decide(event, policy, None), command)
+            subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", command], env=self.env, capture_output=True,
+                           timeout=120)
+            return self.ok("agents", "get", "--project", "p", "--name", "Max")
+        self.assertNotEqual(run("--fields '{\"cwd\": \"%s\"}'" % folder.as_posix()).get("cwd"), folder.as_posix())
+        self.assertEqual(run("--cwd '%s'" % folder)["cwd"], str(folder))
 
     def test_unknown_agent(self):
         """An unknown agent reads as null; updating it fails with exit 1 and the message 'unknown agent'."""
