@@ -673,6 +673,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             offered = escalation_providers(env, plan, package)
             while next_class(offered, current, excluded):
                 current = next_class(offered, current, excluded)
+            cls = current   # the owner's answer directs the retry to the highest offered class
         queen_class = env.settings.get('queenClass', 'medium')
         if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
                 failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):

@@ -45,7 +45,7 @@ class ReleaseRetryTests(RoundCase):
         db.answer_question(self.conn, q['id'], 'Try the corrected approach.', 'owner')
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 0)
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_attempt_signals').fetchone()[0], 4)
-        result = bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [])
+        result = bees.start_process(env, REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [])
         self.assertEqual(result['class'], 'heavy')
         # End the embedded test Bee before recording the subsequent attempts.
         bees.close_embedded(self.conn, 'testproj', REL, 'P1')
