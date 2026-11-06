@@ -20,9 +20,14 @@ def next_version(current: str, requested: str = "") -> str:
     return ".".join(map(str, new))
 
 
+class NoRelease(LookupError):
+    """GitHub answered HTTP 404 for the latest release: the repository has no published release yet."""
+
+
 def check_latest(repository: str, current: str):
-    """Return the latest stable GitHub release if it is newer, otherwise None."""
+    """Return the latest stable GitHub release if it is newer, otherwise None; NoRelease when GitHub has no release yet (HTTP 404)."""
     import json
+    from urllib.error import HTTPError
     from urllib.request import Request
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(part in (".", "..") for part in repository.split("/")):
@@ -30,8 +35,13 @@ def check_latest(repository: str, current: str):
     next_version(current)  # Validate before making a network request.
     request = Request("https://api.github.com/repos/%s/releases/latest" % repository,
                       headers={"Accept": "application/vnd.github+json", "User-Agent": "HaiveQueen"})
-    with urlopen(request, timeout=15) as response:
-        release = json.load(response)
+    try:
+        with urlopen(request, timeout=15) as response:
+            release = json.load(response)
+    except HTTPError as exc:
+        if exc.code == 404:
+            raise NoRelease("no release published yet") from exc
+        raise
     version = str(release.get("tag_name", "")).removeprefix("v")
     try:
         if not version:

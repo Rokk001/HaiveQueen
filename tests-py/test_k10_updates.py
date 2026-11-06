@@ -68,6 +68,38 @@ class CheckTests(RoundCase):
         self.assertIsNone(updates.check({"update": {"repository": "o/r"}}, now=self.now + timedelta(hours=1), lookup=offline, current="2.0.1"))
         self.assertEqual(len(self.calls), 1)
 
+    def test_http_404_means_no_release_published_yet_not_a_failed_check(self):
+        """Owner answer 372 (4): while GitHub has no release (HTTP 404) the header says so instead of "update check failed"."""
+        from io import BytesIO
+        from urllib.error import HTTPError
+        from haivequeen import releases
+        not_found = HTTPError("https://api.github.com/repos/o/r/releases/latest", 404, "Not Found", {}, BytesIO(b"{}"))
+        with mock.patch("haivequeen.releases.urlopen", side_effect=not_found):
+            with self.assertRaises(releases.NoRelease):
+                releases.check_latest("o/r", "2.0.1")
+            state = updates.check({"update": {"repository": "o/r"}}, now=self.now, manual=True, lookup=releases.check_latest, current="2.0.1")
+        self.assertTrue(state["no_release"])
+        self.assertEqual(state["error"], "")
+        self.assertIsNone(state["available"])
+        self.assertTrue(updates.load_state()["no_release"])   # survives a restart
+        text, level, action = updates.header_line(updates.load_state())
+        self.assertIn("no release published yet", text)
+        self.assertNotIn("update check failed", text)
+        self.assertEqual((level, action), ("dim", "check"))
+        with mock.patch.object(i18n, "is_german", return_value=True):
+            self.assertIn("noch kein Release veröffentlicht", updates.header_line(updates.load_state())[0])
+        # a plain HTTPError 404 of another lookup counts the same; a later release or another error clears the mark
+        def raw_404(repository, current):
+            raise not_found
+        self.assertTrue(updates.check({"update": {"repository": "o/r"}}, now=self.now, manual=True, lookup=raw_404, current="2.0.1")["no_release"])
+        self.assertFalse(self.check(self.now, manual=True)["no_release"])
+        self.assertIn("New version available", updates.header_line(updates.load_state())[0])
+        def server_error(repository, current):
+            raise HTTPError("https://api.github.com/repos/o/r/releases/latest", 500, "Server Error", {}, BytesIO(b"{}"))
+        state = updates.check({"update": {"repository": "o/r"}}, now=self.now, manual=True, lookup=server_error, current="2.0.1")
+        self.assertFalse(state["no_release"])
+        self.assertIn("update check failed", updates.header_line(state)[0])
+
     def test_no_newer_release_clears_the_offer(self):
         self.check(self.now)
         state = updates.check({"update": {"repository": "o/r"}}, now=self.now, manual=True, lookup=lambda r, c: None, current="2.0.2")
@@ -269,7 +301,8 @@ class TextTests(unittest.TestCase):
     """The update texts of the GUI exist in German."""
 
     def test_german_texts(self):
-        for text in (updates.TEXT_CHECK_NOW, updates.TEXT_AVAILABLE, updates.TEXT_CONFIRM, updates.TEXT_CHECKING, updates.TEXT_INSTALLING, updates.TEXT_FAILED):
+        for text in (updates.TEXT_CHECK_NOW, updates.TEXT_AVAILABLE, updates.TEXT_CONFIRM, updates.TEXT_CHECKING, updates.TEXT_INSTALLING, updates.TEXT_FAILED,
+                     updates.TEXT_CHECK_FAILED, updates.TEXT_NO_RELEASE, updates.TEXT_CURRENT):
             with mock.patch.object(i18n, "is_german", return_value=True):
                 self.assertNotEqual(i18n.tr(text, "2.0.2") if "%s" in text else i18n.tr(text), text % "2.0.2" if "%s" in text else text, text)
 

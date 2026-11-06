@@ -452,7 +452,7 @@ GERMAN = {
     "Install version %s now? HaiveQueen starts no new Queen or Bee, waits until every running agent has ended, installs the new version and restarts.":
         "Version %s jetzt installieren? HaiveQueen startet keine neue Queen und keine Biene mehr, wartet, bis jeder laufende Agent beendet ist, installiert die neue Version und startet neu.",
     "installing version %s – waiting for running agents": "installiere Version %s – warte auf laufende Agenten", "update to %s failed, see STATUS": "Update auf %s fehlgeschlagen, siehe STATUS",
-    "up to date": "aktuell", "update check failed": "Update-Prüfung fehlgeschlagen",
+    "up to date": "aktuell", "update check failed": "Update-Prüfung fehlgeschlagen", "no release published yet": "noch kein Release veröffentlicht",
     "%s: letters, digits and . / - _ are expected, starting with a letter or digit": "%s: Buchstaben, Ziffern und . / - _ werden erwartet, am Anfang ein Buchstabe oder eine Ziffer",
     "Waiting for owner check": "Wartet auf Owner-Prüfung", "Waiting for answer": "Wartet auf Antwort", "No active Queen": "Keine aktive Queen", "; open questions %s": "; offene Fragen %s", "Done": "Fertig", "Resting until %s": "Ruht bis %s",
     "Queenless": "Ohne Queen", "Waiting for Codex": "Wartet auf Codex", "Waiting for provider": "Wartet auf Anbieter", "Handoff": "Übergabe", "Waiting to start": "Wartet auf Start",
