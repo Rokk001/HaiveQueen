@@ -28,6 +28,7 @@ TEXT_INSTALLING = N_("installing version %s – waiting for running agents")
 TEXT_FAILED = N_("update to %s failed, see STATUS")
 TEXT_CURRENT = N_("up to date")
 TEXT_CHECK_FAILED = N_("update check failed")
+TEXT_NO_RELEASE = N_("no release published yet")
 
 
 # ---- persisted state ----
@@ -38,7 +39,7 @@ def state_path() -> Path:
 
 
 def load_state() -> dict:
-    """{last_check, available, error, installing}; an unreadable or missing file gives an empty state."""
+    """{last_check, available, error, no_release, installing}; an unreadable or missing file gives an empty state."""
     try:
         data = json.loads(state_path().read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
@@ -123,7 +124,9 @@ def due(machine, state=None, now=None) -> bool:
 def check(machine, now=None, manual=False, lookup=None, current=None):
     """Ask GitHub for a newer release when due (or always with `manual`) and return the new state; None when it was not due.
 
-    An error is stored with the time of the attempt, so the next automatic check waits a whole interval (Check now may retry at once)."""
+    An error is stored with the time of the attempt, so the next automatic check waits a whole interval (Check now may retry at once).
+    GitHub's HTTP 404 (no release published yet) is no error: it sets no_release, which the header shows instead of "update check failed"."""
+    from urllib.error import HTTPError
     from . import releases
     now = now or datetime.now()
     state = load_state()
@@ -133,9 +136,12 @@ def check(machine, now=None, manual=False, lookup=None, current=None):
     state["last_check"] = now.isoformat(timespec="seconds")
     try:
         found = lookup(repository(machine), current or installed_version())
-        state.update(available=dict(found) if found else None, error="")
+        state.update(available=dict(found) if found else None, error="", no_release=False)
     except Exception as exc:   # offline, rate limit, unknown repository: shown, never fatal
-        state.update(available=None, error=str(exc)[:300] or exc.__class__.__name__)
+        if isinstance(exc, releases.NoRelease) or (isinstance(exc, HTTPError) and exc.code == 404):
+            state.update(available=None, error="", no_release=True)
+        else:
+            state.update(available=None, error=str(exc)[:300] or exc.__class__.__name__, no_release=False)
     save_state(state)
     return state
 
@@ -225,6 +231,8 @@ def header_line(state, checking=False) -> tuple:
         return tr(TEXT_FAILED, state["failed"]) + "  ·  " + tr(TEXT_CHECK_NOW), "bad", "check"
     if state.get("error"):
         return tr(TEXT_CHECK_FAILED) + "  ·  " + tr(TEXT_CHECK_NOW), "bad", "check"
+    if state.get("no_release"):
+        return tr(TEXT_NO_RELEASE) + "  ·  " + tr(TEXT_CHECK_NOW), "dim", "check"
     if state.get("last_check"):
         return tr(TEXT_CURRENT) + "  ·  " + tr(TEXT_CHECK_NOW), "dim", "check"
     return tr(TEXT_CHECK_NOW), "dim", "check"
