@@ -932,12 +932,29 @@ class Dashboard:
 
     # Open the Queen menu of the Hive under the pointer.
     def on_context(self, event):
-        """A right click on a Hive row or a Queen row selects it and opens the Queen menu; on a Bee row no menu opens."""
+        """A right click on a Hive row or a Queen row selects it and opens the Queen menu; on a stopped package it offers "Resume package"; on other Bee rows no menu opens."""
+        from . import gui_dialog
         for x0, y0, x1, y1, action, arg in reversed(self.hits):
             if x0 <= event.x <= x1 and y0 <= event.y <= y1 and action == self.select:
                 self.select(arg)
+                row = self.selected(arg[0])
+                if arg[0] == "bees" and row is not None and row.get("stopped"):
+                    gui_dialog.popup_menu(self.root, [(tr("Resume package"), lambda: self.resume_package(row))], self.mono)
+                    return
                 self.hive_menu()
                 return
+
+    # Release a package the owner stopped.
+    def resume_package(self, row):
+        """After a confirmation release the stopped package of `row` again: its Queen may start a Bee for it."""
+        from . import bees
+        if not self.confirm(tr("Resume package %s?", row["task"])):
+            return
+        try:
+            bees.resume_package(self.conn, row["project"], row["plan_path"], row.get("package") or row["task"])
+        except Exception as exc:
+            self.complain(tr("Could not resume the package: %s", exc))
+        self.refresh()
 
     # Open the live view of the selected row.
     def open_live(self):
@@ -1044,7 +1061,7 @@ class Dashboard:
             return [(tr("Pause"), "pause"), (tr("Stop"), "stop")]
         if hive["live"]:
             return [(tr("Start again"), "start"), (tr("Stop"), "stop")]
-        return [(tr("Start again"), "start"), (tr("Reject"), "reject")]
+        return [(tr("Start again"), "start"), (tr("Cancel plan"), "reject")]
 
     # The providers a replacement Queen of a Hive could run on instead of its own.
     def queen_providers(self, hive) -> list:
@@ -1066,7 +1083,7 @@ class Dashboard:
         """After a confirmation: pause (no new Queen or Bee starts, a running Queen keeps working), stop (end the Queen and her Bees, plan paused), reject (a stopped Hive) or start again (a paused plan gets its earlier status back, a rejected plan becomes a draft). Nothing is deleted."""
         from . import hives, loop
         ask = {"pause": i18n.N_("Pause %s? Running agents keep working, no new Queen or Bee starts."), "stop": i18n.N_("Stop %s? The Queen and her Bees are ended and the plan is paused. Handoff, packages, branch and worktrees stay."),
-               "reject": i18n.N_("Reject %s? The plan never starts again by itself; starting it again makes it a draft. Nothing is deleted."), "start": i18n.N_("Start %s again?")}[action]
+               "reject": i18n.N_("Cancel %s? The plan never starts again by itself; starting it again makes it a draft. Nothing is deleted."), "start": i18n.N_("Start %s again?")}[action]
         if not self.confirm(tr(ask, hive["name"])):
             return
         try:
@@ -1108,20 +1125,37 @@ class Dashboard:
 
     # Stop the selected Bee.
     def stop_bee(self):
-        """Kill the process tree of the selected Bee after a confirmation; the runner records the vanished process and the task is retried.
+        """Kill the process tree of the selected Bee after a confirmation; its package stays stopped until the owner resumes it ("Resume package").
+        A Bee that runs as a subagent of its Queen has no process: its package is stopped and its Queen told to end it; the stop stays pending and the Bee keeps
+        its place until the Queen confirms its end (owner answer 220).
 
-        A Queen row is refused with a hint to the Queen menu, and a Bee that has not started yet with a hint that there is nothing to stop."""
+        A Queen row is refused with a hint to the Queen menu, a stopped package is offered for resuming, and a Bee that has not started yet gets a hint that there is nothing to stop."""
         bee = self.selected("bees")
         if bee is None:
+            return
+        if bee.get("stopped"):
+            self.resume_package(bee)
             return
         if bee["kind"] == "queen":
             self.inform(tr("X stops Bees only. Use the Queen menu (M, or a right click on the Queen) to restart or end a Queen."))
             return
+        if bee.get("stopping"):   # owner answer 220: the place stays held until the Queen confirms that her subagent ended
+            self.inform(tr("The stop of %s (%s) is pending: the Bee keeps its place until its Queen confirms that it has ended.", bee["name"], bee["task"]))
+            return
+        if bee.get("embedded"):   # a subagent of its Queen has no process of its own: its Queen is told to end it and confirm its end (STOP-PACKAGES)
+            if self.confirm(tr("Stop bee %s (%s)? The package stays stopped until you resume it.", bee["name"], bee["task"])):
+                from . import bees
+                bees.stop_package(self.conn, bee["project"], bee["plan_path"], bee.get("package") or bee["task"])
+                self.refresh()
+            return
         if not bee["agent"]:
             self.inform(tr("This Bee has not started yet, so there is nothing to stop."))
             return
-        found = db.rows(self.conn, "SELECT pid FROM agents WHERE project=? AND name=? AND archived=0", (bee["project"], bee["agent"]))
-        if found and found[0]["pid"] and self.confirm(tr("Stop bee %s (%s)?", bee["name"], bee["task"])):
+        found = db.rows(self.conn, "SELECT pid, plan_path, package FROM agents WHERE project=? AND name=? AND archived=0", (bee["project"], bee["agent"]))
+        if found and found[0]["pid"] and self.confirm(tr("Stop bee %s (%s)? The package stays stopped until you resume it.", bee["name"], bee["task"])):
+            from . import bees
+            if found[0]["package"]:
+                bees.stop_package(self.conn, bee["project"], found[0]["plan_path"] or bee["plan_path"], found[0]["package"])
             osplat.kill_process_tree(found[0]["pid"])
             self.refresh()
 

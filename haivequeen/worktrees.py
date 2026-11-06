@@ -422,7 +422,7 @@ def _open_plan_branches(env, plan):
     from . import bees
     found = set()
     for other in runtime.list_plans(env.conn, env.name):
-        if other['path'] == plan or other['status'] in ('DONE', 'REJECTED'):
+        if other['path'] == plan or other['status'] in ('DONE', 'CANCELLED'):
             continue
         try:
             named = bees.plan_worktree(env, other['path'])

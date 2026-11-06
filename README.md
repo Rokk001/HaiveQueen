@@ -9,7 +9,7 @@
   <img alt="Windows and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4?style=for-the-badge">
 </p>
 
-<p align="center"><b>Run plans with Queens and parallel Bees: write a plan, set it to READY, and HaiveQueen works it through.</b></p>
+<p align="center"><b>Run plans with Queens and parallel Bees: write a plan, set it to QUEUED (or SENT to have it cut), and HaiveQueen works it through.</b></p>
 
 ---
 
@@ -29,7 +29,7 @@ HaiveQueen is a local orchestrator for coding agents ([Claude Code](https://clau
 
 **4. A plan is not done because an agent says so.** Before integration the Queen lists every requirement of the plan with evidence in the state file under `## Completeness`. `bzz ready` is refused for a missing, open or partial requirement, and then an independent **check agent** (fresh, not part of the plan, read-only) compares the plan as submitted with the list and the branch. Only `READY-CHECK: PASSED` accepts the branch.
 
-**5. A plan cutter with requirements and dependencies.** Hand over free text (`status = "SUBMITTED"`). The Queen first writes every requirement as `- <id>: <text>` into the state file, then cuts the plan into small packages with class, `depends_on` and the requirements each covers. `bzz plan check` refuses a cut in which a requirement belongs to no package.
+**5. A plan cutter with requirements and dependencies.** Hand over free text (`status = "SENT"`). The Queen first writes every requirement as `- <id>: <text>` into the state file, then cuts the plan into small packages with class, `depends_on` and the requirements each covers. `bzz plan check` refuses a cut in which a requirement belongs to no package.
 
 **6. Role files you can read and change without code.** What the Queen, a Bee, the plan cutter and the check agent are told lives in plain Markdown files in [`roles/`](roles).
 
@@ -55,8 +55,8 @@ Also: the manager is not a model (the Beekeeper is a plain program loop that cos
 
 ## How it works
 
-1. **Plan.** You write a plan (Markdown with a TOML header, see [Plans](#plans)) and set `status = "READY"`. That is the release; there is no submit step.
-2. **Start.** The Beekeeper reads READY and IN_PROGRESS plans, picks a provider that offers the Queen class and starts one Hive per plan within the machine-wide limits. Hives that can resume take precedence over new plans.
+1. **Plan.** You write a plan (Markdown with a TOML header, see [Plans](#plans)) and set `status = "QUEUED"`. That is the release; there is no submit step. A draft started with **Start** in the Hives window becomes `SENT` and is cut by its Queen first.
+2. **Start.** The Beekeeper reads SENT, PREPARING, QUEUED, RUNNING, WAITING and REVIEW plans, picks a provider that offers the Queen class and starts one Hive per plan within the machine-wide limits. Hives that can resume take precedence over new plans.
 3. **Work.** The Queen coordinates and never works a package herself: every package goes to a Bee of its class, respecting dependencies and the Bee limit. Subagent Bees run in the foreground, independent ones in parallel from one message, so the Queen never polls a Bee. She answers technical questions, merges the Bee branches and, when every requirement is done, integrates (git, compile check, build). A package that needs a capability (for example `Image generation`) goes to a provider that offers it; local providers are used when available.
 4. **Completeness.** Before integration the Queen answers the completeness question with evidence for every requirement and lists every requirement id once in the state file as `- <id>: done | <evidence>`; `bzz ready` is refused for missing, open or partial ids and a fresh check agent must pass the branch. Partial items count as open. Requirements covered exclusively by packages marked `verify = "owner"` are listed separately as owner checks.
 5. **Integration.** She merges the current integration branch into her branch, runs the project check, registers her branch and performs the project's integration steps. Only one integration per project runs at a time; a waiting Hive hands off and resumes when its turn comes.
@@ -161,11 +161,11 @@ The loop and all agents run as hidden background processes; the dashboard window
 
 ## Plans
 
-A plan is a Markdown file with a TOML header between `+++` lines ([`examples/plan.example.md`](examples/plan.example.md)). Only a plan with `status = "READY"` or `"IN_PROGRESS"` starts agents.
+A plan is a Markdown file with a TOML header between `+++` lines ([`examples/plan.example.md`](examples/plan.example.md)). Only a plan with one of the statuses `SENT`, `PREPARING`, `QUEUED`, `RUNNING`, `WAITING` or `REVIEW` starts agents. A broken header, an unknown status or an unknown class is shown as an error in the Hives window. A plan that names no branch gets the branch `<plan file name in lower case without -PLAN>`, created from `<remoteName>/<integrationBranch>`; when that branch already exists and the plan has no Hive history, you are asked whether to take it over or create a new one.
 
 ```toml
 +++
-status = "READY"
+status = "QUEUED"
 
 [[packages]]
 id = "P1"
@@ -192,14 +192,14 @@ Free Markdown below the header: the agents read it.
 
 | Field | Meaning |
 |---|---|
-| `status` | `SUBMITTED` hands over a plan that is not cut yet (see below); `READY` releases a cut plan; `IN_PROGRESS` and `DONE` are set by HaiveQueen; `PAUSED` stops new starts (window: `Space`) |
+| `status` | `DRAFT` -> `SENT` -> `PREPARING` -> `QUEUED` -> `RUNNING` <-> `WAITING` -> `REVIEW` -> `DONE`, plus `PAUSED` and `CANCELLED`. `SENT` hands over a plan that is not cut yet (see below); `QUEUED` releases a cut plan; `PREPARING` (a Queen cuts it), `RUNNING`, `WAITING` (every open package waits; the Hives window says what for), `REVIEW` (integrated, waits for your owner check) and `DONE` are set by HaiveQueen; `PAUSED` stops new starts (window: `Space`); `CANCELLED` never starts again by itself. The old names `SUBMITTED`, `READY`, `IN_PROGRESS` and `REJECTED` are read as `SENT`, `QUEUED`, `RUNNING` and `CANCELLED` and written with the new name at the next status change |
 | `class` | `light`, `medium` or `heavy`; the provider maps each class to a model and an effort |
 | `depends_on` | package ids this one waits for, or `["all"]` |
 | `capability` | only providers offering it may run the package. The name is free: you define it in the provider entry of the machine settings (`capabilities = ["Coding", "Queen", "Image generation", "3D modelling", "Build"]` and `capabilitiesVersion = 1`) and several providers may offer the same one, for example `3D modelling` or `Build` for work that only some models are suited for. A package whose provider is missing waits alone; one that another provider offers too goes there. |
 | `owner_check` | header key (not per package): `"none"` skips the acceptance question after integration, anything else (default) asks you to test the integrated build |
 | `verify` | who closes the last requirements: `code` (the Bee does, default), `build` (a build step does) or `owner` (an owner check by you). A Bee is done when its own work is. An unknown value is treated as `code` |
 
-**Submitting a plan that is not cut yet.** Write the plan as free Markdown under a header that only says `status = "SUBMITTED"`. The plan gets a Hive and a Queen like any other, and her first step is to cut it: she reads the text and the capabilities of the configured providers, writes the packages (id, title, class, `depends_on`, `verify`) into the header and makes work that only some providers can do (any capability that not every provider offers, such as `Image generation`) a package of its own with `capability`. `bzz plan check` then verifies the header (at least one package, unique ids, a title each, known dependencies without a cycle, every capability offered by a configured provider); when it passes the plan becomes `READY` and the Queen starts Bees. It also warns (without blocking) when a package without a capability waits for one that needs a capability, because that package then stops whenever the provider is missing. `bzz bee start` is refused while a plan is still `SUBMITTED`. Plans whose header already lists packages run as before. A package that waits for a missing provider stops only itself: the Queen keeps working every other package that can start, and the Hive waits only when none can.
+**Submitting a plan that is not cut yet.** Write the plan as free Markdown under a header that only says `status = "SENT"`. The plan gets a Hive and a Queen like any other, and her first step is to cut it: she reads the text and the capabilities of the configured providers, writes the packages (id, title, class, `depends_on`, `verify`) into the header and makes work that only some providers can do (any capability that not every provider offers, such as `Image generation`) a package of its own with `capability`. `bzz plan check` then verifies the header (at least one package, unique ids, a title each, known dependencies without a cycle, every capability offered by a configured provider); when it passes the plan becomes `QUEUED` and the Queen starts Bees. It also warns (without blocking) when a package without a capability waits for one that needs a capability, because that package then stops whenever the provider is missing. `bzz bee start` is refused while a plan is still `SENT` or `PREPARING`. Plans whose header already lists packages run as before. A package that waits for a missing provider stops only itself: the Queen keeps working every other package that can start, and the Hive waits only when none can.
 
 A plan may be paused and resumed in the window. A paused plan gets no new Queen or Bee; a running Queen keeps working.
 
@@ -249,7 +249,7 @@ Every list that does not fit has a scroll bar (or use the mouse wheel).
 | `M` / right click | Queen menu for the Hive or Queen row: restart the Queen (on the same provider, or on another configured provider that offers the Queen class; the Hive then keeps that provider), end Queen and Bees, pause or resume the plan |
 | `Space` | pause or resume the plan of the selected Hive |
 | `P` | pause or resume all new starts |
-| `X` | stop the selected Bee (a Queen or a not yet started Bee only gets a hint) |
+| `X` | stop the selected Bee; its package stays stopped until you resume it (`X` again or a right click on the stopped row: **Resume package**). A Bee that runs as a subagent of its Queen has no process of its own: the Queen is told to end it (file `STOP-PACKAGES` in her run folder); the Bee shows as *stopping* and keeps its place until the Queen confirms its end with `bzz bee result --outcome interrupted`. A Queen restart frees no subagent Bee, stopped or not: its end is not confirmed, so it keeps its place and its package gets no new Bee; the new Queen finds it in the file `OPEN-BEES` and releases it only with `bzz bee result --ended-evidence <file>`, a file the Bee wrote at its end after its start. A Queen or a not yet started Bee only gets a hint. Packages a running Queen could start now but has not are listed as *startable, not started*, and the Queen is told in the same round (file `START-PACKAGES` in her run folder) |
 | `C`, `S`, `A` | clear, save, auto-scroll the log |
 | `L`, `N`, `Esc` | big log (also double click on `LOGS`), show or hide routine round lines, remove the log filter |
 
@@ -261,7 +261,7 @@ A click on the repository name in the header opens the GitHub page. Pause, resum
 
 ## Configuration
 
-Machine `config.toml` holds `hives` (default 2), `excludedProviders`, provider `slots`, provider `classes` and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. Per provider, `beeMode` chooses how the Bees of that provider's Queen run: `subagent` (embedded, small context, no extra slot; default for Claude) or `process` (a separate agent each; default for Codex); it can also be changed in the settings window. `escalateAfter` defaults to 3. `contextLimitTokens` defaults to 300000: set it once for all Apiaries; a project may override it, and a model entry under `[providers.classes]` may carry its own value that wins for Queens and Bees running with that model. Project settings override machine settings except the machine-wide ones. Per project (`.haivequeen/project.toml`): `integrationBranch` (default `main`), `language` (default English; the language of all free text written to you), `upstreamRepo` (folder of an upstream repository whose checked-in `AGENTS.md` and `CLAUDE.md` are project rules too) and `codeRepo`. See [`examples/config.example.toml`](examples/config.example.toml) and [`examples/project.example.toml`](examples/project.example.toml).
+Machine `config.toml` holds `hives` (default 2), `excludedProviders`, provider `slots`, provider `classes` and the machine resource settings. `queenClass` (default `medium`) and `beesPerQueen` (default 3) may be set in the machine config or overridden in a project. Per provider, `beeMode` chooses how the Bees of that provider's Queen run: `subagent` (embedded, small context, no extra slot; default for Claude) or `process` (a separate agent each; default for Codex); it can also be changed in the settings window. `escalateAfter` defaults to 3. `beesPerQueen` counts every running Bee of a Queen, separate processes and embedded subagents alike. `readyCheckClass` (default `medium`) is the class of the check agent of `bzz ready`. Free RAM below `minFreeRamGB` (default 2) of a project skips only that project in a round. `contextLimitTokens` defaults to 300000: set it once for all Apiaries; a project may override it, and a model entry under `[providers.classes]` may carry its own value that wins for Queens and Bees running with that model. Project settings override machine settings except the machine-wide ones. Per project (`.haivequeen/project.toml`): `integrationBranch` (default `main`), `language` (default English; the language of all free text written to you), `upstreamRepo` (folder of an upstream repository whose checked-in `AGENTS.md` and `CLAUDE.md` are project rules too) and `codeRepo`. See [`examples/config.example.toml`](examples/config.example.toml) and [`examples/project.example.toml`](examples/project.example.toml).
 
 - **Quotas.** Claude subscription quotas are refreshed at most once per minute with the local CLI `/usage` metadata command, without model turns, hooks, MCP servers or saved sessions. The dashboard and scheduling share the verified account windows; a failed refresh hides the old percentage in the dashboard and stores what went wrong. Starts keep using the last verified reading for up to 6 hours; with an older or no reading automatic Claude selection pauses until a refresh succeeds. A Hive that waits for a provider shows why (quota used up, usage unknown, or too few slots). A provider whose slots can never fit a Queen plus a Bee process (`beeMode = "process"`) raises one owner question instead of restarting Queens in a loop.
 - **Apiary page.** The General page of a project file shows these settings; they live in `.haivequeen/project.toml`.

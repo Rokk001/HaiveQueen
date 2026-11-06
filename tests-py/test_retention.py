@@ -57,7 +57,7 @@ class RetentionTest(unittest.TestCase):
     def test_expired_runs_removed_but_active_plan_runs_preserved(self):
         self.conn.execute("INSERT INTO projects(name) VALUES ('p')")
         self.conn.execute("INSERT INTO plans(project,path,title,status,updated_at) VALUES ('p','done.md','Done','DONE',?)", (self.old(),))
-        self.conn.execute("INSERT INTO plans(project,path,title,status,updated_at) VALUES ('p','open.md','Open','IN_PROGRESS',?)", (self.old(),))
+        self.conn.execute("INSERT INTO plans(project,path,title,status,updated_at) VALUES ('p','open.md','Open','RUNNING',?)", (self.old(),))
         for name, plan in (("old-done", "done.md"), ("old-open", "open.md")):
             self.conn.execute("INSERT INTO agents(project,name,plan_path,status,ended_at) VALUES ('p',?,?, 'done',?)", (name, plan, self.old()))
             (self.runs / "p" / name).mkdir(parents=True)

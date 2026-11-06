@@ -106,7 +106,11 @@ def cmd_ask(args, conn) -> int:
     from haivequeen import triage
     open_questions = runtime.list_questions(conn, args.project, status="open", plan=args.plan, item=args.item)
     if open_questions:
-        out({"ok": True, "id": open_questions[-1]["id"], "status": "open"})
+        qid = open_questions[-1]["id"]
+        with db.transaction(conn):
+            conn.execute("UPDATE questions SET question=question || ? WHERE id=? AND status='open'", ("\n\n" + args.question, qid))
+            db.add_event(conn, args.project, "note", "Additional text for question %d: %s" % (qid, args.question), data={"question_id": qid})
+        out({"ok": True, "id": qid, "status": "open"})
         return 0
     known = triage._known_answer(conn, args.project, args.plan, args.item)
     if known:
@@ -312,7 +316,7 @@ def cmd_requeen(args, conn):
 
 # Check the plan the calling Queen has cut into packages.
 def cmd_plan(args, conn):
-    """Check the header of the Queen's own plan (packages, unique ids, titles, dependencies without cycle, capabilities some provider offers, every requirement the Queen wrote in the state file belongs to a package). On success a SUBMITTED plan becomes READY and the packages are read into the database; otherwise the problems are reported and nothing changes."""
+    """Check the header of the Queen's own plan (packages, unique ids, titles, dependencies without cycle, capabilities some provider offers, every requirement the Queen wrote in the state file belongs to a package). On success a SENT or PREPARING plan becomes QUEUED and the packages are read into the database; otherwise the problems are reported and nothing changes."""
     from haivequeen import plans as plan_mod, scheduler
     agent = os.environ.get("BZZ_AGENT")
     queen = runtime.get_agent(conn, args.project, agent) if agent else None
@@ -330,9 +334,9 @@ def cmd_plan(args, conn):
     if problems:
         return fail("the plan is not cut properly: " + "; ".join(problems))
     status = parsed.status
-    if status == "SUBMITTED":
+    if status in plan_mod.CUT_STATUSES:
         runtime.save_cut_assignments(conn, args.project, plan, parsed.packages, path.read_text(encoding="utf-8-sig"))
-        status = runtime.set_plan_status(conn, args.project, plan, "READY")["status"]
+        status = runtime.set_plan_status(conn, args.project, plan, "QUEUED")["status"]
     runtime.sync_plans(conn, args.project)
     out({"ok": True, "plan": plan, "status": status, "packages": [p.id for p in parsed.packages], "warnings": plan_mod.plan_warnings(parsed)})
     return 0
@@ -424,6 +428,9 @@ def cmd_bee(args, conn):
             refused = integration.result_refusal(conn, args.project, plan, args.package)
             if refused:
                 return fail(refused)
+        refused = bees.release_refusal(conn, args.project, plan, args.package, queen, getattr(args, "ended_evidence", "") or "")
+        if refused:   # owner answer 220: only trustworthy evidence ends a subagent Bee of an earlier Queen
+            return fail(refused)
         bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked)
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
@@ -472,6 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--error", default="")
     p.add_argument("--blocked-by", choices=["question", "build", "owner", "package", "provider"], default="")
     p.add_argument("--blocked-ref", default="")
+    p.add_argument("--ended-evidence", default="", help="file the subagent Bee of an earlier Queen wrote at its end (its final report)")
     p.add_argument("--no-subagents", action="store_true")
     p.set_defaults(fn=cmd_bee)
 

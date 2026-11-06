@@ -11,6 +11,7 @@
 """
 import os
 import re
+import subprocess
 import time
 
 from . import plans, roles, runtime
@@ -45,18 +46,17 @@ def parse_completeness(text):
 
 
 def _names(decision, rid):
-    """True when a decision names the requirement id as its item or as a word of its text."""
-    if str(decision.get("item") or "").strip().upper() == rid.upper():
-        return True
-    return bool(re.search(r"(?<![A-Za-z0-9_.-])" + re.escape(rid) + r"(?![A-Za-z0-9_])", str(decision.get("text") or ""), re.I))
+    """Only a decision explicitly filed for this requirement sets it aside."""
+    return str(decision.get("item") or "").strip().upper() == rid.upper()
 
 
-def evaluate(plan_text, state_text, decisions, assignments=None):
+def evaluate(plan_text, state_text, decisions, assignments=None, versions=()):
     """Check the requirement list of the state file against the requirement ids of the plan and the state file; returns a Result."""
     res = Result()
     required = {}
-    for rid, text in plans.parse_requirements(plan_text) + plans.parse_requirements(state_text):
-        required.setdefault(rid, text)
+    for source in (plan_text, state_text, *versions):
+        for rid, text in plans.parse_requirements(source):
+            required.setdefault(rid, text)
     res.ids = list(required)
     if not required:
         res.no_ids = True
@@ -113,6 +113,44 @@ def _read(paths):
     return "", paths[0]
 
 
+class PlanHistoryError(Exception):
+    """The plan history could not be read reliably."""
+
+
+def plan_versions(path, current):
+    """Read the current plan and its committed versions, if it has Git history."""
+    folder = os.path.dirname(os.path.abspath(path))
+    try:
+        probe = subprocess.run(['git', '-C', folder, 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if probe.returncode:
+            if 'not a git repository' in probe.stderr.lower():
+                return [current]
+            raise PlanHistoryError('cannot locate the plan repository')
+        root = probe.stdout.strip()
+        shallow = subprocess.run(['git', '-C', root, 'rev-parse', '--is-shallow-repository'], capture_output=True, text=True, check=True).stdout.strip()
+        if shallow != 'false':
+            raise PlanHistoryError('the plan repository has incomplete history')
+        relative = os.path.relpath(path, root).replace('\\', '/')
+        history = subprocess.run(['git', '-C', root, '-c', 'core.quotePath=false', 'log', '--follow', '--format=COMMIT:%H', '--name-status', '--', relative], capture_output=True, text=True, encoding='utf-8', check=True).stdout
+        versions = [current]
+        commit = None
+        for line in history.splitlines():
+            if line.startswith('COMMIT:'):
+                commit = line[7:]
+            elif line and commit:
+                fields = line.split('\t')
+                if fields[0].startswith('D'):
+                    break   # the file was deleted here: older versions at this path belong to an earlier plan
+                result = subprocess.run(['git', '-C', root, 'show', '%s:%s' % (commit, relative)], capture_output=True, check=True)
+                versions.append(result.stdout.decode('utf-8-sig', errors='replace'))
+                if fields[0].startswith('R') and len(fields) == 3 and fields[2] == relative:
+                    relative = fields[1]
+                commit = None
+        return versions
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+        raise PlanHistoryError('cannot read the plan history') from exc
+
+
 def gate(env, plan, queen):
     """Run the whole gate for the Queen's `bzz ready`; returns (accepted, message, waiting)."""
     folders = [f for f in (queen.get("cwd"), str(env.workspace)) if f]
@@ -121,11 +159,17 @@ def gate(env, plan, queen):
     decisions = [d for d in runtime.list_decisions(env.conn, env.name, active_only=True) if not d["plan_path"] or d["plan_path"] == plan]
     assignments = runtime.cut_assignments(env.conn, env.name, plan, plan_text)
     # No trustworthy cut record (older worked plan, reused path, another plan title): require evidence; requirements added after the cut need evidence too.
-    res = evaluate(plan_text, state_text, decisions, assignments if assignments is not None else [])
+    try:
+        versions = plan_versions(plan_file, plan_text)
+    except PlanHistoryError as exc:
+        return False, str(exc), True
+    res = evaluate(plan_text, state_text, decisions, assignments if assignments is not None else [], versions)
     if res.no_ids or res.blocking:
         return False, refusal_text(res), False
     skipped = ", ".join(res.owner + res.aside) or "none"
     prompt = roles.role_text("ready-check", {"plan_file": plan_file, "state_file": state_file, "cwd": queen.get("cwd") or str(env.workspace), "skipped": skipped, "language": roles.language(env.settings)})
+    historical = dict.fromkeys(pair for text in versions for pair in plans.parse_requirements(text))
+    prompt += "\n\nRequirements from all plan versions:\n" + "\n".join("- %s: %s" % pair for pair in historical)
     request = {"env": env, "queen": queen, "plan": plan, "cwd": queen.get("cwd") or str(env.workspace), "prompt": prompt}
     runner = CHECK_RUNNER or (lambda r: start_check_agent(r["env"], r["queen"], r))
     verdict, text = runner(request)
@@ -158,7 +202,7 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
         return "unavailable", "no provider with a free slot and class %s" % cls
     provider = pick["name"]
     existing = [a["name"] for a in runtime.list_agents(env.conn, env.name, "all")]
-    state = {"names": existing, "busy": [], "plan_status": {scheduler.norm_plan(plan): "IN_PROGRESS"}, "by_path": {scheduler.norm_plan(plan): {"path": plan}}}
+    state = {"names": existing, "busy": [], "plan_status": {scheduler.norm_plan(plan): "RUNNING"}, "by_path": {scheduler.norm_plan(plan): {"path": plan}}}
     ctx = {"env": env, "state": state, "pool": loop.Pool(free, 0), "report": [], "dry": False, "settle": 0}
     action = {"name": "%s-ready-check" % re.sub(r"-\d+$", "", str(queen["name"])), "type": provider, "phase": "verify", "plan": plan, "package": "READY-CHECK",
               "cwd": request["cwd"], "prompt": request["prompt"], "class": cls}

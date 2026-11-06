@@ -19,8 +19,8 @@ class Rule11Test(RoundCase):
         self.assertEqual(queens[0]["plan_path"], "docs/plans/dummy/READY-PLAN.md")
         runtime.sync_plans(self.conn, "testproj", str(self.repo))
         st = {p["path"]: p["status"] for p in runtime.list_plans(self.conn, "testproj")}
-        self.assertEqual(st["docs/plans/dummy/READY-PLAN.md"], "IN_PROGRESS")
-        self.assertIn('status = "IN_PROGRESS"', (self.repo / "docs/plans/dummy/READY-PLAN.md").read_text(encoding="utf-8"))
+        self.assertEqual(st["docs/plans/dummy/READY-PLAN.md"], "RUNNING")
+        self.assertIn('status = "RUNNING"', (self.repo / "docs/plans/dummy/READY-PLAN.md").read_text(encoding="utf-8"))
         self.assertEqual((st["docs/plans/dummy/DRAFT-PLAN.md"], st["docs/plans/dummy/PAUSED-PLAN.md"]), ("DRAFT", "PAUSED"))
 
 

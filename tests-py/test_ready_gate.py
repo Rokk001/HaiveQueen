@@ -5,7 +5,10 @@ import contextlib
 import io
 import json
 import os
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from bzztest import REL, RoundCase, runtime
@@ -79,6 +82,107 @@ class ListTests(unittest.TestCase):
         res = self.check(completeness(*FULL[:2]), decisions=[dict(decision, status="superseded")])
         self.assertEqual([i for i, _ in res.blocking], ["G-3"])
 
+    def test_decision_text_mention_does_not_set_aside(self):
+        decision = {"item": "other", "text": "G-3 is discussed", "status": "active"}
+        res = self.check(completeness(*FULL[:2]), decisions=[decision])
+        self.assertEqual([i for i, _ in res.blocking], ["G-3"])
+
+    def test_plan_history_includes_removed_and_current_requirements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            plan = root / 'PLAN.md'
+            plan.write_text('# Plan\n\n## Requirements\n\n- G-1: old\n', encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
+            current = '# Plan\n\n## Requirements\n\n- G-2: new\n'
+            plan.write_text(current, encoding='utf-8')
+            texts = readygate.plan_versions(str(plan), current)
+            ids = {rid for text in texts for rid, _ in plans.parse_requirements(text)}
+            self.assertEqual(ids, {'G-1', 'G-2'})
+            res = readygate.evaluate(current, '## Completeness\n- G-2: done | test\n', [], [], texts)
+            self.assertEqual([rid for rid, _ in res.blocking], ['G-1'])
+
+    def test_plan_history_stops_at_a_deleted_earlier_plan(self):
+        """A plan file that was deleted and later written again at the same path: the history before the deletion belongs to another plan and never blocks the gate."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            plan = root / 'PLAN.md'
+            plan.write_text('# Old plan\n\n## Requirements\n\n- G-9: of the old plan\n', encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'old plan'], check=True)
+            subprocess.run(['git', '-C', str(root), 'rm', '-q', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'remove old plan'], check=True)
+            plan.write_text('# Plan\n\n## Requirements\n\n- G-1: first\n', encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'new plan'], check=True)
+            current = '# Plan\n\n## Requirements\n\n- G-2: second\n'
+            plan.write_text(current, encoding='utf-8')
+            texts = readygate.plan_versions(str(plan), current)
+            self.assertEqual({rid for text in texts for rid, _ in plans.parse_requirements(text)}, {'G-1', 'G-2'})
+
+    def test_plan_history_follows_committed_rename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            old = root / 'OLD.md'
+            old.write_text('# Plan\n\n## Requirements\n\n- G-0: old\n', encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'OLD.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
+            old.write_text('# Plan\n\n## Requirements\n\n- G-1: revised\n', encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'OLD.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'revise'], check=True)
+            subprocess.run(['git', '-C', str(root), 'mv', 'OLD.md', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'rename'], check=True)
+            plan = root / 'PLAN.md'
+            current = '# Plan\n\n## Requirements\n\n- G-2: new\n'
+            plan.write_text(current, encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'update'], check=True)
+            texts = readygate.plan_versions(str(plan), current)
+            self.assertEqual({rid for text in texts for rid, _ in plans.parse_requirements(text)}, {'G-0', 'G-1', 'G-2'})
+
+    def test_plan_history_read_error_is_not_silently_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            plan = root / 'PLAN.md'
+            plan.write_text(PLAN_BODY, encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
+            real_run = subprocess.run
+            def fail_show(args, **kwargs):
+                if 'show' in args:
+                    raise subprocess.CalledProcessError(1, args)
+                return real_run(args, **kwargs)
+            with mock.patch('haivequeen.readygate.subprocess.run', side_effect=fail_show):
+                with self.assertRaises(readygate.PlanHistoryError):
+                    readygate.plan_versions(str(plan), PLAN_BODY)
+
+    def test_shallow_plan_history_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            plan = root / 'PLAN.md'
+            plan.write_text(PLAN_BODY, encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
+            head = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True)
+            (root / '.git' / 'shallow').write_text(head, encoding='ascii')
+            with self.assertRaises(readygate.PlanHistoryError):
+                readygate.plan_versions(str(plan), PLAN_BODY)
+
     def test_plan_without_ids_is_refused(self):
         """No requirement id anywhere: refused with the hint that requirements need ids."""
         res = readygate.evaluate("# Plan\n\nDo things.\n", "# State\n", [])
@@ -148,6 +252,30 @@ class GateTests(RoundCase):
     def queued(self):
         """Rows of the integration queue."""
         return self.conn.execute("SELECT * FROM queue WHERE project='testproj'").fetchall()
+
+    def test_check_agent_gets_the_requirements_of_every_plan_version(self):
+        """H-27 end to end: a requirement only an earlier committed version had is required at bzz ready and is handed to the check agent."""
+        def git(*args):
+            subprocess.run(["git", "-C", str(self.repo)] + list(args), check=True, capture_output=True)
+        git("init", "-q")
+        git("config", "user.name", "Test")
+        git("config", "user.email", "test@example.invalid")
+        text = (self.repo / REL).read_text(encoding="utf-8")
+        (self.repo / REL).write_text(text + "- H-77: removed later\n", encoding="utf-8")
+        git("add", REL)
+        git("commit", "-qm", "first version")
+        (self.repo / REL).write_text(text, encoding="utf-8")
+        self.state(*FULL)
+        with self.runner("passed"):
+            code, res = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("H-77", res["error"])
+        self.assertEqual(self.requests, [])
+        self.state(*(FULL + ("- H-77: done | test evidence",)))
+        with self.runner("passed"):
+            code, res = self.ready()
+        self.assertEqual(code, 0, res)
+        self.assertIn("H-77: removed later", self.requests[-1]["prompt"])
 
     def test_list_refusal_starts_no_check_agent(self):
         """A bad list is refused with the ids and the check agent is not asked."""
@@ -271,6 +399,14 @@ class GateTests(RoundCase):
         with mock.patch("haivequeen.loop._do_start", return_value=0):
             verdict, text = readygate.start_check_agent(self.env(), self.queen, {"prompt": "x", "plan": REL, "cwd": str(self.wt)}, sleep=lambda s: None)
         self.assertEqual(verdict, "unavailable")
+
+    def test_ready_check_uses_configured_class(self):
+        env = self.env()
+        env.settings["readyCheckClass"] = "heavy"
+        with mock.patch("haivequeen.bees.select_route", return_value=None) as route:
+            verdict, text = readygate.start_check_agent(env, self.queen, {"prompt": "x", "plan": REL, "cwd": str(self.wt)})
+        self.assertEqual(route.call_args.args[3], "heavy")
+        self.assertIn("heavy", text)
 
 
 if __name__ == "__main__":

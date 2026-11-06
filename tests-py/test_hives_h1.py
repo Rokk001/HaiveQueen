@@ -139,7 +139,7 @@ class HiveRoundTests(RoundCase):
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         from bzztest import REL
-        self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "IN_PROGRESS")
+        self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "RUNNING")
 
     # Pause starts no new Queen and leaves the existing process alone.
     def test_global_pause_preserves_running_queen(self):
@@ -962,7 +962,7 @@ class HiveRoundTests(RoundCase):
         runtime.queue_upsert(self.conn, "testproj", "older-branch", tip="abc", plan=REL, status="integrated")
         self.round()
         self.round()
-        self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "IN_PROGRESS")
+        self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "RUNNING")
 
     # Only integration of the Queen's registered row completes her plan.
     def test_own_integrated_ready_row_finishes_plan(self):

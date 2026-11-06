@@ -1,5 +1,5 @@
 +++
-status = "READY"
+status = "QUEUED"
 
 [[packages]]
 id = "P1"

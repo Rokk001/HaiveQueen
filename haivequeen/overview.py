@@ -16,7 +16,7 @@ from .i18n import N_, tr
 
 FINISHED_HOURS = 1
 ORCHESTRATOR_KINDS = ("agent", "brain")   # providers_usage kinds written by the orchestrator itself (the "all plans" row)
-PLAN_BADGES = (("DRAFT", "gray"), ("READY", "cyan"), ("IN_PROGRESS", "yellow"), ("DONE", "green"), ("PAUSED", "darkgray"))
+PLAN_BADGES = (("DRAFT", "gray"), ("SENT", "gray"), ("PREPARING", "cyan"), ("QUEUED", "cyan"), ("RUNNING", "yellow"), ("WAITING", "yellow"), ("REVIEW", "green"), ("DONE", "green"), ("PAUSED", "darkgray"), ("CANCELLED", "darkgray"))
 
 
 # ---- formatting helpers ----

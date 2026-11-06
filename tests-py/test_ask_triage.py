@@ -48,6 +48,11 @@ class AskTriageTest(RoundCase):
         self.assertEqual(self.ask("G1", "How strong is the trap?")["id"], qid)
         self.assertEqual([q["id"] for q in runtime.list_questions(self.conn, "testproj", "open")], [qid])
 
+    def test_followup_text_is_appended_to_open_question(self):
+        qid = self.ask("N3", "First question?")["id"]
+        self.assertEqual(self.ask("N3", "Additional detail?")["id"], qid)
+        self.assertEqual(self.status(qid)["question"], "First question?\n\nAdditional detail?")
+
     def test_duplicate_of_answered_question_is_closed_with_reference(self):
         """The same item asked again after an answer is closed by auto and names the old question."""
         old = db.add_question(self.conn, "testproj", REL, "D1", "Which colour?", "A")

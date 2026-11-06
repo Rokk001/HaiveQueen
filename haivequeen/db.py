@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 14   # 14: Apiaries from before the integration switches keep deploy on (projects.legacy_deploy); 13: remove the retired one-time Hive migration; 12: build measurements from the RAM of the build processes (peak_mb, parallel); 11: start contexts and start benchmarks; 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
+SCHEMA_VERSION = 15   # 15: plan statuses SENT, PREPARING, QUEUED, RUNNING, WAITING, REVIEW and CANCELLED replace SUBMITTED, READY, IN_PROGRESS and REJECTED; 14: Apiaries from before the integration switches keep deploy on (projects.legacy_deploy); 13: remove the retired one-time Hive migration; 12: build measurements from the RAM of the build processes (peak_mb, parallel); 11: start contexts and start benchmarks; 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -121,14 +121,14 @@ def rebuild_queue_table(conn: sqlite3.Connection, schema_text: str) -> None:
 
 
 def rebuild_plans_table(conn: sqlite3.Connection, schema_text: str) -> None:
-    """Recreate an old plans table whose CHECK list lacks 'REJECTED' (SQLite cannot alter a CHECK); all rows and their statuses are kept, done in one transaction."""
+    """Recreate an old plans table whose CHECK list lacks 'CANCELLED' (SQLite cannot alter a CHECK); all rows are kept and old status names get their new name, done in one transaction."""
     def old_sql():
         """Return the stored CREATE statement of the plans table, or None when the table does not exist yet."""
         row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='plans'").fetchone()
         return row[0] if row else None
 
     sql = old_sql()
-    if sql is None or "'REJECTED'" in sql:
+    if sql is None or "'CANCELLED'" in sql:
         return
     match = re.search(r"CREATE TABLE IF NOT EXISTS plans \(.*?\n\);", schema_text, re.S)
     if match is None:
@@ -136,11 +136,15 @@ def rebuild_plans_table(conn: sqlite3.Connection, schema_text: str) -> None:
     conn.execute("BEGIN IMMEDIATE")
     try:
         sql = old_sql()   # another process may have migrated while this one waited for the lock
-        if sql is not None and "'REJECTED'" not in sql:
+        if sql is not None and "'CANCELLED'" not in sql:
+            from .plans import LEGACY_STATUSES
             conn.execute("ALTER TABLE plans RENAME TO plans_old")
             conn.execute(match.group(0))
-            cols = ", ".join(r[1] for r in conn.execute("PRAGMA table_info(plans_old)"))
-            conn.execute(f"INSERT INTO plans ({cols}) SELECT {cols} FROM plans_old")
+            names = [r[1] for r in conn.execute("PRAGMA table_info(plans_old)")]
+            mapped = "CASE status " + " ".join("WHEN '%s' THEN '%s'" % pair for pair in LEGACY_STATUSES.items()) + " ELSE status END"
+            cols = ", ".join(names)
+            values = ", ".join(mapped if n == "status" else n for n in names)
+            conn.execute(f"INSERT INTO plans ({cols}) SELECT {values} FROM plans_old")
             conn.execute("DROP TABLE plans_old")
     except BaseException:
         conn.execute("ROLLBACK")

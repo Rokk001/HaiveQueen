@@ -163,7 +163,7 @@ class LegacyTest(unittest.TestCase):
         self.assertEqual(st["feature/one"]["tip"], "aaa111")
         self.assertEqual(out["sources"]["queue"]["errors"], 1)
         plan = self.query("SELECT * FROM plans")[0]
-        self.assertEqual((plan["status"], plan["title"]), ("READY", "Plan A"))
+        self.assertEqual((plan["status"], plan["title"]), ("QUEUED", "Plan A"))
         pk = {r["id"]: r for r in self.query("SELECT * FROM packages")}
         self.assertEqual((pk["P2"]["class"], json.loads(pk["P2"]["depends_on"])), ("heavy", ["P1"]))
         self.assertEqual([r["key"] for r in self.query("SELECT key FROM nofollow ORDER BY key")],

@@ -232,7 +232,7 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     is_paused = key in (paused or ())
     is_rejected = key in (plan_rejected or ())
     if is_rejected:
-        status, kind = tr("Plan rejected"), "wait"
+        status, kind = tr("Plan cancelled"), "wait"
     elif is_paused:
         status, kind = (tr("Running, plan paused") if live else tr("Plan paused")), "wait"
     elif live:
@@ -309,7 +309,7 @@ def embedded_rows(conn) -> list:
 
 
 # Collect the Bees of the active Hives: running Bee processes and packages that have a Bee assigned but no process yet.
-def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None, hive_rows=None, embedded=None, package_steps=None) -> list:
+def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None, hive_rows=None, embedded=None, package_steps=None, startable=None, stopped=None) -> list:
     """Rows for the Bees table. A package with a Bee assignment but no running process shows as 'waiting'; finished packages are left out.
 
     `hive_keys` limits the waiting rows to the (project, plan) pairs whose Queen is running: only a running Queen starts Bees, so the assignments of any other Hive are not waiting Bees.
@@ -332,7 +332,8 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
                      "task": str(bee["package"]).strip(), "step": step, "step_frac": step_fraction(step),
                      "ctx": int((sub or {}).get("ctx") or 0), "ctx_limit": int(ctx_limit(queen)) if sub and ctx_limit else 0,
                      "tin": int((sub or {}).get("tin") or 0), "tout": int((sub or {}).get("tout") or 0),
-                     "status": "running", "runtime": fmt_elapsed(bee["started_at"], now)})
+                     "status": "stopping" if bee.get("outcome") == "stopping" else "running", "stopping": bee.get("outcome") == "stopping",
+                     "runtime": fmt_elapsed(bee["started_at"], now), "embedded": True, "package": bee["package"]})
         seen.add((bee["project"], bee["plan_path"], bee["package"]))
     for (project, plan, package) in sorted(assigned or {}):
         if (project, plan, package) in seen or (project, plan, package) in (completed or ()) or (hive_keys is not None and (project, plan) not in hive_keys):
@@ -341,6 +342,20 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
         # so neither the package id nor that provider is shown as the Bee's name or model.
         rows.append({"kind": "bee", "name": "–", "agent": None, "project": project, "plan_path": plan, "model": "–", "hive": hive_name(plan),
                      "apiary": project, "task": package, "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": "waiting", "runtime": "–"})
+        seen.add((project, plan, package))
+    for (project, plan), names in sorted((startable or {}).items()):   # H-47: startable packages the running Queen has not started yet
+        for package in names:
+            if (project, plan, package) in seen or (hive_keys is not None and (project, plan) not in hive_keys):
+                continue
+            rows.append({"kind": "bee", "name": "–", "agent": None, "project": project, "plan_path": plan, "model": "–", "hive": hive_name(plan),
+                         "apiary": project, "task": package, "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": "startable, not started", "runtime": "–"})
+            seen.add((project, plan, package))
+    for (project, plan, package) in sorted(stopped or ()):   # H-31: a package the owner stopped stays here until the owner resumes it
+        if (project, plan, package) in seen or (project, plan, package) in (completed or ()):
+            continue
+        rows.append({"kind": "bee", "name": "–", "agent": None, "project": project, "plan_path": plan, "model": "–", "hive": hive_name(plan),
+                     "apiary": project, "task": package, "package": package, "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": "stopped", "stopped": True, "runtime": "–"})
+        seen.add((project, plan, package))
     if not hive_rows:
         return rows
     ordered, placed = [], set()
@@ -503,6 +518,9 @@ def info_sections(d) -> list:
     else:
         qs = [(tr("none open"), "dim")]
     out.append((tr("QUESTIONS"), qs))
+    if d.get("global_faults"):   # faults that belong to no Apiary (H-46 g): shown here, never as an inbox question
+        out.append((tr("FAULTS"), [((localtime.time(db.parse_time(f["at"])) if db.parse_time(f["at"]) else "--:--") + " " + i18n.log_text(f["text"]), "bad")
+                                   for f in d["global_faults"]]))
     if d["round_errors"]:
         out.append((tr("ROUND ERRORS"), [((localtime.time(db.parse_time(e["ts"])) if db.parse_time(e["ts"]) else "--:--") + " " + e["project"] + " " + i18n.log_text(e["text"]), "bad")
                                      for e in d["round_errors"]]))
@@ -519,6 +537,16 @@ def orchestrator_state(run_state, loop_pid, stop_pending) -> dict:
     if stop_pending:
         return {"label": "STOPPING", "level": "warn"}
     return {"label": run_state, "level": {"RUNNING": "ok", "PAUSED": "warn"}.get(run_state, "warn")}
+
+
+# The faults of the program itself for the status panel.
+def _global_faults(conn, now) -> list:
+    """Global faults to show; none when they cannot be read."""
+    try:
+        from . import faults
+        return faults.global_faults(conn, now)
+    except Exception:
+        return []
 
 
 # Read the installed package version for the header.
@@ -574,7 +602,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     rejected = rejected_map(conn)
     waiting = waiting_map(conn)
     paused = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='PAUSED'")}
-    plan_rejected = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='REJECTED'")}
+    plan_rejected = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='CANCELLED'")}
     plan_done = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='DONE'")}   # rejected and done Hives only show in the Hives window
     embedded = embedded_rows(conn)
     hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected, waiting, embedded, plan_rejected) for h in hives.hive_data(conn, project, agents)]
@@ -583,7 +611,10 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     steps = {k: v for h in hive_rows for k, v in h["steps"].items()}
     package_steps = step_counts(conn)   # a running Bee starts at 0/m of the steps it was given ...
     package_steps.update({(h["apiary"], h["plan_path"], p): step for h in hive_rows for p, step in h["package_steps"].items()})   # ... and shows the newest step report of its package
-    bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]}, hive_rows, embedded, package_steps)
+    from . import bees as bee_mod
+    stopped = [s for s in bee_mod.stopped_packages(conn) if not project or s[0] == project]
+    bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]}, hive_rows, embedded, package_steps,
+                    bee_mod.startable_map(conn), stopped)
     workers = [b for b in bees if b["kind"] == "bee"]
     apiaries = sorted({h["apiary"] for h in hive_rows})
     slots = sum(int(p["total_slots"] or 0) for p in d["provider_limits"])
@@ -611,7 +642,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
             "projects": [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")],
             "log": [log_line(e, who) for e in reversed(events)], "log_ids": [e["id"] for e in reversed(events)], "log_meta": [log_meta(e, plan_of) for e in reversed(events)], "activity": activity_rows(agents_all, now),
             "system": sysinfo if sysinfo is not None else system_info(d["sysinfo"]), "queue": queue_panel(conn, project),
-            "info": info_sections(d), "limits": limit_bars(d)}
+            "info": info_sections({**d, "global_faults": _global_faults(conn, now)}), "limits": limit_bars(d)}
 
 
 # Find the live text file of an agent.
