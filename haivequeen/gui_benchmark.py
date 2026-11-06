@@ -3,6 +3,7 @@
 Opened by the button 'Benchmark Start Context' of the provider page in the settings (gui_config). The measurement itself is startctx.benchmark.
 """
 import threading
+from datetime import datetime
 
 from . import db, startctx
 from .gui import COL
@@ -24,12 +25,14 @@ def table_rows(conn, provider) -> list:
 class BenchmarkWindow:
     """A dark window with the title, the progress line, an error text (red) and the table of the stored results of one provider."""
 
-    def __init__(self, root, conn, provider, mono="Consolas"):
+    def __init__(self, root, conn, provider, mono="Consolas", cfg=None):
         """Open the window for `provider`; the table shows the stored results at once."""
         import tkinter as tk
         from tkinter import ttk
         from . import gui_dialog
         self.tk, self.conn, self.provider, self.running = tk, conn, provider, False
+        self.cfg, self.mono = cfg or {}, mono
+        self.table_font, self.heading_font = (mono, 10), (mono, 10, "bold")
         self.win = tk.Toplevel(root)
         self.win.title("Benchmark")
         self.win.geometry("760x420")
@@ -47,23 +50,45 @@ class BenchmarkWindow:
         buttons = tk.Frame(inner, bg=COL["panel"])
         buttons.pack(side="bottom", fill="x", padx=14, pady=10)
         tk.Button(buttons, text="Close", width=12, font=(mono, 10), command=self.win.destroy).pack(side="right")
+        self.start_button = tk.Button(buttons, text="Start benchmark", font=(mono, 10), command=self.start)
+        self.start_button.pack(side="right", padx=(0, 8))
         columns = ("apiary", "hq", "own", "saving", "date")
-        self.table = ttk.Treeview(inner, columns=columns, show="headings", selectmode="browse")
+        table_frame = tk.Frame(inner, bg=COL["panel"])
+        table_frame.pack(fill="both", expand=True, padx=14)
+        self.table = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
         for column, title, width in (("apiary", "Apiary", 160), ("hq", "HaiveQueen profile", 150), ("own", "Own profile", 120), ("saving", "Saving", 90), ("date", "Date", 110)):
             self.table.heading(column, text=title)
-            self.table.column(column, width=width, anchor="w")
-        bar = gui_dialog.scrollbar(inner, self.table.yview)
-        self.table.configure(yscrollcommand=bar.set)
-        bar.pack(side="right", fill="y", padx=(0, 14))
-        self.table.pack(side="left", fill="both", expand=True, padx=(14, 0))
+            self.table.column(column, width=width, minwidth=width, stretch=False, anchor="w")
+        bar = gui_dialog.scrollbar(table_frame, self.table.yview)
+        horizontal = gui_dialog.scrollbar(table_frame, self.table.xview, orient="horizontal")
+        self.table.configure(yscrollcommand=bar.set, xscrollcommand=horizontal.set)
+        bar.pack(side="right", fill="y")
+        horizontal.pack(side="bottom", fill="x")
+        self.table.pack(fill="both", expand=True)
         self.refresh()
 
     # Fill the table from the stored results.
     def refresh(self):
         """Reload the table: the complete stored measurements of the provider (earlier ones and the new ones)."""
         self.table.delete(*self.table.get_children())
-        for row in table_rows(self.conn, self.provider):
+        from tkinter import font
+        rows = table_rows(self.conn, self.provider)
+        normal = font.Font(root=self.win, font=self.table_font)
+        bold = font.Font(root=self.win, font=self.heading_font)
+        for i, column in enumerate(self.table["columns"]):
+            width = max([bold.measure(self.table.heading(column, "text"))] + [normal.measure(str(row[i])) for row in rows]) + 24
+            self.table.column(column, width=width, minwidth=width, stretch=False)
+        for row in rows:
             self.table.insert("", "end", values=row)
+
+    def start(self):
+        """Confirm and start a measurement from this window."""
+        from . import gui_dialog
+        if self.running:
+            return
+        count = 2 * self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+        if gui_dialog.ask(self.win, "HaiveQueen", "Measure %s in every Apiary with both profiles? This starts the CLI %d times and uses login tokens." % (self.provider, count), self.mono):
+            self.run(self.cfg)
 
     # Measure.
     def run(self, cfg, done=None, wait=False):
@@ -71,7 +96,10 @@ class BenchmarkWindow:
         new results show in the window; `done()` is called at the end."""
         box = {}
         name = self.provider
+        if self.running:
+            return
         self.running = True
+        self.start_button.config(state="disabled")
         self.error.config(text="")
         self.progress.config(text="measuring ...")
         path = next((r[2] for r in self.conn.execute("PRAGMA database_list") if r[1] == "main"), "")
@@ -92,11 +120,12 @@ class BenchmarkWindow:
             self.running = False
             res = box["result"]
             try:
+                self.start_button.config(state="normal")
                 if res["excluded"]:
                     self.progress.config(text="")
                     self.error.config(text="Provider %s is excluded (excludedProviders): nothing was measured." % name)
                 else:
-                    self.progress.config(text=(box.get("progress", "") + "  - done").strip(" -"))
+                    self.progress.config(text="Done: %d of %d measurements, %s" % (res.get("completed", 0), res.get("total", 0), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
                     self.error.config(text="\n".join("Error: " + e for e in res["errors"]))
                 self.refresh()
             except self.tk.TclError:

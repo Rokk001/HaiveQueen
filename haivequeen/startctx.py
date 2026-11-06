@@ -105,8 +105,8 @@ def benchmark(conn, cfg, provider, measure=None, progress=None) -> dict:
 
     Returns {"excluded": bool, "errors": [text], "results": [{"project", "mode", "tokens"}]}. An excluded provider (machine-wide excludedProviders) is not measured.
     A failed run is reported in `errors` and stores nothing (an older value of it stays); the other run of the pair is stored. `measure(prov, cwd, hq, task)` is
-    the measurement (default measure_cli; tests pass a fake). `progress(text)` is called before each run with '2/4: ODP with the HaiveQueen profile ...'."""
-    out = {"excluded": False, "errors": [], "results": []}
+    the measurement (default measure_cli; tests pass a fake). `progress(text)` is called before each run with its number, Apiary and profile."""
+    out = {"excluded": False, "errors": [], "results": [], "completed": 0, "total": 0}
     if provider in [str(x) for x in cfg.get("excludedProviders") or []]:
         out["excluded"] = True
         return out
@@ -118,27 +118,32 @@ def benchmark(conn, cfg, provider, measure=None, progress=None) -> dict:
     measure = measure or measure_cli
     names = [r[0] for r in conn.execute("SELECT name FROM projects ORDER BY name").fetchall()]
     total, count = 2 * len(names), 0
+    out["total"] = total
     for project in names:
         cwd = code_folder(conn, project)
         if not cwd or not Path(cwd).is_dir():
-            out["errors"].append("%s: no code folder" % project)
-            count += 2
+            for profile in ("HaiveQueen profile", "own profile"):
+                count += 1
+                out["errors"].append("Measurement %d of %d: %s, %s: no code folder" % (count, total, project, profile))
+            out["completed"] = count
             continue
         for mode, hq in (("hq", True), ("own", False)):
             count += 1
-            label = "%s %s" % (project, "with the HaiveQueen profile" if hq else "without it")
+            label = "%s, %s" % (project, "HaiveQueen profile" if hq else "own profile")
             if progress:
                 try:
-                    progress("%d/%d: %s ..." % (count, total, label))
+                    progress("Measurement %d of %d: %s ..." % (count, total, label))
                 except Exception:
                     pass
             try:
                 tokens = int(measure(prov, cwd, hq, TASK))
             except Exception as exc:   # one failed run must not stop the others
-                out["errors"].append("%s: %s" % (label, exc))
+                out["errors"].append("Measurement %d of %d: %s: %s" % (count, total, label, exc))
+                out["completed"] = count
                 continue
             store_benchmark(conn, provider, project, mode, tokens)
             out["results"].append({"project": project, "mode": mode, "tokens": tokens})
+            out["completed"] = count
     return out
 
 
