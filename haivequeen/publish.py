@@ -1,6 +1,9 @@
 """Release at integration (H-43, H-46 k): with the Apiary switch publishReleases on and a remote on GitHub, HaiveQueen itself (never an agent)
 publishes every integration into the integration branch as a GitHub release.
 
+Repository: the GitHub repository, the base version (pyproject.toml), the tags and releases and the commit of a release are always those of the
+code repository of the Apiary (codeRepo when it is set, else the workspace); a release recorded for another repository does not count.
+
 The version counts the last digit of the latest release up (2.0.1, 2.0.2, ...); without a release yet it counts up from the version of the
 pyproject.toml of the Apiary. A bigger step is taken only when the owner enters it as nextVersion on the Apiary page; a nextVersion that is not newer
 than the latest release is already used and is ignored.
@@ -18,12 +21,14 @@ import os
 import re
 import tomllib
 from datetime import datetime
+from pathlib import Path
 
 from . import db, releases, runtime
 
 QUEUE_KEY = "release-queue"       # JSON list of the integrations not yet published, oldest first
 PENDING_KEY = "release-pending"   # the single pending entry of the first K10 version; taken over into the queue
 LAST_KEY = "release-last"         # the version HaiveQueen published last
+LAST_REPO_KEY = "release-last-repository"   # owner/name the release of LAST_KEY went to; a release elsewhere does not count
 ERROR_KEY = "release-error"
 SINCE_KEY = "release-since"       # switch-on time; older integrations get no release
 BEFORE_KEY = "release-before-switch"  # integrated queue IDs already present at switch-on
@@ -39,11 +44,20 @@ def _run(argv, cwd):
     return selfupdate.run_command(argv, cwd)
 
 
+def code_folder(env) -> Path:
+    """The code repository of the Apiary: codeRepo (older files: repo) when it is set, else the workspace.
+
+    Its remote, pyproject.toml version, tags, releases and commits are those of every release; the workspace is never used for them."""
+    value = env.settings.get("codeRepo") or env.settings.get("repo")
+    return Path(value) if value else Path(env.workspace)
+
+
 def github_repository(env, run=None):
-    """owner/name when the remote of the Apiary (remoteName, default origin) is on GitHub, else None."""
+    """owner/name when the remote (remoteName, default origin) of the code repository of the Apiary is on GitHub, else None."""
     run = run or _run
     remote = str(env.settings.get("remoteName") or "origin")
-    code, out = run(["git", "-C", str(env.workspace), "remote", "get-url", remote], env.workspace)
+    folder = code_folder(env)
+    code, out = run(["git", "-C", str(folder), "remote", "get-url", remote], folder)
     if code != 0:
         return None
     try:
@@ -65,9 +79,9 @@ def token(run=None) -> str:
 
 
 def base_version(env) -> str:
-    """The version of the pyproject.toml of the Apiary, else 0.0.0 (the first release counts up from it)."""
+    """The version of the pyproject.toml of the code repository of the Apiary, else 0.0.0 (the first release counts up from it)."""
     try:
-        with open(env.workspace / "pyproject.toml", "rb") as handle:
+        with open(code_folder(env) / "pyproject.toml", "rb") as handle:
             value = str(tomllib.load(handle)["project"]["version"])
         releases.next_version(value)
         return value
@@ -93,8 +107,9 @@ def _sha(text) -> str:
 
 
 def _git(env, run, *args):
-    """Run git in the Apiary folder; returns (exit code, output)."""
-    return run(["git", "-C", str(env.workspace)] + list(args), env.workspace)
+    """Run git in the code repository of the Apiary; returns (exit code, output)."""
+    folder = code_folder(env)
+    return run(["git", "-C", str(folder)] + list(args), folder)
 
 
 def branch_heads(env, run=None, fetch=False) -> list:
@@ -283,7 +298,8 @@ def _append(conn, env, row, run, exact) -> dict:
         commit = ""
         _report(conn, env, "release of %s: the integrated commit could not be read yet, it is looked up again from the history of the "
                            "integration branch: %s" % (row["plan_path"], str(exc)[:300]))
-    entry = {"queue_id": row["id"], "plan": row["plan_path"], "tip": row["tip"] or "", "commit": commit, "version": ""}
+    entry = {"queue_id": row["id"], "plan": row["plan_path"], "tip": row["tip"] or "", "commit": commit, "version": "",
+             "repository": github_repository(env, run) or ""}   # the commit was read in the code repository of this GitHub repository
     with db.transaction(conn):
         entries = _load(conn, env.name)
         if not any(e.get("queue_id") == row["id"] for e in entries):
@@ -324,15 +340,31 @@ def discover(conn, env, run=None) -> list:
     return added
 
 
+def _separate_code_repo(env) -> bool:
+    """True when the Apiary has a code repository apart from its workspace."""
+    try:
+        return code_folder(env).resolve() != Path(env.workspace).resolve()
+    except OSError:
+        return True
+
+
 def _key(version):
     """Sort key of a version string."""
     return tuple(int(part) for part in version.split("."))
 
 
+def last_published(conn, project, repository) -> str:
+    """The version HaiveQueen published last for `project` when it went to `repository`, else empty (a release in another
+    repository, or one recorded before the repository was stored, does not count)."""
+    if not repository or runtime.kv_get(conn, project, LAST_REPO_KEY) != repository:
+        return ""
+    return runtime.kv_get(conn, project, LAST_KEY) or ""
+
+
 def _current(conn, env, repository, latest) -> str:
-    """The version the next release counts up from: the newer of the latest GitHub release and the one HaiveQueen published last,
-    else the version of pyproject.toml."""
-    candidates = [v for v in (latest(repository), runtime.kv_get(conn, env.name, LAST_KEY)) if v]
+    """The version the next release counts up from: the newer of the latest GitHub release of `repository` and the one HaiveQueen published
+    last to `repository`, else the version of the pyproject.toml of the code repository."""
+    candidates = [v for v in (latest(repository), last_published(conn, env.name, repository)) if v]
     return max(candidates, key=_key) if candidates else base_version(env)
 
 
@@ -346,6 +378,10 @@ def _drain(conn, env, repository, run, latest, publisher, token_fn) -> list:
                 runtime.kv_delete(conn, env.name, ERROR_KEY)
             return done
         entry = dict(entries[0])
+        if entry.get("repository") != repository and (entry.get("repository") or _separate_code_repo(env)):
+            # chosen for another repository (or read from the workspace before the code repository was used): choose again here
+            entry["commit"] = entry["version"] = ""
+        entry["repository"] = repository
         try:
             if not entry.get("commit"):   # never the current head: only the integration point of the tip, which a later integration does not move
                 tip = entry.get("tip") or _queue_tip(conn, env.name, entry.get("queue_id"))
@@ -372,6 +408,7 @@ def _drain(conn, env, repository, run, latest, publisher, token_fn) -> list:
             _store(conn, env.name, [e for e in _load(conn, env.name) if e.get("queue_id") != entry.get("queue_id")])
             conn.execute(_UPSERT, (env.name, DONE_PREFIX + str(entry["queue_id"]), entry["version"], db.now()))
             conn.execute(_UPSERT, (env.name, LAST_KEY, entry["version"], db.now()))
+            conn.execute(_UPSERT, (env.name, LAST_REPO_KEY, repository, db.now()))
             db.add_event(conn, env.name, "release", "release %s of %s published at %s" % (entry["version"], repository, entry["commit"][:12]))
         done.append(entry)
 

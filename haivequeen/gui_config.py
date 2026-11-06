@@ -743,14 +743,15 @@ class ConfigWindow:
             self.build_form()
 
     def github_repository(self, shown):
-        """owner/name of the GitHub remote of the shown Apiary (its remoteName), or None."""
+        """owner/name of the GitHub remote (its remoteName) of the code repository of the shown Apiary (codeRepo, else the workspace), or None."""
         from . import publish
         from types import SimpleNamespace
         workspace = self.apiaries[self.node[1]]["workspace"]
         if not workspace:
             return None
         try:
-            return publish.github_repository(SimpleNamespace(workspace=Path(workspace), settings={"remoteName": shown.get("remoteName") or "origin"}))
+            settings = {"remoteName": shown.get("remoteName") or "origin", "codeRepo": str(shown.get("codeRepo") or shown.get("repo") or "").strip()}
+            return publish.github_repository(SimpleNamespace(workspace=Path(workspace), settings=settings))
         except Exception:
             return None
 

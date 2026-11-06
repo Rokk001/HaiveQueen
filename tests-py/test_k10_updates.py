@@ -247,6 +247,7 @@ class InstallTests(RoundCase):
         """H-42: once HaiveQueen published a release for project HaiveQueen the checkout update neither merges nor pushes nor stops the loop."""
         from haivequeen import publish, runtime
         runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_KEY, "2.0.1")
+        runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_REPO_KEY, "owner/tool")
         calls, run = self.legacy_run()
         res = self.legacy_update(run)
         self.assertEqual(res["result"], "retired")
@@ -278,6 +279,7 @@ class InstallTests(RoundCase):
         """The common release update stays the ongoing path."""
         from haivequeen import publish, runtime
         runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_KEY, "2.0.1")
+        runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_REPO_KEY, "owner/tool")
         calls, run = self.legacy_run("v2.0.1")
         with mock.patch.object(selfupdate, "wait_first_round", return_value=True), mock.patch.object(selfupdate, "lock_path", return_value=self.base / "lock"):
             res = selfupdate.run_update(self.conn, live=self.base, run=run, sleep=lambda s: None, alive=lambda p: False,
@@ -288,6 +290,7 @@ class InstallTests(RoundCase):
     def test_retired_command_does_not_spawn_the_worker(self):
         from haivequeen import publish, runtime
         runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_KEY, "2.0.1")
+        runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_REPO_KEY, "owner/tool")
         out = []
         with mock.patch.object(selfupdate, "spawn_worker", side_effect=AssertionError("spawned")), \
                 mock.patch("builtins.print", side_effect=lambda text: out.append(json.loads(text))):

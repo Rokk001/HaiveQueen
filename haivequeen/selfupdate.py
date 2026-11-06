@@ -58,12 +58,13 @@ def integration_branch(conn) -> str:
 def legacy_retired(conn, live=None, run=None) -> str:
     """Why the checkout update (no version) is retired, or "" while the one-time transition of H-46 (j) is still open.
 
-    Retired once a release was published for project HaiveQueen (kv release-last) or the live folder's HEAD has a release tag vX.Y.Z
-    in its history (it was installed from a release)."""
+    Retired once a release was published for project HaiveQueen to the repository of its code (kv release-last with release-last-repository;
+    a release recorded without its repository went to the workspace remote and does not count) or the live folder's HEAD has a release tag
+    vX.Y.Z in its history (it was installed from a release)."""
     import re
     from . import publish, runtime
     try:
-        last = runtime.kv_get(conn, PROJECT, publish.LAST_KEY) if conn is not None else None
+        last = runtime.kv_get(conn, PROJECT, publish.LAST_KEY) if conn is not None and runtime.kv_get(conn, PROJECT, publish.LAST_REPO_KEY) else None
     except Exception:
         last = None
     if last:
