@@ -73,7 +73,7 @@ def cmd_ready(args, conn) -> int:
             held = integration.open_steps(env, plan, ("Build",))
             if held:
                 return fail("ready refused: integration step package %s is not done; start a Bee for it, or wait for the answer of the owner" % ", ".join(held))
-            missing = integration.compile_check_missing(env, row["name"])
+            missing = integration.compile_check_missing(env, row, plan)
             if missing:
                 return fail("ready refused: " + missing)
             accepted, message, waiting = readygate.gate(env, plan, row)   # requirement list first, then the fresh check agent
@@ -98,6 +98,27 @@ def cmd_ready(args, conn) -> int:
             bees.set_package_state(conn, args.project, args.plan, package, 'done', agent)   # ready means the Queen answered Open requirements: 0, so every package is done
     out({"ok": True, **res})
     return 0
+
+
+# Run the compile check of the project for the Queen of a Hive.
+def cmd_compile_check(args, conn) -> int:
+    """Run the configured compile check in the worktree of the calling Queen and store the result for her run and current commit (bzz ready reads it); exit 0 only when it is green."""
+    from haivequeen import hives, integration, scheduler as sch
+    agent = os.environ.get("BZZ_AGENT")
+    row = runtime.get_agent(conn, args.project, agent) if agent else None
+    if not row or row.get("phase") != "queen" or not _plan_matches(conn, args.project, row.get("plan_path"), args.plan) or hives.get(conn, args.project, row.get("plan_path")) is None:
+        return fail("compile-check refused: not this Hive's Queen")
+    env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
+    if env is None:
+        return fail("compile-check refused: unknown project")
+    if not integration.switches(env.settings)["compileCheck"] or not str(env.settings.get("compileCheck") or "").strip():
+        out({"ok": True, "skipped": "no compile check is configured or it is switched off for this Apiary"})
+        return 0
+    if not integration.head_commit(row.get("cwd")):
+        return fail("compile-check refused: the commit of the Queen's worktree cannot be read")
+    result = integration.run_compile_check(env, row)
+    out(result)
+    return 0 if result["ok"] else 1
 
 
 # File a question for the owner.
@@ -522,6 +543,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(f"--{a}", required=True)
     p.add_argument("--note", default="")
     p.set_defaults(fn=cmd_ready)
+
+    p = sub.add_parser("compile-check")
+    p.add_argument("--project", required=True)
+    p.add_argument("--plan", required=True)
+    p.set_defaults(fn=cmd_compile_check)
 
     p = sub.add_parser("ask")
     for a in ("project", "plan", "item", "question"):
