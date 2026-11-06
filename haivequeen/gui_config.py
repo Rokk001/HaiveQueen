@@ -308,15 +308,17 @@ class ConfigWindow:
         canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
         canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units")))
         canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
-        bottom = tk.Frame(self.win)
-        bottom.pack(fill="x", padx=8, pady=6)
+        foot = tk.Frame(self.win)
+        foot.pack(fill="x", side="bottom", padx=8, pady=6, before=body)   # packed before the body so the shrinking body never pushes it out
+        bottom = tk.Frame(foot)
+        bottom.pack(fill="x")
         self.bottom_buttons = []
         for text, command in (("Save", self.save), ("Revert", self.reload), ("Open folder", self.open_folder), ("Close", self.win.destroy)):
             button = tk.Button(bottom, text=text, width=12, command=command)
             button.pack(side="left", padx=4)
             self.bottom_buttons.append(button)
-        self.bottom_note = tk.Label(bottom, text="Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.", fg=COL["dim"], justify="left", anchor="w")
-        self.bottom_note.pack(side="left", padx=12, fill="x", expand=True)
+        self.bottom_note = tk.Label(foot, text="Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.", fg=COL["dim"], justify="left", anchor="w")
+        self.bottom_note.pack(fill="x", pady=(6, 0))   # its own row below the buttons over the full width, wraps to as many lines as needed
         self.bottom_note.bind("<Configure>", lambda e: self.bottom_note.configure(wraplength=max(120, e.width)))
         self.reload()
 

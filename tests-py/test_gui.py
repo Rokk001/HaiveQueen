@@ -226,10 +226,11 @@ class SnapshotTest(unittest.TestCase):
 
     # The build line is part of the dashboard data and of the SYSTEM panel.
     def test_build_line_in_snapshot_without_build_table(self):
-        """CFG has no buildJobs table: the snapshot still carries the build line (defaults, not measured yet) for the SYSTEM panel."""
+        """CFG has no buildJobs table: the STATUS panel SYSTEM section still carries the build line; the SYSTEM meter panel does not."""
         self.assertNotIn("buildJobs", CFG)
-        self.assertRegex(self.snap["build_line"], r"^Build jobs \d+ of \d+ cores \((running|next build)\) \| per job not measured yet")
-        self.assertIn(self.snap["build_line"], [t for title, lines in self.snap["info"] if title == "SYSTEM" for t, _c in lines])
+        self.assertNotIn("build_line", self.snap)
+        lines = [t for title, ls in self.snap["info"] if title == "SYSTEM" for t, _c in ls]
+        self.assertTrue(any(re.match(r"^Build jobs \d+ of \d+ cores \((running|next build)\) \| per job not measured yet", t) for t in lines), lines)
 
     # One state tells the user whether HaiveQueen runs, waits or stands still.
     def test_orchestrator_state(self):
@@ -284,24 +285,6 @@ class StateButtonTest(unittest.TestCase):
         for name in ("app.ico", "app_icon.png"):
             self.assertTrue((gui.ASSETS / name).is_file(), name)
         self.assertEqual(gui.REPO_URL, "https://github.com/Rokk001/HaiveQueen")
-
-
-# The build line of the SYSTEM panel wraps instead of being cut off.
-class BuildLineWrapTest(unittest.TestCase):
-    """The build line is wrapped at its separators, so the median RAM per job stays readable."""
-
-    # The whole line fits on two lines at the normal panel width.
-    def test_build_line_wraps_without_cutting(self):
-        """No part of the line is lost and no line is cut with an ellipsis."""
-        from haivequeen import gui
-        fake = types.SimpleNamespace(tw=lambda t, size: len(t) * 6.5)
-        fake.fit = lambda t, w, size: gui.Dashboard.fit(fake, t, w, size)
-        line = "Build jobs 3 of 8 cores (running) | per job 1234 MB | active: 3 cores"
-        parts = gui.Dashboard.wrap_parts(fake, line, 298, 12)
-        self.assertLessEqual(len(parts), 2)
-        self.assertIn("per job 1234 MB", " ".join(parts))
-        self.assertIn("active: 3 cores", " ".join(parts))
-        self.assertFalse(any("…" in x for x in parts))
 
 
 # Draw the window once when a display exists.
