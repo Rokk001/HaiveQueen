@@ -407,6 +407,49 @@ class IntegrationPointTests(PublishCase):
         self.assertEqual([p[2] for p in self.published], [self.merge])
         self.assertIsNone(runtime.kv_get(self.conn, "testproj", publish.DONE_PREFIX + str(old["id"])))
 
+    def test_external_switch_edit_before_first_loop_keeps_later_integration(self):
+        import os
+        from datetime import datetime
+        from unittest import mock
+        path = self.repo / ".haivequeen" / "project.toml"
+        path.write_text(path.read_text().replace("publishReleases = true", "publishReleases = false"), encoding="utf-8")
+        with mock.patch("haivequeen.db.now", return_value="2001-01-01T00:00:00"):
+            runtime.queue_upsert(self.conn, "testproj", "old", tip=self.tip, plan="old.md", status="integrated")
+        path.write_text(path.read_text().replace("publishReleases = false", "publishReleases = true"), encoding="utf-8")
+        edited = datetime.fromisoformat("2002-01-01T00:00:00").timestamp()
+        os.utime(path, (edited, edited))
+        with mock.patch("haivequeen.db.now", return_value="2003-01-01T00:00:00"):
+            runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
+        with mock.patch("haivequeen.db.now", return_value="2004-01-01T00:00:00"):
+            self.retry()
+        self.assertEqual([p[2] for p in self.published], [self.merge])
+
+    def test_external_enable_and_later_edit_preserve_integration_boundary(self):
+        from unittest import mock
+        path = self.repo / ".haivequeen" / "project.toml"
+        path.write_text(path.read_text().replace("publishReleases = true", "publishReleases = false"), encoding="utf-8")
+        with mock.patch("haivequeen.db.now", return_value="2001-01-01T00:00:00"):
+            old = runtime.queue_upsert(self.conn, "testproj", "old", tip=self.tip, plan="old.md", status="integrated")
+        path.write_text(path.read_text().replace("publishReleases = false", "publishReleases = true"), encoding="utf-8")
+        with mock.patch("haivequeen.db.now", return_value="2001-01-01T00:00:00"):
+            runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
+        path.write_text(path.read_text() + "\n# subsequent edit\n", encoding="utf-8")
+        with mock.patch("haivequeen.db.now", return_value="2004-01-01T00:00:00"):
+            self.retry()
+        self.assertEqual([p[2] for p in self.published], [self.merge])
+        self.assertIsNone(runtime.kv_get(self.conn, "testproj", publish.DONE_PREFIX + str(old["id"])))
+
+    def test_external_disable_and_reenable_skips_disabled_integrations(self):
+        path = self.repo / ".haivequeen" / "project.toml"
+        self.retry()
+        path.write_text(path.read_text().replace("publishReleases = true", "publishReleases = false"), encoding="utf-8")
+        old = runtime.queue_upsert(self.conn, "testproj", "old", tip=self.tip, plan="old.md", status="integrated")
+        path.write_text(path.read_text().replace("publishReleases = false", "publishReleases = true"), encoding="utf-8")
+        runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
+        self.retry()
+        self.assertEqual([p[2] for p in self.published], [self.merge])
+        self.assertIsNone(runtime.kv_get(self.conn, "testproj", publish.DONE_PREFIX + str(old["id"])))
+
     def test_the_switch_time_is_kept_at_the_first_loop_round(self):
         self.assertIsNone(runtime.kv_get(self.conn, "testproj", publish.SINCE_KEY))
         self.retry()
