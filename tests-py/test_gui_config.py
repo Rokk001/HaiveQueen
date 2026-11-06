@@ -39,7 +39,7 @@ capabilities = ["images"]
 
 [[projects]]
 name = "ODP"
-workspace = "C:\\\\Users\\\\mario\\\\GitHub\\\\Moreya-Internal"
+workspace = "C:\\\\Users\\\\Example\\\\Projects\\\\Sample"
 '''
 
 
