@@ -6,7 +6,7 @@ from .runtime import CmdError
 def _known_answer(conn, project, plan, item):
     """The stored answer that already settles `item` of `plan`: ('question', id, text) of an answered question, or ('decision', id, text) of an active
     decision of the plan or without a plan. None when there is none (or no item)."""
-    if not item:
+    if not item or item == "owner-check" or item.startswith("owner-check-"):
         return None
     for q in reversed(runtime.list_questions(conn, project, "answered", plan, item)):
         return ("question", q["id"], q["answer"] or "")
