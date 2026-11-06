@@ -318,6 +318,19 @@ class Dashboard:
             s = s[:-1]
         return s.rstrip() + "…" if s else "…"
 
+    # A text wrapped at its " | " separators.
+    def wrap_parts(self, s, width, size, lines=2):
+        """`s` split at ' | ' into at most `lines` lines that each fit `width` design pixels; no part is dropped, a too long line is cut with an ellipsis."""
+        out = []
+        for part in str(s).split(" | "):
+            if out and self.tw(out[-1] + " | " + part, size) <= width:
+                out[-1] += " | " + part
+            else:
+                out.append(part)
+        if len(out) > lines:
+            out[lines - 1:] = [" | ".join(out[lines - 1:])]
+        return [self.fit(o, width, size) for o in out]
+
     # Width of a text in design pixels.
     def tw(self, s, size):
         """Design width of `s` drawn at font size `size`, measured with the dashboard font (an estimate before the font exists)."""
@@ -660,7 +673,8 @@ class Dashboard:
             self.text(x0 + 134, y, note, 13, "text", "w")
             self.bar(x1 - 82, y - 8, 70, 16, pct / 100, colour)
         if s.get("build_line"):   # the build line: job count, median RAM per job (B-10)
-            self.text(x0 + 12, y0 + 62 + 3 * 24 - 4, self.fit(s["build_line"], x1 - x0 - 24, 12), 12, "cyan", "w")
+            for k, part in enumerate(self.wrap_parts(s["build_line"], x1 - x0 - 24, 12)):   # at most two lines, wrapped at the separators
+                self.text(x0 + 12, y0 + 128 + k * 14, part, 12, "cyan", "w")
 
     # Draw open questions and queued integrations.
     def queue(self, s, x0, y0, x1, y1):
