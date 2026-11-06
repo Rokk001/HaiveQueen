@@ -601,11 +601,29 @@ def configuration_stamp(conn):
     return projects, tuple(files)
 
 
+def close_obsolete_questions(conn):
+    """Close pending questions for finished plans or unregistered projects once."""
+    answer = "closed: plan finished or project unknown"
+    with db.transaction(conn):
+        rows = conn.execute(
+            "SELECT q.id, q.project FROM questions q "
+            "WHERE q.status IN ('open', 'triage') AND ("
+            "NOT EXISTS (SELECT 1 FROM projects p WHERE p.name=q.project) OR "
+            "EXISTS (SELECT 1 FROM plans p WHERE p.project=q.project AND p.path=q.plan_path "
+            "AND p.status IN ('DONE', 'REJECTED', 'CANCELLED')))"
+        ).fetchall()
+        for row in rows:
+            conn.execute("UPDATE questions SET status='answered', answer=?, answered_by='coordinator', answered_at=? WHERE id=?",
+                         (answer, db.now(), row['id']))
+            db.add_event(conn, row['project'], 'answer', answer, data={'question_id': row['id'], 'by': 'coordinator'})
+
+
 # The loop body (see run_loop).
 # Keep provider quotas current during idle waits as well as scheduling rounds.
 # Apply valid TOML changes at safe scheduling boundaries without restarting agents.
 def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_kwargs) -> int:
     """The loop body (see run_loop)."""
+    close_obsolete_questions(conn)
     envs = sch.load_projects(conn, machine)
     minutes = round_minutes if round_minutes else float(machine.get("roundMinutes", 5))
     state = {"since": datetime.now(), "next_at": None, "busy": False, "projects": [e.name for e in envs]}

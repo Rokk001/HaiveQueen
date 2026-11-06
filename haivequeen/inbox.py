@@ -112,8 +112,8 @@ def integration_ref(settings) -> str:
 def parse_file(path: Path, project: str, conn, repo=None, ref: str = "origin/main") -> tuple:
     """Parse and check one inbox file without writing anything; return (answers, decisions, queue orders) as lists of argument dicts.
 
-    Raises InboxError for a parse error, an unknown table or key, a wrong value, an unknown or already answered question
-    (or one of another project), a question answered twice in the same file and a queue order that cannot be carried out.
+    Raises InboxError for a parse error, an unknown table or key, a wrong value, an unknown or already answered question,
+    a question answered twice in the same file and a queue order that cannot be carried out.
     `repo` and `ref` are the git checkout and the integration ref that a withdraw order is checked against.
     """
     try:
@@ -141,8 +141,8 @@ def parse_file(path: Path, project: str, conn, repo=None, ref: str = "origin/mai
         text, by = _plain_text(entry, "text", where), _plain_text(entry, "by", where)
         if by not in WHO:
             raise InboxError("%s: by must be owner or coordinator, not '%s'" % (where, by))
-        row = conn.execute("SELECT project, status FROM questions WHERE id=?", (qid,)).fetchone()
-        if row is None or row["project"] != project:
+        row = conn.execute("SELECT status FROM questions WHERE id=?", (qid,)).fetchone()
+        if row is None:
             raise InboxError("%s: unknown question %d" % (where, qid))
         if row["status"] != "open" or qid in seen:
             raise InboxError("%s: question %d is already answered" % (where, qid))
