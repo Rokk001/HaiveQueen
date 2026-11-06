@@ -5,14 +5,20 @@ beside the packages of the plan file and survive reading it again. With no such 
 `bzz integration release` and the closing of the plan wait for the Deploy package.
 """
 import json
+import os
 import re
+import subprocess
+import time
+from datetime import datetime
 
-from . import db, plans, roles, routine, runtime, scheduler as sch
+from . import db, localtime, plans, roles, routine, runtime, scheduler as sch
 from .i18n import tr
 
 BUILD = plans.STEP_PACKAGES["Build"]
 DEPLOY = plans.STEP_PACKAGES["Deploy"]
-COMPILE_MILESTONE = re.compile(r"^(\w+)\t\S+ Compile test\b")
+COMPILE_MILESTONE = re.compile(r"^(\w+)\t\S+ Compile test\b")   # the live line of a compile check in milestones.txt (the dashboard shows it)
+COMPILE_KEY = "compile-check:"   # + Queen name: the stored result of `bzz compile-check` for that Queen run
+COMPILE_TIMEOUT = 3600   # seconds a compile check may run before it counts as failed
 
 
 # The three switches of an Apiary.
@@ -111,20 +117,76 @@ def reset(conn, project, plan):
         conn.execute("UPDATE questions SET item=? WHERE project=? AND plan_path=? AND item=? AND status='answered'", (package + "-answered", project, plan, package))   # the new integration asks again
 
 
-# Whether the Queen's run shows a passed compile check.
-def compile_check_missing(env, queen_name):
-    """The reason `bzz ready` waits for the compile check, or '': the step is on, a command is configured and the last recognised run of this Queen is not green."""
-    if not switches(env.settings)["compileCheck"] or not str(env.settings.get("compileCheck") or "").strip():
+# The commit a worktree stands on.
+def head_commit(cwd):
+    """The full commit ID of HEAD in the folder, or '' when it cannot be read."""
+    if not cwd:
         return ""
     try:
-        lines = (env.run_dir(queen_name) / "milestones.txt").read_text(encoding="utf-8", errors="replace").splitlines()
+        done = subprocess.run(["git", "-C", str(cwd), "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+# The stored result of the compile check of a Queen run.
+def compile_result(conn, project, queen_name):
+    """The result `bzz compile-check` stored for the Queen ({ok, exit, commit, time, seconds, command}), or None."""
+    raw = runtime.kv_get(conn, project, COMPILE_KEY + queen_name)
+    try:
+        data = json.loads(raw) if raw else None
+    except ValueError:
+        data = None
+    return data if isinstance(data, dict) else None
+
+
+# Run the compile check of the project for a Queen.
+def run_compile_check(env, queen, timeout=COMPILE_TIMEOUT):
+    """Run the setting compileCheck in the worktree of the Queen, store {ok, exit, commit, time, seconds, command} for her run, add the live line
+    to her milestones and return the result with the end of the output under "output"; the commit is the one the worktree stood on before the run."""
+    command = str(env.settings.get("compileCheck") or "").strip()
+    cwd = str(queen.get("cwd") or "")
+    commit = head_commit(cwd)
+    started = time.time()
+    try:
+        # The configured command line is the owner's own text, so the system shell runs it (named explicitly, no shell flag): cmd /s keeps a quoted program path intact.
+        line = 'cmd.exe /d /s /c "%s"' % command if os.name == "nt" else ["/bin/sh", "-c", command]
+        done = subprocess.run(line, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        code, output = done.returncode, (done.stdout or "") + (done.stderr or "")
+    except subprocess.TimeoutExpired:
+        code, output = 124, "the compile check ran longer than %d seconds" % timeout
+    except OSError as exc:
+        code, output = 127, "the compile check could not start: %s" % exc
+    result = {"ok": code == 0, "exit": code, "commit": commit, "time": db.now(), "seconds": round(time.time() - started, 1), "command": command}
+    runtime.kv_set(env.conn, env.name, COMPILE_KEY + queen["name"], json.dumps(result))
+    last = next((" ".join(line.split()) for line in reversed(output.splitlines()) if line.strip()), "")
+    live = "%s\t%s Compile test - Exit %s%s\n" % ("Green" if result["ok"] else "Red", localtime.time(datetime.now()), code, (": " + last[:140]) if last else "")
+    try:
+        folder = env.run_dir(queen["name"])
+        folder.mkdir(parents=True, exist_ok=True)
+        with open(str(folder / "milestones.txt"), "ab") as handle:
+            handle.write(live.encode("utf-8"))
     except OSError:
-        lines = []
-    runs = [m.group(1) for m in map(COMPILE_MILESTONE.match, lines) if m]
-    if not runs:
-        return "the configured compile check was not run in this Queen run; run it yourself with the exact command compileCheck of the project configuration, then call bzz ready again"
-    if runs[-1] != "Green":
-        return "the last compile check of this Queen run failed; fix it, run it again, then call bzz ready again"
+        pass
+    return {**result, "output": "\n".join(output.strip().splitlines()[-40:])[-4000:]}
+
+
+# Whether the Queen's run has a passed compile check for her current commit.
+def compile_check_missing(env, queen, plan):
+    """The reason `bzz ready` waits for the compile check, or '': the step is on, a command is configured and the Queen has no green `bzz compile-check` result for the commit her worktree stands on."""
+    if not switches(env.settings)["compileCheck"] or not str(env.settings.get("compileCheck") or "").strip():
+        return ""
+    again = "run bzz compile-check --project %s --plan %s, then call bzz ready again" % (env.name, plan)
+    result = compile_result(env.conn, env.name, queen["name"])
+    if not result:
+        return "the compile check was not run in this Queen run; " + again
+    if not result.get("ok"):
+        return "the last compile check of this Queen run failed; fix it, " + again
+    head = head_commit(queen.get("cwd"))
+    if not head:
+        return "the commit of the worktree cannot be read, so the compile check cannot be matched to it"
+    if result.get("commit") != head:
+        return "the green compile check is for commit %s but the worktree is at %s; %s" % (str(result.get("commit"))[:7], head[:7], again)
     return ""
 
 
@@ -137,8 +199,9 @@ def start_text(env, plan, provider_name):
                "--parallel value of the build command (also in the variable named by ParallelVar); the build starts only while the free RAM is at least MinFreeGB. These values win over a "
                "--parallel value or RAM minimum in a project rule: do not ask a question about that difference. If it reports waiting for integration, write a handoff and end until restarted. "
                "After acquiring the place, abort any unfinished merge in the project integration checkout before integrating again." % (env.name, plan))
-    order = [("Run the compile check of the project yourself in this run with the exact command compileCheck of the project configuration (bzz ready looks for its green result), then register your own branch with bzz ready."
-              if on["compileCheck"] else "Register your own branch with bzz ready."), acquire]
+    order = [("Run the compile check with bzz compile-check --project %s --plan %s: it runs the command compileCheck of the project configuration in your worktree and stores the result for your current commit. "
+              "Do not run that command yourself; bzz ready accepts only this result and only for the commit your worktree is at, so run it again after every new commit. Then register your own branch with bzz ready."
+              % (env.name, plan) if on["compileCheck"] else "Register your own branch with bzz ready."), acquire]
     if states["Deploy"] == "queen":
         order.append("If the release worktree of the project is missing, create it again and build it according to the integration rules of the project; only the Queen who holds the integration place may do this.")
     order.append("Integrate your own branch, then release the integration place with bzz integration release --project %s --plan %s." % (env.name, plan))

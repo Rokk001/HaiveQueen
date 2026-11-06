@@ -35,6 +35,7 @@ class OwnHiveHookTest(unittest.TestCase):
         "bzz plan check --project Hive --plan plans/ONE-PLAN.md",
         "bzz integration acquire --project Hive --plan plans/ONE-PLAN.md",
         "bzz integration release --project Hive --plan plans/ONE-PLAN.md --owner-pid 123",
+        "bzz compile-check --project Hive --plan plans/ONE-PLAN.md",
         "bzz ready --project Hive --branch one-plan --tip abc123 --plan plans/ONE-PLAN.md --note 'ready'",
         "bzz queue upsert --project Hive --plan plans/ONE-PLAN.md --branch one-plan --tip abc123 --status ready",
         "bzz queue upsert --project Hive --branch one-plan --status in_run",
