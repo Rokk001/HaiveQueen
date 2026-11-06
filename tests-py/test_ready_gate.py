@@ -403,9 +403,9 @@ class GateTests(RoundCase):
     def test_ready_check_uses_configured_class(self):
         env = self.env()
         env.settings["readyCheckClass"] = "heavy"
-        with mock.patch("haivequeen.bees.select_route", return_value=None) as route:
+        with mock.patch("haivequeen.scheduler.select_provider", return_value=None) as route:
             verdict, text = readygate.start_check_agent(env, self.queen, {"prompt": "x", "plan": REL, "cwd": str(self.wt)})
-        self.assertEqual(route.call_args.args[3], "heavy")
+        self.assertEqual(route.call_args.args[1], "heavy")
         self.assertIn("heavy", text)
 
 
