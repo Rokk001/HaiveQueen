@@ -405,11 +405,11 @@ class WindowTest(unittest.TestCase):
                     self.assertLessEqual(note.winfo_x() + note.winfo_reqwidth(), avail + 2, geo)
                     self.assertGreaterEqual(note.winfo_reqheight(), 1)
 
-    def test_bottom_note_wraps_with_the_bar_width(self):
-        """The save note is a wrapping label: its wraplength follows the bar width and the buttons stay visible."""
+    def test_bottom_note_has_its_own_row_below_the_buttons(self):
+        """The save note sits on its own row under the buttons over the full window width and shows every line of its text."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         widths = []
-        for geo in ("1130x800", "760x700"):
+        for geo in ("1130x800", "760x700", "640x700"):
             win.win.geometry(geo)
             win.win.update()
             note = win.bottom_note
@@ -417,9 +417,13 @@ class WindowTest(unittest.TestCase):
             self.assertGreaterEqual(wrap, 120)
             self.assertLessEqual(wrap, note.winfo_width())
             widths.append(wrap)
+            self.assertGreater(note.winfo_width(), win.win.winfo_width() - 40, geo)
+            self.assertGreaterEqual(note.winfo_height(), note.winfo_reqheight(), geo)
+            self.assertLessEqual(note.winfo_rooty() + note.winfo_height(), win.win.winfo_rooty() + win.win.winfo_height(), geo)
             for child in win.bottom_buttons:
                 self.assertLessEqual(child.winfo_x() + child.winfo_width(), win.win.winfo_width(), geo)
-        self.assertLess(widths[1], widths[0])
+                self.assertLessEqual(child.winfo_rooty() + child.winfo_height(), note.winfo_rooty(), geo)
+        self.assertLess(widths[2], widths[0])
         win.win.destroy()
 
     def test_ram_reserve_is_not_offered_but_kept_on_save(self):

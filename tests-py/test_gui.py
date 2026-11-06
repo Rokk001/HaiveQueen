@@ -298,10 +298,51 @@ class BuildLineWrapTest(unittest.TestCase):
         fake.fit = lambda t, w, size: gui.Dashboard.fit(fake, t, w, size)
         line = "Build jobs 3 of 8 cores (running) | per job 1234 MB | active: 3 cores"
         parts = gui.Dashboard.wrap_parts(fake, line, 298, 12)
+        self.assertEqual(parts[0], "Build jobs 3 of 8 cores (running)")
         self.assertLessEqual(len(parts), 2)
         self.assertIn("per job 1234 MB", " ".join(parts))
         self.assertIn("active: 3 cores", " ".join(parts))
         self.assertFalse(any("…" in x for x in parts))
+
+
+# The SYSTEM panel shows both build lines completely at every window size.
+class BuildLinePanelTest(unittest.TestCase):
+    """Drawn dashboard: line 1 is the job count, line 2 the RAM per job; nothing is cut and everything stays inside the panel."""
+
+    def test_two_full_lines_at_default_and_1280x720(self):
+        import tkinter as tk
+        from haivequeen import gui
+        try:
+            root = tk.Tk()
+            root.attributes("-alpha", 0.0)
+        except tk.TclError:
+            self.skipTest("no display")
+        tmp = tempfile.TemporaryDirectory()
+        conn = db.connect(Path(tmp.name) / "o.db")
+        try:
+            gui.REFRESH_MS = 10 ** 9
+            win = gui.Dashboard(root, conn)
+            for geo in ("1672x912", "1280x720"):
+                root.geometry(geo)
+                root.update()
+                win.snap["build_line"] = "Build jobs 6 of 8 cores (next build) | per job 1234 MB | active: 3 cores"
+                win.draw()
+                items = [i for i in win.canvas.find_all() if win.canvas.type(i) == "text"]
+                texts = {win.canvas.itemcget(i, "text"): i for i in items}
+                self.assertIn("Build jobs 6 of 8 cores (next build)", texts, geo)
+                second = [t for t in texts if t.startswith("per job")]
+                self.assertEqual(len(second), 1, geo)
+                self.assertIn("1234 MB", second[0])
+                self.assertFalse([t for t in texts if "…" in t and ("per job" in t or "Build jobs" in t)], geo)
+                for t in ("Build jobs 6 of 8 cores (next build)", second[0]):
+                    box = win.canvas.bbox(texts[t])
+                    self.assertGreaterEqual(box[0], 515 * win.scale - 1, geo)
+                    self.assertLessEqual(box[2], 837 * win.scale + 1, geo)
+                    self.assertLessEqual(box[3], 858 * win.scale + 1, geo)
+        finally:
+            root.destroy()
+            conn.close()
+            tmp.cleanup()
 
 
 # Draw the window once when a display exists.

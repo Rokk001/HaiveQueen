@@ -320,16 +320,30 @@ class Dashboard:
 
     # A text wrapped at its " | " separators.
     def wrap_parts(self, s, width, size, lines=2):
-        """`s` split at ' | ' into at most `lines` lines that each fit `width` design pixels; no part is dropped, a too long line is cut with an ellipsis."""
-        out = []
-        for part in str(s).split(" | "):
-            if out and self.tw(out[-1] + " | " + part, size) <= width:
+        """`s` as display lines: the text before the first ' | ' stays alone on line 1, the remaining parts follow on line 2. A line wider than
+        `width` continues on further lines (at the separators, then at spaces); nothing is dropped and nothing is cut with an ellipsis."""
+        parts = str(s).split(" | ")
+        out = [parts[0]]
+        for part in parts[1:]:
+            if len(out) > 1 and self.tw(out[-1] + " | " + part, size) <= width:
                 out[-1] += " | " + part
             else:
                 out.append(part)
-        if len(out) > lines:
-            out[lines - 1:] = [" | ".join(out[lines - 1:])]
-        return [self.fit(o, width, size) for o in out]
+        if len(out) > 2 and lines == 2:   # keep two lines when the rest fits on one
+            rest = " | ".join(out[1:])
+            if self.tw(rest, size) <= width:
+                out[1:] = [rest]
+        final = []
+        for line in out:
+            row = ""
+            for word in line.split(" "):
+                if row and self.tw(row + " " + word, size) > width:
+                    final.append(row)
+                    row = word
+                else:
+                    row = (row + " " + word) if row else word
+            final.append(row)
+        return final
 
     # Width of a text in design pixels.
     def tw(self, s, size):
@@ -363,9 +377,9 @@ class Dashboard:
         self.tiles(s)
         self.hive_table(s, 10, 267, 1035, 507)
         self.bee_table(s, 10, 515, 1035, 700)
-        self.activity(s, 10, 710, 505, 850)
-        self.system(s, 515, 710, 837, 850)
-        self.queue(s, 846, 710, 1035, 850)
+        self.activity(s, 10, 710, 505, 858)
+        self.system(s, 515, 710, 837, 858)
+        self.queue(s, 846, 710, 1035, 858)
         if self.log_big:
             self.log_panel(s, 1045, 165, 1662, 850)
         else:
@@ -666,15 +680,15 @@ class Dashboard:
         rows = (("CPU", m["cpu"], "(%d cores)" % m["cores"], load(m["cpu"]), "icon_cpu"), ("RAM", m["ram_pct"], "%.1f/%.0f GB" % (m["ram_used_gb"], m["ram_total_gb"]), load(m["ram_pct"]), "icon_ram"),
                 ("Disk", m["disk_pct"], "%.1f/%.1f TB" % (m["disk_used_tb"], m["disk_total_tb"]), load(m["disk_pct"]), "icon_disk"))
         for i, (name, pct, note, colour, icon) in enumerate(rows):
-            y = y0 + 62 + i * 24
+            y = y0 + 58 + i * 22
             self.pic(icon, x0 + 10, y, "w")
             self.text(x0 + 46, y, name, 15, "text", "w")
             self.text(x0 + 92, y, "%d%%" % pct, 15, "cyan", "w")
             self.text(x0 + 134, y, note, 13, "text", "w")
             self.bar(x1 - 82, y - 8, 70, 16, pct / 100, colour)
         if s.get("build_line"):   # the build line: job count, median RAM per job (B-10)
-            for k, part in enumerate(self.wrap_parts(s["build_line"], x1 - x0 - 24, 12)):   # at most two lines, wrapped at the separators
-                self.text(x0 + 12, y0 + 128 + k * 14, part, 12, "cyan", "w")
+            for k, part in enumerate(self.wrap_parts(s["build_line"], x1 - x0 - 24, 12)):   # line 1 the job count, line 2 the RAM per job; more only when too narrow
+                self.text(x0 + 12, y0 + 121 + k * 14, part, 12, "cyan", "w")
 
     # Draw open questions and queued integrations.
     def queue(self, s, x0, y0, x1, y1):
