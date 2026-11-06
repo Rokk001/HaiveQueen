@@ -16,7 +16,7 @@ SAFE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 UNSAFE_ANYWHERE = set("‘’‚‛“”„‟")   # PowerShell also treats these as quotes
 
 ANY, PROJECT, PLAN, AGENT, NAME, INT, BRANCH = "any", "project", "plan", "agent", "name", "int", "branch"
-QUEEN, CWD_FIELDS = "queen", "cwd-fields"
+QUEEN, CWD_FIELDS, CWD_PATH = "queen", "cwd-fields", "cwd-path"
 QUEUE_STATUSES = ("ready", "in_run", "integrated", "blocked", "withdrawn")
 
 # (command, action) -> (required options, optional options, flags without a value)
@@ -53,7 +53,10 @@ _add("decisions", ("list",), {"--project": PROJECT}, {"--plan": PLAN, "--item": 
 _add("decisions", ("add",), {"--project": PROJECT, "--plan": PLAN, "--source": ANY, "--text": ANY}, {"--item": ANY})
 _add("agents", ("list",), {"--project": PROJECT}, {"--scope": ("active", "archive", "all"), "--status": ANY})
 _add("packages", ("list",), {"--project": PROJECT}, {"--plan": PLAN})
-_add("agents", ("update-fields",), {"--project": PROJECT, "--name": QUEEN, "--fields": CWD_FIELDS})   # the Queen records her worktree
+# The Queen records her worktree with exactly one of --cwd <path> (works in every shell) or --fields '{"cwd": ...}'
+# (Windows PowerShell 5.1 strips the inner double quotes, so that form fails there without a change).
+_add("agents", ("update-fields",), {"--project": PROJECT, "--name": QUEEN}, {"--cwd": CWD_PATH, "--fields": CWD_FIELDS})
+ONE_OF = {("agents", "update-fields"): {"--cwd", "--fields"}}
 
 
 def split_command(command, shell):
@@ -135,7 +138,14 @@ def _cwd_fields_ok(value):
         return False
     if not isinstance(fields, dict) or set(fields) != {"cwd"} or not isinstance(fields["cwd"], str):
         return False
-    cwd = fields["cwd"]
+    return _cwd_path_ok(fields["cwd"])
+
+
+def _cwd_path_ok(cwd):
+    """True for an existing absolute directory without a .. part and without a trailing backslash
+    (Windows PowerShell 5.1 would let it escape the closing quote of an argument with a space)."""
+    if cwd.endswith("\\"):
+        return False
     if not re.fullmatch(r"(?:[A-Za-z]:[\\/]|/)[A-Za-z0-9_ ./:\\-]*", cwd) or ".." in re.split(r"[\\/]", cwd):
         return False
     return os.path.isdir(cwd)
@@ -175,6 +185,8 @@ def _value_ok(kind, value, policy, lookup=live_branch):
         return bool(policy.get("name")) and value == str(policy["name"])
     if kind == CWD_FIELDS:
         return _cwd_fields_ok(value)
+    if kind == CWD_PATH:
+        return _cwd_path_ok(value)
     if kind == NAME:
         return bool(SAFE_NAME.fullmatch(value)) and ".." not in value
     if kind == INT:
@@ -215,6 +227,9 @@ def bzz_allowed(args, policy, lookup=live_branch):
         if value.startswith("-") and value != "-" or not _value_ok(kind, value, policy, lookup):
             return False
         i += 2
+    one_of = ONE_OF.get((command, action))
+    if one_of and len(seen & one_of) != 1:
+        return False
     return all(opt in seen for opt in required)
 
 

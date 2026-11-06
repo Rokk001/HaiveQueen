@@ -372,6 +372,9 @@ class ClaudeRunTest(RunnerBase):
         record = "bzz agents update-fields --project demo --name QUEEN-LATE --fields '{\"cwd\": \"%s\"}'" % worktree.as_posix()
         self.assertTrue(self.hook_allows("QUEEN-LATE", record))
         self.assertTrue(self.hook_allows("QUEEN-LATE", record, "PowerShell"))
+        by_cwd = "bzz agents update-fields --project demo --name QUEEN-LATE --cwd '%s'" % worktree
+        self.assertTrue(self.hook_allows("QUEEN-LATE", by_cwd))
+        self.assertTrue(self.hook_allows("QUEEN-LATE", by_cwd, "PowerShell"))
         self.assertFalse(self.hook_allows("QUEEN-LATE", record.replace("QUEEN-LATE", "QUEEN-OTHER")))
         self.assertFalse(self.hook_allows("QUEEN-LATE", ready))   # the worktree is not recorded yet
         runtime.upsert_agent(self.conn, "demo", "QUEEN-LATE", {"cwd": str(worktree)}, create=False)

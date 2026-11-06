@@ -200,6 +200,32 @@ class LifecycleHookTest(unittest.TestCase):
                     self.assertIsNone(decide(bad, tool), (bad, tool))
             self.assertIsNone(decide(ok, policy=dict(POLICY, name=None)))
 
+    def test_update_fields_cwd_form_needs_no_json_quotes(self):
+        """--cwd '<folder>' is the form that also survives Windows PowerShell 5.1; exactly one of --cwd and --fields."""
+        with tempfile.TemporaryDirectory() as tmp:
+            spaced = Path(tmp) / "plan wt"
+            spaced.mkdir()
+            base = "bzz agents update-fields --project Hive --name Queen-1 "
+            fields = "--fields '{\"cwd\": \"%s\"}'" % spaced.as_posix()
+            good = [base + "--cwd '%s'" % spaced, base + "--cwd '%s'" % spaced.as_posix(), base + '--cwd "%s"' % spaced.as_posix(),
+                    base + "--cwd %s" % Path(tmp).as_posix(),
+                    "bzz agents update-fields --name Queen-1 --cwd '%s' --project Hive" % spaced,
+                    "& '%s' -I '%s' agents update-fields --project Hive --name Queen-1 --cwd '%s'" % (PY, CLI, spaced)]
+            for command in good:
+                for tool in ("Bash", "PowerShell"):
+                    if command.startswith("&") and tool == "Bash":
+                        continue
+                    self.assertIsNotNone(decide(command, tool), (command, tool))
+            bad = [base + "--cwd '%s\\'" % spaced, base + "--cwd '%s'" % (spaced / "missing"), base + "--cwd 'rel/dir'",
+                   base + "--cwd '%s/..'" % spaced.as_posix(), base + "--cwd '%s' %s" % (spaced, fields), base.strip(),
+                   base + "--cwd '%s' --cwd '%s'" % (spaced, spaced), base.replace("Queen-1", "Queen-2") + "--cwd '%s'" % spaced,
+                   base + "--cwd '%s;x'" % spaced, base + "--cwd \"%s$x\"" % spaced,
+                   "bzz agents upsert --project Hive --name Queen-1 --cwd '%s'" % spaced]
+            for command in bad:
+                for tool in ("Bash", "PowerShell"):
+                    self.assertIsNone(decide(command, tool), (command, tool))
+            self.assertIsNotNone(decide(base + fields, "PowerShell"))   # still allowed; it only fails harmlessly in PowerShell 5.1
+
     def test_branch_created_after_start_is_resolved_when_the_hook_runs(self):
         ready = "bzz ready --project Hive --branch new-plan --tip abc123 --plan plans/ONE-PLAN.md"
         upsert = "bzz queue upsert --project Hive --branch new-plan --status in_run"
