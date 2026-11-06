@@ -1,6 +1,9 @@
 """K10, H-42 and H-46(i): daily and manual update check, confirmed install of a release, drain of agents and restart."""
+import contextlib
+import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -10,7 +13,8 @@ from pathlib import Path
 from unittest import mock
 
 from bzztest import RoundCase
-from haivequeen import bees, config, gui_config, i18n, loop, selfupdate, updates
+from haivequeen import bees, config, desktop, gui_config, i18n, loop, selfupdate, updates
+from haivequeen import platform as osplat
 
 
 class CheckTests(RoundCase):
@@ -239,6 +243,11 @@ class HeaderTests(RoundCase):
 class DrainTests(RoundCase):
     """H-46(i): while the update waits for running agents no Queen or Bee starts."""
 
+    def setUp(self):
+        super().setUp()
+        self.base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.base, True)
+
     def hold_lock(self, pid):
         path = selfupdate.lock_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -259,6 +268,111 @@ class DrainTests(RoundCase):
             with mock.patch.dict(os.environ, {selfupdate.RESTART_VAR: "1"}):
                 loop.cmd_start(args, self.conn)
             run_loop.assert_called_once()
+
+    def test_start_called_by_the_update_worker_is_allowed_without_the_variable(self):
+        """A worker of an older version restarts without BZZ_UPDATE_RESTART: its child `start` is recognized by the parent process, else the loop never starts (rollback after 1800 s)."""
+        self.hold_lock(4242)
+        args = Namespace(foreground=True, rounds=1, round_minutes=None, keep_pause=True, json=True, desktop=False)
+        with mock.patch("haivequeen.updates.draining", return_value=True), mock.patch.object(loop, "run_loop", return_value=0) as run_loop,                 mock.patch("os.getppid", return_value=4242), mock.patch("builtins.print"):
+            loop.cmd_start(args, self.conn)
+        run_loop.assert_called_once()
+
+    def test_background_start_of_the_worker_passes_the_allowance_to_the_loop_process(self):
+        """The detached `start --foreground` of the loop is no child of the worker: it gets BZZ_UPDATE_RESTART from the start the worker called."""
+        self.hold_lock(4242)
+        args = Namespace(foreground=False, rounds=0, round_minutes=0, keep_pause=True, json=True, desktop=False)
+        with mock.patch("haivequeen.updates.draining", return_value=True), mock.patch.object(loop, "loop_running", return_value=None),                 mock.patch.object(loop, "spawn_detached") as spawn, mock.patch("haivequeen.gui.launch_detached", return_value={}),                 mock.patch("os.getppid", return_value=4242), mock.patch("builtins.print"):
+            loop.cmd_start(args, self.conn)
+        self.assertEqual(spawn.call_args.kwargs.get("env"), {selfupdate.RESTART_VAR: "1"})
+
+    def test_start_of_another_process_is_still_refused_while_draining(self):
+        """Only the child of the lock holder passes: a start from any other parent is refused."""
+        self.hold_lock(4242)
+        args = Namespace(foreground=True, rounds=1, round_minutes=None, keep_pause=True, json=True, desktop=False)
+        with mock.patch("haivequeen.updates.draining", return_value=True), mock.patch.object(loop, "run_loop", return_value=0) as run_loop,                 mock.patch("os.getppid", return_value=999), mock.patch("builtins.print"):
+            loop.cmd_start(args, self.conn)
+        run_loop.assert_not_called()
+
+    def refused(self, **kw):
+        """Run `start` as a call that is refused; return (exit code, printed payload)."""
+        args = Namespace(foreground=kw.pop("foreground", False), rounds=0, round_minutes=0, keep_pause=True, json=True, desktop=False)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = loop.cmd_start(args, self.conn)
+        return code, json.loads(out.getvalue())
+
+    def reasons(self):
+        """The refusal lines in the events and in beekeeper.log."""
+        events = [r["text"] for r in self.conn.execute("SELECT text FROM events WHERE kind='start-refused'")]
+        log = osplat.runs_dir() / "beekeeper.log"
+        return events, (log.read_text(encoding="utf-8") if log.exists() else "")
+
+    def test_refused_start_while_updating_exits_with_1_and_names_the_reason(self):
+        """A refusal is no success: exit 1, and the reason is an event and a line of beekeeper.log (the worker must not wait 1800 s for a loop that never starts)."""
+        self.hold_lock(4242)
+        with mock.patch("haivequeen.updates.draining", return_value=True), mock.patch("os.getppid", return_value=999):
+            code, payload = self.refused()
+        events, log = self.reasons()
+        self.assertEqual(code, 1)
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["updating"])
+        self.assertEqual(len(events), 1)
+        self.assertIn("update", events[0])
+        self.assertIn(events[0], log)
+
+    def test_refused_start_during_a_pending_stop_exits_with_1(self):
+        loop.stop_flag().parent.mkdir(parents=True, exist_ok=True)
+        loop.stop_flag().write_text("stop requested\n", encoding="utf-8")
+        with mock.patch.object(loop, "loop_running", return_value=4711):
+            code, payload = self.refused()
+        events, log = self.reasons()
+        self.assertEqual((code, payload["ok"], payload["stopping"]), (1, False, True))
+        self.assertEqual(len(events), 1)
+        self.assertIn(events[0], log)
+
+    def test_refused_start_while_another_start_is_pending_exits_with_1(self):
+        with mock.patch.object(loop, "loop_running", return_value=None), mock.patch.object(loop, "start_pending", return_value=True),                 mock.patch.object(loop, "spawn_detached") as spawn:
+            code, payload = self.refused()
+        events, log = self.reasons()
+        spawn.assert_not_called()
+        self.assertEqual((code, payload["ok"], payload["starting"]), (1, False, True))
+        self.assertEqual(len(events), 1)
+        self.assertIn(events[0], log)
+
+    def test_start_with_a_running_loop_still_exits_with_0(self):
+        """Not a refusal: the loop runs, the call only opens the window."""
+        with mock.patch.object(loop, "loop_running", return_value=4711), mock.patch("haivequeen.gui.launch_detached", return_value={}):
+            code, payload = self.refused()
+        self.assertEqual((code, payload["ok"], payload["running"]), (0, True, True))
+        self.assertEqual(self.reasons()[0], [])
+
+    def test_desktop_text_of_a_refused_stop_or_start_is_the_message_not_an_error(self):
+        self.assertIn("2", desktop.result_text("start", {"ok": False, "stopping": True, "running_agents": 2, "error": "x"}, "English"))
+        self.assertEqual(desktop.result_text("start", {"ok": False, "starting": True, "error": "x"}, "English"), "HQ is already starting.")
+        self.assertEqual(desktop.result_text("start", {"ok": False, "updating": True, "error": "An update is waiting"}, "English"), "Error: An update is waiting")
+
+    def test_worker_sees_a_refused_restart_at_once_and_does_not_wait_for_a_round(self):
+        """The restart answers with exit 1: the update fails now instead of after the 1800 s of the first round."""
+        def run(argv, cwd):
+            if "start" in argv:
+                return 1, '{"ok": false, "updating": true}'
+            return 0, "a" * 40
+        with mock.patch.object(selfupdate, "wait_first_round") as wait, mock.patch.object(selfupdate, "lock_path", return_value=self.base / "lock"):
+            res = selfupdate.run_update(self.conn, live=self.base, run=run, sleep=lambda s: None, alive=lambda p: False, loop_pid=lambda: None)
+        wait.assert_not_called()
+        self.assertIn(res["result"], ("failed", "rollback"))
+        self.assertIn("start:", res["note"])
+
+    def test_worker_accepts_a_restart_refused_because_a_start_is_pending(self):
+        """Another start is already bringing the loop up: the worker waits for its first round as before."""
+        def run(argv, cwd):
+            if "start" in argv:
+                return 1, '{"ok": false, "starting": true}'
+            return 0, "a" * 40
+        with mock.patch.object(selfupdate, "wait_first_round", return_value=True) as wait, mock.patch.object(selfupdate, "lock_path", return_value=self.base / "lock"):
+            res = selfupdate.run_update(self.conn, live=self.base, run=run, sleep=lambda s: None, alive=lambda p: False, loop_pid=lambda: None)
+        wait.assert_called_once()
+        self.assertEqual(res["result"], "ok")
 
     def test_embedded_bee_start_is_refused_while_draining(self):
         self.assertIn("update", bees.drain_refusal(lambda: True))

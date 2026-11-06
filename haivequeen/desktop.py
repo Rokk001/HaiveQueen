@@ -7,7 +7,7 @@ from .i18n import tr
 # Describe the start or stop result without suggesting agents were terminated.
 def result_text(command, result, language=None):
     """Return desktop feedback in `language` (default: the machine language), with English fallback."""
-    if not result.get("ok"):
+    if not result.get("ok") and not (result.get("stopping") or result.get("starting")):   # a refused start during a stop or start is a message, not an error
         return tr("Error: %s", result.get("error") or tr("HQ could not execute the command.", language=language), language=language)
     if command == "stop" or result.get("stopping"):
         count = int(result.get("running_agents") or 0)

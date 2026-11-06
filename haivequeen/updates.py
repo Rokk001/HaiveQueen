@@ -241,6 +241,16 @@ def draining(alive=None) -> bool:
     return pid > 0 and bool(alive(pid))
 
 
+def started_by_update_worker(parent=None) -> bool:
+    """True when the process that started this one holds the self-update lock: the restart of the worker, also of an older version that sets no BZZ_UPDATE_RESTART."""
+    from . import selfupdate
+    try:
+        pid = int(selfupdate.lock_path().read_text(encoding="ascii").strip() or 0)
+    except (OSError, ValueError):
+        return False
+    return pid > 0 and pid == (parent or os.getppid())
+
+
 # ---- command line ----
 
 def cmd_update(args, conn) -> int:

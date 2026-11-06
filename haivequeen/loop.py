@@ -786,6 +786,29 @@ def command_result(args, payload) -> int:
     return 0
 
 
+# A refused start is a failure for the caller: exit 1, the reason in the events and in beekeeper.log.
+def refuse_start(args, conn, payload, reason) -> int:
+    """Print `payload` as a failed result (ok false, error = `reason`), record "start refused: <reason>" as event and as line of beekeeper.log, return 1.
+
+    Callers that start the loop (the self-update, scripts) see the refusal at once instead of waiting for a round that never comes.
+    """
+    text = "start refused: " + reason
+    try:
+        with db.transaction(conn):
+            db.add_event(conn, runstate.GLOBAL_PROJECT, "start-refused", text)
+    except Exception:   # the refusal is reported anyway
+        pass
+    try:
+        log = osplat.runs_dir() / "beekeeper.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a", encoding="utf-8") as out:
+            out.write("%s %s\n" % (db.now(), text))
+    except OSError:
+        pass
+    command_result(args, {**payload, "ok": False, "error": reason})
+    return 1
+
+
 # Serialise `bzz start` between processes.
 @contextmanager
 def start_lock(timeout: float = 120.0, poll: float = 0.1):
@@ -830,13 +853,14 @@ def cmd_start(args, conn) -> int:
         raise ValueError(i18n.tr("The desktop message supports only the background start."))
     machine = config.load_config()
     from . import updates
-    if updates.draining() and not os.environ.get("BZZ_UPDATE_RESTART"):   # H-46(i): the update waits for running agents, nothing starts meanwhile
-        return command_result(args, {"ok": False, "updating": True, "note": "An update is waiting for running agents; HaiveQueen starts again after it."})
+    by_worker = updates.started_by_update_worker()   # the worker's own restart; a worker of an older version sets no BZZ_UPDATE_RESTART
+    if updates.draining() and not os.environ.get("BZZ_UPDATE_RESTART") and not by_worker:   # H-46(i): the update waits for running agents, nothing starts meanwhile
+        return refuse_start(args, conn, {"updating": True}, "An update is waiting for running agents; HaiveQueen starts again after it.")
     pid = loop_running()
     if pid:
         if stop_flag().exists():
-            return command_result(args, {"ok": True, "running": True, "stopping": True, "pid": pid,
-                                         "running_agents": active_count(conn), "note": "Waiting for the previous stop to finish."})
+            return refuse_start(args, conn, {"running": True, "stopping": True, "pid": pid, "running_agents": active_count(conn)},
+                                "Waiting for the previous stop to finish.")
         return command_result(args, {"ok": True, "running": True, "pid": pid, **({} if args.foreground else gui.launch_detached()),
                                      "note": "The orchestrator is already running."})
     try:
@@ -858,11 +882,11 @@ def cmd_start(args, conn) -> int:
         if pid:
             return command_result(args, {"ok": True, "running": True, "pid": pid, **gui.launch_detached(), "note": "The orchestrator is already running."})
         if start_pending():
-            return command_result(args, {"ok": True, "running": False, "starting": True, "note": "The orchestrator is just starting."})
+            return refuse_start(args, conn, {"running": False, "starting": True}, "The orchestrator is just starting.")
         start_pending_file().parent.mkdir(parents=True, exist_ok=True)
         start_pending_file().write_text(str(os.getpid()), encoding="ascii")
         try:
-            spawn_detached(boot, osplat.runs_dir() / "beekeeper.log")   # the loop has no window: its output goes to this file, round errors show in the dashboard
+            spawn_detached(boot, osplat.runs_dir() / "beekeeper.log", env={"BZZ_UPDATE_RESTART": "1"} if by_worker else None)   # the loop process is no child of the worker   # the loop has no window: its output goes to this file, round errors show in the dashboard
             return command_result(args, {"ok": True, **gui.launch_detached()})
         except Exception:
             start_pending_file().unlink()
