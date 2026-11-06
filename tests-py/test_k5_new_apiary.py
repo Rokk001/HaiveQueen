@@ -143,8 +143,15 @@ class NewApiaryTests(ApiaryCase):
         conn = self.open_db()
         db.upsert_project(conn, "bare", str(self.workspace), "white", 0)
         db.upsert_project(conn, "nofolder", str(self.base / "missing"), "white", 0)
-        files = gui_config.settings_files(conn, self.base)
-        self.assertEqual([f[1] for f in files if not f[2]], [self.workspace / ".haivequeen" / "project.toml"])
+        (self.base / "config.toml").write_text("slots = 2\n", encoding="utf-8")
+        try:
+            root = tkinter.Tk()
+        except tkinter.TclError as exc:
+            self.skipTest("no display: %s" % exc)
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        win = gui_config.ConfigWindow(root, conn, self.base)
+        self.assertEqual([a["path"] for a in win.apiaries], [self.workspace / ".haivequeen" / "project.toml"])
 
 
 class SettingsWindowTests(ApiaryCase):
@@ -174,10 +181,10 @@ class SettingsWindowTests(ApiaryCase):
         conn = self.open_db()
         db.upsert_project(conn, "bare", str(self.workspace), "white", 0)
         win = gui_config.ConfigWindow(self.root, conn, self.base)
-        win.pick_file(next(f[0] for f in win.files if not f[2]))
-        self.assertIs({path[0]: like for path, _getter, like in win.getters}["deployEnabled"], False)
+        win.select(win.entries.index(("apiaries", 0)))
+        self.assertIs({path[-1]: like for path, _getter, like in win.getters}["deployEnabled"], False)
         win.collect()
-        win.target().update({"deployEnabled": True})
+        win.target()["file"].update({"deployEnabled": True})
         win.build_form()
         win.save()
         self.assertEqual(win.status.cget("text"), "Saved.")

@@ -246,9 +246,8 @@ class WindowTest(unittest.TestCase):
         """The General page of a project file offers every Apiary setting with its default under a readable label; a changed value is saved."""
         import tomllib
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
-        index, label = next((i, f[0]) for i, f in enumerate(win.files) if not f[2])
-        win.pick_file(label)
-        keys = {path[0]: like for path, _getter, like in win.getters}
+        win.select(win.entries.index(("apiaries", 0)))
+        keys = {path[1]: like for path, _getter, like in win.getters if path[0] == "file"}
         for key, default in gui_config.APIARY_DEFAULTS:
             if key in gui_config.RELEASE_KEYS:
                 self.assertNotIn(key, keys)   # H-43: the release settings are offered only for a remote on GitHub, this Apiary has none
@@ -258,10 +257,10 @@ class WindowTest(unittest.TestCase):
         self.assertIn("Run the deploy", texts)
         self.assertNotIn("deployEnabled", texts)
         win.collect()
-        win.target().update({"deployEnabled": False, "remoteName": "upstream", "ownerTopics": ["pricing"]})
+        win.target()["file"].update({"deployEnabled": False, "remoteName": "upstream", "ownerTopics": ["pricing"]})
         win.build_form()
         win.save()
-        saved = tomllib.loads(win.files[index][1].read_text(encoding="utf-8"))
+        saved = tomllib.loads(win.apiaries[0]["path"].read_text(encoding="utf-8"))
         self.assertIs(saved["deployEnabled"], False)
         self.assertEqual(saved["remoteName"], "upstream")
         self.assertEqual(saved["ownerTopics"], ["pricing"])
@@ -365,22 +364,118 @@ class WindowTest(unittest.TestCase):
         self.assertIn("slots", win.status.cget("text"))
         self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["slots"], 8)
 
-    # The project.toml of an Apiary is offered as a second file.
+    # The project.toml of an Apiary is edited on its page of the tab Apiaries.
     def test_project_file_is_listed_and_editable(self):
-        """The file list holds config.toml and the project.toml of ODP; saving a changed priority writes it."""
+        """The tab Apiaries lists ODP; saving a changed priority on its page writes its project.toml."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
-        self.assertEqual([f[0] for f in win.files], ["config.toml (machine)", "project.toml (ODP)"])
-        win.pick_file("project.toml (ODP)")
+        win.pick_tab("apiaries")
+        self.assertEqual(win.nodes.get(0, "end"), ("ODP",))
         self.type_into_entry(win, "2", "5")
         win.save()
-        self.assertEqual(gui_config.load_raw(win.files[1][1])["priority"], 5)
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(gui_config.load_raw(self.folder / "ws" / ".haivequeen" / "project.toml")["priority"], 5)
+
+    # Owner answer 372 (1): three tabs, no file selection.
+    def test_window_has_three_tabs_and_no_file_selection(self):
+        """The window offers the tabs General, Providers and Apiaries; no File choice and no file name is shown; each tab lists only its own pages."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        self.assertEqual([b.cget("text") for b in win.tab_buttons.values()], ["General", "Providers", "Apiaries"])
+        texts = [w.cget("text") for w in descendants(win.win) if w.winfo_class() in ("Label", "Button", "Menubutton", "Radiobutton")]
+        self.assertFalse([text for text in texts if "File:" in text or "config.toml (" in text or "project.toml (" in text], texts)
+        self.assertFalse(win.side.winfo_manager())   # the General tab has no list
+        win.pick_tab("providers")
+        self.assertEqual(win.nodes.get(0, "end"), ("claude", "codex"))
+        self.assertEqual(win.add_button.cget("text"), "Add provider")
+        win.pick_tab("apiaries")
+        self.assertEqual(win.nodes.get(0, "end"), ("ODP",))
+        self.assertEqual(win.add_button.cget("text"), "Add Apiary")
+        self.assertTrue(win.side.winfo_manager())
+
+    # Owner answer 372 (2): every setting of an Apiary on one page, each once.
+    def test_apiary_page_holds_all_its_settings_once(self):
+        """The page of an Apiary shows its name and workspace from config.toml and all settings of its project.toml, including the four switches; no key twice."""
+        with mock.patch("haivequeen.publish.github_repository", return_value="owner/name"):
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win.pick_tab("apiaries")
+        paths = [path for path, _getter, _like in win.getters]
+        keys = [path[-1] for path in paths]
+        self.assertEqual(len(keys), len(set(keys)), keys)
+        self.assertIn(("entry", "name"), paths)
+        self.assertIn(("entry", "workspace"), paths)
+        self.assertTrue({("file", "priority"), ("file", "planGlobs")} <= set(paths))
+        labels = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
+        for label in ("Run the compile check", "Run the build", "Run the deploy", "Publish release at integration"):
+            self.assertIn(label, labels)
+        self.assertNotIn(("file", "name"), paths)   # the name of config.toml is the only one
+        self.assertIsNone(win.build_vars)
+        self.assertFalse([p for p, _g, _l in win.getters if p[-1] in ("slots", "hives", "capabilities")])   # no machine or provider setting on an Apiary page
+
+    # H-54 with owner answer 372: Save rewrites no unchanged project.toml.
+    def test_save_rewrites_no_unchanged_apiary_file(self):
+        """Saving after only looking at an Apiary page leaves its project.toml untouched and keeps the provider capabilities as they are."""
+        path = self.folder / "ws" / ".haivequeen" / "project.toml"
+        before = path.read_text(encoding="utf-8")
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(1)
+        win.select(2)
+        win.pick_tab("apiaries")
+        win.save()
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+        self.assertFalse(path.with_name("project.toml.bak").exists())
+        codex = gui_config.load_raw(self.folder / "config.toml")["providers"][1]
+        self.assertEqual((codex["capabilities"], codex["use"]), (["images"], "capability-only"))
+
+    # Owner answer 372 (3): the capabilities stay on the provider pages.
+    def test_capabilities_are_on_the_provider_pages_only(self):
+        """A provider page offers the capability ticks; a changed tick is saved for that provider."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(1)   # provider claude
+        self.assertIn(("capabilities",), [p for p, _g, _l in win.getters])
+        boxes = {w.cget("text"): w for w in descendants(win.form) if w.winfo_class() == "Checkbutton"}
+        boxes["Deploy"].invoke()
+        win.save()
+        claude = gui_config.load_raw(self.folder / "config.toml")["providers"][0]
+        self.assertIn("Deploy", claude["capabilities"])
+
+    # Owner answer 372 (2): Add Apiary creates its project.toml in the background.
+    def test_add_apiary_creates_its_project_file(self):
+        """Add Apiary adds a page; with a name and an existing workspace Save writes config.toml, registers the Apiary and creates its project.toml with the switches set on the page."""
+        new = self.folder / "fresh"
+        new.mkdir()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.pick_tab("apiaries")
+        win.add_entry()
+        self.assertEqual(win.nodes.get(0, "end"), ("ODP", "new-apiary"))
+        self.type_into_entry(win, "new-apiary", "Fresh")
+        self.type_into_entry(win, "", str(new))
+        self.assertTrue(win.collect())
+        win.target()["file"]["buildEnabled"] = False
+        win.build_form()
+        win.save()
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        listed = gui_config.load_raw(self.folder / "config.toml")["projects"]
+        self.assertEqual(listed[-1], {"name": "Fresh", "workspace": str(new)})
+        self.assertEqual(gui_config.load_raw(new / ".haivequeen" / "project.toml"), {"buildEnabled": False})
+        self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='Fresh'").fetchone()[0], str(new.resolve()))
+
+    def test_add_apiary_without_workspace_writes_no_project_file(self):
+        """A new Apiary whose workspace does not exist cannot keep changed settings: nothing is written and the reason is shown."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.pick_tab("apiaries")
+        win.add_entry()
+        win.target()["file"]["deployEnabled"] = True
+        before = (self.folder / "config.toml").read_text(encoding="utf-8")
+        win.save()
+        self.assertIn("workspace folder does not exist", win.status.cget("text"))
+        self.assertEqual((self.folder / "config.toml").read_text(encoding="utf-8"), before)
 
     # Adding and removing a provider.
     def test_add_and_remove_provider(self):
         """A new provider appears in the list and in the saved file; removing it afterwards removes it again."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.add_provider()
-        self.assertIn("provider: new-provider", win.nodes.get(0, "end"))
+        self.assertIn("new-provider", win.nodes.get(0, "end"))
         self.type_into_entry(win, "new-provider", "extra")
         win.save()
         names = [p["name"] for p in gui_config.load_raw(self.folder / "config.toml")["providers"]]
@@ -564,7 +659,7 @@ class WindowTest(unittest.TestCase):
     def test_project_file_has_no_build_block(self):
         """The build block belongs to the machine settings only."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
-        win.pick_file("project.toml (ODP)")
+        win.pick_tab("apiaries")
         self.assertIsNone(win.build_vars)
 
 

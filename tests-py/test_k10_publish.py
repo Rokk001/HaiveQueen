@@ -394,13 +394,8 @@ class IntegrationPointTests(PublishCase):
         with mock.patch("haivequeen.db.now", return_value="2002-01-01T00:00:00"):
             old = runtime.queue_upsert(self.conn, "testproj", "old", tip=self.tip, plan="old.md", status="integrated")
         data["publishReleases"] = True
-        from types import SimpleNamespace
-        window = SimpleNamespace(conn=self.conn, data=data, files=[("project", path)], index=0,
-                                 collect=lambda: True, machine=lambda: False,
-                                 status=SimpleNamespace(config=lambda **kw: None),
-                                 col={"red": "red", "green": "green"}, on_saved=None)
         with mock.patch("haivequeen.db.now", return_value="2002-01-01T00:00:00"):
-            gui_config.ConfigWindow.save(window)
+            gui_config.save_project_file(self.conn, path, data)
         with mock.patch("haivequeen.db.now", return_value="2003-01-01T00:00:00"):
             runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
         with mock.patch("haivequeen.db.now", return_value="2004-01-01T00:00:00"):
