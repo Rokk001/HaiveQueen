@@ -169,7 +169,7 @@ class InstallTests(RoundCase):
     def test_worker_command_line_names_the_release(self):
         argv = selfupdate.worker_argv("2.0.2")
         self.assertEqual(argv[-3:], ["--worker", "--version", "2.0.2"])
-        self.assertEqual(selfupdate.worker_argv()[-1], "--worker")   # the legacy self-update stays (H-46 j)
+        self.assertEqual(selfupdate.worker_argv()[-1], "--worker")   # the one-time checkout update of H-46 (j)
 
     def fake_run(self, heads):
         calls = []
@@ -216,12 +216,91 @@ class InstallTests(RoundCase):
             selfupdate.run_update(self.conn, live=self.base, run=lambda a, c: (0, ""), version="2.0; rm")
 
     def test_legacy_self_update_still_merges_the_integration_branch_and_pushes(self):
+        """Before the first release (H-46 j) the checkout update lands the plan."""
         calls, run = self.fake_run(["a" * 40, "b" * 40])
         with mock.patch.object(selfupdate, "wait_first_round", return_value=True), mock.patch.object(selfupdate, "lock_path", return_value=self.base / "lock"):
             selfupdate.run_update(self.conn, live=self.base, run=run, sleep=lambda s: None, alive=lambda p: False, loop_pid=lambda: None)
         joined = [" ".join(a) for a in calls]
         self.assertTrue(any("merge --ff-only origin/main" in j for j in joined), joined)
         self.assertTrue(any("push origin main" in j for j in joined), joined)
+
+    def legacy_run(self, tag=""):
+        """Runner whose `git describe` answers `tag` (a release tag of the live folder, or none)."""
+        calls, run = self.fake_run(["a" * 40, "b" * 40])
+
+        def tagged(argv, cwd):
+            if "describe" in argv:
+                calls.append(argv)
+                return (0, tag + "\n") if tag else (128, "fatal: No names found, cannot describe anything.")
+            return run(argv, cwd)
+        return calls, tagged
+
+    def legacy_update(self, run):
+        with mock.patch.object(selfupdate, "wait_first_round", return_value=True), mock.patch.object(selfupdate, "lock_path", return_value=self.base / "lock"):
+            return selfupdate.run_update(self.conn, live=self.base, run=run, sleep=lambda s: None, alive=lambda p: False, loop_pid=lambda: None)
+
+    def test_legacy_self_update_is_retired_after_a_published_release(self):
+        """H-42: once HaiveQueen published a release for project HaiveQueen the checkout update neither merges nor pushes nor stops the loop."""
+        from haivequeen import publish, runtime
+        runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_KEY, "2.0.1")
+        calls, run = self.legacy_run()
+        res = self.legacy_update(run)
+        self.assertEqual(res["result"], "retired")
+        self.assertIn("2.0.1", res["note"])
+        self.assertIn("bzz update", res["note"])
+        joined = [" ".join(a) for a in calls]
+        self.assertFalse(any(" merge " in j or " push " in j or " fetch " in j or "start" in j for j in joined), joined)
+        self.assertIsNone(self.conn.execute("SELECT id FROM self_updates").fetchone())
+        self.assertFalse(loop.stop_flag().exists())
+
+    def test_legacy_self_update_is_retired_when_the_live_folder_is_at_a_release(self):
+        calls, run = self.legacy_run("v2.0.1")
+        res = self.legacy_update(run)
+        self.assertEqual(res["result"], "retired")
+        self.assertIn("v2.0.1", res["note"])
+        self.assertFalse(any("push" in a or "merge" in a for a in calls), calls)
+
+    def test_a_non_release_tag_keeps_the_transition_open(self):
+        calls, run = self.legacy_run("v2.0.1-rc1")
+        self.assertEqual(selfupdate.legacy_retired(self.conn, self.base, run), "")
+
+    def test_release_of_another_project_keeps_the_transition_open(self):
+        from haivequeen import publish, runtime
+        runtime.kv_set(self.conn, "Other", publish.LAST_KEY, "3.0.0")
+        calls, run = self.legacy_run()
+        self.assertEqual(selfupdate.legacy_retired(self.conn, self.base, run), "")
+
+    def test_release_install_still_works_after_the_legacy_path_is_retired(self):
+        """The common release update stays the ongoing path."""
+        from haivequeen import publish, runtime
+        runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_KEY, "2.0.1")
+        calls, run = self.legacy_run("v2.0.1")
+        with mock.patch.object(selfupdate, "wait_first_round", return_value=True), mock.patch.object(selfupdate, "lock_path", return_value=self.base / "lock"):
+            res = selfupdate.run_update(self.conn, live=self.base, run=run, sleep=lambda s: None, alive=lambda p: False,
+                                        loop_pid=lambda: None, version="2.0.2")
+        self.assertEqual(res["result"], "ok")
+        self.assertTrue(any("merge --ff-only v2.0.2" in " ".join(a) for a in calls))
+
+    def test_retired_command_does_not_spawn_the_worker(self):
+        from haivequeen import publish, runtime
+        runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_KEY, "2.0.1")
+        out = []
+        with mock.patch.object(selfupdate, "spawn_worker", side_effect=AssertionError("spawned")), \
+                mock.patch("builtins.print", side_effect=lambda text: out.append(json.loads(text))):
+            code = selfupdate.cmd_self_update(Namespace(worker=False, version=None), self.conn)
+        self.assertEqual(code, 1)
+        self.assertEqual(out[0]["result"], "retired")
+        with mock.patch.object(selfupdate, "spawn_worker", return_value={"how": "detached"}) as spawn, \
+                mock.patch("builtins.print"):
+            self.assertEqual(selfupdate.cmd_self_update(Namespace(worker=False, version="2.0.2"), self.conn), 0)
+        spawn.assert_called_once_with(version="2.0.2")
+
+    def test_transition_command_still_spawns_the_worker_before_the_first_release(self):
+        """H-46 (j): before the first release the checkout update lands the plan one last time."""
+        with mock.patch.object(selfupdate, "legacy_retired", return_value=""), \
+                mock.patch.object(selfupdate, "spawn_worker", return_value={"how": "detached"}) as spawn, mock.patch("builtins.print"):
+            self.assertEqual(selfupdate.cmd_self_update(Namespace(worker=False, version=None), self.conn), 0)
+        spawn.assert_called_once_with()
 
     def test_finished_install_is_recognised(self):
         state = {"installing": {"version": "2.0.2", "after_row": 4}}

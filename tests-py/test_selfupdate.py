@@ -39,6 +39,8 @@ class FakeGit:
         if argv[0] == "git":
             sub = [a for a in argv[3:]]   # after: git -C <live>
             name = sub[0]
+            if name == "describe":   # the retirement check (H-42): no release tag, so the one-time checkout update runs
+                return 128, "fatal: No names found, cannot describe anything."
             self.calls.append((name + (" " + sub[1] if name in ("merge", "reset", "push") else ""), str(cwd)))
             if self.fail.get(name):
                 return self.fail[name], "git %s failed" % name
@@ -470,7 +472,7 @@ class UpdateTest(SelfUpdateBase):
         def run(argv, cwd):
             """After the start of the new loop a round error is logged."""
             res = inner(argv, cwd)
-            if inner.calls[-1][0] == "start" and inner.words().count("start") == 1:
+            if inner.calls and inner.calls[-1][0] == "start" and inner.words().count("start") == 1:
                 db.add_event(self.conn, "ODP", "rounds", "ROUND ERROR pane HaiveQueen.3 did not start within 20 s " + "x" * 300 + " END-OF-ERROR")
             return res
         run.inner = inner
@@ -491,7 +493,7 @@ class UpdateTest(SelfUpdateBase):
         def run(argv, cwd):
             """After the start of the new loop an agent is marked as vanished."""
             res = inner(argv, cwd)
-            if inner.calls[-1][0] == "start" and inner.words().count("start") == 1:
+            if inner.calls and inner.calls[-1][0] == "start" and inner.words().count("start") == 1:
                 db.add_event(self.conn, "ODP", "note", "Ada: runner process vanished (ended by executor or crashed), marked failed")
             return res
         run.inner = inner

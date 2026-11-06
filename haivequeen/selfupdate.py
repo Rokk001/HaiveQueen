@@ -10,6 +10,10 @@ The live folder is the folder of this package: no path of a machine is written i
 With a version (`self-update --worker --version X`, started by the update button, H-42) the same worker installs the release X instead: it
 fetches the tag vX from origin, fast-forwards to it and never pushes. While the worker holds its lock no Queen or Bee starts (H-46 i); its own
 restart carries the variable BZZ_UPDATE_RESTART, which `start` accepts while the lock is held.
+
+The checkout update without a version is the one-time transition of H-46 (j): it is retired (refused with result "retired", no row, no
+merge, no push) as soon as the release path has started, i.e. HaiveQueen published a release for project HaiveQueen or the live folder
+is at a release tag vX.Y.Z. From then on the common release update (`bzz update`, the update button) is the only way (H-42).
 """
 import json
 import os
@@ -49,6 +53,31 @@ def integration_branch(conn) -> str:
     from . import scheduler
     env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == PROJECT), None)
     return str((env.settings if env else {}).get("integrationBranch") or "main")
+
+
+def legacy_retired(conn, live=None, run=None) -> str:
+    """Why the checkout update (no version) is retired, or "" while the one-time transition of H-46 (j) is still open.
+
+    Retired once a release was published for project HaiveQueen (kv release-last) or the live folder's HEAD has a release tag vX.Y.Z
+    in its history (it was installed from a release)."""
+    import re
+    from . import publish, runtime
+    try:
+        last = runtime.kv_get(conn, PROJECT, publish.LAST_KEY) if conn is not None else None
+    except Exception:
+        last = None
+    if last:
+        return "release %s was published" % last
+    live = Path(live or live_folder())
+    run = run or run_command
+    code, out = run(["git", "-C", str(live), "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD"], live)
+    tag = (out or "").strip()
+    if code == 0 and re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag):
+        return "the live folder is at release %s" % tag
+    return ""
+
+
+RETIRED_NOTE = "the checkout self-update was a one-time transition (H-46 j) and is retired: %s; use `bzz update` or the update button"
 
 
 # ---- starting the detached worker ----
@@ -208,6 +237,10 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
     if version is not None:
         from . import releases
         releases.next_version(str(version))   # only a plain version number reaches git
+    else:
+        why = legacy_retired(conn, live, run)
+        if why:
+            return {"result": "retired", "note": RETIRED_NOTE % why, "old": "", "new": ""}
     holder = loop._take_pid_lock(lock_path(), own_ok=False, wait=0.5)
     if holder:
         return {"result": "locked", "note": "another self-update runs (pid %s)" % holder, "old": "", "new": ""}
@@ -296,6 +329,11 @@ def cmd_self_update(args, conn) -> int:
         print(json.dumps({"ok": res["result"] in ("ok", "rollback"), **res}))
         return 0 if res["result"] in ("ok", "rollback") else 1
     version = getattr(args, "version", None)
+    if not version:
+        why = legacy_retired(conn)
+        if why:
+            print(json.dumps({"ok": False, "result": "retired", "note": RETIRED_NOTE % why}))
+            return 1
     print(json.dumps({"ok": True, **(spawn_worker(version=version) if version else spawn_worker())}))
     return 0
 
