@@ -311,6 +311,28 @@ class WindowTest(unittest.TestCase):
         win.save()
         self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["language"], "German")
 
+    def test_provider_arguments_survive_save_and_unrelated_edit(self):
+        path = self.folder / "config.toml"
+        example = gui_config.load_raw(Path(__file__).resolve().parents[1] / "examples" / "config.example.toml")
+        data = gui_config.load_raw(path)
+        args = example["providers"][0]["args"]
+        args[2:2] = ["--allowedTools", "Read, Bash(git status)"]
+        data["providers"][0]["args"] = args
+        data["providers"][0]["extraList"] = ["first", "", " last "]
+        gui_config.save_file(path, data)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(1)
+        win.save()
+        saved = gui_config.load_raw(path)["providers"][0]
+        self.assertEqual(saved["args"], args)
+        self.assertEqual(saved["extraList"], ["first", "", " last "])
+        self.type_into_entry(win, "5", "4")
+        win.save()
+        saved = gui_config.load_raw(path)["providers"][0]
+        self.assertEqual(saved["slots"], 4)
+        self.assertEqual(saved["args"], args)
+        self.assertEqual(saved["extraList"], ["first", "", " last "])
+
     # Editing the allowed tools list and a number, then saving.
     def test_edit_allowed_tools_and_save(self):
         """Changing the allowed tools and the slots of a provider writes both; everything else in the file stays."""

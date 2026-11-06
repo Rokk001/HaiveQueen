@@ -542,8 +542,7 @@ class ConfigWindow:
             from . import cli_presets
             key = cli_presets.key_for(data)
             if key == cli_presets.CUSTOM:
-                data.setdefault("profileEnv", {})   # an own CLI: the variables that point it to the profile folder ({home} = its profile folder)
-                shown["profileEnv"] = data["profileEnv"]
+                shown.setdefault("profileEnv", {})   # variables pointing to the CLI profile folder ({home} = its profile folder)
                 shown.setdefault("loginCommand", "")   # the command that makes the login
                 shown.setdefault("loginFiles", [])   # the login files, relative to the profile folder of the CLI
                 shown.setdefault("outputFormat", "")   # the output format the CLI writes: claude, codex or opencode
@@ -570,6 +569,8 @@ class ConfigWindow:
             shown.setdefault("beeMode", "process" if shown.get("protocol") == "codex" else "subagent")   # always offer the setting, with the value that applies without an entry
         self.fields(self.form, shown, ())
         self.add_row(self.form, ())
+        self.initial_values = {path: getter() for path, getter, _like in self.getters}
+        self.initial_build = tuple(v.get() for v in self.build_vars) if self.build_vars else None
 
     def github_repository(self, shown):
         """owner/name of the GitHub remote of the shown Apiary (its remoteName), or None."""
@@ -844,7 +845,7 @@ class ConfigWindow:
         if isinstance(value, list) and all(isinstance(v, str) for v in value):
             text.insert("1.0", "\n".join(value))
             text.pack(side="left", fill="x", expand=True)
-            return lambda: [line.strip() for line in text.get("1.0", "end").splitlines() if line.strip()]
+            return lambda: text.get("1.0", "end-1c").split("\n") if text.get("1.0", "end-1c") else []
         text.insert("1.0", json.dumps(value))
         text.pack(side="left", fill="x", expand=True)
         def read_json():
@@ -882,16 +883,18 @@ class ConfigWindow:
         """Write every editor value of the shown part into `self.data`; show the first wrong value in the status line and return False."""
         data = self.target()
         values = {}
+        current = {}
         where = ()
         try:
             for path, getter, like in self.getters:
                 where = path
                 raw = getter()
+                current[path] = raw
                 values[path] = raw if isinstance(raw, (bool, list, dict)) or isinstance(like, (bool, list)) else parse_typed(raw, like)
         except (ValueError, TypeError) as exc:
             self.status.config(text="%s: %s" % (".".join(where), exc), fg=self.col["red"])
             return False
-        if self.build_vars is not None:
+        if self.build_vars is not None and tuple(v.get() for v in self.build_vars) != self.initial_build:
             try:
                 apply_build(self.data, *[v.get() for v in self.build_vars], cores=machine_cores())
             except ValueError as exc:
@@ -899,15 +902,30 @@ class ConfigWindow:
                 return False
         old_entry = dict(data) if self.node[0] == "providers" else None
         for path, raw in values.items():
-            if self.node[0] == "providers" and path in (("allowedTools",), ("args",)):
+            if (self.node[0] == "providers" and path in (("allowedTools",), ("args",))) or current[path] == self.initial_values[path]:
                 continue
             target = data
             for step in path[:-1]:
-                target = target[step]
+                target = target.setdefault(step, {})
             target[path[-1]] = raw
         if self.node[0] == "providers":
-            keep_legacy_entry(data, old_entry)
-            data["args"] = join_args(values.get(("args",), []), values.get(("allowedTools",), []), self.position)
+            if any(current.get((key,)) != self.initial_values.get((key,)) for key in ("capabilities", "use")):
+                keep_legacy_entry(data, old_entry)
+            rest = values.get(("args",), [])
+            tools = values.get(("allowedTools",), [])
+            if rest != self.initial_values.get(("args",)) or tools != self.initial_values.get(("allowedTools",)):
+                args = join_args(rest, tools, self.position)
+                if tools == self.initial_values.get(("allowedTools",)) and self.position is not None:
+                    pair = old_entry["args"][self.position:self.position + 2]
+                    if tools:
+                        args[self.position + 1] = pair[1]
+                    else:
+                        pos = min(self.position, len(args))
+                        args[pos:pos] = pair
+                data["args"] = args
+                _, _, self.position = split_args(args)
+        self.initial_values = current
+        self.initial_build = tuple(v.get() for v in self.build_vars) if self.build_vars else None
         self.status.config(text="")
         return True
 
