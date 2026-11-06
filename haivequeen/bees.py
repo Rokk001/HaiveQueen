@@ -270,7 +270,8 @@ FAILURE_QUESTION = 'The package remains unsolved at the highest available class.
 
 def retry_epoch(conn, project, plan, package):
     """Last signal before the most recent owner-directed retry; None before any answer."""
-    row = conn.execute('SELECT signal_rowid FROM bee_retry_answers WHERE project=? AND plan_path=? AND package=? ORDER BY question_id DESC LIMIT 1', (project, plan, package)).fetchone()
+    # Signal boundaries advance when answers arrive, regardless of question creation order.
+    row = conn.execute('SELECT MAX(signal_rowid) FROM bee_retry_answers WHERE project=? AND plan_path=? AND package=?', (project, plan, package)).fetchone()
     return row[0] if row else None
 
 

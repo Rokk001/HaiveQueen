@@ -78,6 +78,23 @@ class ReleaseRetryTests(RoundCase):
         db.answer_question(self.conn, q['id'], 'Duplicate.', 'auto')
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 3)
 
+    def test_retry_boundary_follows_answer_order_not_question_order(self):
+        # Pending questions can be answered out of creation order.
+        older = db.add_question(self.conn, 'testproj', REL, 'P1', bees.FAILURE_QUESTION, '')
+        newer = db.add_question(self.conn, 'testproj', REL, 'P1', bees.FAILURE_QUESTION, '')
+        for attempt in ('a0', 'a1'):
+            bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', attempt, ['R'])
+        db.answer_question(self.conn, newer, 'Try this approach.', 'owner')
+        for attempt in ('b0', 'b1'):
+            bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', attempt, ['R'])
+        db.answer_question(self.conn, older, 'Use the revised approach.', 'coordinator')
+        bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', 'c0', ['R'])
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 0)
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_attempt_signals').fetchone()[0], 5)
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_retry_answers').fetchone()[0], 2)
+        self.assertEqual([r[0] for r in self.conn.execute('SELECT previous_counts FROM bee_retry_answers')],
+                         ['{"heavy": 1}', '{"heavy": 1}'])
+
     def test_every_open_bee_needs_proof(self):
         for name in ('Ada', 'Bea'):
             bees.record_embedded_start(self.conn, 'testproj', REL, 'P1', name, 'medium', 'claude')
