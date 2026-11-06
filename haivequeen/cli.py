@@ -479,7 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--error", default="")
     p.add_argument("--blocked-by", choices=["question", "build", "owner", "package", "provider"], default="")
     p.add_argument("--blocked-ref", default="")
-    p.add_argument("--ended-evidence", default="", help="file the subagent Bee of an earlier Queen wrote at its end (its final report)")
+    p.add_argument("--ended-evidence", default="", help="existing Bee result file; release also requires its matching agent row to have ended or its known process to be absent")
     p.add_argument("--no-subagents", action="store_true")
     p.set_defaults(fn=cmd_bee)
 

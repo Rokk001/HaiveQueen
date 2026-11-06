@@ -326,6 +326,8 @@ def answer_question(conn, qid: int, text: str, by: str, apiary: bool = False) ->
             (row["project"], now(), by, f"{row['question']} -> {text}", None if apiary else row["plan_path"], row["item"]),
         )
         add_event(conn, row["project"], "answer", text, data={"question_id": qid, "by": by})
+        from . import bees
+        bees.answer_failure_question(conn, row, by)
     return {"id": qid, "project": row["project"], "answered_by": by}
 
 
