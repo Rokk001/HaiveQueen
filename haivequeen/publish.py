@@ -24,7 +24,8 @@ QUEUE_KEY = "release-queue"       # JSON list of the integrations not yet publis
 PENDING_KEY = "release-pending"   # the single pending entry of the first K10 version; taken over into the queue
 LAST_KEY = "release-last"         # the version HaiveQueen published last
 ERROR_KEY = "release-error"
-SINCE_KEY = "release-since"       # when HaiveQueen first saw the switch on; older integrations get no release
+SINCE_KEY = "release-since"       # switch-on time (first observation for legacy configurations); older integrations get no release
+BEFORE_KEY = "release-before-switch"  # integrated queue IDs already present at switch-on
 DONE_PREFIX = "release-done:"
 
 _UPSERT = ("INSERT INTO kv (project, key, value, updated_at) VALUES (?,?,?,?) "
@@ -217,12 +218,20 @@ def pending_releases(conn, project) -> list:
 
 
 def _since(conn, env) -> str:
-    """The time HaiveQueen first saw the switch on (kept in kv release-since); integrations before it get no release."""
+    """The recorded switch-on time; legacy configurations fall back to the first observation."""
     value = runtime.kv_get(conn, env.name, SINCE_KEY)
     if not value:
         value = db.now()
         runtime.kv_set(conn, env.name, SINCE_KEY, value)
     return value
+
+
+def _before_switch(conn, project):
+    """Queue IDs already integrated when the current switch-on occurred."""
+    try:
+        return set(json.loads(runtime.kv_get(conn, project, BEFORE_KEY) or "[]"))
+    except (ValueError, TypeError):
+        return set()
 
 
 def _append(conn, env, row, run, exact) -> dict:
@@ -255,7 +264,7 @@ def record(conn, env, plan, run=None):
                        (env.name, plan)).fetchone()
     if not row or row["status"] != "integrated" or runtime.kv_get(conn, env.name, DONE_PREFIX + str(row["id"])):
         return None
-    if since and str(row["updated_at"] or "") < since:
+    if row["id"] in _before_switch(conn, env.name) or (since and str(row["updated_at"] or "") < since):
         return None
     return _append(conn, env, row, run or _run, exact=False)
 
@@ -269,8 +278,9 @@ def discover(conn, env, run=None) -> list:
                         "AND NOT EXISTS (SELECT 1 FROM hive_integration h WHERE h.project=q.project AND h.plan_path=q.plan_path) ORDER BY id",
                         (env.name, since)).fetchall()
     added = []
+    before = _before_switch(conn, env.name)
     for row in rows:
-        if row["id"] in queued or runtime.kv_get(conn, env.name, DONE_PREFIX + str(row["id"])):
+        if row["id"] in before or row["id"] in queued or runtime.kv_get(conn, env.name, DONE_PREFIX + str(row["id"])):
             continue
         added.append(_append(conn, env, row, run or _run, exact=True))
     return added
