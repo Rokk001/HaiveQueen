@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from haivequeen import config, db, legacy, loop, runtime, runtime_cli, selfupdate  # noqa: E402
+from haivequeen import config, db, legacy, loop, runtime, runtime_cli, selfupdate, updates  # noqa: E402
 from haivequeen import export as export_mod, init as init_mod, views  # noqa: E402
 
 STUBS = ()
@@ -231,6 +231,12 @@ def cmd_integration(args, conn):
             last = conn.execute("SELECT status FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (args.project, args.plan)).fetchone()
             if last and last["status"] == "integrated" and integration.sync(env, args.plan, hive["provider"])["Deploy"] == "package" and integration.open_steps(env, args.plan, ("Deploy",)):
                 return fail("release refused: integration step package %s is not done; start a Bee for it first" % integration.DEPLOY)
+        if env:
+            from haivequeen import publish
+            try:
+                publish.after_integration(conn, env, args.plan)   # H-43/H-46(k): HaiveQueen publishes the release itself; a failure is retried by the loop
+            except Exception as exc:
+                db.add_event(conn, args.project, "release", "release step failed: %s" % exc)
         hives.release_integration(conn, args.project, args.plan)
         if env:
             worktrees.cleanup(env)
@@ -563,6 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
     legacy.register(sub)
     loop.register(sub)
     selfupdate.register(sub)
+    updates.register(sub)
     from haivequeen import worktrees
     worktrees.register(sub)
 

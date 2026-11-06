@@ -522,13 +522,22 @@ def orchestrator_state(run_state, loop_pid, stop_pending) -> dict:
 
 
 # Read the installed package version for the header.
+_VERSION_CACHE = {}
+
+
 def _version() -> str:
-    """Version of the haivequeen package, or an en dash when it is not installed."""
+    """The installed version (release tag of the install folder, see updates.installed_version), read at most once a minute; an en dash when unknown."""
+    import time
+    now = time.monotonic()
+    if _VERSION_CACHE and now - _VERSION_CACHE["at"] < 60:
+        return _VERSION_CACHE["value"]
     try:
-        from importlib.metadata import version
-        return version("haivequeen")
+        from . import updates
+        value = updates.installed_version()
     except Exception:
-        return "–"
+        value = "–"
+    _VERSION_CACHE.update(at=now, value=value)
+    return value
 
 
 # Collect everything the graphical dashboard shows in one call.

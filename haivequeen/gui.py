@@ -187,6 +187,7 @@ class Dashboard:
         root.bind("<Key>", self.on_key)
         self.canvas.bind("<Destroy>", self.on_destroy)
         self.tick_job = None
+        self.update_state, self.update_thread = {}, None   # H-42: the last update check and a running check (thread)
         self.tick()
 
     # Cancel the pending redraw and refresh when the window closes.
@@ -214,7 +215,57 @@ class Dashboard:
             self.snap, self.error = gui_data.snapshot(self.conn, self.project), ""
         except Exception as exc:   # a failed read must not close the window
             self.error = tr("error: %s", exc)
+        self.watch_update()
         self.draw()
+
+    # The update function of the header (H-42).
+    def watch_update(self, manual=False):
+        """Read the last update check, start the daily check (or with `manual` Check now) in a thread, and restart the window after a finished install."""
+        import threading
+        from . import updates
+        try:
+            if updates.settle_install(db.last_self_update(self.conn)) == "ok":
+                self.restart_window()
+                return
+            self.update_state = updates.load_state()
+        except Exception:   # the update line must never break the dashboard
+            self.update_state = {}
+        if self.update_thread is not None and self.update_thread.is_alive():
+            return
+        machine = config.load_config()
+        if manual or (not self.update_state.get("installing") and updates.due(machine, self.update_state)):
+            self.update_thread = threading.Thread(target=(lambda: updates.check(machine, manual=True)) if manual else (lambda: updates.scheduled_check(machine)), daemon=True)
+            self.update_thread.start()
+
+    # Check for a new version now.
+    def check_update(self):
+        """The button Check now: ask GitHub at once; the header shows the result at the next refresh."""
+        self.watch_update(manual=True)
+        self.draw()
+
+    # Install the offered version after a confirmation.
+    def install_update(self):
+        """The update button: after the confirmation the detached worker waits for running agents, installs the release and restarts HaiveQueen."""
+        from . import updates
+        found = updates.offered(self.update_state)
+        if not found or not self.confirm(tr(updates.TEXT_CONFIRM, found["version"])):
+            return
+        try:
+            updates.request_install(found["version"])
+        except Exception as exc:
+            self.inform(str(exc))
+        self.refresh()
+
+    # Start the window again with the installed code.
+    def restart_window(self):
+        """Close this window and open it again in a new process (after an install the new code shows the new version)."""
+        try:
+            if lock_file().read_text(encoding="ascii").strip() == str(os.getpid()):
+                lock_file().unlink()
+        except OSError:
+            pass
+        launch_detached()
+        self.root.after(100, self.root.destroy)
 
     # Refresh and schedule the next round.
     def tick(self):
@@ -378,6 +429,14 @@ class Dashboard:
         left = self.canvas.bbox(first)[2] / self.scale   # the link starts where the first part ends (design units)
         link = self.text(left, 143, "Rokk001/HaiveQueen", 17, "cyan", "w", underline=True)
         self.hit(left - 4, 130, self.canvas.bbox(link)[2] / self.scale + 4, 156, lambda _a: self.open_repo())
+        from . import updates
+        text, level, action = updates.header_line(self.update_state, self.update_thread is not None and self.update_thread.is_alive())
+        x = self.canvas.bbox(link)[2] / self.scale + 10
+        bar = self.text(x, 143, "|", 17, "cyan", "w")
+        x = self.canvas.bbox(bar)[2] / self.scale + 10
+        item = self.text(x, 143, text, 17, {"warn": "amber", "bad": "red"}.get(level, "dim"), "w", underline=action is not None)
+        if action:
+            self.hit(x - 4, 130, self.canvas.bbox(item)[2] / self.scale + 4, 156, lambda _a: self.install_update() if action == "install" else self.check_update())
 
     # Draw the six tiles.
     def tiles(self, s):

@@ -55,6 +55,8 @@ DEFAULT_SETTINGS = {
     "deployEnabled": False,  # an Apiary from before the switches keeps it on: build_settings(legacy_deploy)
     "deleteFinishedWorktrees": True,
     "deleteIntegratedBranches": False,
+    "publishReleases": False,   # HaiveQueen publishes a GitHub release at each integration (only for a remote on GitHub)
+    "nextVersion": "",          # the owner's next version (e.g. 2.1.0); without it the last digit counts up
     "buildFlowDoc": "",
     "integratorInstructions": "",
     "worktreePrefix": "wt",

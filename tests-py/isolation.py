@@ -42,6 +42,7 @@ def snapshot_real(bases=None) -> dict:
 
 
 REAL_BEFORE = snapshot_real()
+os.environ.setdefault("BZZ_NO_UPDATE_CHECK", "1")   # no automatic update check asks GitHub during the tests (test_k10_updates.py removes this)
 os.environ.setdefault("BZZ_NO_LOGIN_CHECK", "1")   # providers of the tests need no login in the profile (test_profile.py removes this)
 ROOT = Path(tempfile.mkdtemp(prefix="hq-tests-appdata-"))
 REDIRECTED = {"LOCALAPPDATA": ROOT / "local", "APPDATA": ROOT / "roaming", "XDG_DATA_HOME": ROOT / "local", "XDG_CONFIG_HOME": ROOT / "roaming"}

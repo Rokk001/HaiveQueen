@@ -307,6 +307,15 @@ def refuse(env, package, reason):
     return False
 
 
+# The reason no Bee may start while an update waits for running agents.
+def drain_refusal(draining=None):
+    """H-46(i): while the update worker waits for running agents no Bee starts, an embedded one included; the reason, else None."""
+    from . import updates
+    if (draining or updates.draining)():
+        return 'an update of HaiveQueen waits for the running agents to end; no Bee starts until it has restarted'
+    return None
+
+
 # Start a separate Bee process after validating context, memory, slots and routing.
 def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=None, no_subagents=False):
     """Start an eligible Bee through the agent runner. Every package goes to a Bee, the Queen never works one herself; the provider setting beeMode decides whether
@@ -318,6 +327,9 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
     from . import hives, loop, routine, usage
     with loop.hive_schedule_lock():
         check_dependencies(env, plan, package)
+        draining = drain_refusal()
+        if draining:
+            return refuse(env, package, draining)
         hive = hives.get(env.conn, env.name, plan)
         if not hive or not hives.can_start_bee(env.conn, env.name, plan, False, env.settings.get('contextLimitTokens', 300000)):
             return refuse(env, package, 'the Hive may not start a Bee now (Hive state %s, context limit or HANDOFF reached)' % (hive['state'] if hive else 'missing'))

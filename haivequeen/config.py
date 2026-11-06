@@ -16,6 +16,7 @@ DEFAULT_CONFIG = {
     "exportDir": "",
     "projects": [],
     "retention": {"logsDays": 30, "runsDays": 30, "databaseDays": 90, "inboxDays": 30},
+    "update": {"checkHours": 24, "repository": ""},
 }
 
 DEFAULT_PROJECT = {

@@ -42,6 +42,31 @@ def check_latest(repository: str, current: str):
     return {"version": version, "url": str(release.get("html_url", ""))}
 
 
+def latest_version(repository: str):
+    """The version of the latest stable GitHub release of `repository`, or None when it has none (404) or its tag is no version."""
+    import json
+    from urllib.error import HTTPError
+    from urllib.request import Request
+
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(part in (".", "..") for part in repository.split("/")):
+        raise ValueError("repository must be an owner/name pair")
+    request = Request("https://api.github.com/repos/%s/releases/latest" % repository,
+                      headers={"Accept": "application/vnd.github+json", "User-Agent": "HaiveQueen"})
+    try:
+        with urlopen(request, timeout=15) as response:
+            release = json.load(response)
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+    version = str(release.get("tag_name", "")).removeprefix("v")
+    try:
+        next_version(version)
+    except ValueError:
+        return None
+    return version
+
+
 def repository_from_remote(remote: str) -> str:
     """Extract an owner/name pair from a GitHub HTTPS or SSH remote."""
     match = re.fullmatch(
