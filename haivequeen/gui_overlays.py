@@ -5,9 +5,10 @@ without units has no rows and the window writes "none". The tokens of a Bee that
 (gui_data.hive_row takes them from the Queen's row), so every sum counts them once."""
 from . import runtime, scheduler as sch, startctx
 from . import overview
+from .i18n import N_, tr
 
 KEYS = ("apiaries", "hives", "queens", "bees", "io", "start")
-TITLES = {"apiaries": "APIARIES", "hives": "HIVES", "queens": "QUEENS", "bees": "BUSY BEES", "io": "TOTAL I/O", "start": "START CONTEXT"}
+TITLES = {"apiaries": N_("APIARIES"), "hives": N_("HIVES"), "queens": N_("QUEENS"), "bees": N_("BUSY BEES"), "io": N_("TOTAL I/O"), "start": N_("START CONTEXT")}
 
 
 def _tokens(agent) -> tuple:
@@ -107,24 +108,31 @@ def _tok(n) -> str:
     return "–" if n is None else overview.fmt_tok0(n)
 
 
+def _part_label(label) -> str:
+    """The name of one part of a start context: role, task, or rules with the file name."""
+    if label.startswith("rules "):
+        return tr("rules %s", label[len("rules "):])
+    return tr(label)
+
+
 def lines(snap, key) -> list:
     """The lines of the overlay of tile `key` as (text, colour name) pairs, the first being the heading; 'none' for a tile without units."""
     rows = (snap.get("overlays") or {}).get(key, {}).get("rows", [])
-    out = [(TITLES[key] + " (now)", "gold")]
+    out = [(tr("%s (now)", tr(TITLES[key])), "gold")]
     if not rows:
-        return out + [("none", "dim")]
+        return out + [(tr("none"), "dim")]
     if key == "io":
-        out.append(("model | in / out | fresh in | cached in", "dim"))
+        out.append((tr("model | in / out | fresh in | cached in"), "dim"))
         out += [("%s | %s / %s | %s | %s" % (r["model"], _tok(r["tin"]), _tok(r["tout"]), _tok(r["fresh"]), _tok(r["cached"])), "text") for r in rows]
     elif key == "apiaries":
-        out.append(("Apiary | in / out today", "dim"))
+        out.append((tr("Apiary | in / out today"), "dim"))
         out += [("%s | %s / %s" % (r["name"], _tok(r["tin"]), _tok(r["tout"])), "text") for r in rows]
     elif key == "hives":
-        out.append(("Hive | in / out today | per finished package", "dim"))
+        out.append((tr("Hive | in / out today | per finished package"), "dim"))
         out += [("%s (%s) | %s / %s | %s" % (r["name"], r["apiary"], _tok(r["tin"]), _tok(r["tout"]),
                                               "%s / %s" % (_tok(r["per_package"][0]), _tok(r["per_package"][1])) if r["per_package"] else "–"), "text") for r in rows]
     elif key in ("queens", "bees"):
-        out.append(("%s | Hive | run in / out" % ("Queen" if key == "queens" else "Bee"), "dim"))
+        out.append((tr("Queen | Hive | run in / out") if key == "queens" else tr("Bee | Hive | run in / out"), "dim"))
         out += [("%s | %s (%s) | %s / %s" % (r["name"], r["hive"], r["apiary"], _tok(r["tin"]), _tok(r["tout"])), "text") for r in rows]
     else:
         return [(HEADLINE, "gold"), ("   |   ".join(("",) + COLUMNS), "dim")] + [(_start_text(r), "dim" if r["missing"] else "text") for r in rows]

@@ -110,7 +110,7 @@ class LegacyTest(unittest.TestCase):
         finally:
             conn.close()
 
-    # Verify imported records alongside the Hive migration marker.
+    # Verify imported legacy records without creating a retired Hive migration marker.
     def test_imports_all_sources(self):
         """Every source lands in its table with the expected values."""
         code, out = self.run_import()
@@ -121,7 +121,7 @@ class LegacyTest(unittest.TestCase):
         self.assertEqual(src["AGENTS-ARCHIVE.json"]["imported"], 1)
         self.assertEqual(self.counts(), {
             "agents": 3, "events": 5, "build_measurements": 1, "providers_usage": 2, "handled": 2, "nofollow": 2,
-            "questions": 2, "decisions": 2, "queue": 4, "kv": 3, "plans": 1, "packages": 2})
+            "questions": 2, "decisions": 2, "queue": 4, "kv": 2, "plans": 1, "packages": 2})
         a = self.query("SELECT * FROM agents WHERE name='ALPHA-P1-work'")[0]
         self.assertEqual((a["archived"], a["pid"], a["pane_id"], a["tokens_in"], a["plan_path"], a["last_line"]),
                          (0, 111, "3", 1000, "docs/plans/plan-a.md", "Fertig: Käse über Öl"))
@@ -163,7 +163,7 @@ class LegacyTest(unittest.TestCase):
         self.assertEqual(st["feature/one"]["tip"], "aaa111")
         self.assertEqual(out["sources"]["queue"]["errors"], 1)
         plan = self.query("SELECT * FROM plans")[0]
-        self.assertEqual((plan["status"], plan["title"]), ("READY", "Plan A"))
+        self.assertEqual((plan["status"], plan["title"]), ("QUEUED", "Plan A"))
         pk = {r["id"]: r for r in self.query("SELECT * FROM packages")}
         self.assertEqual((pk["P2"]["class"], json.loads(pk["P2"]["depends_on"])), ("heavy", ["P1"]))
         self.assertEqual([r["key"] for r in self.query("SELECT key FROM nofollow ORDER BY key")],

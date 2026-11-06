@@ -7,7 +7,9 @@ from pathlib import Path
 
 from . import config, db, gui_overlays, hives, overview, runstate, runtime
 from . import platform as osplat
+from . import i18n, localtime
 from . import scheduler as sch
+from .i18n import N_, tr
 
 LOG_LINES = 80         # newest event rows (without routine noise) shown in the log panel
 LOG_FETCH = 500        # newest event rows read to find those LOG_LINES
@@ -43,7 +45,7 @@ def fmt_tokens(n) -> str:
     if n >= 100_000_000:
         return "%dM" % round(n / 1_000_000)
     if n >= 1_000_000:
-        return "%.1fM" % (n / 1_000_000)
+        return i18n.decimal("%.1fM" % (n / 1_000_000))
     return "%dk" % round(n / 1000) if n >= 1000 else str(n)
 
 
@@ -96,48 +98,56 @@ def system_info(base) -> dict:
             "disk_pct": round(100 * disk.used / disk.total) if disk and disk.total else 0}
 
 
-# English text of a recorded start blocker (hives.blocker_label writes the terminal-era German words).
+# Show a stored time in the system format.
+def fmt_stamp(text) -> str:
+    """A stored ISO time as date and time in the system format; other text unchanged, nothing for none."""
+    when = db.parse_time(text)
+    return localtime.date_time(when) if when else str(text or "")
+
+
+# Text of a recorded start blocker.
 def blocker_text(reason) -> str:
-    """English text of the reason why a Hive could not start its Queen."""
+    """Text of the reason why a Hive could not start its Queen, in the language of the GUI."""
     reason = str(reason)
     if reason.startswith("Hive limit "):
-        return "Hive limit %s reached" % reason.split()[2]
+        return tr("Hive limit %s reached", reason.split()[2])
     if reason.startswith("free RAM "):
-        return "Not enough free RAM: " + reason.split(" is below")[0][9:]
+        return tr("Not enough free RAM: %s", i18n.decimal(reason.split(" is below")[0][9:]))
     if reason.startswith("no provider with a free slot"):
-        return "No free provider with a Queen model"
+        return tr("No free provider with a Queen model")
     if reason.startswith("waiting for provider "):
-        return "Waiting for provider " + reason[len("waiting for provider "):]
+        name, colon, detail = reason[len("waiting for provider "):].partition(": ")
+        return tr("Waiting for provider %s", name) + (": " + i18n.log_text(detail) if colon else "")
     if reason.startswith("its branch "):
-        return "Plan branch is used elsewhere"
+        return tr("Plan branch is used elsewhere")
     if reason.startswith("worktree for branch "):
-        return "Plan worktree could not be prepared"
-    return {"STOP": "HaiveQueen stopped", "PAUSED": "HaiveQueen paused",
-            "waiting for the integration place": "Waiting for integration", "handing off, Bee processes are still running": "Handoff: Bees still running",
-            "retry after an interrupted Queen is not due yet": "Waiting after interrupted Queen",
-            "no branch or worktree named in the plan or its state file": "Plan branch or worktree missing",
-            "the Hive is already claimed": "Start already reserved"}.get(reason, reason)
+        return tr("Plan worktree could not be prepared")
+    return tr({"STOP": N_("HaiveQueen stopped"), "PAUSED": N_("HaiveQueen paused"),
+               "waiting for the integration place": N_("Waiting for integration"), "handing off, Bee processes are still running": N_("Handoff: Bees still running"),
+               "retry after an interrupted Queen is not due yet": N_("Waiting after interrupted Queen"),
+               "no branch or worktree named in the plan or its state file": N_("Plan branch or worktree missing"),
+               "the Hive is already claimed": N_("Start already reserved")}.get(reason, i18n.log_text(reason)))
 
 
-# English state text of a Hive without a running Queen (hives.state_label writes German words).
+# State text of a Hive without a running Queen.
 def status_text(hive) -> str:
-    """English words for the persisted Hive state, the actual start blocker and the pending questions."""
+    """Words in the language of the GUI for the persisted Hive state, the actual start blocker and the pending questions."""
     state = hive.get("state")
     questions = hive.get("pending_questions") or []
     suffix = " (#" + ", #".join(map(str, questions)) + ")" if questions else ""
     if state in ("answer", "owner_check") and questions:
-        return ("Waiting for owner check" if state == "owner_check" else "Waiting for answer") + suffix
+        return (tr("Waiting for owner check") if state == "owner_check" else tr("Waiting for answer")) + suffix
     if hive.get("blocker") and state in ("running", "waiting", "starting", "requeen", "codex_wait", "provider_wait", "integration_wait"):
         return blocker_text(hive["blocker"]) + suffix
     if state == "running":
-        return "No active Queen" + ("; open questions #" + ", #".join(map(str, questions)) if questions else "")
+        return tr("No active Queen") + (tr("; open questions %s", "#" + ", #".join(map(str, questions))) if questions else "")
     if state == "done":
-        return "Done"
+        return tr("Done")
     if state == "resting":
-        return "Resting until " + str(hive.get("reset_at") or "?").replace("T", " ")[:16]
-    return {"queenless": "Queenless", "integration_wait": "Waiting for integration", "answer": "Waiting for answer", "owner_check": "Waiting for owner check",
-            "codex_wait": "Waiting for Codex", "provider_wait": "Waiting for provider", "handoff": "Handoff", "waiting": "Waiting to start",
-            "starting": "Waiting to start", "requeen": "Waiting to start"}.get(state, "")
+        return tr("Resting until %s", fmt_stamp(hive.get("reset_at")) or "?")
+    return tr({"queenless": N_("Queenless"), "integration_wait": N_("Waiting for integration"), "answer": N_("Waiting for answer"), "owner_check": N_("Waiting for owner check"),
+               "codex_wait": N_("Waiting for Codex"), "provider_wait": N_("Waiting for provider"), "handoff": N_("Handoff"), "waiting": N_("Waiting to start"),
+               "starting": N_("Waiting to start"), "requeen": N_("Waiting to start")}.get(state, ""))
 
 
 # Read which packages have a Bee assigned and which a Bee has finished.
@@ -222,14 +232,15 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     is_paused = key in (paused or ())
     is_rejected = key in (plan_rejected or ())
     if is_rejected:
-        status, kind = "Plan rejected", "wait"
+        status, kind = tr("Plan cancelled"), "wait"
     elif is_paused:
-        status, kind = ("Running, plan paused" if live else "Plan paused"), "wait"
+        status, kind = (tr("Running, plan paused") if live else tr("Plan paused")), "wait"
     elif live:
-        status, kind = "Running", "ok"
+        status, kind = tr("Running"), "ok"
     else:
-        status = status_text(hive) or "Idle"
-        kind = "idle" if status == "Idle" else "wait"
+        status = status_text(hive)
+        kind = "wait" if status else "idle"
+        status = status or tr("Idle")
     qin, qout = agent_tokens(queen) if queen else (0, 0)
     for bee in embedded or ():   # the tokens of a Bee that runs as a subagent are shown at the Bee, not again at its Queen
         sub = match_sub(queen, bee["name"]) if queen and (bee["project"], bee["plan_path"]) == key else None
@@ -275,7 +286,7 @@ def bee_row(agent, now, steps=None, ctx_limit=None, package_steps=None) -> dict:
     return {"kind": "bee", "name": name, "agent": agent.get("name"), "project": agent.get("project"), "plan_path": agent.get("plan_path") or "",
             "model": overview.model_short(agent.get("provider"), agent.get("model"), agent.get("effort")),
             "hive": hive_name(agent.get("plan_path") or ""), "apiary": agent.get("project"),
-            "task": str(agent.get("task") or agent.get("package") or agent.get("last_line") or "")[:40].strip(), "step": step, "step_frac": step_fraction(step),
+            "task": str(agent.get("task") or agent.get("package") or i18n.log_text(str(agent.get("last_line") or "")))[:40].strip(), "step": step, "step_frac": step_fraction(step),
             "ctx": int(agent.get("ctxTokens") or 0), "ctx_limit": int(ctx_limit(agent)) if ctx_limit else 0, "tin": tin, "tout": tout,
             "status": "running" if agent.get("status") in runtime.ACTIVE_STATUSES else str(agent.get("status")), "runtime": fmt_elapsed(agent.get("started_at"), now)}
 
@@ -298,7 +309,7 @@ def embedded_rows(conn) -> list:
 
 
 # Collect the Bees of the active Hives: running Bee processes and packages that have a Bee assigned but no process yet.
-def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None, hive_rows=None, embedded=None, package_steps=None) -> list:
+def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None, hive_rows=None, embedded=None, package_steps=None, startable=None, stopped=None) -> list:
     """Rows for the Bees table. A package with a Bee assignment but no running process shows as 'waiting'; finished packages are left out.
 
     `hive_keys` limits the waiting rows to the (project, plan) pairs whose Queen is running: only a running Queen starts Bees, so the assignments of any other Hive are not waiting Bees.
@@ -321,7 +332,8 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
                      "task": str(bee["package"]).strip(), "step": step, "step_frac": step_fraction(step),
                      "ctx": int((sub or {}).get("ctx") or 0), "ctx_limit": int(ctx_limit(queen)) if sub and ctx_limit else 0,
                      "tin": int((sub or {}).get("tin") or 0), "tout": int((sub or {}).get("tout") or 0),
-                     "status": "running", "runtime": fmt_elapsed(bee["started_at"], now)})
+                     "status": "stopping" if bee.get("outcome") == "stopping" else "running", "stopping": bee.get("outcome") == "stopping",
+                     "runtime": fmt_elapsed(bee["started_at"], now), "embedded": True, "package": bee["package"]})
         seen.add((bee["project"], bee["plan_path"], bee["package"]))
     for (project, plan, package) in sorted(assigned or {}):
         if (project, plan, package) in seen or (project, plan, package) in (completed or ()) or (hive_keys is not None and (project, plan) not in hive_keys):
@@ -330,6 +342,20 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
         # so neither the package id nor that provider is shown as the Bee's name or model.
         rows.append({"kind": "bee", "name": "–", "agent": None, "project": project, "plan_path": plan, "model": "–", "hive": hive_name(plan),
                      "apiary": project, "task": package, "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": "waiting", "runtime": "–"})
+        seen.add((project, plan, package))
+    for (project, plan), names in sorted((startable or {}).items()):   # H-47: startable packages the running Queen has not started yet
+        for package in names:
+            if (project, plan, package) in seen or (hive_keys is not None and (project, plan) not in hive_keys):
+                continue
+            rows.append({"kind": "bee", "name": "–", "agent": None, "project": project, "plan_path": plan, "model": "–", "hive": hive_name(plan),
+                         "apiary": project, "task": package, "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": "startable, not started", "runtime": "–"})
+            seen.add((project, plan, package))
+    for (project, plan, package) in sorted(stopped or ()):   # H-31: a package the owner stopped stays here until the owner resumes it
+        if (project, plan, package) in seen or (project, plan, package) in (completed or ()):
+            continue
+        rows.append({"kind": "bee", "name": "–", "agent": None, "project": project, "plan_path": plan, "model": "–", "hive": hive_name(plan),
+                     "apiary": project, "task": package, "package": package, "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": "stopped", "stopped": True, "runtime": "–"})
+        seen.add((project, plan, package))
     if not hive_rows:
         return rows
     ordered, placed = [], set()
@@ -347,7 +373,7 @@ def log_line(event, who=None) -> tuple:
 
     `who` maps an agent name to (phase, person) so the tag shows the Queen or Bee by the person's name."""
     when = db.parse_time(event["ts"])
-    stamp = when.strftime("%H:%M") if when else "--:--"
+    stamp = localtime.time(when) if when else "--:--"
     agent, project = event["agent"], event["project"]
     if agent:
         phase, person = (who or {}).get(agent, (str(agent).split("__")[-1], str(agent).split("__")[0]))
@@ -356,7 +382,14 @@ def log_line(event, who=None) -> tuple:
         tag = "APIARY " + str(project)
     else:
         tag = "SYSTEM"
-    return stamp, tag, str(event["text"] or event["kind"]).replace("\n", " ")
+    text = str(event["text"] or event["kind"]).replace("\n", " ")
+    return stamp, tag, text if free_text(event) else i18n.log_text(text)
+
+
+# Tell a line somebody wrote from a line of the program.
+def free_text(event) -> bool:
+    """True for words of an agent or the owner (a note of an agent, a question, an answer, a final report, a ready line): the log shows them as written, whatever they look like."""
+    return event["kind"] in ("question", "answer", "done", "ready") or (event["kind"] == "note" and bool(event["agent"]))
 
 
 # Sum the tokens of every Apiary and Hive over the activity window.
@@ -384,7 +417,7 @@ def activity_rows(agents_all, now) -> list:
         total = sum(v[0] + v[1] for v in sums[kind].values())
         for (apiary, name), (tin, tout, last) in sorted(sums[kind].items(), key=lambda kv: -(kv[1][0] + kv[1][1])):
             rows.append({"kind": kind, "name": name, "apiary": apiary, "pct": round(100 * (tin + tout) / total) if total else 0,
-                         "tin": tin, "tout": tout, "last": last.strftime("%d.%m. %H:%M")})
+                         "tin": tin, "tout": tout, "last": localtime.date_time(last)})
     return rows
 
 
@@ -427,21 +460,32 @@ def limit_bars(d) -> list:
         if entry is None:   # the provider reports no 5-hour window: no bar
             continue
         if entry["pct"] is None:
-            out.append({"label": label, "pct": None, "note": entry["reset"], "level": "dim"})
+            out.append({"label": label, "pct": None, "note": tr(entry["reset"]), "level": "dim"})
         else:
-            out.append({"label": label, "pct": entry["pct"], "note": ("resets " + entry["reset"]).strip(), "level": level(entry["pct"])})
+            out.append({"label": label, "pct": entry["pct"], "note": tr("resets %s", entry["reset"]).strip(), "level": level(entry["pct"])})
+    if d.get("claude_error") and d["cu"]["FiveHour"] is None and d["cu"]["SevenDay"] is None:
+        out.append({"label": "Claude", "pct": None, "note": tr("Claude limit unknown") + ": " + d["claude_error"], "level": "bad"})
     for p in d["provider_limits"]:
-        marker = "  ◀ next" if p["next"] else ""
+        marker = tr("  ◀ next") if p["next"] else ""
+        if p.get("five_hour"):
+            five = p["five_hour"]
+            note = tr("resets %s", five["reset"]).strip()
+            if p.get("age_minutes") is not None:
+                note = tr("Reading age: %d minutes", p["age_minutes"]) + " | " + note
+            out.append({"label": tr("%s 5h", p["name"].capitalize()), "pct": five["pct"], "note": note, "level": level(five["pct"])})
         if p["has_limit"]:
             reset = sch.format_reset_time(p["reset_at"]) if p["reset_at"] else ""
-            quota = "" if p["ratio"] is None else "quota %.2fx" % p["ratio"]
-            note = " | ".join(part for part in ("resets " + reset if reset else "reset unknown", quota) if part)
+            quota = "" if p["ratio"] is None else i18n.decimal(tr("quota %.2fx", p["ratio"]))
+            note = " | ".join(part for part in (tr("resets %s", reset) if reset else tr("reset unknown"), quota) if part)
+            if p.get("error"):
+                note = (tr("Claude limit unknown") + ": " + p["error"]) if p.get("age_minutes") is None else tr("Reading age: %d minutes", p["age_minutes"]) + " | " + note
             if p.get("stale"):
-                note = "not current, %s ago | %s" % ("%dh" % int(p["stale_hours"]) if p["stale_hours"] >= 1 else "%dmin" % int(p["stale_hours"] * 60), note)
-            out.append({"label": p["name"].capitalize() + " 7d", "pct": None if p["used_pct"] is None else round(p["used_pct"]), "note": note, "level": level(p["used_pct"])})
+                age = "%dh" % int(p["stale_hours"]) if p["stale_hours"] >= 1 else "%dmin" % int(p["stale_hours"] * 60)
+                note = tr("not current, %s ago", age) + " | " + note
+            out.append({"label": tr("%s 7d", p["name"].capitalize()), "pct": None if p["used_pct"] is None else round(p["used_pct"]), "note": note, "level": level(p["used_pct"])})
         total = int(p["total_slots"] or 0)
-        out.append({"label": p["name"].capitalize() + " slots", "pct": round(100 * p["used_slots"] / total) if total else None,
-                    "note": "%d/%d | %s%s" % (p["used_slots"], total, p["model"] or "no medium model", marker), "level": "slots"})
+        out.append({"label": tr("%s slots", p["name"].capitalize()), "pct": round(100 * p["used_slots"] / total) if total else None,
+                    "note": "%d/%d | %s%s" % (p["used_slots"], total, p["model"] or tr("no medium model"), marker), "level": "slots"})
     return out
 
 
@@ -450,9 +494,9 @@ def usage_lines(d) -> list:
     """[(text, colour)] with one line per model: today, all plans and total input/output."""
     def cell(v):
         """Input/output of one usage cell, or 'no data'."""
-        return "no data" if v is None else "%s/%s" % (overview.fmt_tok0(v[0]), overview.fmt_tok0(v[1]))
-    return [("%s  today %s  plans %s  total %s" % (m["Label"].replace("codex-auto-review", "Auto-Review"), cell(m["Today"]), cell(m["Plans"]), cell(m["Total"])), "text")
-            for m in d["usage"]] or [("no data", "dim")]
+        return tr("no data") if v is None else "%s/%s" % (overview.fmt_tok0(v[0]), overview.fmt_tok0(v[1]))
+    return [(tr("%s  today %s  plans %s  total %s", m["Label"].replace("codex-auto-review", "Auto-Review"), cell(m["Today"]), cell(m["Plans"]), cell(m["Total"])), "text")
+            for m in d["usage"]] or [(tr("no data"), "dim")]
 
 
 # Collect the sections of the status panel: everything the overview data holds that has no place in the other panels.
@@ -460,28 +504,31 @@ def info_sections(d) -> list:
     """[(title, [(text, colour)])] for run state, usage, system, plans, questions, round errors and the last self-update (the limits are bars, see limit_bars)."""
     run = d["run"]
     state = {"RUNNING": "ok", "PAUSED": "warn"}[run["state"]]
-    sub = {"RUNNING": "", "PAUSED": "no new agents"}[run["state"]]
-    out = [("STATE", [(run["state"] + ("  " + sub if sub else "") + "  Apiary: %s" % (d["project"] or "all"), state),
-                      ("Beekeeper " + d["orch"]["status"], "text")])]
+    sub = {"RUNNING": "", "PAUSED": tr("no new agents")}[run["state"]]
+    out = [(tr("STATE"), [(tr(run["state"]) + ("  " + sub if sub else "") + tr("  Apiary: %s", d["project"] or tr("all")), state),
+                          (tr("Beekeeper %s", d["orch"]["status"]), "text")])]
     plans = "  ".join("%s %d" % (name, d["counts"].get(name, 0)) for name, _ in overview.PLAN_BADGES)
     if d["counts"].get("DRAFT"):
-        plans += "  (draft: %s)" % ", ".join(d["drafts"])
-    out.append(("USAGE", usage_lines(d)))
+        plans += tr("  (draft: %s)", ", ".join(d["drafts"]))
+    out.append((tr("USAGE"), usage_lines(d)))
     system = [(d["bj"], "text")] if d["bj"] else []
-    out.append(("SYSTEM", system + [("RAM %d%% %.1f/%.0f GB" % (round(100 * (1 - d["sysinfo"]["free_mb"] / d["sysinfo"]["total_mb"])) if d["sysinfo"]["total_mb"] else 0,
-                                                                  (d["sysinfo"]["total_mb"] - d["sysinfo"]["free_mb"]) / 1024.0, d["sysinfo"]["total_mb"] / 1024.0), "text")]))
-    out.append(("PLANS", [(plans, "text")] + [("%s %d / %d integrated (%d%%)" % (st["project"], st["integrated"], st["total"], st["percent"]), "dim")
-                                              for st in d["status"]]))
+    out.append((tr("SYSTEM"), system + [(i18n.decimal("RAM %d%% %.1f/%.0f GB" % (round(100 * (1 - d["sysinfo"]["free_mb"] / d["sysinfo"]["total_mb"])) if d["sysinfo"]["total_mb"] else 0,
+                                                                  (d["sysinfo"]["total_mb"] - d["sysinfo"]["free_mb"]) / 1024.0, d["sysinfo"]["total_mb"] / 1024.0)), "text")]))
+    out.append((tr("PLANS"), [(plans, "text")] + [(tr("%s %d / %d integrated (%d%%)", st["project"], st["integrated"], st["total"], st["percent"]), "dim")
+                                                  for st in d["status"]]))
     if d["qs"]:
-        qs = [("open: %d  %s" % (len(d["qs"]), ", ".join("%s#%s" % (q["project"], q["id"]) for q in d["qs"])), "warn")]
+        qs = [(tr("open: %d  %s", len(d["qs"]), ", ".join("%s#%s" % (q["project"], q["id"]) for q in d["qs"])), "warn")]
     else:
-        qs = [("none open", "dim")]
-    out.append(("QUESTIONS", qs))
+        qs = [(tr("none open"), "dim")]
+    out.append((tr("QUESTIONS"), qs))
+    if d.get("global_faults"):   # faults that belong to no Apiary (H-46 g): shown here, never as an inbox question
+        out.append((tr("FAULTS"), [((localtime.time(db.parse_time(f["at"])) if db.parse_time(f["at"]) else "--:--") + " " + i18n.log_text(f["text"]), "bad")
+                                   for f in d["global_faults"]]))
     if d["round_errors"]:
-        out.append(("ROUND ERRORS", [((db.parse_time(e["ts"]).strftime("%H:%M") if db.parse_time(e["ts"]) else "--:--") + " " + e["project"] + " " + e["text"], "bad")
+        out.append((tr("ROUND ERRORS"), [((localtime.time(db.parse_time(e["ts"])) if db.parse_time(e["ts"]) else "--:--") + " " + e["project"] + " " + i18n.log_text(e["text"]), "bad")
                                      for e in d["round_errors"]]))
     if d["selfupdate"]:
-        out.append(("SELF-UPDATE", [("".join(text for text, _ in overview.self_update_line(d["selfupdate"])), "text")]))
+        out.append((tr("SELF-UPDATE"), [("".join(text for text, _ in overview.self_update_line(d["selfupdate"])), "text")]))
     return out
 
 
@@ -495,14 +542,33 @@ def orchestrator_state(run_state, loop_pid, stop_pending) -> dict:
     return {"label": run_state, "level": {"RUNNING": "ok", "PAUSED": "warn"}.get(run_state, "warn")}
 
 
-# Read the installed package version for the header.
-def _version() -> str:
-    """Version of the haivequeen package, or an en dash when it is not installed."""
+# The faults of the program itself for the status panel.
+def _global_faults(conn, now) -> list:
+    """Global faults to show; none when they cannot be read."""
     try:
-        from importlib.metadata import version
-        return version("haivequeen")
+        from . import faults
+        return faults.global_faults(conn, now)
     except Exception:
-        return "–"
+        return []
+
+
+# Read the installed package version for the header.
+_VERSION_CACHE = {}
+
+
+def _version() -> str:
+    """The installed version (release tag of the install folder, see updates.installed_version), read at most once a minute; an en dash when unknown."""
+    import time
+    now = time.monotonic()
+    if _VERSION_CACHE and now - _VERSION_CACHE["at"] < 60:
+        return _VERSION_CACHE["value"]
+    try:
+        from . import updates
+        value = updates.installed_version()
+    except Exception:
+        value = "–"
+    _VERSION_CACHE.update(at=now, value=value)
+    return value
 
 
 # Collect everything the graphical dashboard shows in one call.
@@ -539,7 +605,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     rejected = rejected_map(conn)
     waiting = waiting_map(conn)
     paused = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='PAUSED'")}
-    plan_rejected = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='REJECTED'")}
+    plan_rejected = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='CANCELLED'")}
     plan_done = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='DONE'")}   # rejected and done Hives only show in the Hives window
     embedded = embedded_rows(conn)
     hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected, waiting, embedded, plan_rejected) for h in hives.hive_data(conn, project, agents)]
@@ -548,7 +614,10 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     steps = {k: v for h in hive_rows for k, v in h["steps"].items()}
     package_steps = step_counts(conn)   # a running Bee starts at 0/m of the steps it was given ...
     package_steps.update({(h["apiary"], h["plan_path"], p): step for h in hive_rows for p, step in h["package_steps"].items()})   # ... and shows the newest step report of its package
-    bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]}, hive_rows, embedded, package_steps)
+    from . import bees as bee_mod
+    stopped = [s for s in bee_mod.stopped_packages(conn) if not project or s[0] == project]
+    bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]}, hive_rows, embedded, package_steps,
+                    bee_mod.startable_map(conn), stopped)
     workers = [b for b in bees if b["kind"] == "bee"]
     apiaries = sorted({h["apiary"] for h in hive_rows})
     slots = sum(int(p["total_slots"] or 0) for p in d["provider_limits"])
@@ -576,7 +645,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
             "projects": [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")],
             "log": [log_line(e, who) for e in reversed(events)], "log_ids": [e["id"] for e in reversed(events)], "log_meta": [log_meta(e, plan_of) for e in reversed(events)], "activity": activity_rows(agents_all, now),
             "system": sysinfo if sysinfo is not None else system_info(d["sysinfo"]), "queue": queue_panel(conn, project),
-            "info": info_sections(d), "limits": limit_bars(d)}
+            "info": info_sections({**d, "global_faults": _global_faults(conn, now)}), "limits": limit_bars(d)}
 
 
 # Find the live text file of an agent.
@@ -608,9 +677,10 @@ def tail_file(path, lines=LIVE_LINES, max_bytes=256 * 1024) -> list:
 
 # Turn live file lines into (colour, text) pairs.
 def live_lines(path, lines=LIVE_LINES) -> list:
-    """[(gui colour name, text)] of the last lines of an agent's live file: a line "<Colour><TAB><text>" gets that colour, any other line the plain text colour."""
+    """[(gui colour name, text)] of the last lines of an agent's live file: a line "<Colour><TAB><text>" gets that colour, any other line the plain text colour.
+    Program lines are shown in the language of the GUI; the words of the agent stay as written."""
     out = []
     for row in tail_file(path, lines):
         word, tab, rest = row.partition(chr(9))
-        out.append((LIVE_COLOURS.get(word, "text"), rest) if tab and word in LIVE_COLOURS else ("text", row))
+        out.append((LIVE_COLOURS[word], i18n.live_text(word, rest)) if tab and word in LIVE_COLOURS else ("text", row))
     return out

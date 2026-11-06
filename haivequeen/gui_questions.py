@@ -3,7 +3,10 @@
 An answer is stored through db.answer_question, the same function the inbox and `bzz answer` use, as answered by the owner. For an owner check
 question the window also lists the steps (packages) of the plan: the ones ticked there are marked rejected, so the Queen reworks exactly those.
 """
+import re
+
 from . import bees, db, gui_data, hives, runtime
+from .i18n import tr
 
 REFRESH_MS = 5000
 
@@ -34,13 +37,23 @@ def answer(conn, qid, text, rejected=(), apiary=False) -> None:
     (nothing is marked then)."""
     text = (text or "").strip()
     if not text:
-        raise ValueError("Write an answer first.")
+        raise ValueError(tr("Write an answer first."))
     if rejected and hives.owner_check_ok(text):
-        raise ValueError("The answer says ok, but steps are marked as rejected.")
+        raise ValueError(tr("The answer says ok, but steps are marked as rejected."))
     row = conn.execute("SELECT project, plan_path FROM questions WHERE id=?", (qid,)).fetchone()
     db.answer_question(conn, qid, text, "owner", apiary=bool(apiary))
     for package in rejected:
         bees.set_package_state(conn, row["project"], row["plan_path"], package, "rejected", "owner")
+
+
+# The text of a refused answer.
+def error_text(exc) -> str:
+    """The message of a refused answer in the language; the database functions raise it in English."""
+    text = str(exc).strip("'\"")
+    found = re.fullmatch(r"(?:question (\S+) is already answered)|(?:unknown question (\S+))", text)
+    if not found:
+        return text
+    return tr("question %s is already answered", found.group(1)) if found.group(1) else tr("unknown question %s", found.group(2))
 
 
 class QuestionsWindow:
@@ -52,7 +65,7 @@ class QuestionsWindow:
         from .gui import COL
         self.tk, self.conn, self.mono, self.on_answered = tk, conn, mono, on_answered
         self.win = tk.Toplevel(root)
-        self.win.title("HaiveQueen questions")
+        self.win.title(tr("HaiveQueen questions"))
         self.win.geometry("1040x680")
         self.questions, self.checks = [], {}
         side = tk.Frame(self.win)
@@ -66,19 +79,19 @@ class QuestionsWindow:
         self.meta.pack(fill="x")
         self.body = tk.Text(main, height=14, wrap="word", font=(mono, 10), state="disabled")
         self.body.pack(fill="both", expand=True, pady=(4, 6))
-        tk.Label(main, text="Your answer", anchor="w", font=(mono, 10)).pack(fill="x")
+        tk.Label(main, text=tr("Your answer"), anchor="w", font=(mono, 10)).pack(fill="x")
         self.reply = tk.Text(main, height=7, wrap="word", font=(mono, 10))
         self.reply.pack(fill="x", pady=(2, 0))
         self.apiary_var = tk.BooleanVar(value=False)
-        self.apiary_box = tk.Checkbutton(main, text="This answer applies to the whole Apiary", variable=self.apiary_var, anchor="w", font=(mono, 10))
+        self.apiary_box = tk.Checkbutton(main, text=tr("This answer applies to the whole Apiary"), variable=self.apiary_var, anchor="w", font=(mono, 10))
         self.apiary_box.pack(fill="x", pady=(0, 6))
-        self.steps = tk.LabelFrame(main, text="Not accepted steps (marked rejected, the Queen reworks them)", font=(mono, 10))
+        self.steps = tk.LabelFrame(main, text=tr("Not accepted steps (marked rejected, the Queen reworks them)"), font=(mono, 10))
         self.steps.pack(fill="x", pady=(0, 6))
         buttons = tk.Frame(main)
         buttons.pack(fill="x")
         self.status = tk.Label(buttons, anchor="w", fg=COL["red"], font=(mono, 10))
         self.status.pack(side="left", fill="x", expand=True)
-        for label, action in (("Use recommendation", self.use_recommendation), ("Answer", self.send), ("Close", self.win.destroy)):
+        for label, action in ((tr("Use recommendation"), self.use_recommendation), (tr("Answer"), self.send), (tr("Close"), self.win.destroy)):
             tk.Button(buttons, text=label, command=action, font=(mono, 10)).pack(side="right", padx=3)
         self.win.bind("<Control-Return>", lambda _e: self.send())
         self.refresh()
@@ -125,12 +138,12 @@ class QuestionsWindow:
         self.body.config(state="normal")
         self.body.delete("1.0", "end")
         if q is None:
-            self.meta.config(text="No open questions.")
+            self.meta.config(text=tr("No open questions."))
             self.body.config(state="disabled")
             self.steps.pack_forget()
             return
-        self.meta.config(text="#%s  %s | %s | %s | %s" % (q["id"], q["project"], q["plan_path"], q["item"], q["created_at"]))
-        self.body.insert("1.0", "%s\n\nRecommendation:\n%s" % (q["question"], q["recommendation"] or "-"))
+        self.meta.config(text="#%s  %s | %s | %s | %s" % (q["id"], q["project"], q["plan_path"], q["item"], gui_data.fmt_stamp(q["created_at"])))
+        self.body.insert("1.0", tr("%s\n\nRecommendation:\n%s", q["question"], q["recommendation"] or "-"))
         self.body.config(state="disabled")
         packages = plan_packages(self.conn, q["project"], q["plan_path"]) if str(q["item"] or "").startswith("owner-check") else []
         if packages:
@@ -159,7 +172,7 @@ class QuestionsWindow:
         try:
             answer(self.conn, q["id"], self.reply.get("1.0", "end"), [p for p, var in self.checks.items() if var.get()], self.apiary_var.get())
         except (ValueError, KeyError) as exc:
-            self.status.config(text=str(exc).strip("'\""))
+            self.status.config(text=error_text(exc))
             return
         self.reply.delete("1.0", "end")
         self.apiary_var.set(False)

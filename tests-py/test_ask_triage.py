@@ -48,6 +48,11 @@ class AskTriageTest(RoundCase):
         self.assertEqual(self.ask("G1", "How strong is the trap?")["id"], qid)
         self.assertEqual([q["id"] for q in runtime.list_questions(self.conn, "testproj", "open")], [qid])
 
+    def test_followup_text_is_appended_to_open_question(self):
+        qid = self.ask("N3", "First question?")["id"]
+        self.assertEqual(self.ask("N3", "Additional detail?")["id"], qid)
+        self.assertEqual(self.status(qid)["question"], "First question?\n\nAdditional detail?")
+
     def test_duplicate_of_answered_question_is_closed_with_reference(self):
         """The same item asked again after an answer is closed by auto and names the old question."""
         old = db.add_question(self.conn, "testproj", REL, "D1", "Which colour?", "A")
@@ -65,6 +70,29 @@ class AskTriageTest(RoundCase):
         self.assertEqual((res["status"], res["answered_by"]), ("answered", "auto"))
         self.assertIn("decision %d" % did, res["answer"])
         self.assertEqual(runtime.list_questions(self.conn, "testproj", "open"), [])
+
+    def test_owner_checks_remain_open_after_prior_answers_and_decisions(self):
+        """Each owner check requires a fresh owner answer, even for a previously settled item."""
+        from haivequeen import hives
+        for item, source in (("owner-check", "answer"), ("owner-check-build17", "decision"), ("owner-check-answered", "answer")):
+            with self.subTest(item=item, source=source):
+                if source == "answer":
+                    old = db.add_question(self.conn, "testproj", REL, item, "Earlier check?", "")
+                    db.answer_question(self.conn, old, "ok", "owner")
+                else:
+                    runtime.add_decision(self.conn, "testproj", "owner", "Already checked.", REL, item)
+                res = self.ask(item, "Check the new result.")
+                self.assertEqual(res["status"], "open")
+                self.assertEqual(self.status(res["id"])["status"], "open")
+                self.assertEqual(self.ask(item)["id"], res["id"])
+                if item != "owner-check-answered":
+                    self.assertIn(res["id"], hives.owner_check_step(self.conn, "testproj", REL)[1])
+                db.answer_question(self.conn, res["id"], "ok", "owner")
+
+    def test_owner_check_prefix_without_hyphen_still_deduplicates(self):
+        old = db.add_question(self.conn, "testproj", REL, "owner-checklist", "Earlier?", "")
+        db.answer_question(self.conn, old, "yes", "owner")
+        self.assertEqual(self.ask("owner-checklist")["answered_by"], "auto")
 
     # Verify the direct question path reuses existing answers and open questions.
     def test_queen_ask_owner_is_matched_against_decisions_and_questions(self):

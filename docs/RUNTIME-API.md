@@ -19,7 +19,7 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 | `agents list` | `[--project] [--scope active\|archive\|all] [--status]` | array of agent rows (default scope: not archived) |
 | `agents get` | `--project --name` | newest row of that name, or `null` |
 | `agents upsert` | `--project --name --fields <json>` | the row; creates it if there is no active row of that name |
-| `agents update-fields` | `--project --name --fields <json>` | the row; error if the agent does not exist |
+| `agents update-fields` | `--project --name` and exactly one of `--fields <json>` or `--cwd <path>` (sets only `cwd`, no JSON quoting needed) | the row; error if the agent does not exist |
 | `agents archive` | `--project [--hours 12] [--match <regex>]` | `{moved}`; ended rows older than the hours, or rows whose plan/name match, get `archived` |
 | `event append` | `--project --text [--kind] [--agent] [--data <json>] [--mirror rounds\|events\|both\|none] [--error] [--log-dir]` | `{id, ts}`; history row plus mirror line(s) |
 | `events list` | `[--project] [--since-id N] [--kind] [--limit N]` | events after the id, oldest first |

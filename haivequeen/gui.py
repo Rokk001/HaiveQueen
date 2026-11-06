@@ -11,8 +11,9 @@ import textwrap
 from datetime import datetime
 from pathlib import Path
 
-from . import config, db, gui_data, runstate
+from . import config, db, gui_data, i18n, runstate
 from . import platform as osplat
+from .i18n import tr
 
 DESIGN_W, DESIGN_H = 1672, 912   # layout coordinates (the mockup without its title bar, a little taller for the status panel); everything scales with the window
 REFRESH_MS = 2000
@@ -64,7 +65,7 @@ def launch_detached() -> dict:
 # Find the zoom/subsample pair (tk can only scale pictures by whole-number ratios) closest to a scale factor.
 def best_fraction(factor) -> tuple:
     """(zoom, subsample) with both <= 8 and a ratio closest to `factor` but not above it (a picture must never be larger than its layout slot)."""
-    fits = [(n, m) for n in range(1, 9) for m in range(1, 9) if n / m <= factor * 1.005]
+    fits = [(n, m) for n in range(1, 9) for m in range(1, 9) if n / m <= factor]
     return max(fits, key=lambda nm: nm[0] / nm[1]) if fits else (1, 8)
 
 
@@ -136,7 +137,7 @@ class LiveView:
         self.box.config(state="normal")
         self.box.delete("1.0", "end")
         if not lines:
-            self.box.insert("end", "No live output yet (%s is missing or empty)." % self.path, "dim")
+            self.box.insert("end", tr("No live output yet (%s is missing or empty).", self.path), "dim")
         for colour, text in lines:
             self.box.insert("end", text + chr(10), colour)
         self.box.config(state="disabled")
@@ -186,6 +187,7 @@ class Dashboard:
         root.bind("<Key>", self.on_key)
         self.canvas.bind("<Destroy>", self.on_destroy)
         self.tick_job = None
+        self.update_state, self.update_thread = {}, None   # H-42: the last update check and a running check (thread)
         self.tick()
 
     # Cancel the pending redraw and refresh when the window closes.
@@ -212,8 +214,58 @@ class Dashboard:
         try:
             self.snap, self.error = gui_data.snapshot(self.conn, self.project), ""
         except Exception as exc:   # a failed read must not close the window
-            self.error = "error: %s" % exc
+            self.error = tr("error: %s", exc)
+        self.watch_update()
         self.draw()
+
+    # The update function of the header (H-42).
+    def watch_update(self, manual=False):
+        """Read the last update check, start the daily check (or with `manual` Check now) in a thread, and restart the window after a finished install."""
+        import threading
+        from . import updates
+        try:
+            if updates.settle_install(db.last_self_update(self.conn)) == "ok":
+                self.restart_window()
+                return
+            self.update_state = updates.load_state()
+        except Exception:   # the update line must never break the dashboard
+            self.update_state = {}
+        if self.update_thread is not None and self.update_thread.is_alive():
+            return
+        machine = config.load_config()
+        if manual or (not self.update_state.get("installing") and updates.due(machine, self.update_state)):
+            self.update_thread = threading.Thread(target=(lambda: updates.check(machine, manual=True)) if manual else (lambda: updates.scheduled_check(machine)), daemon=True)
+            self.update_thread.start()
+
+    # Check for a new version now.
+    def check_update(self):
+        """The button Check now: ask GitHub at once; the header shows the result at the next refresh."""
+        self.watch_update(manual=True)
+        self.draw()
+
+    # Install the offered version after a confirmation.
+    def install_update(self):
+        """The update button: after the confirmation the detached worker waits for running agents, installs the release and restarts HaiveQueen."""
+        from . import updates
+        found = updates.offered(self.update_state)
+        if not found or not self.confirm(tr(updates.TEXT_CONFIRM, found["version"])):
+            return
+        try:
+            updates.request_install(found["version"])
+        except Exception as exc:
+            self.inform(str(exc))
+        self.refresh()
+
+    # Start the window again with the installed code.
+    def restart_window(self):
+        """Close this window and open it again in a new process (after an install the new code shows the new version)."""
+        try:
+            if lock_file().read_text(encoding="ascii").strip() == str(os.getpid()):
+                lock_file().unlink()
+        except OSError:
+            pass
+        launch_detached()
+        self.root.after(100, self.root.destroy)
 
     # Refresh and schedule the next round.
     def tick(self):
@@ -370,7 +422,7 @@ class Dashboard:
         c.delete("all")
         self.hits, self.bars, self.areas = [], {}, []
         if self.snap is None:
-            self.text(20, 20, self.error or "loading…", 18, "dim")
+            self.text(20, 20, self.error or tr("loading…"), 18, "dim")
             return
         s = self.snap
         self.header(s)
@@ -393,24 +445,40 @@ class Dashboard:
     def header(self, s):
         """Draw the header picture (logo, wordmark, honeycomb, slogan) and the version line over it."""
         self.pic("header", 0, 0)
+        if i18n.is_german():   # the wording inside the header picture is English: cover it with the German wording
+            at = self.fraction[0] / self.fraction[1] / self.scale   # the picture scales by a coarser fraction than the layout: the covers follow the picture
+            self.rect(335 * at, 96 * at, 830 * at, 128 * at, fill="#02060a")
+            self.text(342 * at, 112 * at, tr("AI AGENT ORCHESTRATOR"), 19, "text", "w")
+            self.rect(1445 * at, 24 * at, 1650 * at, 134 * at, fill="#02060a")
+            for n, part in enumerate(tr("A SWARM\nOF AGENTS.\nONE QUEEN.").split("\n")):
+                self.text(1455 * at, (44 + n * 28) * at, part, 18, "gold", "w")
         first = self.text(342, 143, "v%s  |  bzz  |  " % s["version"], 17, "cyan", "w")
         left = self.canvas.bbox(first)[2] / self.scale   # the link starts where the first part ends (design units)
         link = self.text(left, 143, "Rokk001/HaiveQueen", 17, "cyan", "w", underline=True)
         self.hit(left - 4, 130, self.canvas.bbox(link)[2] / self.scale + 4, 156, lambda _a: self.open_repo())
+        from . import updates
+        text, level, action = updates.header_line(self.update_state, self.update_thread is not None and self.update_thread.is_alive())
+        x = self.canvas.bbox(link)[2] / self.scale + 10
+        bar = self.text(x, 143, "|", 17, "cyan", "w")
+        x = self.canvas.bbox(bar)[2] / self.scale + 10
+        text = self.fit(text, max(0, DESIGN_W - x - 12), 17)
+        item = self.text(x, 143, text, 17, {"warn": "amber", "bad": "red"}.get(level, "dim"), "w", underline=action is not None)
+        if action:
+            self.hit(x - 4, 130, self.canvas.bbox(item)[2] / self.scale + 4, 156, lambda _a: self.install_update() if action == "install" else self.check_update())
 
     # Draw the six tiles.
     def tiles(self, s):
         """Draw the Apiaries, Hives, Queens, Busy Bees, Total I/O and Start Context tiles and remember where they are for the overlays."""
         t = s["tiles"]
         io = "%s / %s" % (gui_data.fmt_tokens(t["tokens_in"]), gui_data.fmt_tokens(t["tokens_out"]))
-        items = (("APIARIES", str(t["apiaries"]), "active", 10, 145, "t_apiaries", "apiaries"), ("HIVES", str(t["hives"]), "active", 153, 283, "t_hives", "hives"),
-                 ("QUEENS", str(t["queens"]), "online", 291, 426, "t_queens", "queens"), ("BUSY BEES", "%d / %d" % (t["bees"], t["bee_capacity"]), "active", 434, 599, "t_bees", "bees"),
-                 ("TOTAL I/O", io, "in / out (today)", 607, 822, "t_io", "io"))
+        items = ((tr("APIARIES"), str(t["apiaries"]), tr("active"), 10, 145, "t_apiaries", "apiaries"), (tr("HIVES"), str(t["hives"]), tr("active"), 153, 283, "t_hives", "hives"),
+                 (tr("QUEENS"), str(t["queens"]), tr("online"), 291, 426, "t_queens", "queens"), (tr("BUSY BEES"), "%d / %d" % (t["bees"], t["bee_capacity"]), tr("active"), 434, 599, "t_bees", "bees"),
+                 (tr("TOTAL I/O"), io, tr("in / out (today)"), 607, 822, "t_io", "io"))
         self.tile_boxes = []
         for title, value, sub, x0, x1, icon, key in items:
             self.rect(x0, 165, x1, 255, fill="panel", outline="edge", width=2)
             self.pic(icon, x0 + 6, 172)
-            self.text(x0 + 74, 183, title, 16, "text", "nw")
+            self.text(x0 + 74, 183, title, min(16, (x1 - x0 - 80) / (0.6 * len(title))), "text", "nw")
             self.text(x0 + 74, 208, value, max(12, min(28, (x1 - x0 - 80) / (0.62 * len(value)))), "cyan", "nw")
             self.text(x0 + 74, 236, sub, min(15, (x1 - x0 - 80) / (0.6 * len(sub))), "dim", "nw")
             self.tile_boxes.append((key, x0, 165, x1, 255))
@@ -418,8 +486,8 @@ class Dashboard:
         x0, x1 = 830, 1035
         self.rect(x0, 165, x1, 255, fill="panel", outline="edge", width=2)
         self.pic("t_start", x0 + 6, 172)
-        self.text(x0 + 74, 183, "START CONTEXT", 16, "text", "nw")
-        value = "%d %%" % sc["saving"] if sc["saving"] is not None else "no benchmark"
+        self.text(x0 + 74, 183, tr("START CONTEXT"), 16, "text", "nw")
+        value = "%d %%" % sc["saving"] if sc["saving"] is not None else tr("no benchmark")
         self.text(x0 + 74, 208, value, max(12, min(28, (x1 - x0 - 80) / (0.62 * len(value)))), "cyan", "nw")
         self.tile_boxes.append(("start", x0, 165, x1, 255))
 
@@ -453,7 +521,7 @@ class Dashboard:
         rows = gui_overlays.lines(self.snap, self.overlay_key)
         limit = 34
         if len(rows) > limit:
-            rows = rows[:limit - 1] + [("… %d more lines" % (len(rows) - limit + 1), "dim")]
+            rows = rows[:limit - 1] + [(tr("… %d more lines", len(rows) - limit + 1), "dim")]
         size, step = 14, 19
         width = max(self.tw(text, size) for text, _col in rows) + 28
         box = next(b for b in self.tile_boxes if b[0] == self.overlay_key)
@@ -559,15 +627,15 @@ class Dashboard:
     def hive_table(self, s, x0, y0, x1, y1):
         """Draw the Hive table: Queen name, Bees, progress (finished packages), status and runtime; details of the selected row below. All other Queen data is in the Bees table."""
         rows = s["hives"]
-        sub = "%d hives across %d apiaries" % (len(rows), s["tiles"]["apiaries"])
-        short = "%d hives, %d apiaries" % (len(rows), s["tiles"]["apiaries"])
+        sub = tr("%d hives across %d apiaries", len(rows), s["tiles"]["apiaries"])
+        short = tr("%d hives, %d apiaries", len(rows), s["tiles"]["apiaries"])
         state = s["run_state"]
-        prefix = "" if state == "RUNNING" else state + "  "
+        prefix = "" if state == "RUNNING" else tr(state) + "  "
         wordings = ([prefix + sub + "  (%s)" % s["project"]] if s["project"] else []) + [prefix + sub, prefix + short]   # the project name goes first, then the words, when the room is short
-        self.panel(x0, y0, x1, y1, "ACTIVE HIVES", wordings, (("Enter", "live"), ("P", "pause/resume"), ("Space", "plan"), ("F", "apiary"), ("Tab", "table")))
-        for name, x in (("#", 24), ("HIVE", 90), ("APIARY", 218), ("QUEEN", 312), ("BEES", 386), ("PROGRESS", 436), ("STATUS", 576)):
+        self.panel(x0, y0, x1, y1, tr("ACTIVE HIVES"), wordings, ((tr("Enter"), tr("live")), ("P", tr("pause/resume")), (tr("Space"), tr("plan")), ("F", tr("apiary")), (tr("Tab"), tr("table"))))
+        for name, x in (("#", 24), (tr("HIVE"), 90), (tr("APIARY"), 218), (tr("QUEEN"), 312), (tr("BEES"), 386), (tr("PROGRESS"), 436), (tr("STATUS"), 576)):
             self.text(x0 + x, y0 + 56, name, 13, "dim", "w")
-        self.text(x1 - 26, y0 + 56, "RUNTIME", 13, "dim", "e")
+        self.text(x1 - 26, y0 + 56, tr("RUNTIME"), 13, "dim", "e")
         self.pick_clamp("hives", len(rows))
         room = 6
         off = self.offset("hives", len(rows), room)
@@ -593,13 +661,13 @@ class Dashboard:
             self.text(x1 - 26, y, r["runtime"], 14, "text", "e")
         if rows:
             r = rows[self.sel["hives"]]
-            line = "%s | %s | packages %d done, %d implemented%s%s of %d | hive total in/out %s/%s | %s" % (
-                r["name"], r["apiary"], r["done"], r["implemented"], ", %d rejected" % r["rejected"] if r["rejected"] else "",
-                ", %d waiting (%s)" % (r["waiting"], r["waiting_reasons"]) if r["waiting"] else "", r["total"],
-                gui_data.fmt_tokens(r["hive_tin"]), gui_data.fmt_tokens(r["hive_tout"]), r["status"])
+            line = tr("%s | %s | packages %d done, %d implemented%s%s of %d | hive total in/out %s/%s | %s",
+                      r["name"], r["apiary"], r["done"], r["implemented"], tr(", %d rejected", r["rejected"]) if r["rejected"] else "",
+                      tr(", %d waiting (%s)", r["waiting"], r["waiting_reasons"]) if r["waiting"] else "", r["total"],
+                      gui_data.fmt_tokens(r["hive_tin"]), gui_data.fmt_tokens(r["hive_tout"]), r["status"])
             self.text(x0 + 24, y1 - 14, self.fit(line, x1 - x0 - 48, 12), 12, "dim", "w")
         else:
-            self.text(x0 + 24, y0 + 90, "no active hives", 15, "dim", "w")
+            self.text(x0 + 24, y0 + 90, tr("no active hives"), 15, "dim", "w")
 
     # Draw the table of busy Bees.
     def bee_table(self, s, x0, y0, x1, y1):
@@ -609,8 +677,9 @@ class Dashboard:
         running = sum(1 for b in workers if b["status"] == "running")
         parents = {(b["apiary"], b["plan_path"]) for b in rows if b["kind"] == "queen"}   # Hives whose Bees are drawn below their Queen
         hives = {b["hive"] for b in rows}
-        self.panel(x0, y0, x1, y1, "QUEENS AND BEES", "%d running, %d waiting across %d hive%s" % (running, len(workers) - running, len(hives), "" if len(hives) == 1 else "s"), (("Enter", "live"), ("X", "stop"), ("M", "queen")))
-        for name, x in (("#", 24), ("BEE", 80), ("MODEL", 170), ("HIVE", 300), ("TASK", 410), ("CONTEXT", 580), ("TOKENS", 690), ("STATUS", 790), ("RUNTIME", 920)):
+        counts = (running, len(workers) - running, len(hives))
+        self.panel(x0, y0, x1, y1, tr("QUEENS AND BEES"), tr("%d running, %d waiting across %d hive", *counts) if len(hives) == 1 else tr("%d running, %d waiting across %d hives", *counts), ((tr("Enter"), tr("live")), ("X", tr("stop")), ("M", tr("queen"))))
+        for name, x in (("#", 24), (tr("BEE"), 80), (tr("MODEL"), 170), (tr("HIVE"), 300), (tr("TASK"), 410), (tr("CONTEXT"), 580), (tr("TOKENS"), 690), (tr("STATUS"), 790), (tr("RUNTIME"), 920)):
             self.text(x0 + x, y0 + 56, name, 13, "dim", "w")
         self.pick_clamp("bees", len(rows))
         room = 5
@@ -647,15 +716,15 @@ class Dashboard:
             self.context_bar(x0 + 580, y, r["ctx"], r["ctx_limit"])
             self.text(x0 + 690, y, self.fit("%s/%s" % (gui_data.fmt_tokens(r["tin"]), gui_data.fmt_tokens(r["tout"])), 92, 13), 13, "cyan", "w")
             self.dot(x0 + 797, y, colour)
-            self.text(x0 + 809, y, self.fit(r["status"], 100, 14), 14, colour, "w")
+            self.text(x0 + 809, y, self.fit(tr(r["status"]), 100, 14), 14, colour, "w")
             self.text(x0 + 920, y, self.fit(r["runtime"], 90, 14), 14, "text", "w")
         if not rows:
-            self.text(x0 + 24, y0 + 90, "no queens or bees", 15, "dim", "w")
+            self.text(x0 + 24, y0 + 90, tr("no queens or bees"), 15, "dim", "w")
 
     # Draw the token use per Apiary and Hive.
     def activity(self, s, x0, y0, x1, y1):
         """Draw the token use (in/out) of the last seven days per Apiary (cyan names) and per Hive, with the share of each as a bar."""
-        self.panel(x0, y0, x1, y1, "HIVE ACTIVITY", "tokens in/out, last 7 days")
+        self.panel(x0, y0, x1, y1, tr("HIVE ACTIVITY"), tr("tokens in/out, last 7 days"))
         rows = s["activity"]
         room = 4
         off = self.offset("activity", len(rows), room)
@@ -669,16 +738,16 @@ class Dashboard:
             self.text(x0 + 246, y, "%d%%" % r["pct"], 14, "cyan", "w")
             self.text(x1 - 30, y, "%s/%s" % (gui_data.fmt_tokens(r["tin"]), gui_data.fmt_tokens(r["tout"])), 14, "text", "e")
         if not rows:
-            self.text(x0 + 14, y0 + 66, "no usage yet", 14, "dim", "w")
+            self.text(x0 + 14, y0 + 66, tr("no usage yet"), 14, "dim", "w")
 
     # Draw CPU, RAM and disk.
     def system(self, s, x0, y0, x1, y1):
         """Draw the CPU, RAM and disk meters."""
-        self.panel(x0, y0, x1, y1, "SYSTEM", icon="icon_system")
+        self.panel(x0, y0, x1, y1, tr("SYSTEM"), icon="icon_system")
         m = s["system"]
         load = lambda pct: "green" if pct < 70 else "yellow" if pct <= 85 else "red"   # the colour follows the load, like the context bars
-        rows = (("CPU", m["cpu"], "(%d cores)" % m["cores"], load(m["cpu"]), "icon_cpu"), ("RAM", m["ram_pct"], "%.1f/%.0f GB" % (m["ram_used_gb"], m["ram_total_gb"]), load(m["ram_pct"]), "icon_ram"),
-                ("Disk", m["disk_pct"], "%.1f/%.1f TB" % (m["disk_used_tb"], m["disk_total_tb"]), load(m["disk_pct"]), "icon_disk"))
+        rows = (("CPU", m["cpu"], tr("(%d cores)", m["cores"]), load(m["cpu"]), "icon_cpu"), ("RAM", m["ram_pct"], i18n.decimal("%.1f/%.0f GB" % (m["ram_used_gb"], m["ram_total_gb"])), load(m["ram_pct"]), "icon_ram"),
+                ("Disk", m["disk_pct"], i18n.decimal("%.1f/%.1f TB" % (m["disk_used_tb"], m["disk_total_tb"])), load(m["disk_pct"]), "icon_disk"))
         for i, (name, pct, note, colour, icon) in enumerate(rows):
             y = y0 + 58 + i * 22
             self.pic(icon, x0 + 10, y, "w")
@@ -690,10 +759,10 @@ class Dashboard:
     # Draw open questions and queued integrations.
     def queue(self, s, x0, y0, x1, y1):
         """Draw the open question count and the queued integration rows."""
-        self.panel(x0, y0, x1, y1, "APIARY QUEUE", icon="icon_queue")
+        self.panel(x0, y0, x1, y1, tr("APIARY QUEUE"), icon="icon_queue")
         q = s["queue"]
-        self.text(x0 + 14, y0 + 64, "questions: %d" % q["open"], 15, "text", "w")
-        self.text(x0 + 14, y0 + 88, "queued: %d" % q["queued"], 15, "text", "w")
+        self.text(x0 + 14, y0 + 64, tr("questions: %d", q["open"]), 15, "text", "w")
+        self.text(x0 + 14, y0 + 88, tr("queued: %d", q["queued"]), 15, "text", "w")
         self.text(x0 + 14, y0 + 112, self.fit(", ".join(q["labels"]), x1 - x0 - 28, 15), 15, "text", "w")
 
     # Draw the live log.
@@ -701,25 +770,28 @@ class Dashboard:
         """Draw the newest events with coloured source tags, a scroll bar and the auto-scroll, clear and save controls."""
         self.rect(x0, y0, x1, y1, fill="panel", outline="edge", width=2)
         self.pic("icon_logs", x0 + 12, y0 + 10)
-        self.text(x0 + 52, y0 + 26, "LOGS", 20, "gold", "w")
-        self.log_head = (self.px(x0 + 40), self.px(y0 + 8), self.px(x0 + 130), self.px(y0 + 44))
+        title = tr("LOGS")
+        self.text(x0 + 52, y0 + 26, title, 20, "gold", "w")
+        chip_x = max(x0 + 130, x0 + 52 + self.tw(title, 20) + 14)   # the filter chip starts behind the heading, also behind a longer translated one
+        self.log_head = (self.px(x0 + 40), self.px(y0 + 8), self.px(chip_x), self.px(y0 + 44))
         flt = self.log_filter
-        chip = "all" if flt is None else (flt[2] if flt[0] == "hive" else flt[1]) + "  ✕"
-        self.text(x0 + 130, y0 + 26, "| " + chip, 15, "cyan" if flt else "dim", "w")
+        chip = tr("all") if flt is None else (flt[2] if flt[0] == "hive" else flt[1]) + "  ✕"
+        self.text(chip_x, y0 + 26, "| " + chip, 15, "cyan" if flt else "dim", "w")
         if flt:
-            self.hit(x0 + 130, y0 + 12, x0 + 130 + 9 * (len(chip) + 2), y0 + 40, lambda _a: self.clear_log_filter())
+            self.hit(chip_x, y0 + 12, chip_x + 9 * (len(chip) + 2), y0 + 40, lambda _a: self.clear_log_filter())
         x = x1 - 16
-        for key, label, action in (("S", "save", self.save_log), ("C", "clear", self.clear_log)):
+        for key, label, action in (("S", tr("save"), self.save_log), ("C", tr("clear"), self.clear_log)):
             self.text(x, y0 + 26, label, 15, "dim", "e")
             self.text(x - 9 * len(label) - 8, y0 + 26, "[%s]" % key, 15, "cyan", "e")
             self.hit(x - 9 * len(label) - 40, y0 + 12, x, y0 + 40, lambda _a, f=action: f())
             x -= 9 * len(label) + 62
-        self.text(x, y0 + 26, "[%s]" % ("On" if self.autoscroll else "Off"), 15, "cyan", "e")
+        self.text(x, y0 + 26, "[%s]" % (tr("On") if self.autoscroll else tr("Off")), 15, "cyan", "e")
         self.hit(x - 40, y0 + 12, x, y0 + 40, lambda _a: self.toggle_autoscroll())
-        self.text(x - 46, y0 + 26, "Auto-scroll", 15, "dim", "e")
+        self.text(x - 46, y0 + 26, tr("Auto-scroll"), 15, "dim", "e")
         lines = self.visible_log()
+        stamp_w = max([54] + [self.tw(line[0], 14) + 8 for line in lines])   # the system time format decides the width of the time column (for example with AM/PM)
         if self.log_big:   # in the big log long messages continue on the next line instead of being cut off
-            chars = int((x1 - x0 - 196) / 8.4)
+            chars = int((x1 - x0 - 142 - stamp_w) / 8.4)
             wrapped = []
             for stamp, tag, msg in lines:
                 parts = textwrap.wrap(msg, chars) or [""]
@@ -735,15 +807,15 @@ class Dashboard:
             y = y0 + 62 + n * 22
             kind, _, name = tag.partition(" ")
             self.text(x0 + 12, y, stamp, 14, "text", "w")
-            self.text(x0 + 66, y, self.fit(name or kind, 96, 14), 14, TAG_COL.get(kind, "text"), "w")   # only the name: the colour tells Queen, Bee, Apiary
-            self.text(x0 + 166, y, self.fit(msg, x1 - x0 - 196, 14), 14, "text", "w")
+            self.text(x0 + 12 + stamp_w, y, self.fit(name or tr(kind), 96, 14), 14, TAG_COL.get(kind, "text"), "w")   # only the name: the colour tells Queen, Bee, Apiary
+            self.text(x0 + 112 + stamp_w, y, self.fit(msg, x1 - x0 - 142 - stamp_w, 14), 14, "text", "w")
         if not lines:
-            self.text(x0 + 14, y0 + 62, "no log lines", 13, "dim", "w")
+            self.text(x0 + 14, y0 + 62, tr("no log lines"), 13, "dim", "w")
 
     # Draw the model limits as bars.
     def limits_panel(self, s, x0, y0, x1, y1):
         """Draw the Claude/Codex 5-hour windows and per provider the weekly quota and the used slots as bars with a note beside each; scrolls when there are more."""
-        self.panel(x0, y0, x1, y1, "MODEL LIMITS", "used share, resets and slots", icon="icon_system")
+        self.panel(x0, y0, x1, y1, tr("MODEL LIMITS"), tr("used share, resets and slots"), icon="icon_system")
         rows = s["limits"]
         room = int((y1 - y0 - 56) // 26)
         off = self.offset("limits", len(rows), room)
@@ -754,10 +826,10 @@ class Dashboard:
             self.text(x0 + 14, y, r["label"][:15], 14, "text", "w")
             fill = LEVEL_FILL.get(r["level"], "dim")
             self.bar(x0 + 150, y - 7, 140, 14, (r["pct"] or 0) / 100, fill, 18)
-            self.text(x0 + 298, y, "%d%%" % r["pct"] if r["pct"] is not None else "n/a", 14, "cyan" if r["pct"] is not None else "dim", "w")
+            self.text(x0 + 298, y, "%d%%" % r["pct"] if r["pct"] is not None else tr("n/a"), 14, "cyan" if r["pct"] is not None else "dim", "w")
             self.text(x0 + 345, y, self.fit(r["note"], x1 - x0 - 345 - 30, 12), 12, "dim", "w")
         if not rows:
-            self.text(x0 + 14, y0 + 66, "no limit data", 14, "dim", "w")
+            self.text(x0 + 14, y0 + 66, tr("no limit data"), 14, "dim", "w")
 
     # Draw the status sections.
     def status_panel(self, s, x0, y0, x1, y1):
@@ -767,10 +839,16 @@ class Dashboard:
         for title, lines in s["info"]:
             flat.append((True, title, "gold"))
             for text, level in lines:
-                flat += [(False, part, level) for part in textwrap.wrap(text, chars, subsequent_indent="  ") or [""]]
+                width = x1 - x0 - 48
+                limit = chars
+                parts = textwrap.wrap(text, limit, subsequent_indent="  ") or [""]
+                while limit > 3 and any(self.tw(part, 12) > width for part in parts):
+                    limit -= 1
+                    parts = textwrap.wrap(text, limit, subsequent_indent="  ") or [""]
+                flat += [(False, part, level) for part in parts]
         room = int((y1 - y0 - 62) // 15)
         off = self.offset("status", len(flat), room)
-        self.panel(x0, y0, x1, y1, "STATUS", "state, usage, plans and questions")
+        self.panel(x0, y0, x1, y1, tr("STATUS"), tr("state, usage, plans and questions"))
         self.area("status", x0, y0, x1, y1)
         self.scrollbar("status", x1 - 16, y0 + 50, y1 - 8, len(flat), room)
         for n, (heading, text, level) in enumerate(flat[off:off + room]):
@@ -786,14 +864,14 @@ class Dashboard:
         state = self.snap["orchestrator"]
         colour = {"ok": "green", "warn": "amber", "bad": "red"}[state["level"]]
         self.dot(172, 886, colour, 7)
-        label = self.text(188, 886, state["label"], 17, colour, "w", True)
+        label = self.text(188, 886, tr(state["label"]), 17, colour, "w", True)
         right = self.canvas.bbox(label)[2] / self.scale
         self.text(right + 8, 886, "▾", 17, "dim", "w")
         self.hit(160, 866, right + 34, 908, lambda _a: self.state_menu())
         x = right + 50
         self.text(x - 22, 886, "|", 17, "dim", "w")
-        for name, action in (("apiaries" if not self.project else "apiary:" + self.project, self.next_project),
-                             ("hives", self.open_hives), ("questions", self.open_questions), ("config", self.open_config), ("help", self.help)):
+        for name, action in ((tr("apiaries") if not self.project else tr("apiary:%s", self.project), self.next_project),
+                             (tr("hives"), self.open_hives), (tr("questions"), self.open_questions), (tr("config"), self.open_config), (tr("help"), self.help)):
             w = 13 * len(name)
             self.text(x, 886, name, 17, "text", "w")
             self.hit(x - 8, 866, x + w + 8, 908, lambda _a, f=action: f())
@@ -802,7 +880,7 @@ class Dashboard:
             x += 22
         self.canvas.create_line(self.px(x + 10), self.px(886), self.px(DESIGN_W - 440), self.px(886), fill=COL["edge"], width=2)
         self.pic("foot_hex", DESIGN_W - 412, 866)
-        self.text(DESIGN_W - 22, 886, self.error or "BUILD  •  ORCHESTRATE  •  EVOLVE", 17, "red" if self.error else "gold", "e")
+        self.text(DESIGN_W - 22, 886, self.error or tr("BUILD  •  ORCHESTRATE  •  EVOLVE"), 17, "red" if self.error else "gold", "e")
 
     # ---- actions ----
 
@@ -941,12 +1019,29 @@ class Dashboard:
 
     # Open the Queen menu of the Hive under the pointer.
     def on_context(self, event):
-        """A right click on a Hive row or a Queen row selects it and opens the Queen menu; on a Bee row no menu opens."""
+        """A right click on a Hive row or a Queen row selects it and opens the Queen menu; on a stopped package it offers "Resume package"; on other Bee rows no menu opens."""
+        from . import gui_dialog
         for x0, y0, x1, y1, action, arg in reversed(self.hits):
             if x0 <= event.x <= x1 and y0 <= event.y <= y1 and action == self.select:
                 self.select(arg)
+                row = self.selected(arg[0])
+                if arg[0] == "bees" and row is not None and row.get("stopped"):
+                    gui_dialog.popup_menu(self.root, [(tr("Resume package"), lambda: self.resume_package(row))], self.mono)
+                    return
                 self.hive_menu()
                 return
+
+    # Release a package the owner stopped.
+    def resume_package(self, row):
+        """After a confirmation release the stopped package of `row` again: its Queen may start a Bee for it."""
+        from . import bees
+        if not self.confirm(tr("Resume package %s?", row["task"])):
+            return
+        try:
+            bees.resume_package(self.conn, row["project"], row["plan_path"], row.get("package") or row["task"])
+        except Exception as exc:
+            self.complain(tr("Could not resume the package: %s", exc))
+        self.refresh()
 
     # Open the live view of the selected row.
     def open_live(self):
@@ -955,11 +1050,11 @@ class Dashboard:
         if row is None:
             return
         if self.table == "hives":
-            project, agent, title = row["apiary"], row.get("queen_agent"), "Queen %s | %s" % (row["queen"], row["name"])
+            project, agent, title = row["apiary"], row.get("queen_agent"), tr("Queen %s | %s", row["queen"], row["name"])
         else:
-            project, agent, title = row["project"], row.get("agent"), "%s %s | %s" % ("Queen" if row["kind"] == "queen" else "Bee", row["name"], row["hive"])
+            project, agent, title = row["project"], row.get("agent"), (tr("Queen %s | %s", row["name"], row["hive"]) if row["kind"] == "queen" else tr("Bee %s | %s", row["name"], row["hive"]))
         if not agent:
-            self.inform("This row has no agent process yet, so there is no live output.")
+            self.inform(tr("This row has no agent process yet, so there is no live output."))
             return
         view = self.live.get((project, agent))
         if view is not None and view.alive():
@@ -1019,7 +1114,7 @@ class Dashboard:
     def toggle_pause(self):
         """Pause a running run or resume a paused one after a confirmation (key P)."""
         resume = runstate.get_state(self.conn)["state"] != "RUNNING"
-        if self.confirm("Resume HaiveQueen?" if resume else "Pause HaiveQueen? Running agents keep working, no new agent starts."):
+        if self.confirm(tr("Resume HaiveQueen?") if resume else tr("Pause HaiveQueen? Running agents keep working, no new agent starts.")):
             (runstate.resume if resume else runstate.pause)(self.conn, "gui")
             self.refresh()
 
@@ -1037,9 +1132,9 @@ class Dashboard:
         hive = self.selected_hive()
         if hive is None:
             return
-        items = [("Restart Queen of %s" % hive["name"], lambda: self.queen_action(hive, "requeen"))]
-        items += [("Restart Queen of %s on %s" % (hive["name"], name), lambda name=name: self.queen_action(hive, "requeen", name)) for name in self.queen_providers(hive)]
-        items.append(("End Queen and Bees of %s" % hive["name"], lambda: self.queen_action(hive, "dequeen")))
+        items = [(tr("Restart Queen of %s", hive["name"]), lambda: self.queen_action(hive, "requeen"))]
+        items += [(tr("Restart Queen of %s on %s", hive["name"], name), lambda name=name: self.queen_action(hive, "requeen", name)) for name in self.queen_providers(hive)]
+        items.append((tr("End Queen and Bees of %s", hive["name"]), lambda: self.queen_action(hive, "dequeen")))
         items.append(None)
         gui_dialog.popup_menu(self.root, items + [(label + " " + hive["name"], lambda action=action: self.plan_control(hive, action)) for label, action in self.control_items(hive)], self.mono)
 
@@ -1048,12 +1143,12 @@ class Dashboard:
     def control_items(hive) -> list:
         """(label, action) of the plan control: Pause and Stop for a running plan, Start again and Stop for a paused plan with a live Queen, Start again and Reject for a stopped Hive (paused, no live Queen), Start again for a rejected plan."""
         if hive.get("plan_rejected"):
-            return [("Start again", "start")]
+            return [(tr("Start again"), "start")]
         if not hive["paused"]:
-            return [("Pause", "pause"), ("Stop", "stop")]
+            return [(tr("Pause"), "pause"), (tr("Stop"), "stop")]
         if hive["live"]:
-            return [("Start again", "start"), ("Stop", "stop")]
-        return [("Start again", "start"), ("Reject", "reject")]
+            return [(tr("Start again"), "start"), (tr("Stop"), "stop")]
+        return [(tr("Start again"), "start"), (tr("Cancel plan"), "reject")]
 
     # The providers a replacement Queen of a Hive could run on instead of its own.
     def queen_providers(self, hive) -> list:
@@ -1074,16 +1169,16 @@ class Dashboard:
     def plan_control(self, hive, action):
         """After a confirmation: pause (no new Queen or Bee starts, a running Queen keeps working), stop (end the Queen and her Bees, plan paused), reject (a stopped Hive) or start again (a paused plan gets its earlier status back, a rejected plan becomes a draft). Nothing is deleted."""
         from . import hives, loop
-        ask = {"pause": "Pause %s? Running agents keep working, no new Queen or Bee starts.", "stop": "Stop %s? The Queen and her Bees are ended and the plan is paused. Handoff, packages, branch and worktrees stay.",
-               "reject": "Reject %s? The plan never starts again by itself; starting it again makes it a draft. Nothing is deleted.", "start": "Start %s again?"}[action]
-        if not self.confirm(ask % hive["name"]):
+        ask = {"pause": i18n.N_("Pause %s? Running agents keep working, no new Queen or Bee starts."), "stop": i18n.N_("Stop %s? The Queen and her Bees are ended and the plan is paused. Handoff, packages, branch and worktrees stay."),
+               "reject": i18n.N_("Cancel %s? The plan never starts again by itself; starting it again makes it a draft. Nothing is deleted."), "start": i18n.N_("Start %s again?")}[action]
+        if not self.confirm(tr(ask, hive["name"])):
             return
         try:
             with loop.hive_schedule_lock():
                 key = (hive["apiary"], hive["plan_path"])
                 {"pause": hives.pause_plan, "stop": hives.stop_hive, "reject": hives.reject_plan, "start": hives.start_again}[action](self.conn, *key)
         except Exception as exc:
-            self.complain("Could not change the plan: %s" % exc)
+            self.complain(tr("Could not change the plan: %s", exc))
         self.refresh()
 
     # Pause or resume the plan of a Hive (key Space).
@@ -1096,10 +1191,9 @@ class Dashboard:
     # Restart or end the Queen of a Hive through the bzz command.
     def queen_action(self, hive, command, provider=None):
         """After a confirmation run `bzz requeen` (a replacement Queen, on `provider` when given: the Hive then keeps that provider) or `bzz dequeen` (end Queen and own-process Bees) for the Hive in the background and report a failure."""
-        ask = {"requeen": "Restart the Queen of %s? A replacement Queen takes over.", "dequeen": "End the Queen and the Bees of %s? The hive stays queenless."}[command]
-        if provider:
-            ask = "Restart the Queen of %s on " + provider + "? The Hive moves to " + provider + " and keeps it until you change it again."
-        if not self.confirm(ask % hive["name"]):
+        ask = {"requeen": i18n.N_("Restart the Queen of %s? A replacement Queen takes over."), "dequeen": i18n.N_("End the Queen and the Bees of %s? The hive stays queenless.")}[command]
+        text = tr("Restart the Queen of %s on %s? The Hive moves to %s and keeps it until you change it again.", hive["name"], provider, provider) if provider else tr(ask, hive["name"])
+        if not self.confirm(text):
             return
         proc = subprocess.Popen([osplat.python_executable(), "-m", "haivequeen", command, "%s:%s" % (hive["apiary"], hive["plan_path"])] + ([provider] if provider else []), stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **NO_WINDOW)
@@ -1113,25 +1207,42 @@ class Dashboard:
             return
         out, err = proc.communicate()
         if proc.returncode != 0:
-            self.complain("%s failed: %s" % (command, (err or out or "").strip()[:300] or "exit code %d" % proc.returncode))
+            self.complain(tr("%s failed: %s", command, (err or out or "").strip()[:300] or tr("exit code %d", proc.returncode)))
         self.refresh()
 
     # Stop the selected Bee.
     def stop_bee(self):
-        """Kill the process tree of the selected Bee after a confirmation; the runner records the vanished process and the task is retried.
+        """Kill the process tree of the selected Bee after a confirmation; its package stays stopped until the owner resumes it ("Resume package").
+        A Bee that runs as a subagent of its Queen has no process: its package is stopped and its Queen told to end it; the stop stays pending and the Bee keeps
+        its place until the Queen confirms its end (owner answer 220).
 
-        A Queen row is refused with a hint to the Queen menu, and a Bee that has not started yet with a hint that there is nothing to stop."""
+        A Queen row is refused with a hint to the Queen menu, a stopped package is offered for resuming, and a Bee that has not started yet gets a hint that there is nothing to stop."""
         bee = self.selected("bees")
         if bee is None:
             return
+        if bee.get("stopped"):
+            self.resume_package(bee)
+            return
         if bee["kind"] == "queen":
-            self.inform("X stops Bees only. Use the Queen menu (M, or a right click on the Queen) to restart or end a Queen.")
+            self.inform(tr("X stops Bees only. Use the Queen menu (M, or a right click on the Queen) to restart or end a Queen."))
+            return
+        if bee.get("stopping"):   # owner answer 220: the place stays held until the Queen confirms that her subagent ended
+            self.inform(tr("The stop of %s (%s) is pending: the Bee keeps its place until its Queen confirms that it has ended.", bee["name"], bee["task"]))
+            return
+        if bee.get("embedded"):   # a subagent of its Queen has no process of its own: its Queen is told to end it and confirm its end (STOP-PACKAGES)
+            if self.confirm(tr("Stop bee %s (%s)? The package stays stopped until you resume it.", bee["name"], bee["task"])):
+                from . import bees
+                bees.stop_package(self.conn, bee["project"], bee["plan_path"], bee.get("package") or bee["task"])
+                self.refresh()
             return
         if not bee["agent"]:
-            self.inform("This Bee has not started yet, so there is nothing to stop.")
+            self.inform(tr("This Bee has not started yet, so there is nothing to stop."))
             return
-        found = db.rows(self.conn, "SELECT pid FROM agents WHERE project=? AND name=? AND archived=0", (bee["project"], bee["agent"]))
-        if found and found[0]["pid"] and self.confirm("Stop bee %s (%s)?" % (bee["name"], bee["task"])):
+        found = db.rows(self.conn, "SELECT pid, plan_path, package FROM agents WHERE project=? AND name=? AND archived=0", (bee["project"], bee["agent"]))
+        if found and found[0]["pid"] and self.confirm(tr("Stop bee %s (%s)? The package stays stopped until you resume it.", bee["name"], bee["task"])):
+            from . import bees
+            if found[0]["package"]:
+                bees.stop_package(self.conn, bee["project"], found[0]["plan_path"] or bee["plan_path"], found[0]["package"])
             osplat.kill_process_tree(found[0]["pid"])
             self.refresh()
 
@@ -1154,7 +1265,7 @@ class Dashboard:
         """Ask for a file name and write the visible log lines to it."""
         from . import gui_dialog
         folder = osplat.data_dir() / "exports"
-        path = gui_dialog.ask_path(self.root, "Save the log as", str(folder / ("haivequeen-%s.log" % datetime.now().strftime("%Y%m%d-%H%M"))), self.mono)
+        path = gui_dialog.ask_path(self.root, tr("Save the log as"), str(folder / ("haivequeen-%s.log" % datetime.now().strftime("%Y%m%d-%H%M"))), self.mono)
         if path and self.snap:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             Path(path).write_text("\n".join("%s [%s] %s" % ln for ln in self.visible_log()) + "\n", encoding="utf-8")
@@ -1175,7 +1286,7 @@ class Dashboard:
     # Request a graceful stop.
     def stop(self):
         """Run `bzz stop` after a confirmation: running agents finish, no new one starts."""
-        if self.confirm("Stop HaiveQueen gracefully? Running agents finish their task first."):
+        if self.confirm(tr("Stop HaiveQueen gracefully? Running agents finish their task first.")):
             subprocess.Popen([osplat.python_executable(), "-m", "haivequeen", "stop"], stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **NO_WINDOW)
 
@@ -1219,18 +1330,18 @@ class Dashboard:
     # Show the keys.
     def help(self):
         """Show the keyboard and mouse controls."""
-        self.inform("P  pause / resume\nQ  answer the open questions\nSpace  pause / resume the selected plan\nF  next apiary filter\nM / right click  queen menu of the hive or the Queen row\nTab  switch between the Hives and the Queens and Bees table\nUp/Down  select a row of that table\nClick  select a row\nEnter / double click  live output of the row\n"
-                    "X  stop the selected bee\nC  clear log   S  save log   A  auto-scroll\nL / double click on LOGS  big log   N  routine round lines   Esc  remove the log filter", "Keys")
+        self.inform(tr("P  pause / resume\nQ  answer the open questions\nSpace  pause / resume the selected plan\nF  next apiary filter\nM / right click  queen menu of the hive or the Queen row\nTab  switch between the Hives and the Queens and Bees table\nUp/Down  select a row of that table\nClick  select a row\nEnter / double click  live output of the row\n"
+                       "X  stop the selected bee\nC  clear log   S  save log   A  auto-scroll\nL / double click on LOGS  big log   N  routine round lines   Esc  remove the log filter"), tr("Keys"))
 
 
 # The actions the state button offers in a given state.
 def state_actions(label) -> list:
     """[(menu text, Dashboard method name or None)] for the state shown on the button; a None entry is a separator, a None method a disabled line."""
     if label == "STOPPED":
-        return [("Start HaiveQueen", "start")]
+        return [(tr("Start HaiveQueen"), "start")]
     if label == "STOPPING":
-        return [("Stopping: running agents finish their task first", None)]
-    return [("Resume new starts" if label == "PAUSED" else "Pause new starts", "toggle_pause"), None, ("Stop HaiveQueen", "stop")]
+        return [(tr("Stopping: running agents finish their task first"), None)]
+    return [(tr("Resume new starts") if label == "PAUSED" else tr("Pause new starts"), "toggle_pause"), None, (tr("Stop HaiveQueen"), "stop")]
 
 
 # Give the window the HaiveQueen icon instead of tkinter's feather.
@@ -1254,7 +1365,7 @@ def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     project = args[args.index("--project") + 1] if "--project" in args else None
     if running_pid():
-        print("The graphical dashboard is already open.", file=sys.stderr)
+        print(tr("The graphical dashboard is already open."), file=sys.stderr)
         return 0
     lock = lock_file()
     lock.parent.mkdir(parents=True, exist_ok=True)
@@ -1268,7 +1379,7 @@ def main(argv=None) -> int:
         except (AttributeError, OSError):
             pass
     root = tk.Tk()
-    root.title("HaiveQueen | AI Agent Orchestrator")
+    root.title(tr("HaiveQueen | AI Agent Orchestrator"))
     set_window_icon(root)
     root.geometry("%dx%d" % (min(DESIGN_W, root.winfo_screenwidth() - 80), min(DESIGN_H, root.winfo_screenheight() - 120)))
     root.configure(bg=COL["bg"])

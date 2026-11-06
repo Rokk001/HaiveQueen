@@ -6,14 +6,15 @@ CREATE TABLE IF NOT EXISTS projects (
     workspace TEXT,
     colour TEXT,
     priority INTEGER NOT NULL DEFAULT 0,
-    registered_at TEXT
+    registered_at TEXT,
+    legacy_deploy INTEGER NOT NULL DEFAULT 0   -- 1: registered before the integration switches; without an entry deployEnabled stays on
 );
 
 CREATE TABLE IF NOT EXISTS plans (
     project TEXT NOT NULL,
     path TEXT NOT NULL,
     title TEXT,
-    status TEXT CHECK (status IN ('DRAFT','SUBMITTED','READY','IN_PROGRESS','DONE','PAUSED','REJECTED')),
+    status TEXT CHECK (status IN ('DRAFT','SENT','PREPARING','QUEUED','RUNNING','WAITING','REVIEW','DONE','PAUSED','CANCELLED')),
     updated_at TEXT,
     PRIMARY KEY (project, path)
 );

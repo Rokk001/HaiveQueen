@@ -6,6 +6,10 @@ ended by themselves (it ends nothing), fast-forwards main of the live folder to 
 pyproject.toml changed, starts the loop and checks the first round. A failure after the merge is rolled back with `git reset --keep`
 (rollback) and filed as an open question of project HaiveQueen. Every run is one row of the table self_updates.
 The live folder is the folder of this package: no path of a machine is written into the tool.
+
+With a version (`self-update --worker --version X`, started by the update button, H-42) the same worker installs the release X instead: it
+fetches the tag vX from origin, fast-forwards to it and never pushes. While the worker holds its lock no Queen or Bee starts (H-46 i); its own
+restart carries the variable BZZ_UPDATE_RESTART, which `start` accepts while the lock is held.
 """
 import json
 import os
@@ -24,6 +28,7 @@ DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 TASK_NAME = "HaiveQueenSelfUpdate"
+RESTART_VAR = "BZZ_UPDATE_RESTART"   # set for the restart of the worker (see loop.cmd_start)
 STARTING_GRACE = 120   # seconds an agent row without a process id counts as starting (as routine.repair_stale_agents)
 
 
@@ -48,18 +53,18 @@ def integration_branch(conn) -> str:
 
 # ---- starting the detached worker ----
 
-def worker_argv() -> list:
-    """Command line of the worker: the interpreter with `-m haivequeen self-update --worker` (never through bzz.exe, which pip cannot rewrite while it runs)."""
-    return [osplat.python_executable(), "-m", "haivequeen", "self-update", "--worker"]
+def worker_argv(version=None) -> list:
+    """Command line of the worker: the interpreter with `-m haivequeen self-update --worker` (never through bzz.exe, which pip cannot rewrite while it runs); with a release version `--version X`."""
+    return [osplat.python_executable(), "-m", "haivequeen", "self-update", "--worker"] + (["--version", str(version)] if version else [])
 
 
-def spawn_worker(live=None) -> dict:
+def spawn_worker(live=None, version=None) -> dict:
     """Start the worker without inherited handles (DEVNULL, close_fds, detached, own process group, outside the job) and return at once.
 
     Windows refusing the breakaway flag falls back to a one-shot scheduled task. Returns {"how": "detached"|"schtasks"}.
     """
     live = Path(live or live_folder())
-    argv = worker_argv()
+    argv = worker_argv(version)
     common = {"cwd": str(live), "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
     if not osplat.is_windows():
         subprocess.Popen(argv, start_new_session=True, **common)
@@ -68,7 +73,7 @@ def spawn_worker(live=None) -> dict:
         subprocess.Popen(argv, creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB, **common)
         return {"how": "detached"}
     except OSError:
-        command = 'cmd /c cd /d "%s" && "%s" -m haivequeen self-update --worker' % (live, argv[0])
+        command = 'cmd /c cd /d "%s" && "%s" -m haivequeen self-update --worker%s' % (live, argv[0], " --version " + str(version) if version else "")
         subprocess.run(["schtasks", "/create", "/tn", TASK_NAME, "/tr", command, "/sc", "once", "/st", "00:00", "/f"],
                        check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["schtasks", "/run", "/tn", TASK_NAME], check=True,
@@ -166,6 +171,17 @@ def changed_files(live, old: str, new: str, run) -> list:
     return out.split() if code == 0 else []
 
 
+def start_pending_refusal(out: str) -> bool:
+    """True when `start` refused (exit 1) only because another start is already bringing the loop up: that loop counts, the first round is awaited."""
+    for line in reversed((out or "").splitlines()):
+        if line.startswith("{"):
+            try:
+                return bool(json.loads(line).get("starting"))
+            except ValueError:
+                return False
+    return False
+
+
 def rollback(conn, live, old: str, new: str, why: str, run, restart) -> tuple:
     """Reset the live folder to `old` (git reset --keep), install again when pyproject.toml differed, start the loop, file the open question.
 
@@ -193,13 +209,16 @@ def rollback(conn, live, old: str, new: str, why: str, run, restart) -> tuple:
 # ---- the update ----
 
 def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, poll: float = 5.0, round_timeout: float = 1800.0,
-               loop_pid=None) -> dict:
+               loop_pid=None, version=None) -> dict:
     """Do one self-update of the live folder and return {"result", "note", "old", "new"} (also written to self_updates).
 
     Takes the lock (a second run ends at once with result "locked" and no row), writes STOP, waits for loop and agents, updates and checks the
-    first round. Injectable parts (`run`, `sleep`, `alive`, `loop_pid`) serve the tests, which never touch the real flag, lock or agents.
+    first round. With `version` the release tag v<version> is installed instead of origin/<integrationBranch>, without a push. Injectable parts (`run`, `sleep`, `alive`, `loop_pid`) serve the tests, which never touch the real flag, lock or agents.
     """
     live = Path(live or live_folder())
+    if version is not None:
+        from . import releases
+        releases.next_version(str(version))   # only a plain version number reaches git
     holder = loop._take_pid_lock(lock_path(), own_ok=False, wait=0.5)
     if holder:
         return {"result": "locked", "note": "another self-update runs (pid %s)" % holder, "old": "", "new": ""}
@@ -210,16 +229,24 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
         row_id = start_row(conn, old)
         stop = loop.stop_flag()
         stop.parent.mkdir(parents=True, exist_ok=True)
-        stop.write_text("stop requested %s (self-update)\n" % db.now(), encoding="utf-8")
+        stop.write_text("stop requested %s (self-update%s)\n" % (db.now(), " to %s" % version if version else ""), encoding="utf-8")
         wait_until_quiet(conn, sleep, poll, alive, loop_pid)
 
         def restart():
-            """Start the loop through the live code; (True, '') when `start` answered with exit 0."""
-            code, out = run([osplat.python_executable(), "-m", "haivequeen", "start", "--keep-pause"], live)
-            return code == 0, out.strip()
+            """Start the loop through the live code; (True, '') when `start` answered with exit 0 (or refused only because a start is pending)."""
+            os.environ[RESTART_VAR] = "1"   # the started process inherits it: its start is allowed while this worker holds the lock
+            try:
+                code, out = run([osplat.python_executable(), "-m", "haivequeen", "start", "--keep-pause"], live)
+            finally:
+                os.environ.pop(RESTART_VAR, None)
+            return code == 0 or start_pending_refusal(out), out.strip()
 
-        branch = integration_branch(conn)
-        for argv in (["fetch", "origin"], ["merge", "--ff-only", "origin/" + branch]):
+        if version is not None:
+            steps = (["fetch", "origin", "tag", "v%s" % version, "--no-tags"], ["merge", "--ff-only", "v%s" % version])
+        else:
+            branch = integration_branch(conn)
+            steps = (["fetch", "origin"], ["merge", "--ff-only", "origin/" + branch])
+        for argv in steps:
             code, out = run(["git", "-C", str(live)] + argv, live)
             if code != 0:
                 ok, why = restart()   # nothing was changed: only the stopped loop is started again
@@ -230,7 +257,7 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
         failure = ""
         pane_problems = ""
         if new != old:
-            code, out = run(["git", "-C", str(live), "push", "origin", "main"], live)
+            code, out = run(["git", "-C", str(live), "push", "origin", "main"], live) if version is None else (0, "")   # a release install never pushes
             if code != 0:
                 failure = "git push origin main: " + out.strip()[:300]
             elif "pyproject.toml" in changed_files(live, old, new, run):
@@ -254,6 +281,8 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
             result, note = "failed", failure
         else:
             result, note = "ok", ("updated to %s" % new[:12] if new != old else "already current at %s" % new[:12])
+            if version is not None:
+                note = "version %s: %s" % (version, note)
             if pane_problems:
                 note += "; kept despite first round problems: " + pane_problems
                 try:
@@ -274,10 +303,11 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
 def cmd_self_update(args, conn) -> int:
     """`self-update`: spawn the detached worker and return at once; `--worker` runs the update in this process."""
     if args.worker:
-        res = run_update(conn)
+        res = run_update(conn, version=getattr(args, "version", None))
         print(json.dumps({"ok": res["result"] in ("ok", "rollback"), **res}))
         return 0 if res["result"] in ("ok", "rollback") else 1
-    print(json.dumps({"ok": True, **spawn_worker()}))
+    version = getattr(args, "version", None)
+    print(json.dumps({"ok": True, **(spawn_worker(version=version) if version else spawn_worker())}))
     return 0
 
 
@@ -285,4 +315,5 @@ def register(sub) -> None:
     """Add the command self-update to the sub-parser collection of haivequeen/cli.py."""
     p = sub.add_parser("self-update")
     p.add_argument("--worker", action="store_true", help="run the update in this process (the detached worker; the integrator never uses it)")
+    p.add_argument("--version", help="install this release tag v<version> (the update button) instead of origin/<integrationBranch>")
     p.set_defaults(fn=cmd_self_update)

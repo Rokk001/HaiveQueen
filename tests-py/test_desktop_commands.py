@@ -13,6 +13,12 @@ from haivequeen import cli, desktop, loop, runstate, runtime
 class DesktopCommandsTest(RoundCase):
     """Keep every command inside the disposable runtime with mocked UI."""
 
+    def test_desktop_language_regions_and_fallback(self):
+        for language in ('German', 'Deutsch', 'de', 'de-CH', 'de_AT'):
+            self.assertEqual(desktop.result_text('start', {'ok': True}, language), 'HQ wurde gestartet.')
+        for language in ('French', 'en-US', ''):
+            self.assertEqual(desktop.result_text('start', {'ok': True}, language), 'HQ has started.')
+
     # Run a CLI command and return its exit code and JSON output.
     def invoke(self, *arguments):
         """Run a CLI command and return its exit code and JSON output."""
@@ -56,7 +62,8 @@ class DesktopCommandsTest(RoundCase):
                 mock.patch.object(loop, 'run_loop') as run, \
                 mock.patch.object(desktop, 'show_result') as show:
             code, result = self.invoke('start', '--desktop')
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1)   # a refused start is a failure for the caller
+        self.assertFalse(result['ok'])
         self.assertTrue(result['stopping'])
         self.assertEqual(result['running_agents'], 1)
         self.assertEqual(loop.stop_flag().read_text(encoding='utf-8'), 'stop requested\n')
@@ -125,16 +132,17 @@ class DesktopCommandsTest(RoundCase):
     # Visible text explains that running agents are awaited and reports the actual error.
     def test_german_feedback_describes_wait_and_errors(self):
         """Visible text explains that running agents are awaited and reports the actual error."""
-        text = desktop.result_text('start', {'ok': True, 'stopping': True, 'running_agents': 2})
+        text = desktop.result_text('start', {'ok': True, 'stopping': True, 'running_agents': 2}, 'German')
         self.assertIn('2 laufende Agenten', text)
         self.assertIn('ununterbrochen', text)
-        self.assertEqual(desktop.result_text('start', {'ok': False, 'error': 'kaputt'}), 'Fehler: kaputt')
-        self.assertEqual(desktop.result_text('start', {'ok': True}), 'HQ wurde gestartet.')
+        self.assertEqual(desktop.result_text('start', {'ok': False, 'error': 'kaputt'}, 'German'), 'Fehler: kaputt')
+        self.assertEqual(desktop.result_text('start', {'ok': True}, 'German'), 'HQ wurde gestartet.')
 
     # The Windows presenter actually invokes a visible native dialog.
     def test_windows_dialog_displays_result(self):
         """The Windows presenter actually invokes a visible native dialog."""
         with mock.patch.object(desktop.sys, 'platform', 'win32'), \
+                mock.patch('haivequeen.i18n.machine_language', return_value='German'), \
                 mock.patch('ctypes.windll', create=True) as dll:
             desktop.show_result('stop', {'ok': True, 'running_agents': 1})
         dll.user32.MessageBoxW.assert_called_once()

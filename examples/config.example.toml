@@ -1,24 +1,26 @@
 # Machine settings: %APPDATA%\HaiveQueen\config.toml
 slots = 2                 # agent processes shared by all projects
 hives = 2                 # maximum Hives with running Queens, machine-wide
-preferredProvider = ""    # preferred Queen provider, or empty
 excludedProviders = []    # provider names never used
 queenClass = "medium"     # project may override
 beesPerQueen = 3          # project may override
 escalateAfter = 3         # failures per class before escalation
+readyCheckClass = "medium"   # class of the check agent of bzz ready
 contextLimitTokens = 300000   # context size at which a Queen or Bee is asked to hand off; valid for all Apiaries, a project.toml or a model entry under [providers.classes] may set its own
 buildJobs = { cores = 6, parallel = 1, minFreeRamGB = 2 }   # builds: CPU cores in total, the number after --parallel, minimum free RAM in GB before a build (the settings window edits these; omit for the defaults)
 ramReserveMb = 2048       # RAM that must stay free
 agentStallSeconds = 3600  # an agent that prints nothing for this long is marked as stalled, never ended (0 = off)
 exportDir = "%LOCALAPPDATA%\\HaiveQueen\\exports"
+retention = { logsDays = 30, runsDays = 30, databaseDays = 90, inboxDays = 30 }  # expired data is removed by the loop; zero disables that category
+update = { checkHours = 24, repository = "" }   # hours between two update checks (0 = only Check now); repository "owner/name" (empty: the origin of the install folder)
 
 # Interrupted agent ends (laptop sleep, network or API errors, vanished process): the values below are the defaults.
 clockJumpSeconds = 120                  # a wall clock jump above this many seconds during an agent run counts as laptop sleep
 retryWaitMinutes = [1, 2, 4, 8, 15]     # wait before the 1st, 2nd, ... retry of consecutive API or connection errors of one task; the last value repeats
 rateLimitWaitMinutes = 15               # wait after a rate limit when no reset time of the limited provider is known
 
-# Providers: slots = tasks at once (shared by all projects); use = preferred | fallback | capability-only; classes = model and effort per class.
-# limit.source says where the weekly usage comes from (claude | codex | none); the scheduler picks the provider with the most weekly limit left per hour.
+# Providers: slots = tasks at once (shared by all projects); use = preferred | fallback; classes = model and effort per class.
+# limit.source says where the weekly usage comes from (claude | codex | none); interval is seconds (default 60); the scheduler picks the provider with the most weekly limit left per hour.
 [[providers]]
 name = "claude"
 protocol = "claude"
@@ -41,7 +43,8 @@ args = ["exec", "--json", "--skip-git-repo-check", "-m", "{model}", "-c", "model
 slots = 2
 use = "preferred"
 beeMode = "process"
-capabilities = ["images"]
+capabilities = ["Coding", "Queen", "Image generation"]
+capabilitiesVersion = 1
 limit = { source = "codex" }
 [providers.classes]
 light = { model = "gpt-6-luna", effort = "medium" }

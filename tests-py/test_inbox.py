@@ -160,7 +160,7 @@ class QueueOrderTest(InboxTest):
         self.round()
         self.assertEqual(self.status(qid)[0], "blocked")
         self.assertEqual(self.status(qid2), ("ready", "requeued: nur Umgebung"))
-        self.assertEqual(runtime.kv_get(self.conn, "testproj", "branch-cleanup:fix/c"), "erledigt, Aufraeumen erlaubt: integriert")
+        self.assertEqual(runtime.kv_get(self.conn, "testproj", "branch-cleanup:fix/c"), "done, cleanup allowed: integriert")
         self.assertIn("no queue row of branch fix/none", (self.box / "failed" / "n.error.txt").read_text(encoding="utf-8"))
 
 

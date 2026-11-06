@@ -1,11 +1,30 @@
 """Project setup: `bzz init` creates the project files, `bzz register` records a project."""
 import json
+import os
 from pathlib import Path
 
 from . import config, db
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 CLAUDE_LINE = "Read AGENTS.md in this folder first; it holds the rules for all agents.\n"
+EXAMPLE_PLAN = '''+++
+status = "DRAFT"
+
+[[packages]]
+id = "P1"
+title = "Implement the example"
+class = "medium"
+depends_on = []
+requirements = ["E-1", "E-2"]
++++
+# Example plan
+
+Feature branch: `example`
+
+## Requirements
+- E-1: Add a greeting.
+- E-2: Test the greeting.
+'''
 
 
 def _write_new(path: Path, text: str, report: list) -> None:
@@ -34,7 +53,26 @@ def init_project(folder) -> list:
     else:
         plans.mkdir(parents=True)
         report.append({"path": str(plans), "result": "created"})
+    _write_new(plans / "EXAMPLE-PLAN.md", EXAMPLE_PLAN, report)
     return report
+
+
+def register_listed(conn, entries) -> list:
+    """Register the projects of the settings page that have a name and an existing workspace and are not registered yet; returns their names. A registered row is never changed."""
+    added = []
+    known = {r["name"]: r["workspace"] for r in db.rows(conn, "SELECT name, workspace FROM projects")}
+    places = {os.path.normcase(str(Path(w).resolve())) for w in known.values() if w}
+    for entry in entries or []:
+        name, workspace = str(entry.get("name") or "").strip(), str(entry.get("workspace") or "").strip()
+        if not name or not workspace or name in known or not Path(workspace).is_dir():
+            continue
+        ws = Path(workspace).resolve()
+        if os.path.normcase(str(ws)) in places:
+            continue
+        proj = config.load_project(ws)
+        db.upsert_project(conn, name, str(ws), proj["colour"], proj["priority"])
+        added.append(name)
+    return added
 
 
 def register_project(conn, folder) -> dict:

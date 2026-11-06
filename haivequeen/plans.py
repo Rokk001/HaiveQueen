@@ -5,12 +5,15 @@ import re
 import tomllib
 from dataclasses import dataclass, field
 
-STATUSES = ("DRAFT", "SUBMITTED", "READY", "IN_PROGRESS", "DONE", "PAUSED", "REJECTED")
+STATUSES = ("DRAFT", "SENT", "PREPARING", "QUEUED", "RUNNING", "WAITING", "REVIEW", "DONE", "PAUSED", "CANCELLED")
+LEGACY_STATUSES = {"SUBMITTED": "SENT", "READY": "QUEUED", "IN_PROGRESS": "RUNNING", "REJECTED": "CANCELLED"}   # old names in existing plan files; written with the new name at the next status change
 CLASSES = ("light", "medium", "heavy")
 VERIFIES = ("code", "build", "owner")   # who closes the last requirements of a package: the Bee (code), the build, or the owner
+STEP_PACKAGES = {"Build": "INTEGRATION-BUILD", "Deploy": "INTEGRATION-DEPLOY"}   # package ids HaiveQueen itself adds to a plan for an integration step (see integration.py)
 DEFAULT_GLOBS = ("docs/plans/*.md",)
-STARTABLE_STATUSES = ("READY", "IN_PROGRESS")
-QUEEN_STATUSES = ("SUBMITTED",) + STARTABLE_STATUSES   # plans that get a Hive and a Queen; a SUBMITTED plan is cut into packages by its Queen first
+CUT_STATUSES = ("SENT", "PREPARING")   # plans whose Queen still cuts them into packages
+STARTABLE_STATUSES = ("QUEUED", "RUNNING", "WAITING", "REVIEW")
+QUEEN_STATUSES = CUT_STATUSES + STARTABLE_STATUSES   # plans that get a Hive and a Queen; a SENT plan is cut into packages by its Queen first
 
 
 @dataclass
@@ -34,13 +37,21 @@ class Plan:
     status: str = "DRAFT"
     packages: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    errors: list = field(default_factory=list)   # header problems shown in the GUI: broken header, unknown status or class
     owner_check: str = "ask"   # "ask": the owner accepts the integrated plan; "none" (header owner_check = "none") skips that question
 
 
 def normalize_status(value):
-    """Return the upper-case status if known, else DRAFT."""
+    """Return the upper-case status (an old name as its new name) if known, else DRAFT."""
     s = str(value or "").strip().upper()
+    s = LEGACY_STATUSES.get(s, s)
     return s if s in STATUSES else "DRAFT"
+
+
+def status_known(value):
+    """True when the value is a current or an old status name."""
+    s = str(value or "").strip().upper()
+    return s in STATUSES or s in LEGACY_STATUSES
 
 
 def normalize_class(value):
@@ -55,8 +66,8 @@ def normalize_verify(value):
     return (s, True) if s in VERIFIES else ("code", not s)
 
 
-def split_front_matter(text):
-    """Split text into (header_dict, body). Header is {} when no valid +++ TOML block starts the file."""
+def split_front_matter(text, errors=None):
+    """Split text into (header_dict, body). Header is {} when no valid +++ TOML block starts the file; the reason of a broken header is appended to errors."""
     text = text.lstrip("﻿")
     lines = text.splitlines()
     if not lines or lines[0].strip() != "+++":
@@ -65,9 +76,13 @@ def split_front_matter(text):
         if lines[i].strip() == "+++":
             try:
                 header = tomllib.loads("\n".join(lines[1:i]))
-            except tomllib.TOMLDecodeError:
+            except tomllib.TOMLDecodeError as exc:
+                if errors is not None:
+                    errors.append("the plan header is broken: %s" % exc)
                 return {}, "\n".join(lines[i + 1:])
             return header, "\n".join(lines[i + 1:])
+    if errors is not None:
+        errors.append("the plan header has no closing +++ line")
     return {}, text
 
 
@@ -97,13 +112,18 @@ def _depends(value):
 # Parse plan text with TOML front matter into a Plan; no header means DRAFT without packages.
 def parse_plan_text(text, path=""):
     """Parse plan text with TOML front matter into a Plan; no header means DRAFT without packages."""
-    header, body = split_front_matter(text)
+    errors = []
+    header, body = split_front_matter(text, errors)
     packages, warnings = [], []
+    if "status" in header and not status_known(header.get("status")):
+        errors.append("the plan status '%s' is unknown (use %s)" % (header.get("status"), ", ".join(STATUSES)))
     raw = header.get("packages", [])
     if isinstance(raw, list):
         for row in raw:
             if not isinstance(row, dict) or not str(row.get("id", "")).strip():
                 continue
+            if "class" in row and str(row.get("class") or "").strip().lower() not in CLASSES:
+                errors.append("package %s: class '%s' is unknown (use %s)" % (str(row["id"]).strip(), row.get("class"), ", ".join(CLASSES)))
             verify, valid = normalize_verify(row.get("verify"))
             if not valid:
                 warnings.append("package %s: verify '%s' is unknown (use %s), treated as code" % (str(row["id"]).strip(), row.get("verify"), ", ".join(VERIFIES)))
@@ -118,7 +138,7 @@ def parse_plan_text(text, path=""):
                 requirements=_depends(row.get("requirements")),
             ))
     owner_check = "none" if str(header.get("owner_check", "")).strip().lower() in ("none", "false", "no", "off") else "ask"
-    return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings, owner_check=owner_check)
+    return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings, errors=errors, owner_check=owner_check)
 
 
 def load_plan(path):
@@ -223,6 +243,8 @@ def check_plan(plan, capabilities, requirements=()):
         problems.append("the header lists no package")
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
         problems.append("package id %s is used more than once" % dup)
+    for reserved in sorted(set(ids) & set(STEP_PACKAGES.values())):
+        problems.append("package id %s is reserved for an integration step" % reserved)
     deps = {p.id: package_dependencies(plan, p) for p in plan.packages}
     for p in plan.packages:
         if not p.title.strip():
@@ -230,8 +252,10 @@ def check_plan(plan, capabilities, requirements=()):
         for d in deps[p.id]:
             if d not in ids:
                 problems.append("package %s depends on %s, which is not in the plan" % (p.id, d))
-        for cap in [c.strip() for c in p.capability.split(",") if c.strip()]:
-            if cap not in capabilities:
+        from .scheduler import canonical_capability
+        available = {canonical_capability(c) for c in capabilities}
+        for cap in [canonical_capability(c) for c in p.capability.split(",") if c.strip()]:
+            if cap not in available:
                 problems.append("package %s needs the capability %s, which no configured provider offers" % (p.id, cap))
     state = {}
 
@@ -269,7 +293,7 @@ def plan_warnings(plan):
 
 
 def startable_packages(plans, done_ids):
-    """Rule 11: packages of READY/IN_PROGRESS plans that are not done and whose dependencies are all in done_ids.
+    """Rule 11: packages of QUEUED, RUNNING, WAITING or REVIEW plans that are not done and whose dependencies are all in done_ids.
 
     Returns a list of (plan, package) pairs. done_ids is a set of package ids."""
     done = set(done_ids)

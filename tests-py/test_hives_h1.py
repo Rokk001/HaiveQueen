@@ -38,14 +38,6 @@ class HiveRoundTests(RoundCase):
         super().finish(name, final=final, status=status, project=project)
         runtime.upsert_agent(self.conn, project, name, {"pid": None})
 
-    # Provide the migration's explicit synthetic target list.
-    def migration_source(self):
-        """Write the migration target list into a separate draft plan."""
-        rel = 'docs/plans/MIGRATE/MIGRATE-PLAN.md'
-        self.plan('DRAFT', [], project='hq', rel=rel)
-        with (self.base / 'repo-hq' / rel).open('a', encoding='utf-8') as plan:
-            plan.write('\n- D25 Migration: HaiveQueen plans in work (OLD-ONE, OLD-TWO, OLD-THREE, OLD-FOUR) stay paused.\n')
-
     # One plan starts one Queen even when multiple packages are ready.
     def test_one_queen_for_a_plan_with_two_packages(self):
         """One plan starts one Queen even when multiple packages are ready."""
@@ -147,7 +139,7 @@ class HiveRoundTests(RoundCase):
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         from bzztest import REL
-        self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "IN_PROGRESS")
+        self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "RUNNING")
 
     # Pause starts no new Queen and leaves the existing process alone.
     def test_global_pause_preserves_running_queen(self):
@@ -182,7 +174,7 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(picked["name"], "b")
 
     # An available preferred provider wins even with less free weekly limit.
-    def test_preferred_provider_has_priority_when_available(self):
+    def test_obsolete_preferred_provider_does_not_override_quota(self):
         """An available preferred provider wins even with less free weekly limit."""
         from bzztest import provider
         self.machine["providers"] = [provider("a", 1), provider("b", 1, "fallback")]
@@ -191,32 +183,7 @@ class HiveRoundTests(RoundCase):
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"]
         self.assertEqual(len(active), 1)
-        self.assertEqual(active[0]["provider"], "b")
-
-    # First resumed round pauses the four old HQ plans and keeps open questions.
-    def test_migration_pauses_existing_hq_plans_and_keeps_questions(self):
-        """First resumed round pauses the four old HQ plans and keeps open questions."""
-        from haivequeen import runstate
-        self.add_project("hq")
-        for tag in ("OLD-ONE", "OLD-TWO", "OLD-THREE", "OLD-FOUR"):
-            self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}], project="hq", rel=f"docs/plans/{tag}/{tag}-PLAN.md")
-            self.agent("old-" + tag, project="hq", plan_path=f"docs/plans/{tag}/{tag}-PLAN.md", phase="work", status="done")
-        self.migration_source()
-        self.conn.execute("INSERT INTO questions (project,plan_path,item,question,status,created_at) VALUES (?,?,?,?,?,?)",
-                          ("hq", "docs/plans/OLD-ONE/OLD-ONE-PLAN.md", "P1", "Which?", "open", "2026-01-01"))
-        rel = "docs/plans/OLD-ONE/OLD-ONE-PLAN.md"
-        runtime.set_package(self.conn, "hq", rel, "P1", locked=True, reason="old lock")
-        runtime.kv_set(self.conn, "hq", "stall:" + rel + "|P1", "old")
-        runstate.pause(self.conn)
-        runstate.resume(self.conn)
-        self.round()
-        rows = runtime.list_plans(self.conn, "hq")
-        targets = [row for row in rows if row["path"].split("/")[-1].startswith("OLD-")]
-        self.assertEqual(len(targets), 4)
-        self.assertTrue(all(row["status"] == "PAUSED" for row in targets))
-        self.assertEqual(len(runtime.list_questions(self.conn, "hq", status="open")), 1)
-        self.assertFalse(runtime.list_packages(self.conn, "hq", rel)[0]["locked"])
-        self.assertIsNone(runtime.kv_get(self.conn, "hq", "stall:" + rel + "|P1"))
+        self.assertEqual(active[0]["provider"], "a")
 
     # A finished context handoff starts a new Queen on the same provider.
     def test_context_handoff_restarts_same_hive_and_provider(self):
@@ -458,9 +425,9 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(len(active), 1)
         self.assertEqual(active[0]["plan_path"], rel1)
 
-    # The first Queen sees unresolved questions from before the migration.
+    # The first Queen receives an existing open question.
     def test_first_queen_receives_existing_open_questions(self):
-        """The first Queen sees unresolved questions from before the migration."""
+        """The first Queen receives an existing open question."""
         from haivequeen import db
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -531,18 +498,6 @@ class HiveRoundTests(RoundCase):
         self.finish("Bee1")
         self.finish("Bee2")
         self.assertTrue(hives.can_handoff(self.conn, "testproj", REL))
-
-    # The one-time migration waits for an explicit first resume.
-    def test_migration_does_not_run_while_paused(self):
-        """The one-time migration waits for an explicit first resume."""
-        from haivequeen import runstate
-        self.add_project("hq")
-        rel = "docs/plans/OLD-ONE/OLD-ONE-PLAN.md"
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}], project="hq", rel=rel)
-        self.agent("old-work", project="hq", plan_path=rel, phase="work", status="done")
-        runstate.pause(self.conn)
-        self.round()
-        self.assertEqual(runtime.list_plans(self.conn, "hq")[0]["status"], "IN_PROGRESS")
 
     # An unfinished normal end starts another Queen on the same Hive.
     def test_unfinished_queen_restarts_without_handoff(self):
@@ -653,31 +608,6 @@ class HiveRoundTests(RoundCase):
         self.assertTrue(all(a["phase"] == "queen" for a in active))
         self.assertEqual(self.calls(), 0)
 
-    # The draft stays DRAFT and the migration is only performed once.
-    def test_migration_keeps_draft_and_does_not_repeat(self):
-        """The draft stays DRAFT and the migration is only performed once."""
-        from haivequeen import runstate
-        self.add_project("hq")
-        rel = "docs/plans/DRAFT-ONLY/DRAFT-ONLY-PLAN.md"
-        self.plan("DRAFT", [{"id": "P1", "title": "First"}], project="hq", rel=rel)
-        old = "docs/plans/OLD-ONE/OLD-ONE-PLAN.md"
-        self.plan("IN_PROGRESS", [{"id": "P2", "title": "Second"}], project="hq", rel=old)
-        self.agent("old-work", project="hq", plan_path=old, phase="work", status="done")
-        for tag in ("OLD-TWO", "OLD-THREE", "OLD-FOUR"):
-            self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}], project="hq", rel=f"docs/plans/{tag}/{tag}-PLAN.md")
-        self.migration_source()
-        runstate.pause(self.conn)
-        runstate.resume(self.conn)
-        self.round()
-        statuses = {p["path"]: p["status"] for p in runtime.list_plans(self.conn, "hq")}
-        self.assertEqual(statuses[rel], "DRAFT")
-        self.assertEqual(statuses[old], "PAUSED")
-        runtime.set_plan_status(self.conn, "hq", old, "IN_PROGRESS")
-        self.round()
-        statuses = {p["path"]: p["status"] for p in runtime.list_plans(self.conn, "hq")}
-        self.assertEqual(statuses[rel], "DRAFT")
-        self.assertEqual(statuses[old], "IN_PROGRESS")
-
     # Repeated old verification records do not lock the Hive.
     def test_old_verification_streak_does_not_stop_hive(self):
         """Repeated old verification records do not lock the Hive."""
@@ -774,21 +704,6 @@ class HiveRoundTests(RoundCase):
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] in ("running", "starting")]
         self.assertEqual({a["plan_path"] for a in active}, {REL, second})
-
-    # Existing otherproject plans stay eligible for their own Hives after migration.
-    def test_migration_leaves_other_project_plans_active(self):
-        """Existing otherproject plans stay eligible for their own Hives after migration."""
-        from haivequeen import runstate
-        self.add_project("otherproject")
-        names = ("FIRST", "SECOND", "THIRD", "FOURTH")
-        for name in names:
-            self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}], project="otherproject", rel=f"docs/plans/{name}/{name}-PLAN.md")
-        runstate.pause(self.conn)
-        runstate.resume(self.conn)
-        self.round()
-        rows = runtime.list_plans(self.conn, "otherproject")
-        self.assertEqual(len(rows), 4)
-        self.assertTrue(all(row["status"] == "IN_PROGRESS" for row in rows))
 
     # Three in-session Bees do not use process slots in addition to their Queen.
     def test_embedded_subagents_do_not_take_provider_slots(self):
@@ -1047,7 +962,7 @@ class HiveRoundTests(RoundCase):
         runtime.queue_upsert(self.conn, "testproj", "older-branch", tip="abc", plan=REL, status="integrated")
         self.round()
         self.round()
-        self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "IN_PROGRESS")
+        self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "RUNNING")
 
     # Only integration of the Queen's registered row completes her plan.
     def test_own_integrated_ready_row_finishes_plan(self):
@@ -1242,8 +1157,11 @@ class HiveRoundTests(RoundCase):
         import argparse
         import contextlib
         import io
+        import os
+        from unittest import mock
         from haivequeen import cli
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.dict(os.environ):
+            os.environ.pop("BZZ_AGENT", None)   # an external window is no agent, also when the suite itself runs inside one
             self.assertEqual(cli.cmd_integration(argparse.Namespace(action="acquire", project="testproj", plan="outside", owner_pid=987654), self.conn), 0)
         self.round(alive=lambda pid: False)
         from haivequeen import hives
@@ -1291,16 +1209,6 @@ class HiveRoundTests(RoundCase):
         runstate.pause(self.conn)
         self.assertFalse(hives.can_start_bee(self.conn, "testproj", REL, own_process=True))
         self.assertTrue(hives.can_start_bee(self.conn, "testproj", REL, own_process=False))
-
-    # Migration does not run merely because a new database defaults to running.
-    def test_migration_requires_an_explicit_resume(self):
-        """Migration does not run merely because a new database defaults to running."""
-        self.add_project("hq")
-        rel = "docs/plans/OLD-ONE/OLD-ONE-PLAN.md"
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}], project="hq", rel=rel)
-        self.agent("old-work", project="hq", plan_path=rel, phase="work", status="done")
-        self.round()
-        self.assertEqual(runtime.list_plans(self.conn, "hq")[0]["status"], "IN_PROGRESS")
 
     # The actual Queen prompt forbids new Bees and waits for running Bees at handoff.
     def test_queen_handoff_prompt_waits_for_bees(self):

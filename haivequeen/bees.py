@@ -3,6 +3,8 @@ import json
 import re
 
 from . import buildjobs, db, roles, runtime, scheduler
+from . import plans as plan_mod
+from .i18n import tr
 
 
 # Return the next available configured class above the current one.
@@ -20,6 +22,7 @@ def route_candidates(providers, hive_provider, capability, escalated):
     """A package that needs capabilities only runs on providers that offer all of them, an escalated package may use any provider, else only the Queen's provider and endpoint providers."""
     if capability:
         return capable_providers(providers, capability)
+    providers = [p for p in providers if "Coding" in scheduler.provider_capabilities(p)]
     if escalated:
         return list(providers)
     candidates = [p for p in providers if p.get('endpoint') or p['name'] == hive_provider]
@@ -29,7 +32,7 @@ def route_candidates(providers, hive_provider, capability, escalated):
 
 def capable_providers(providers, need) -> list:
     """The providers that offer every capability in `need`."""
-    return [p for p in providers if all(n in p.get('capabilities', []) for n in need)]
+    return [p for p in providers if ('Confidential data' not in [scheduler.canonical_capability(n) for n in need] or scheduler._local_confidential(p)) and all(scheduler.canonical_capability(n) in [scheduler.canonical_capability(c) for c in p.get('capabilities', [])] for n in need)]
 
 
 def select_route(providers, free, hive_provider, package_class, capability, excluded, escalated, limited=()):
@@ -54,6 +57,7 @@ def ensure_attempts(conn):
     conn.execute('CREATE TABLE IF NOT EXISTS bee_attempts (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(project,plan_path,package,class))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_attempt_reports (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, attempt TEXT NOT NULL, PRIMARY KEY(project,plan_path,package,attempt))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_attempt_signals (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, attempt TEXT NOT NULL, open_requirements TEXT NOT NULL, error TEXT NOT NULL, counted INTEGER NOT NULL, PRIMARY KEY(project,plan_path,package,attempt))')
+    conn.execute('CREATE TABLE IF NOT EXISTS bee_retry_answers (question_id INTEGER PRIMARY KEY, project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, signal_rowid INTEGER NOT NULL, previous_counts TEXT NOT NULL)')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_assignments (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, provider TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_worktrees (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, cwd TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_completed (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
@@ -61,6 +65,8 @@ def ensure_attempts(conn):
     if 'reason' not in [r[1] for r in conn.execute('PRAGMA table_info(package_progress)')]:
         conn.execute("ALTER TABLE package_progress ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE TABLE IF NOT EXISTS embedded_bees (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, name TEXT NOT NULL, class TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', effort TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, ended_at TEXT, outcome TEXT NOT NULL DEFAULT '')")
+    if 'queen' not in [r[1] for r in conn.execute('PRAGMA table_info(embedded_bees)')]:
+        conn.execute("ALTER TABLE embedded_bees ADD COLUMN queen TEXT NOT NULL DEFAULT ''")   # the Queen whose native subagent the Bee is
     conn.execute('CREATE TABLE IF NOT EXISTS bee_step_counts (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, steps INTEGER NOT NULL, PRIMARY KEY(project,plan_path,package))')
 
 
@@ -72,12 +78,14 @@ def record_step_count(conn, project, plan, package, steps):
 
 
 # Remember a Bee that runs as an embedded subagent of the Queen.
-def record_embedded_start(conn, project, plan, package, name, cls, provider, model='', effort=''):
-    """An embedded Bee has no agent row of its own: store it so the window can show it under its Queen. An older open row of the package is closed first."""
+def record_embedded_start(conn, project, plan, package, name, cls, provider, model='', effort='', queen=''):
+    """An embedded Bee has no agent row of its own: store it so the window can show it under its Queen `queen`.
+
+    An older open row of the package is never closed here: a new start does not prove that the older subagent ended (owner answer 220), so
+    start_process refuses a new Bee while one is open."""
     ensure_attempts(conn)
-    close_embedded(conn, project, plan, package, 'replaced')
-    conn.execute('INSERT INTO embedded_bees(project,plan_path,package,name,class,provider,model,effort,started_at) VALUES (?,?,?,?,?,?,?,?,?)',
-                 (project, plan, package, name, cls, provider, model, effort, db.now()))
+    conn.execute('INSERT INTO embedded_bees(project,plan_path,package,name,class,provider,model,effort,started_at,queen) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                 (project, plan, package, name, cls, provider, model, effort, db.now(), queen or ''))
 
 
 # Names that open embedded Bees hold.
@@ -90,14 +98,99 @@ def open_embedded_names(conn, skip=None) -> set:
 
 
 # Mark embedded Bees as ended.
-def close_embedded(conn, project, plan, package=None, outcome='done'):
-    """Close the open embedded Bees of a package, or of the whole plan when no package is given, with the outcome that ended them."""
+def close_embedded(conn, project, plan, package=None, outcome='done', keep_stopping=False):
+    """Close the open embedded Bees of a package, or of the whole plan when no package is given, with the outcome that ended them.
+
+    A Bee whose stop is pending (outcome STOPPING) is closed only by a confirmation of its end (its result reported by its Queen), then with the outcome
+    stopped. `keep_stopping` leaves such a Bee open: a replacement or a Queen restart does not prove that the subagent ended (owner answer 220).
+    Returns the number of rows closed whose stop was pending."""
     ensure_attempts(conn)
-    sql, args = 'UPDATE embedded_bees SET ended_at=?, outcome=? WHERE project=? AND plan_path=? AND ended_at IS NULL', [db.now(), outcome, project, plan]
+    where, args = ' WHERE project=? AND plan_path=? AND ended_at IS NULL', [project, plan]
+    if package:
+        where += ' AND package=?'
+        args.append(package)
+    confirmed = 0
+    if not keep_stopping:
+        confirmed = conn.execute("UPDATE embedded_bees SET ended_at=?, outcome='stopped'" + where + ' AND outcome=?', [db.now()] + args + [STOPPING]).rowcount
+    conn.execute('UPDATE embedded_bees SET ended_at=?, outcome=?' + where + ' AND outcome!=?', [db.now(), outcome] + args + [STOPPING])
+    return confirmed
+
+
+# An embedded Bee the owner stopped keeps its row and its Bee place until its end is confirmed.
+STOPPING = 'stopping'
+
+
+def unconfirmed_embedded(conn, project, plan, package=None):
+    """The open embedded Bee rows (dicts) of the plan or one of its packages, oldest first: none of them has a confirmed end."""
+    ensure_attempts(conn)
+    sql, args = 'SELECT * FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', [project, plan]
     if package:
         sql += ' AND package=?'
         args.append(package)
-    conn.execute(sql, args)
+    cur = conn.execute(sql + ' ORDER BY started_at', args)
+    names = [c[0] for c in cur.description]
+    return [dict(zip(names, r)) for r in cur.fetchall()]
+
+
+def own_embedded(row, queen) -> bool:
+    """True when the open embedded Bee row is a native subagent of the running Queen `queen` (agent dict): only she sees its end directly.
+    A row without a recorded Queen (written before the Queen was recorded) counts as hers when it started after her."""
+    if not queen:
+        return False
+    if row.get('queen'):
+        return row['queen'] == queen.get('name')
+    return bool(queen.get('started_at')) and str(row.get('started_at') or '') >= str(queen['started_at'])
+
+
+def release_refusal(conn, project, plan, package, queen, evidence=''):
+    """Require an existing result AND an ended Bee row or a known, absent Bee process.
+
+    Neither the Queen's end nor a recent file proves that a Bee ended. Check every
+    open Bee, including those of this Queen, before releasing any of their places."""
+    from pathlib import Path
+    from . import platform
+    foreign = unconfirmed_embedded(conn, project, plan, package)
+    if not foreign:
+        return ''
+    row = foreign[-1]
+    who = 'the subagent Bee %s (%s) of Queen %s' % (row['name'], package, row.get('queen') or 'unknown')
+    if not evidence:
+        return ('%s has no confirmed end; record its result only with --ended-evidence <file the Bee wrote at its end, such as its final report>. '
+                'Without such evidence leave it open: it keeps its Bee place' % who)
+    path = Path(evidence)
+    if not path.is_file():
+        return 'the evidence %s for %s does not exist or is no file' % (evidence, who)
+    started = max(db.parse_time(r['started_at']) for r in foreign)
+    if path.stat().st_mtime < started.timestamp():
+        return 'the evidence %s was written before %s started, so it proves no end of it' % (evidence, who)
+    for bee in foreign:
+        agent = runtime.get_agent(conn, project, bee['name'])
+        if not (agent and agent.get('phase') == 'bee' and agent.get('plan_path') == plan and agent.get('package') == package
+                and str(agent.get('started_at') or '') >= bee['started_at']):
+            return 'Bee %s has no matching agent row proving its end; its row and Bee place stay open' % bee['name']
+        ended = str(agent.get('ended_at') or '') >= bee['started_at'] and agent.get('status') not in runtime.ACTIVE_STATUSES
+        try:
+            pid = int(agent.get('pid') or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        absent = pid > 0 and not platform.process_alive(pid)
+        if not (ended or absent):
+            return 'Bee %s has no confirmed end; a newer result file is not proof of its end' % bee['name']
+    return ''
+
+
+def stopping_embedded(conn, project, plan=None, package=None):
+    """(plan, package, name) of the open embedded Bees whose stop is pending, oldest first."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedded_bees'").fetchone():
+        return []
+    sql, args = 'SELECT plan_path, package, name FROM embedded_bees WHERE project=? AND ended_at IS NULL AND outcome=?', [project, STOPPING]
+    if plan:
+        sql += ' AND plan_path=?'
+        args.append(plan)
+    if package:
+        sql += ' AND package=?'
+        args.append(package)
+    return [tuple(r) for r in conn.execute(sql + ' ORDER BY started_at', args)]
 
 
 # Count a failed attempt, ignoring technical interruptions.
@@ -113,7 +206,8 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
         if attempt and conn.execute('INSERT OR IGNORE INTO bee_attempt_reports(project,plan_path,package,attempt) VALUES(?,?,?,?)', (project, plan, package, attempt)).rowcount == 0:
             return
         if attempt:
-            previous = conn.execute('SELECT open_requirements,error FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND class=? ORDER BY rowid DESC LIMIT 1', (project, plan, package, cls)).fetchone()
+            epoch = retry_epoch(conn, project, plan, package)
+            previous = conn.execute('SELECT open_requirements,error FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND class=? AND rowid>? ORDER BY rowid DESC LIMIT 1', (project, plan, package, cls, epoch or 0)).fetchone()
             state = conn.execute('SELECT state FROM package_progress WHERE project=? AND plan_path=? AND package=?', (project, plan, package)).fetchone()
             same_requirement = verify == 'code' and previous and set(open_requirements or []) & set(json.loads(previous[0]))
             same_error = previous and error and error == previous[1]
@@ -171,6 +265,28 @@ def failure_count(conn, project, plan, package, cls):
     return row[0] if row else 0
 
 
+FAILURE_QUESTION = 'The package remains unsolved at the highest available class. How should it continue?'
+
+
+def retry_epoch(conn, project, plan, package):
+    """Last signal before the most recent owner-directed retry; None before any answer."""
+    # Signal boundaries advance when answers arrive, regardless of question creation order.
+    row = conn.execute('SELECT MAX(signal_rowid) FROM bee_retry_answers WHERE project=? AND plan_path=? AND package=?', (project, plan, package)).fetchone()
+    return row[0] if row else None
+
+
+def answer_failure_question(conn, question, by):
+    """Start a fresh counting cycle once for an owner/coordinator failure answer, retaining history."""
+    if by not in ('owner', 'coordinator') or question['question'] not in (FAILURE_QUESTION, tr(FAILURE_QUESTION, language='German')):
+        return
+    ensure_attempts(conn)
+    key = (question['project'], question['plan_path'], question['item'])
+    counts = dict(conn.execute('SELECT class,failures FROM bee_attempts WHERE project=? AND plan_path=? AND package=?', key).fetchall())
+    last = conn.execute('SELECT COALESCE(MAX(rowid),0) FROM bee_attempt_signals').fetchone()[0]
+    if conn.execute('INSERT OR IGNORE INTO bee_retry_answers VALUES (?,?,?,?,?,?)', (question['id'], *key, last, json.dumps(counts))).rowcount:
+        conn.execute('UPDATE bee_attempts SET failures=0 WHERE project=? AND plan_path=? AND package=?', key)
+
+
 # Determine the current or next escalation class.
 def next_attempt(conn, project, plan, package, cls, providers, excluded, threshold):
     """Return the current class, its next offered class, or None at the top."""
@@ -192,6 +308,183 @@ PACKAGE_STATES = ('working', 'waiting', 'implemented', 'done', 'rejected')   # p
 def queen_instructions(queen_class, bee_limit, threshold, context_limit, language=None):
     """Return Queen task instructions for the configured classes and limits."""
     return roles.role_text('queen', {'class': queen_class, 'bee_limit': bee_limit, 'escalate_after': threshold, 'context_limit': context_limit, 'language': language or roles.language({})})
+
+
+# Packages the owner stopped with "Stop Bee": they stay stopped until the owner resumes them.
+STOP_KEY = 'package-stopped:'
+
+
+STOP_NOTICE_FILE = 'STOP-PACKAGES'
+
+
+def stop_notice_text(conn, project, plan):
+    """The text of STOP-PACKAGES for the plan, empty when no package is stopped and no stop is pending."""
+    ensure_attempts(conn)
+    names = [p for (_, pl, p) in stopped_packages(conn, project) if pl == plan]
+    pending = stopping_embedded(conn, project, plan)
+    names += [p for (_, p, _) in pending if p not in names]
+    if not names:
+        return ''
+    text = 'The owner stopped these packages: %s. End their Bees now (a subagent Bee too), start none of them again and leave them open; the owner resumes them.\n' % ', '.join(names)
+    if pending:
+        text += ('Stop pending until you confirm the end of these subagent Bees: %s. They keep their Bee place until then. As soon as a subagent Bee '
+                 'has ended, confirm it with bzz bee result --outcome interrupted for its package.\n') % ', '.join('%s (%s)' % (n, p) for (_, p, n) in pending)
+    return text
+
+
+OPEN_BEES_FILE = 'OPEN-BEES'
+
+
+def open_bees_text(conn, project, plan, queen):
+    """The text of OPEN-BEES for the Queen `queen`: the subagent Bees of earlier Queens of the plan whose end is not confirmed; empty when none."""
+    inherited = [r for r in unconfirmed_embedded(conn, project, plan) if not own_embedded(r, queen)]
+    if not inherited:
+        return ''
+    return ('These subagent Bees of an earlier Queen of your plan have no confirmed end: %s. Each keeps its Bee place and its package gets no new Bee. '
+            'Do not start them again. Only when the Bee agent row has ended or its known process no longer exists AND its result exists, record its result with bzz bee result '
+            '--ended-evidence <that file> for its package; otherwise leave it open and go on with the other packages.\n') % ', '.join(
+        '%s (%s, Queen %s)' % (r['name'], r['package'], r.get('queen') or 'unknown') for r in inherited)
+
+
+def write_stop_notice(conn, project, plan):
+    """Tell every running Queen of the plan (file STOP-PACKAGES in her run folder) which packages the owner stopped: she ends their subagent Bees,
+    confirms each ended subagent Bee and starts none of them again. An embedded Bee has no process of its own, so only its Queen can end it.
+    Without a stopped package or a pending stop the file is removed; an unchanged file is not written again."""
+    from . import platform as osplat
+    text = stop_notice_text(conn, project, plan)
+    for queen in runtime.list_agents(conn, project, 'active'):
+        if queen.get('plan_path') != plan or queen.get('phase') != 'queen' or queen.get('status') not in runtime.ACTIVE_STATUSES:
+            continue
+        for name, body in ((STOP_NOTICE_FILE, text), (OPEN_BEES_FILE, open_bees_text(conn, project, plan, queen))):
+            target = osplat.runs_dir() / project / queen['name'] / name
+            if body:
+                if not target.is_file() or target.read_text(encoding='utf-8') != body:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(body, encoding='utf-8')
+            elif target.exists():
+                target.unlink()
+
+
+def after_queen_start(conn, project, plan):
+    """A new Queen of the plan has started. The embedded Bees of her predecessor stay open with their Bee places: a Queen ending proves no end of her
+    native Bees (owner answer 220). The new Queen is told of them (OPEN-BEES) and of stopped packages (STOP-PACKAGES)."""
+    inherited = unconfirmed_embedded(conn, project, plan)
+    if inherited:
+        runtime.append_event(conn, project, 'New Queen of %s: subagent Bees %s keep their Bee places until their end is confirmed' % (
+            plan, ', '.join('%s (%s)' % (r['name'], r['package']) for r in inherited)), kind='note', mirror='none')
+    write_stop_notice(conn, project, plan)
+
+
+def stop_package(conn, project, plan, package):
+    """Mark the package as stopped by the owner; no Bee of it starts again until resume_package.
+
+    An open embedded (subagent) Bee of the package has no process HaiveQueen could end: its stop is pending (outcome STOPPING), its row stays open and
+    keeps its Bee place, and the running Queen is told to end it and confirm its end; only that confirmation closes the row (owner answer 220)."""
+    ensure_attempts(conn)
+    runtime.kv_set(conn, project, STOP_KEY + '%s|%s' % (plan, package), db.now())
+    pending = conn.execute('UPDATE embedded_bees SET outcome=? WHERE project=? AND plan_path=? AND package=? AND ended_at IS NULL',
+                           (STOPPING, project, plan, package)).rowcount
+    text = 'Package %s stopped by the owner; it stays stopped until the owner resumes it' % package
+    if pending:
+        text += '. Its subagent Bee keeps its Bee place until its Queen confirms that it ended'
+    runtime.append_event(conn, project, text, kind='note', mirror='none')
+    write_stop_notice(conn, project, plan)
+
+
+def package_stopped(conn, project, plan, package):
+    """True when the owner stopped the package and has not resumed it."""
+    return bool(runtime.kv_get(conn, project, STOP_KEY + '%s|%s' % (plan, package)))
+
+
+def stopped_packages(conn, project=None):
+    """(project, plan, package) of every package the owner stopped and has not resumed, sorted."""
+    sql, args = "SELECT project, key FROM kv WHERE substr(key,1,?)=? AND value!=''", [len(STOP_KEY), STOP_KEY]
+    if project:
+        sql += ' AND project=?'
+        args.append(project)
+    found = []
+    for row in conn.execute(sql, args):
+        plan, _, package = row[1][len(STOP_KEY):].rpartition('|')
+        if plan and package:
+            found.append((row[0], plan, package))
+    return sorted(found)
+
+
+def resume_package(conn, project, plan, package):
+    """Release a stopped package again (GUI action "Resume package"); its Queen may start a Bee for it again."""
+    if not package_stopped(conn, project, plan, package):
+        raise ValueError('the package %s is not stopped' % package)
+    runtime.kv_delete(conn, project, STOP_KEY + '%s|%s' % (plan, package))
+    runtime.append_event(conn, project, 'Package %s resumed by the owner' % package, kind='note', mirror='none')
+    write_stop_notice(conn, project, plan)
+
+
+# Packages a running Queen could start now but has not started (H-47): their dependencies are done and Bee places are free.
+NOTICE_FILE = 'START-PACKAGES'
+STARTABLE_KEY = 'hive-startable:'
+
+
+def startable_not_started(env, plan, alive=None):
+    """Ids of the packages of the plan that are not finished, waiting, stopped or worked by a live or embedded Bee and whose dependencies are done."""
+    from . import agent_process
+    ensure_attempts(env.conn)
+    states = {r[0]: r[1] for r in env.conn.execute('SELECT package,state FROM package_progress WHERE project=? AND plan_path=?', (env.name, plan))}
+    worked = {a.get('package') for a in runtime.list_agents(env.conn, env.name, 'active')
+              if a.get('plan_path') == plan and a.get('phase') == 'bee' and agent_process.counts(a, alive)}
+    worked |= {r[0] for r in env.conn.execute('SELECT package FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', (env.name, plan))}
+    locked = {p['id'] for p in runtime.list_packages(env.conn, env.name, plan) if p['locked'] or p['phase'] == 'done'}
+    packages = env.packages(plan)
+    ids = {p['id'] for p in packages}
+    found = []
+    for p in packages:
+        if p['id'] in worked or p['id'] in locked or states.get(p['id']) in ('done', 'implemented', 'waiting'):
+            continue
+        if package_done(env.conn, env.name, plan, p['id']) or package_stopped(env.conn, env.name, plan, p['id']):
+            continue
+        if all(dep in ids and (package_done(env.conn, env.name, plan, dep) or states.get(dep) in ('done', 'implemented')) for dep in p['depends']):
+            found.append(p['id'])
+    return found
+
+
+def free_bee_places(env, plan, free_slots, alive=None):
+    """Bee places the Queen of the plan has free now: beesPerQueen minus her live and embedded Bees, at most the free provider slots."""
+    from . import agent_process
+    ensure_attempts(env.conn)
+    live = sum(1 for a in runtime.list_agents(env.conn, env.name, 'active')
+               if a.get('plan_path') == plan and a.get('phase') == 'bee' and agent_process.counts(a, alive))
+    live += env.conn.execute('SELECT COUNT(*) FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', (env.name, plan)).fetchone()[0]
+    return max(0, min(int(env.settings.get('beesPerQueen', 3)) - live, int(free_slots)))
+
+
+def notify_startable(env, plan, queen, free_slots, alive=None):
+    """Tell the running Queen in this round which packages to start now (file START-PACKAGES in her run folder) and store them for the dashboard.
+
+    Returns the package ids named; none when no package waits, no Bee place is free or the Queen has her HANDOFF file (the file and the stored list are then cleared)."""
+    target = env.run_dir(queen['name']) / NOTICE_FILE
+    handoff = (target.parent / 'HANDOFF').exists()   # a Queen at her context limit starts no new Bees
+    places = 0 if handoff else free_bee_places(env, plan, free_slots, alive)
+    names = startable_not_started(env, plan, alive)[:places] if places else []
+    runtime.kv_set(env.conn, env.name, STARTABLE_KEY + plan, json.dumps(names))
+    if names:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('Start these packages now, each with its own Bee (%d Bee place(s) free): %s\n' % (places, ', '.join(names)), encoding='utf-8')
+        env.log('Queen %s told to start the startable packages %s' % (queen['name'], ', '.join(names)))
+    elif target.exists():
+        target.unlink()
+    return names
+
+
+def startable_map(conn):
+    """{(project, plan): [package ids]} of the startable packages a running Queen has not started yet (as stored by the last round)."""
+    found = {}
+    for row in conn.execute("SELECT project, key, value FROM kv WHERE substr(key,1,?)=?", (len(STARTABLE_KEY), STARTABLE_KEY)):
+        try:
+            names = json.loads(row[2] or '[]')
+        except ValueError:
+            continue
+        if names:
+            found[(row[0], row[1][len(STARTABLE_KEY):])] = list(names)
+    return found
 
 
 # Packages of a plan that can still start although one provider is missing.
@@ -251,7 +544,11 @@ def escalation_providers(env, plan, package):
 # Record an attempt and file one owner question when the top class is exhausted.
 def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked=''):
     """Record an outcome and ask once after the highest class fails repeatedly. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
-    close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome)   # the embedded Bee of this package has reported
+    had_open = bool(unconfirmed_embedded(env.conn, env.name, plan, package))
+    if close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome):   # the embedded Bee of this package has reported
+        runtime.append_event(env.conn, env.name, 'The stopped subagent Bee of package %s has ended; its Bee place is free' % package, kind='note', mirror='none')
+    if had_open:   # the notices of the running Queens no longer name it
+        write_stop_notice(env.conn, env.name, plan)
     if blocked:
         set_package_state(env.conn, env.name, plan, package, 'waiting', 'queen', blocked)
         return
@@ -262,9 +559,10 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
     threshold = int(env.settings.get('escalateAfter', 3))
     excluded = env.settings.get('excludedProviders', [])
     if outcome == 'failed' and next_attempt(env.conn, env.name, plan, package, cls, escalation_providers(env, plan, package), excluded, threshold) is None:
-        text = 'The package remains unsolved at the highest available class. How should it continue?'
-        if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, plan=plan, item=package)):
-            db.add_question(env.conn, env.name, plan, package, text, 'Review the failed attempts and choose the next approach.')
+        language = roles.language(env.settings)
+        text = tr(FAILURE_QUESTION, language=language)
+        if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=package)):
+            db.add_question(env.conn, env.name, plan, package, text, tr('Review the failed attempts and choose the next approach.', language=language))
 
 
 # Verify the Bee has a distinct worktree in the same repository.
@@ -304,6 +602,15 @@ def refuse(env, package, reason):
     return False
 
 
+# The reason no Bee may start while an update waits for running agents.
+def drain_refusal(draining=None):
+    """H-46(i): while the update worker waits for running agents no Bee starts, an embedded one included; the reason, else None."""
+    from . import updates
+    if (draining or updates.draining)():
+        return 'an update of HaiveQueen waits for the running agents to end; no Bee starts until it has restarted'
+    return None
+
+
 # Start a separate Bee process after validating context, memory, slots and routing.
 def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=None, no_subagents=False):
     """Start an eligible Bee through the agent runner. Every package goes to a Bee, the Queen never works one herself; the provider setting beeMode decides whether
@@ -315,6 +622,9 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
     from . import hives, loop, routine, usage
     with loop.hive_schedule_lock():
         check_dependencies(env, plan, package)
+        draining = drain_refusal()
+        if draining:
+            return refuse(env, package, draining)
         hive = hives.get(env.conn, env.name, plan)
         if not hive or not hives.can_start_bee(env.conn, env.name, plan, False, env.settings.get('contextLimitTokens', 300000)):
             return refuse(env, package, 'the Hive may not start a Bee now (Hive state %s, context limit or HANDOFF reached)' % (hive['state'] if hive else 'missing'))
@@ -328,14 +638,27 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         from . import platform as osplat
         from . import agent_process
         running = [{**a, 'status': 'running'} for a in active if agent_process.counts(a)]
-        if sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
+        ensure_attempts(env.conn)
+        embedded_count = env.conn.execute('SELECT COUNT(*) FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', (env.name, plan)).fetchone()[0]
+        if embedded_count + sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
             return refuse(env, package, 'the Queen already has %s Bees running' % env.settings.get('beesPerQueen', 3))
         plan_row = next((p for p in runtime.list_plans(env.conn, env.name) if p['path'] == plan), None)
-        if plan_row and plan_row['status'] == 'SUBMITTED':
+        if plan_row and plan_row['status'] in plan_mod.CUT_STATUSES:
             return refuse(env, package, 'the plan is not cut yet: write its packages into the header and run bzz plan check first')
         package_row = next((p for p in env.packages(plan) if p['id'] == package), None)
         if not package_row:
             return refuse(env, package, 'the package is not in the plan')
+        if package_stopped(env.conn, env.name, plan, package):
+            return refuse(env, package, 'the owner stopped this package; it starts again only after the owner resumes it')
+        pending = stopping_embedded(env.conn, env.name, plan, package)
+        if pending:
+            return refuse(env, package, 'the stopped subagent Bee %s of this package has not confirmed its end; once it has ended, report it with bzz bee result --outcome interrupted' % pending[0][2])
+        unconfirmed = unconfirmed_embedded(env.conn, env.name, plan, package)
+        if unconfirmed:   # owner answer 220: no replacement while the earlier subagent Bee may still run
+            if own_embedded(unconfirmed[0], queen):
+                return refuse(env, package, 'the subagent Bee %s of this package has not confirmed its end; record its result with bzz bee result first' % unconfirmed[0]['name'])
+            return refuse(env, package, 'the subagent Bee %s of the earlier Queen %s has not confirmed its end; record its result with bzz bee result --ended-evidence first' % (
+                unconfirmed[0]['name'], unconfirmed[0].get('queen') or 'unknown'))
         requested_class = package_row['cls']
         threshold = int(env.settings.get('escalateAfter', 3))
         excluded = env.settings.get('excludedProviders', [])
@@ -352,12 +675,18 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
                                if any((p.get('classes', {}).get(name) or {}).get('model') for p in others)), None)
             use_other_provider = base_class is not None
         if base_class is None:
-            text = ('No configured provider offers the capability %s. How should this package continue?' % ', '.join(need) if need
-                    else 'No configured provider offers the required class or a higher class. How should this package continue?')
+            language = roles.language(env.settings)
+            text = (tr('No configured provider offers the capability %s. How should this package continue?', ', '.join(need), language=language) if need
+                    else tr('No configured provider offers the required class or a higher class. How should this package continue?', language=language))
             if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, plan=plan, item=package)):
-                db.add_question(env.conn, env.name, plan, package, text, 'Configure an eligible provider.')
+                db.add_question(env.conn, env.name, plan, package, text, tr('Configure an eligible provider.', language=language))
             return refuse(env, package, 'no configured provider offers the required class or the capability %s (question filed)' % ', '.join(need) if need else 'no configured provider offers the required class (question filed)')
         current = base_class
+        if retry_epoch(env.conn, env.name, plan, package) is not None:
+            offered = escalation_providers(env, plan, package)
+            while next_class(offered, current, excluded):
+                current = next_class(offered, current, excluded)
+            cls = current   # the owner's answer directs the retry to the highest offered class
         queen_class = env.settings.get('queenClass', 'medium')
         if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
                 failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):
@@ -365,9 +694,12 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             if current is None:
                 return refuse(env, package, 'the package failed %d times at the Queen class %s and no higher class is offered' % (threshold, queen_class))
         while failure_count(env.conn, env.name, plan, package, current) >= threshold:
+            previous = current
             current = next_class(escalation_providers(env, plan, package), current, excluded)
             if current is None:
                 return refuse(env, package, 'the package failed %d times and no higher class is offered' % threshold)
+            if scheduler.class_index(previous) < scheduler.class_index(queen_class) <= scheduler.class_index(current):
+                env.log('Package %s raised to Queen class %s after failures' % (package, current))
         ensure_attempts(env.conn)
         stored = env.conn.execute('SELECT class FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
         if stored and stored[0] == cls and scheduler.class_index(cls) > scheduler.class_index(current):
@@ -415,7 +747,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
                 env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(Path(cwd).absolute())))
                 cwd = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()[0]
             entry = (pick.get('classes') or {}).get(selected_class) or {}
-            record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''))
+            record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''), queen['name'])
             record_step_count(env.conn, env.name, plan, package, len(steps))
             # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
             prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')))
@@ -426,7 +758,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         if not cwd or not valid_bee_worktree(env, path, queen.get('cwd')):
             return refuse(env, package, 'no valid separate worktree for the Bee was given')
         existing = [a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')]
-        state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'IN_PROGRESS'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
+        state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'RUNNING'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
         ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
         action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs'))), 'class': selected_class}
         if not loop._do_start(ctx, action, forced_pick=pick):
@@ -453,11 +785,35 @@ def state_branch(env, plan):
     return ''
 
 
+# The branch HaiveQueen creates for a plan that names none (H-22).
+def derived_branch(plan):
+    """The plan file name in lower case without -PLAN and .md (docs/plans/Feature-X-PLAN.md gives feature-x)."""
+    from pathlib import Path
+    return re.sub(r'-plan$', '', Path(plan).stem, flags=re.I).lower()
+
+
+def branch_is_derived(env, plan):
+    """True when the plan's branch is only the derived name of H-22: the plan, its state file and the owner name none."""
+    resolved = plan_worktree(env, plan)
+    if not resolved or resolved[0] != derived_branch(plan):
+        return False
+    conn = getattr(env, 'conn', None)
+    if conn is not None and runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan):
+        return False
+    text = (env.workspace / plan).read_text(encoding='utf-8-sig')
+    return not re.search(r'(?im)feature[ -]branch\s*:|\bbranch(?:es)?\b\s*:?\s*`|^\s*[-*]?\s*git\s*:\s*branch', text) and not state_branch(env, plan) and \
+        not (conn is not None and runtime.list_questions(conn, env.name, status='answered', plan=plan, item='worktree'))
+
+
 # Resolve the plan's named branch and optional named worktree.
 def plan_worktree(env, plan):
     """Read an unambiguous branch and worktree, including numbered Branches rules."""
     import re
     from pathlib import Path
+    conn = getattr(env, 'conn', None)
+    chosen = runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan) if conn is not None else None
+    if chosen:   # the owner chose a new branch instead of an existing one (H-23)
+        return chosen, Path(__import__('haivequeen.routine', fromlist=['new_worktree']).new_worktree(env, scheduler.to_slug(chosen)))
     text = (env.workspace / plan).read_text(encoding='utf-8-sig')
     text = re.sub(r'\*\*([^*\n]+)\*\*', r'\1', text)
     feature = re.search(r'(?im)^\s*[-*]?\s*feature[ -]branch\s*:\s*`?([\w./-]+)`?', text)
@@ -476,14 +832,18 @@ def plan_worktree(env, plan):
         branch, worktree = state_branch(env, plan), None
     else:
         answers = runtime.list_questions(env.conn, env.name, status='answered', plan=plan, item='worktree')
-        if not answers:
-            return None
-        lines = (answers[-1].get('answer') or '').strip().splitlines()
-        if len(lines) != 2:
-            return None
-        branch, worktree = (line.strip() for line in lines)
-        if not branch or not worktree:
-            return None
+        if answers:
+            lines = (answers[-1].get('answer') or '').strip().splitlines()
+            if len(lines) != 2:
+                return None
+            branch, worktree = (line.strip() for line in lines)
+            if not branch or not worktree:
+                return None
+        else:
+            branch = derived_branch(plan)
+            if not branch:
+                return None
+            worktree = None
     return branch, Path(worktree) if worktree else Path(__import__('haivequeen.routine', fromlist=['new_worktree']).new_worktree(env, scheduler.to_slug(branch)))
 
 
@@ -495,15 +855,72 @@ def foreign_plan_branch(env, plan):
     if not resolved:
         return False
     branch, _ = resolved
+    if runtime.kv_get(env.conn, env.name, TAKEOVER_KEY + plan) == branch:   # the owner said: take over the existing branch
+        return False
     if env.conn.execute("SELECT 1 FROM queue WHERE project=? AND branch=? AND status IN ('ready','blocked','in_run') LIMIT 1", (env.name, branch)).fetchone():
         return True
     if any(a.get('plan_path') == plan for a in runtime.list_agents(env.conn, env.name, 'all')):
         return False
-    for ref in ('refs/heads/' + branch, 'refs/remotes/origin/' + branch):
+    remote_name = str(env.settings.get('remoteName') or 'origin')
+    for ref in ('refs/heads/' + branch, 'refs/remotes/' + remote_name + '/' + branch):
         result = subprocess.run(['git', '-C', str(env.code_repo), 'show-ref', '--verify', '--quiet', ref], capture_output=True)
         if result.returncode == 0:
             return True
     return False
+
+
+# The plan's branch exists but the plan has no Hive history (H-23): the owner decides whether the Hive takes it over or creates a new one.
+TAKEOVER_KEY, NEW_BRANCH_KEY, BRANCH_ITEM = 'branch-takeover:', 'plan-branch:', 'branch-takeover'
+TAKE_OVER_WORDS = ('take over', 'takeover', 'existing', 'use it', 'übernehmen', 'uebernehmen', 'bestehend')
+NEW_WORDS = ('new', 'create', 'neu', 'neuen', 'anlegen')
+
+
+def branch_choice(answer):
+    """'take over', 'new' or '' for an owner answer to the branch question (English protocol words, German still recognised)."""
+    text = str(answer or '').strip().lower()
+    if any(word in text for word in TAKE_OVER_WORDS):
+        return 'take over'
+    if any(re.search(r'(?<![a-zäöü])%s(?![a-zäöü])' % re.escape(word), text) for word in NEW_WORDS):
+        return 'new'
+    return ''
+
+
+def free_branch_name(env, branch):
+    """The first of <branch>-2, <branch>-3, ... that is neither a local nor a remote branch."""
+    import subprocess
+    remote_name = str(env.settings.get('remoteName') or 'origin')
+    n = 2
+    while True:
+        name = '%s-%d' % (branch, n)
+        refs = ('refs/heads/' + name, 'refs/remotes/%s/%s' % (remote_name, name))
+        if all(subprocess.run(['git', '-C', str(env.code_repo), 'show-ref', '--verify', '--quiet', ref], capture_output=True).returncode for ref in refs):
+            return name
+        n += 1
+
+
+def resolve_existing_branch(env, plan):
+    """For a plan whose branch exists without Hive history: apply the owner's answer, else ask once.
+
+    Returns 'take over' or 'new' when the owner decided (the Hive may start), else '' (the plan waits for the answer)."""
+    from .i18n import tr
+    branch = plan_worktree(env, plan)[0]
+    for q in reversed(runtime.list_questions(env.conn, env.name, status='answered', plan=plan, item=BRANCH_ITEM)):
+        choice = branch_choice(q.get('answer'))
+        if choice == 'take over':
+            runtime.kv_set(env.conn, env.name, TAKEOVER_KEY + plan, branch)
+            env.log('plan %s: the owner takes over the existing branch %s' % (plan, branch))
+            return choice
+        if choice == 'new':
+            name = free_branch_name(env, branch)
+            runtime.kv_set(env.conn, env.name, NEW_BRANCH_KEY + plan, name)
+            env.log('plan %s: the owner wants a new branch; %s is created instead of %s' % (plan, name, branch))
+            return choice
+    if not runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=BRANCH_ITEM):
+        language = roles.language(env.settings)
+        db.add_question(env.conn, env.name, plan, BRANCH_ITEM,
+                        tr('The branch %s of this plan already exists, but the plan has no Hive history. Take over the existing branch or create a new one?', branch, language=language),
+                        tr('Answer "take over" to continue on %s, or "new" to create a new branch from the integration branch.', branch, language=language))
+    return ''
 
 
 # Reuse or create the explicitly named branch in a separate Git worktree.
@@ -533,8 +950,9 @@ def prepare_queen_worktree(env, plan):
     if exists:
         args = ['worktree', 'add', str(target), branch]
     else:
-        remote = subprocess.run(git + ['show-ref', '--verify', '--quiet', 'refs/remotes/origin/' + branch], capture_output=True).returncode == 0
-        base = 'origin/' + (branch if remote else str(env.settings.get('integrationBranch', 'main')))
+        remote_name = str(env.settings.get('remoteName') or 'origin')
+        remote = subprocess.run(git + ['show-ref', '--verify', '--quiet', 'refs/remotes/' + remote_name + '/' + branch], capture_output=True).returncode == 0
+        base = remote_name + '/' + (branch if remote else str(env.settings.get('integrationBranch') or 'main'))
         args = ['worktree', 'add', '-b', branch, str(target), base]
     result = subprocess.run(git + args, capture_output=True, text=True, encoding='utf-8', errors='replace')
     if result.returncode:

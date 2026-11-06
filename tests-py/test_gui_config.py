@@ -10,7 +10,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from haivequeen import db, gui_config  # noqa: E402
+from haivequeen import db, gui_config, i18n  # noqa: E402
 
 SAMPLE = '''# Machine settings (kept at the top)
 slots = 8
@@ -206,6 +206,21 @@ class WindowTest(unittest.TestCase):
             win.select(2)
             self.assertEqual(win.login_status.cget("text"), "Login missing")   # codex has no login yet
 
+    def test_bzz_install_button_reports_supported_and_skipped_clis(self):
+        from haivequeen import bzz_install
+        for language in ("English", "German"):
+            with self.subTest(language=language), mock.patch("haivequeen.i18n.machine_language", return_value=language):
+                win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+                button = next(w for w in descendants(win.form)
+                              if w.winfo_class() == "Button" and w.cget("text") == i18n.tr("Install /bzz"))
+                result = {"Claude Code": "installed", "Codex CLI": "skipped: literal /bzz is not supported"}
+                with mock.patch.object(bzz_install, "install", return_value=result) as install:
+                    button.invoke()
+                install.assert_called_once_with()
+                labels = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
+                self.assertIn("Claude Code: %s\nCodex CLI: %s" % (i18n.tr("installed"), i18n.tr(result["Codex CLI"])), labels)
+                win.win.destroy()
+
     # Own CLI: the three values are offered on its page and used for the status.
     def test_unknown_cli_offers_its_login_values(self):
         """A provider whose CLI is not built in shows profileEnv, loginCommand and loginFiles, and its status follows the login file."""
@@ -227,6 +242,31 @@ class WindowTest(unittest.TestCase):
             (data / "profile" / "mycli" / "t.json").write_text("{}", encoding="utf-8")
             win.refresh_login()
             self.assertEqual(win.login_status.cget("text"), "Login present")
+
+    # H-15 to H-19: the Apiary page of a project file.
+    def test_apiary_page_shows_edits_and_saves_its_settings(self):
+        """The General page of a project file offers every Apiary setting with its default under a readable label; a changed value is saved."""
+        import tomllib
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        index, label = next((i, f[0]) for i, f in enumerate(win.files) if not f[2])
+        win.pick_file(label)
+        keys = {path[0]: like for path, _getter, like in win.getters}
+        for key, default in gui_config.APIARY_DEFAULTS:
+            if key in gui_config.RELEASE_KEYS:
+                self.assertNotIn(key, keys)   # H-43: the release settings are offered only for a remote on GitHub, this Apiary has none
+                continue
+            self.assertEqual(keys[key], default, key)
+        texts = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
+        self.assertIn("Run the deploy", texts)
+        self.assertNotIn("deployEnabled", texts)
+        win.collect()
+        win.target().update({"deployEnabled": False, "remoteName": "upstream", "ownerTopics": ["pricing"]})
+        win.build_form()
+        win.save()
+        saved = tomllib.loads(win.files[index][1].read_text(encoding="utf-8"))
+        self.assertIs(saved["deployEnabled"], False)
+        self.assertEqual(saved["remoteName"], "upstream")
+        self.assertEqual(saved["ownerTopics"], ["pricing"])
 
     # The provider page offers the CLI choice.
     def test_provider_page_offers_the_cli_choice(self):
@@ -262,14 +302,38 @@ class WindowTest(unittest.TestCase):
 
     # The language of the free text to the owner.
     def test_general_offers_the_language_and_saves_it(self):
-        """General shows a language field (English without an entry); a typed language is written to the file."""
+        """General offers English and German (English without an entry); the picked language is written to the file."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.select(0)
         getters = {path: getter for path, getter, _like in win.getters}
         self.assertEqual(getters[("language",)](), "English")
-        self.type_into_entry(win, "English", "Deutsch")
+        button = next(w for w in descendants(win.form) if w.winfo_class() == "Menubutton" and "English" in w.cget("text"))
+        menu = button.nametowidget(button.cget("menu"))
+        menu.invoke(menu.index("German"))
         win.save()
-        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["language"], "Deutsch")
+        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["language"], "German")
+
+    def test_provider_arguments_survive_save_and_unrelated_edit(self):
+        path = self.folder / "config.toml"
+        example = gui_config.load_raw(Path(__file__).resolve().parents[1] / "examples" / "config.example.toml")
+        data = gui_config.load_raw(path)
+        args = example["providers"][0]["args"]
+        args[2:2] = ["--allowedTools", "Read, Bash(git status)"]
+        data["providers"][0]["args"] = args
+        data["providers"][0]["extraList"] = ["first", "", " last "]
+        gui_config.save_file(path, data)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(1)
+        win.save()
+        saved = gui_config.load_raw(path)["providers"][0]
+        self.assertEqual(saved["args"], args)
+        self.assertEqual(saved["extraList"], ["first", "", " last "])
+        self.type_into_entry(win, "5", "4")
+        win.save()
+        saved = gui_config.load_raw(path)["providers"][0]
+        self.assertEqual(saved["slots"], 4)
+        self.assertEqual(saved["args"], args)
+        self.assertEqual(saved["extraList"], ["first", "", " last "])
 
     # Editing the allowed tools list and a number, then saving.
     def test_edit_allowed_tools_and_save(self):
@@ -382,6 +446,38 @@ class WindowTest(unittest.TestCase):
                     self.assertEqual((saved["envVar"], saved["reserveMB"]), ("BUILD_MP_JOBS", 1024))
                 win.win.destroy()
 
+    def test_build_ram_uses_the_decimal_comma_in_german_and_stores_a_toml_number(self):
+        """German shows and takes "2,5" (a point is still taken), the file always holds a number, a wrong value is refused with a German message."""
+        path = self.folder / "config.toml"
+        with mock.patch.object(gui_config, "machine_cores", return_value=8), mock.patch.object(i18n, "machine_language", return_value="German"):
+            path.write_text("slots = 2\n[buildJobs]\nminFreeRamGB = 2.5\n", encoding="utf-8")
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            self.assertEqual(win.build_vars[2].get(), "2,5")
+            for typed, stored, shown in (("3,25", 3.25, "3,25"), ("4.5", 4.5, "4,5"), ("6,0", 6, "6")):
+                win.build_vars[2].set(typed)
+                win.save()
+                self.assertEqual(gui_config.load_raw(path)["buildJobs"]["minFreeRamGB"], stored)
+                win.build_form()
+                self.assertEqual(win.build_vars[2].get(), shown)
+            before = path.read_text(encoding="utf-8")
+            win.build_vars[2].set("1,2,3")
+            win.save()
+            self.assertEqual(win.status.cget("text"), "Mindestens freier RAM vor einem Build: eine Zahl wird erwartet")
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+            win.win.destroy()
+
+    def test_build_ram_keeps_the_decimal_point_in_english(self):
+        """English shows the point; a comma is taken there too."""
+        path = self.folder / "config.toml"
+        with mock.patch.object(gui_config, "machine_cores", return_value=8), mock.patch.object(i18n, "machine_language", return_value="English"):
+            path.write_text("slots = 2\n[buildJobs]\nminFreeRamGB = 2.5\n", encoding="utf-8")
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            self.assertEqual(win.build_vars[2].get(), "2.5")
+            win.build_vars[2].set("3,5")
+            win.save()
+            self.assertEqual(gui_config.load_raw(path)["buildJobs"]["minFreeRamGB"], 3.5)
+            win.win.destroy()
+
     def test_a_wrong_build_value_is_refused(self):
         """A parallel value of 0 stays on screen with its message and nothing is written."""
         with mock.patch.object(gui_config, "machine_cores", return_value=8):
@@ -391,6 +487,35 @@ class WindowTest(unittest.TestCase):
             win.save()
             self.assertIn("Parallel builds", win.status.cget("text"))
             self.assertEqual((self.folder / "config.toml").read_text(encoding="utf-8"), before)
+
+    # H-10, H-17: looking at a provider is no selection; changing its ticks is.
+    def legacy_page(self, **entry):
+        """The window on a provider entry from before the ticks."""
+        path = self.folder / "config.toml"
+        data = gui_config.load_raw(path)
+        data["providers"] = [{"name": "old", "protocol": "claude", "command": "claude", "classes": {"medium": {"model": "m"}}, **entry}]
+        gui_config.save_file(path, data)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(1)
+        return win, path
+
+    def test_showing_and_saving_an_old_provider_changes_nothing_of_its_selection(self):
+        win, path = self.legacy_page(capabilities=["build"], use="capability-only")
+        self.assertFalse(any("as before" in str(w.cget("text")) for w in descendants(win.form) if w.winfo_class() == "Label"))   # H-46(d): no promise of implicit steps
+        win.save()
+        saved = gui_config.load_raw(path)["providers"][0]
+        self.assertEqual(saved["capabilities"], ["build"])
+        self.assertEqual(saved["use"], "capability-only")
+        self.assertNotIn("capabilitiesVersion", saved)
+
+    def test_changing_the_ticks_of_an_old_provider_makes_them_the_selection(self):
+        win, path = self.legacy_page(capabilities=["build"])
+        next(w for w in descendants(win.form) if w.winfo_class() == "Checkbutton" and w.cget("text") == "Deploy").invoke()
+        win.save()
+        saved = gui_config.load_raw(path)["providers"][0]
+        self.assertEqual(saved["capabilitiesVersion"], 1)
+        self.assertEqual(sch_capabilities(saved), ["Coding", "Queen", "Build", "Deploy"])
+
 
     def test_build_notes_wrap_within_the_window(self):
         """The explanations of the Build block sit under their field and wrap to the available width, at the normal and at a small window size."""
@@ -443,6 +568,12 @@ class WindowTest(unittest.TestCase):
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.pick_file("project.toml (ODP)")
         self.assertIsNone(win.build_vars)
+
+
+def sch_capabilities(entry):
+    """The ticks of a saved provider entry as the program reads them."""
+    from haivequeen import scheduler
+    return scheduler.provider_capabilities(entry)
 
 
 class BenchmarkWindowTest(WindowTest):

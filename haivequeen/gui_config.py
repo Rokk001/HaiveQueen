@@ -1,7 +1,7 @@
 """Editor for the TOML settings in the graphical window: config.toml of the machine and the project.toml of every Apiary.
 
 This file holds the data layer (read, split the allowed tools, write TOML, check, save with a backup); the window is `ConfigWindow` below.
-Only the standard library is used: Python can read TOML but not write it, so `dumps` writes the few TOML forms the settings use.
+TOML Kit preserves comments and layout when an existing settings file is saved.
 """
 import json
 import math
@@ -9,17 +9,58 @@ import os
 import re
 import shutil
 import tomllib
+from collections import Counter
 from pathlib import Path
+import tomlkit
+
+from . import gui_data, localtime
+from .i18n import N_, decimal, tr
 
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
-CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "use": ("preferred", "fallback", "capability-only"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
+CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "use": ("preferred", "fallback"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
+CAPABILITIES = ("Coding", "Queen", "Build", "Deploy", "Image generation", "3D modelling", "Audio generation", "Video generation", "Vision", "Browser automation", "Web research", "GPU workloads", "Confidential data")
 CLASSES = ("light", "medium", "heavy")
 # The block "Build" of the General page: exactly these three fields, each with one sentence of explanation (key in the buildJobs table, label, explanation).
+BUILD_TEXT_WIDTH = 470   # pixels of an explanation in the block "Build": what stays free beside the field in the window size below, in every language
 BUILD_FIELDS = (
-    ("cores", "CPU cores per build", "How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short."),
-    ("parallel", "Parallel builds", "How many targets the build command builds at the same time (the number after --parallel); each target gets the cores divided by this number."),
-    ("minFreeRamGB", "Minimum free RAM before a build", "A build only starts while at least this many GB of RAM are free, otherwise it waits."),
+    ("cores", N_("CPU cores per build"), N_("How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short.")),
+    ("parallel", N_("Parallel builds"), N_("How many targets the build command builds at the same time (the number after --parallel); each target gets the cores divided by this number.")),
+    ("minFreeRamGB", N_("Minimum free RAM before a build"), N_("A build only starts while at least this many GB of RAM are free, otherwise it waits.")),
 )
+
+
+# The settings of the Apiary page, each with the value that applies without an entry (for an Apiary from before the switches deploy stays on, see apiary_settings).
+APIARY_DEFAULTS = (("ownerTopics", []), ("ownerCheckText", ""), ("compileCheckEnabled", True), ("buildEnabled", True), ("deployEnabled", False),
+                   ("integrationBranch", "main"), ("remoteName", "origin"), ("worktreeLocation", ""), ("deleteFinishedWorktrees", True), ("deleteIntegratedBranches", False),
+                   ("publishReleases", False), ("nextVersion", ""))
+RELEASE_KEYS = ("publishReleases", "nextVersion")   # offered only for an Apiary whose remote is on GitHub (H-43)
+SETTING_LABELS = {
+    "ownerTopics": N_("Topics that always go to the owner (one per line)"), "ownerCheckText": N_("Owner-check question (empty: default text)"),
+    "compileCheckEnabled": N_("Run the compile check"), "buildEnabled": N_("Run the build"), "deployEnabled": N_("Run the deploy"),
+    "integrationBranch": N_("Integration branch"), "remoteName": N_("Remote name"), "worktreeLocation": N_("Worktree location (empty: beside the repository)"),
+    "deleteFinishedWorktrees": N_("Delete finished worktrees automatically"), "deleteIntegratedBranches": N_("Delete integrated branches (local and remote)"),
+    "publishReleases": N_("Publish release at integration"), "nextVersion": N_("Next version (empty: count the last digit up)"),
+}
+
+
+# The values the Apiary page shows.
+def apiary_settings(shown, legacy_deploy=False):
+    """A copy of the settings of a project file with every setting of the Apiary page present; legacy_deploy: an Apiary from before the switches, whose deploy stays on without an entry."""
+    out = dict(shown)
+    if legacy_deploy:
+        out.setdefault("deployEnabled", True)
+    for key, default in APIARY_DEFAULTS:
+        out.setdefault(key, list(default) if isinstance(default, list) else default)
+    return out
+
+
+# Hide the release settings of an Apiary whose remote is not on GitHub.
+def release_fields(shown, repository):
+    """`shown` without publishReleases and nextVersion when `repository` (owner/name of the GitHub remote) is None (H-43: only for a remote on GitHub)."""
+    if not repository:
+        for key in RELEASE_KEYS:
+            shown.pop(key, None)
+    return shown
 
 
 # The number of logical cores of this machine.
@@ -53,18 +94,18 @@ def apply_build(data, cores_text, parallel_text, ram_text, cores=None):
         try:
             value = int(str(text).strip())
         except ValueError:
-            raise ValueError("%s: a whole number is expected" % label)
+            raise ValueError(tr("%s: a whole number is expected", tr(label)))
         if value < low or (high is not None and value > high):
-            raise ValueError("%s: a whole number from %d%s is expected" % (label, low, " to %d" % high if high is not None else " up"))
+            raise ValueError(tr("%s: a whole number from %d to %d is expected", tr(label), low, high) if high is not None else tr("%s: a whole number from %d up is expected", tr(label), low))
         return value
-    n_cores = whole(cores_text, "CPU cores per build", 1, cores)
-    parallel = whole(parallel_text, "Parallel builds", 1)
+    n_cores = whole(cores_text, N_("CPU cores per build"), 1, cores)
+    parallel = whole(parallel_text, N_("Parallel builds"), 1)
     try:
         ram = float(str(ram_text).strip().replace(",", "."))
     except ValueError:
-        raise ValueError("Minimum free RAM before a build: a number is expected")
+        raise ValueError(tr("Minimum free RAM before a build: a number is expected"))
     if not math.isfinite(ram) or ram <= 0:
-        raise ValueError("Minimum free RAM before a build: a number above 0 is expected")
+        raise ValueError(tr("Minimum free RAM before a build: a number above 0 is expected"))
     old = data.get("buildJobs")
     table = {k: v for k, v in old.items() if k not in ("coreShare", "fixed", "cores", "parallel", "minFreeRamGB")} if isinstance(old, dict) else {}
     table.update({"cores": n_cores, "parallel": parallel, "minFreeRamGB": int(ram) if ram == int(ram) else ram})
@@ -135,7 +176,7 @@ def _value(value) -> str:
         return str(value)
     if isinstance(value, float):
         if not math.isfinite(value):
-            raise ValueError("a number must be finite")
+            raise ValueError(tr("a number must be finite"))
         return repr(value)
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
@@ -143,7 +184,7 @@ def _value(value) -> str:
         return "[" + ", ".join(_value(v) for v in value) + "]"
     if isinstance(value, dict):
         return "{ " + ", ".join("%s = %s" % (_key(k), _value(v)) for k, v in value.items()) + " }" if value else "{}"
-    raise ValueError("cannot write %r as TOML" % (value,))
+    raise ValueError(tr("cannot write %r as TOML", value))
 
 
 # A dict that must become its own [table] because it holds other dicts.
@@ -189,9 +230,23 @@ def check(data, machine=True) -> list:
     problems = []
     try:
         if tomllib.loads(dumps(data)) != data:
-            problems.append("the settings cannot be written as TOML without changing them")
+            problems.append(tr("the settings cannot be written as TOML without changing them"))
     except (ValueError, tomllib.TOMLDecodeError) as exc:
         problems.append(str(exc))
+    for key, label in (("remoteName", "Remote name"), ("integrationBranch", "Integration branch")):
+        if data.get(key) and not re.fullmatch(r"[\w][\w./-]*", str(data[key])):
+            problems.append(tr("%s: letters, digits and . / - _ are expected, starting with a letter or digit", tr(label)))
+    if str(data.get("nextVersion") or "").strip():
+        from . import releases
+        try:
+            releases.next_version(str(data["nextVersion"]).strip())
+        except ValueError:
+            problems.append(tr("Next version: three numbers like 2.1.0 are expected"))
+    update = data.get("update")
+    if update is not None:
+        hours = update.get("checkHours", 24) if isinstance(update, dict) else None
+        if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not math.isfinite(hours) or hours < 0:
+            problems.append(tr("update.checkHours: a number of hours from 0 up is expected (0 = no daily check)"))
     if machine and not problems:
         from . import scheduler
         try:
@@ -199,44 +254,165 @@ def check(data, machine=True) -> list:
             int(data.get("hives", 2))
             minutes = float(data.get("roundMinutes", 5))
             if not math.isfinite(minutes) or minutes <= 0:
-                problems.append("roundMinutes must be greater than zero")
+                problems.append(tr("roundMinutes must be greater than zero"))
             names = [p.get("name") for p in data.get("providers") or []]
             if len(set(names)) != len(names):
-                problems.append("provider names must be unique")
+                problems.append(tr("provider names must be unique"))
         except (ValueError, TypeError, AttributeError) as exc:
             problems.append(str(exc))
     return problems
 
 
+# Whether the values of a provider page are a selection of the owner.
+def keep_legacy_entry(data, old):
+    """A provider from before the ticks stays one until the owner changes its ticks or its old use capability-only: then the ticks are the selection of the owner. Showing and saving the page changes nothing."""
+    from . import scheduler
+    if old.get("capabilitiesVersion"):
+        return
+    use_kept = old.get("use") != "capability-only" or data.get("use") == "preferred"
+    if set(data.get("capabilities") or []) != set(scheduler.provider_capabilities(old)) or not use_kept:
+        data["capabilitiesVersion"] = 1
+        return
+    for key in ("capabilities", "use"):
+        if key in old:
+            data[key] = old[key]
+        else:
+            data.pop(key, None)
+
+
 # Write a settings file and keep the old one.
 def save_file(path, data):
-    """Write `data` to `path` as TOML: the comment lines at the top of the old file stay, the old file is kept as `<name>.bak`, the new one replaces it in one step."""
+    """Update a TOML document, preserving its formatting and comments where values remain."""
     path = Path(path)
-    header = ""
+    document = tomlkit.document()
+    original = ""
     if path.is_file():
-        kept = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("#") or not line.strip():
-                kept.append(line)
-            else:
-                break
-        header = "\n".join(kept).rstrip("\n") + "\n\n" if any(x.strip() for x in kept) else ""
+        original = path.read_text(encoding="utf-8")
+        document = tomlkit.parse(original)
         shutil.copy2(path, path.with_name(path.name + ".bak"))
+    _update_document(document, data)
+    result = tomlkit.dumps(document)
+    remaining = Counter(_comments(result))
+    for comment in _comments(original):
+        if remaining[comment]:
+            remaining[comment] -= 1
+        else:
+            result += "\n" + comment + "\n"
+    if tomllib.loads(result) != data:
+        raise ValueError("settings could not be written without changing their values")
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
-    temp.write_text(header + dumps(data), encoding="utf-8", newline="\n")
+    temp.write_text(result, encoding="utf-8", newline="\n")
     os.replace(temp, path)
+
+
+def save_project_file(conn, path, data):
+    """Save a project and capture the release boundary while integration writes are locked."""
+    from . import config, db, publish
+    path = Path(path)
+    previous = config._load_toml(path)
+    enabling = bool(data.get("publishReleases")) and not bool(previous.get("publishReleases"))
+    if not enabling:
+        save_file(path, data)
+        return
+    project = conn.execute("SELECT name FROM projects WHERE workspace=?", (str(path.parent.parent),)).fetchone()
+    if not project:
+        raise ValueError("project is not registered")
+    name = project[0]
+    with db.transaction(conn):
+        # Keep the original boundary on re-enable: eligible integrations may
+        # still be awaiting discovery, while disabled ones are excluded when
+        # their queue rows are recorded.
+        if not conn.execute("SELECT 1 FROM kv WHERE project=? AND key=? AND value != ''",
+                            (name, publish.SINCE_KEY)).fetchone():
+            before = [row[0] for row in conn.execute("SELECT id FROM queue WHERE project=? AND status='integrated'", (name,))]
+            conn.execute(publish._UPSERT, (name, publish.SINCE_KEY, db.now(), db.now()))
+            conn.execute(publish._UPSERT, (name, publish.BEFORE_KEY, json.dumps(before), db.now()))
+        save_file(path, data)
+
+
+def _comments(text):
+    """Return TOML comments outside quoted strings, including multiline strings."""
+    comments, quote, multiline, escaped = [], None, False, False
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if quote == '"' and escaped:
+                escaped = False
+            elif quote == '"' and c == "\\":
+                escaped = True
+            elif multiline and text.startswith(quote * 3, i):
+                # TOML permits one or two literal quotes just before the closing
+                # delimiter. Consume the whole 3-5 quote run, not just three.
+                end = i + 3
+                while end < len(text) and text[end] == quote:
+                    end += 1
+                quote, multiline = None, False
+                i = end - 1
+            elif not multiline and c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+            multiline = text.startswith(c * 3, i)
+            if multiline:
+                i += 2
+        elif c == "#":
+            end = text.find("\n", i)
+            end = len(text) if end < 0 else end
+            comments.append(text[i:end].rstrip("\r"))
+            i = end - 1
+        i += 1
+    return comments
+
+
+def _update_document(document, data):
+    """Change retained tables in place so their comments and layout survive."""
+    from tomlkit.items import AoT, InlineTable, Table
+    for key in list(document):
+        if key not in data:
+            del document[key]
+    for key, value in data.items():
+        if key not in document:
+            document[key] = value
+            continue
+        old = document[key]
+        if isinstance(value, dict) and isinstance(old, (Table, InlineTable)):
+            _update_document(old, value)
+        elif isinstance(value, list) and isinstance(old, AoT) and all(isinstance(v, dict) for v in value):
+            # Provider/project names (or ids) identify entries even when the
+            # settings editor removes or reorders them. Never transfer their
+            # comments to a different named entry by position.
+            identity = next((field for field in ("name", "id")
+                             if all(isinstance(entry.get(field), str) for entry in [*old, *value])
+                             and len({entry[field] for entry in old}) == len(old)
+                             and len({entry[field] for entry in value}) == len(value)), None)
+            if identity:
+                entries = {entry[identity]: entry for entry in old}
+                updated_array = tomlkit.aot()
+                for updated in value:
+                    entry = entries.get(updated[identity])
+                    if entry is None:
+                        entry = tomlkit.table()
+                    _update_document(entry, updated)
+                    updated_array.append(entry)
+                document[key] = updated_array
+            elif len(old) == len(value):
+                for entry, updated in zip(old, value):
+                    _update_document(entry, updated)
+            elif old.unwrap() != value:
+                document[key] = value
+        elif (old.unwrap() if hasattr(old, "unwrap") else old) != value:
+            document[key] = value
 
 
 # Settings files the editor offers.
 def settings_files(conn, config_dir) -> list:
-    """[(label, path, is_machine)]: config.toml first, then the project.toml of every registered Apiary that has one."""
-    out = [("config.toml (machine)", Path(config_dir) / "config.toml", True)]
-    for name, workspace in conn.execute("SELECT name, workspace FROM projects ORDER BY name"):
-        if workspace:
-            path = Path(workspace) / ".haivequeen" / "project.toml"
-            if path.is_file():
-                out.append(("project.toml (%s)" % name, path, False))
+    """[(label, path, is_machine, legacy_deploy)]: config.toml first, then the project.toml of every registered Apiary whose folder exists; a missing file is created at Save, so its switches can be set."""
+    out = [(tr("config.toml (machine)"), Path(config_dir) / "config.toml", True, False)]
+    for name, workspace, legacy_deploy in conn.execute("SELECT name, workspace, legacy_deploy FROM projects ORDER BY name"):
+        if workspace and Path(workspace).is_dir():
+            out.append((tr("project.toml (%s)", name), Path(workspace) / ".haivequeen" / "project.toml", False, bool(legacy_deploy)))
     return out
 
 
@@ -248,8 +424,11 @@ def parse_typed(text, like=None):
         if isinstance(like, bool):
             if text.lower() in ("true", "false"):
                 return text.lower() == "true"
-            raise ValueError("true or false expected")
-        return type(like)(text)
+            raise ValueError(tr("true or false expected"))
+        try:
+            return type(like)(text)
+        except ValueError:
+            raise ValueError(tr("a number is expected"))
     if like is None:
         if text.lower() in ("true", "false"):
             return text.lower() == "true"
@@ -276,13 +455,13 @@ class ConfigWindow:
         self.index, self.data, self.node, self.getters, self.entries, self.position = 0, {}, ("general", None), [], [], None
         self.build_vars = None
         self.win = tk.Toplevel(root)
-        self.win.title("HaiveQueen settings")
+        self.win.title(tr("HaiveQueen settings"))
         self.win.geometry("1100x700")
         self.win.minsize(640, 420)
         top = tk.Frame(self.win)
         top.pack(fill="x", padx=8, pady=6)
         self.file_var = tk.StringVar(value=self.files[0][0])
-        tk.Label(top, text="File:").pack(side="left")
+        tk.Label(top, text=tr("File:")).pack(side="left")
         self.dialog.option_menu(top, self.file_var, [f[0] for f in self.files], self.mono, self.pick_file).pack(side="left", padx=6)
         from .gui import COL
         self.col = COL   # the dashboard colours, also for the status texts
@@ -295,7 +474,7 @@ class ConfigWindow:
         self.nodes = tk.Listbox(side, width=28, exportselection=False, font=(mono, 10))
         self.nodes.pack(fill="y", expand=True)
         self.nodes.bind("<<ListboxSelect>>", self.pick_node)
-        for text, command in (("Add provider", self.add_provider), ("Add project", self.add_project), ("Remove entry", self.remove_node)):
+        for text, command in ((tr("Add provider"), self.add_provider), (tr("Add project"), self.add_project), (tr("Remove entry"), self.remove_node)):
             tk.Button(side, text=text, command=command).pack(fill="x", pady=1)
         canvas = tk.Canvas(body, highlightthickness=0)
         scroll = self.dialog.scrollbar(body, canvas.yview)
@@ -314,10 +493,10 @@ class ConfigWindow:
         bottom.pack(fill="x")
         self.bottom_buttons = []
         for text, command in (("Save", self.save), ("Revert", self.reload), ("Open folder", self.open_folder), ("Close", self.win.destroy)):
-            button = tk.Button(bottom, text=text, width=12, command=command)
+            button = tk.Button(bottom, text=tr(text), width=12, command=command)
             button.pack(side="left", padx=4)
             self.bottom_buttons.append(button)
-        self.bottom_note = tk.Label(foot, text="Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.", fg=COL["dim"], justify="left", anchor="w")
+        self.bottom_note = tk.Label(foot, text=tr("Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak."), fg=COL["dim"], justify="left", anchor="w")
         self.bottom_note.pack(fill="x", pady=(6, 0))   # its own row below the buttons over the full width, wraps to as many lines as needed
         self.bottom_note.bind("<Configure>", lambda e: self.bottom_note.configure(wraplength=max(120, e.width)))
         self.reload()
@@ -340,11 +519,11 @@ class ConfigWindow:
         """Rebuild the left list: General, then every provider and project."""
         self.nodes.delete(0, "end")
         self.entries = [("general", None)]
-        self.nodes.insert("end", "General")
+        self.nodes.insert("end", tr("General"))
         for kind in ("providers", "projects"):
             for i, item in enumerate(self.data.get(kind) or []):
                 self.entries.append((kind, i))
-                self.nodes.insert("end", "%s: %s" % (kind[:-1], item.get("name", "?")))
+                self.nodes.insert("end", tr("provider: %s", item.get("name", "?")) if kind == "providers" else tr("project: %s", item.get("name", "?")))
 
     # Change the selected file.
     def pick_file(self, label):
@@ -395,8 +574,7 @@ class ConfigWindow:
             from . import cli_presets
             key = cli_presets.key_for(data)
             if key == cli_presets.CUSTOM:
-                data.setdefault("profileEnv", {})   # an own CLI: the variables that point it to the profile folder ({home} = its profile folder)
-                shown["profileEnv"] = data["profileEnv"]
+                shown.setdefault("profileEnv", {})   # variables pointing to the CLI profile folder ({home} = its profile folder)
                 shown.setdefault("loginCommand", "")   # the command that makes the login
                 shown.setdefault("loginFiles", [])   # the login files, relative to the profile folder of the CLI
                 shown.setdefault("outputFormat", "")   # the output format the CLI writes: claude, codex or opencode
@@ -406,15 +584,48 @@ class ConfigWindow:
             shown.pop("buildJobs", None)   # the build settings are the block "Build" below, never the raw table
             shown.pop("ramReserveMb", None)   # machine-only, settable in config.toml only; not offered here, the stored value stays untouched on save
             self.build_block()
+            self.bzz_row()
         if kind == "general":
+            shown.pop("preferredProvider", None)
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
+            if not self.machine():
+                shown = apiary_settings(shown, self.files[self.index][3])
+                shown = release_fields(shown, self.github_repository(shown))
         if kind == "providers":
+            from . import scheduler
+            shown["capabilities"] = scheduler.provider_capabilities(data)
+            shown["use"] = "preferred" if data.get("use") == "capability-only" else data.get("use", "preferred")
+            shown.pop("capabilitiesVersion", None)
             rest, tools, self.position = split_args(shown.get("args"))
             shown = {k: v for k, v in shown.items() if k != "args"}
             shown["allowedTools"], shown["args"] = tools, rest
             shown.setdefault("beeMode", "process" if shown.get("protocol") == "codex" else "subagent")   # always offer the setting, with the value that applies without an entry
         self.fields(self.form, shown, ())
         self.add_row(self.form, ())
+        self.initial_values = {path: getter() for path, getter, _like in self.getters}
+        self.initial_build = tuple(v.get() for v in self.build_vars) if self.build_vars else None
+
+    def github_repository(self, shown):
+        """owner/name of the GitHub remote of the shown Apiary (its remoteName), or None."""
+        from . import publish
+        from types import SimpleNamespace
+        workspace = self.files[self.index][1].parent.parent
+        try:
+            return publish.github_repository(SimpleNamespace(workspace=workspace, settings={"remoteName": shown.get("remoteName") or "origin"}))
+        except Exception:
+            return None
+
+    def bzz_row(self):
+        """Offer profile installation and show the result for each CLI."""
+        row = self.tk.Frame(self.form)
+        row.pack(fill="x", pady=4)
+        status = self.tk.Label(row, anchor="w", justify="left")
+        def install():
+            from . import bzz_install
+            result = bzz_install.install()
+            status.config(text="\n".join("%s: %s" % (tr(name), tr(message)) for name, message in result.items()))
+        self.tk.Button(row, text=tr("Install /bzz"), command=install).pack(anchor="w")
+        status.pack(anchor="w")
 
     # The block "Build" of the General page.
     def build_block(self):
@@ -423,9 +634,9 @@ class ConfigWindow:
         tk = self.tk
         cores = machine_cores()
         shown = build_values(self.data, cores)
-        box = tk.LabelFrame(self.form, text="Build", padx=6, pady=4)
+        box = tk.LabelFrame(self.form, text=tr("Build"), padx=6, pady=4)
         box.pack(fill="x", pady=(0, 10), anchor="w")
-        cores_var, parallel_var, ram_var = tk.StringVar(value=str(shown["cores"])), tk.StringVar(value=str(shown["parallel"])), tk.StringVar(value="%g" % shown["minFreeRamGB"])
+        cores_var, parallel_var, ram_var = tk.StringVar(value=str(shown["cores"])), tk.StringVar(value=str(shown["parallel"])), tk.StringVar(value=decimal("%g" % shown["minFreeRamGB"]))
         self.build_vars = (cores_var, parallel_var, ram_var)
         self.build_notes = []
         for (key, label, explanation), var in zip(BUILD_FIELDS, self.build_vars):
@@ -433,12 +644,12 @@ class ConfigWindow:
             item.pack(fill="x", pady=2, anchor="w")
             row = tk.Frame(item)
             row.pack(fill="x", anchor="w")
-            tk.Label(row, text=label, width=32, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+            tk.Label(row, text=tr(label), width=32, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
             if key == "cores":
                 self.dialog.option_menu(row, var, [str(n) for n in range(1, cores + 1)], self.mono).pack(side="left")
             else:
                 tk.Entry(row, textvariable=var, width=8, font=(self.mono, 10)).pack(side="left")
-            note = tk.Label(item, text=explanation, anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=300)
+            note = tk.Label(item, text=tr(explanation), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=300)
             note.pack(fill="x", anchor="w", padx=(4, 0))   # under the field, wrapped to the width that is available (never cut off)
             item.bind("<Configure>", lambda e, n=note: n.configure(wraplength=max(120, e.width - 12)))
             self.build_notes.append(note)
@@ -483,12 +694,12 @@ class ConfigWindow:
         tk = self.tk
         row = tk.Frame(self.form)
         row.pack(fill="x", pady=(0, 8), anchor="w")
-        tk.Label(row, text="login", width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+        tk.Label(row, text=tr("login"), width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
         flow = tk.Frame(row)   # status and buttons: wrapped to the next row when the form is too narrow, never cut
         flow.pack(side="left", fill="x", expand=True, anchor="n")
         self.login_status = tk.Label(flow, anchor="w", font=(self.mono, 10, "bold"))
-        self.login_button = tk.Button(flow, text="Login", width=12, command=self.login_click)
-        self.benchmark_button = tk.Button(flow, text="Benchmark Start Context", command=self.benchmark_click)
+        self.login_button = tk.Button(flow, text=tr("Login"), width=12, command=self.login_click)
+        self.benchmark_button = tk.Button(flow, text=tr("Benchmark Start Context"), command=self.benchmark_click)
         items = [self.login_status, self.login_button, self.benchmark_button]
 
         def layout(_e=None):
@@ -512,7 +723,7 @@ class ConfigWindow:
         if self.login_status is None:
             return
         present = profile.has_login(self.login_provider())
-        self.login_status.config(text="Login present" if present else "Login missing", fg=self.col["green"] if present else self.col["red"])
+        self.login_status.config(text=tr("Login present") if present else tr("Login missing"), fg=self.col["green"] if present else self.col["red"])
 
     # The Login button.
     def login_click(self):
@@ -522,14 +733,14 @@ class ConfigWindow:
             return
         prov = self.login_provider()
         if not profile.login_command(prov):
-            self.dialog.info(self.win, "HaiveQueen", "No login is set up for this provider. For a CLI that is not built in, set the profile variables, "
-                             "the login command and the login files on this page.", self.mono)
+            self.dialog.info(self.win, "HaiveQueen", tr("No login is set up for this provider. For a CLI that is not built in, set the profile variables, "
+                                                "the login command and the login files on this page."), self.mono)
             return
-        if not self.dialog.ask(self.win, "HaiveQueen", "Open a terminal window and run `%s` for provider %s in the HaiveQueen profile?" % (profile.login_command(prov), prov["name"]), self.mono):
+        if not self.dialog.ask(self.win, "HaiveQueen", tr("Open a terminal window and run `%s` for provider %s in the HaiveQueen profile?", profile.login_command(prov), prov["name"]), self.mono):
             return
         proc = profile.login_run(prov)
         if proc is None:
-            self.dialog.error(self.win, "HaiveQueen", "The login window could not be opened (no terminal program found).", self.mono)
+            self.dialog.error(self.win, "HaiveQueen", tr("The login window could not be opened (no terminal program found)."), self.mono)
             return
         self.watch_login(proc)
 
@@ -574,16 +785,34 @@ class ConfigWindow:
                 self.fields(box, value, path + (key,))
                 self.add_row(box, path + (key,))
                 continue
-            tk.Label(row, text=key, width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+            tk.Label(row, text=tr(SETTING_LABELS[key]) if key in SETTING_LABELS and self.node[0] == "general" and not self.machine() else key, width=22, anchor="nw", justify="left", wraplength=190, font=(self.mono, 10)).pack(side="left", anchor="n")
             self.getters.append((path + (key,), self.editor(row, key, value), value))
 
     # One editor widget for a value; returns the function that reads it back.
     def editor(self, parent, key, value):
         """Make the editor for `value` (check box, choice, line, one entry per line, or JSON for anything else) and return its getter."""
         tk = self.tk
+        if key == "capabilities" and self.node[0] == "providers":
+            box = tk.Frame(parent)
+            box.pack(side="left", fill="x", expand=True)
+            choices = list(dict.fromkeys(CAPABILITIES + tuple(value)))
+            variables = [(name, tk.BooleanVar(value=name in value)) for name in choices]
+            labels = {"Coding": "Coding (including tests, docs and review)", "Queen": "Queen (plan cutting and coordination)", "Build": "Build (with this machine’s tools)", "Vision": "Vision (understand images and screenshots)", "Confidential data": "Confidential data (local models only)"}
+            for name, var in variables:
+                tk.Checkbutton(box, text=tr(labels.get(name, name)), variable=var, anchor="w").pack(anchor="w")
+            custom = tk.StringVar()
+            row = tk.Frame(box)
+            row.pack(fill="x")
+            tk.Label(row, text=tr("Add own")).pack(side="left")
+            tk.Entry(row, textvariable=custom).pack(side="left", fill="x", expand=True)
+            return lambda: [name for name, var in variables if var.get()] + [name.strip() for name in custom.get().split(",") if name.strip()]
         if isinstance(value, bool):
             var = tk.BooleanVar(value=value)
             tk.Checkbutton(parent, variable=var).pack(side="left")
+            return var.get
+        if key == "language" and self.machine() and self.node[0] == "general":
+            var = tk.StringVar(value=value)
+            self.dialog.option_menu(parent, var, list(dict.fromkeys(("English", "German", value))), self.mono).pack(side="left")
             return var.get
         if isinstance(value, str) and key in CHOICES:
             var = tk.StringVar(value=value)
@@ -597,10 +826,16 @@ class ConfigWindow:
         if isinstance(value, list) and all(isinstance(v, str) for v in value):
             text.insert("1.0", "\n".join(value))
             text.pack(side="left", fill="x", expand=True)
-            return lambda: [line.strip() for line in text.get("1.0", "end").splitlines() if line.strip()]
+            return lambda: text.get("1.0", "end-1c").split("\n") if text.get("1.0", "end-1c") else []
         text.insert("1.0", json.dumps(value))
         text.pack(side="left", fill="x", expand=True)
-        return lambda: json.loads(text.get("1.0", "end"))
+        def read_json():
+            """The typed JSON value; a wrong one raises ValueError with the message."""
+            try:
+                return json.loads(text.get("1.0", "end"))
+            except ValueError:
+                raise ValueError(tr("valid JSON is expected"))
+        return read_json
 
     # A row to add one setting.
     def add_row(self, parent, path):
@@ -609,7 +844,7 @@ class ConfigWindow:
         row = tk.Frame(parent)
         row.pack(fill="x", pady=(6, 2), anchor="w")
         key, value = tk.StringVar(), tk.StringVar()
-        tk.Label(row, text="new setting", width=22, anchor="w", fg=self.col["dim"], font=(self.mono, 10)).pack(side="left")
+        tk.Label(row, text=tr("new setting"), width=22, anchor="w", fg=self.col["dim"], font=(self.mono, 10)).pack(side="left")
         tk.Entry(row, textvariable=key, width=22, font=(self.mono, 10)).pack(side="left")
         tk.Entry(row, textvariable=value, width=40, font=(self.mono, 10)).pack(side="left", padx=4)
 
@@ -622,37 +857,56 @@ class ConfigWindow:
                 target = target[step]
             target[key.get().strip()] = parse_typed(value.get())
             self.build_form()
-        tk.Button(row, text="Add", command=add).pack(side="left")
+        tk.Button(row, text=tr("Add"), command=add).pack(side="left")
 
     # Read the typed values back into the data.
     def collect(self) -> bool:
         """Write every editor value of the shown part into `self.data`; show the first wrong value in the status line and return False."""
         data = self.target()
         values = {}
+        current = {}
         where = ()
         try:
             for path, getter, like in self.getters:
                 where = path
                 raw = getter()
+                current[path] = raw
                 values[path] = raw if isinstance(raw, (bool, list, dict)) or isinstance(like, (bool, list)) else parse_typed(raw, like)
         except (ValueError, TypeError) as exc:
             self.status.config(text="%s: %s" % (".".join(where), exc), fg=self.col["red"])
             return False
-        if self.build_vars is not None:
+        if self.build_vars is not None and tuple(v.get() for v in self.build_vars) != self.initial_build:
             try:
                 apply_build(self.data, *[v.get() for v in self.build_vars], cores=machine_cores())
             except ValueError as exc:
                 self.status.config(text=str(exc), fg=self.col["red"])
                 return False
+        old_entry = dict(data) if self.node[0] == "providers" else None
         for path, raw in values.items():
-            if self.node[0] == "providers" and path in (("allowedTools",), ("args",)):
+            if (self.node[0] == "providers" and path in (("allowedTools",), ("args",))) or current[path] == self.initial_values[path]:
                 continue
             target = data
             for step in path[:-1]:
-                target = target[step]
+                target = target.setdefault(step, {})
             target[path[-1]] = raw
         if self.node[0] == "providers":
-            data["args"] = join_args(values.get(("args",), []), values.get(("allowedTools",), []), self.position)
+            if any(current.get((key,)) != self.initial_values.get((key,)) for key in ("capabilities", "use")):
+                keep_legacy_entry(data, old_entry)
+            rest = values.get(("args",), [])
+            tools = values.get(("allowedTools",), [])
+            if rest != self.initial_values.get(("args",)) or tools != self.initial_values.get(("allowedTools",)):
+                args = join_args(rest, tools, self.position)
+                if tools == self.initial_values.get(("allowedTools",)) and self.position is not None:
+                    pair = old_entry["args"][self.position:self.position + 2]
+                    if tools:
+                        args[self.position + 1] = pair[1]
+                    else:
+                        pos = min(self.position, len(args))
+                        args[pos:pos] = pair
+                data["args"] = args
+                _, _, self.position = split_args(args)
+        self.initial_values = current
+        self.initial_build = tuple(v.get() for v in self.build_vars) if self.build_vars else None
         self.status.config(text="")
         return True
 
@@ -661,7 +915,7 @@ class ConfigWindow:
         """Append a new provider (claude protocol, one slot, fallback use) and show it."""
         if self.machine() and self.collect():
             self.data.setdefault("providers", []).append({"name": "new-provider", "protocol": "claude", "command": "claude", "args": [], "slots": 1, "use": "fallback",
-                                                          "classes": {"medium": {"model": "", "effort": "medium"}}})
+                                                          "capabilities": ["Coding", "Queen"], "capabilitiesVersion": 1, "classes": {"medium": {"model": "", "effort": "medium"}}})
             self.fill_nodes()
             self.select(1 + len(self.data["providers"]) - 1)
 
@@ -680,7 +934,7 @@ class ConfigWindow:
         if kind == "general":
             return
         from . import gui_dialog
-        if gui_dialog.ask(self.win, "HaiveQueen", "Remove this %s from the settings?" % kind[:-1], self.mono):
+        if gui_dialog.ask(self.win, "HaiveQueen", tr("Remove this provider from the settings?") if kind == "providers" else tr("Remove this project from the settings?"), self.mono):
             del self.data[kind][i]
             self.fill_nodes()
             self.select(0)
@@ -694,8 +948,14 @@ class ConfigWindow:
         if problems:
             self.status.config(text="; ".join(problems)[:300], fg=self.col["red"])
             return
-        save_file(self.files[self.index][1], self.data)
-        self.status.config(text="Saved.", fg=self.col["green"])
+        if self.machine():
+            save_file(self.files[self.index][1], self.data)
+        else:
+            save_project_file(self.conn, self.files[self.index][1], self.data)
+        if self.machine():
+            from . import init
+            init.register_listed(self.conn, self.data.get("projects"))   # a project added on this page is an Apiary from now on
+        self.status.config(text=tr("Saved."), fg=self.col["green"])
         if self.on_saved:
             self.on_saved()
 

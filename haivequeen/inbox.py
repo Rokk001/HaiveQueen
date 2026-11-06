@@ -8,6 +8,8 @@ from pathlib import Path
 
 from . import db, runtime
 
+SUPERSEDED = ("superseded", "ueberholt", "überholt")   # the reason of a withdraw whose tip need not be in the target; English protocol word, German input still read
+
 WHO = ("owner", "coordinator")
 ANSWER_KEYS = {"question_id", "text", "by"}
 DECISION_KEYS = {"text", "source", "plan", "item"}
@@ -57,7 +59,7 @@ def is_ancestor(repo, tip: str, ref: str) -> bool:
 def _queue_order(entry: dict, where: str, project: str, conn, repo, ref: str) -> dict:
     """Check one [[queue]] entry against the queue and git without writing anything; return {action, branch, reason, ids}.
 
-    withdraw needs the tip of every selected row to be in `ref` unless the reason is exactly "ueberholt"; requeue selects the newest open row only.
+    withdraw needs the tip of every selected row to be in `ref` unless the reason is exactly "superseded" (the German words are still read); requeue selects the newest open row only.
     """
     extra = set(entry) - QUEUE_KEYS
     if extra:
@@ -79,19 +81,19 @@ def _queue_order(entry: dict, where: str, project: str, conn, repo, ref: str) ->
         raise InboxError("%s: branch %s has no ready or blocked row%s" % (where, branch, " with tip " + tip if tip else ""))
     if action == "requeue":
         return {"action": action, "branch": branch, "reason": reason, "ids": [rows[-1]["id"]]}
-    if reason.strip().lower() != "ueberholt":
+    if reason.strip().lower() not in SUPERSEDED:
         for r in rows:
             if not r["tip"]:
                 raise InboxError("%s: row %d of branch %s has no tip to check against %s" % (where, r["id"], branch, ref))
             if not is_ancestor(repo, r["tip"], ref):
-                raise InboxError("%s: tip %s of branch %s is not in %s and the reason is not 'ueberholt'" % (where, r["tip"], branch, ref))
+                raise InboxError("%s: tip %s of branch %s is not in %s and the reason is not 'superseded'" % (where, r["tip"], branch, ref))
     return {"action": action, "branch": branch, "reason": reason, "ids": [r["id"] for r in rows]}
 
 
 def apply_queue_order(conn, project: str, order: dict) -> None:
     """Carry out a checked queue order: withdraw (status withdrawn, note keeps the old status word and the reason), mark_cleanup (kv mark) or requeue (status ready)."""
     if order["action"] == "mark_cleanup":
-        runtime.kv_set(conn, project, CLEANUP_PREFIX + order["branch"], "erledigt, Aufraeumen erlaubt: " + order["reason"])
+        runtime.kv_set(conn, project, CLEANUP_PREFIX + order["branch"], "done, cleanup allowed: " + order["reason"])
         return
     with db.transaction(conn):
         for qid in order["ids"]:
@@ -102,11 +104,16 @@ def apply_queue_order(conn, project: str, order: dict) -> None:
                 conn.execute("UPDATE queue SET status='ready', note=?, updated_at=? WHERE id=?", ("requeued: " + order["reason"], db.now(), qid))
 
 
-def parse_file(path: Path, project: str, conn, repo=None, ref: str = "origin/integration/all") -> tuple:
+def integration_ref(settings) -> str:
+    """The remote-tracking ref of the integration branch: <remoteName>/<integrationBranch>, by default origin/main."""
+    return str(settings.get("remoteName") or "origin") + "/" + str(settings.get("integrationBranch") or "main")
+
+
+def parse_file(path: Path, project: str, conn, repo=None, ref: str = "origin/main") -> tuple:
     """Parse and check one inbox file without writing anything; return (answers, decisions, queue orders) as lists of argument dicts.
 
-    Raises InboxError for a parse error, an unknown table or key, a wrong value, an unknown or already answered question
-    (or one of another project), a question answered twice in the same file and a queue order that cannot be carried out.
+    Raises InboxError for a parse error, an unknown table or key, a wrong value, an unknown or already answered question,
+    a question answered twice in the same file and a queue order that cannot be carried out.
     `repo` and `ref` are the git checkout and the integration ref that a withdraw order is checked against.
     """
     try:
@@ -134,8 +141,8 @@ def parse_file(path: Path, project: str, conn, repo=None, ref: str = "origin/int
         text, by = _plain_text(entry, "text", where), _plain_text(entry, "by", where)
         if by not in WHO:
             raise InboxError("%s: by must be owner or coordinator, not '%s'" % (where, by))
-        row = conn.execute("SELECT project, status FROM questions WHERE id=?", (qid,)).fetchone()
-        if row is None or row["project"] != project:
+        row = conn.execute("SELECT status FROM questions WHERE id=?", (qid,)).fetchone()
+        if row is None:
             raise InboxError("%s: unknown question %d" % (where, qid))
         if row["status"] != "open" or qid in seen:
             raise InboxError("%s: question %d is already answered" % (where, qid))
@@ -189,7 +196,7 @@ def process_inbox(env) -> dict:
     for path in files:
         try:
             answers, decisions, orders = parse_file(path, env.name, env.conn, env.settings.get("codeRepo") or env.settings.get("repo") or env.workspace,
-                                                    "origin/" + str(env.settings.get("integrationBranch") or "integration/all"))
+                                                    integration_ref(env.settings))
             for a in answers:
                 db.answer_question(env.conn, a["qid"], a["text"], a["by"])
             for d in decisions:

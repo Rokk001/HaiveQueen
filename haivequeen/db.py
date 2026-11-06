@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 12   # 12: build measurements from the RAM of the build processes (peak_mb, parallel); 11: start contexts and start benchmarks; 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
+SCHEMA_VERSION = 15   # 15: plan statuses SENT, PREPARING, QUEUED, RUNNING, WAITING, REVIEW and CANCELLED replace SUBMITTED, READY, IN_PROGRESS and REJECTED; 14: Apiaries from before the integration switches keep deploy on (projects.legacy_deploy); 13: remove the retired one-time Hive migration; 12: build measurements from the RAM of the build processes (peak_mb, parallel); 11: start contexts and start benchmarks; 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -121,14 +121,14 @@ def rebuild_queue_table(conn: sqlite3.Connection, schema_text: str) -> None:
 
 
 def rebuild_plans_table(conn: sqlite3.Connection, schema_text: str) -> None:
-    """Recreate an old plans table whose CHECK list lacks 'REJECTED' (SQLite cannot alter a CHECK); all rows and their statuses are kept, done in one transaction."""
+    """Recreate an old plans table whose CHECK list lacks 'CANCELLED' (SQLite cannot alter a CHECK); all rows are kept and old status names get their new name, done in one transaction."""
     def old_sql():
         """Return the stored CREATE statement of the plans table, or None when the table does not exist yet."""
         row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='plans'").fetchone()
         return row[0] if row else None
 
     sql = old_sql()
-    if sql is None or "'REJECTED'" in sql:
+    if sql is None or "'CANCELLED'" in sql:
         return
     match = re.search(r"CREATE TABLE IF NOT EXISTS plans \(.*?\n\);", schema_text, re.S)
     if match is None:
@@ -136,16 +136,29 @@ def rebuild_plans_table(conn: sqlite3.Connection, schema_text: str) -> None:
     conn.execute("BEGIN IMMEDIATE")
     try:
         sql = old_sql()   # another process may have migrated while this one waited for the lock
-        if sql is not None and "'REJECTED'" not in sql:
+        if sql is not None and "'CANCELLED'" not in sql:
+            from .plans import LEGACY_STATUSES
             conn.execute("ALTER TABLE plans RENAME TO plans_old")
             conn.execute(match.group(0))
-            cols = ", ".join(r[1] for r in conn.execute("PRAGMA table_info(plans_old)"))
-            conn.execute(f"INSERT INTO plans ({cols}) SELECT {cols} FROM plans_old")
+            names = [r[1] for r in conn.execute("PRAGMA table_info(plans_old)")]
+            mapped = "CASE status " + " ".join("WHEN '%s' THEN '%s'" % pair for pair in LEGACY_STATUSES.items()) + " ELSE status END"
+            cols = ", ".join(names)
+            values = ", ".join(mapped if n == "status" else n for n in names)
+            conn.execute(f"INSERT INTO plans ({cols}) SELECT {values} FROM plans_old")
             conn.execute("DROP TABLE plans_old")
     except BaseException:
         conn.execute("ROLLBACK")
         raise
     conn.execute("COMMIT")
+
+
+# Tell the Apiaries from before the integration switches from later ones.
+def mark_existing_apiaries(conn: sqlite3.Connection) -> None:
+    """Add projects.legacy_deploy to a database from before the switches and set it on every Apiary in it; in one step, so an Apiary registered later is never marked."""
+    with transaction(conn):
+        if "legacy_deploy" not in [r[1] for r in conn.execute("PRAGMA table_info(projects)")]:
+            conn.execute("ALTER TABLE projects ADD COLUMN legacy_deploy INTEGER NOT NULL DEFAULT 0")
+            conn.execute("UPDATE projects SET legacy_deploy=1")
 
 
 # Bring the database up to SCHEMA_VERSION (user_version pragma).
@@ -165,10 +178,10 @@ def migrate(conn: sqlite3.Connection) -> None:
                 except sqlite3.OperationalError as exc:   # another process added it between the check and the ALTER
                     if "duplicate column" not in str(exc):
                         raise
+        mark_existing_apiaries(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_archived ON agents (project, archived)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_kind ON providers_usage (kind, ts)")
-        if version < 7:
-            conn.execute("INSERT OR IGNORE INTO kv(project,key,value,updated_at) VALUES ('*','hives-migration','pending',?)", (now(),))
+        conn.execute("DELETE FROM kv WHERE key IN ('hives-migration','hives-migrated')")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -313,6 +326,8 @@ def answer_question(conn, qid: int, text: str, by: str, apiary: bool = False) ->
             (row["project"], now(), by, f"{row['question']} -> {text}", None if apiary else row["plan_path"], row["item"]),
         )
         add_event(conn, row["project"], "answer", text, data={"question_id": qid, "by": by})
+        from . import bees
+        bees.answer_failure_question(conn, row, by)
     return {"id": qid, "project": row["project"], "answered_by": by}
 
 

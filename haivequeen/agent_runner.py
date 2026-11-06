@@ -22,8 +22,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import buildjobs, config, db, interrupt, overview, profile, runtime, scheduler, startctx
+from . import buildjobs, config, db, interrupt, localtime, overview, profile, roles, runtime, scheduler, startctx
 from . import platform as osplat
+from .i18n import tr
 
 TOOL_ROOT = Path(__file__).resolve().parent.parent
 CLASSES = ("light", "medium", "heavy")
@@ -176,21 +177,101 @@ def executed_check_scripts(cmd, wrapped=False):
     return checks
 
 
+SHELLS = re.compile(r'(?:pwsh|powershell|bash|sh|zsh|dash|cmd)(?:\.exe)?$', re.I)
+COMMAND_PREFIXES = re.compile(r'(?:exec|command|call|time)$', re.I)
+SHELL_VALUE_FLAGS = ('-executionpolicy', '-ep', '-version', '-inputformat', '-outputformat', '-workingdirectory', '-wd', '-configurationname', '-settingsfile')
+
+
+# Split a command line into its commands, each a list of words without their quotes.
+def _shell_commands(cmd):
+    """Commands of a command line in any common shell; the separators are ; & && | || and a line end, a comment ends at the line end."""
+    commands, current = [], []
+    for token in re.findall(r'''"[^"]*"|'[^']*'|\#[^\r\n]*|&&|\|\||[;&|\n]|[^\s;&|]+''', str(cmd or '')) + [';']:
+        if token.startswith('#'):
+            continue
+        if token in (';', '&', '&&', '|', '||', '\n'):
+            if current:
+                commands.append(current)
+                current = []
+        else:
+            current.append(token[1:-1] if len(token) > 1 and token[0] in '"\'' and token[-1] == token[0] else token)
+    return commands
+
+
+# Open shell wrappers and leave out what only prepares a command.
+def _plain_commands(cmd, depth=0):
+    """The commands that really run, each as a list of words: `pwsh -Command "x"`, `bash -lc 'x'` and `cmd /c x` count as x; `env`, `FOO=1` and the like are left out."""
+    plain = []
+    for words in _shell_commands(cmd):
+        while words and (re.fullmatch(r'\w+=\S*', words[0]) or COMMAND_PREFIXES.fullmatch(words[0]) or re.split(r'[/\\]', words[0])[-1].lower() in ('env', 'env.exe')):
+            words = words[1:]
+        if not words:
+            continue
+        shell = SHELLS.fullmatch(re.split(r'[/\\]', words[0])[-1])
+        flag = next((i for i, word in enumerate(words) if i and re.fullmatch(r'(?:-(?:command|[a-z]*c)|/[ck])', word, re.I)), None) if shell else None
+        if flag is not None and flag + 1 < len(words) and depth < 3:
+            tail = words[flag + 1:]
+            plain.extend(_plain_commands(tail[0] if len(tail) == 1 else ' '.join('"%s"' % w if re.search(r'\s', w) else w for w in tail), depth + 1))
+        else:
+            plain.append(words)
+            if shell:   # `pwsh -File x.ps1` and `bash x.sh` also count as running x
+                index = 1
+                while index < len(words) and words[index][:1] in ('-', '/') and not re.match(r'/[a-zA-Z]/|/\w+/', words[index]):
+                    index += 2 if words[index].lower() in SHELL_VALUE_FLAGS else 1
+                if index < len(words):
+                    plain.append(words[index:])
+    return plain
+
+
+# Compare words of a command whatever way the shell wrote its program.
+def _same_word(a, b, program=False):
+    """True when two words are equal; a path counts in any slash form (also /c/x for C:/x); a program also without .exe and in any case."""
+    def norm(word):
+        """The comparable form of a word."""
+        word = re.sub(r'^/([a-zA-Z])/', r'\1:/', word.replace('\\', '/'))
+        if program:
+            word = re.sub(r'\.exe$', '', word, flags=re.I).casefold()
+        return word
+    return norm(a) == norm(b)
+
+
+# The compile check command that applies to a run.
+def configured_compile_check(machine, project):
+    """The setting compileCheck as the Queen and bzz ready read it: the project over the machine settings."""
+    return scheduler.build_settings(machine, project).get("compileCheck") or ""
+
+
+# Whether a command line runs the configured command.
+def runs_configured_command(cmd, configured):
+    """True when `cmd` runs the configured command in command position, in any shell, with or without further arguments; all its parts in their order when it has several."""
+    wanted = _plain_commands(configured)
+    if not wanted:
+        return False
+    position = 0
+    for words in _plain_commands(cmd):
+        want = wanted[position]
+        if len(words) >= len(want) and all(_same_word(w, x, i == 0) for i, (w, x) in enumerate(zip(words, want))):
+            position += 1
+            if position == len(wanted):
+                return True
+    return False
+
+
 # Classify requested operations while treating read and search arguments as data.
-def classify_cmd(cmd, queue_re=None):
+def classify_cmd(cmd, queue_re=None, compile_check=None):
     """Recognise a milestone command (commit, push, compile test, check, ready line, file write); returns {kind, label} or None.
 
     A call of `bzz ready` is the ready line; queue_re (optional) additionally marks writes into a legacy queue file.
     """
     cmd = str(cmd or "")
+    if compile_check and runs_configured_command(cmd, compile_check):   # first: `check && git commit` is evidence of the check; text in a search, echo or message is not
+        return {"kind": "check", "label": "Compile test"}
     if re.search(r"git\s+commit", cmd):
         m = re.search(r'-m\s+"([^"\r\n$]{3,})"', cmd) or re.search(r"-m\s+'([^'\r\n]{3,})'", cmd)
         return {"kind": "commit", "label": ("Commit: " + short(m.group(1), 100)) if m else "Commit"}
     if re.search(r"git\s+push", cmd):
         return {"kind": "push", "label": "Push"}
     checks = executed_check_scripts(cmd)
-    if any(name.lower() == 'compile-check-changed.ps1' for name in checks):
-        return {"kind": "check", "label": "Compile test"}
     if checks:
         return {"kind": "check", "label": "Check " + checks[0]}
     if re.search(r"(?:bzz|cli.py)[\"']?\s+ready(\s|$)", cmd):
@@ -467,6 +548,7 @@ class AgentRun:
         self.plan, self.package, self.phase = plan, package, phase
         self.out = out or sys.stdout
         self.queue_re, self.sessions = queue_re, sessions
+        self.compile_check = None
         self.thread = ""
         self.tin, self.tout = (None, None) if protocol == "codex" else (0, 0)   # Codex reports its token totals only in the session log
         self.ctx = 0
@@ -496,7 +578,7 @@ class AgentRun:
         text = str(text)
         if len(text) > 1500:
             text = text[:1500] + "..."
-        ts = datetime.now().strftime("%H:%M") + " "
+        ts = localtime.time(datetime.now()) + " "
         try:
             with open(str(self.ms_file), "ab") as handle:
                 handle.write((colour + "\t" + ts + " ".join(text.split()) + "\n").encode("utf-8"))
@@ -680,7 +762,7 @@ class AgentRun:
                         elif fp:
                             self.say("changed: " + self.rel_path(fp), "Cyan")
                     elif c.get("name") in ("Bash", "PowerShell"):
-                        info = classify_cmd(str(inp.get("command") or ""), self.queue_re)
+                        info = classify_cmd(str(inp.get("command") or ""), self.queue_re, self.compile_check)
                         if info:
                             if info["kind"] == "edit":
                                 self.say(info["label"], "Cyan")
@@ -722,6 +804,15 @@ class AgentRun:
                 self.say(text, "White")
         elif et == "tool_use":
             self.last = "tool: " + str(part.get("tool"))
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            command = (state.get("input") or {}).get("command") if isinstance(state.get("input"), dict) else None
+            if command and state.get("status") in ("completed", "error"):
+                info = classify_cmd(str(command), self.queue_re, self.compile_check)
+                if info and info["kind"] == "edit":
+                    self.say(info["label"], "Cyan")
+                elif info:
+                    metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+                    self.say_result(info, str(state.get("output") or state.get("error") or ""), metadata.get("exit"), state.get("status") == "error")
         elif et == "step_finish":
             tokens = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
             cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
@@ -754,7 +845,7 @@ class AgentRun:
                     self.say(self.final, "White")
             elif it == "command_execution":
                 self.last = "cmd: " + short(item.get("command"))
-                info = classify_cmd(str(item.get("command") or ""), self.queue_re)
+                info = classify_cmd(str(item.get("command") or ""), self.queue_re, self.compile_check)
                 if info:
                     if info["kind"] == "edit":
                         self.say(info["label"], "Cyan")
@@ -788,7 +879,7 @@ class AgentRun:
         if not w:
             return
         try:
-            runtime.kv_set(self.conn, "*", "usage-claude", json.dumps({"saved": datetime.now().isoformat(), "fiveHour": w.get("five_hour"), "sevenDay": w.get("seven_day")}))
+            runtime.kv_set(self.conn, "*", "usage-claude:" + str(self.provider), json.dumps({"saved": datetime.now().isoformat(), "fiveHour": w.get("five_hour"), "sevenDay": w.get("seven_day")}))
         except Exception:
             pass
 
@@ -831,6 +922,56 @@ def approx_start_parts(a, pcfg, cfg, workspace, protocol, message=""):
         return {}
 
 
+# Find the one branch a Queen may register as ready or change in the queue.
+def queen_branch(conn, cfg, project, plan, cwd, integration_branch):
+    """The branch the plan (or its state file) names, else the branch checked out in the Queen's worktree;
+    None when neither is known or it is the integration branch."""
+    branch = None
+    try:
+        from . import bees
+        env = next((e for e in scheduler.load_projects(conn, cfg) if e.name == project), None)
+        named = bees.plan_worktree(env, plan) if env is not None else None
+        branch = named[0] if named else None
+    except Exception:
+        branch = None
+    if not branch and cwd:
+        try:
+            done = subprocess.run(["git", "-C", str(cwd), "symbolic-ref", "--quiet", "--short", "HEAD"],
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+            branch = done.stdout.strip() if done.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            branch = None
+    if not branch or branch == str(integration_branch):
+        return None
+    return branch
+
+
+# Look the Queen's plan branch up again for the own-Hive hook (the branch may be created after the start).
+def queen_branch_now(project, plan, name, integration_branch):
+    """The branch queen_branch finds now, with the worktree the Queen recorded as her cwd; None when it is
+    unknown, the integration branch, or a queue entry or an active agent of another plan in the same worktree
+    gives it to another plan."""
+    same_plan = lambda value: not value or Path(str(value)).as_posix() == Path(str(plan)).as_posix()
+    same_dir = lambda left, right: bool(left and right) and os.path.normcase(os.path.abspath(str(left))) == os.path.normcase(os.path.abspath(str(right)))
+    cfg = config.load_config()
+    conn = db.connect(config.db_path())
+    try:
+        row = runtime.get_agent(conn, project, name)
+        if not row or row.get("archived") or not same_plan(row.get("plan_path") or row.get("plan")):
+            return None
+        branch = queen_branch(conn, cfg, project, plan, row.get("cwd"), integration_branch or "main")
+        if not branch:
+            return None
+        if any(not same_plan(entry[0]) for entry in conn.execute("SELECT plan_path FROM queue WHERE project=? AND branch=?", (project, branch))):
+            return None
+        for other in conn.execute("SELECT plan_path, cwd FROM agents WHERE project=? AND archived=0 AND name<>?", (project, name)):
+            if same_dir(other[1], row.get("cwd")) and not same_plan(other[0]):
+                return None
+        return branch
+    finally:
+        conn.close()
+
+
 # Run one agent, rejecting empty Claude tool arguments before starting its CLI.
 def run_agent(a, out=None):
     """Run one agent as described by the parsed arguments; returns 0 (the status is in the agents table)."""
@@ -859,6 +1000,7 @@ def run_agent(a, out=None):
     queue_name = pcfg.get("integrationStateFile")
     queue_re = re.escape(Path(str(queue_name)).stem) if queue_name else None
     run = AgentRun(conn, a.project, a.name, a.provider, protocol, a.cwd, run_dir, a.plan, a.package, a.phase, out, queue_re)
+    run.compile_check = configured_compile_check(cfg, pcfg)
     run.format = prov["format"]
     run.context_limit = scheduler.context_limit({"contextLimitTokens": CONTEXT_LIMIT, **scheduler.build_settings(cfg, pcfg)}, [{**prov, "name": a.provider}], a.provider, cls)
     run.model = model_label(model)
@@ -906,11 +1048,49 @@ def run_agent(a, out=None):
             raise ValueError("claudeTools missing")
         if not profile.prepare(prov):
             if not runtime.list_questions(conn, a.project, status="open", plan=a.plan, item=a.package or "profile"):
+                language = roles.language(scheduler.build_settings(cfg, pcfg))
                 db.add_question(conn, a.project, a.plan, a.package or "profile",
-                                "Provider %s (protocol %s) cannot be kept to the HaiveQueen profile, so it would read private files. This package is stopped. Which provider may run it?" % (a.provider, protocol),
-                                "Give the package to a provider that can be kept to the profile.")
+                                tr("Provider %s (protocol %s) cannot be kept to the HaiveQueen profile, so it would read private files. This package is stopped. Which provider may run it?", a.provider, protocol, language=language),
+                                tr("Give the package to a provider that can be kept to the profile.", language=language))
             raise ValueError("provider %s cannot be kept to the HaiveQueen profile" % a.provider)
         arg_list = build_args(prov, vars_)
+        if protocol == "claude" and a.phase == "queen" and a.plan:
+            settings = scheduler.build_settings(cfg, pcfg)
+            grants = profile.claude_integration_permissions(a.project, a.plan, settings.get("remoteName") or "origin",
+                                                             settings.get("integrationBranch") or "main", osplat.python_executable(),
+                                                             TOOL_ROOT / "haivequeen" / "cli.py")
+            permissions_file = run_dir / "claude-integration-settings.json"
+            provider_settings = {}
+            settings_args = [i for i, arg in enumerate(arg_list) if arg == "--settings" or arg.startswith("--settings=")]
+            if len(settings_args) > 1:
+                raise ValueError("multiple Claude --settings arguments cannot be merged")
+            if settings_args:
+                i = settings_args[0]
+                if arg_list[i] == "--settings":
+                    if i + 1 >= len(arg_list):
+                        raise ValueError("Claude --settings requires a value")
+                    raw = arg_list[i + 1]
+                    del arg_list[i:i + 2]
+                else:
+                    raw = arg_list.pop(i).split("=", 1)[1]
+                if raw.lstrip().startswith("{"):
+                    provider_settings = json.loads(raw)
+                else:
+                    path = Path(raw)
+                    if not path.is_absolute():
+                        path = Path(a.cwd) / path
+                    provider_settings = json.loads(path.read_text(encoding="utf-8"))
+            policy_file = run_dir / "claude-hive-policy.json"
+            integration_branch = settings.get("integrationBranch") or "main"
+            policy = profile.claude_hook_policy(a.project, a.plan, agent_row["id"] if agent_row else None,
+                                                settings.get("remoteName") or "origin", integration_branch,
+                                                osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py",
+                                                queen_branch(conn, cfg, a.project, a.plan, a.cwd, integration_branch), a.name)
+            policy_file.write_text(json.dumps(policy, indent=1) + "\n", encoding="utf-8")
+            hook = profile.claude_hook_command(osplat.python_executable(), TOOL_ROOT / "haivequeen" / "claude_hook.py", policy_file)
+            merged = profile.claude_merge_run_settings(provider_settings, grants, hook)
+            permissions_file.write_text(json.dumps(merged, indent=1) + "\n", encoding="utf-8")
+            arg_list.extend(["--settings", str(permissions_file)])
         if a.phase == "bee" and protocol == "claude":
             if "--setting-sources" in arg_list:
                 i = arg_list.index("--setting-sources")

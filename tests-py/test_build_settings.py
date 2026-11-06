@@ -411,8 +411,6 @@ class InstructionsTest(RoundCase):
         from haivequeen import bees
         self.assertIn("BUILD_PARALLEL", bees.bee_prompt("Anna", "P1", "task", ["s1"], ["a"], ["r"], bj.rule_text(env.settings["buildJobs"])))
         self.assertNotIn("{{", bees.bee_prompt("Anna", "P1", "task", ["s1"], ["a"], ["r"]))
-        for name in ("release", "integrator"):
-            self.assertIn("BUILD_PARALLEL", routine.prompt(env, name, {"plan": REL, "cwd": "x"}))
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")

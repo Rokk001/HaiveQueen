@@ -90,7 +90,7 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(ar.classify_cmd("git commit -m 'Other thing'")["label"], "Commit: Other thing")
         self.assertEqual(ar.classify_cmd("git commit")["label"], "Commit")
         self.assertEqual(ar.classify_cmd("git push origin x")["kind"], "push")
-        self.assertEqual(ar.classify_cmd("pwsh scripts/compile-check-changed.ps1")["label"], "Compile test")
+        self.assertEqual(ar.classify_cmd("pwsh scripts/compile-check-changed.ps1", compile_check="pwsh scripts/compile-check-changed.ps1")["label"], "Compile test")
         self.assertEqual(ar.classify_cmd("python check-leaks.py")["label"], "Check check-leaks.py")
         self.assertEqual(ar.classify_cmd("python -I haivequeen/cli.py ready --branch x")["kind"], "ready")
         self.assertEqual(ar.classify_cmd("echo hi >> QUEUE.md", "QUEUE")["kind"], "ready")
@@ -277,6 +277,123 @@ class RunnerBase(unittest.TestCase):
 class ClaudeRunTest(RunnerBase):
     """A full run with a fake Claude stream."""
 
+    def test_queen_merges_provider_settings_file(self):
+        cfg = self.base / "cfg" / "config.toml"
+        own_hook = {"matcher": "Bash", "hooks": [{"type": "command", "command": "provider-hook"}]}
+        (self.ws / "custom.json").write_text(json.dumps({"model": "chosen", "permissions": {"allow": ["Bash(existing)"], "deny": ["Bash(no)"]},
+                                                         "hooks": {"PreToolUse": [own_hook]}}), encoding="utf-8")
+        cfg.write_text(cfg.read_text(encoding="utf-8").replace("args = ['--model'", "args = ['--settings', 'custom.json', '--model'", 1), encoding="utf-8")
+        self.prepare("QUEEN-MERGE")
+        r = self.run_runner("QUEEN-MERGE", "claude", claude_stream(), phase="queen")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        argv = self.record()["argv"]
+        self.assertEqual(argv.count("--settings"), 1)
+        settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text(encoding="utf-8"))
+        self.assertEqual(settings["model"], "chosen")
+        self.assertIn("Bash(existing)", settings["permissions"]["allow"])
+        self.assertIn("Bash(git push origin HEAD:main)", settings["permissions"]["allow"])
+        self.assertEqual(settings["permissions"]["deny"], ["Bash(no)"])
+        self.assertEqual(settings["hooks"]["PreToolUse"][0], own_hook)
+        self.assertIn("claude_hook.py", settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"])
+
+    def test_queen_receives_per_run_integration_settings(self):
+        (self.ws / ".haivequeen").mkdir()
+        (self.ws / ".haivequeen" / "project.toml").write_text("integrationBranch = 'release/next'\nremoteName = 'upstream'\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.ws), "init", "-q", "-b", "demo-branch"], check=True, capture_output=True)
+        self.prepare("QUEEN-RULES")
+        r = self.run_runner("QUEEN-RULES", "claude", claude_stream(), phase="queen")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        argv = self.record()["argv"]
+        settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text(encoding="utf-8"))
+        rules = settings["permissions"]["allow"]
+        self.assertIn("Bash(git push upstream HEAD:release/next)", rules)
+        self.assertIn("PowerShell(bzz integration acquire --project demo --plan plans/Demo-PLAN.md)", rules)
+        self.assertFalse(any("*" in rule for rule in rules))
+        pre = settings["hooks"]["PreToolUse"]
+        self.assertEqual(len(pre), 1)
+        self.assertEqual(pre[0]["matcher"], "Bash|PowerShell")
+        command = pre[0]["hooks"][0]["command"]
+        self.assertIn("claude_hook.py", command)
+        policy_path = Path(argv[argv.index("--settings") + 1]).parent / "claude-hive-policy.json"
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        self.assertEqual((policy["project"], policy["plan"], policy["remote"], policy["integrationBranch"]),
+                         ("demo", "plans/Demo-PLAN.md", "upstream", "release/next"))
+        self.assertEqual(policy["agent"], self.row("QUEEN-RULES")["id"])
+        self.assertEqual(policy["branch"], "demo-branch")
+        for text, allowed in (("bzz queue upsert --project demo --plan plans/Demo-PLAN.md --branch demo-branch --status ready", True),
+                              ("bzz queue upsert --project demo --branch demo-branch --status in_run", True),
+                              ("bzz queue upsert --project demo --plan plans/Demo-PLAN.md --branch demo --status ready", False),
+                              ("bzz queue upsert --project other --plan plans/Demo-PLAN.md --branch demo-branch", False)):
+            event = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": text}})
+            done = subprocess.run(command, shell=True, input=event, capture_output=True, text=True, timeout=60)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual('"allow"' in done.stdout, allowed, text)
+
+    def queen_policy(self, name):
+        """Run a Queen and return the own-Hive hook policy written for it."""
+        self.prepare(name)
+        r = self.run_runner(name, "claude", claude_stream(), phase="queen")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        argv = self.record()["argv"]
+        return json.loads((Path(argv[argv.index("--settings") + 1]).parent / "claude-hive-policy.json").read_text(encoding="utf-8"))
+
+    def test_queen_on_integration_branch_gets_no_branch_scope(self):
+        subprocess.run(["git", "-C", str(self.ws), "init", "-q", "-b", "main"], check=True, capture_output=True)
+        self.assertIsNone(self.queen_policy("QUEEN-MAIN")["branch"])
+
+    def test_queen_branch_named_by_plan_wins_over_cwd_branch(self):
+        (self.ws / "plans").mkdir()
+        (self.ws / "plans" / "Demo-PLAN.md").write_text("# Demo\n- Feature branch: `demo-plan`\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.ws), "init", "-q", "-b", "other-work"], check=True, capture_output=True)
+        self.assertEqual(self.queen_policy("QUEEN-NAMED")["branch"], "demo-plan")
+
+    def hook_allows(self, name, text, tool="Bash"):
+        """Run the generated own-Hive hook of a Queen run for one command; True when it allows it."""
+        settings = json.loads((self.runs / name / "claude-integration-settings.json").read_text(encoding="utf-8"))
+        command = settings["hooks"]["PreToolUse"][-1]["hooks"][0]["command"]
+        event = json.dumps({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"command": text}})
+        done = subprocess.run(command, shell=True, input=event, capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return '"allow"' in done.stdout
+
+    def test_hook_recognizes_plan_branch_created_after_start(self):
+        git = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(self.ws)] + list(args),
+                                           check=True, capture_output=True)
+        git("init", "-q", "-b", "main")
+        git("commit", "-q", "--allow-empty", "-m", "base")
+        policy = self.queen_policy("QUEEN-LATE")
+        self.assertIsNone(policy["branch"])
+        self.assertEqual(policy["name"], "QUEEN-LATE")
+        ready = "bzz ready --project demo --branch late-plan --tip abc123 --plan plans/Demo-PLAN.md"
+        in_run = "bzz queue upsert --project demo --branch late-plan --status in_run"
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready))   # not created yet
+        worktree = self.base / "late-wt"
+        git("worktree", "add", "-q", "-b", "late-plan", str(worktree))
+        record = "bzz agents update-fields --project demo --name QUEEN-LATE --fields '{\"cwd\": \"%s\"}'" % worktree.as_posix()
+        self.assertTrue(self.hook_allows("QUEEN-LATE", record))
+        self.assertTrue(self.hook_allows("QUEEN-LATE", record, "PowerShell"))
+        by_cwd = "bzz agents update-fields --project demo --name QUEEN-LATE --cwd '%s'" % worktree
+        self.assertTrue(self.hook_allows("QUEEN-LATE", by_cwd))
+        self.assertTrue(self.hook_allows("QUEEN-LATE", by_cwd, "PowerShell"))
+        self.assertFalse(self.hook_allows("QUEEN-LATE", record.replace("QUEEN-LATE", "QUEEN-OTHER")))
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready))   # the worktree is not recorded yet
+        runtime.upsert_agent(self.conn, "demo", "QUEEN-LATE", {"cwd": str(worktree)}, create=False)
+        self.assertTrue(self.hook_allows("QUEEN-LATE", ready))
+        self.assertTrue(self.hook_allows("QUEEN-LATE", in_run))
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready.replace("late-plan", "main")))
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready.replace("late-plan", "other-plan")))
+        runtime.upsert_agent(self.conn, "demo", "QUEEN-OTHER", {"cwd": str(worktree), "plan": "plans/Other-PLAN.md", "status": "running"})
+        self.assertEqual(self.row("QUEEN-OTHER")["plan_path"], "plans/Other-PLAN.md")
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready))   # the worktree belongs to another plan's agent
+        runtime.upsert_agent(self.conn, "demo", "QUEEN-OTHER", {"cwd": str(self.ws)}, create=False)
+        self.assertTrue(self.hook_allows("QUEEN-LATE", ready))
+        runtime.queue_upsert(self.conn, "demo", "late-plan", plan="plans/Other-PLAN.md", status="ready")
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready))   # the branch belongs to another plan
+        (self.ws / "plans").mkdir()
+        (self.ws / "plans" / "Demo-PLAN.md").write_text("# Demo\n", encoding="utf-8")
+        (self.ws / "plans" / "Demo-STATE.md").write_text("Plan: Demo; branch state-plan; started\n", encoding="utf-8")
+        self.assertTrue(self.hook_allows("QUEEN-LATE", ready.replace("late-plan", "state-plan")))
+
     # Verify the project default reaches the Claude CLI.
     def test_default_claude_tools_reach_cli(self):
         """A project without claudeTools passes the default tool list to Claude."""
@@ -343,7 +460,7 @@ class ClaudeRunTest(RunnerBase):
         self.assertIn("End: done (exit 0)", ms)
         self.assertEqual(len((run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()), 7)   # raw stream incl. the non-JSON line
         self.assertIn("fake stderr line", (run_dir / "stderr.txt").read_text(encoding="utf-8"))
-        usage = json.loads(runtime.kv_get(self.conn, "*", "usage-claude"))
+        usage = json.loads(runtime.kv_get(self.conn, "*", "usage-claude:claude"))
         self.assertEqual(usage["fiveHour"]["utilization"], 0.4)
         self.assertFalse((run_dir / "HANDOFF").exists())
         rec = self.record()
@@ -362,7 +479,7 @@ class ClaudeRunTest(RunnerBase):
         self.prepare("A-2")
         self.run_runner("A-2", "claude", claude_stream())
         self.assertEqual(self.row("A-2")["task"], "Do the demo task now")
-        self.conn.execute("INSERT INTO plans (project, path, title, status) VALUES ('demo','plans/Demo-PLAN.md','Demo','READY')")
+        self.conn.execute("INSERT INTO plans (project, path, title, status) VALUES ('demo','plans/Demo-PLAN.md','Demo','QUEUED')")
         self.conn.execute("INSERT INTO packages (project, plan_path, id, title, phase, locked) VALUES ('demo','plans/Demo-PLAN.md','P1','Build the thing','work',0)")
         self.prepare("A-3")
         self.run_runner("A-3", "claude", claude_stream())

@@ -206,6 +206,87 @@ def kv_set(conn, project, key, value) -> None:
             (project, key, value, db.now()))
 
 
+CUT_KEY = "cut-verification:"   # + plan path: the requirement/verify pairs of the accepted cut, its plan generation and plan title
+CUT_RESET_KEY = "cut-reset:"     # + plan path: when the owner or a reused path started a new plan generation
+
+
+def plan_identity(text):
+    """The plan title (first heading, spaces folded): with the generation of the path it tells an edited plan from another plan."""
+    return re.sub(r"\s+", " ", plan_mod.parse_plan_text(str(text or "")).title).strip()
+
+
+def _cut_record(value):
+    """The stored cut record as a dict, or None when it is missing or not a record of this format."""
+    try:
+        record = json.loads(value) if value is not None else None
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(record, dict) or not isinstance(record.get("generation"), str) or not isinstance(record.get("title"), str):
+        return None
+    pairs = record.get("pairs")
+    if not isinstance(pairs, list) or not all(isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) for p in pairs):
+        return None
+    return record
+
+
+def _generation(conn, project, plan):
+    """The current plan generation of a path: the time of its last reset, '' before any."""
+    return kv_get(conn, project, CUT_RESET_KEY + plan) or ""
+
+
+def cut_assignments(conn, project, plan, plan_text):
+    """The requirement/verify pairs of the accepted cut of this plan generation, or None when there is no trustworthy record
+    (an older plan, a reused path, or another plan title at this path). Edits of the plan text and later requirements keep the
+    record: requirements added after the cut have no pair and so need evidence (H-27)."""
+    record = _cut_record(kv_get(conn, project, CUT_KEY + plan))
+    if record is None or record["generation"] != _generation(conn, project, plan) or record["title"] != plan_identity(plan_text):
+        return None
+    return record["pairs"]
+
+
+def _write_cut(conn, project, plan, packages, plan_text, source, replace):
+    """Inside a transaction: store the cut unless a record of this format exists and replace is False; returns True when stored."""
+    if not replace and _cut_record(kv_get(conn, project, CUT_KEY + plan)) is not None:
+        return False
+    record = {"pairs": [[rid, pkg.verify] for pkg in packages for rid in pkg.requirements], "generation": _generation(conn, project, plan),
+              "title": plan_identity(plan_text), "source": source, "at": db.now()}
+    conn.execute("INSERT INTO kv (project, key, value, updated_at) VALUES (?,?,?,?) ON CONFLICT(project, key) DO UPDATE SET "
+                 "value=excluded.value, updated_at=excluded.updated_at", (project, CUT_KEY + plan, json.dumps(record), db.now()))
+    return True
+
+
+def save_cut_assignments(conn, project, plan, packages, plan_text, source="check", replace=False):
+    """Preserve the accepted cut of a plan generation; a later check of the same generation cannot change it (replace only for a
+    cut the owner starts). Returns True when the record was written."""
+    with db.transaction(conn):
+        return _write_cut(conn, project, plan, packages, plan_text, source, replace)
+
+
+def _reset_cut(conn, project, plan):
+    """Inside a transaction: a new plan generation starts at this path; the old cut record no longer applies."""
+    conn.execute("DELETE FROM kv WHERE project=? AND key=?", (project, CUT_KEY + plan))
+    conn.execute("INSERT INTO kv (project, key, value, updated_at) VALUES (?,?,?,?) ON CONFLICT(project, key) DO UPDATE SET "
+                 "value=excluded.value, updated_at=excluded.updated_at", (project, CUT_RESET_KEY + plan, db.now(), db.now()))
+
+
+def reset_cut_assignments(conn, project, plan):
+    """Start a new plan generation at this path (owner rejects or redrafts the plan)."""
+    with db.transaction(conn):
+        _reset_cut(conn, project, plan)
+
+
+def _recover_cut(conn, project, plan, plan_text):
+    """Inside a transaction: an older QUEUED plan without a cut record gets its current header as record only when no Queen or
+    Bee of this generation has started yet, so no agent can have changed the header after the owner wrote it."""
+    if _cut_record(kv_get(conn, project, CUT_KEY + plan)) is not None:
+        return False
+    since = kv_get(conn, project, CUT_RESET_KEY + plan) or ""
+    if conn.execute("SELECT 1 FROM agents WHERE project=? AND plan_path=? AND (started_at IS NULL OR started_at>=?) LIMIT 1",
+                    (project, plan, since)).fetchone():
+        return False
+    return _write_cut(conn, project, plan, plan_mod.parse_plan_text(plan_text).packages, plan_text, "unworked", False)
+
+
 def kv_delete(conn, project, key) -> int:
     """Delete a key; returns the number of deleted rows."""
     with db.transaction(conn):
@@ -336,6 +417,14 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
     with db.transaction(conn):
         for plan in found:
             rel = os.path.relpath(plan.path, ws).replace("\\", "/")
+            before = conn.execute("SELECT status FROM plans WHERE project=? AND path=?", (project, rel)).fetchone()
+            if before is not None and before[0] == "DONE" and plan.status != "DONE":
+                _reset_cut(conn, project, rel)   # a finished plan's path is used again: a new plan generation
+            if plan.status == "QUEUED":
+                try:
+                    _recover_cut(conn, project, rel, Path(plan.path).read_text(encoding="utf-8-sig"))
+                except OSError:
+                    pass
             conn.execute(
                 "INSERT INTO plans (project, path, title, status, updated_at) VALUES (?,?,?,?,?) "
                 "ON CONFLICT(project, path) DO UPDATE SET title=excluded.title, status=excluded.status, "
@@ -349,8 +438,9 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
                     "capability=excluded.capability, verify=excluded.verify, depends_on=excluded.depends_on",
                     (project, rel, pkg.id, pkg.title, pkg.cls, pkg.agent, pkg.capability, pkg.verify,
                      json.dumps(pkg.depends_on)))
-            conn.execute(f"DELETE FROM packages WHERE project=? AND plan_path=? AND id NOT IN ({','.join('?' * len(ids)) or 'NULL'})",
-                         [project, rel] + ids)
+            kept = ids + list(plan_mod.STEP_PACKAGES.values())   # step packages are not in the plan file
+            conn.execute(f"DELETE FROM packages WHERE project=? AND plan_path=? AND id NOT IN ({','.join('?' * len(kept))})",
+                         [project, rel] + kept)
             state = {r["id"]: r for r in conn.execute(
                 "SELECT id, phase, locked FROM packages WHERE project=? AND plan_path=?", (project, rel))}
             done = {i for i, r in state.items() if r["phase"] == "done"} | set(extra_done)
@@ -402,8 +492,9 @@ def set_package(conn, project, plan, pid, phase=None, locked=None, reason=None) 
 
 
 def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
-    """Set a plan status in the table and in the plan file (front matter 'status =' line or the v1 'Status:' line 2)."""
+    """Set a plan status in the table and in the plan file (front matter 'status =' line or the v1 'Status:' line 2); an old status name is taken as its new name."""
     status = status.strip().upper()
+    status = plan_mod.LEGACY_STATUSES.get(status, status)
     if status not in plan_mod.STATUSES:
         raise CmdError(f"unknown status {status}")
     path = _workspace(conn, project, workspace) / plan
@@ -442,6 +533,11 @@ def queue_upsert(conn, project, branch, tip=None, plan=None, status=None, note=N
     with db.transaction(conn):
         row = conn.execute("SELECT * FROM queue WHERE project=? AND branch=? ORDER BY id DESC LIMIT 1",
                            (project, branch)).fetchone()
+        switching = status == "integrated" and (row is None or row["status"] != "integrated" or (tip is not None and tip != row["tip"]))
+        enabled = None
+        if switching:
+            from . import publish
+            enabled = publish.observe_integration_switch(conn, project)
         if row is not None and not (row["status"] == "integrated" and tip is not None and tip != row["tip"]):
             vals = {"tip": tip, "plan_path": plan, "status": status, "note": note, "run": run}
             sets = [f"{k}=?" for k, v in vals.items() if v is not None] + ["updated_at=?"]
@@ -452,6 +548,8 @@ def queue_upsert(conn, project, branch, tip=None, plan=None, status=None, note=N
             qid = conn.execute(
                 "INSERT INTO queue (project, branch, tip, plan_path, status, note, run, updated_at) VALUES (?,?,?,?,?,?,?,?)",
                 (project, branch, tip, plan, status or "ready", note, run, db.now())).lastrowid
+        if switching and enabled is False:
+            publish.exclude_integration(conn, project, qid)
         return dict(conn.execute("SELECT * FROM queue WHERE id=?", (qid,)).fetchone())
 
 

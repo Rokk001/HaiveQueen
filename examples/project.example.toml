@@ -1,6 +1,18 @@
 # Project settings: <project>\.haivequeen\project.toml
 name = "example"
 colour = "cyan"
+compileCheckEnabled = true        # integration steps that run; an Apiary file without these keys keeps all three on
+buildEnabled = true
+deployEnabled = false
+integrationBranch = "main"
+remoteName = "origin"
+worktreeLocation = ""             # folder of new worktrees (relative: from the repository); empty = beside the repository
+deleteFinishedWorktrees = true    # remove worktrees whose commits are integrated
+publishReleases = false     # HaiveQueen publishes a GitHub release at each integration (only for a remote on GitHub)
+nextVersion = ""             # the next version for a bigger step, e.g. "2.1.0"; empty: the last digit counts up
+deleteIntegratedBranches = false  # delete the plan branch and its sub-branches, local and remote, after the plan is integrated
+ownerTopics = []                  # topics whose questions always go to the owner, e.g. ["pricing", "public wording"]
+ownerCheckText = ""               # the owner-check question after integration; empty = "Check the integrated result" in the language setting
 priority = 0                      # higher gets a free slot first
 claudeTools = "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop"
 planGlobs = ["docs/plans/*.md"]

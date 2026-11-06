@@ -101,15 +101,15 @@ class SelectTest(unittest.TestCase):
 
     def test_needs_and_endpoint(self):
         """Capabilities from the plan header or the rules; endpoint arguments for the codex CLI."""
-        self.assertIn("images", sch.package_needs({}, "Blender models and textures"))
+        self.assertIn("Image generation", sch.package_needs({}, "Blender models and textures"))
         self.assertEqual(sch.package_needs({}, "Change the parser"), [])
         rules = {"capabilityRules": [{"capability": "voice", "patterns": [r"(?i)\bnarration\b"]}]}
         self.assertIn("voice", sch.package_needs(rules, "Record the narration"))
         self.assertEqual(sch.package_needs(rules, "Blender models"), [])
-        self.assertIn("images", sch.package_needs({}, "Draw the logo", "images"))
+        self.assertIn("Image generation", sch.package_needs({}, "Draw the logo", "images"))
         self.assertEqual(sch.package_needs({}, "Blender models and textures", "voice"), ["voice"])
-        self.assertEqual(sch.package_needs({}, "Draw the logo", "images, voice"), ["images", "voice"])
-        self.assertIn("images", sch.package_needs({}, "Blender models and textures", ""))
+        self.assertEqual(sch.package_needs({}, "Draw the logo", "images, voice"), ["Image generation", "voice"])
+        self.assertIn("Image generation", sch.package_needs({}, "Blender models and textures", ""))
         lm = {"name": "lmstudio", "protocol": "codex", "slots": 1, "classes": {"light": {"model": "qwen-coder", "effort": "medium"}},
               "endpoint": {"baseUrl": "http://192.0.2.10:1234/v1"}}
         ea = sch.endpoint_args(sch.get_providers(settings(lm))[0])

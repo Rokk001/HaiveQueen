@@ -10,11 +10,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, db, profile, runtime
+from . import config, db, plans, profile, runtime
 from . import platform as osplat
+from . import localtime
+from .i18n import tr
 
 CLASS_NAMES = ("light", "medium", "heavy")
-USES = ("preferred", "fallback", "capability-only")
+USES = ("preferred", "fallback")
 BEE_MODES = ("subagent", "process")   # how the Queen of a provider runs her Bees: embedded subagents or separate agent processes
 GLOBAL = "*"   # project value of machine-wide kv rows
 ACTIVE = ("running", "starting")
@@ -22,26 +24,18 @@ ACTIVE = ("running", "starting")
 # Prompt templates of the agents the routine starts itself (placeholders {name}, see expand_template). A project may replace any of them
 # in the [prompts] table of its project.toml.
 DEFAULT_PROMPTS = {
-    "fixBlocked": "Plan: {plan}. The integrator blocked branch {branch} (tip {tip}). Fix exactly what the queue row says (integration queue of project {project}, row of {branch}): {status} Work in the worktree {cwd} on that branch, run {compileCheck} until exit 0 and the check scripts of the changed files, push normally and register the branch again with bzz ready (new tip, note 'Kompiliertest: Exit 0'). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the fix is finished.",
-    "fixBlockedNoPlan": "The integrator blocked branch {branch} (tip {tip}) and the queue row has no plan. The row says: {status} The main checkout ({cwd}) stays on {integrationBranch} and is never edited: create your own worktree for that branch next to it ({newWorktree}), fix exactly what the row says, run {compileCheck} until exit 0 and the check scripts of the changed files, push normally and register the branch again with bzz ready (new tip, note 'Kompiliertest: Exit 0'). Follow all rules in section 1 of AGENT-RULES.md, end when the fix is finished.",
     "answeredQuestion": "Plan: {plan}, item {item} (question {qid}). {owner} answered: {answer} Implement exactly this answer. {where} Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the item is finished.",
     "verifyOpenWork": "Plan: {plan}, package {pkg}. The independent verification {verifier} answered that requirements are open (answer: {answerPath}). Implement exactly the open requirements it lists, nothing else, and nothing the plan leaves to {owner}. Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state with evidence per requirement, end when all of them are done.",
     "restartWork": "Plan: {plan}, package {pkg}. The previous work agent {previous} never got a pane (technical failure of the window); start the package again from the plan (what is already done stays done). Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the package is finished.",
-    "workInMainCheckout": "The main checkout ({cwd}) stays on {integrationBranch} and is never edited. Work in your own worktree next to it ({newWorktree}) on a new sub-branch named {subBranch} of the feature branch that the plan names (create the feature branch from origin/{integrationBranch} if it does not exist, merge your sub-branch back into it locally when the package is finished).",
     "workInWorktree": "Work in the worktree {cwd} and the branch the plan names for this package (never invent them).",
-    "release": "Release of the branch of plan {plan} (worktree {cwd}): merge origin/{integrationBranch} (keep both sides of every conflict), run {compileCheck} until exit 0, run the check scripts for the changed files, push normally and register the branch with bzz ready (note 'Kompiliertest: Exit 0'; {buildFlowDoc} rules 3-5). {buildRules} Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the release is finished.",
-    "integrator": "You are the integrator. Follow {integratorInstructions} and {buildFlowDoc}: read the ready rows of the integration queue (bzz queue --project {project}), merge them, one Release build, check scripts, load test, push {integrationBranch}, deploy, set the rows to integrated (bzz queue upsert). {buildRules} Follow all rules in section 1 of AGENT-RULES.md.",
     "interruptedWork": "Plan: {plan}, package {pkg}. The previous work agent {previous} was interrupted (laptop sleep, network or API problem, or its process vanished), not finished. Continue exactly where it stopped: the work already in the worktree is kept, what is already done stays done. Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the package is finished.",
     "unfinishedWork": "Plan: {plan}, package {pkg}. The previous work agent {previous} ended without a new commit on its branch, so the package is not finished. Read its report ({answerPath}) and the handoff in the plan's state file, continue exactly where it stopped, commit your work and do not repeat what is already done. Work in {cwd} (the main checkout is never edited: use your own worktree on a sub-branch of the plan's feature branch when code changes). Follow all rules in section 1 of AGENT-RULES.md, update the plan's state, end when the package is finished.",
-    "lockQuestion": "{marker} - {tag}\n\nPackage {pkg} is locked: the checks repeatedly reported open items, also after the attempt with a higher class. Last check ({agent}): {text}\n\nQuestion: How should the package continue (other approach, change the requirement, check in the game)? Recommendation: {owner} decides after seeing the open items.",
 }
 
 # Settings every project gets; machine config.toml and project.toml overlay them (project over machine over these defaults).
 DEFAULT_SETTINGS = {
     "owner": "Owner",
-    "openMarker": "Open for Owner",
     "hives": 2,
-    "preferredProvider": "",
     "excludedProviders": [],
     "queenClass": "medium",
     "beesPerQueen": 3,
@@ -52,7 +46,17 @@ DEFAULT_SETTINGS = {
     "rateLimitWaitMinutes": 15,   # wait after a rate limit when no reset time of the limited provider is known
     "contextLimitTokens": 300000,
     "integrationBranch": "main",
+    "remoteName": "origin",
+    "worktreeLocation": "",
+    "ownerTopics": [],
     "compileCheck": "",
+    "compileCheckEnabled": True,
+    "buildEnabled": True,
+    "deployEnabled": False,  # an Apiary from before the switches keeps it on: build_settings(legacy_deploy)
+    "deleteFinishedWorktrees": True,
+    "deleteIntegratedBranches": False,
+    "publishReleases": False,   # HaiveQueen publishes a GitHub release at each integration (only for a remote on GitHub)
+    "nextVersion": "",          # the owner's next version (e.g. 2.1.0); without it the last digit counts up
     "buildFlowDoc": "",
     "integratorInstructions": "",
     "worktreePrefix": "wt",
@@ -63,7 +67,13 @@ DEFAULT_SETTINGS = {
     "buildProcessNames": [],
     "capabilityRules": [],
 }
-MACHINE_ONLY = ("hives", "preferredProvider", "excludedProviders", "providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
+MACHINE_ONLY = ("hives", "excludedProviders", "providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
+
+
+def effective_verify(settings: dict, verify) -> str:
+    """Who closes a package: its verify value, except that with the build switch off a package marked build is closed like a code package."""
+    value = str(verify or "code")
+    return "code" if value == "build" and not settings.get("buildEnabled", True) else value
 
 
 def deep_merge(base: dict, over: dict) -> dict:
@@ -78,12 +88,13 @@ def deep_merge(base: dict, over: dict) -> dict:
 
 
 # Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project.
-def build_settings(machine: dict, project_cfg: dict) -> dict:
-    """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project."""
-    merged = deep_merge(DEFAULT_SETTINGS, {k: v for k, v in machine.items() if k not in ("projects",)})
+def build_settings(machine: dict, project_cfg: dict, legacy_deploy: bool = False) -> dict:
+    """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project. With legacy_deploy (an Apiary from before the switches) the default of deployEnabled is on."""
+    defaults = {**DEFAULT_SETTINGS, "deployEnabled": True} if legacy_deploy else DEFAULT_SETTINGS
+    merged = deep_merge(defaults, {k: v for k, v in machine.items() if k not in ("projects",)})
     over = {k: v for k, v in project_cfg.items() if k not in MACHINE_ONLY}
     merged = deep_merge(merged, over)
-    for key in ("progressVerifies", "planStallHours", "minClass", "bundle", "triage", "brain", "integratorSlots"):
+    for key in ("progressVerifies", "planStallHours", "minClass", "bundle", "openMarker", "triage", "brain", "integratorSlots"):
         merged.pop(key, None)
     if "minFreeRamGB" not in merged:
         merged["minFreeRamGB"] = float(machine.get("ramReserveMb", 2048)) / 1024.0
@@ -129,13 +140,20 @@ def resolve_agent_class(settings: dict, phase: str, requested: str, failures: in
     i = class_index(requested)
     every = max(1, int(settings.get("escalateAfter", 2)))
     i = min(2, i + failures // every)
-    minimum = (settings.get("minClass") or {}).get(phase)
-    if minimum:
-        i = max(i, class_index(minimum))
     return CLASS_NAMES[i]
 
 
 # ---- providers ----
+
+def provider_capabilities(p):
+    capabilities = [canonical_capability(c) for c in (p.get("capabilities") or [])]
+    if not p.get("capabilitiesVersion"):
+        if p.get("use") != "capability-only" and "Coding" not in capabilities:
+            capabilities.append("Coding")
+        if not p.get("endpoint") and "Queen" not in capabilities:
+            capabilities.append("Queen")
+    return list(dict.fromkeys(capabilities))
+
 
 def get_providers(settings: dict) -> list:
     """Return the provider entries as dicts (name, protocol, command, args, slots, use, capabilities, classes, limit, endpoint).
@@ -146,23 +164,28 @@ def get_providers(settings: dict) -> list:
     for p in settings.get("providers") or []:
         name = str(p.get("name") or "")
         if not name:
-            raise ValueError("a provider entry has no name")
+            raise ValueError(tr("a provider entry has no name"))
         use = str(p.get("use") or "preferred")
+        old_capability_only = use == "capability-only"
+        if old_capability_only:
+            use = "preferred"
         if use not in USES:
-            raise ValueError("provider %s: use must be preferred, fallback or capability-only, not '%s'" % (name, use))
+            raise ValueError(tr("provider %s: use must be preferred, fallback or capability-only, not '%s'", name, use))
         proto = str(p.get("protocol") or name)
         fmt = profile.check_protocol(name, proto, p.get("outputFormat"))   # a CLI HaiveQueen cannot read is refused here, with a clear message
         bee_mode = str(p.get("beeMode") or ("subagent" if proto == "claude" else "process"))   # the embedded Bee mode is a Claude Code feature
         if bee_mode not in BEE_MODES:
-            raise ValueError("provider %s: beeMode must be subagent or process, not '%s'" % (name, bee_mode))
+            raise ValueError(tr("provider %s: beeMode must be subagent or process, not '%s'", name, bee_mode))
         limit = p.get("limit")
+        capabilities = provider_capabilities(p)
         out.append({
             "name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto), "beeMode": bee_mode,
             "args": [str(a) for a in (p.get("args") or [])],
             "slots": int(p.get("slots", settings.get("slots", 0)) or 0), "use": use,
-            "capabilities": [str(c) for c in (p.get("capabilities") or [])],
+            "capabilities": capabilities, "capabilitiesVersion": 1,
             "classes": p.get("classes") or {},
             "limit": str(limit.get("source", "")) if isinstance(limit, dict) else str(limit or ""),
+            "usageInterval": float(limit.get("interval", 60)) if isinstance(limit, dict) else 60,
             "endpoint": p.get("endpoint"), **profile.custom_fields(p),
         })
         out[-1]["login"] = profile.has_login(out[-1])   # the login in the HaiveQueen profile; without it the provider counts as not available
@@ -207,7 +230,7 @@ def format_reset_time(epoch) -> str:
     if not epoch:
         return ""
     d = datetime.fromtimestamp(int(epoch))
-    return d.strftime("%H:%M") if d.date() == datetime.now().date() else d.strftime("%d.%m. %H:%M")
+    return localtime.time(d) if d.date() == datetime.now().date() else localtime.date_time(d)
 
 
 def save_claude_usage(conn, event: dict) -> None:
@@ -284,6 +307,8 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
     or the file in BZZ_PROVIDER_LIMITS_FILE replaces the real sources (tests); with a test runtime (BZZ_RUNTIME_OVERRIDE) and neither
     nothing is read from this PC.
     """
+    if provider.get("limit") == "none":
+        return {"FreePct": 100.0, "Hours": 168.0}
     used = hours = None
     table = limits
     lf = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
@@ -294,16 +319,17 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
         if entry:
             used, hours = entry.get("usedPercent"), entry.get("resetHours")
     elif not os.environ.get("BZZ_RUNTIME_OVERRIDE") and provider["limit"] in ("claude", "codex"):
+        from . import usage
         kept = None
         if provider["limit"] == "claude" and conn is not None:
             from . import usage
-            if usage.claude_refresh_failed(conn):
-                kept = usage.retained_weekly(conn)   # the last verified weekly reading while it is recent; without one the quota counts as unavailable
+            if usage.claude_refresh_failed(conn, provider=provider):
+                kept = usage.retained_weekly(conn, provider=provider)   # the last verified weekly reading while it is recent; without one the quota counts as unavailable
                 if kept is None:
                     return {"FreePct": 0.0, "Hours": 168.0}
         u = ({"Pct": kept[0], "At": kept[1]} if kept else
-             claude_usage(conn)["SevenDay"] if provider["limit"] == "claude" and conn is not None
-             else codex_usage()["SevenDay"] if provider["limit"] == "codex" else None)
+             ({"Pct": w.get("pct"), "At": w.get("at")} if w else None) if provider["limit"] == "claude" and conn is not None and (w := usage.get_claude_usage(conn, provider=provider).get("seven_day"))
+             else ({"Pct": w.get("pct"), "At": w.get("at")} if w else None) if provider["limit"] == "codex" and conn is not None and (w := usage.cached_codex_usage(conn, provider=provider).get("seven_day")) else None)
         if u and u.get("Pct") is not None:
             used = u["Pct"]
             if u.get("At"):
@@ -315,26 +341,43 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
 
 # ---- capabilities and selection ----
 
-DEFAULT_CAPABILITY_RULE = {"capability": "images", "patterns": [
+CAPABILITY_ALIASES = {"images": "Image generation", "blender": "3D modelling", "build": "Build"}
+
+def canonical_capability(value):
+    value = str(value).strip()
+    return CAPABILITY_ALIASES.get(value.lower(), value)
+
+DEFAULT_CAPABILITY_RULE = {"capability": "Image generation", "patterns": [
     r"(?i)\b(models?|textures?|materials?|particles?|icons?|clips?|sounds?)\b", r"(?i)\b(Blender|assets?|graphics?)\b"]}
 
 
 def package_needs(settings: dict, content: str, capability: str = "") -> list:
     """Capabilities a package needs: those named in its plan header (comma separated) as they stand, else the capabilityRules matching its title."""
-    declared = [c.strip() for c in str(capability or "").split(",") if c.strip()]
+    declared = [canonical_capability(c) for c in str(capability or "").split(",") if c.strip()]
     if declared:
         return declared
     rules = settings.get("capabilityRules") or [DEFAULT_CAPABILITY_RULE]
     need = []
     for r in rules:
-        if all(re.search(pat, content or "") for pat in r.get("patterns", [])) and r["capability"] not in need:
-            need.append(str(r["capability"]))
+        if all(re.search(pat, content or "") for pat in r.get("patterns", [])) and canonical_capability(r["capability"]) not in need:
+            need.append(canonical_capability(r["capability"]))
     return need
+
+
+def _local_confidential(provider):
+    from urllib.parse import urlparse
+    import ipaddress
+    endpoint = provider.get("endpoint") or {}
+    try:
+        host = urlparse(endpoint.get("baseUrl", "")).hostname if isinstance(endpoint, dict) else None
+        return host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except (ValueError, TypeError):
+        return False
 
 
 def capability_available(providers: list, needs: list) -> bool:
     """True when at least one provider with ALL the capabilities has slots above 0 (slots 0 = off for everything)."""
-    return any(p["slots"] > 0 and all(n in p["capabilities"] for n in needs) for p in providers)
+    return any(p["slots"] > 0 and ("Confidential data" not in [canonical_capability(n) for n in needs] or _local_confidential(p)) and all(canonical_capability(n) in [canonical_capability(c) for c in p["capabilities"]] for n in needs) for p in providers)
 
 
 def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "", prefer: str = "",
@@ -348,7 +391,7 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
     follow-up with an earlier provider when it is a candidate, `avoid` (verify) prefers another provider, `protocol` limits to claude or codex.
     """
     cname = CLASS_NAMES[class_index(cls)]
-    needs = [n for n in (needs or []) if n]
+    needs = [canonical_capability(n) for n in (needs or []) if n]
     cand = []
     for idx, p in enumerate(providers, 1):
         if p["slots"] <= 0 or int(free.get(p["name"], 0)) <= 0:
@@ -358,9 +401,11 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
         model = (p["classes"] or {}).get(cname)
         if not (model and model.get("model")):
             continue
+        if "Confidential data" in needs and not _local_confidential(p):
+            continue
         if any(n not in p["capabilities"] for n in needs):
             continue
-        if p["use"] == "capability-only" and not needs:
+        if "Coding" not in p["capabilities"] and not needs:
             continue
         lim = provider_limit(p, conn, limits)
         if not needs and lim["FreePct"] <= 0:
@@ -505,10 +550,12 @@ class ProjectEnv:
             res.append({"id": str(p["id"]), "cls": cls.lower() if re.match(r"(?i)^(light|medium|heavy)$", cls) else "medium",
                         "content": str(p["title"] or ""), "depends": deps, "phase": str(p["phase"] or ""),
                         "depends_all": any(re.match(r"(?i)^all(e)?$", str(d)) for d in p["depends_on"]),
-                        "capability": str(p["capability"] or ""), "verify": str(p.get("verify") or "code")})
+                        "capability": str(p["capability"] or ""), "verify": effective_verify(self.settings, p.get("verify"))})
+        steps = list(plans.STEP_PACKAGES.values())
+        rank = lambda package: steps.index(package) + 1 if package in steps else 0   # plan packages, then the Build step, then the Deploy step: "all" means what comes before
         for r in res:
             if r["depends_all"]:
-                r["depends"] += [x["id"] for x in res if x["id"] != r["id"] and x["id"] not in r["depends"]]
+                r["depends"] += [x["id"] for x in res if x["id"] != r["id"] and x["id"] not in r["depends"] and (rank(x["id"]) < rank(r["id"]) or rank(x["id"]) == rank(r["id"]) == 0)]
         return res
 
 
@@ -520,7 +567,7 @@ def load_projects(conn, machine: dict) -> list:
         if not ws or not Path(ws).is_dir():
             continue
         pcfg = config.load_project(ws)
-        settings = build_settings(machine, pcfg)
+        settings = build_settings(machine, pcfg, bool(row["legacy_deploy"]))
         envs.append(ProjectEnv(conn, row["name"], ws, settings, pcfg.get("colour") or row["colour"] or "white",
                                int(pcfg.get("priority", row["priority"] or 0)), pcfg.get("planGlobs"), pcfg.get("planExclude")))
     return envs
@@ -538,14 +585,14 @@ def waiting_since(env: ProjectEnv, plan_path: str, package_id: str, now_iso: str
 
 
 def oldest_waiting(env: ProjectEnv) -> str:
-    """ISO time of the oldest package of a READY or IN_PROGRESS plan that waits for an agent ('' when none waits).
+    """ISO time of the oldest package of a QUEUED, RUNNING or WAITING plan that waits for an agent ('' when none waits).
 
     A package waits when it is not done and no active agent works on it. An agent that exists for it clears its marker.
     """
     active = {(norm_plan(a.get("plan_path")), str(a.get("package"))) for a in env.agents() if a.get("status") in ACTIVE}
     oldest = ""
     for plan in runtime.list_plans(env.conn, env.name):
-        if plan["status"] not in ("READY", "IN_PROGRESS"):
+        if plan["status"] not in ("QUEUED", "RUNNING", "WAITING"):
             continue
         for p in runtime.list_packages(env.conn, env.name, plan["path"]):
             key = "wait:%s|%s" % (plan["path"], p["id"])

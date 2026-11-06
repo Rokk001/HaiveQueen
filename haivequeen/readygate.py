@@ -3,14 +3,15 @@
 1. The requirement list. The Queen answers the completeness question in the state file beside the plan, in a section `## Completeness`, one line per
    requirement: `- <id>: done | <evidence>` (evidence is a file, commit or test). Every requirement id of the plan (section Requirements of the
    plan, lines `- <id>: <text>`) and of the state file (its own section Requirements) must appear there exactly once with status done and an
-   evidence. Requirements the plan names as an owner check, and ids an active decision of the owner names (set aside), are listed separately
-   and do not block. The count line `Offene Anforderungen: <n>` does not decide here.
-2. The check agent. A fresh agent (class medium, provider chosen like a Bee's, loads like a Bee, took no part in the plan) compares the plan as
+   evidence. Requirements covered only by owner-verified packages, and ids an active decision of the owner names (set aside), are listed separately
+   and do not block. The count line `Open requirements: <n>` does not decide here.
+2. The check agent. A fresh agent (configured class, eligible free provider, took no part in the plan) compares the plan as
    submitted with the list and the branch and ends with `READY-CHECK: PASSED` or `READY-CHECK: FAILED` plus the missing points. Only a passed
    result accepts the branch. When the agent cannot run, `bzz ready` waits and the Queen calls it again next round.
 """
 import os
 import re
+import subprocess
 import time
 
 from . import plans, roles, runtime
@@ -19,8 +20,7 @@ CHECK_RUNNER = None   # tests replace this: callable(request dict) -> (verdict, 
 
 COMPLETENESS_HEADING = re.compile(r"(?im)^#{1,6}\s*completeness\s*$")
 LIST_LINE = re.compile(r"^\s*[-*]\s*([A-Za-z0-9_.-]+)\s*:\s*(.*?)\s*$")
-OWNER_CHECK = re.compile(r"(?i)owner[\s_-]*check")
-VERDICT_LINE = re.compile(r"(?im)^\s*READY-CHECK:\s*(PASSED|FAILED)\b.*$")
+VERDICT_LINE = re.compile(r"(?im)^[ \t]*READY-CHECK:[ \t]*(PASSED|FAILED)\b")
 DONE_STATUS = ("done", "erledigt")
 
 
@@ -46,27 +46,30 @@ def parse_completeness(text):
 
 
 def _names(decision, rid):
-    """True when a decision names the requirement id as its item or as a word of its text."""
-    if str(decision.get("item") or "").strip().upper() == rid.upper():
-        return True
-    return bool(re.search(r"(?<![A-Za-z0-9_.-])" + re.escape(rid) + r"(?![A-Za-z0-9_])", str(decision.get("text") or ""), re.I))
+    """Only a decision explicitly filed for this requirement sets it aside."""
+    return str(decision.get("item") or "").strip().upper() == rid.upper()
 
 
-def evaluate(plan_text, state_text, decisions):
+def evaluate(plan_text, state_text, decisions, assignments=None, versions=()):
     """Check the requirement list of the state file against the requirement ids of the plan and the state file; returns a Result."""
     res = Result()
     required = {}
-    for rid, text in plans.parse_requirements(plan_text) + plans.parse_requirements(state_text):
-        required.setdefault(rid, text)
+    for source in (plan_text, state_text, *versions):
+        for rid, text in plans.parse_requirements(source):
+            required.setdefault(rid, text)
     res.ids = list(required)
     if not required:
         res.no_ids = True
         return res
     entries = parse_completeness(state_text)
+    if assignments is None:
+        packages = plans.parse_plan_text(plan_text).packages
+        assignments = [(rid, p.verify) for p in packages for rid in p.requirements]
     active = [d for d in decisions if str(d.get("status") or "active") == "active"]
     for rid, text in required.items():
         mine = [e for e in entries if e[0] == rid]
-        if OWNER_CHECK.search(text) or any(e[1].replace("_", "-").replace(" ", "-") == "owner-check" for e in mine):
+        covering = [verify for requirement, verify in assignments if requirement == rid]
+        if covering and all(verify == "owner" for verify in covering):
             res.owner.append(rid)
         elif any(_names(d, rid) for d in active):
             res.aside.append(rid)
@@ -110,17 +113,63 @@ def _read(paths):
     return "", paths[0]
 
 
+class PlanHistoryError(Exception):
+    """The plan history could not be read reliably."""
+
+
+def plan_versions(path, current):
+    """Read the current plan and its committed versions, if it has Git history."""
+    folder = os.path.dirname(os.path.abspath(path))
+    try:
+        probe = subprocess.run(['git', '-C', folder, 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if probe.returncode:
+            if 'not a git repository' in probe.stderr.lower():
+                return [current]
+            raise PlanHistoryError('cannot locate the plan repository')
+        root = probe.stdout.strip()
+        shallow = subprocess.run(['git', '-C', root, 'rev-parse', '--is-shallow-repository'], capture_output=True, text=True, check=True).stdout.strip()
+        if shallow != 'false':
+            raise PlanHistoryError('the plan repository has incomplete history')
+        relative = os.path.relpath(path, root).replace('\\', '/')
+        history = subprocess.run(['git', '-C', root, '-c', 'core.quotePath=false', 'log', '--follow', '--format=COMMIT:%H', '--name-status', '--', relative], capture_output=True, text=True, encoding='utf-8', check=True).stdout
+        versions = [current]
+        commit = None
+        for line in history.splitlines():
+            if line.startswith('COMMIT:'):
+                commit = line[7:]
+            elif line and commit:
+                fields = line.split('\t')
+                if fields[0].startswith('D'):
+                    break   # the file was deleted here: older versions at this path belong to an earlier plan
+                result = subprocess.run(['git', '-C', root, 'show', '%s:%s' % (commit, relative)], capture_output=True, check=True)
+                versions.append(result.stdout.decode('utf-8-sig', errors='replace'))
+                if fields[0].startswith('R') and len(fields) == 3 and fields[2] == relative:
+                    relative = fields[1]
+                commit = None
+        return versions
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+        raise PlanHistoryError('cannot read the plan history') from exc
+
+
 def gate(env, plan, queen):
     """Run the whole gate for the Queen's `bzz ready`; returns (accepted, message, waiting)."""
     folders = [f for f in (queen.get("cwd"), str(env.workspace)) if f]
     plan_text, plan_file = _read([os.path.join(f, plan) for f in folders])
     state_text, state_file = _read([plans.state_file_path(os.path.join(f, plan)) for f in folders])
     decisions = [d for d in runtime.list_decisions(env.conn, env.name, active_only=True) if not d["plan_path"] or d["plan_path"] == plan]
-    res = evaluate(plan_text, state_text, decisions)
+    assignments = runtime.cut_assignments(env.conn, env.name, plan, plan_text)
+    # No trustworthy cut record (older worked plan, reused path, another plan title): require evidence; requirements added after the cut need evidence too.
+    try:
+        versions = plan_versions(plan_file, plan_text)
+    except PlanHistoryError as exc:
+        return False, str(exc), True
+    res = evaluate(plan_text, state_text, decisions, assignments if assignments is not None else [], versions)
     if res.no_ids or res.blocking:
         return False, refusal_text(res), False
     skipped = ", ".join(res.owner + res.aside) or "none"
     prompt = roles.role_text("ready-check", {"plan_file": plan_file, "state_file": state_file, "cwd": queen.get("cwd") or str(env.workspace), "skipped": skipped, "language": roles.language(env.settings)})
+    historical = dict.fromkeys(pair for text in versions for pair in plans.parse_requirements(text))
+    prompt += "\n\nRequirements from all plan versions:\n" + "\n".join("- %s: %s" % pair for pair in historical)
     request = {"env": env, "queen": queen, "plan": plan, "cwd": queen.get("cwd") or str(env.workspace), "prompt": prompt}
     runner = CHECK_RUNNER or (lambda r: start_check_agent(r["env"], r["queen"], r))
     verdict, text = runner(request)
@@ -134,10 +183,10 @@ def gate(env, plan, queen):
 def start_check_agent(env, queen, request, sleep=time.sleep):
     """Start the check agent through the agent runner like a Bee and wait for its answer; returns (verdict, text).
 
-    Provider and class are chosen like a Bee's (class medium; the Queen's provider or an endpoint provider; a free slot, not at its limit), and it
+    The configured ready-check class runs on an eligible provider with a free slot and limit, and it
     takes a slot like a Bee. No provider, no slot, a failed start, an agent that ends without verdict or a timeout (setting readyCheckTimeoutSec)
     give `unavailable`."""
-    from . import agent_process, bees, hives, loop, scheduler, usage
+    from . import agent_process, hives, loop, scheduler, usage
     plan = request["plan"]
     hive = hives.get(env.conn, env.name, plan)
     if not hive:
@@ -146,12 +195,14 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
     running = [{**a, "status": "running"} for a in active if agent_process.counts(a)]
     free = scheduler.provider_free(env.providers, running)
     limited = [p["name"] for p in env.providers if any(w["used_pct"] >= 100 for w in usage.limit_windows(env.conn, p))]
-    route = bees.select_route(env.providers, free, hive["provider"], "medium", (), env.settings.get("excludedProviders", []), False, limited)
-    if not route:
-        return "unavailable", "no provider with a free slot and class medium"
-    provider, cls = route
+    cls = str(env.settings.get("readyCheckClass", "medium"))
+    candidates = [p for p in env.providers if p["name"] not in env.settings.get("excludedProviders", []) and p["name"] not in limited]
+    pick = scheduler.select_provider(candidates, cls, [], free, conn=env.conn)
+    if not pick:
+        return "unavailable", "no provider with a free slot and class %s" % cls
+    provider = pick["name"]
     existing = [a["name"] for a in runtime.list_agents(env.conn, env.name, "all")]
-    state = {"names": existing, "busy": [], "plan_status": {scheduler.norm_plan(plan): "IN_PROGRESS"}, "by_path": {scheduler.norm_plan(plan): {"path": plan}}}
+    state = {"names": existing, "busy": [], "plan_status": {scheduler.norm_plan(plan): "RUNNING"}, "by_path": {scheduler.norm_plan(plan): {"path": plan}}}
     ctx = {"env": env, "state": state, "pool": loop.Pool(free, 0), "report": [], "dry": False, "settle": 0}
     action = {"name": "%s-ready-check" % re.sub(r"-\d+$", "", str(queen["name"])), "type": provider, "phase": "verify", "plan": plan, "package": "READY-CHECK",
               "cwd": request["cwd"], "prompt": request["prompt"], "class": cls}
@@ -160,8 +211,9 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
     name = state["names"][-1]
     deadline = time.monotonic() + float(env.settings.get("readyCheckTimeoutSec", 3600))
     while time.monotonic() < deadline:
+        # bzz done can set a terminal status before the runner writes final.txt.
         row = runtime.get_agent(env.conn, env.name, name)
-        if row is None or row.get("status") not in scheduler.ACTIVE:
+        if row is not None and row.get("status") not in scheduler.ACTIVE and not agent_process.is_live(row):
             try:
                 text = (env.run_dir(name) / "final.txt").read_text(encoding="utf-8-sig")
             except OSError:

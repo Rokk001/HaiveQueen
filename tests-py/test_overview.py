@@ -40,7 +40,7 @@ class OverviewTest(unittest.TestCase):
             "model": "gpt-6.1-sol", "effort": "medium", "status": "done", "startedAt": iso(30), "endedAt": iso(10),
             "tokensIn": 5000, "tokensOut": 900})
         with db.transaction(self.conn):
-            self.conn.execute("INSERT INTO plans (project, path, title, status) VALUES ('alpha','docs/plans/A-PLAN.md','A','IN_PROGRESS')")
+            self.conn.execute("INSERT INTO plans (project, path, title, status) VALUES ('alpha','docs/plans/A-PLAN.md','A','RUNNING')")
             self.conn.execute("INSERT INTO plans (project, path, title, status) VALUES ('beta','docs/plans/NEW-PLAN.md','N','DRAFT')")
         db.add_question(self.conn, "beta", "docs/plans/B-PLAN.md", "I1", "Which?", "A")
         runtime.usage_add(self.conn, project="alpha", provider="claude", model="claude-sonnet-5-5", tokens_in=2000,
@@ -69,7 +69,7 @@ class OverviewTest(unittest.TestCase):
         self.assertEqual([a["name"] for a in d["agents"]], ["alpha-job-one"])
         self.assertEqual([a["name"] for a in d["fin"]], ["beta-job-two"])
         self.assertEqual(d["projects"], ["alpha", "beta"])
-        self.assertEqual((d["counts"]["IN_PROGRESS"], d["counts"]["DRAFT"]), (1, 1))
+        self.assertEqual((d["counts"]["RUNNING"], d["counts"]["DRAFT"]), (1, 1))
         self.assertEqual(d["drafts"], ["NEW"])
         self.assertEqual([q["project"] for q in d["qs"]], ["beta"])
         self.assertEqual(d["cu"]["FiveHour"]["pct"], 42)
@@ -91,7 +91,7 @@ class OverviewTest(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "BZZ_DATA_DIR"}
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(usage, "home_dir", return_value=home):
             usage._codex_refresh.clear()
-            d = overview.collect(self.conn, None, datetime.now(), {}, dict(SYS))
+            d = overview.collect(self.conn, None, datetime.now(), {"providers": [{"name": "codex", "protocol": "codex", "limit": {"source": "codex"}}]}, dict(SYS))
         self.assertIsNotNone(runtime.kv_get(self.conn, "*", "usage-codex"))
         self.assertEqual(d["xu"]["FiveHour"]["pct"], 37)
 

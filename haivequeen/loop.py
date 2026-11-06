@@ -22,6 +22,7 @@ from pathlib import Path
 
 from . import buildjobs, config, db, events, export, faults, inbox, profile, reattach, roles, routine, runstate, runtime, usage, views
 from . import platform as osplat
+from . import localtime
 from . import scheduler as sch
 from .routine import view
 from .scheduler import ACTIVE, norm_plan
@@ -29,10 +30,28 @@ from .scheduler import ACTIVE, norm_plan
 TOOLS_DIR = Path(__file__).resolve().parent.parent
 PHASES = ("work", "verify", "release", "integrate")
 TEMPORARY = re.compile(r"^(no worker slot|no free slot|no integrator slot|free RAM|STOP flag|run state)")   # a start rejected for one of these is tried again next round
-AGENT_NAMES = ["Ada", "Bea", "Cleo", "Dina", "Ella", "Fia", "Gina", "Hana", "Ida", "Juna", "Kira", "Lea", "Mia", "Nora", "Ola",
-               "Pia", "Rita", "Sara", "Tara", "Uma", "Vera", "Wilma", "Yara", "Zoe",
-               "Anna", "Bella", "Clara", "Dora", "Eva", "Frida", "Greta", "Heidi", "Ines", "Jana", "Katja", "Lena", "Maja", "Nina", "Olga", "Paula",
-               "Rosa", "Sofia", "Tessa", "Ulla", "Vivi", "Wanda", "Xenia", "Zora"]   # short first names of the agents; the main agent is called Queen and is not in this list
+def names_file() -> Path:
+    """Editable list of agent names in the user's configuration directory."""
+    return osplat.config_dir() / "bee_names.txt"
+
+
+def load_agent_names() -> list:
+    """Read names on each selection so edits take effect without a restart."""
+    default = Path(__file__).with_name("bee_names.txt")
+    path = names_file()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with path.open("x", encoding="utf-8") as target:
+                target.write(default.read_text(encoding="utf-8"))
+        except FileExistsError:
+            pass
+    names = list(dict.fromkeys(line.strip() for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip() and not line.strip().startswith("#")))
+    return names or default.read_text(encoding="utf-8").splitlines()
+
+
+AGENT_NAMES = Path(__file__).with_name("bee_names.txt").read_text(encoding="utf-8").splitlines()
+
 AGENT_COLOURS = ["4FA8FF", "C77DFF", "FF6FB5", "3DDCDC", "FF9F43", "3DDC97", "2B6CB0", "8A3FD1", "C2306F", "1E9C9C", "C26A10", "1E9B5F"]   # 6 hues at least 25 degrees apart, each light then dark (the first 6 agents differ in hue), none of the status colours
 FORWARD_ENV = ("BZZ_DATA_DIR", "BZZ_CONFIG_DIR", "BZZ_LOG_DIR", "BZZ_RUNTIME_OVERRIDE", "BZZ_HOST", "BZZ_FAKE_AGENT", "BZZ_SAMPLE_SEC")
 
@@ -177,9 +196,10 @@ def agent_identity(conn, excluded_names=()) -> dict:
     used_c = [str(a.get("color")) for a in rows]
     run_c = [str(a.get("color")) for a in rows if a.get("status") in ACTIVE]
     running_names = {str(a.get("person")) for a in rows if a.get("status") in ACTIVE} | embedded_names
-    n = (next((x for x in AGENT_NAMES if x not in used_n), None)
-         or next((x for x in AGENT_NAMES if x not in running_names and x not in excluded_names), None)
-         or min(AGENT_NAMES, key=lambda x: sum(1 for a in rows if str(a.get("person")) == x and a.get("status") in ACTIVE)))   # all taken: the least used one
+    names = load_agent_names()
+    n = (next((x for x in names if x not in used_n), None)
+         or next((x for x in names if x not in running_names and x not in excluded_names), None)
+         or min(names, key=lambda x: sum(1 for a in rows if str(a.get("person")) == x and a.get("status") in ACTIVE)))   # all taken: the least used one
     # Colours of agents that ended within the last hour are given up first; a colour of a running agent repeats only with more running agents than colours (then the least used one).
     # The second shade of a hue is only taken when every hue is in use by a running agent: colours are compared by hue family (index modulo 6), not by exact value.
     run_hues = {AGENT_COLOURS.index(x) % 6 for x in run_c if x in AGENT_COLOURS}
@@ -263,7 +283,7 @@ def _state_summary(env, quiet=False) -> dict:
         f = env.workspace / pr["path"]
         st = f.stat()
         plans.append({"path": pr["path"], "status": pr["status"], "sizeKB": int(st.st_size / 1024),
-                      "modified": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")})
+                      "modified": localtime.date_time(datetime.fromtimestamp(st.st_mtime))})
     plans.sort(key=lambda p: p["modified"], reverse=True)
     return {"all_plans": prows, "plans": plans}
 
@@ -324,10 +344,7 @@ def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
         profile.notify_missing(conn, sch.get_providers(machine))
         from . import worktrees
         for env in envs:
-            try:
-                env.log('Worktree cleanup: ' + json.dumps(worktrees.prune(env), ensure_ascii=False))
-            except Exception as exc:
-                env.log('Worktree cleanup failed: ' + str(exc))
+            worktrees.cleanup(env)
     with hive_schedule_lock():
         if dry_run:
             import sqlite3
@@ -358,12 +375,6 @@ def _min_ram(env) -> float:
     return float(s.get("pilotMinFreeRamGB", 2)) if s.get("pilot") else float(s.get("minFreeRamGB", 2))
 
 
-def _make_pool(conn, any_env) -> Pool:
-    """Free slots per provider across all projects (workers of every project count) and free integrator slots."""
-    active = [view(r) for r in runtime.list_agents(conn, None, "active") if r.get("status") in ACTIVE]
-    providers = any_env.providers if any_env else []
-    used_int = sum(1 for a in active if a.get("phase") == "integrate")
-    return Pool(sch.provider_free(providers, active), max(0, int((any_env.settings if any_env else {}).get("integratorSlots", 1)) - used_int))
 
 
 def run_hook(env, summary: dict) -> None:
@@ -380,100 +391,18 @@ def build_ram_wait(env, phase, free_gb):
     return buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get("buildJobs")), float(free_gb) * 1024.0)
 
 
-def _reject_reason(c, a):
-    """Validation of a start_agent action in the order of the rules; returns (reason or None, picked provider or None)."""
-    env, st, pool, dry = c["env"], c["state"], c["pool"], c["dry"]
-    providers = env.providers
-    name, plan, pkg, phase = a.get("name"), str(a.get("plan") or ""), str(a.get("package") or ""), a.get("phase")
-    key = "%s|%s|%s" % (plan, pkg, phase)
-    bundle = [str(b) for b in a.get("bundle") or []]
-    why = None
-    if not (a.get("name") and a.get("prompt") and a.get("cwd") and a.get("type") and a.get("phase")):
-        why = "missing field"
-    elif not sch.get_provider(providers, str(a["type"])):
-        why = "unknown provider %s" % a["type"]
-    elif phase not in PHASES:
-        why = "bad phase %s" % phase
-    elif not os.path.isdir(str(a["cwd"])):
-        why = "cwd missing: %s" % a["cwd"]
-    elif stop_flag().exists() and not dry:
-        why = "STOP flag"
-    elif not dry and not runstate.starts_allowed(env.conn):
-        why = "run state %s: no new agents" % runstate.get_state(env.conn)["state"]
-    elif any(b["Key"] == key for b in st["blocked"]):
-        bk = next(b for b in st["blocked"] if b["Key"] == key)
-        why = "blockiert: " + bk["Error"]
-        if not dry:
-            env.log("TECHNICAL NOTE: task %s failed 2 times with the same error and is not started again: %s" % (name, bk["Error"]))
-    elif (norm_plan(plan) + "|" + pkg) in st["busy"] or any((norm_plan(plan) + "|" + b) in st["busy"] for b in bundle):
-        why = "an agent already works on this package"
-    elif phase in ("work", "verify") and (routine.stall_open(env, plan, pkg) or routine.plan_stall_open(env, plan)):
-        why = "stopped by the progress guard: waiting for the answer of the owner"
-    elif phase == "work" and routine.package_locked(env, plan, pkg):
-        why = "package is locked: verifications reported open items too often (open question)"
-    elif routine.is_frozen(env, plan, pkg):
-        why = "package is frozen (nofollow list): no follow-up task"
-    elif (phase != "integrate" and not (phase == "work" and pkg.startswith("FIX-") and norm_plan(plan) == norm_plan(routine.QUEUE_PLAN_ID))
-          and not any(p["path"] == plan.replace("\\", "/") or p["path"] == plan for p in st["startable"])):
-        why = "rule 11: plan is not READY or IN_PROGRESS"
-    if not why and c["pilot"] and phase == "integrate":
-        why = "pilot mode: no integrator"
-    if not why and c["pilot"] and not plan.replace("/", "\\").endswith(str(env.settings.get("pilotPlan", "")).replace("/", "\\")):
-        why = "pilot mode: only packages of the pilot plan"
-    if not why and phase == "integrate" and c["plan_files"]:
-        why = "pilot/test mode (plan files): no integrator"
-    pick = None
-    if not why and phase == "integrate":
-        if not c["snapshot"].get("integration", {}).get("canStart"):
-            why = "integrator.canStart is false"
-        elif pool.int_free <= 0:
-            why = "no integrator slot"
-        else:
-            pick = next((p for p in providers if p["protocol"] == "claude" and p["slots"] > 0 and (p["classes"].get("medium") or {}).get("model")), None)   # the integrator is a Claude Code agent and uses no worker slot
-            if not pick:
-                why = "no free slot: no Claude Code provider is on (slots 0)"
-    elif not why:
-        if pool.workers() <= 0:
-            why = "no worker slot"
-        else:
-            # The package table decides what a package needs, not the "graphics" flag the brain happened to send; the flag still counts as "images".
-            need = routine.package_needs_for(env, plan, pkg) if phase == "work" else []
-            if a.get("graphics") is True and "images" not in need:
-                need = need + ["images"]
-            if need and not sch.capability_available(providers, need):
-                why = "no provider with the capability %s has slots above 0" % ", ".join(need)
-            else:
-                cls0 = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
-                pick = sch.select_provider(providers, cls0, need, pool.free, prefer=str(a["type"]), conn=env.conn)   # a busy slot never waits
-                if not pick:
-                    why = "no free slot" + (" for the capability %s" % ", ".join(need) if need else " in a fitting provider (class %s)" % cls0)
-    if not why and not dry and c["free_ram"]() < c["min_ram"]:
-        why = "free RAM %.2f GB is below %s GB" % (c["free_ram"](), c["min_ram"])
-    if not why and not dry:
-        why = build_ram_wait(env, phase, c["free_ram"]())   # the start of an integrate or release agent waits for the minimum free RAM before a build
-    if not why and not dry and c["pilot"] and _build_names(env):
-        why = "a build process runs (pilot waits): " + ", ".join(_build_names(env))
-    return why, pick
 
 
 # Action start_agent: validate, write the prompt and the agent row, start the runner. Returns 1 when an agent was started.
 def _do_start(c, a, forced_pick=None) -> int:
     """Action start_agent: validate, write the prompt and the agent row, start the runner. Returns 1 when an agent was started.
 
-    `forced_pick` is a provider chosen by the caller (triage agents): the validation is skipped.
+    `forced_pick` is the provider already selected by the Hive caller.
     """
     env, st, pool, report, dry = c["env"], c["state"], c["pool"], c["report"], c["dry"]
-    why, pick = (None, forced_pick) if forced_pick is not None else _reject_reason(c, a)
-    if why:
-        report.append("REJECT start_agent %s: %s" % (a.get("name"), why))
-        if not dry:
-            env.log("reject %s: %s" % (a.get("name"), why))
-        # A start that failed only for a temporary reason (slot, RAM, STOP) must not use up the brain event: it is asked again next round.
-        if TEMPORARY.match(why) and not dry:
-            for ev in c["rt_events"]:
-                if norm_plan(ev["plan"]) == norm_plan(str(a.get("plan"))):
-                    routine.remove_handled(env, ev["key"])
-        return 0
+    if forced_pick is None:
+        raise ValueError("a provider must be selected before starting an agent")
+    pick = forced_pick
     protocol, prov = pick["protocol"], pick["name"]
     nm, k = str(a["name"]), 1
     while nm in st["names"]:
@@ -507,8 +436,8 @@ def _do_start(c, a, forced_pick=None) -> int:
         rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"   # a project with a separate code repo keeps its rules in the workspace
         hdr = ("You are the agent %s (one task, then you end). Follow all rules in section 1 of %s and every rule of the repository (%s and the "
                "files it names). Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, TOOLS_DIR / "docs" / "AGENT-RULES.md", rules_doc))
-    handoff = ("Prüfe nach jedem abgeschlossenen Arbeitsschritt, ob die Datei %s existiert. Wenn ja: schreib den Stand (erledigt, offen, nächster Schritt, "
-               "Branch, Worktree) in die State-Datei des Plans unter 'Handoff %s' und beende dich." % (hf, nm))
+    handoff = ("After each completed step, check whether %s exists. If it does, record the status (completed, open, next step, "
+               "branch and worktree) in the plan state file under 'Handoff %s' and end." % (hf, nm))
     if phase == "queen":
         handoff = ("After each completed step check %s. When it exists, do not start new Bees, "
                    "wait for running Bees, finish your current step, record the handoff in the plan state and end." % hf)
@@ -523,7 +452,7 @@ def _do_start(c, a, forced_pick=None) -> int:
     ident = agent_identity(env.conn, [predecessors[-1]['person']] if phase == 'queen' and predecessors else ())
     if phase in ("bee", "queen"):   # a Bee and a Queen are named by their short female name (A2); the number of a repeated row key is not part of it
         base = re.sub(r"-\d+$", "", nm)
-        ident["Person"] = base if base in AGENT_NAMES else nm
+        ident["Person"] = base if base in load_agent_names() else nm
     cls = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
     cm = sch.class_model(env.providers, prov, cls)
     bundle = [str(b) for b in a.get("bundle") or []]
@@ -544,11 +473,13 @@ def _do_start(c, a, forced_pick=None) -> int:
     env.event("%s started (%s)" % (ident["Person"] if phase in ("bee", "queen") else nm, {"codex": "Codex", "claude": "Claude"}.get(prov, prov)))
     if phase != "integrate":
         pk0 = norm_plan(plan)
-        if st["plan_status"].get(pk0) == "READY":
+        before = st["plan_status"].get(pk0)
+        after = {"SENT": "PREPARING" if phase == "queen" else None, "QUEUED": "RUNNING", "WAITING": "RUNNING"}.get(before)
+        if after:   # a Queen starts on a sent plan: it is prepared; any start on a prepared or waiting plan: it runs
             try:
-                runtime.set_plan_status(env.conn, env.name, str(st["by_path"][pk0]["path"]), "IN_PROGRESS", str(env.workspace))
-                st["plan_status"][pk0] = "IN_PROGRESS"
-                env.log("plan %s: READY -> IN_PROGRESS" % plan)
+                runtime.set_plan_status(env.conn, env.name, str(st["by_path"][pk0]["path"]), after, str(env.workspace))
+                st["plan_status"][pk0] = after
+                env.log("plan %s: %s -> %s" % (plan, before, after))
             except runtime.CmdError as exc:
                 env.log("plan %s: status change failed: %s" % (plan, exc))
     runtime.kv_delete(env.conn, env.name, "wait:%s|%s" % (plan, pkg))
@@ -578,7 +509,7 @@ def report_loop_failure(conn, text: str) -> None:
     runtime.append_event(conn, "HaiveQueen", text, mirror="rounds", error=True)
     runtime.append_event(conn, "HaiveQueen", text, mirror="events", error=True)
     runtime.kv_set(conn, sch.GLOBAL, "loop-unexpected-end-at", datetime.now().isoformat(timespec="seconds"))
-    faults.file_fault(conn, "HaiveQueen", "loop_vanished", text)
+    faults.file_global_fault(conn, "loop_vanished", text)   # belongs to no Apiary: status panel and desktop message, no inbox question
 
 
 # Run rounds until the STOP flag exists (or `rounds` rounds are done), then wait for the running agents and end.
@@ -672,11 +603,29 @@ def configuration_stamp(conn):
     return projects, tuple(files)
 
 
+def close_obsolete_questions(conn):
+    """Close pending questions for finished plans or unregistered projects once."""
+    answer = "closed: plan finished or project unknown"
+    with db.transaction(conn):
+        rows = conn.execute(
+            "SELECT q.id, q.project FROM questions q "
+            "WHERE q.status IN ('open', 'triage') AND ("
+            "NOT EXISTS (SELECT 1 FROM projects p WHERE p.name=q.project) OR "
+            "EXISTS (SELECT 1 FROM plans p WHERE p.project=q.project AND p.path=q.plan_path "
+            "AND p.status IN ('DONE', 'REJECTED', 'CANCELLED')))"
+        ).fetchall()
+        for row in rows:
+            conn.execute("UPDATE questions SET status='answered', answer=?, answered_by='coordinator', answered_at=? WHERE id=?",
+                         (answer, db.now(), row['id']))
+            db.add_event(conn, row['project'], 'answer', answer, data={'question_id': row['id'], 'by': 'coordinator'})
+
+
 # The loop body (see run_loop).
 # Keep provider quotas current during idle waits as well as scheduling rounds.
 # Apply valid TOML changes at safe scheduling boundaries without restarting agents.
 def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_kwargs) -> int:
     """The loop body (see run_loop)."""
+    close_obsolete_questions(conn)
     envs = sch.load_projects(conn, machine)
     minutes = round_minutes if round_minutes else float(machine.get("roundMinutes", 5))
     state = {"since": datetime.now(), "next_at": None, "busy": False, "projects": [e.name for e in envs]}
@@ -771,6 +720,19 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
                 env.log("ROUND ERROR %s" % exc)
                 env.event("Round error: %s" % exc, True)
         daily_export(envs)
+        try:
+            from . import retention
+            retention.cleanup(conn, machine)
+        except Exception as exc:
+            for env in envs[:1]:
+                env.log("RETENTION ERROR %s" % exc)
+        try:
+            from . import publish, updates
+            updates.scheduled_check(machine)   # H-42: once per interval, the result is kept for the GUI
+            publish.retry_pending(conn, envs)   # H-43: a release that failed at integration is published again
+        except Exception as exc:
+            for env in envs[:1]:
+                env.log("UPDATE ERROR %s" % exc)
         done += 1
         nxt = datetime.fromtimestamp(time.time() + minutes * 60)
         state.update(busy=False, since=datetime.now(), next_at=nxt)
@@ -824,6 +786,29 @@ def command_result(args, payload) -> int:
     return 0
 
 
+# A refused start is a failure for the caller: exit 1, the reason in the events and in beekeeper.log.
+def refuse_start(args, conn, payload, reason) -> int:
+    """Print `payload` as a failed result (ok false, error = `reason`), record "start refused: <reason>" as event and as line of beekeeper.log, return 1.
+
+    Callers that start the loop (the self-update, scripts) see the refusal at once instead of waiting for a round that never comes.
+    """
+    text = "start refused: " + reason
+    try:
+        with db.transaction(conn):
+            db.add_event(conn, runstate.GLOBAL_PROJECT, "start-refused", text)
+    except Exception:   # the refusal is reported anyway
+        pass
+    try:
+        log = osplat.runs_dir() / "beekeeper.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a", encoding="utf-8") as out:
+            out.write("%s %s\n" % (db.now(), text))
+    except OSError:
+        pass
+    command_result(args, {**payload, "ok": False, "error": reason})
+    return 1
+
+
 # Serialise `bzz start` between processes.
 @contextmanager
 def start_lock(timeout: float = 120.0, poll: float = 0.1):
@@ -863,15 +848,19 @@ def start_boot_command(args) -> list:
 # Start a session: the loop as a hidden process and the graphical window.
 def cmd_start(args, conn) -> int:
     """`bzz start`: run the loop in this process (--foreground), or start it as a hidden background process (no terminal window) and open the graphical dashboard once."""
-    from . import config, gui
+    from . import config, gui, i18n
     if args.foreground and getattr(args, "desktop", False):
-        raise ValueError("Die Desktop-Rückmeldung unterstützt nur den Hintergrundstart.")
+        raise ValueError(i18n.tr("The desktop message supports only the background start."))
     machine = config.load_config()
+    from . import updates
+    by_worker = updates.started_by_update_worker()   # the worker's own restart; a worker of an older version sets no BZZ_UPDATE_RESTART
+    if updates.draining() and not os.environ.get("BZZ_UPDATE_RESTART") and not by_worker:   # H-46(i): the update waits for running agents, nothing starts meanwhile
+        return refuse_start(args, conn, {"updating": True}, "An update is waiting for running agents; HaiveQueen starts again after it.")
     pid = loop_running()
     if pid:
         if stop_flag().exists():
-            return command_result(args, {"ok": True, "running": True, "stopping": True, "pid": pid,
-                                         "running_agents": active_count(conn), "note": "Waiting for the previous stop to finish."})
+            return refuse_start(args, conn, {"running": True, "stopping": True, "pid": pid, "running_agents": active_count(conn)},
+                                "Waiting for the previous stop to finish.")
         return command_result(args, {"ok": True, "running": True, "pid": pid, **({} if args.foreground else gui.launch_detached()),
                                      "note": "The orchestrator is already running."})
     try:
@@ -893,11 +882,11 @@ def cmd_start(args, conn) -> int:
         if pid:
             return command_result(args, {"ok": True, "running": True, "pid": pid, **gui.launch_detached(), "note": "The orchestrator is already running."})
         if start_pending():
-            return command_result(args, {"ok": True, "running": False, "starting": True, "note": "The orchestrator is just starting."})
+            return refuse_start(args, conn, {"running": False, "starting": True}, "The orchestrator is just starting.")
         start_pending_file().parent.mkdir(parents=True, exist_ok=True)
         start_pending_file().write_text(str(os.getpid()), encoding="ascii")
         try:
-            spawn_detached(boot, osplat.runs_dir() / "beekeeper.log")   # the loop has no window: its output goes to this file, round errors show in the dashboard
+            spawn_detached(boot, osplat.runs_dir() / "beekeeper.log", env={"BZZ_UPDATE_RESTART": "1"} if by_worker else None)   # the loop process is no child of the worker   # the loop has no window: its output goes to this file, round errors show in the dashboard
             return command_result(args, {"ok": True, **gui.launch_detached()})
         except Exception:
             start_pending_file().unlink()

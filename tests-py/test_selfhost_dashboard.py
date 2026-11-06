@@ -64,13 +64,13 @@ class SelfhostDashboardTest(unittest.TestCase):
         self.add_update("failed", new="9999999zzzz")
         self.add_update("ok")
         t = self.line()[0]
-        self.assertIn("self-update ok  29.10. 11:02  2222222", t)
+        self.assertRegex(t, r"self-update ok  .*11:02.*  2222222")
         self.assertNotIn("9999999", t)
 
     def test_rollback_names_old_commit(self):
         """A rollback shows the commit it went back to."""
         self.add_update("rollback")
-        self.assertIn("self-update rollback  29.10. 11:02  2222222 (back to 1111111)", self.line()[0])
+        self.assertRegex(self.line()[0], r"self-update rollback  .*11:02.*  2222222 \(back to 1111111\)")
 
     def test_result_colours(self):
         """ok is green, rollback yellow, failed red."""

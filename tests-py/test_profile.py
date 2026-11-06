@@ -1,5 +1,6 @@
 """The HaiveQueen profile: every provider CLI is started with its user files in the profile folder, nothing private is read or copied."""
 import gc
+import json
 import os
 import tempfile
 import time
@@ -65,12 +66,48 @@ class EnvironmentTest(ProfileCase):
         """Session logs and settings for usage and Codex limits are read from the profile, never from the user's home folder."""
         home = Path(self.tmp.name) / "home"
         with mock.patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
-            for path in (usage.claude_root(), usage.codex_root(), usage.claude_settings_path(), ar.codex_sessions_dir(), profile.sessions_dir("codex")):
+            for path in (usage.codex_root(), ar.codex_sessions_dir(), profile.sessions_dir("codex")):
                 self.assertTrue(path.is_relative_to(self.data / "profile"), path)
                 self.assertFalse(path.is_relative_to(home))
 
 
 class ContentTest(ProfileCase):
+    def test_merge_claude_run_settings_preserves_provider_options_and_rules(self):
+        original = {"model": "example", "permissions": {"allow": ["Bash(existing)"], "deny": ["Bash(no)"]}}
+        merged = profile.claude_merge_run_settings(original, ["Bash(new)"])
+        self.assertEqual(merged["model"], "example")
+        self.assertEqual(merged["permissions"], {"allow": ["Bash(existing)", "Bash(new)"], "deny": ["Bash(no)"]})
+        self.assertEqual(original["permissions"]["allow"], ["Bash(existing)"])
+
+    def test_claude_integration_permissions_are_restored_on_prepare(self):
+        claude = provider("claude", 1)
+        self.assertTrue(profile.prepare(claude))
+        settings = self.data / "profile/claude/settings.json"
+        self.assertFalse(json.loads(settings.read_text(encoding="utf-8")).get("permissions", {}).get("allow"))
+        settings.write_text('{}', encoding="utf-8")
+        self.assertTrue(profile.prepare(claude))
+        restored = json.loads(settings.read_text(encoding="utf-8"))
+        self.assertFalse(restored["autoMemoryEnabled"])
+        self.assertFalse(restored.get("permissions", {}).get("allow"))
+
+    def test_integration_permissions_are_exact_and_specific_to_run(self):
+        rules = profile.claude_integration_permissions("Hive", "plans/ONE-PLAN.md", "upstream", "release/next", "python", "/opt/hq/cli.py")
+        for tool in ("Bash", "PowerShell"):
+            self.assertIn(f"{tool}(git push upstream HEAD:release/next)", rules)
+            self.assertIn(f"{tool}(bzz integration acquire --project Hive --plan plans/ONE-PLAN.md)", rules)
+            self.assertIn(f"{tool}('python' -I '/opt/hq/cli.py' integration release --project Hive --plan plans/ONE-PLAN.md)", rules)
+        self.assertTrue(all("*" not in rule for rule in rules))
+        self.assertFalse(any("Other" in rule or "HEAD:main" in rule for rule in rules))
+        bash = {rule[5:-1] for rule in rules if rule.startswith("Bash(")}
+        self.assertIn("bzz integration acquire --project Hive --plan plans/ONE-PLAN.md", bash)
+        for command in ("bzz integration acquire --project Other --plan plans/ONE-PLAN.md",
+                        "bzz integration acquire --project Hive --plan plans/OTHER.md",
+                        "git push upstream HEAD:main", "git push upstream HEAD:release/next --force",
+                        "python -I /tmp/cli.py integration acquire --project Hive --plan plans/ONE-PLAN.md"):
+            self.assertNotIn(command, bash)
+        self.assertEqual(profile.claude_integration_permissions("Hive*", "plan", "upstream", "main", "python", "cli.py"),
+                         ["Bash(git push upstream HEAD:main)", "PowerShell(git push upstream HEAD:main)"])
+
     def test_prepare_writes_only_settings_and_copies_nothing(self):
         """The profile gets the settings of HaiveQueen only; private instruction and login files of the home folder stay out."""
         home = Path(self.tmp.name) / "home"

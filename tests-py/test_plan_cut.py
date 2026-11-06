@@ -60,7 +60,7 @@ class CutCheckTests(test_plan_submit.SubmittedPlanTests):
         code, output = self.check()
         self.assertNotEqual(code, 0)
         self.assertIn("requirement R3 belongs to no package", output)
-        self.assertEqual(plans.load_plan(str(self.repo / REL)).status, "SUBMITTED")
+        self.assertEqual(plans.load_plan(str(self.repo / REL)).status, "SENT")
 
     def test_check_passes_when_every_requirement_is_covered_and_capability_work_is_apart(self):
         self.queen_of("SUBMITTED", [{"id": "P1", "title": "Window", "requirements": ["R1", "R3"]},

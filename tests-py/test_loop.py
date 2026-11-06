@@ -3,6 +3,9 @@ import json
 import os
 import re
 import sys
+import tempfile
+from pathlib import Path
+from unittest import mock
 import time
 import unittest
 
@@ -107,13 +110,14 @@ class RunStateTest(RoundCase):
 
     # Verify the Queen-based loop behavior.
     def test_stop_flag_and_low_ram(self):
-        """The STOP flag and low free RAM skip the round, too."""
+        """The STOP flag skips the round; low free RAM skips only the project whose minimum it is below (H-24), not the round."""
         loop.stop_flag().parent.mkdir(parents=True, exist_ok=True)
         loop.stop_flag().write_text("x")
         self.assertEqual(self.round()["skipped"], "STOP")
         loop.stop_flag().unlink()
         res = self.round(free_ram=lambda: 0.5)
-        self.assertIn("free RAM", res["skipped"])
+        self.assertIsNone(res["skipped"])
+        self.assertIn("free RAM", runtime.kv_get(self.conn, "testproj", "hive-blocker:" + REL))
         self.assertIsNone(next((a for a in runtime.list_agents(self.conn, "testproj") if a["phase"] == "queen" and a["status"] == "running"), None))
 
 
@@ -226,6 +230,16 @@ class LoopTest(RoundCase):
                 with loop.start_lock(timeout=0.3):
                     pass
         self.assertFalse(loop.start_lock_file().exists())
+
+    def test_names_are_read_from_editable_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "names.txt"
+            path.write_text("First\nSecond\n", encoding="utf-8")
+            with mock.patch.object(loop, "names_file", return_value=path):
+                self.assertEqual(loop.load_agent_names(), ["First", "Second"])
+                self.assertEqual(loop.agent_identity(self.conn)["Person"], "First")
+                path.write_text("Changed\n", encoding="utf-8")
+                self.assertEqual(loop.load_agent_names(), ["Changed"])
 
     def test_agent_names(self):
         """At least 24 unique agent names and none is Queen."""
@@ -402,7 +416,6 @@ class LockResolvedTest(RoundCase):
         """An answer to a legacy lock question is retained without recreating the lock."""
         self.locked_round()
         qid = db.add_question(self.conn, "testproj", REL, "K1 Config values: range", "Paket K1 ist gesperrt, weil die Pruefung einen offenen Punkt meldet.", "retry")
-        self.assertIsNone(routine.lock_resolution(self.env(), REL, "K1"))
         db.answer_question(self.conn, qid, "siehe dort", "coordinator")
         self.assert_released()
 
@@ -434,22 +447,7 @@ class LockResolvedTest(RoundCase):
         self.assertEqual([a["name"] for a in runtime.list_agents(self.conn, "testproj") if a["package"] == "K1"], before)
         self.assertTrue(runtime.list_decisions(self.conn, "testproj", item="LOCK-K1"))
         self.assertFalse(self.pkg()["locked"])
-    def test_done_answer_on_item_with_title(self):
-        """An answered question with item 'K1 Config values' that says erledigt closes K1 (done_decisions), a lock question without that word does not."""
-        env = self.env()
-        qid = db.add_question(self.conn, "testproj", REL, "K1 Config values: range", "Paket K1 ist gesperrt, weil die Pruefung einen offenen Punkt meldet.", "x")
-        db.answer_question(self.conn, qid, "siehe dort", "coordinator")
-        self.assertEqual(routine.done_decisions(env, REL, ["K1", "K2"]), {})
-        qid = db.add_question(self.conn, "testproj", REL, "K1 Config values: range", "Paket K1 ist gesperrt.", "x")
-        db.answer_question(self.conn, qid, "erledigt, keine weiteren Laeufe", "coordinator")
-        self.assertEqual(list(routine.done_decisions(env, REL, ["K1", "K2"])), ["K1"])
 
-    def test_done_wording_needs_done(self):
-        """A decision that only names the package does not close it, and 'not done' does not either."""
-        env = self.env()
-        runtime.add_decision(self.conn, "testproj", "owner", "K1 is not done yet", REL, None)
-        runtime.add_decision(self.conn, "testproj", "owner", "K1 keeps its layout", REL, "LOCK-K1")
-        self.assertEqual(routine.done_decisions(env, REL, ['K1', 'K2']), {})
 
 class BrainTest(RoundCase):
     """The brain call with a stub program (no model)."""

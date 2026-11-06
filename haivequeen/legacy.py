@@ -12,7 +12,7 @@ from . import db, plans as plan_mod, runtime
 from .runtime import CmdError
 
 KV_FILES = (("ORCH-STATE.json", "loop-state"), ("ORCH-SYNC.json", "event-sync"), ("usage-claude.json", "usage-claude"))
-QUEUE_STATUS = (("ready", "ready"), ("in lauf", "in_run"), ("integriert", "integrated"), ("blockiert", "blocked"),
+QUEUE_STATUS = (("in progress", "in_run"), ("integrated", "integrated"), ("blocked", "blocked"), ("withdrawn", "withdrawn"), ("ready", "ready"), ("in lauf", "in_run"), ("integriert", "integrated"), ("blockiert", "blocked"),
                 ("zurückgezogen", "withdrawn"), ("zurueckgezogen", "withdrawn"), ("superseded", "withdrawn"),
                 ("ersetzt", "withdrawn"), ("verworfen", "withdrawn"), ("zurückgestellt", "withdrawn"),
                 ("zurueckgestellt", "withdrawn"))

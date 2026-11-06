@@ -8,14 +8,15 @@ import os
 import re
 import time
 import types
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import buildjobs, config, db, platform as osplat, runstate, runtime, scheduler as sch, usage
+from . import buildjobs, config, db, i18n, localtime, platform as osplat, runstate, runtime, scheduler as sch, usage
+from .i18n import N_, tr
 
 FINISHED_HOURS = 1
 ORCHESTRATOR_KINDS = ("agent", "brain")   # providers_usage kinds written by the orchestrator itself (the "all plans" row)
-PLAN_BADGES = (("DRAFT", "gray"), ("READY", "cyan"), ("IN_PROGRESS", "yellow"), ("DONE", "green"), ("PAUSED", "darkgray"))
+PLAN_BADGES = (("DRAFT", "gray"), ("SENT", "gray"), ("PREPARING", "cyan"), ("QUEUED", "cyan"), ("RUNNING", "yellow"), ("WAITING", "yellow"), ("REVIEW", "green"), ("DONE", "green"), ("PAUSED", "darkgray"), ("CANCELLED", "darkgray"))
 
 
 # ---- formatting helpers ----
@@ -25,9 +26,9 @@ def fmt_tok0(n) -> str:
     if n is None:
         return "–"
     if n >= 1e9:
-        return "%.1fG" % (n / 1e9)
+        return i18n.decimal("%.1fG" % (n / 1e9))
     if n >= 1e6:
-        return "%.1fM" % (n / 1e6)
+        return i18n.decimal("%.1fM" % (n / 1e6))
     if n >= 1e3:
         return "%dk" % int(n / 1e3 + 0.5)
     return str(int(n))
@@ -78,7 +79,7 @@ def format_reset(epoch, now) -> str:
     if not epoch:
         return ""
     d = datetime.fromtimestamp(int(epoch))
-    return d.strftime("%H:%M") if d.date() == now.date() else d.strftime("%d.%m. %H:%M")
+    return localtime.time(d) if d.date() == now.date() else localtime.date_time(d)
 
 
 
@@ -120,7 +121,7 @@ def window_usage(raw, now):
             elif int(w.get("resetsAt") or 0) > t:
                 res[name] = {"pct": round(100 * float(w.get("utilization"))), "reset": format_reset(w["resetsAt"], now)}
             else:
-                res[name] = {"pct": None, "reset": "new window"}
+                res[name] = {"pct": None, "reset": N_("new window")}
         except (TypeError, ValueError):
             continue
     return res
@@ -237,7 +238,9 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         sysinfo = live_sysinfo(conn, project)
     host = sysinfo["host"]
     try:
-        usage.refresh_codex_usage(conn)
+        codex = [p for p in sch.get_providers(cfg) if p.get("limit") == "codex"]
+        for provider in codex:
+            usage.refresh_codex_usage(conn, min_interval=provider.get("usageInterval", 60), provider=provider)
     except Exception:
         pass
     all_rows = runtime.list_agents(conn, project, "active")
@@ -260,16 +263,17 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     loop = _kv(conn, "loop-state") or {}
     since = _parse_time(loop.get("since")) if isinstance(loop, dict) else None
     if since:
-        orch_status = "idle since " + since.strftime("%H:%M")
+        orch_status = tr("idle since %s", localtime.time(since))
     else:
-        orch_status = "idle"
+        orch_status = tr("idle")
     last_round = conn.execute("SELECT ts FROM events WHERE kind='round'" + (" AND project=?" if project else "")
                               + " ORDER BY id DESC LIMIT 1", pa).fetchone()
     return {
         "now": now, "project": project, "projects": scope, "colours": colours, "cfg": cfg, "sysinfo": sysinfo,
         "run": runstate.get_state(conn), "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all, now),
         "provider_limits": provider_lines(conn, cfg, agents_all),
-        "cu": window_usage(_kv(conn, "usage-claude"), now), "xu": window_usage(_kv(conn, "usage-codex"), now),
+        "claude_error": usage.claude_refresh_error(conn) if not sch.get_providers(cfg or {}) and not usage.retained_claude(conn) else "",
+        "cu": window_usage((usage.retained_claude(conn) or _kv(conn, "usage-claude")) if not sch.get_providers(cfg or {}) else None, now), "xu": window_usage(_kv(conn, "usage-codex"), now),
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
         "qs": db.open_questions(conn, project, only_open=True),
@@ -277,7 +281,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "selfupdate": db.last_self_update(conn),
         "orch": {"status": orch_status},
         "round_errors": round_errors(conn, project, now),
-        "last_round": (_parse_time(last_round[0]).strftime("%H:%M:%S") if last_round and _parse_time(last_round[0]) else "-"),
+        "last_round": (localtime.time(_parse_time(last_round[0])) if last_round and _parse_time(last_round[0]) else "-"),
     }
 
 
@@ -302,7 +306,7 @@ def provider_lines(conn, cfg, agents) -> list:
                     if hours is not None:
                         reset_at = time.time() + float(hours) * 3600
             elif not os.environ.get("BZZ_RUNTIME_OVERRIDE"):
-                window = (sch.claude_usage(conn) if source == "claude" else sch.codex_usage()).get("SevenDay")
+                window = (({"Pct": w.get("pct"), "At": w.get("at")} if w else None) if (w := usage.get_claude_usage(conn, provider=provider).get("seven_day")) else None) if source == "claude" else {"Pct": w.get("pct"), "At": w.get("at")} if (w := usage.cached_codex_usage(conn, provider=provider).get("seven_day")) else None
                 if window and window.get("Pct") is not None:
                     used = float(window["Pct"])
                     if window.get("At"):
@@ -320,8 +324,16 @@ def provider_lines(conn, cfg, agents) -> list:
             remaining_week = max(0.0, float(hours)) / 168.0
             remaining_quota = max(0.0, 100.0 - used) / 100.0
             ratio = remaining_quota / remaining_week if remaining_week else float("inf")
-        rows.append({"name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
-                     "stale": stale_hours is not None, "stale_hours": stale_hours,
+        kept = usage.retained_claude(conn, provider=provider) if source == "claude" else None
+        if kept:
+            window = window_usage(kept, datetime.now(timezone.utc)).get("SevenDay")
+            if window and window.get("pct") is not None:
+                used = window["pct"]
+        saved = _parse_time(kept.get("saved")) if kept else None
+        age_minutes = max(0, int((datetime.now(timezone.utc) - saved.astimezone(timezone.utc)).total_seconds() // 60)) if saved else None
+        error = usage.claude_refresh_error(conn, provider=provider) if source == "claude" else ""
+        five = window_usage(kept or usage._claude_snapshot(conn, provider=provider), datetime.now(timezone.utc)).get("FiveHour") if source == "claude" else None
+        rows.append({"stale": stale_hours is not None, "stale_hours": stale_hours, "five_hour": five, "error": error, "age_minutes": age_minutes, "name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
                      "has_limit": source in ("claude", "codex"),
                      "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
                      "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),
@@ -350,11 +362,11 @@ def self_update_line(su) -> list:
     """Line parts of the last self-update: result in its colour, end (else start) time, new commit, and for a rollback the commit it went back to."""
     result = su.get("result") or "?"
     when = _parse_time(su.get("ended")) or _parse_time(su.get("started"))
-    text = "  " + (when.strftime("%d.%m. %H:%M") if when else "-") + "  " + (su.get("new_commit") or "-")[:7]
+    text = "  " + (localtime.date_time(when) if when else "-") + "  " + (su.get("new_commit") or "-")[:7]
     if result == "rollback":
-        text += " (back to " + (su.get("old_commit") or "-")[:7] + ")"
+        text += tr(" (back to %s)", (su.get("old_commit") or "-")[:7])
     col = {"ok": "green", "rollback": "yellow"}.get(result, "red")
-    return [("self-update ", "gray"), (result, col), (text, "gray")]
+    return [(tr("self-update "), "gray"), (tr(result), col), (text, "gray")]
 
 
 def live_sysinfo(conn, project=None) -> dict:

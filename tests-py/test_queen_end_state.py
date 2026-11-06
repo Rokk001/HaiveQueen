@@ -145,6 +145,7 @@ class QueenEndStateTest(EndedWithoutWorkTest):
             self.assertEqual(hives.queen_final_text(run, 0, 'message', ended=1.5), 'old')
             class Env:
                 name = 'P'
+                settings = {}
             with patch.object(hives.db, 'add_question', return_value=1) as add:
                 hives.ask_about_end(None, Env(), 'plan', {'name': 'Ada', 'status': 'done'}, text)
                 question = add.call_args.args[4]

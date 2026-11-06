@@ -100,7 +100,7 @@ class SnapshotTest(unittest.TestCase):
         row = snap["hives"][0]
         self.assertTrue(row["paused"])
         self.assertIn("paused", row["status"])
-        self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','READY','2026-11-01T12:00:00')")
+        self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','QUEUED','2026-11-01T12:00:00')")
         self.conn.commit()
         row = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)["hives"][0]
         self.assertFalse(row["paused"])
@@ -114,11 +114,11 @@ class SnapshotTest(unittest.TestCase):
             snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
             return snap["hives"], snap["tiles"]["hives"]
         self.assertEqual(len(active()[0]), 1)
-        for status in ("REJECTED", "DONE"):
+        for status in ("CANCELLED", "DONE"):
             self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP',?,'AI',?,'2026-11-01T12:00:00')", (plan, status))
             self.conn.commit()
             self.assertEqual(active(), ([], 0), status)
-        self.conn.execute("UPDATE plans SET status='READY'")
+        self.conn.execute("UPDATE plans SET status='QUEUED'")
         self.conn.execute("UPDATE hives SET state='done'")
         self.conn.commit()
         self.assertEqual(active()[0], [])
@@ -287,9 +287,40 @@ class StateButtonTest(unittest.TestCase):
         self.assertEqual(gui.REPO_URL, "https://github.com/Rokk001/HaiveQueen")
 
 
+def size_supported(width, height, screen_width, screen_height):
+    """Whether a requested window size fits on the available display."""
+    return width <= screen_width and height <= screen_height
+
+
 # Draw the window once when a display exists.
 class WindowTest(unittest.TestCase):
     """Smoke test: the window draws from the invented snapshot without an exception."""
+
+    def test_dashboard_content_fits_at_small_size(self):
+        """Status text, update errors and the header image stay inside their available width."""
+        import tkinter as tk
+        from haivequeen import gui
+        try:
+            root = tk.Tk()
+            root.attributes("-alpha", 0.0)
+        except tk.TclError:
+            self.skipTest("no display")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                conn = db.connect(Path(tmp) / "o.db")
+                try:
+                    root.geometry("1000x600+0+0")
+                    with mock.patch.object(gui.Dashboard, "watch_update"):
+                        win = gui.Dashboard(root, conn)
+                        root.update()
+                        win.update_state = {"failed": "a" * 200}
+                        win.draw()
+                        self.assertLessEqual(win.canvas.bbox("all")[2], win.canvas.winfo_width() + 2)
+                        self.assertLessEqual(win.fraction[0] / win.fraction[1], win.scale)
+                finally:
+                    conn.close()
+        finally:
+            root.destroy()
 
     # Draw the window, or skip without a display.
     def test_draw(self):
@@ -332,11 +363,14 @@ class WindowTest(unittest.TestCase):
             gui.REFRESH_MS = 10 ** 9
             win = gui.Dashboard(root, conn)
             root.update()
-            link = [h for h in win.hits if h[1] < 150 * win.scale < h[3] and h[0] > 450 * win.scale]
-            self.assertEqual(len(link), 1)
+            link = sorted((h for h in win.hits if h[1] < 150 * win.scale < h[3] and h[0] > 450 * win.scale), key=lambda h: h[0])
+            self.assertEqual(len(link), 2)   # the repository link, then the update part of the header (H-42)
             with mock.patch("webbrowser.open") as opened:
                 link[0][4](None)
             opened.assert_called_once_with(gui.REPO_URL)
+            with mock.patch.object(win, "check_update") as check:
+                link[1][4](None)
+            check.assert_called_once_with()
         finally:
             root.destroy()
             conn.close()
@@ -373,6 +407,13 @@ class WindowTest(unittest.TestCase):
             conn.close()
             tmp.cleanup()
 
+    def test_size_supported(self):
+        """Both dimensions must fit on the available display."""
+        self.assertTrue(size_supported(1000, 600, 1280, 800))
+        self.assertTrue(size_supported(1280, 800, 1280, 800))
+        self.assertFalse(size_supported(1366, 768, 1280, 800))
+        self.assertFalse(size_supported(800, 801, 1280, 800))
+
     # Draw at many window sizes and check that nothing is drawn outside the canvas.
     def test_sizes(self):
         """At seven window sizes, check the layout on screens at least 1280 pixels wide."""
@@ -381,31 +422,37 @@ class WindowTest(unittest.TestCase):
         gui.REFRESH_MS = 10 ** 9
         checked = 0
         for width, height in ((800, 500), (1000, 600), (1200, 700), (1366, 768), (1600, 900), (1920, 1050), (2400, 1300)):
-            try:
-                root = tk.Tk()
-                root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
-            except tk.TclError:
-                self.skipTest("no display")
-            tmp = tempfile.TemporaryDirectory()
-            conn = db.connect(Path(tmp.name) / "o.db")
-            try:
-                root.geometry("%dx%d+0+0" % (width, height))
-                win = gui.Dashboard(root, conn)
-                root.update()
-                canvas_w, canvas_h = win.canvas.winfo_width(), win.canvas.winfo_height()
-                if abs(canvas_w - width) > 0.05 * width:
-                    continue   # the window manager clamped this size (small screen): nothing to check
-                zoom, sub = win.fraction
-                self.assertLessEqual(zoom / sub, win.scale * 1.005)
-                left, top, right, bottom = win.canvas.bbox("all")
-                self.assertGreaterEqual((left, top), (-1, -1), (width, height))
-                self.assertLessEqual(right, canvas_w + 2, (width, height))
-                self.assertLessEqual(bottom, canvas_h + 2, (width, height))
-                checked += 1
-            finally:
-                root.destroy()
-                conn.close()
-                tmp.cleanup()
+            with self.subTest(width=width, height=height):
+                try:
+                    root = tk.Tk()
+                    root.attributes("-alpha", 0.0)   # fully transparent: do not flash on the user's screen
+                except tk.TclError:
+                    self.skipTest("no display")
+                try:
+                    screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
+                    if not size_supported(width, height, screen_w, screen_h):
+                        self.skipTest("%dx%d exceeds display %dx%d" % (width, height, screen_w, screen_h))
+                    with tempfile.TemporaryDirectory() as tmp:
+                        conn = db.connect(Path(tmp) / "o.db")
+                        try:
+                            root.geometry("%dx%d+0+0" % (width, height))
+                            win = gui.Dashboard(root, conn)
+                            root.update()
+                            self.assertAlmostEqual(root.winfo_width(), width, delta=0.05 * width)
+                            self.assertAlmostEqual(root.winfo_height(), height, delta=0.05 * height)
+                            canvas_w, canvas_h = win.canvas.winfo_width(), win.canvas.winfo_height()
+                            zoom, sub = win.fraction
+                            self.assertLessEqual(zoom / sub, win.scale * 1.005)
+                            left, top, right, bottom = win.canvas.bbox("all")
+                            self.assertGreaterEqual((left, top), (-1, -1), (width, height))
+                            self.assertLessEqual(right, canvas_w + 2, (width, height))
+                            self.assertLessEqual(bottom, canvas_h + 2, (width, height))
+                            checked += 1
+                        finally:
+                            conn.close()
+                finally:
+                    root.destroy()
+
         self.assertGreaterEqual(checked, 3)
 
 

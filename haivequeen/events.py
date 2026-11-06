@@ -27,8 +27,8 @@ def run_command(argv: list, work_dir, timeout: int) -> dict:
 def current_event_keys(env, plans: list, queue_rows: list, verify_zero, questions: list) -> dict:
     """Current event candidates as an ordered dict key -> text (the state, not the change: new keys since the last round are the events).
 
-    `plans` are dicts with path and status, `queue_rows` dicts with branch, tip and status words (ready, integriert),
-    `verify_zero(agent name)` tells whether a verify ended with 'Offene Anforderungen: 0', `questions` are dicts with id and status OPEN/ANSWERED.
+    `plans` are dicts with path and status, `queue_rows` dicts with branch, tip and status words (ready, integrated),
+    `verify_zero(agent name)` tells whether a verify ended with 'Open requirements: 0', `questions` are dicts with id and status OPEN/ANSWERED.
     """
     cur = {}
     for pr in plans:
@@ -48,7 +48,7 @@ def current_event_keys(env, plans: list, queue_rows: list, verify_zero, question
         word = str(r["status"]).strip().split(" ")[0]
         if word == "ready":
             cur["queue|%s|%s|ready" % (r["branch"], r["tip"])] = "ready %s" % r["branch"]
-        elif word == "integriert":
+        elif word in ("integrated", "integriert"):
             cur["queue|%s|%s|integrated" % (r["branch"], r["tip"])] = "integrated %s" % r["branch"]
     for q in questions:
         if q["status"] == "OPEN":

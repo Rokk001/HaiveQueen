@@ -92,6 +92,24 @@ class QueenLoadTest(RoundCase):
         queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen" and a["name"] != "Old")
         return (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8-sig")
 
+    def test_context_scopes_and_deduplicates_answers(self):
+        runtime.add_decision(self.conn, "testproj", "owner", "OWN-DECISION", REL)
+        runtime.add_decision(self.conn, "testproj", "owner", "GLOBAL-DECISION", None)
+        runtime.add_decision(self.conn, "testproj", "owner", "OTHER-DECISION", "other.md")
+        runtime.add_decision(self.conn, "otherproj", "owner", "FOREIGN-DECISION", None)
+        for plan, question, answer, global_answer in (
+            (REL, "OWN-QUESTION", "OWN-ANSWER", False),
+            ("other.md", "GLOBAL-QUESTION", "GLOBAL-ANSWER", True),
+            ("other.md", "OTHER-QUESTION", "OTHER-ANSWER", False),
+        ):
+            qid = db.add_question(self.conn, "testproj", plan, question, question, "")
+            db.answer_question(self.conn, qid, answer, "owner", apiary=global_answer)
+        text = profile.queen_load(self.conn, "testproj", self.repo, REL)
+        for value in ("OWN-DECISION", "GLOBAL-DECISION", "OWN-QUESTION", "OWN-ANSWER", "GLOBAL-QUESTION", "GLOBAL-ANSWER"):
+            self.assertEqual(text.count(value), 1, value)
+        for value in ("OTHER-DECISION", "FOREIGN-DECISION", "OTHER-QUESTION", "OTHER-ANSWER"):
+            self.assertNotIn(value, text)
+
     def test_queen_gets_exactly_her_parts(self):
         text = self.queen_prompt()
         self.assertIn("You are the Queen", text)                       # her Queen role file

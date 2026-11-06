@@ -37,14 +37,14 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
             "sevenDay": {"utilization": percent / 100, "resetsAt": self.reset}}
         if failed:
             raw["refresh_error"] = "quota refresh failed"
-        runtime.kv_set(self.conn, "*", "usage-claude", json.dumps(raw))
+        runtime.kv_set(self.conn, "*", "usage-claude:claude", json.dumps(raw))
         return raw
 
     # Apply the current account reading to the dashboard, ranking and start gate.
     def test_current_weekly_exhaustion_is_shared_everywhere(self):
         raw = self.snapshot(100)
         self.assertEqual(overview.window_usage(raw, datetime.now())["SevenDay"]["pct"], 100)
-        self.assertEqual(scheduler.claude_usage(self.conn)["SevenDay"]["Pct"], 100)
+        self.assertEqual(usage.get_claude_usage(self.conn, provider=self.provider)["seven_day"]["pct"], 100)
         self.assertEqual(usage.get_provider_limit(self.conn, self.provider, read_pc=True)["free_pct"], 0)
         self.assertEqual(scheduler.provider_limit(self.provider, self.conn)["FreePct"], 0)
         self.assertIsNone(scheduler.select_provider([self.provider], "medium", [], {"claude": 5}, conn=self.conn))
@@ -54,7 +54,7 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
     def test_failed_refresh_does_not_display_old_ninety_percent(self):
         raw = self.snapshot(90, failed=True, age_hours=usage.RETAIN_HOURS + 1)
         self.assertIsNone(overview.window_usage(raw, datetime.now())["SevenDay"])
-        self.assertIsNone(scheduler.claude_usage(self.conn)["SevenDay"])
+        self.assertIsNone(usage.get_claude_usage(self.conn, provider=self.provider)["seven_day"])
         row = overview.provider_lines(self.conn, self.cfg, [])[0]
         self.assertIsNone(row["used_pct"])
         self.assertIsNone(row["ratio"])
@@ -80,20 +80,34 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
     def test_failed_refresh_stores_the_reason(self):
         provider = dict(self.provider, command="a-claude-cli-that-does-not-exist")
         self.assertFalse(usage.refresh_claude_usage(self.conn, [provider], run=lambda *a, **k: None, force=True))
-        self.assertIn("missing CLI", usage.claude_refresh_error(self.conn))
+        self.assertIn("missing CLI", usage.claude_refresh_error(self.conn, provider=provider))
 
     # The provider may confirm exhaustion without supplying a reset timestamp.
     def test_verified_percentage_without_reset_stays_known(self):
         raw = self.snapshot(100)
         raw["sevenDay"]["resetsAt"] = None
-        runtime.kv_set(self.conn, "*", "usage-claude", json.dumps(raw))
+        runtime.kv_set(self.conn, "*", "usage-claude:claude", json.dumps(raw))
         self.assertEqual(overview.window_usage(raw, datetime.now())["SevenDay"], {"pct": 100, "reset": ""})
-        self.assertEqual(scheduler.claude_usage(self.conn)["SevenDay"], {"Pct": 100, "Reset": "", "At": None})
+        self.assertEqual(usage.get_claude_usage(self.conn, provider=self.provider)["seven_day"], {"pct": 100, "reset": "", "at": None})
         self.assertEqual(scheduler.provider_limit(self.provider, self.conn)["FreePct"], 0)
         row = overview.provider_lines(self.conn, self.cfg, [])[0]
         self.assertEqual(row["used_pct"], 100)
         self.assertIsNone(row["reset_at"])
         self.assertFalse(row["next"])
+
+    def test_failures_and_retained_age_are_scoped_to_provider(self):
+        self.snapshot(13, failed=True)
+        other = dict(self.provider, name="other")
+        runtime.kv_set(self.conn, "*", "usage-claude:other", json.dumps({
+            "saved": datetime.now().astimezone().isoformat(),
+            "sevenDay": {"utilization": 0.7, "resetsAt": self.reset}}))
+        self.assertEqual(scheduler.provider_limit(self.provider, self.conn)["FreePct"], 87)
+        self.assertEqual(scheduler.provider_limit(other, self.conn)["FreePct"], 30)
+        row = overview.provider_lines(self.conn, self.cfg, [])[0]
+        self.assertEqual(row["used_pct"], 13)
+        self.assertIsNotNone(row["age_minutes"])
+        self.assertTrue(row["error"])
+        self.assertFalse(usage.claude_refresh_failed(self.conn, provider=other))
 
     # Metadata I/O must finish before scheduling acquires its shared lock.
     def test_refresh_runs_outside_the_hive_scheduling_lock(self):

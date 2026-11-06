@@ -18,9 +18,9 @@ class LoopEndTest(RoundCase):
 
     # Return the loop faults in this test database.
     def questions(self):
-        """Return pending and visible loop faults in this test database."""
-        return (runtime.list_questions(self.conn, "HaiveQueen", "fault_check", faults.FAULT_PLAN, "loop_vanished") +
-                runtime.list_questions(self.conn, "HaiveQueen", "open", faults.FAULT_PLAN, "loop_vanished"))
+        """Return the shown loop faults in this test database; a vanished loop belongs to no Apiary, so it is never an inbox question (H-46 g)."""
+        self.assertEqual(runtime.list_questions(self.conn, "HaiveQueen", None, faults.FAULT_PLAN, "loop_vanished"), [])
+        return [f for f in faults.global_faults(self.conn) if f["kind"] == "loop_vanished"]
 
     # A dead loop with no STOP and no clean end files one fault on takeover.
     def test_stale_lock_files_one_fault(self):
@@ -32,9 +32,8 @@ class LoopEndTest(RoundCase):
             loop.run_loop(self.conn, self.machine)
             loop.run_loop(self.conn, self.machine)
         self.assertEqual(len(self.questions()), 1)
-        self.assertEqual(self.questions()[0]["status"], "fault_check")
         text = "Loop ended unexpectedly (pid 2000000000, last state idle since 2026-01-01T00:00:00)"
-        self.assertIn(text, self.questions()[0]["question"])
+        self.assertIn(text, self.questions()[0]["text"])
         self.assertIn(text, self.log("HaiveQueen"))
         self.assertTrue(any(text in e["text"] for e in runtime.list_events(self.conn, "HaiveQueen")))
 

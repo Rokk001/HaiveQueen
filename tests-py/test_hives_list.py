@@ -29,7 +29,7 @@ class ListTests(RoundCase):
         write_plan(self.repo / OTHER, "DRAFT", [], "Never read")
         write_plan(ws2 / OTHER, "REJECTED", [], "Rejected one")
         rows = {(r["apiary"], r["plan_path"]): r["status"] for r in gui_hives.plan_rows(self.conn)}
-        self.assertEqual(rows, {("testproj", REL): "READY", ("testproj", OTHER): "DRAFT", ("second", REL): "DONE", ("second", OTHER): "REJECTED"})
+        self.assertEqual(rows, {("testproj", REL): "QUEUED", ("testproj", OTHER): "DRAFT", ("second", REL): "DONE", ("second", OTHER): "CANCELLED"})
 
     def test_a_plan_with_a_hive_is_marked(self):
         """Only a plan that had a Hive says so."""
@@ -60,11 +60,11 @@ class ActionTests(RoundCase):
     def test_offered_actions_by_status(self):
         """The rules per status."""
         self.assertEqual(self.offered("DRAFT"), ["start", "reject"])
-        self.assertEqual(self.offered("READY"), ["pause"])
-        self.assertEqual(self.offered("SUBMITTED"), ["pause"])
-        self.assertEqual(self.offered("IN_PROGRESS"), ["pause"])
+        self.assertEqual(self.offered("QUEUED"), ["pause"])
+        self.assertEqual(self.offered("SENT"), ["pause"])
+        self.assertEqual(self.offered("RUNNING"), ["pause"])
         self.assertEqual(self.offered("DONE"), [])
-        self.assertEqual(self.offered("REJECTED"), ["start", "draft"])
+        self.assertEqual(self.offered("CANCELLED"), ["start", "draft"])
 
     def test_a_stopped_hive_offers_start_reject_and_draft(self):
         """PAUSED without a live Queen is a stopped Hive."""
@@ -78,14 +78,14 @@ class ActionTests(RoundCase):
         self.assertFalse(gui_hives.run_action(self.conn, self.row(), "start", lambda text: False))
         self.assertEqual(self.status(), "DRAFT")
         self.assertTrue(gui_hives.run_action(self.conn, self.row(), "start", yes))
-        self.assertEqual(self.status(), "READY")
+        self.assertEqual(self.status(), "SENT")
 
     def test_start_draft_ready_stopped_before_and_rejected_draft(self):
-        """Start: a stopped plan gets its earlier status, a rejected plan DRAFT, a draft READY."""
+        """Start: a stopped plan gets its earlier status, a cancelled plan DRAFT, a draft SENT (H-21)."""
         self.plan("IN_PROGRESS", PKG)
         hives.pause_plan(self.conn, "testproj", REL)
         gui_hives.run_action(self.conn, self.row(), "start", yes)
-        self.assertEqual(self.status(), "IN_PROGRESS")
+        self.assertEqual(self.status(), "RUNNING")
         self.plan("REJECTED", PKG)
         gui_hives.run_action(self.conn, self.row(), "start", yes)
         self.assertEqual(self.status(), "DRAFT")
@@ -96,10 +96,10 @@ class ActionTests(RoundCase):
         gui_hives.run_action(self.conn, self.row(), "pause", yes)
         self.assertEqual(self.status(), "PAUSED")
         gui_hives.run_action(self.conn, self.row(), "reject", yes)
-        self.assertEqual(self.status(), "REJECTED")
+        self.assertEqual(self.status(), "CANCELLED")
         self.plan("DRAFT", PKG)
         gui_hives.run_action(self.conn, self.row(), "reject", yes)
-        self.assertEqual(self.status(), "REJECTED")
+        self.assertEqual(self.status(), "CANCELLED")
         self.plan("READY", PKG)
         with self.assertRaises(ValueError):
             hives.reject_plan(self.conn, "testproj", REL)
@@ -122,7 +122,7 @@ class ActionTests(RoundCase):
         write_plan(self.repo / OTHER, "DRAFT", PKG, "Never read")
         row = next(r for r in gui_hives.plan_rows(self.conn) if r["plan_path"] == OTHER)
         gui_hives.run_action(self.conn, row, "start", yes)
-        self.assertEqual(self.conn.execute("SELECT status FROM plans WHERE path=?", (OTHER,)).fetchone()[0], "READY")
+        self.assertEqual(self.conn.execute("SELECT status FROM plans WHERE path=?", (OTHER,)).fetchone()[0], "SENT")
 
 
 class StyleTests(RoundCase):
@@ -161,7 +161,7 @@ class WindowTests(unittest.TestCase):
     def test_footer_has_a_hives_button(self):
         """The footer names the button and the Dashboard opens the list through open_hives."""
         self.assertTrue(callable(gui.Dashboard.open_hives))
-        self.assertIn('"hives", self.open_hives', inspect.getsource(gui.Dashboard.footer))
+        self.assertIn('tr("hives"), self.open_hives', inspect.getsource(gui.Dashboard.footer))
 
     def test_open_hives_creates_the_window_once(self):
         """A second click brings the open window to the front."""
@@ -179,7 +179,7 @@ class WindowTests(unittest.TestCase):
 
     def test_menu_items_confirm_and_call(self):
         """The right-click menu lists the actions of the row; choosing one runs it with the confirmation."""
-        row = {"apiary": "A", "plan_path": "p.md", "name": "X", "status": "REJECTED", "stopped": False, "has_hive": False}
+        row = {"apiary": "A", "plan_path": "p.md", "name": "X", "status": "CANCELLED", "stopped": False, "has_hive": False}
         win = mock.Mock(spec=gui_hives.HivesWindow)
         win.conn = object()
         win.on_changed = None

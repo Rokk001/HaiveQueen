@@ -65,11 +65,12 @@ class CommandClassificationTest(unittest.TestCase):
 
     # The special compile milestone also requires an actual script invocation.
     def test_compile_script_execution_keeps_label(self):
-        """Direct and interpreter-based compile checks keep the existing label."""
+        """A script configured as the compile check keeps the label however it is run; its file name alone says nothing (H-17)."""
         for command in ('pwsh scripts/compile-check-changed.ps1', '& "scripts/compile-check-changed.ps1"',
                         '"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "& scripts/compile-check-changed.ps1"'):
             with self.subTest(command=command):
-                self.assertEqual(ar.classify_cmd(command), {'kind': 'check', 'label': 'Compile test'})
+                self.assertEqual(ar.classify_cmd(command, compile_check='scripts/compile-check-changed.ps1'), {'kind': 'check', 'label': 'Compile test'})
+                self.assertEqual(ar.classify_cmd(command), {'kind': 'check', 'label': 'Check compile-check-changed.ps1'})
 
 
 if __name__ == '__main__':
