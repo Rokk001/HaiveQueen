@@ -459,6 +459,95 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(gui_config.load_raw(new / ".haivequeen" / "project.toml"), {"buildEnabled": False})
         self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='Fresh'").fetchone()[0], str(new.resolve()))
 
+    # A new Apiary in a workspace that already has a project.toml (Vera-7 open point).
+    def existing_workspace(self):
+        """A folder with a project.toml of its own (a comment, three settings) and the text of that file."""
+        folder = self.folder / "known"
+        (folder / ".haivequeen").mkdir(parents=True)
+        text = '# kept\npriority = 7\nplanGlobs = ["docs/*.md"]\ndeployEnabled = false\n'
+        (folder / ".haivequeen" / "project.toml").write_text(text, encoding="utf-8")
+        return folder, text
+
+    def new_apiary_in(self, win, folder):
+        """Add an Apiary on the tab Apiaries and type `folder` as its workspace (not yet entered)."""
+        win.pick_tab("apiaries")
+        win.add_entry()
+        self.type_into_entry(win, "", str(folder))
+
+    def shown(self, win) -> dict:
+        """{key: shown value} of the project.toml settings on the shown Apiary page."""
+        return {path[1]: getter() for path, getter, _like in win.getters if path[0] == "file"}
+
+    def test_entered_workspace_shows_its_project_file_at_once(self):
+        """Entering the workspace of a new Apiary shows the settings of the project.toml already there, without leaving the page."""
+        folder, _text = self.existing_workspace()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        self.new_apiary_in(win, folder)
+        node = win.node
+        workspace = next(w for w in descendants(win.form) if w.winfo_class() == "Entry" and w.get() == str(folder))
+        self.assertTrue({"<FocusOut>", "<Key-Return>"} <= set(workspace.bind()), workspace.bind())
+        win.workspace_entered()   # what both bindings call (hidden test windows get no focus events)
+        self.assertEqual(win.node, node)
+        shown = self.shown(win)
+        self.assertEqual((shown["priority"], shown["planGlobs"], shown["deployEnabled"]), ("7", ["docs/*.md"], False))
+
+    def test_entered_workspace_keeps_the_unsaved_edits(self):
+        """A setting changed before the workspace is entered stays as typed; the other values of the existing project.toml stay as they are."""
+        folder, _text = self.existing_workspace()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.pick_tab("apiaries")
+        win.add_entry()
+        win.target()["file"]["priority"] = 9
+        win.build_form()
+        self.type_into_entry(win, "", str(folder))
+        win.workspace_entered()
+        shown = self.shown(win)
+        self.assertEqual((shown["priority"], shown["planGlobs"], shown["deployEnabled"]), ("9", ["docs/*.md"], False))
+        win.save()
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        saved = (folder / ".haivequeen" / "project.toml").read_text(encoding="utf-8")
+        self.assertEqual(tomllib.loads(saved), {"priority": 9, "planGlobs": ["docs/*.md"], "deployEnabled": False})
+        self.assertIn("# kept", saved)
+
+    def test_save_right_after_typing_the_workspace_keeps_the_existing_file(self):
+        """Save without entering the workspace first still lays the edits over the existing project.toml instead of replacing it."""
+        folder, _text = self.existing_workspace()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.pick_tab("apiaries")
+        win.add_entry()
+        win.target()["file"]["buildEnabled"] = False
+        win.build_form()
+        self.type_into_entry(win, "", str(folder))
+        win.save()
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(gui_config.load_raw(folder / ".haivequeen" / "project.toml"),
+                         {"priority": 7, "planGlobs": ["docs/*.md"], "deployEnabled": False, "buildEnabled": False})
+
+    def test_entered_workspace_without_edits_leaves_the_file_untouched(self):
+        """Entering the workspace and saving without a change writes no project.toml and no backup; the Apiary is registered."""
+        folder, text = self.existing_workspace()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        self.new_apiary_in(win, folder)
+        win.workspace_entered()
+        win.save()
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        path = folder / ".haivequeen" / "project.toml"
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
+        self.assertFalse(path.with_name("project.toml.bak").exists())
+        self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='new-apiary'").fetchone()[0], str(folder.resolve()))
+
+    def test_entering_the_same_workspace_again_rebuilds_nothing(self):
+        """Entering an unchanged workspace keeps the page and its typed values as they are."""
+        folder, _text = self.existing_workspace()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        self.new_apiary_in(win, folder)
+        win.workspace_entered()
+        self.type_into_entry(win, "7", "8")
+        rows = list(win.form.winfo_children())
+        win.workspace_entered()
+        self.assertEqual(list(win.form.winfo_children()), rows)
+        self.assertEqual(self.shown(win)["priority"], "8")
+
     def test_add_apiary_without_workspace_writes_no_project_file(self):
         """A new Apiary whose workspace does not exist cannot keep changed settings: nothing is written and the reason is shown."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
