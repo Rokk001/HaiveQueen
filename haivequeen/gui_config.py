@@ -306,6 +306,26 @@ def save_file(path, data):
     os.replace(temp, path)
 
 
+def save_project_file(conn, path, data):
+    """Save a project and capture the release boundary while integration writes are locked."""
+    from . import config, db, publish
+    path = Path(path)
+    previous = config._load_toml(path)
+    enabling = bool(data.get("publishReleases")) and not bool(previous.get("publishReleases"))
+    if not enabling:
+        save_file(path, data)
+        return
+    project = conn.execute("SELECT name FROM projects WHERE workspace=?", (str(path.parent.parent),)).fetchone()
+    if not project:
+        raise ValueError("project is not registered")
+    name = project[0]
+    with db.transaction(conn):
+        before = [row[0] for row in conn.execute("SELECT id FROM queue WHERE project=? AND status='integrated'", (name,))]
+        conn.execute(publish._UPSERT, (name, publish.SINCE_KEY, db.now(), db.now()))
+        conn.execute(publish._UPSERT, (name, publish.BEFORE_KEY, json.dumps(before), db.now()))
+        save_file(path, data)
+
+
 def _comments(text):
     """Return TOML comments outside quoted strings, including multiline strings."""
     comments, quote, multiline, escaped = [], None, False, False
@@ -377,7 +397,7 @@ def _update_document(document, data):
                     _update_document(entry, updated)
             elif old.unwrap() != value:
                 document[key] = value
-        elif old.unwrap() != value:
+        elif (old.unwrap() if hasattr(old, "unwrap") else old) != value:
             document[key] = value
 
 
@@ -938,7 +958,10 @@ class ConfigWindow:
         if problems:
             self.status.config(text="; ".join(problems)[:300], fg=self.col["red"])
             return
-        save_file(self.files[self.index][1], self.data)
+        if self.machine():
+            save_file(self.files[self.index][1], self.data)
+        else:
+            save_project_file(self.conn, self.files[self.index][1], self.data)
         if self.machine():
             from . import init
             init.register_listed(self.conn, self.data.get("projects"))   # a project added on this page is an Apiary from now on
