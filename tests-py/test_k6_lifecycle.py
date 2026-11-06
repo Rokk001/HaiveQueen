@@ -397,14 +397,18 @@ class StoppedPackageTests(RoundCase):
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Eva", "medium", "claude", queen="Queen-A")
         self.assertEqual(sorted(r["name"] for r in gui_data.embedded_rows(self.conn)), ["Cia", "Eva"])   # recording never closes an older row
 
-    def test_the_own_queen_confirms_her_subagent_bee_without_further_evidence(self):
+    def test_the_own_queen_also_needs_end_proof_and_result(self):
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
         queen = runtime.get_agent(self.conn, "testproj", "Queen-A")
-        self.assertEqual(bees.release_refusal(self.conn, "testproj", REL, "P1", queen, ""), "")
+        self.assertIn('--ended-evidence', bees.release_refusal(self.conn, "testproj", REL, "P1", queen, ""))
+        self.agent('Cia', phase='bee', package='P1', status='done', started_at=db.now(), ended_at=db.now())
+        report = self.wt / 'result.md'
+        report.write_text('done', encoding='utf-8')
+        self.assertEqual(bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(report)), "")
         bees.report_attempt(self.env(), REL, "P1", "medium", "interrupted", "Cia")
         self.assertEqual(gui_data.embedded_rows(self.conn), [])
 
-    def test_a_later_queen_releases_an_orphaned_bee_only_with_evidence_written_after_its_start(self):
+    def test_a_later_queen_requires_end_proof_besides_a_new_result(self):
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
         self.conn.execute("UPDATE embedded_bees SET started_at=? WHERE name='Cia'", ((datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds"),))
         self.restart_queen()
@@ -420,6 +424,8 @@ class StoppedPackageTests(RoundCase):
         self.assertIn("before", bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(old)))
         report = self.wt / "result.md"
         report.write_text("done", encoding="utf-8")
+        self.assertIn('no matching agent', bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(report)))
+        self.agent('Cia', phase='bee', package='P1', status='done', started_at=db.now(), ended_at=db.now())
         self.assertEqual(bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(report)), "")
         self.assertEqual(len(gui_data.embedded_rows(self.conn)), 1)   # checking alone releases nothing
 
@@ -438,9 +444,16 @@ class StoppedPackageTests(RoundCase):
         report.write_text("done", encoding="utf-8")
         args.ended_evidence = str(report)
         with mock.patch.dict("os.environ", {"BZZ_AGENT": "Queen-B"}), mock.patch.object(scheduler, "load_projects", return_value=[env]), \
+                mock.patch("haivequeen.config.load_config", return_value={}), mock.patch.object(cli, "fail", side_effect=lambda text: text):
+            self.assertIn('no matching agent', cli.cmd_bee(args, self.conn))
+        self.assertEqual(len(gui_data.embedded_rows(self.conn)), 1)
+        self.assertEqual(bees.free_bee_places(env, REL, 5), 2)
+        self.agent('Cia', phase='bee', package='P1', status='done', started_at=db.now(), ended_at=db.now())
+        with mock.patch.dict("os.environ", {"BZZ_AGENT": "Queen-B"}), mock.patch.object(scheduler, "load_projects", return_value=[env]), \
                 mock.patch("haivequeen.config.load_config", return_value={}), mock.patch.object(cli, "out"):
             self.assertEqual(cli.cmd_bee(args, self.conn), 0)
         self.assertEqual(gui_data.embedded_rows(self.conn), [])
+        self.assertEqual(bees.free_bee_places(env, REL, 5), 3)
         self.assertEqual(self.queen_notice("Queen-B"), "")
 
     def test_stop_bee_on_an_embedded_bee_stops_it_and_tells_its_queen(self):

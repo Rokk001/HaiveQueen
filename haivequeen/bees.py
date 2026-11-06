@@ -57,6 +57,7 @@ def ensure_attempts(conn):
     conn.execute('CREATE TABLE IF NOT EXISTS bee_attempts (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(project,plan_path,package,class))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_attempt_reports (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, attempt TEXT NOT NULL, PRIMARY KEY(project,plan_path,package,attempt))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_attempt_signals (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, attempt TEXT NOT NULL, open_requirements TEXT NOT NULL, error TEXT NOT NULL, counted INTEGER NOT NULL, PRIMARY KEY(project,plan_path,package,attempt))')
+    conn.execute('CREATE TABLE IF NOT EXISTS bee_retry_answers (question_id INTEGER PRIMARY KEY, project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, signal_rowid INTEGER NOT NULL, previous_counts TEXT NOT NULL)')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_assignments (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, provider TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_worktrees (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, cwd TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_completed (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
@@ -142,16 +143,17 @@ def own_embedded(row, queen) -> bool:
 
 
 def release_refusal(conn, project, plan, package, queen, evidence=''):
-    """Why the result of `queen` for the package may not close its open embedded Bees; empty when it may.
+    """Require an existing result AND an ended Bee row or a known, absent Bee process.
 
-    The Queen that started a subagent Bee sees it return, which confirms its end. A later Queen only inherits the row: a Queen ending or missing progress
-    proves no end (owner answer 220), so she needs trustworthy evidence, a file the Bee wrote at its end (its final report) after its start."""
+    Neither the Queen's end nor a recent file proves that a Bee ended. Check every
+    open Bee, including those of this Queen, before releasing any of their places."""
     from pathlib import Path
-    foreign = [r for r in unconfirmed_embedded(conn, project, plan, package) if not own_embedded(r, queen)]
+    from . import platform
+    foreign = unconfirmed_embedded(conn, project, plan, package)
     if not foreign:
         return ''
     row = foreign[-1]
-    who = 'the subagent Bee %s (%s) of the earlier Queen %s' % (row['name'], package, row.get('queen') or 'unknown')
+    who = 'the subagent Bee %s (%s) of Queen %s' % (row['name'], package, row.get('queen') or 'unknown')
     if not evidence:
         return ('%s has no confirmed end; record its result only with --ended-evidence <file the Bee wrote at its end, such as its final report>. '
                 'Without such evidence leave it open: it keeps its Bee place' % who)
@@ -161,6 +163,19 @@ def release_refusal(conn, project, plan, package, queen, evidence=''):
     started = max(db.parse_time(r['started_at']) for r in foreign)
     if path.stat().st_mtime < started.timestamp():
         return 'the evidence %s was written before %s started, so it proves no end of it' % (evidence, who)
+    for bee in foreign:
+        agent = runtime.get_agent(conn, project, bee['name'])
+        if not (agent and agent.get('phase') == 'bee' and agent.get('plan_path') == plan and agent.get('package') == package
+                and str(agent.get('started_at') or '') >= bee['started_at']):
+            return 'Bee %s has no matching agent row proving its end; its row and Bee place stay open' % bee['name']
+        ended = str(agent.get('ended_at') or '') >= bee['started_at'] and agent.get('status') not in runtime.ACTIVE_STATUSES
+        try:
+            pid = int(agent.get('pid') or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        absent = pid > 0 and not platform.process_alive(pid)
+        if not (ended or absent):
+            return 'Bee %s has no confirmed end; a newer result file is not proof of its end' % bee['name']
     return ''
 
 
@@ -191,7 +206,8 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
         if attempt and conn.execute('INSERT OR IGNORE INTO bee_attempt_reports(project,plan_path,package,attempt) VALUES(?,?,?,?)', (project, plan, package, attempt)).rowcount == 0:
             return
         if attempt:
-            previous = conn.execute('SELECT open_requirements,error FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND class=? ORDER BY rowid DESC LIMIT 1', (project, plan, package, cls)).fetchone()
+            epoch = retry_epoch(conn, project, plan, package)
+            previous = conn.execute('SELECT open_requirements,error FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND class=? AND rowid>? ORDER BY rowid DESC LIMIT 1', (project, plan, package, cls, epoch or 0)).fetchone()
             state = conn.execute('SELECT state FROM package_progress WHERE project=? AND plan_path=? AND package=?', (project, plan, package)).fetchone()
             same_requirement = verify == 'code' and previous and set(open_requirements or []) & set(json.loads(previous[0]))
             same_error = previous and error and error == previous[1]
@@ -249,6 +265,27 @@ def failure_count(conn, project, plan, package, cls):
     return row[0] if row else 0
 
 
+FAILURE_QUESTION = 'The package remains unsolved at the highest available class. How should it continue?'
+
+
+def retry_epoch(conn, project, plan, package):
+    """Last signal before the most recent owner-directed retry; None before any answer."""
+    row = conn.execute('SELECT signal_rowid FROM bee_retry_answers WHERE project=? AND plan_path=? AND package=? ORDER BY question_id DESC LIMIT 1', (project, plan, package)).fetchone()
+    return row[0] if row else None
+
+
+def answer_failure_question(conn, question, by):
+    """Start a fresh counting cycle once for an owner/coordinator failure answer, retaining history."""
+    if by not in ('owner', 'coordinator') or question['question'] not in (FAILURE_QUESTION, tr(FAILURE_QUESTION, language='German')):
+        return
+    ensure_attempts(conn)
+    key = (question['project'], question['plan_path'], question['item'])
+    counts = dict(conn.execute('SELECT class,failures FROM bee_attempts WHERE project=? AND plan_path=? AND package=?', key).fetchall())
+    last = conn.execute('SELECT COALESCE(MAX(rowid),0) FROM bee_attempt_signals').fetchone()[0]
+    if conn.execute('INSERT OR IGNORE INTO bee_retry_answers VALUES (?,?,?,?,?,?)', (question['id'], *key, last, json.dumps(counts))).rowcount:
+        conn.execute('UPDATE bee_attempts SET failures=0 WHERE project=? AND plan_path=? AND package=?', key)
+
+
 # Determine the current or next escalation class.
 def next_attempt(conn, project, plan, package, cls, providers, excluded, threshold):
     """Return the current class, its next offered class, or None at the top."""
@@ -303,7 +340,7 @@ def open_bees_text(conn, project, plan, queen):
     if not inherited:
         return ''
     return ('These subagent Bees of an earlier Queen of your plan have no confirmed end: %s. Each keeps its Bee place and its package gets no new Bee. '
-            'Do not start them again. When a file the Bee wrote at its end (its final report) proves that it ended, record its result with bzz bee result '
+            'Do not start them again. Only when the Bee agent row has ended or its known process no longer exists AND its result exists, record its result with bzz bee result '
             '--ended-evidence <that file> for its package; otherwise leave it open and go on with the other packages.\n') % ', '.join(
         '%s (%s, Queen %s)' % (r['name'], r['package'], r.get('queen') or 'unknown') for r in inherited)
 
@@ -522,8 +559,8 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
     excluded = env.settings.get('excludedProviders', [])
     if outcome == 'failed' and next_attempt(env.conn, env.name, plan, package, cls, escalation_providers(env, plan, package), excluded, threshold) is None:
         language = roles.language(env.settings)
-        text = tr('The package remains unsolved at the highest available class. How should it continue?', language=language)
-        if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, plan=plan, item=package)):
+        text = tr(FAILURE_QUESTION, language=language)
+        if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=package)):
             db.add_question(env.conn, env.name, plan, package, text, tr('Review the failed attempts and choose the next approach.', language=language))
 
 
@@ -632,6 +669,10 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
                 db.add_question(env.conn, env.name, plan, package, text, tr('Configure an eligible provider.', language=language))
             return refuse(env, package, 'no configured provider offers the required class or the capability %s (question filed)' % ', '.join(need) if need else 'no configured provider offers the required class (question filed)')
         current = base_class
+        if retry_epoch(env.conn, env.name, plan, package) is not None:
+            offered = escalation_providers(env, plan, package)
+            while next_class(offered, current, excluded):
+                current = next_class(offered, current, excluded)
         queen_class = env.settings.get('queenClass', 'medium')
         if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
                 failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):
