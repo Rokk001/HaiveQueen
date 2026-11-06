@@ -34,38 +34,10 @@ def record(conn, project, plan, agent, kind, provider, tokens, parts=None, start
                  (project, plan or "", agent, kind, provider, started_at or db.now(), int(tokens), json.dumps(parts) if parts else None))
 
 
-def today_starts(conn, since) -> list:
-    """The starts recorded at or after the ISO time `since` as dicts (parts decoded), oldest first."""
-    out = []
-    for r in conn.execute("SELECT * FROM start_contexts WHERE started_at>=? ORDER BY id", (since,)):
-        d = dict(r)
-        try:
-            d["parts"] = json.loads(d.pop("parts_json") or "null") or {}
-        except ValueError:
-            d["parts"] = {}
-        out.append(d)
-    return out
-
-
 def approx_parts(role_text, rule_files, task_text) -> dict:
     """The parts of HaiveQueen in a start context as approximate counts: the role file, every project rules file and the task.
     `rule_files` = [(label, text)]; the task is the message the CLI is started with (not the prompt file it reads afterwards: that is no part of the first turn)."""
     return {"role": approx_tokens(role_text), "rules": {label: approx_tokens(text) for label, text in rule_files}, "task": approx_tokens(task_text)}
-
-
-def fit_parts(parts, tokens) -> dict:
-    """The parts of one start as {label: n}, scaled down together when they sum to more than the start context `tokens`, so no part and no sum exceeds it."""
-    flat = {}
-    if parts.get("role") is not None:
-        flat["role"] = int(parts["role"])
-    for label, n in (parts.get("rules") or {}).items():
-        flat["rules " + label] = int(n)
-    if parts.get("task") is not None:
-        flat["task"] = int(parts["task"])
-    total = sum(flat.values())
-    if total > tokens:
-        flat = {k: int(v * tokens / total) for k, v in flat.items()}
-    return flat
 
 
 # ---- the benchmark
@@ -88,6 +60,20 @@ def benchmarks(conn, provider=None) -> list:
 def _tok(n) -> str:
     """Compact token count (18k)."""
     return "%dk" % int(n / 1e3 + 0.5) if n >= 1000 else str(int(n))
+
+
+def pairs(conn) -> list:
+    """The complete measurements: one per provider and Apiary that has both values, as dicts (provider, project, hq, own, saving in percent as a float, measured_at = the newer
+    of the two times). A pair with only one value or an own value of 0 is no measurement."""
+    got = {}
+    for b in benchmarks(conn):
+        got.setdefault((b["provider"], b["project"]), {})[b["mode"]] = b
+    out = []
+    for (provider, project), m in got.items():
+        if "hq" in m and "own" in m and m["own"]["tokens"] > 0:
+            out.append({"provider": provider, "project": project, "hq": m["hq"]["tokens"], "own": m["own"]["tokens"],
+                        "saving": 100.0 * (m["hq"]["tokens"] - m["own"]["tokens"]) / m["own"]["tokens"], "measured_at": max(m["hq"]["measured_at"], m["own"]["measured_at"])})
+    return out
 
 
 def comparison(hq, own) -> str:

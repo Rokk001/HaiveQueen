@@ -55,6 +55,14 @@ class BuildJobsTest(RoundCase):
         self.assertEqual(bj.job_count(settings(), 12, 4096, bj.stored_per_job(c, "testproj"))["Jobs"], 5)
         self.assertEqual((bj.use_mb(3000, 3), bj.use_mb(0, 2)), (1000, 0))
 
+    def test_use_per_job_divides_by_processes_seen(self):
+        """Only 2 of 8 jobs were alive at the sampled peak (compile jobs are short): the RAM is shared by those 2, not by all 8 (was 21 MB for a real 80 MB job)."""
+        self.assertEqual(bj.use_mb(160, 8, 1, seen=2), 80)
+        self.assertEqual(bj.use_mb(800, 8, 1, seen=20), 100)   # more processes than jobs (link, helper): the job count stays the limit
+        self.assertEqual(bj.use_mb(800, 8, 1, seen=0), 100)    # nothing known: the job count
+        self.assertEqual(bj.use_mb(400, 4, 2, seen=1), 200)    # the parallel value still divides
+        self.assertLessEqual(bj.SAMPLE_SEC, 2.0)               # short compile processes are missed by a 10 s sampler
+
     def test_measure_and_line(self):
         """End of a build: peak RAM of the build processes, use per job, one ROUNDS.log line; dashboard line while a build runs and without."""
         samples = self.base / "samples.txt"

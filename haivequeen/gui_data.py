@@ -479,6 +479,9 @@ def limit_bars(d) -> list:
             note = " | ".join(part for part in (tr("resets %s", reset) if reset else tr("reset unknown"), quota) if part)
             if p.get("error"):
                 note = (tr("Claude limit unknown") + ": " + p["error"]) if p.get("age_minutes") is None else tr("Reading age: %d minutes", p["age_minutes"]) + " | " + note
+            if p.get("stale"):
+                age = "%dh" % int(p["stale_hours"]) if p["stale_hours"] >= 1 else "%dmin" % int(p["stale_hours"] * 60)
+                note = tr("not current, %s ago", age) + " | " + note
             out.append({"label": tr("%s 7d", p["name"].capitalize()), "pct": None if p["used_pct"] is None else round(p["used_pct"]), "note": note, "level": level(p["used_pct"])})
         total = int(p["total_slots"] or 0)
         out.append({"label": tr("%s slots", p["name"].capitalize()), "pct": round(100 * p["used_slots"] / total) if total else None,

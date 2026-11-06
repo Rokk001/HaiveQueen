@@ -2,6 +2,7 @@
 import re
 import sys
 import tempfile
+import types
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -222,6 +223,14 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(self.snap["run_state"], d["run"]["state"])
         titles = [t for t, _ in self.snap["info"]]
         self.assertEqual(titles[:5], ["STATE", "USAGE", "SYSTEM", "PLANS", "QUESTIONS"])
+
+    # The build line is part of the dashboard data and of the SYSTEM panel.
+    def test_build_line_in_snapshot_without_build_table(self):
+        """CFG has no buildJobs table: the STATUS panel SYSTEM section still carries the build line; the SYSTEM meter panel does not."""
+        self.assertNotIn("buildJobs", CFG)
+        self.assertNotIn("build_line", self.snap)
+        lines = [t for title, ls in self.snap["info"] if title == "SYSTEM" for t, _c in ls]
+        self.assertTrue(any(re.match(r"^Build jobs \d+ of \d+ cores \((running|next build)\) \| per job not measured yet", t) for t in lines), lines)
 
     # One state tells the user whether HaiveQueen runs, waits or stands still.
     def test_orchestrator_state(self):

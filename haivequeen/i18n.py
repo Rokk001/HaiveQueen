@@ -474,7 +474,7 @@ GERMAN = {
     "  Queens: average %s%s": "  Queens: Schnitt %s%s", "  Bees: average %s%s": "  Bees: Schnitt %s%s", " (parts of HaiveQueen approximate)": " (Anteile von HaiveQueen ungefähr)",
     "    CLI's own part %s": "    Eigenanteil der CLI %s", "role": "Rolle", "task": "Aufgabe", "rules %s": "Regeln %s",
     # ---- start context benchmark
-    "no benchmark yet": "noch kein Benchmark", "HaiveQueen %s, own profile %s, %+d %%": "HaiveQueen %s, eigenes Profil %s, %+d %%",
+    "no benchmark yet": "noch kein Benchmark", "no benchmark": "kein Benchmark", "not current, %s ago": "nicht aktuell, vor %s", "HaiveQueen %s, own profile %s, %+d %%": "HaiveQueen %s, eigenes Profil %s, %+d %%",
     "%s with the HaiveQueen profile": "%s mit dem HaiveQueen-Profil", "%s without it": "%s ohne es", "%s: no code folder": "%s: kein Code-Ordner",
     # ---- hives window
     "HaiveQueen Hives": "HaiveQueen Hives", "Apiary": "Apiary", "Hive": "Hive", "Status": "Status", "Has Hive": "Hat Hive",

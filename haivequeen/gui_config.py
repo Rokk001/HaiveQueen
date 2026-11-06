@@ -8,7 +8,6 @@ import math
 import os
 import re
 import shutil
-import threading
 import tomllib
 from collections import Counter
 from pathlib import Path
@@ -433,6 +432,7 @@ class ConfigWindow:
         self.win = tk.Toplevel(root)
         self.win.title(tr("HaiveQueen settings"))
         self.win.geometry("1100x700")
+        self.win.minsize(640, 420)
         top = tk.Frame(self.win)
         top.pack(fill="x", padx=8, pady=6)
         self.file_var = tk.StringVar(value=self.files[0][0])
@@ -462,11 +462,18 @@ class ConfigWindow:
         canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
         canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units")))
         canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
-        bottom = tk.Frame(self.win)
-        bottom.pack(fill="x", padx=8, pady=6)
-        for text, command in ((tr("Save"), self.save), (tr("Revert"), self.reload), (tr("Open folder"), self.open_folder), (tr("Close"), self.win.destroy)):
-            tk.Button(bottom, text=text, command=command).pack(side="left", padx=4)
-        tk.Label(bottom, text=tr("Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak."), fg=COL["dim"]).pack(side="left", padx=12)
+        foot = tk.Frame(self.win)
+        foot.pack(fill="x", side="bottom", padx=8, pady=6, before=body)   # packed before the body so the shrinking body never pushes it out
+        bottom = tk.Frame(foot)
+        bottom.pack(fill="x")
+        self.bottom_buttons = []
+        for text, command in (("Save", self.save), ("Revert", self.reload), ("Open folder", self.open_folder), ("Close", self.win.destroy)):
+            button = tk.Button(bottom, text=tr(text), width=12, command=command)
+            button.pack(side="left", padx=4)
+            self.bottom_buttons.append(button)
+        self.bottom_note = tk.Label(foot, text=tr("Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak."), fg=COL["dim"], justify="left", anchor="w")
+        self.bottom_note.pack(fill="x", pady=(6, 0))   # its own row below the buttons over the full width, wraps to as many lines as needed
+        self.bottom_note.bind("<Configure>", lambda e: self.bottom_note.configure(wraplength=max(120, e.width)))
         self.reload()
 
     # Is the file shown a machine config (providers, projects)?
@@ -536,7 +543,7 @@ class ConfigWindow:
         data = self.target()
         shown = {k: v for k, v in data.items() if kind != "general" or k not in ("providers", "projects")}
         self.position = None
-        self.login_status = self.login_button = self.benchmark_button = self.benchmark_status = None
+        self.login_status = self.login_button = self.benchmark_button = self.benchmark_status = None   # benchmark_status stays None: no text on the page
         self.build_vars = None   # the three variables of the block "Build" while the General page of config.toml is shown
         if kind == "providers":
             from . import cli_presets
@@ -550,6 +557,7 @@ class ConfigWindow:
             self.login_row()
         if kind == "general" and self.machine():
             shown.pop("buildJobs", None)   # the build settings are the block "Build" below, never the raw table
+            shown.pop("ramReserveMb", None)   # machine-only, settable in config.toml only; not offered here, the stored value stays untouched on save
             self.build_block()
             self.bzz_row()
         if kind == "general":
@@ -605,15 +613,21 @@ class ConfigWindow:
         box.pack(fill="x", pady=(0, 10), anchor="w")
         cores_var, parallel_var, ram_var = tk.StringVar(value=str(shown["cores"])), tk.StringVar(value=str(shown["parallel"])), tk.StringVar(value=decimal("%g" % shown["minFreeRamGB"]))
         self.build_vars = (cores_var, parallel_var, ram_var)
+        self.build_notes = []
         for (key, label, explanation), var in zip(BUILD_FIELDS, self.build_vars):
-            row = tk.Frame(box)
-            row.pack(fill="x", pady=2, anchor="w")
-            tk.Label(row, text=tr(label), width=38, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+            item = tk.Frame(box)
+            item.pack(fill="x", pady=2, anchor="w")
+            row = tk.Frame(item)
+            row.pack(fill="x", anchor="w")
+            tk.Label(row, text=tr(label), width=32, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
             if key == "cores":
                 self.dialog.option_menu(row, var, [str(n) for n in range(1, cores + 1)], self.mono).pack(side="left")
             else:
                 tk.Entry(row, textvariable=var, width=8, font=(self.mono, 10)).pack(side="left")
-            tk.Label(row, text=tr(explanation), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=BUILD_TEXT_WIDTH).pack(side="left", padx=12)
+            note = tk.Label(item, text=tr(explanation), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=300)
+            note.pack(fill="x", anchor="w", padx=(4, 0))   # under the field, wrapped to the width that is available (never cut off)
+            item.bind("<Configure>", lambda e, n=note: n.configure(wraplength=max(120, e.width - 12)))
+            self.build_notes.append(note)
 
     # The provider of the shown page in the form the profile functions read.
     def login_provider(self) -> dict:
@@ -656,15 +670,25 @@ class ConfigWindow:
         row = tk.Frame(self.form)
         row.pack(fill="x", pady=(0, 8), anchor="w")
         tk.Label(row, text=tr("login"), width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
-        self.login_status = tk.Label(row, anchor="w", font=(self.mono, 10, "bold"))
-        self.login_status.pack(side="left")
-        self.login_button = tk.Button(row, text=tr("Login"), width=12, command=self.login_click)
-        self.login_button.pack(side="left", padx=12)
-        self.benchmark_button = tk.Button(row, text=tr("Benchmark Start Context"), command=self.benchmark_click)
-        self.benchmark_button.pack(side="left")
-        self.benchmark_status = tk.Label(self.form, anchor="w", justify="left", font=(self.mono, 9), wraplength=900)
-        self.benchmark_status.pack(fill="x", pady=(0, 8), anchor="w")
-        self.show_benchmark()
+        flow = tk.Frame(row)   # status and buttons: wrapped to the next row when the form is too narrow, never cut
+        flow.pack(side="left", fill="x", expand=True, anchor="n")
+        self.login_status = tk.Label(flow, anchor="w", font=(self.mono, 10, "bold"))
+        self.login_button = tk.Button(flow, text=tr("Login"), width=12, command=self.login_click)
+        self.benchmark_button = tk.Button(flow, text=tr("Benchmark Start Context"), command=self.benchmark_click)
+        items = [self.login_status, self.login_button, self.benchmark_button]
+
+        def layout(_e=None):
+            """Place the three widgets left to right and start a new row where the next one would not fit."""
+            width, x, y, high = max(flow.winfo_width(), 1), 0, 0, 0
+            for item in items:
+                w, h = item.winfo_reqwidth() + 12, item.winfo_reqheight() + 4
+                if x and x + w > width:
+                    x, y, high = 0, y + high, 0
+                item.place(x=x, y=y)
+                x, high = x + w, max(high, h)
+            flow.config(height=y + high)
+        flow.bind("<Configure>", layout)
+        layout()
         self.refresh_login()
 
     # Show whether the shown provider has its login in the profile.
@@ -695,30 +719,11 @@ class ConfigWindow:
             return
         self.watch_login(proc)
 
-    # The stored benchmark of the shown provider.
-    def benchmark_lines(self, name) -> list:
-        """One line per Apiary with the stored benchmark of provider `name` (with the date of the measurement), or the note that there is none yet."""
-        from . import startctx
-        rows = startctx.benchmarks(self.conn, name)
-        out = []
-        for project in sorted({r["project"] for r in rows}):
-            mine = [r for r in rows if r["project"] == project]
-            measured = db.parse_time(max(r["measured_at"] for r in mine))
-            out.append("%s: %s (%s)" % (project, startctx.benchmark_text(self.conn, name, project), localtime.date(measured) if measured else "-"))
-        return out or [tr("Start context: no benchmark yet")]
-
-    # Show the stored benchmark and an error line on the page.
-    def show_benchmark(self, notes=(), error=False):
-        """Write the stored benchmark of the shown provider and the extra lines `notes` (errors in red) into the status text under the buttons."""
-        if self.benchmark_status is None:
-            return
-        self.benchmark_status.config(text="\n".join(list(notes) + self.benchmark_lines(self.login_provider()["name"])), fg=self.col["red"] if error else self.col["dim"])
-
     # The Benchmark Start Context button.
     def benchmark_click(self, wait=False):
-        """After a safety question measure the start context of the shown provider in every registered Apiary, with and without the HaiveQueen profile
-        (in a thread, so the window stays usable; `wait` runs it here). The results and the errors of failed runs are shown on the page."""
-        from . import startctx, db
+        """After a safety question open the window Benchmark and measure the start context of the shown provider in every registered Apiary, with and without
+        the HaiveQueen profile (in a thread, so the windows stay usable; `wait` runs it here). The window shows progress, results and errors."""
+        from . import gui_benchmark
         if not self.collect():
             return
         name = self.login_provider()["name"]
@@ -726,54 +731,20 @@ class ConfigWindow:
                                                   "with your own configuration? This starts the CLI %d times and uses a few tokens of your login.",
                                                   name, 2 * self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]), self.mono):
             return
-        cfg = dict(self.data)
-        self.benchmark_button.config(state="disabled")
-        self.benchmark_status.config(text=tr("measuring …"), fg=self.col["dim"])
-        box = {}
-        path = next((r[2] for r in self.conn.execute("PRAGMA database_list") if r[1] == "main"), "")
+        old = getattr(self, "benchmark_win", None)
+        if old is not None and old.win.winfo_exists():
+            old.win.destroy()
+        self.benchmark_win = gui_benchmark.BenchmarkWindow(self.root, self.conn, name, self.mono)
+        button = self.benchmark_button
+        button.config(state="disabled")
 
-        def work():
-            """Measure on an own connection (SQLite connections belong to one thread)."""
-            conn = self.conn if wait else db.connect(path)
+        def done():
+            """Allow the next measurement (the page may have changed meanwhile)."""
             try:
-                box["result"] = startctx.benchmark(conn, cfg, name, progress=lambda text: box.__setitem__("progress", text))
-            except Exception as exc:
-                box["result"] = {"excluded": False, "errors": [str(exc)], "results": []}
-            finally:
-                if conn is not self.conn:
-                    conn.close()
-
-        def finish():
-            """Show the result in the status text."""
-            res = box["result"]
-            try:
-                self.benchmark_button.config(state="normal")
-                if res["excluded"]:
-                    self.show_benchmark([tr("Provider %s is excluded (excludedProviders): nothing was measured.", name)], True)
-                else:
-                    self.show_benchmark([tr("Error: %s", e) for e in res["errors"]], bool(res["errors"]))
-            except self.tk.TclError:
-                pass   # the page was closed meanwhile
-
-        def poll():
-            """Wait for the thread without blocking the window."""
-            try:
-                if not self.win.winfo_exists():
-                    return
-                if "result" in box:
-                    finish()
-                else:
-                    if box.get("progress"):
-                        self.benchmark_status.config(text=box["progress"], fg=self.col["dim"])   # e.g. "2/4: ODP with the HaiveQueen profile ..."
-                    self.win.after(300, poll)
+                button.config(state="normal")
             except self.tk.TclError:
                 pass
-        if wait:
-            work()
-            finish()
-        else:
-            threading.Thread(target=work, daemon=True).start()
-            self.win.after(300, poll)
+        self.benchmark_win.run(dict(self.data), done, wait)
 
     # Refresh the state when the terminal window is closed.
     def watch_login(self, proc):

@@ -151,14 +151,12 @@ def blocked_tasks(agents, now=None) -> list:
 
 
 def build_jobs_line(conn, cfg, projects, agents, sysinfo) -> str:
-    """SYSTEM line for build jobs, or None without a buildJobs setting or without a project that has buildProcessNames.
+    """SYSTEM line for build jobs, or None without a project that has buildProcessNames (a missing buildJobs table means the defaults).
 
     "Build jobs N of M cores (running|next build) | per job X MB | active: N cores": N is the running job count during a build, else the count
     `bzz integration acquire` would hand out now; X is the median per job of the project. With several such projects every project gets its
     part, named by the project, in this one line. `sysinfo["build_projects"]` names the projects with buildProcessNames (default: all shown)."""
-    if cfg.get("buildJobs") is None:
-        return None
-    settings = {"buildJobs": cfg.get("buildJobs")}
+    settings = {"buildJobs": cfg.get("buildJobs") if cfg.get("buildJobs") is not None else 0}   # no table or 0 = the defaults, the line stays
     shown = [p for p in projects if p in (sysinfo.get("build_projects") if sysinfo.get("build_projects") is not None else projects)]
     parts = []
     for name in shown:
@@ -298,7 +296,7 @@ def provider_lines(conn, cfg, agents) -> list:
         source = provider["limit"]
         used_slots = sum(1 for agent in agents if agent.get("status") in sch.ACTIVE
                          and sch.row_provider(agent) == provider["name"])
-        used, hours, reset_at = None, None, None
+        used, hours, reset_at, stale_hours = None, None, None, None
         if source in ("claude", "codex"):
             limits_path = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
             if limits_path and Path(limits_path).is_file():
@@ -314,6 +312,13 @@ def provider_lines(conn, cfg, agents) -> list:
                     if window.get("At"):
                         reset_at = float(window["At"])
                         hours = max(0.0, (reset_at - time.time()) / 3600)
+                elif source == "claude":   # the newest check failed: show the last verified reading while it is younger than RETAIN_HOURS
+                    kept = usage.retained_weekly(conn)
+                    if kept:
+                        used, stale_hours = float(kept[0]), usage.retained_age_hours(conn)
+                        if kept[1]:
+                            reset_at = float(kept[1])
+                            hours = max(0.0, (reset_at - time.time()) / 3600)
         ratio = None
         if used is not None and hours is not None:
             remaining_week = max(0.0, float(hours)) / 168.0
@@ -328,7 +333,7 @@ def provider_lines(conn, cfg, agents) -> list:
         age_minutes = max(0, int((datetime.now(timezone.utc) - saved.astimezone(timezone.utc)).total_seconds() // 60)) if saved else None
         error = usage.claude_refresh_error(conn, provider=provider) if source == "claude" else ""
         five = window_usage(kept or usage._claude_snapshot(conn, provider=provider), datetime.now(timezone.utc)).get("FiveHour") if source == "claude" else None
-        rows.append({"five_hour": five, "error": error, "age_minutes": age_minutes, "name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
+        rows.append({"stale": stale_hours is not None, "stale_hours": stale_hours, "five_hour": five, "error": error, "age_minutes": age_minutes, "name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
                      "has_limit": source in ("claude", "codex"),
                      "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
                      "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),

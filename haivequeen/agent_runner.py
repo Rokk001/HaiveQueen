@@ -1126,13 +1126,13 @@ def run_agent(a, out=None):
         process_names = [str(x) for x in pcfg.get("buildProcessNames") or []]
         if a.phase == "queen":
             sampler = threading.Thread(target=queen_build_monitor, daemon=True, args=(
-                a.project, a.plan, a.name, bj_jobs, samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or 10),
+                a.project, a.plan, a.name, bj_jobs, samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or buildjobs.SAMPLE_SEC),
                 bj["Parallel"], os.getpid(), bj["Measurements"]))
         elif a.phase == "bee":
             sampler = None   # a Bee only gets the variables: no sampler and no job count in its row (it is no build agent of its own)
         else:
             sampler = threading.Thread(target=sampler_loop, daemon=True, args=(
-                samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or 10), os.getpid()))
+                samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or buildjobs.SAMPLE_SEC), os.getpid()))
             runtime.upsert_agent(conn, a.project, a.name, {"buildJobs": bj_jobs})
             run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
         if sampler:
@@ -1257,7 +1257,7 @@ def complete_build_measure(conn, project, name, jobs, start_free_mb, sample_file
     if smp["Seen"] <= 0 or smp["PeakMB"] <= 0:
         runtime.append_event(conn, project, head + ", no build process seen, nothing stored", kind="rounds", agent=name, mirror="rounds")
         return None
-    use = buildjobs.use_mb(smp["PeakMB"], jobs, parallel)
+    use = buildjobs.use_mb(smp["PeakMB"], jobs, parallel, smp["Seen"])
     stored = buildjobs.save_per_job(conn, project, use, jobs, start_free_mb, low, dur, peak_mb=smp["PeakMB"], parallel=parallel, count=count)
     runtime.append_event(conn, project, "%s, build process RAM peak=%d MB, use per job=%d MB (median %d MB)" % (head, smp["PeakMB"], use, stored),
                          kind="rounds", agent=name, mirror="rounds")

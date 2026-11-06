@@ -10,6 +10,7 @@ import zlib
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from haivequeen import db
 from haivequeen import platform as osplat
 from haivequeen import localtime
 from haivequeen import profile
@@ -188,6 +189,17 @@ def retained_claude(conn, project=GLOBAL_PROJECT, provider=None):
     return {k: v for k, v in snap.items() if k != 'refresh_error'}
 
 
+# How old the retained reading is.
+def retained_age_hours(conn, project=GLOBAL_PROJECT):
+    """Age in hours of the retained reading, or None when there is none."""
+    if retained_claude(conn, project) is None:
+        return None
+    saved = datetime.fromisoformat(str(_claude_snapshot(conn, project).get('saved')))
+    if saved.tzinfo is None:
+        saved = saved.astimezone()
+    return max(0.0, (datetime.now(timezone.utc) - saved).total_seconds() / 3600)
+
+
 # The weekly part of the retained reading.
 def retained_weekly(conn, project=GLOBAL_PROJECT, provider=None):
     """(used percent, reset epoch or None) of the weekly window of the retained reading, or None when there is none or its window has already reset."""
@@ -196,6 +208,7 @@ def retained_weekly(conn, project=GLOBAL_PROJECT, provider=None):
     return (window['pct'], window.get('at')) if window and window.get('pct') is not None else None
 
 
+CLAUDE_USAGE_TIMEOUT = 60   # seconds the claude -p /usage call may take (start-up alone needs far more than 20 s while many Claude processes run)
 USAGE_INTERVAL = 60              # seconds between usage checks of a model provider
 USAGE_UNREACHABLE_INTERVAL = 600   # seconds between usage checks of a provider whose last check failed (not reachable)
 
@@ -254,7 +267,7 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
         child_env = profile.environment({**provider, 'protocol': 'claude'})
         child_env.pop('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', None)
         kwargs = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.PIPE, 'stderr': subprocess.DEVNULL,
-                  'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'timeout': 20, 'env': child_env}
+                  'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'timeout': CLAUDE_USAGE_TIMEOUT, 'env': child_env}
         if osplat.is_windows():
             kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         result = (run or subprocess.run)(argv, **kwargs)
@@ -291,7 +304,16 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
         if value['fiveHour'] is None and value['sevenDay'] is None:
             raise ValueError('missing global quotas')
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
-        value = {**old, 'checked_at': checked_at, 'refresh_error': 'Claude usage refresh failed: %s' % ((str(exc) or type(exc).__name__)[:160])}
+        if isinstance(exc, subprocess.TimeoutExpired):
+            reason = 'CLI timed out after %s s' % CLAUDE_USAGE_TIMEOUT   # the exception text would repeat the whole command line
+        else:
+            reason = (str(exc) or type(exc).__name__)[:160]
+        value = {**old, 'checked_at': checked_at, 'refresh_error': 'Claude usage refresh failed: %s' % reason}
+        try:
+            with db.transaction(conn):
+                db.add_event(conn, GLOBAL_PROJECT, 'usage', value['refresh_error'])
+        except Exception:   # the log must never turn a failed check into a crash
+            pass
         runtime.kv_set(conn, GLOBAL_PROJECT, _claude_key(provider), json.dumps(value))
         runtime.kv_set(conn, GLOBAL_PROJECT, check_key, checked_at)
         return False

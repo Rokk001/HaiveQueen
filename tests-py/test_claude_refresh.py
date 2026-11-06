@@ -5,7 +5,9 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 from bzztest import RoundCase
-from haivequeen import runtime, usage
+import os
+from haivequeen import overview, runtime, usage
+from haivequeen import gui_data
 
 
 # Exercise metadata without real provider processes or authentication access.
@@ -186,7 +188,7 @@ class ClaudeRefreshTests(RoundCase):
         self.assertNotIn('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', kwargs['env'])
         self.assertEqual(kwargs['stdin'], subprocess.DEVNULL)
         self.assertEqual(kwargs['stderr'], subprocess.DEVNULL)
-        self.assertLessEqual(kwargs['timeout'], 20)
+        self.assertLessEqual(kwargs['timeout'], 60)
         self.assertFalse(kwargs.get('shell', False))
 
     # Malformed and nonfinite quota fields cannot create a fresh-looking snapshot.
@@ -247,3 +249,53 @@ class ClaudeRefreshTests(RoundCase):
         runtime.kv_set(self.conn, '*', 'usage-claude-last-check', expired)
         self.assertTrue(self.refresh(run=run))
         self.assertEqual(run.call_count, 1)
+
+    # The cause of a failed check stays readable after the next check overwrites the kv text.
+    def test_failed_check_is_logged_as_event(self):
+        """Every failed check writes one usage event with its error text; a good check writes none."""
+        self.seed()
+        self.assertFalse(self.refresh(run=mock.Mock(side_effect=subprocess.TimeoutExpired('claude', 20)), force=True))
+        self.assertFalse(self.refresh(run=mock.Mock(return_value=subprocess.CompletedProcess([], 1, '', 'SECRET')), force=True))
+        self.assertTrue(self.refresh(force=True))
+        rows = self.conn.execute("SELECT ts, project, text FROM events WHERE kind='usage' ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertIn('timed out', rows[0][2])
+        self.assertIn('exit 1', rows[1][2])
+        self.assertTrue(all(r[0] for r in rows))
+        self.assertNotIn('SECRET', ''.join(r[2] for r in rows))
+
+    # Under load Claude needs more than the old 20 seconds.
+    def test_timeout_leaves_room_for_load(self):
+        """The CLI call gets at least 60 seconds and a timeout is reported as such."""
+        self.seed()
+        run = mock.Mock(side_effect=subprocess.TimeoutExpired('claude', 60))
+        self.refresh(run=run, force=True)
+        self.assertGreaterEqual(run.call_args.kwargs['timeout'], 60)
+        self.assertIn('timed out', json.loads(runtime.kv_get(self.conn, '*', 'usage-claude'))['refresh_error'])
+
+    # Model Limits keeps the last verified weekly reading while it is young, marked as not current.
+    def test_model_limits_show_retained_reading_with_age(self):
+        """After a failed check the weekly row shows the old percentage, not current, with its age; after RETAIN_HOURS it is n/a."""
+        self.seed()
+        providers = [{'name': 'claude', 'protocol': 'claude', 'use': 'preferred', 'slots': 2, 'limit': 'claude',
+                      'classes': {'medium': {'model': 'm'}}}]
+        saved = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        runtime.kv_set(self.conn, '*', 'usage-claude', json.dumps({'saved': saved, 'refresh_error': 'Claude usage refresh failed: x',
+            'sevenDay': {'utilization': 0.9, 'resetsAt': int(self.reset.timestamp())}}))
+        env = {k: v for k, v in os.environ.items() if k != 'BZZ_RUNTIME_OVERRIDE'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            row = overview.provider_lines(self.conn, {'providers': providers}, [])[0]
+            self.assertEqual(row['used_pct'], 90)
+            self.assertTrue(row['stale'])
+            self.assertAlmostEqual(row['stale_hours'], 2, delta=0.1)
+            bars = gui_data.limit_bars({'cu': {'FiveHour': None}, 'xu': {'FiveHour': None}, 'provider_limits': [row]})
+            seven = [b for b in bars if b['label'].endswith('7d')][0]
+            self.assertEqual(seven['pct'], 90)
+            self.assertIn('not current', seven['note'])
+            self.assertIn('2h', seven['note'])
+            old = (datetime.now(timezone.utc) - timedelta(hours=usage.RETAIN_HOURS + 1)).isoformat()
+            runtime.kv_set(self.conn, '*', 'usage-claude', json.dumps({'saved': old, 'refresh_error': 'x',
+                'sevenDay': {'utilization': 0.9, 'resetsAt': int(self.reset.timestamp())}}))
+            row = overview.provider_lines(self.conn, {'providers': providers}, [])[0]
+            self.assertIsNone(row['used_pct'])
+            self.assertFalse(row['stale'])

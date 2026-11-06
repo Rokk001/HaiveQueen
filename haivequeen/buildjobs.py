@@ -96,9 +96,16 @@ def job_count(bj: dict, cores: int, free_mb: float, measured_mb, concurrent: int
     return {"Jobs": max(1, min(core_jobs, ram_limit)), "Why": "ram" if ram_limit < core_jobs else "cores", "PerJobMB": per, "Parallel": parallel}
 
 
-def use_mb(peak_mb: float, jobs: int, parallel: int = 1) -> float:
-    """RAM use per job in MB: the highest RAM sum of the build processes divided by the jobs the build got and the parallel value; never negative."""
-    return float(round(max(0.0, float(peak_mb)) / max(1, int(jobs)) / max(1, int(parallel))))
+SAMPLE_SEC = 1.0   # sample interval of the build processes: compile processes live only seconds, a 10 s sampler misses most of them
+
+
+def use_mb(peak_mb: float, jobs: int, parallel: int = 1, seen: int = 0) -> float:
+    """RAM use per job in MB: the highest RAM sum of the build processes divided by the jobs the build got and the parallel value; never negative.
+
+    `seen` is the highest number of build processes alive at one sample. When fewer than `jobs` were alive at the peak, the peak is shared by
+    those processes only (dividing by all jobs would report far too little); more than `jobs` processes never raise the divisor."""
+    divisor = min(int(jobs), int(seen)) if int(seen) > 0 else int(jobs)
+    return float(round(max(0.0, float(peak_mb)) / max(1, divisor) / max(1, int(parallel))))
 
 
 def median(values):
@@ -170,7 +177,7 @@ def complete_measure(env, name: str, jobs: int, start_free_mb: float, sample_fil
     if smp["Seen"] <= 0 or smp["PeakMB"] <= 0:
         env.log("%s, no build process seen, nothing stored" % head)
         return {"MinFreeMB": low, "UseMB": None, "StoredMB": None, "PeakMB": 0.0}
-    use = use_mb(smp["PeakMB"], jobs, parallel)
+    use = use_mb(smp["PeakMB"], jobs, parallel, smp["Seen"])
     stored = save_per_job(env.conn, env.name, use, jobs, start_free_mb, low, dur.total_seconds(), peak_mb=smp["PeakMB"], parallel=parallel, count=count)
     env.log("%s, build process RAM peak=%d MB, use per job=%d MB (median %d MB)" % (head, smp["PeakMB"], use, stored))
     return {"MinFreeMB": low, "UseMB": use, "StoredMB": stored, "PeakMB": smp["PeakMB"]}
@@ -255,7 +262,7 @@ def jobs_line(env, agents: list, compiler_count: int = None, cores: int = None, 
     return txt
 
 
-def sample_loop(out, parent_pid: int = 0, interval: float = 10.0, names=(), max_samples: int = 0) -> int:
+def sample_loop(out, parent_pid: int = 0, interval: float = SAMPLE_SEC, names=(), max_samples: int = 0) -> int:
     """Write `ISO time;free MB;build process count;build process RAM MB` to the file every `interval` seconds until the parent process is gone;
     returns the number written. The build processes are those below the parent process."""
     written = 0
@@ -277,7 +284,7 @@ def main(argv=None) -> int:
     p.add_argument("--parent-pid", type=int, default=0)
     p.add_argument("--names", default="")
     args = ap.parse_args(argv)
-    sample_loop(args.out, args.parent_pid, float(os.environ.get("BZZ_SAMPLE_SEC", "10")),
+    sample_loop(args.out, args.parent_pid, float(os.environ.get("BZZ_SAMPLE_SEC", str(SAMPLE_SEC))),
                 [n for n in args.names.split(",") if n])
     return 0
 
