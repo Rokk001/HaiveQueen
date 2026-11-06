@@ -1,11 +1,12 @@
 """K10, H-43 and H-46(k): the Apiary switch "Publish release at integration", the version count-up and the release published by HaiveQueen itself."""
 import json
+import subprocess
 import unittest
 from pathlib import Path
 from urllib.error import HTTPError
 
 from bzztest import REL, RoundCase
-from haivequeen import db, gui_config, publish, releases, runtime, scheduler
+from haivequeen import db, gui_config, publish, releases, runtime, scheduler, selfupdate
 
 SHA = "c" * 40
 SHA2 = "d" * 40
@@ -247,6 +248,146 @@ class DurableQueueTests(PublishCase):
         self.retry()
         self.assertEqual(self.published, [("owner/tool", "2.0.5", SHA, "tok")])
         self.assertIsNone(runtime.kv_get(self.conn, "testproj", "release-pending"))
+
+
+class IntegrationPointTests(PublishCase):
+    """H-43: the release goes to the exact commit of each integration, read from a real Git history, even when the remote cannot be read and
+    the integration branch has moved on meanwhile."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_project(publishReleases=True)
+        self.git_dir = self.base / "git"
+        self.git_dir.mkdir()
+        self.git("init", "--quiet", "-b", "main")
+        self.git("config", "user.email", "t@example.invalid")
+        self.git("config", "user.name", "t")
+        self.git("config", "commit.gpgsign", "false")
+        self.a = self.commit("a")
+        self.git("switch", "--quiet", "-c", "feature")
+        self.tip = self.commit("f1")
+        self.git("switch", "--quiet", "main")
+        self.b = self.commit("b")
+        self.git("merge", "--quiet", "--no-ff", "-m", "merge feature", "feature")
+        self.merge = self.git("rev-parse", "HEAD")
+        self.later = self.commit("c")   # another integration after this one
+        self.remote_head = None         # what ls-remote answers; None = the remote cannot be read
+        self.track(self.later)
+
+    def git(self, *args):
+        res = subprocess.run(["git", "-C", str(self.git_dir)] + list(args), capture_output=True, text=True, check=True)
+        return res.stdout.strip()
+
+    def commit(self, name):
+        self.git("commit", "--quiet", "--allow-empty", "-m", name)
+        return self.git("rev-parse", "HEAD")
+
+    def track(self, sha):
+        """Set (or with None delete) the local remote branch origin/main."""
+        if sha:
+            self.git("update-ref", "refs/remotes/origin/main", sha)
+        else:
+            subprocess.run(["git", "-C", str(self.git_dir), "update-ref", "-d", "refs/remotes/origin/main"], capture_output=True)
+
+    def run_git(self, argv, cwd):
+        if "get-url" in argv:
+            return 0, self.remote + "\n"
+        if "ls-remote" in argv:
+            return (0, "%s\trefs/heads/main\n" % self.remote_head) if self.remote_head else (128, "fatal: unable to access")
+        if "fetch" in argv:
+            return 128, "fatal: unable to access"
+        argv = list(argv)
+        argv[2] = str(self.git_dir)   # git -C <Apiary> ... runs in the test history
+        return selfupdate.run_command(argv, self.git_dir)
+
+    def integrate_tip(self, tip, plan=REL, branch="feature"):
+        runtime.queue_upsert(self.conn, "testproj", branch, tip=tip, plan=plan, status="integrated")
+        return self.after(plan)
+
+    def after(self, plan=REL):
+        return publish.after_integration(self.conn, self.env(), plan, run=self.run_git, latest=lambda repo: self.latest,
+                                         publisher=self.publisher, token=lambda run=None: "tok")
+
+    def retry(self):
+        return publish.retry_pending(self.conn, [self.env()], run=self.run_git, latest=lambda repo: self.latest,
+                                     publisher=self.publisher, token=lambda run=None: "tok")
+
+    def test_unreadable_commit_is_published_later_at_the_integration_not_at_the_moved_head(self):
+        self.track(None)
+        self.assertIsNone(self.integrate_tip(self.tip))
+        self.assertEqual([p["commit"] for p in publish.pending_releases(self.conn, "testproj")], [""])
+        self.assertIn("could not be read", runtime.kv_get(self.conn, "testproj", publish.ERROR_KEY))
+        self.track(self.later)   # the branch is readable again but has moved on to a later integration
+        self.retry()
+        self.assertEqual(self.published, [("owner/tool", "2.0.1", self.merge, "tok")])
+        self.assertEqual(publish.pending_releases(self.conn, "testproj"), [])
+
+    def test_the_integration_point_is_taken_even_when_the_head_already_moved_on(self):
+        self.remote_head = self.later
+        self.integrate_tip(self.tip)
+        self.assertEqual(self.published, [("owner/tool", "2.0.1", self.merge, "tok")])
+
+    def test_a_fast_forward_integration_is_published_at_the_tip(self):
+        self.git("switch", "--quiet", "-c", "ff")
+        ff = self.commit("f2")
+        self.git("switch", "--quiet", "main")
+        self.git("merge", "--quiet", "--ff-only", "ff")
+        moved = self.commit("d")
+        self.track(None)
+        self.integrate_tip(ff, branch="ff")
+        self.track(moved)
+        self.retry()
+        self.assertEqual([p[2] for p in self.published], [ff])
+
+    def test_a_tip_that_is_not_in_the_branch_is_never_published_at_another_commit(self):
+        self.git("switch", "--quiet", "-c", "stray", self.a)
+        stray = self.commit("never integrated")
+        self.git("switch", "--quiet", "main")
+        self.track(None)
+        self.integrate_tip(stray, branch="stray")
+        self.track(self.later)
+        self.retry()
+        self.assertEqual(self.published, [])
+        self.assertIn("not in the history", runtime.kv_get(self.conn, "testproj", publish.ERROR_KEY))
+        self.assertEqual(len(publish.pending_releases(self.conn, "testproj")), 1)
+
+    def test_an_entry_of_the_older_format_without_tip_uses_the_tip_of_its_queue_row(self):
+        row = runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
+        runtime.kv_set(self.conn, "testproj", publish.SINCE_KEY, "9999")   # the loop does not queue it again itself
+        runtime.kv_set(self.conn, "testproj", "release-queue", json.dumps([{"queue_id": row["id"], "plan": REL, "commit": "", "version": ""}]))
+        self.retry()
+        self.assertEqual([p[2] for p in self.published], [self.merge])
+
+    def test_an_integration_without_release_command_is_published_by_the_loop(self):
+        runtime.kv_set(self.conn, "testproj", publish.SINCE_KEY, "2000-01-01T00:00:00")
+        runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
+        self.retry()
+        self.assertEqual(self.published, [("owner/tool", "2.0.1", self.merge, "tok")])
+        self.retry()
+        self.assertIsNone(self.after())
+        self.assertEqual(len(self.published), 1)
+
+    def test_the_loop_leaves_an_integration_to_the_queen_that_still_holds_the_place(self):
+        runtime.kv_set(self.conn, "testproj", publish.SINCE_KEY, "2000-01-01T00:00:00")
+        runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
+        self.conn.execute("INSERT INTO hive_integration(project, plan_path, acquired) VALUES ('testproj', ?, 1)", (REL,))
+        self.conn.commit()
+        self.retry()
+        self.assertEqual(self.published, [])
+
+    def test_an_integration_before_the_switch_was_on_gets_no_release(self):
+        row = runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
+        self.conn.execute("UPDATE queue SET updated_at='2001-01-01T00:00:00' WHERE id=?", (row["id"],))
+        self.conn.commit()
+        runtime.kv_set(self.conn, "testproj", publish.SINCE_KEY, "2002-01-01T00:00:00")
+        self.retry()
+        self.assertIsNone(self.after())
+        self.assertEqual(self.published, [])
+
+    def test_the_switch_time_is_kept_at_the_first_loop_round(self):
+        self.assertIsNone(runtime.kv_get(self.conn, "testproj", publish.SINCE_KEY))
+        self.retry()
+        self.assertTrue(runtime.kv_get(self.conn, "testproj", publish.SINCE_KEY))
 
 
 class LookupTests(unittest.TestCase):
