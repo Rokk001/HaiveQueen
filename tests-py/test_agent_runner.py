@@ -299,6 +299,7 @@ class ClaudeRunTest(RunnerBase):
     def test_queen_receives_per_run_integration_settings(self):
         (self.ws / ".haivequeen").mkdir()
         (self.ws / ".haivequeen" / "project.toml").write_text("integrationBranch = 'release/next'\nremoteName = 'upstream'\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.ws), "init", "-q", "-b", "demo-branch"], check=True, capture_output=True)
         self.prepare("QUEEN-RULES")
         r = self.run_runner("QUEEN-RULES", "claude", claude_stream(), phase="queen")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -318,12 +319,33 @@ class ClaudeRunTest(RunnerBase):
         self.assertEqual((policy["project"], policy["plan"], policy["remote"], policy["integrationBranch"]),
                          ("demo", "plans/Demo-PLAN.md", "upstream", "release/next"))
         self.assertEqual(policy["agent"], self.row("QUEEN-RULES")["id"])
-        for text, allowed in (("bzz queue upsert --project demo --plan plans/Demo-PLAN.md --branch demo --status ready", True),
-                              ("bzz queue upsert --project other --plan plans/Demo-PLAN.md --branch demo", False)):
+        self.assertEqual(policy["branch"], "demo-branch")
+        for text, allowed in (("bzz queue upsert --project demo --plan plans/Demo-PLAN.md --branch demo-branch --status ready", True),
+                              ("bzz queue upsert --project demo --branch demo-branch --status in_run", True),
+                              ("bzz queue upsert --project demo --plan plans/Demo-PLAN.md --branch demo --status ready", False),
+                              ("bzz queue upsert --project other --plan plans/Demo-PLAN.md --branch demo-branch", False)):
             event = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": text}})
             done = subprocess.run(command, shell=True, input=event, capture_output=True, text=True, timeout=60)
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertEqual('"allow"' in done.stdout, allowed, text)
+
+    def queen_policy(self, name):
+        """Run a Queen and return the own-Hive hook policy written for it."""
+        self.prepare(name)
+        r = self.run_runner(name, "claude", claude_stream(), phase="queen")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        argv = self.record()["argv"]
+        return json.loads((Path(argv[argv.index("--settings") + 1]).parent / "claude-hive-policy.json").read_text(encoding="utf-8"))
+
+    def test_queen_on_integration_branch_gets_no_branch_scope(self):
+        subprocess.run(["git", "-C", str(self.ws), "init", "-q", "-b", "main"], check=True, capture_output=True)
+        self.assertIsNone(self.queen_policy("QUEEN-MAIN")["branch"])
+
+    def test_queen_branch_named_by_plan_wins_over_cwd_branch(self):
+        (self.ws / "plans").mkdir()
+        (self.ws / "plans" / "Demo-PLAN.md").write_text("# Demo\n- Feature branch: `demo-plan`\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.ws), "init", "-q", "-b", "other-work"], check=True, capture_output=True)
+        self.assertEqual(self.queen_policy("QUEEN-NAMED")["branch"], "demo-plan")
 
     # Verify the project default reaches the Claude CLI.
     def test_default_claude_tools_reach_cli(self):

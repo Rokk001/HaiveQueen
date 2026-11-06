@@ -3,7 +3,7 @@
 The hook is run as `python -I claude_hook.py <policy.json>` and therefore uses only the standard library.
 It reads the hook event from stdin and prints an "allow" decision only for one simple command whose
 arguments, parsed exactly like a narrow common subset of Bash and PowerShell, name the Queen's own
-project, plan and agent. Anything else produces no output, so Claude's normal permission rules decide.
+project, plan and agent, and for `ready` and `queue upsert` her own plan branch. Anything else produces no output, so Claude's normal permission rules decide.
 """
 import json
 import re
@@ -13,7 +13,8 @@ SAFE_BARE = re.compile(r"[A-Za-z0-9_./:=+-]+")
 SAFE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 UNSAFE_ANYWHERE = set("‘’‚‛“”„‟")   # PowerShell also treats these as quotes
 
-ANY, PROJECT, PLAN, AGENT, NAME, INT = "any", "project", "plan", "agent", "name", "int"
+ANY, PROJECT, PLAN, AGENT, NAME, INT, BRANCH = "any", "project", "plan", "agent", "name", "int", "branch"
+QUEUE_STATUSES = ("ready", "in_run", "integrated", "blocked", "withdrawn")
 
 # (command, action) -> (required options, optional options, flags without a value)
 SCHEMA = {}
@@ -35,16 +36,16 @@ _add("package", (None,), {"--project": PROJECT, "--plan": PLAN, "--package": ANY
                           "--state": ("working", "waiting", "implemented", "done", "rejected")}, {"--reason": ANY})
 _add("plan", ("check",), {"--project": PROJECT, "--plan": PLAN})
 _add("integration", ("acquire", "release"), {"--project": PROJECT, "--plan": PLAN}, {"--owner-pid": INT})
-_add("ready", (None,), {"--project": PROJECT, "--branch": NAME, "--tip": NAME, "--plan": PLAN}, {"--note": ANY})
+_add("ready", (None,), {"--project": PROJECT, "--branch": BRANCH, "--tip": NAME, "--plan": PLAN}, {"--note": ANY})
 _add("ask", (None,), {"--project": PROJECT, "--plan": PLAN, "--item": ANY, "--question": ANY}, {"--recommendation": ANY})
 _add("note", (None,), {"--project": PROJECT, "--text": ANY})
 _add("done", (None,), {"--agent": AGENT, "--result": ANY})
 _add("status", (None,), {"--project": PROJECT}, flags=("--json",))
 _add("questions", (None,), {"--project": PROJECT}, {"--plan": PLAN, "--item": ANY, "--status": ANY}, ("--open",))
 _add("views", (None,), {"--project": PROJECT})
-_add("queue", ("list",), {"--project": PROJECT})
-_add("queue", ("upsert",), {"--project": PROJECT, "--plan": PLAN, "--branch": NAME},
-     {"--tip": NAME, "--status": ANY, "--note": ANY, "--run": ANY})
+_add("queue", (None, "list"), {"--project": PROJECT}, {"--branch": ANY})   # read only; without an action word it lists too
+_add("queue", ("upsert",), {"--project": PROJECT, "--branch": BRANCH},
+     {"--plan": PLAN, "--tip": NAME, "--status": QUEUE_STATUSES, "--note": ANY, "--run": ANY})
 _add("decisions", ("list",), {"--project": PROJECT}, {"--plan": PLAN, "--item": ANY}, ("--all",))
 _add("decisions", ("add",), {"--project": PROJECT, "--plan": PLAN, "--source": ANY, "--text": ANY}, {"--item": ANY})
 _add("agents", ("list",), {"--project": PROJECT}, {"--scope": ("active", "archive", "all"), "--status": ANY})
@@ -132,6 +133,8 @@ def _value_ok(kind, value, policy):
         return _plan_key(value) == _plan_key(policy.get("plan"))
     if kind == AGENT:
         return policy.get("agent") is not None and value == str(policy.get("agent"))
+    if kind == BRANCH:   # only the Queen's own plan branch; unknown at the start means never
+        return bool(policy.get("branch")) and value == str(policy["branch"])
     if kind == NAME:
         return bool(SAFE_NAME.fullmatch(value)) and ".." not in value
     if kind == INT:

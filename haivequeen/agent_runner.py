@@ -922,6 +922,30 @@ def approx_start_parts(a, pcfg, cfg, workspace, protocol, message=""):
         return {}
 
 
+# Find the one branch a Queen may register as ready or change in the queue.
+def queen_branch(conn, cfg, project, plan, cwd, integration_branch):
+    """The branch the plan (or its state file) names, else the branch checked out in the Queen's worktree;
+    None when neither is known or it is the integration branch."""
+    branch = None
+    try:
+        from . import bees
+        env = next((e for e in scheduler.load_projects(conn, cfg) if e.name == project), None)
+        named = bees.plan_worktree(env, plan) if env is not None else None
+        branch = named[0] if named else None
+    except Exception:
+        branch = None
+    if not branch and cwd:
+        try:
+            done = subprocess.run(["git", "-C", str(cwd), "symbolic-ref", "--quiet", "--short", "HEAD"],
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+            branch = done.stdout.strip() if done.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            branch = None
+    if not branch or branch == str(integration_branch):
+        return None
+    return branch
+
+
 # Run one agent, rejecting empty Claude tool arguments before starting its CLI.
 def run_agent(a, out=None):
     """Run one agent as described by the parsed arguments; returns 0 (the status is in the agents table)."""
@@ -1031,9 +1055,11 @@ def run_agent(a, out=None):
                         path = Path(a.cwd) / path
                     provider_settings = json.loads(path.read_text(encoding="utf-8"))
             policy_file = run_dir / "claude-hive-policy.json"
+            integration_branch = settings.get("integrationBranch") or "main"
             policy = profile.claude_hook_policy(a.project, a.plan, agent_row["id"] if agent_row else None,
-                                                settings.get("remoteName") or "origin", settings.get("integrationBranch") or "main",
-                                                osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py")
+                                                settings.get("remoteName") or "origin", integration_branch,
+                                                osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py",
+                                                queen_branch(conn, cfg, a.project, a.plan, a.cwd, integration_branch))
             policy_file.write_text(json.dumps(policy, indent=1) + "\n", encoding="utf-8")
             hook = profile.claude_hook_command(osplat.python_executable(), TOOL_ROOT / "haivequeen" / "claude_hook.py", policy_file)
             merged = profile.claude_merge_run_settings(provider_settings, grants, hook)

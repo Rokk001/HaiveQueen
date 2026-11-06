@@ -12,7 +12,7 @@ from haivequeen import profile
 
 PY = "C:/Py/python.exe"
 CLI = "C:/hq/haivequeen/cli.py"
-POLICY = profile.claude_hook_policy("Hive", "plans/ONE-PLAN.md", 42, "upstream", "release/next", PY, CLI)
+POLICY = profile.claude_hook_policy("Hive", "plans/ONE-PLAN.md", 42, "upstream", "release/next", PY, CLI, "one-plan")
 
 
 def decide(command, tool="Bash", policy=POLICY):
@@ -37,6 +37,10 @@ class OwnHiveHookTest(unittest.TestCase):
         "bzz integration release --project Hive --plan plans/ONE-PLAN.md --owner-pid 123",
         "bzz ready --project Hive --branch one-plan --tip abc123 --plan plans/ONE-PLAN.md --note 'ready'",
         "bzz queue upsert --project Hive --plan plans/ONE-PLAN.md --branch one-plan --tip abc123 --status ready",
+        "bzz queue upsert --project Hive --branch one-plan --status in_run",
+        "bzz queue upsert --project Hive --branch one-plan --tip abc123 --status integrated --note 'pushed to release/next'",
+        "bzz queue list --project Hive --branch one-plan",
+        "bzz queue --project Hive",
         "bzz decisions list --project Hive --plan plans/ONE-PLAN.md",
         "bzz decisions add --project Hive --plan plans/ONE-PLAN.md --source auto --item K1 --text 'Use X because Y'",
         "bzz agents list --project Hive",
@@ -53,7 +57,7 @@ class OwnHiveHookTest(unittest.TestCase):
         "bzz note --project Other --text hi",
         "bzz ask --project Hive --plan plans/OTHER.md --item K1 --question q",
         "bzz done --agent 43 --result r.txt",
-        "bzz queue upsert --project Hive --branch one-plan",
+        "bzz queue upsert --project Hive --plan plans/OTHER.md --branch one-plan",
         "bzz decisions add --project Hive --source auto --text t",
         # argparse would accept these and change the target
         "bzz note --project Hive --text hi --project Other",
@@ -106,6 +110,12 @@ class OwnHiveHookTest(unittest.TestCase):
         "git push upstream +HEAD:release/next",
         "bzz ready --project Hive --branch -x --tip a --plan plans/ONE-PLAN.md",
         "bzz ready --project Hive --branch ../x --tip a --plan plans/ONE-PLAN.md",
+        # another branch than the Queen's own one
+        "bzz ready --project Hive --branch other-plan --tip abc123 --plan plans/ONE-PLAN.md",
+        "bzz ready --project Hive --branch release/next --tip abc123 --plan plans/ONE-PLAN.md",
+        "bzz queue upsert --project Hive --plan plans/ONE-PLAN.md --branch other-plan --status ready",
+        "bzz queue upsert --project Hive --branch One-Plan --status in_run",
+        "bzz queue upsert --project Hive --branch one-plan --status bogus",
     ]
 
     def test_own_hive_commands_are_allowed(self):
@@ -120,6 +130,14 @@ class OwnHiveHookTest(unittest.TestCase):
                 with self.subTest(command=command, tool=tool):
                     self.assertIsNone(decide(command, tool))
 
+    def test_branch_commands_need_a_known_own_branch(self):
+        for branch in (None, ""):
+            policy = dict(POLICY, branch=branch)
+            for command in ("bzz ready --project Hive --branch one-plan --tip abc123 --plan plans/ONE-PLAN.md",
+                            "bzz queue upsert --project Hive --branch one-plan --status in_run"):
+                self.assertIsNone(decide(command, policy=policy), (branch, command))
+            self.assertIsNotNone(decide("bzz note --project Hive --text hi", policy=policy))
+
     def test_powershell_call_operator_only_for_quoted_program(self):
         command = "& 'C:/Py/python.exe' -I 'C:/hq/haivequeen/cli.py' note --project Hive --text hi"
         self.assertIsNotNone(decide(command, "PowerShell"))
@@ -127,10 +145,10 @@ class OwnHiveHookTest(unittest.TestCase):
 
     def test_powershell_number_literals_are_left_to_claude(self):
         for value in ("0x2A", "1kb", "1e3", "042", "4.2", "-1", "1a2b"):
-            command = "bzz ready --project Hive --branch one --tip %s --plan plans/ONE-PLAN.md" % value
+            command = "bzz ready --project Hive --branch one-plan --tip %s --plan plans/ONE-PLAN.md" % value
             self.assertIsNone(decide(command, "PowerShell"), value)
-        self.assertIsNotNone(decide("bzz ready --project Hive --branch one --tip 1a2b --plan plans/ONE-PLAN.md", "Bash"))
-        self.assertIsNotNone(decide("bzz ready --project Hive --branch one --tip '1a2b' --plan plans/ONE-PLAN.md", "PowerShell"))
+        self.assertIsNotNone(decide("bzz ready --project Hive --branch one-plan --tip 1a2b --plan plans/ONE-PLAN.md", "Bash"))
+        self.assertIsNotNone(decide("bzz ready --project Hive --branch one-plan --tip '1a2b' --plan plans/ONE-PLAN.md", "PowerShell"))
         self.assertIsNotNone(decide("bzz done --agent 42 --result r", "PowerShell"))
 
     def test_other_tools_and_events_are_ignored(self):
