@@ -287,6 +287,32 @@ def size_supported(width, height, screen_width, screen_height):
 class WindowTest(unittest.TestCase):
     """Smoke test: the window draws from the invented snapshot without an exception."""
 
+    def test_dashboard_content_fits_at_small_size(self):
+        """Status text, update errors and the header image stay inside their available width."""
+        import tkinter as tk
+        from haivequeen import gui
+        try:
+            root = tk.Tk()
+            root.attributes("-alpha", 0.0)
+        except tk.TclError:
+            self.skipTest("no display")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                conn = db.connect(Path(tmp) / "o.db")
+                try:
+                    root.geometry("1000x600+0+0")
+                    with mock.patch.object(gui.Dashboard, "watch_update"):
+                        win = gui.Dashboard(root, conn)
+                        root.update()
+                        win.update_state = {"failed": "a" * 200}
+                        win.draw()
+                        self.assertLessEqual(win.canvas.bbox("all")[2], win.canvas.winfo_width() + 2)
+                        self.assertLessEqual(win.fraction[0] / win.fraction[1], win.scale)
+                finally:
+                    conn.close()
+        finally:
+            root.destroy()
+
     # Draw the window, or skip without a display.
     def test_draw(self):
         """Create the window, draw a snapshot and check that items exist on the canvas."""

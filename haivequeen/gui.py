@@ -65,7 +65,7 @@ def launch_detached() -> dict:
 # Find the zoom/subsample pair (tk can only scale pictures by whole-number ratios) closest to a scale factor.
 def best_fraction(factor) -> tuple:
     """(zoom, subsample) with both <= 8 and a ratio closest to `factor` but not above it (a picture must never be larger than its layout slot)."""
-    fits = [(n, m) for n in range(1, 9) for m in range(1, 9) if n / m <= factor * 1.005]
+    fits = [(n, m) for n in range(1, 9) for m in range(1, 9) if n / m <= factor]
     return max(fits, key=lambda nm: nm[0] / nm[1]) if fits else (1, 8)
 
 
@@ -434,6 +434,7 @@ class Dashboard:
         x = self.canvas.bbox(link)[2] / self.scale + 10
         bar = self.text(x, 143, "|", 17, "cyan", "w")
         x = self.canvas.bbox(bar)[2] / self.scale + 10
+        text = self.fit(text, max(0, DESIGN_W - x - 12), 17)
         item = self.text(x, 143, text, 17, {"warn": "amber", "bad": "red"}.get(level, "dim"), "w", underline=action is not None)
         if action:
             self.hit(x - 4, 130, self.canvas.bbox(item)[2] / self.scale + 4, 156, lambda _a: self.install_update() if action == "install" else self.check_update())
@@ -758,7 +759,13 @@ class Dashboard:
         for title, lines in s["info"]:
             flat.append((True, title, "gold"))
             for text, level in lines:
-                flat += [(False, part, level) for part in textwrap.wrap(text, chars, subsequent_indent="  ") or [""]]
+                width = x1 - x0 - 48
+                limit = chars
+                parts = textwrap.wrap(text, limit, subsequent_indent="  ") or [""]
+                while limit > 3 and any(self.tw(part, 12) > width for part in parts):
+                    limit -= 1
+                    parts = textwrap.wrap(text, limit, subsequent_indent="  ") or [""]
+                flat += [(False, part, level) for part in parts]
         room = int((y1 - y0 - 62) // 15)
         off = self.offset("status", len(flat), room)
         self.panel(x0, y0, x1, y1, tr("STATUS"), tr("state, usage, plans and questions"))
