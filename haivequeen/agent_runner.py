@@ -186,15 +186,15 @@ SHELL_VALUE_FLAGS = ('-executionpolicy', '-ep', '-version', '-inputformat', '-ou
 def _shell_commands(cmd):
     """Commands of a command line in any common shell; the separators are ; & && | || and a line end, a comment ends at the line end."""
     commands, current = [], []
-    for token in re.findall(r'''"[^"]*"|'[^']*'|\#[^\r\n]*|&&|\|\||[;&|\n]|[^\s;&|]+''', str(cmd or '')) + [';']:
+    for token in re.findall(r'''\#[^\r\n]*|&&|\|\||[;&|\n]|(?:"[^"]*"|'[^']*'|[^\s;&|])+''', str(cmd or '')) + [';']:
         if token.startswith('#'):
             continue
         if token in (';', '&', '&&', '|', '||', '\n'):
             if current:
                 commands.append(current)
                 current = []
-        else:
-            current.append(token[1:-1] if len(token) > 1 and token[0] in '"\'' and token[-1] == token[0] else token)
+        else:   # pieces without a space between them are one word ('a'"'b'"'c' is a'b'c), each piece loses its own quotes
+            current.append(''.join(a or b or c for a, b, c in re.findall(r'''"([^"]*)"|'([^']*)'|([^"']+|["'])''', token)))
     return commands
 
 
@@ -228,7 +228,7 @@ def _same_word(a, b, program=False):
     """True when two words are equal; a path counts in any slash form (also /c/x for C:/x); a program also without .exe and in any case."""
     def norm(word):
         """The comparable form of a word."""
-        word = re.sub(r'^/([a-zA-Z])/', r'\1:/', word.replace('\\', '/'))
+        word = re.sub(r'^/([a-zA-Z])/', r'\1:/', re.sub(r'[\\/]+', '/', word))   # also a doubled backslash, as Codex writes a Windows path
         if program:
             word = re.sub(r'\.exe$', '', word, flags=re.I).casefold()
         return word

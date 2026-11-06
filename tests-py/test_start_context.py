@@ -345,7 +345,7 @@ class BenchmarkTest(unittest.TestCase):
         out = startctx.benchmark(self.conn, self.cfg, "claude", measure=measure)
         self.assertEqual(len(out["errors"]), 1)
         self.assertIn("not logged in", out["errors"][0])
-        self.assertIn("ODP", out["errors"][0])
+        self.assertEqual(out["errors"][0], "Measurement 2 of 4: ODP, own profile: not logged in")
         got = {(r["project"], r["mode"]): r["tokens"] for r in startctx.benchmarks(self.conn, "claude")}
         self.assertEqual(got[("ODP", "own")], 55000)   # the older value stays
         self.assertEqual(got[("ODP", "hq")], 18000)   # the successful run of the pair is stored
@@ -424,7 +424,7 @@ class ProgressTest(BenchmarkTest):
     def test_progress_names_each_run(self):
         seen = []
         startctx.benchmark(self.conn, self.cfg, "claude", measure=lambda *a: 5, progress=seen.append)
-        self.assertEqual(seen, ["1/4: ODP with the HaiveQueen profile ...", "2/4: ODP without it ...", "3/4: ZED with the HaiveQueen profile ...", "4/4: ZED without it ..."])
+        self.assertEqual(seen, ["Measurement 1 of 4: ODP, HaiveQueen profile ...", "Measurement 2 of 4: ODP, own profile ...", "Measurement 3 of 4: ZED, HaiveQueen profile ...", "Measurement 4 of 4: ZED, own profile ..."])
 
 
 class ButtonTest(unittest.TestCase):
@@ -463,22 +463,40 @@ class ButtonTest(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
-    def test_button_asks_first_and_shows_results_and_errors(self):
-        """No confirmation, no measurement; after it the results (and a failed run's error) are shown on the page."""
+    def test_settings_opens_window_and_start_runs_benchmark(self):
         from haivequeen import gui_config
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):
             win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
             win.select(1)
-            self.assertIsNotNone(win.benchmark_button)
-            with mock.patch("haivequeen.gui_dialog.ask", return_value=False) as ask, mock.patch("haivequeen.startctx.benchmark") as bench:
+            result = {"excluded": False, "errors": ["ODP, own profile: not logged in"], "results": [], "completed": 2, "total": 2}
+            with mock.patch("haivequeen.gui_dialog.ask", return_value=True) as ask, mock.patch("haivequeen.startctx.benchmark", return_value=result) as bench:
                 win.benchmark_button.invoke()
-                self.assertTrue(ask.called)
                 bench.assert_not_called()
-            result = {"excluded": False, "errors": ["ODP without profile: not logged in"], "results": []}
-            with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", return_value=result) as bench:
-                win.benchmark_click(wait=True)
+                ask.assert_not_called()
+                win.benchmark_win.run(win.benchmark_win.cfg, wait=True)
                 self.assertEqual(bench.call_args[0][2], "claude")
-            self.assertIn("not logged in", win.benchmark_win.error.cget("text"))
+                self.assertRegex(win.benchmark_win.progress.cget("text"), r"Done: 2 of 2 measurements, .+")
+                self.assertIn("ODP, own profile: not logged in", win.benchmark_win.error.cget("text"))
+
+    def test_table_columns_fit_headers_and_values(self):
+        from tkinter import font
+        from haivequeen import gui_config
+        long_name = "A very long Apiary name that must remain visible"
+        startctx.store_benchmark(self.conn, "claude", long_name, "hq", 18000)
+        startctx.store_benchmark(self.conn, "claude", long_name, "own", 61000)
+        with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win.select(1)
+            win.benchmark_click()
+            bench = win.benchmark_win
+            self.root.update()
+            normal = font.Font(root=self.root, font=bench.table_font)
+            bold = font.Font(root=self.root, font=bench.heading_font)
+            for column, value in zip(bench.table["columns"], bench.table.item(bench.table.get_children()[0], "values")):
+                width = bench.table.column(column, "width")
+                self.assertGreaterEqual(width, normal.measure(value))
+                self.assertGreaterEqual(width, bold.measure(bench.table.heading(column, "text")))
+            self.assertTrue(bench.table.cget("xscrollcommand"))
 
 
 class TileDrawTest(unittest.TestCase):
@@ -523,7 +541,7 @@ class ProgressButtonTest(ButtonTest):
         release = threading.Event()
 
         def fake(conn, cfg, name, measure=None, progress=None):
-            progress("2/4: ODP with the HaiveQueen profile ...")
+            progress("Measurement 2 of 4: ODP, own profile ...")
             release.wait(20)
             return {"excluded": False, "errors": [], "results": []}
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):
@@ -531,18 +549,20 @@ class ProgressButtonTest(ButtonTest):
             win.select(1)
             with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", side_effect=fake):
                 win.benchmark_click()
+                win.benchmark_win.start_button.invoke()
+                self.assertEqual(win.benchmark_win.start_button.cget("state"), "disabled")
                 import time
                 end = time.time() + 10
-                while time.time() < end and "2/4" not in win.benchmark_win.progress.cget("text"):
+                while time.time() < end and "Measurement 2 of 4" not in win.benchmark_win.progress.cget("text"):
                     self.root.update()
                     time.sleep(0.05)
-                self.assertIn("2/4: ODP with the HaiveQueen profile ...", win.benchmark_win.progress.cget("text"))
+                self.assertIn("Measurement 2 of 4: ODP, own profile ...", win.benchmark_win.progress.cget("text"))
                 release.set()
                 end = time.time() + 10
-                while time.time() < end and win.benchmark_button.cget("state") != "normal":
+                while time.time() < end and win.benchmark_win.start_button.cget("state") != "normal":
                     self.root.update()
                     time.sleep(0.05)
-                self.assertEqual(win.benchmark_button.cget("state"), "normal")
+                self.assertEqual(win.benchmark_win.start_button.cget("state"), "normal")
 
 
 class HoverTest(unittest.TestCase):

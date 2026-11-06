@@ -62,7 +62,8 @@ class DesktopCommandsTest(RoundCase):
                 mock.patch.object(loop, 'run_loop') as run, \
                 mock.patch.object(desktop, 'show_result') as show:
             code, result = self.invoke('start', '--desktop')
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1)   # a refused start is a failure for the caller
+        self.assertFalse(result['ok'])
         self.assertTrue(result['stopping'])
         self.assertEqual(result['running_agents'], 1)
         self.assertEqual(loop.stop_flag().read_text(encoding='utf-8'), 'stop requested\n')

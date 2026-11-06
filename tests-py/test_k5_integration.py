@@ -4,6 +4,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -209,9 +210,10 @@ class StepStateTests(IntegrationCase):
 class ReadyAndReleaseGateTests(IntegrationCase):
     """H-17, H-46(d): bzz ready, integration acquire and release enforce the steps in code."""
 
-    def queen(self):
-        """Register the running Queen of the Hive."""
-        runtime.upsert_agent(self.conn, "testproj", "Ada", {"status": "running", "phase": "queen", "plan_path": REL, "pid": 4242, "provider": "claude"})
+    def queen(self, cwd=None):
+        """Register the running Queen of the Hive, with her worktree when `cwd` is given."""
+        fields = {"status": "running", "phase": "queen", "plan_path": REL, "pid": 4242, "provider": "claude"}
+        runtime.upsert_agent(self.conn, "testproj", "Ada", {**fields, "cwd": cwd} if cwd else fields)
         patcher = mock.patch.dict(os.environ, {"BZZ_AGENT": "Ada"})
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -252,17 +254,89 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         self.assertEqual(self.ready()[0], 0)
         self.assertEqual(integration.open_steps(env, REL), [integration.DEPLOY])
 
-    def test_ready_needs_a_green_compile_check_of_this_run(self):
-        self.use(self.providers[0], compileCheck="npm test")
+    def worktree(self):
+        """A Git folder with one commit, used as the Queen's worktree; returns its path."""
+        folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(folder.cleanup)
+        self.commit(folder.name, "one")
+        return folder.name
+
+    def commit(self, folder, message):
+        """Add an empty commit to the Git folder (the folder becomes a repository on the first call)."""
+        subprocess.run(["git", "-C", folder, "init", "-q"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", folder, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", message], check=True, capture_output=True)
+
+    def checked(self, exit_code=0):
+        """A Queen with a worktree whose compile check is a script that records where it ran and exits with `exit_code`; returns the worktree."""
+        folder = self.worktree()
+        Path(folder, "check.py").write_text("import os, sys\nopen('ran.txt', 'w').write(os.getcwd())\nsys.exit(%d)\n" % exit_code, encoding="utf-8")
+        self.use(self.providers[0], compileCheck='"%s" check.py' % sys.executable)
         self.hive()
-        self.queen()
+        self.queen(folder)
+        return folder
+
+    def test_ready_is_refused_until_bzz_compile_check_ran(self):
+        self.checked()
         code, result = self.ready()
         self.assertEqual(code, 1)
-        self.assertIn("compile check", result["error"])
-        self.milestones("Red\t10:00 Compile test - Exit 1: failed")
+        self.assertIn("bzz compile-check --project testproj --plan %s" % REL, result["error"])
+
+    def test_a_compile_check_line_in_the_milestones_does_not_count(self):
+        """Ella-12 ran the check wrapped twice; whatever the milestones say, only the stored result of bzz compile-check opens bzz ready."""
+        self.checked()
+        self.milestones("Green\t10:05 Compile test - Exit 0: ok")
         self.assertEqual(self.ready()[0], 1)
-        self.milestones("Red\t10:00 Compile test - Exit 1: failed", "Green\t10:05 Compile test - Exit 0: ok")
+
+    def test_compile_check_runs_the_command_in_the_worktree_and_ready_accepts_that_commit(self):
+        folder = self.checked()
+        code, result = self.call(cli.cmd_compile_check)
+        self.assertEqual((code, result["ok"], result["exit"]), (0, True, 0), result)
+        self.assertEqual(result["commit"], integration.head_commit(folder))
+        self.assertEqual(Path(Path(folder, "ran.txt").read_text(encoding="utf-8")).resolve(), Path(folder).resolve())
+        stored = integration.compile_result(self.conn, "testproj", "Ada")
+        self.assertEqual((stored["ok"], stored["commit"], stored["command"]), (True, result["commit"], self.env().settings["compileCheck"]))
+        self.assertTrue(stored["time"] and stored["seconds"] >= 0)
+        live = (self.env().run_dir("Ada") / "milestones.txt").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(integration.COMPILE_MILESTONE.match(live[-1]).group(1), "Green")
         self.assertEqual(self.ready()[0], 0)
+
+    def test_a_red_compile_check_exits_1_and_ready_is_refused(self):
+        self.checked(exit_code=3)
+        code, result = self.call(cli.cmd_compile_check)
+        self.assertEqual((code, result["ok"], result["exit"]), (1, False, 3), result)
+        code, refused = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("failed", refused["error"])
+
+    def test_a_commit_after_the_compile_check_needs_a_new_run(self):
+        folder = self.checked()
+        self.assertEqual(self.call(cli.cmd_compile_check)[0], 0)
+        self.commit(folder, "two")
+        code, refused = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("run bzz compile-check", refused["error"])
+        self.assertEqual(self.call(cli.cmd_compile_check)[0], 0)
+        self.assertEqual(self.ready()[0], 0)
+
+    def test_compile_check_is_for_the_queen_of_the_hive_only(self):
+        self.use(self.providers[0], compileCheck="npm test")
+        self.hive()
+        code, result = self.call(cli.cmd_compile_check)
+        self.assertEqual(code, 1)
+        self.assertIn("not this Hive's Queen", result["error"])
+
+    def test_compile_check_does_nothing_when_switched_off(self):
+        self.use(self.providers[0], compileCheck="npm test", compileCheckEnabled=False)
+        self.hive()
+        self.queen(self.worktree())
+        code, result = self.call(cli.cmd_compile_check)
+        self.assertEqual(code, 0)
+        self.assertIn("skipped", result)
+        self.assertIsNone(integration.compile_result(self.conn, "testproj", "Ada"))
+
+    def test_compile_check_has_a_command_line(self):
+        args = cli.build_parser().parse_args(["compile-check", "--project", "p", "--plan", "x.md"])
+        self.assertEqual((args.fn, args.project, args.plan), (cli.cmd_compile_check, "p", "x.md"))
 
     def test_ready_needs_no_compile_check_when_switched_off(self):
         self.use(self.providers[0], compileCheck="npm test", compileCheckEnabled=False)
@@ -377,7 +451,9 @@ class StartTextTests(IntegrationCase):
     def test_compile_check_step_with_switch_on(self):
         self.use(self.providers[0])
         self.hive()
-        self.assertIn("Run the compile check of the project yourself in this run", self.text())
+        text = self.text()
+        self.assertIn("Run the compile check with bzz compile-check --project testproj --plan %s" % REL, text)
+        self.assertIn("Do not run that command yourself", text)
 
     def test_delegated_steps_name_their_packages(self):
         self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build", "Deploy"))
@@ -535,6 +611,22 @@ class CommandRecognitionTests(unittest.TestCase):
 
     def assertNotRecognised(self, command, configured=WINDOWS):
         self.assertNotEqual((agent_runner.classify_cmd(command, compile_check=configured) or {}).get("label"), "Compile test", command)
+
+    def test_adjacent_quoted_pieces_are_one_word(self):
+        """Codex joins a PowerShell script from adjacent pieces ('a'"'b'"'c', one word in the shell); seen in a Queen run whose green check was not recognised."""
+        command = r'''"C:\Tools\pwsh.exe" -Command '$env:LOCALAPPDATA = Join-Path $env:TEMP '"'hq-local'; "'$env:APPDATA = Join-Path $env:TEMP '"'hq-roaming'; Remove-Item Env:BZZ_AGENT -ErrorAction SilentlyContinue; & 'C:\Tools\Python\python.exe' -W ignore -m unittest discover -s tests-py -p test*.py"'''
+        self.assertRecognised(command)
+        self.assertNotRecognised(command.replace("unittest discover", "pytest"))
+        self.assertNotRecognised(r'''"C:\Tools\pwsh.exe" -Command 'Write-Output '"'C:\Tools\Python\python.exe -W ignore -m unittest discover -s tests-py -p test*.py'"''')
+
+    def test_doubled_backslashes_in_the_program_path(self):
+        """Codex writes the Windows path of the program with every backslash doubled; it is the same program."""
+        double = lambda text: text.replace("\\", "\\\\")   # the doubling as the Codex command shows it
+        command = r'''"C:\Tools\pwsh.exe" -Command '$env:APPDATA = Join-Path $env:TEMP '"'hq-roaming'; & 'C:\Tools\Python\python.exe' -W ignore -m unittest discover -s tests-py -p test*.py"'''
+        self.assertIn("C:\\\\Tools\\\\Python", double(command))
+        self.assertRecognised(double(command))
+        self.assertRecognised(double(r"C:\Tools\Python\python.exe -W ignore -m unittest discover -s tests-py -p test*.py"))
+        self.assertNotRecognised(double(r"C:\Tools\Python\python.exe -W ignore -m pytest tests-py"))
 
     def test_plain_and_chained(self):
         self.assertRecognised(self.WINDOWS)

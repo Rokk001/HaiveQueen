@@ -406,14 +406,28 @@ def _update_document(document, data):
             document[key] = value
 
 
-# Settings files the editor offers.
-def settings_files(conn, config_dir) -> list:
-    """[(label, path, is_machine, legacy_deploy)]: config.toml first, then the project.toml of every registered Apiary whose folder exists; a missing file is created at Save, so its switches can be set."""
-    out = [(tr("config.toml (machine)"), Path(config_dir) / "config.toml", True, False)]
-    for name, workspace, legacy_deploy in conn.execute("SELECT name, workspace, legacy_deploy FROM projects ORDER BY name"):
-        if workspace and Path(workspace).is_dir():
-            out.append((tr("project.toml (%s)", name), Path(workspace) / ".haivequeen" / "project.toml", False, bool(legacy_deploy)))
-    return out
+def edits_of(base, data) -> dict:
+    """The settings of `data` that differ from `base` (nested tables compared key by key): the unsaved edits of a page."""
+    edits = {}
+    for key, value in data.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            inner = edits_of(base[key], value)
+            if inner:
+                edits[key] = inner
+        elif key not in base or base[key] != value:
+            edits[key] = value
+    return edits
+
+
+def with_edits(base, edits) -> dict:
+    """A copy of `base` with `edits` laid over it (nested tables merged key by key)."""
+    merged = json.loads(json.dumps(base))
+    for key, value in edits.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = with_edits(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 # Convert text typed into the editor to the right type.
@@ -442,7 +456,9 @@ def parse_typed(text, like=None):
 
 # The window of the editor.
 class ConfigWindow:
-    """A Toplevel with one form per part of the settings: General, every provider (with its allowed tools) and every project."""
+    """A Toplevel with three tabs: General (the machine settings), Providers and Apiaries; the files config.toml and project.toml stay in the background."""
+
+    TABS = (("general", N_("General")), ("providers", N_("Providers")), ("apiaries", N_("Apiaries")))
 
     # Build the window for the settings files of `conn`.
     def __init__(self, root, conn, config_dir, mono="Consolas", on_saved=None):
@@ -451,8 +467,9 @@ class ConfigWindow:
         self.tk, self.root, self.conn, self.mono, self.on_saved = tk, root, conn, mono, on_saved
         from . import gui_dialog   # imported here: gui_dialog imports gui, which imports this module only on demand
         self.dialog = gui_dialog
-        self.files = settings_files(conn, config_dir)
-        self.index, self.data, self.node, self.getters, self.entries, self.position = 0, {}, ("general", None), [], [], None
+        self.config_path = Path(config_dir) / "config.toml"
+        self.data, self.node, self.getters, self.entries, self.visible, self.position = {}, ("general", None), [], [], [], None
+        self.apiaries, self.initial_values, self.initial_build = [], {}, None
         self.build_vars = None
         self.win = tk.Toplevel(root)
         self.win.title(tr("HaiveQueen settings"))
@@ -460,23 +477,28 @@ class ConfigWindow:
         self.win.minsize(640, 420)
         top = tk.Frame(self.win)
         top.pack(fill="x", padx=8, pady=6)
-        self.file_var = tk.StringVar(value=self.files[0][0])
-        tk.Label(top, text=tr("File:")).pack(side="left")
-        self.dialog.option_menu(top, self.file_var, [f[0] for f in self.files], self.mono, self.pick_file).pack(side="left", padx=6)
+        self.tab_var = tk.StringVar(value="general")
+        self.tab_buttons = {}
+        for key, label in self.TABS:
+            button = tk.Radiobutton(top, text=tr(label), value=key, variable=self.tab_var, indicatoron=False, width=12, command=lambda k=key: self.pick_tab(k))
+            button.pack(side="left", padx=(0, 2))
+            self.tab_buttons[key] = button
         from .gui import COL
         self.col = COL   # the dashboard colours, also for the status texts
         self.status = tk.Label(top, anchor="w", fg=COL["red"])
         self.status.pack(side="left", padx=12, fill="x", expand=True)
         body = tk.Frame(self.win)
         body.pack(fill="both", expand=True, padx=8)
-        side = tk.Frame(body)
-        side.pack(side="left", fill="y")
-        self.nodes = tk.Listbox(side, width=28, exportselection=False, font=(mono, 10))
+        self.side = tk.Frame(body)
+        self.side.pack(side="left", fill="y")
+        self.nodes = tk.Listbox(self.side, width=28, exportselection=False, font=(mono, 10))
         self.nodes.pack(fill="y", expand=True)
         self.nodes.bind("<<ListboxSelect>>", self.pick_node)
-        for text, command in ((tr("Add provider"), self.add_provider), (tr("Add project"), self.add_project), (tr("Remove entry"), self.remove_node)):
-            tk.Button(side, text=text, command=command).pack(fill="x", pady=1)
+        self.add_button = tk.Button(self.side, command=self.add_entry)
+        self.add_button.pack(fill="x", pady=1)
+        tk.Button(self.side, text=tr("Remove entry"), command=self.remove_node).pack(fill="x", pady=1)
         canvas = tk.Canvas(body, highlightthickness=0)
+        self.canvas = canvas
         scroll = self.dialog.scrollbar(body, canvas.yview)
         canvas.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -501,42 +523,99 @@ class ConfigWindow:
         self.bottom_note.bind("<Configure>", lambda e: self.bottom_note.configure(wraplength=max(120, e.width)))
         self.reload()
 
-    # Is the file shown a machine config (providers, projects)?
+    # Is the shown page a page of config.toml (General or a provider)?
     def machine(self) -> bool:
-        """True while config.toml is the selected file."""
-        return self.files[self.index][2]
+        """True on the General tab and on a provider page; False on an Apiary page."""
+        return self.node[0] != "apiaries"
 
-    # Read the selected file again and show its parts.
+    def registered(self) -> dict:
+        """{name: (workspace, legacy_deploy)} of the Apiaries in the database."""
+        return {r[0]: (r[1], bool(r[2])) for r in self.conn.execute("SELECT name, workspace, legacy_deploy FROM projects")}
+
+    # The Apiaries of the tab Apiaries.
+    def load_apiaries(self):
+        """One record per Apiary: every entry of config.toml, then the Apiaries registered only in the database whose folder exists."""
+        registered = self.registered()
+        self.apiaries = [self.apiary_record(entry, registered) for entry in self.data.get("projects") or []]
+        listed = {a["name"] for a in self.apiaries}
+        for name in sorted(registered):
+            if name not in listed and registered[name][0] and Path(registered[name][0]).is_dir():
+                self.apiaries.append(self.apiary_record(None, registered, name))
+
+    def apiary_record(self, entry, registered, name=None):
+        """The record of one Apiary: its entry in config.toml (None for an Apiary only in the database), its name, the workspace whose project.toml it uses
+        (the registered one wins over the one typed in config.toml), the settings of that file, a copy to see changes, and whether it is an Apiary from before the switches."""
+        name = name if entry is None else str(entry.get("name") or "")
+        row = registered.get(name)
+        workspace = str(row[0] if row and row[0] else (entry or {}).get("workspace") or "")
+        path = Path(workspace) / ".haivequeen" / "project.toml" if workspace else None
+        data = load_raw(path) if path else {}
+        return {"entry": entry, "name": name, "workspace": workspace, "path": path, "file": data, "saved": json.dumps(data, sort_keys=True),
+                "legacy": bool(row and row[1]), "exists": bool(path and path.is_file())}
+
+    # Read the files again and show their parts.
     def reload(self):
-        """Drop unsaved changes: read the selected file and list General, the providers and the projects."""
-        self.data = load_raw(self.files[self.index][1])
+        """Drop unsaved changes: read config.toml and the project.toml of every Apiary and show the General tab."""
+        self.data = load_raw(self.config_path)
+        self.load_apiaries()
         self.status.config(text="")
+        self.node = ("general", None)
         self.fill_nodes()
         self.select(0)
 
     # List the parts of the settings.
     def fill_nodes(self):
-        """Rebuild the left list: General, then every provider and project."""
-        self.nodes.delete(0, "end")
-        self.entries = [("general", None)]
-        self.nodes.insert("end", tr("General"))
-        for kind in ("providers", "projects"):
-            for i, item in enumerate(self.data.get(kind) or []):
-                self.entries.append((kind, i))
-                self.nodes.insert("end", tr("provider: %s", item.get("name", "?")) if kind == "providers" else tr("project: %s", item.get("name", "?")))
+        """Rebuild the list of all pages (General, every provider, every Apiary) and show the pages of the current tab on the left."""
+        listed = self.data.get("projects") or []
+        if [a["entry"] for a in self.apiaries if a["entry"] is not None] != listed:
+            registered = self.registered()   # entries added to or removed from config.toml outside the buttons
+            old = {id(a["entry"]): a for a in self.apiaries if a["entry"] is not None}
+            self.apiaries = [old.get(id(e)) or self.apiary_record(e, registered) for e in listed] + [a for a in self.apiaries if a["entry"] is None]
+        self.entries = [("general", None)] + [("providers", i) for i in range(len(self.data.get("providers") or []))] + [("apiaries", k) for k in range(len(self.apiaries))]
+        self.show_tab(self.node[0])
 
-    # Change the selected file.
-    def pick_file(self, label):
-        """Switch to the file with this label; typed but unsaved changes of the old file are dropped."""
-        self.index = [f[0] for f in self.files].index(label)
-        self.reload()
+    def label(self, node) -> str:
+        """The text of a page in the left list."""
+        kind, i = node
+        if kind == "providers":
+            return str(self.data["providers"][i].get("name", "?"))
+        if kind == "apiaries":
+            return self.apiaries[i]["name"] or "?"
+        return tr("General")
+
+    def show_tab(self, tab):
+        """Show the pages of `tab` in the left list (hidden on the General tab) and the matching Add button."""
+        self.tab_var.set(tab)
+        self.visible = [node for node in self.entries if node[0] == tab]
+        self.nodes.delete(0, "end")
+        for node in self.visible:
+            self.nodes.insert("end", self.label(node))
+        if tab == "general":
+            self.side.pack_forget()
+        else:
+            self.add_button.config(text=tr("Add provider") if tab == "providers" else tr("Add Apiary"))
+            self.side.pack(side="left", fill="y", before=self.canvas)
+
+    # A tab was clicked.
+    def pick_tab(self, tab):
+        """Keep the typed values of the shown page, then show the first page of `tab` (an empty page when the tab has none)."""
+        if not self.collect():
+            self.tab_var.set(self.node[0])
+            return
+        self.show_tab(tab)
+        if self.visible:
+            self.select(self.entries.index(self.visible[0]))
+        else:
+            self.node = (tab, None)
+            self.clear_form()
 
     # Show one part.
     def select(self, row):
-        """Select list row `row` and build its form."""
-        self.nodes.selection_clear(0, "end")
-        self.nodes.selection_set(row)
+        """Show page `row` of the list of all pages (0 is General, then the providers, then the Apiaries), switching to its tab."""
         self.node = self.entries[row]
+        self.show_tab(self.node[0])
+        self.nodes.selection_clear(0, "end")
+        self.nodes.selection_set(self.visible.index(self.node))
         self.build_form()
 
     # Row clicked in the list.
@@ -547,29 +626,45 @@ class ConfigWindow:
             return
         if not self.collect():
             self.nodes.selection_clear(0, "end")
-            self.nodes.selection_set(self.entries.index(self.node))
+            if self.node in self.visible:
+                self.nodes.selection_set(self.visible.index(self.node))
             return
-        self.node = self.entries[picked[0]]
+        self.node = self.visible[picked[0]]
         self.build_form()
 
     # The dict a part edits.
     def target(self) -> dict:
-        """The dict of the shown part: the top level for General, else the provider or project entry."""
+        """The dict of the shown part: the top level for General, the provider entry, or for an Apiary {"entry": its entry in config.toml, "file": its project.toml}."""
         kind, i = self.node
-        return self.data if kind == "general" else self.data[kind][i]
+        if kind == "general":
+            return self.data
+        if kind == "apiaries":
+            apiary = self.apiaries[i]
+            return {"entry": apiary["entry"] if apiary["entry"] is not None else {}, "file": apiary["file"]}
+        return self.data[kind][i]
+
+    def clear_form(self):
+        """Remove every row of the right side."""
+        for child in self.form.winfo_children():
+            child.destroy()
+        self.getters, self.initial_values, self.initial_build = [], {}, None
+        self.build_vars = None   # the three variables of the block "Build" while the General page is shown
+        self.login_status = self.login_button = self.benchmark_button = self.benchmark_status = None   # benchmark_status stays None: no text on the page
 
     # Build the form of the shown part.
     def build_form(self):
-        """Fill the right side with one row per setting of the shown part; a provider gets its allowed tools and other arguments as two lists."""
-        for child in self.form.winfo_children():
-            child.destroy()
-        self.getters = []
-        kind, _i = self.node
+        """Fill the right side with one row per setting of the shown part; a provider gets its allowed tools and other arguments as two lists;
+        an Apiary gets its entry of config.toml and all settings of its project.toml on one page."""
+        self.clear_form()
+        kind, i = self.node
+        self.position = None
+        if kind != "general" and i is None:
+            return
+        if kind == "apiaries":
+            self.apiary_form()
+            return
         data = self.target()
         shown = {k: v for k, v in data.items() if kind != "general" or k not in ("providers", "projects")}
-        self.position = None
-        self.login_status = self.login_button = self.benchmark_button = self.benchmark_status = None   # benchmark_status stays None: no text on the page
-        self.build_vars = None   # the three variables of the block "Build" while the General page of config.toml is shown
         if kind == "providers":
             from . import cli_presets
             key = cli_presets.key_for(data)
@@ -580,17 +675,13 @@ class ConfigWindow:
                 shown.setdefault("outputFormat", "")   # the output format the CLI writes: claude, codex or opencode
             self.cli_row(key)
             self.login_row()
-        if kind == "general" and self.machine():
+        if kind == "general":
             shown.pop("buildJobs", None)   # the build settings are the block "Build" below, never the raw table
             shown.pop("ramReserveMb", None)   # machine-only, settable in config.toml only; not offered here, the stored value stays untouched on save
             self.build_block()
             self.bzz_row()
-        if kind == "general":
             shown.pop("preferredProvider", None)
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
-            if not self.machine():
-                shown = apiary_settings(shown, self.files[self.index][3])
-                shown = release_fields(shown, self.github_repository(shown))
         if kind == "providers":
             from . import scheduler
             shown["capabilities"] = scheduler.provider_capabilities(data)
@@ -605,13 +696,61 @@ class ConfigWindow:
         self.initial_values = {path: getter() for path, getter, _like in self.getters}
         self.initial_build = tuple(v.get() for v in self.build_vars) if self.build_vars else None
 
+    def apiary_form(self):
+        """The page of one Apiary: name and workspace from config.toml, then every setting of its project.toml (the switches and the other Apiary settings first), each once."""
+        apiary = self.apiaries[self.node[1]]
+        entry = apiary["entry"]
+        if entry is not None:
+            self.adopt_workspace(apiary)
+            self.fields(self.form, dict(entry), ("entry",))
+        else:
+            row = self.tk.Frame(self.form)
+            row.pack(fill="x", pady=2, anchor="w")
+            self.tk.Label(row, text="%s  (%s)" % (apiary["name"], apiary["workspace"]), anchor="w", font=(self.mono, 10)).pack(side="left")
+        shown = {k: v for k, v in apiary["file"].items() if k not in ("name", "workspace", "preferredProvider")}   # the name and the workspace are those of config.toml (no setting twice)
+        shown.setdefault("language", "English")
+        shown = release_fields(apiary_settings(shown, apiary["legacy"]), self.github_repository(shown))
+        first = {key: shown.pop(key) for key, _default in APIARY_DEFAULTS if key in shown}
+        self.fields(self.form, {**first, **shown}, ("file",))
+        self.add_row(self.form, ("file",))
+        self.initial_values = {path: getter() for path, getter, _like in self.getters}
+
+    def adopt_workspace(self, apiary) -> bool:
+        """For an Apiary not registered yet whose workspace in config.toml was changed: take the project.toml of that workspace (if any) as its settings
+        and lay the unsaved edits of the page over them, so neither the edits nor the unchanged values of the file are lost. True when the record changed."""
+        entry = apiary["entry"]
+        if entry is None or apiary["name"] in self.registered():
+            return False
+        typed = str(entry.get("workspace") or "")
+        if typed == apiary["workspace"]:
+            return False
+        edits = edits_of(json.loads(apiary["saved"]), apiary["file"])
+        record = self.apiary_record(entry, {})
+        record["file"] = with_edits(record["file"], edits)
+        apiary.update(record)
+        return True
+
+    # The workspace of an Apiary page was typed.
+    def workspace_entered(self, _event=None):
+        """Keep the typed values and, when the typed workspace already holds a project.toml (or no longer does), show its settings at once."""
+        if self.node[0] != "apiaries" or self.node[1] is None:
+            return
+        apiary = self.apiaries[self.node[1]]
+        if not self.collect():
+            return
+        saved = apiary["saved"]
+        if self.adopt_workspace(apiary) and apiary["saved"] != saved:
+            self.build_form()
+
     def github_repository(self, shown):
         """owner/name of the GitHub remote of the shown Apiary (its remoteName), or None."""
         from . import publish
         from types import SimpleNamespace
-        workspace = self.files[self.index][1].parent.parent
+        workspace = self.apiaries[self.node[1]]["workspace"]
+        if not workspace:
+            return None
         try:
-            return publish.github_repository(SimpleNamespace(workspace=workspace, settings={"remoteName": shown.get("remoteName") or "origin"}))
+            return publish.github_repository(SimpleNamespace(workspace=Path(workspace), settings={"remoteName": shown.get("remoteName") or "origin"}))
         except Exception:
             return None
 
@@ -745,31 +884,16 @@ class ConfigWindow:
         self.watch_login(proc)
 
     # The Benchmark Start Context button.
-    def benchmark_click(self, wait=False):
-        """After a safety question open the window Benchmark and measure the start context of the shown provider in every registered Apiary, with and without
-        the HaiveQueen profile (in a thread, so the windows stay usable; `wait` runs it here). The window shows progress, results and errors."""
+    def benchmark_click(self):
+        """Open the benchmark window for the selected provider."""
         from . import gui_benchmark
         if not self.collect():
             return
         name = self.login_provider()["name"]
-        if not self.dialog.ask(self.win, "HaiveQueen", tr("Measure the start context of provider %s in every registered Apiary, twice: once with the HaiveQueen profile and once "
-                                                  "with your own configuration? This starts the CLI %d times and uses a few tokens of your login.",
-                                                  name, 2 * self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]), self.mono):
-            return
         old = getattr(self, "benchmark_win", None)
         if old is not None and old.win.winfo_exists():
             old.win.destroy()
-        self.benchmark_win = gui_benchmark.BenchmarkWindow(self.root, self.conn, name, self.mono)
-        button = self.benchmark_button
-        button.config(state="disabled")
-
-        def done():
-            """Allow the next measurement (the page may have changed meanwhile)."""
-            try:
-                button.config(state="normal")
-            except self.tk.TclError:
-                pass
-        self.benchmark_win.run(dict(self.data), done, wait)
+        self.benchmark_win = gui_benchmark.BenchmarkWindow(self.root, self.conn, name, self.mono, dict(self.data))
 
     # Refresh the state when the terminal window is closed.
     def watch_login(self, proc):
@@ -800,8 +924,13 @@ class ConfigWindow:
                 self.fields(box, value, path + (key,))
                 self.add_row(box, path + (key,))
                 continue
-            tk.Label(row, text=tr(SETTING_LABELS[key]) if key in SETTING_LABELS and self.node[0] == "general" and not self.machine() else key, width=22, anchor="nw", justify="left", wraplength=190, font=(self.mono, 10)).pack(side="left", anchor="n")
+            tk.Label(row, text=tr(SETTING_LABELS[key]) if key in SETTING_LABELS and path[:1] == ("file",) else key, width=22, anchor="nw", justify="left", wraplength=190, font=(self.mono, 10)).pack(side="left", anchor="n")
             self.getters.append((path + (key,), self.editor(row, key, value), value))
+            if path + (key,) == ("entry", "workspace"):
+                for widget in row.winfo_children():
+                    if isinstance(widget, tk.Entry):
+                        widget.bind("<FocusOut>", self.workspace_entered, add="+")   # the settings of an existing project.toml appear when the workspace is entered
+                        widget.bind("<Return>", self.workspace_entered, add="+")
 
     # One editor widget for a value; returns the function that reads it back.
     def editor(self, parent, key, value):
@@ -888,7 +1017,7 @@ class ConfigWindow:
                 current[path] = raw
                 values[path] = raw if isinstance(raw, (bool, list, dict)) or isinstance(like, (bool, list)) else parse_typed(raw, like)
         except (ValueError, TypeError) as exc:
-            self.status.config(text="%s: %s" % (".".join(where), exc), fg=self.col["red"])
+            self.status.config(text="%s: %s" % (".".join(where[1:] if self.node[0] == "apiaries" else where), exc), fg=self.col["red"])
             return False
         if self.build_vars is not None and tuple(v.get() for v in self.build_vars) != self.initial_build:
             try:
@@ -925,58 +1054,92 @@ class ConfigWindow:
         self.status.config(text="")
         return True
 
+    # The Add button of the left list.
+    def add_entry(self):
+        """Add a provider on the tab Providers, an Apiary on the tab Apiaries."""
+        if self.tab_var.get() == "providers":
+            self.add_provider()
+        elif self.tab_var.get() == "apiaries":
+            self.add_apiary()
+
     # Add a provider with the fields the loop needs.
     def add_provider(self):
         """Append a new provider (claude protocol, one slot, fallback use) and show it."""
-        if self.machine() and self.collect():
+        if self.collect():
             self.data.setdefault("providers", []).append({"name": "new-provider", "protocol": "claude", "command": "claude", "args": [], "slots": 1, "use": "fallback",
                                                           "capabilities": ["Coding", "Queen"], "capabilitiesVersion": 1, "classes": {"medium": {"model": "", "effort": "medium"}}})
             self.fill_nodes()
-            self.select(1 + len(self.data["providers"]) - 1)
+            self.select(len(self.data["providers"]))
 
-    # Add a project.
-    def add_project(self):
-        """Append a new project entry (name and workspace) and show it."""
-        if self.machine() and self.collect():
-            self.data.setdefault("projects", []).append({"name": "new-project", "workspace": ""})
+    # Add an Apiary.
+    def add_apiary(self):
+        """Append a new Apiary (name and workspace in config.toml; its project.toml is created at Save) and show it."""
+        if self.collect():
+            self.data.setdefault("projects", []).append({"name": "new-apiary", "workspace": ""})
             self.fill_nodes()
-            self.select(len(self.entries) - 1)
+            self.select(self.entries.index(("apiaries", len(self.data["projects"]) - 1)))
 
-    # Remove the shown provider or project.
+    # Remove the shown provider or Apiary.
     def remove_node(self):
-        """Delete the shown provider or project from the settings (not from the file until Save)."""
+        """Delete the shown provider or the entry of the shown Apiary in config.toml (not from the file until Save; the project.toml stays)."""
         kind, i = self.node
-        if kind == "general":
+        if kind == "general" or i is None or (kind == "apiaries" and self.apiaries[i]["entry"] is None):
             return
         from . import gui_dialog
-        if gui_dialog.ask(self.win, "HaiveQueen", tr("Remove this provider from the settings?") if kind == "providers" else tr("Remove this project from the settings?"), self.mono):
-            del self.data[kind][i]
+        if gui_dialog.ask(self.win, "HaiveQueen", tr("Remove this provider from the settings?") if kind == "providers" else tr("Remove this Apiary from the settings?"), self.mono):
+            if kind == "providers":
+                del self.data["providers"][i]
+            else:
+                entry = self.apiaries.pop(i)["entry"]
+                self.data["projects"] = [e for e in self.data["projects"] if e is not entry]
             self.fill_nodes()
             self.select(0)
 
-    # Check and write the file.
+    def apiary_writes(self) -> tuple:
+        """([(apiary, path of its project.toml)] to write at Save, [problems]): an Apiary whose settings changed or that has no project.toml yet, in an existing workspace."""
+        writes, problems = [], []
+        registered = self.registered()
+        for apiary in self.apiaries:
+            row = registered.get(apiary["name"])
+            workspace = str(row[0] if row and row[0] else (apiary["entry"] or {}).get("workspace") or "").strip()
+            path = Path(workspace) / ".haivequeen" / "project.toml" if workspace and Path(workspace).is_dir() else None
+            changed = json.dumps(apiary["file"], sort_keys=True) != apiary["saved"]
+            if path is None:
+                if changed:
+                    problems.append(tr("%s: the workspace folder does not exist", apiary["name"]))
+                continue
+            if changed or not path.is_file():
+                problems += ["%s: %s" % (apiary["name"], text) for text in check(apiary["file"], machine=False)]
+                writes.append((apiary, path))
+        return writes, problems
+
+    # Check and write the files.
     def save(self):
-        """Collect the shown part, check everything, write the file and tell the main window; a problem is shown and nothing is written."""
+        """Collect the shown part, check everything, write config.toml and the project.toml of every changed or new Apiary and tell the main window; a problem is shown and nothing is written."""
         if not self.collect():
             return
-        problems = check(self.data, self.machine())
+        for apiary in self.apiaries:
+            self.adopt_workspace(apiary)   # a workspace typed just before Save: its project.toml is the base, never replaced by the edits alone
+        writes, problems = self.apiary_writes()
+        problems = check(self.data, True) + problems
         if problems:
             self.status.config(text="; ".join(problems)[:300], fg=self.col["red"])
             return
-        if self.machine():
-            save_file(self.files[self.index][1], self.data)
-        else:
-            save_project_file(self.conn, self.files[self.index][1], self.data)
-        if self.machine():
-            from . import init
-            init.register_listed(self.conn, self.data.get("projects"))   # a project added on this page is an Apiary from now on
+        from . import init
+        save_file(self.config_path, self.data)
+        init.register_listed(self.conn, self.data.get("projects"))   # an Apiary added on this tab is an Apiary from now on
+        for apiary, path in writes:
+            save_project_file(self.conn, path, apiary["file"])
+            apiary.update(path=path, workspace=str(path.parent.parent), saved=json.dumps(apiary["file"], sort_keys=True), exists=True)
         self.status.config(text=tr("Saved."), fg=self.col["green"])
         if self.on_saved:
             self.on_saved()
 
     # Open the settings folder.
     def open_folder(self):
-        """Open the folder of the shown file in the file manager."""
-        folder = self.files[self.index][1].parent
+        """Open the folder of the shown settings in the file manager: that of the project.toml on an Apiary page, else that of config.toml."""
+        folder = self.config_path.parent
+        if self.node[0] == "apiaries" and self.node[1] is not None and self.apiaries[self.node[1]]["path"] and self.apiaries[self.node[1]]["path"].parent.is_dir():
+            folder = self.apiaries[self.node[1]]["path"].parent
         if os.name == "nt":
             os.startfile(str(folder))

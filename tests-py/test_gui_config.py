@@ -1,6 +1,8 @@
 """Tests of the settings editor: TOML writing, the allowed tools list, checks, saving with a backup, and the window."""
 import sys
 import tempfile
+import threading
+import time
 import tomllib
 import unittest
 from pathlib import Path
@@ -246,9 +248,8 @@ class WindowTest(unittest.TestCase):
         """The General page of a project file offers every Apiary setting with its default under a readable label; a changed value is saved."""
         import tomllib
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
-        index, label = next((i, f[0]) for i, f in enumerate(win.files) if not f[2])
-        win.pick_file(label)
-        keys = {path[0]: like for path, _getter, like in win.getters}
+        win.select(win.entries.index(("apiaries", 0)))
+        keys = {path[1]: like for path, _getter, like in win.getters if path[0] == "file"}
         for key, default in gui_config.APIARY_DEFAULTS:
             if key in gui_config.RELEASE_KEYS:
                 self.assertNotIn(key, keys)   # H-43: the release settings are offered only for a remote on GitHub, this Apiary has none
@@ -258,10 +259,10 @@ class WindowTest(unittest.TestCase):
         self.assertIn("Run the deploy", texts)
         self.assertNotIn("deployEnabled", texts)
         win.collect()
-        win.target().update({"deployEnabled": False, "remoteName": "upstream", "ownerTopics": ["pricing"]})
+        win.target()["file"].update({"deployEnabled": False, "remoteName": "upstream", "ownerTopics": ["pricing"]})
         win.build_form()
         win.save()
-        saved = tomllib.loads(win.files[index][1].read_text(encoding="utf-8"))
+        saved = tomllib.loads(win.apiaries[0]["path"].read_text(encoding="utf-8"))
         self.assertIs(saved["deployEnabled"], False)
         self.assertEqual(saved["remoteName"], "upstream")
         self.assertEqual(saved["ownerTopics"], ["pricing"])
@@ -365,22 +366,207 @@ class WindowTest(unittest.TestCase):
         self.assertIn("slots", win.status.cget("text"))
         self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["slots"], 8)
 
-    # The project.toml of an Apiary is offered as a second file.
+    # The project.toml of an Apiary is edited on its page of the tab Apiaries.
     def test_project_file_is_listed_and_editable(self):
-        """The file list holds config.toml and the project.toml of ODP; saving a changed priority writes it."""
+        """The tab Apiaries lists ODP; saving a changed priority on its page writes its project.toml."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
-        self.assertEqual([f[0] for f in win.files], ["config.toml (machine)", "project.toml (ODP)"])
-        win.pick_file("project.toml (ODP)")
+        win.pick_tab("apiaries")
+        self.assertEqual(win.nodes.get(0, "end"), ("ODP",))
         self.type_into_entry(win, "2", "5")
         win.save()
-        self.assertEqual(gui_config.load_raw(win.files[1][1])["priority"], 5)
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(gui_config.load_raw(self.folder / "ws" / ".haivequeen" / "project.toml")["priority"], 5)
+
+    # Owner answer 372 (1): three tabs, no file selection.
+    def test_window_has_three_tabs_and_no_file_selection(self):
+        """The window offers the tabs General, Providers and Apiaries; no File choice and no file name is shown; each tab lists only its own pages."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        self.assertEqual([b.cget("text") for b in win.tab_buttons.values()], ["General", "Providers", "Apiaries"])
+        texts = [w.cget("text") for w in descendants(win.win) if w.winfo_class() in ("Label", "Button", "Menubutton", "Radiobutton")]
+        self.assertFalse([text for text in texts if "File:" in text or "config.toml (" in text or "project.toml (" in text], texts)
+        self.assertFalse(win.side.winfo_manager())   # the General tab has no list
+        win.pick_tab("providers")
+        self.assertEqual(win.nodes.get(0, "end"), ("claude", "codex"))
+        self.assertEqual(win.add_button.cget("text"), "Add provider")
+        win.pick_tab("apiaries")
+        self.assertEqual(win.nodes.get(0, "end"), ("ODP",))
+        self.assertEqual(win.add_button.cget("text"), "Add Apiary")
+        self.assertTrue(win.side.winfo_manager())
+
+    # Owner answer 372 (2): every setting of an Apiary on one page, each once.
+    def test_apiary_page_holds_all_its_settings_once(self):
+        """The page of an Apiary shows its name and workspace from config.toml and all settings of its project.toml, including the four switches; no key twice."""
+        with mock.patch("haivequeen.publish.github_repository", return_value="owner/name"):
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win.pick_tab("apiaries")
+        paths = [path for path, _getter, _like in win.getters]
+        keys = [path[-1] for path in paths]
+        self.assertEqual(len(keys), len(set(keys)), keys)
+        self.assertIn(("entry", "name"), paths)
+        self.assertIn(("entry", "workspace"), paths)
+        self.assertTrue({("file", "priority"), ("file", "planGlobs")} <= set(paths))
+        labels = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
+        for label in ("Run the compile check", "Run the build", "Run the deploy", "Publish release at integration"):
+            self.assertIn(label, labels)
+        self.assertNotIn(("file", "name"), paths)   # the name of config.toml is the only one
+        self.assertIsNone(win.build_vars)
+        self.assertFalse([p for p, _g, _l in win.getters if p[-1] in ("slots", "hives", "capabilities")])   # no machine or provider setting on an Apiary page
+
+    # H-54 with owner answer 372: Save rewrites no unchanged project.toml.
+    def test_save_rewrites_no_unchanged_apiary_file(self):
+        """Saving after only looking at an Apiary page leaves its project.toml untouched and keeps the provider capabilities as they are."""
+        path = self.folder / "ws" / ".haivequeen" / "project.toml"
+        before = path.read_text(encoding="utf-8")
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(1)
+        win.select(2)
+        win.pick_tab("apiaries")
+        win.save()
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+        self.assertFalse(path.with_name("project.toml.bak").exists())
+        codex = gui_config.load_raw(self.folder / "config.toml")["providers"][1]
+        self.assertEqual((codex["capabilities"], codex["use"]), (["images"], "capability-only"))
+
+    # Owner answer 372 (3): the capabilities stay on the provider pages.
+    def test_capabilities_are_on_the_provider_pages_only(self):
+        """A provider page offers the capability ticks; a changed tick is saved for that provider."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.select(1)   # provider claude
+        self.assertIn(("capabilities",), [p for p, _g, _l in win.getters])
+        boxes = {w.cget("text"): w for w in descendants(win.form) if w.winfo_class() == "Checkbutton"}
+        boxes["Deploy"].invoke()
+        win.save()
+        claude = gui_config.load_raw(self.folder / "config.toml")["providers"][0]
+        self.assertIn("Deploy", claude["capabilities"])
+
+    # Owner answer 372 (2): Add Apiary creates its project.toml in the background.
+    def test_add_apiary_creates_its_project_file(self):
+        """Add Apiary adds a page; with a name and an existing workspace Save writes config.toml, registers the Apiary and creates its project.toml with the switches set on the page."""
+        new = self.folder / "fresh"
+        new.mkdir()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.pick_tab("apiaries")
+        win.add_entry()
+        self.assertEqual(win.nodes.get(0, "end"), ("ODP", "new-apiary"))
+        self.type_into_entry(win, "new-apiary", "Fresh")
+        self.type_into_entry(win, "", str(new))
+        self.assertTrue(win.collect())
+        win.target()["file"]["buildEnabled"] = False
+        win.build_form()
+        win.save()
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        listed = gui_config.load_raw(self.folder / "config.toml")["projects"]
+        self.assertEqual(listed[-1], {"name": "Fresh", "workspace": str(new)})
+        self.assertEqual(gui_config.load_raw(new / ".haivequeen" / "project.toml"), {"buildEnabled": False})
+        self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='Fresh'").fetchone()[0], str(new.resolve()))
+
+    # A new Apiary in a workspace that already has a project.toml (Vera-7 open point).
+    def existing_workspace(self):
+        """A folder with a project.toml of its own (a comment, three settings) and the text of that file."""
+        folder = self.folder / "known"
+        (folder / ".haivequeen").mkdir(parents=True)
+        text = '# kept\npriority = 7\nplanGlobs = ["docs/*.md"]\ndeployEnabled = false\n'
+        (folder / ".haivequeen" / "project.toml").write_text(text, encoding="utf-8")
+        return folder, text
+
+    def new_apiary_in(self, win, folder):
+        """Add an Apiary on the tab Apiaries and type `folder` as its workspace (not yet entered)."""
+        win.pick_tab("apiaries")
+        win.add_entry()
+        self.type_into_entry(win, "", str(folder))
+
+    def shown(self, win) -> dict:
+        """{key: shown value} of the project.toml settings on the shown Apiary page."""
+        return {path[1]: getter() for path, getter, _like in win.getters if path[0] == "file"}
+
+    def test_entered_workspace_shows_its_project_file_at_once(self):
+        """Entering the workspace of a new Apiary shows the settings of the project.toml already there, without leaving the page."""
+        folder, _text = self.existing_workspace()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        self.new_apiary_in(win, folder)
+        node = win.node
+        workspace = next(w for w in descendants(win.form) if w.winfo_class() == "Entry" and w.get() == str(folder))
+        self.assertTrue({"<FocusOut>", "<Key-Return>"} <= set(workspace.bind()), workspace.bind())
+        win.workspace_entered()   # what both bindings call (hidden test windows get no focus events)
+        self.assertEqual(win.node, node)
+        shown = self.shown(win)
+        self.assertEqual((shown["priority"], shown["planGlobs"], shown["deployEnabled"]), ("7", ["docs/*.md"], False))
+
+    def test_entered_workspace_keeps_the_unsaved_edits(self):
+        """A setting changed before the workspace is entered stays as typed; the other values of the existing project.toml stay as they are."""
+        folder, _text = self.existing_workspace()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.pick_tab("apiaries")
+        win.add_entry()
+        win.target()["file"]["priority"] = 9
+        win.build_form()
+        self.type_into_entry(win, "", str(folder))
+        win.workspace_entered()
+        shown = self.shown(win)
+        self.assertEqual((shown["priority"], shown["planGlobs"], shown["deployEnabled"]), ("9", ["docs/*.md"], False))
+        win.save()
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        saved = (folder / ".haivequeen" / "project.toml").read_text(encoding="utf-8")
+        self.assertEqual(tomllib.loads(saved), {"priority": 9, "planGlobs": ["docs/*.md"], "deployEnabled": False})
+        self.assertIn("# kept", saved)
+
+    def test_save_right_after_typing_the_workspace_keeps_the_existing_file(self):
+        """Save without entering the workspace first still lays the edits over the existing project.toml instead of replacing it."""
+        folder, _text = self.existing_workspace()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.pick_tab("apiaries")
+        win.add_entry()
+        win.target()["file"]["buildEnabled"] = False
+        win.build_form()
+        self.type_into_entry(win, "", str(folder))
+        win.save()
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(gui_config.load_raw(folder / ".haivequeen" / "project.toml"),
+                         {"priority": 7, "planGlobs": ["docs/*.md"], "deployEnabled": False, "buildEnabled": False})
+
+    def test_entered_workspace_without_edits_leaves_the_file_untouched(self):
+        """Entering the workspace and saving without a change writes no project.toml and no backup; the Apiary is registered."""
+        folder, text = self.existing_workspace()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        self.new_apiary_in(win, folder)
+        win.workspace_entered()
+        win.save()
+        self.assertEqual(win.status.cget("text"), "Saved.")
+        path = folder / ".haivequeen" / "project.toml"
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
+        self.assertFalse(path.with_name("project.toml.bak").exists())
+        self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='new-apiary'").fetchone()[0], str(folder.resolve()))
+
+    def test_entering_the_same_workspace_again_rebuilds_nothing(self):
+        """Entering an unchanged workspace keeps the page and its typed values as they are."""
+        folder, _text = self.existing_workspace()
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        self.new_apiary_in(win, folder)
+        win.workspace_entered()
+        self.type_into_entry(win, "7", "8")
+        rows = list(win.form.winfo_children())
+        win.workspace_entered()
+        self.assertEqual(list(win.form.winfo_children()), rows)
+        self.assertEqual(self.shown(win)["priority"], "8")
+
+    def test_add_apiary_without_workspace_writes_no_project_file(self):
+        """A new Apiary whose workspace does not exist cannot keep changed settings: nothing is written and the reason is shown."""
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win.pick_tab("apiaries")
+        win.add_entry()
+        win.target()["file"]["deployEnabled"] = True
+        before = (self.folder / "config.toml").read_text(encoding="utf-8")
+        win.save()
+        self.assertIn("workspace folder does not exist", win.status.cget("text"))
+        self.assertEqual((self.folder / "config.toml").read_text(encoding="utf-8"), before)
 
     # Adding and removing a provider.
     def test_add_and_remove_provider(self):
         """A new provider appears in the list and in the saved file; removing it afterwards removes it again."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.add_provider()
-        self.assertIn("provider: new-provider", win.nodes.get(0, "end"))
+        self.assertIn("new-provider", win.nodes.get(0, "end"))
         self.type_into_entry(win, "new-provider", "extra")
         win.save()
         names = [p["name"] for p in gui_config.load_raw(self.folder / "config.toml")["providers"]]
@@ -564,7 +750,7 @@ class WindowTest(unittest.TestCase):
     def test_project_file_has_no_build_block(self):
         """The build block belongs to the machine settings only."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
-        win.pick_file("project.toml (ODP)")
+        win.pick_tab("apiaries")
         self.assertIsNone(win.build_vars)
 
 
@@ -611,49 +797,81 @@ class BenchmarkWindowTest(WindowTest):
             if widget.winfo_class() == "Label":
                 self.assertNotIn("no benchmark yet", str(widget.cget("text")))
 
-    def run_benchmark(self, result, progress=None, stored=False):
-        """Press the button with a fake measurement; returns (settings window, Benchmark window)."""
-        from haivequeen import startctx
-        if stored:
-            startctx.store_benchmark(self.conn, "claude", "ODP", "hq", 32000, when="2026-10-01T10:00:00")
-            startctx.store_benchmark(self.conn, "claude", "ODP", "own", 100000, when="2026-10-01T10:00:00")
-
-        def fake(conn, cfg, name, measure=None, progress=None):
-            if text:
-                progress(text)
-            return result
-        text = progress
-        win = self.provider_page("1130x700")
-        with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", side_effect=fake):
-            win.benchmark_click(wait=True)
-        self.root.update()
-        return win, win.benchmark_win
+    def wait_until(self, predicate):
+        """Pump Tk events while a background measurement reports its state."""
+        deadline = time.monotonic() + 5
+        while not predicate() and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(0.01)
+        self.assertTrue(predicate(), "Timed out waiting for the benchmark window")
 
     def test_window_shows_progress_and_results_table(self):
-        """The window is called Benchmark, shows the progress text and a table with HaiveQueen profile, own profile, saving and date per Apiary, also of earlier runs."""
-        win, bw = self.run_benchmark({"excluded": False, "errors": [], "results": []}, progress="2/4: ODP without it ...", stored=True)
-        self.assertEqual(bw.win.title(), "Benchmark")
-        self.assertIn("2/4: ODP without it ...", bw.progress.cget("text"))
-        heads = [bw.table.heading(c)["text"] for c in bw.table["columns"]]
-        self.assertEqual(heads, ["Apiary", "HaiveQueen profile", "Own profile", "Saving", "Date"])
-        rows = [bw.table.item(i)["values"] for i in bw.table.get_children()]
-        self.assertEqual([str(v) for v in rows[0]], ["ODP", "32k", "100k", "-68 %", "2026-10-01"])
-        self.assertEqual(win.benchmark_button.cget("state"), "normal")
+        """Opening is passive; starting shows live progress and refreshes stored results."""
+        from haivequeen import startctx
+        startctx.store_benchmark(self.conn, "claude", "ODP", "hq", 32000, when="2026-10-01T10:00:00")
+        startctx.store_benchmark(self.conn, "claude", "ODP", "own", 100000, when="2026-10-01T10:00:00")
+        entered, release = threading.Event(), threading.Event()
+
+        def fake(conn, cfg, name, progress=None):
+            progress("2/4: ODP without it ...")
+            entered.set()
+            release.wait(5)
+            startctx.store_benchmark(conn, name, "ODP", "hq", 40000, when="2026-10-02T10:00:00")
+            return {"excluded": False, "errors": [], "results": [], "completed": 4, "total": 4}
+
+        win = self.provider_page("1130x700")
+        with mock.patch("haivequeen.gui_dialog.ask", return_value=True) as ask, mock.patch("haivequeen.startctx.benchmark", side_effect=fake) as bench:
+            win.benchmark_button.invoke()
+            bw = win.benchmark_win
+            bench.assert_not_called()
+            ask.assert_not_called()
+            self.assertEqual(bw.win.title(), "Benchmark")
+            heads = [bw.table.heading(c)["text"] for c in bw.table["columns"]]
+            self.assertEqual(heads, ["Apiary", "HaiveQueen profile", "Own profile", "Saving", "Date"])
+            rows = [bw.table.item(i)["values"] for i in bw.table.get_children()]
+            self.assertEqual([str(v) for v in rows[0]], ["ODP", "32k", "100k", "-68 %", "2026-10-01"])
+            try:
+                bw.start_button.invoke()
+                self.wait_until(lambda: entered.is_set() and "2/4: ODP" in bw.progress.cget("text"))
+                self.assertEqual(bw.start_button.cget("state"), "disabled")
+                bw.start()  # A second start must not launch another measurement.
+                bench.assert_called_once()
+            finally:
+                release.set()
+            self.wait_until(lambda: not bw.running)
+            self.assertIn("Done: 4 of 4", bw.progress.cget("text"))
+            self.assertEqual(bw.start_button.cget("state"), "normal")
+            rows = [bw.table.item(i)["values"] for i in bw.table.get_children()]
+            self.assertEqual([str(v) for v in rows[0]], ["ODP", "40k", "100k", "-60 %", "2026-10-02"])
 
     def test_window_shows_error_and_excluded(self):
-        """A failed run shows its error in the window, an excluded provider says so."""
-        win, bw = self.run_benchmark({"excluded": False, "errors": ["ODP without profile: not logged in"], "results": []})
-        self.assertIn("not logged in", bw.error.cget("text"))
-        win, bw = self.run_benchmark({"excluded": True, "errors": [], "results": []})
-        self.assertIn("excluded", bw.error.cget("text"))
-
-    def test_declined_question_opens_no_window(self):
-        """No confirmation, no window and no measurement."""
+        """Starting a failed or excluded run reports it in the existing window."""
         win = self.provider_page("1130x700")
-        with mock.patch("haivequeen.gui_dialog.ask", return_value=False), mock.patch("haivequeen.startctx.benchmark") as bench:
-            win.benchmark_click(wait=True)
+        win.benchmark_button.invoke()
+        bw = win.benchmark_win
+        results = [{"excluded": False, "errors": ["ODP without profile: not logged in"], "results": []},
+                   {"excluded": True, "errors": [], "results": []}]
+        with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", side_effect=results):
+            for expected in ("not logged in", "excluded"):
+                bw.start_button.invoke()
+                self.wait_until(lambda: not bw.running)
+                self.assertIn(expected, bw.error.cget("text"))
+                self.assertEqual(bw.start_button.cget("state"), "normal")
+
+    def test_declined_question_keeps_window_without_measurement(self):
+        """Declining the in-window confirmation leaves the window and results intact."""
+        win = self.provider_page("1130x700")
+        with mock.patch("haivequeen.gui_dialog.ask", return_value=False) as ask, mock.patch("haivequeen.startctx.benchmark") as bench:
+            win.benchmark_button.invoke()
+            bw = win.benchmark_win
+            ask.assert_not_called()
+            bw.start_button.invoke()
+            ask.assert_called_once()
+            self.assertIs(ask.call_args.args[0], bw.win)
             bench.assert_not_called()
-        self.assertIsNone(getattr(win, "benchmark_win", None))
+        self.assertTrue(bw.win.winfo_exists())
+        self.assertFalse(bw.running)
+        self.assertEqual(bw.start_button.cget("state"), "normal")
 
 
 if __name__ == "__main__":
