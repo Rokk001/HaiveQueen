@@ -536,6 +536,22 @@ class CommandRecognitionTests(unittest.TestCase):
     def assertNotRecognised(self, command, configured=WINDOWS):
         self.assertNotEqual((agent_runner.classify_cmd(command, compile_check=configured) or {}).get("label"), "Compile test", command)
 
+    def test_adjacent_quoted_pieces_are_one_word(self):
+        """Codex joins a PowerShell script from adjacent pieces ('a'"'b'"'c', one word in the shell); seen in a Queen run whose green check was not recognised."""
+        command = r'''"C:\Tools\pwsh.exe" -Command '$env:LOCALAPPDATA = Join-Path $env:TEMP '"'hq-local'; "'$env:APPDATA = Join-Path $env:TEMP '"'hq-roaming'; Remove-Item Env:BZZ_AGENT -ErrorAction SilentlyContinue; & 'C:\Tools\Python\python.exe' -W ignore -m unittest discover -s tests-py -p test*.py"'''
+        self.assertRecognised(command)
+        self.assertNotRecognised(command.replace("unittest discover", "pytest"))
+        self.assertNotRecognised(r'''"C:\Tools\pwsh.exe" -Command 'Write-Output '"'C:\Tools\Python\python.exe -W ignore -m unittest discover -s tests-py -p test*.py'"''')
+
+    def test_doubled_backslashes_in_the_program_path(self):
+        """Codex writes the Windows path of the program with every backslash doubled; it is the same program."""
+        double = lambda text: text.replace("\\", "\\\\")   # the doubling as the Codex command shows it
+        command = r'''"C:\Tools\pwsh.exe" -Command '$env:APPDATA = Join-Path $env:TEMP '"'hq-roaming'; & 'C:\Tools\Python\python.exe' -W ignore -m unittest discover -s tests-py -p test*.py"'''
+        self.assertIn("C:\\\\Tools\\\\Python", double(command))
+        self.assertRecognised(double(command))
+        self.assertRecognised(double(r"C:\Tools\Python\python.exe -W ignore -m unittest discover -s tests-py -p test*.py"))
+        self.assertNotRecognised(double(r"C:\Tools\Python\python.exe -W ignore -m pytest tests-py"))
+
     def test_plain_and_chained(self):
         self.assertRecognised(self.WINDOWS)
         self.assertRecognised("cd worktree && " + self.WINDOWS)
