@@ -533,6 +533,11 @@ def queue_upsert(conn, project, branch, tip=None, plan=None, status=None, note=N
     with db.transaction(conn):
         row = conn.execute("SELECT * FROM queue WHERE project=? AND branch=? ORDER BY id DESC LIMIT 1",
                            (project, branch)).fetchone()
+        switching = status == "integrated" and (row is None or row["status"] != "integrated" or (tip is not None and tip != row["tip"]))
+        enabled = None
+        if switching:
+            from . import publish
+            enabled = publish.observe_integration_switch(conn, project)
         if row is not None and not (row["status"] == "integrated" and tip is not None and tip != row["tip"]):
             vals = {"tip": tip, "plan_path": plan, "status": status, "note": note, "run": run}
             sets = [f"{k}=?" for k, v in vals.items() if v is not None] + ["updated_at=?"]
@@ -543,6 +548,8 @@ def queue_upsert(conn, project, branch, tip=None, plan=None, status=None, note=N
             qid = conn.execute(
                 "INSERT INTO queue (project, branch, tip, plan_path, status, note, run, updated_at) VALUES (?,?,?,?,?,?,?,?)",
                 (project, branch, tip, plan, status or "ready", note, run, db.now())).lastrowid
+        if switching and enabled is False:
+            publish.exclude_integration(conn, project, qid)
         return dict(conn.execute("SELECT * FROM queue WHERE id=?", (qid,)).fetchone())
 
 

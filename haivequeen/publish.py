@@ -218,6 +218,39 @@ def pending_releases(conn, project) -> list:
     return _load(conn, project)
 
 
+def observe_integration_switch(conn, project):
+    """Capture an externally enabled switch before its first integration is recorded.
+
+    Called inside the queue write transaction, so the snapshot excludes the new
+    integration even when the scheduler has not yet observed the setting.
+    """
+    from . import config
+    row = conn.execute("SELECT workspace FROM projects WHERE name=?", (project,)).fetchone()
+    if not row or not row[0]:
+        return
+    try:
+        enabled = config.load_project(row[0]).get("publishReleases", False)
+    except (OSError, ValueError):
+        return
+    if not enabled:
+        return False
+    if conn.execute("SELECT 1 FROM kv WHERE project=? AND key=? AND value != ''",
+                    (project, SINCE_KEY)).fetchone():
+        return True
+    before = [r[0] for r in conn.execute("SELECT id FROM queue WHERE project=? AND status='integrated'", (project,))]
+    now = db.now()
+    conn.execute(_UPSERT, (project, SINCE_KEY, now, now))
+    conn.execute(_UPSERT, (project, BEFORE_KEY, json.dumps(before), now))
+    return True
+
+
+def exclude_integration(conn, project, queue_id):
+    """Keep integrations observed while disabled out of future releases."""
+    before = _before_switch(conn, project)
+    before.add(queue_id)
+    conn.execute(_UPSERT, (project, BEFORE_KEY, json.dumps(sorted(before)), db.now()))
+
+
 def _since(conn, env) -> str:
     """Use the configuration edit time when an external edit enabled releases."""
     value = runtime.kv_get(conn, env.name, SINCE_KEY)
