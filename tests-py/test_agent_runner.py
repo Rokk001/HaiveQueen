@@ -347,6 +347,50 @@ class ClaudeRunTest(RunnerBase):
         subprocess.run(["git", "-C", str(self.ws), "init", "-q", "-b", "other-work"], check=True, capture_output=True)
         self.assertEqual(self.queen_policy("QUEEN-NAMED")["branch"], "demo-plan")
 
+    def hook_allows(self, name, text, tool="Bash"):
+        """Run the generated own-Hive hook of a Queen run for one command; True when it allows it."""
+        settings = json.loads((self.runs / name / "claude-integration-settings.json").read_text(encoding="utf-8"))
+        command = settings["hooks"]["PreToolUse"][-1]["hooks"][0]["command"]
+        event = json.dumps({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"command": text}})
+        done = subprocess.run(command, shell=True, input=event, capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return '"allow"' in done.stdout
+
+    def test_hook_recognizes_plan_branch_created_after_start(self):
+        git = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(self.ws)] + list(args),
+                                           check=True, capture_output=True)
+        git("init", "-q", "-b", "main")
+        git("commit", "-q", "--allow-empty", "-m", "base")
+        policy = self.queen_policy("QUEEN-LATE")
+        self.assertIsNone(policy["branch"])
+        self.assertEqual(policy["name"], "QUEEN-LATE")
+        ready = "bzz ready --project demo --branch late-plan --tip abc123 --plan plans/Demo-PLAN.md"
+        in_run = "bzz queue upsert --project demo --branch late-plan --status in_run"
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready))   # not created yet
+        worktree = self.base / "late-wt"
+        git("worktree", "add", "-q", "-b", "late-plan", str(worktree))
+        record = "bzz agents update-fields --project demo --name QUEEN-LATE --fields '{\"cwd\": \"%s\"}'" % worktree.as_posix()
+        self.assertTrue(self.hook_allows("QUEEN-LATE", record))
+        self.assertTrue(self.hook_allows("QUEEN-LATE", record, "PowerShell"))
+        self.assertFalse(self.hook_allows("QUEEN-LATE", record.replace("QUEEN-LATE", "QUEEN-OTHER")))
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready))   # the worktree is not recorded yet
+        runtime.upsert_agent(self.conn, "demo", "QUEEN-LATE", {"cwd": str(worktree)}, create=False)
+        self.assertTrue(self.hook_allows("QUEEN-LATE", ready))
+        self.assertTrue(self.hook_allows("QUEEN-LATE", in_run))
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready.replace("late-plan", "main")))
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready.replace("late-plan", "other-plan")))
+        runtime.upsert_agent(self.conn, "demo", "QUEEN-OTHER", {"cwd": str(worktree), "plan": "plans/Other-PLAN.md", "status": "running"})
+        self.assertEqual(self.row("QUEEN-OTHER")["plan_path"], "plans/Other-PLAN.md")
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready))   # the worktree belongs to another plan's agent
+        runtime.upsert_agent(self.conn, "demo", "QUEEN-OTHER", {"cwd": str(self.ws)}, create=False)
+        self.assertTrue(self.hook_allows("QUEEN-LATE", ready))
+        runtime.queue_upsert(self.conn, "demo", "late-plan", plan="plans/Other-PLAN.md", status="ready")
+        self.assertFalse(self.hook_allows("QUEEN-LATE", ready))   # the branch belongs to another plan
+        (self.ws / "plans").mkdir()
+        (self.ws / "plans" / "Demo-PLAN.md").write_text("# Demo\n", encoding="utf-8")
+        (self.ws / "plans" / "Demo-STATE.md").write_text("Plan: Demo; branch state-plan; started\n", encoding="utf-8")
+        self.assertTrue(self.hook_allows("QUEEN-LATE", ready.replace("late-plan", "state-plan")))
+
     # Verify the project default reaches the Claude CLI.
     def test_default_claude_tools_reach_cli(self):
         """A project without claudeTools passes the default tool list to Claude."""

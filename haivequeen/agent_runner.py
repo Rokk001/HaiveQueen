@@ -946,6 +946,32 @@ def queen_branch(conn, cfg, project, plan, cwd, integration_branch):
     return branch
 
 
+# Look the Queen's plan branch up again for the own-Hive hook (the branch may be created after the start).
+def queen_branch_now(project, plan, name, integration_branch):
+    """The branch queen_branch finds now, with the worktree the Queen recorded as her cwd; None when it is
+    unknown, the integration branch, or a queue entry or an active agent of another plan in the same worktree
+    gives it to another plan."""
+    same_plan = lambda value: not value or Path(str(value)).as_posix() == Path(str(plan)).as_posix()
+    same_dir = lambda left, right: bool(left and right) and os.path.normcase(os.path.abspath(str(left))) == os.path.normcase(os.path.abspath(str(right)))
+    cfg = config.load_config()
+    conn = db.connect(config.db_path())
+    try:
+        row = runtime.get_agent(conn, project, name)
+        if not row or row.get("archived") or not same_plan(row.get("plan_path") or row.get("plan")):
+            return None
+        branch = queen_branch(conn, cfg, project, plan, row.get("cwd"), integration_branch or "main")
+        if not branch:
+            return None
+        if any(not same_plan(entry[0]) for entry in conn.execute("SELECT plan_path FROM queue WHERE project=? AND branch=?", (project, branch))):
+            return None
+        for other in conn.execute("SELECT plan_path, cwd FROM agents WHERE project=? AND archived=0 AND name<>?", (project, name)):
+            if same_dir(other[1], row.get("cwd")) and not same_plan(other[0]):
+                return None
+        return branch
+    finally:
+        conn.close()
+
+
 # Run one agent, rejecting empty Claude tool arguments before starting its CLI.
 def run_agent(a, out=None):
     """Run one agent as described by the parsed arguments; returns 0 (the status is in the agents table)."""
@@ -1059,7 +1085,7 @@ def run_agent(a, out=None):
             policy = profile.claude_hook_policy(a.project, a.plan, agent_row["id"] if agent_row else None,
                                                 settings.get("remoteName") or "origin", integration_branch,
                                                 osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py",
-                                                queen_branch(conn, cfg, a.project, a.plan, a.cwd, integration_branch))
+                                                queen_branch(conn, cfg, a.project, a.plan, a.cwd, integration_branch), a.name)
             policy_file.write_text(json.dumps(policy, indent=1) + "\n", encoding="utf-8")
             hook = profile.claude_hook_command(osplat.python_executable(), TOOL_ROOT / "haivequeen" / "claude_hook.py", policy_file)
             merged = profile.claude_merge_run_settings(provider_settings, grants, hook)

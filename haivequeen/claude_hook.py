@@ -4,8 +4,10 @@ The hook is run as `python -I claude_hook.py <policy.json>` and therefore uses o
 It reads the hook event from stdin and prints an "allow" decision only for one simple command whose
 arguments, parsed exactly like a narrow common subset of Bash and PowerShell, name the Queen's own
 project, plan and agent, and for `ready` and `queue upsert` her own plan branch. Anything else produces no output, so Claude's normal permission rules decide.
+A plan branch created after the start is looked up again when the hook runs (plan, state file or the worktree she recorded as her cwd).
 """
 import json
+import os
 import re
 import sys
 
@@ -14,6 +16,7 @@ SAFE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 UNSAFE_ANYWHERE = set("‘’‚‛“”„‟")   # PowerShell also treats these as quotes
 
 ANY, PROJECT, PLAN, AGENT, NAME, INT, BRANCH = "any", "project", "plan", "agent", "name", "int", "branch"
+QUEEN, CWD_FIELDS = "queen", "cwd-fields"
 QUEUE_STATUSES = ("ready", "in_run", "integrated", "blocked", "withdrawn")
 
 # (command, action) -> (required options, optional options, flags without a value)
@@ -50,6 +53,7 @@ _add("decisions", ("list",), {"--project": PROJECT}, {"--plan": PLAN, "--item": 
 _add("decisions", ("add",), {"--project": PROJECT, "--plan": PLAN, "--source": ANY, "--text": ANY}, {"--item": ANY})
 _add("agents", ("list",), {"--project": PROJECT}, {"--scope": ("active", "archive", "all"), "--status": ANY})
 _add("packages", ("list",), {"--project": PROJECT}, {"--plan": PLAN})
+_add("agents", ("update-fields",), {"--project": PROJECT, "--name": QUEEN, "--fields": CWD_FIELDS})   # the Queen records her worktree
 
 
 def split_command(command, shell):
@@ -76,7 +80,7 @@ def split_command(command, shell):
             if end < 0:
                 return None
             word = text[i + 1:end]
-            bad = "'\"" if quote == "'" else "'\"$`\\!"
+            bad = "'" if quote == "'" else "'\"$`\\!"   # a double quote inside single quotes is checked per option
             if not word or any(c in bad for c in word):
                 return None
             i = end + 1
@@ -123,7 +127,31 @@ def bzz_arguments(words, policy):
     return None
 
 
-def _value_ok(kind, value, policy):
+def _cwd_fields_ok(value):
+    """True for a JSON object with only "cwd": an existing absolute directory without a .. part."""
+    try:
+        fields = json.loads(value)
+    except ValueError:
+        return False
+    if not isinstance(fields, dict) or set(fields) != {"cwd"} or not isinstance(fields["cwd"], str):
+        return False
+    cwd = fields["cwd"]
+    if not re.fullmatch(r"(?:[A-Za-z]:[\\/]|/)[A-Za-z0-9_ ./:\\-]*", cwd) or ".." in re.split(r"[\\/]", cwd):
+        return False
+    return os.path.isdir(cwd)
+
+
+def live_branch(policy):
+    """The Queen's plan branch resolved now (it may have been created after the start), or None."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(str(policy.get("cli") or ""))))
+    if not policy.get("name") or not os.path.isfile(os.path.join(root, "haivequeen", "agent_runner.py")):
+        return None
+    sys.path.insert(0, root)
+    from haivequeen import agent_runner
+    return agent_runner.queen_branch_now(policy["project"], policy["plan"], policy["name"], policy.get("integrationBranch"))
+
+
+def _value_ok(kind, value, policy, lookup=live_branch):
     """Check one option value against its constraint."""
     if kind == ANY:
         return True
@@ -133,8 +161,20 @@ def _value_ok(kind, value, policy):
         return _plan_key(value) == _plan_key(policy.get("plan"))
     if kind == AGENT:
         return policy.get("agent") is not None and value == str(policy.get("agent"))
-    if kind == BRANCH:   # only the Queen's own plan branch; unknown at the start means never
-        return bool(policy.get("branch")) and value == str(policy["branch"])
+    if kind == BRANCH:   # only the Queen's own plan branch: the one known at the start, else the one resolved now
+        if policy.get("branch") and value == str(policy["branch"]):
+            return True
+        if not SAFE_NAME.fullmatch(value) or ".." in value or lookup is None:
+            return False
+        try:
+            now = lookup(policy)
+        except Exception:
+            return False
+        return bool(now) and value == str(now) and value != str(policy.get("integrationBranch"))
+    if kind == QUEEN:
+        return bool(policy.get("name")) and value == str(policy["name"])
+    if kind == CWD_FIELDS:
+        return _cwd_fields_ok(value)
     if kind == NAME:
         return bool(SAFE_NAME.fullmatch(value)) and ".." not in value
     if kind == INT:
@@ -142,7 +182,7 @@ def _value_ok(kind, value, policy):
     return value in kind
 
 
-def bzz_allowed(args, policy):
+def bzz_allowed(args, policy, lookup=live_branch):
     """True when args are one accepted own-Hive bzz command: exact option names, each at most once, no extras."""
     if not args:
         return False
@@ -155,6 +195,8 @@ def bzz_allowed(args, policy):
         rest = rest[1:]
     required, optional, flags = schema
     seen = set()
+    if any('"' in word for word in args[:len(args) - len(rest)]):
+        return False
     i = 0
     while i < len(rest):
         opt = rest[i]
@@ -168,7 +210,9 @@ def bzz_allowed(args, policy):
         if kind is None or i + 1 >= len(rest):
             return False
         value = rest[i + 1]
-        if value.startswith("-") and value != "-" or not _value_ok(kind, value, policy):
+        if '"' in value and kind != CWD_FIELDS:   # Bash and PowerShell may pass inner double quotes differently
+            return False
+        if value.startswith("-") and value != "-" or not _value_ok(kind, value, policy, lookup):
             return False
         i += 2
     return all(opt in seen for opt in required)
@@ -180,7 +224,7 @@ def push_allowed(words, policy):
     return bool(remote and branch) and words == ["git", "push", str(remote), "HEAD:%s" % branch]
 
 
-def decide(event, policy):
+def decide(event, policy, lookup=live_branch):
     """Return the reason for an allow decision, or None to leave the decision to Claude's permission rules."""
     if not isinstance(event, dict) or event.get("hook_event_name", "PreToolUse") != "PreToolUse":
         return None
@@ -194,7 +238,7 @@ def decide(event, policy):
     if push_allowed(words, policy):
         return "HaiveQueen: push to the integration branch of this Queen"
     args = bzz_arguments(words, policy)
-    if args is not None and bzz_allowed(args, policy):
+    if args is not None and bzz_allowed(args, policy, lookup):
         return "HaiveQueen: own-Hive bzz command of this Queen"
     return None
 

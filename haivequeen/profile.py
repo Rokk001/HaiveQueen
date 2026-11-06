@@ -143,11 +143,12 @@ def claude_hook_command(python, hook_script, policy_file):
     return '"%s" -I "%s" "%s"' % (fwd(python), fwd(hook_script), fwd(policy_file))
 
 
-def claude_hook_policy(project, plan, agent, remote, branch, python, cli, own_branch=None):
+def claude_hook_policy(project, plan, agent, remote, branch, python, cli, own_branch=None, name=None):
     """Values the own-Hive hook (haivequeen/claude_hook.py) compares each Bash or PowerShell command with;
-    own_branch is the Queen's plan branch (None: the hook allows no `ready` or `queue upsert`)."""
-    return {"project": str(project), "plan": str(plan), "agent": agent, "remote": str(remote),
-            "integrationBranch": str(branch), "python": str(python), "cli": str(cli),
+    own_branch is the Queen's plan branch known at the start (None: the hook looks it up again when it runs),
+    name the Queen's agent name (None: no `agents update-fields`, no later branch lookup)."""
+    return {"project": str(project), "plan": str(plan), "agent": agent, "name": str(name) if name else None,
+            "remote": str(remote), "integrationBranch": str(branch), "python": str(python), "cli": str(cli),
             "branch": str(own_branch) if own_branch else None}
 
 

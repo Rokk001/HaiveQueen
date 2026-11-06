@@ -12,12 +12,12 @@ from haivequeen import profile
 
 PY = "C:/Py/python.exe"
 CLI = "C:/hq/haivequeen/cli.py"
-POLICY = profile.claude_hook_policy("Hive", "plans/ONE-PLAN.md", 42, "upstream", "release/next", PY, CLI, "one-plan")
+POLICY = profile.claude_hook_policy("Hive", "plans/ONE-PLAN.md", 42, "upstream", "release/next", PY, CLI, "one-plan", name="Queen-1")
 
 
-def decide(command, tool="Bash", policy=POLICY):
-    """Hook decision for one command."""
-    return hook.decide({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"command": command}}, policy)
+def decide(command, tool="Bash", policy=POLICY, lookup=None):
+    """Hook decision for one command (lookup: the branch resolved when the hook runs)."""
+    return hook.decide({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"command": command}}, policy, lookup)
 
 
 class OwnHiveHookTest(unittest.TestCase):
@@ -176,6 +176,55 @@ class OwnHiveHookTest(unittest.TestCase):
             for result in (run("bzz note --project Other --text hi"), run("bzz note --project Hive --text hi",
                                                                             Path(tmp) / "missing.json")):
                 self.assertEqual((result.returncode, result.stdout), (0, ""), result.stderr)
+
+
+class LifecycleHookTest(unittest.TestCase):
+    """The Queen records her worktree and a plan branch created after the start is recognized."""
+
+    def test_update_fields_records_only_own_existing_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp).as_posix()
+            ok = "bzz agents update-fields --project Hive --name Queen-1 --fields '{\"cwd\": \"%s\"}'" % cwd
+            win = "bzz agents update-fields --project Hive --name Queen-1 --fields '{\"cwd\":\"%s\"}'" % str(Path(tmp)).replace("\\", "\\\\")
+            for tool in ("Bash", "PowerShell"):
+                self.assertIsNotNone(decide(ok, tool), tool)
+                self.assertIsNotNone(decide(win, tool), tool)
+            for bad in (ok.replace("Queen-1", "Queen-2"), ok.replace("Hive", "Other", 1),
+                        ok.replace(cwd, cwd + "/missing"), ok.replace(cwd, cwd + "/.."), ok.replace(cwd, "rel/dir"),
+                        ok.replace('"cwd": ', '"status": "done", "cwd": '), ok.replace('"cwd"', '"plan"'),
+                        ok.replace("'{", '"{').replace("}'", '}"'), ok + " --project Hive",
+                        "bzz agents update-fields --project Hive --name Queen-1 --fields '[1]'",
+                        "bzz agents upsert --project Hive --name Queen-1 --fields '{\"cwd\": \"%s\"}'" % cwd,
+                        "bzz note --project Hive --text 'say \"hi\"'"):
+                for tool in ("Bash", "PowerShell"):
+                    self.assertIsNone(decide(bad, tool), (bad, tool))
+            self.assertIsNone(decide(ok, policy=dict(POLICY, name=None)))
+
+    def test_branch_created_after_start_is_resolved_when_the_hook_runs(self):
+        ready = "bzz ready --project Hive --branch new-plan --tip abc123 --plan plans/ONE-PLAN.md"
+        upsert = "bzz queue upsert --project Hive --branch new-plan --status in_run"
+        policy = dict(POLICY, branch=None)
+        calls = []
+
+        def now(p):
+            calls.append(p)
+            return "new-plan"
+        for command in (ready, upsert):
+            self.assertIsNotNone(decide(command, policy=policy, lookup=now))
+            self.assertIsNone(decide(command.replace("new-plan", "other"), policy=policy, lookup=now))
+        self.assertIsNotNone(decide(ready, policy=POLICY, lookup=now))   # the plan branch was renamed after the start
+        self.assertIsNone(decide("bzz ready --project Hive --branch release/next --tip a --plan plans/ONE-PLAN.md",
+                                 policy=policy, lookup=lambda p: "release/next"))
+        self.assertIsNone(decide(ready, policy=policy, lookup=lambda p: None))
+        self.assertIsNone(decide(ready, policy=policy, lookup=lambda p: 1 / 0))
+        self.assertIsNone(decide(ready.replace("new-plan", "../x"), policy=policy, lookup=lambda p: "../x"))
+        calls.clear()
+        decide("bzz ready --project Hive --branch one-plan --tip a --plan plans/ONE-PLAN.md", lookup=now)
+        decide("bzz note --project Hive --text hi", policy=policy, lookup=now)
+        self.assertEqual(calls, [])   # no lookup for the start branch or other commands
+
+    def test_live_lookup_without_tool_root_finds_nothing(self):
+        self.assertIsNone(hook.live_branch(dict(POLICY, branch=None)))
 
 
 class HookSettingsTest(unittest.TestCase):
