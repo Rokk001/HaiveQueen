@@ -686,9 +686,6 @@ class Dashboard:
             self.text(x0 + 92, y, "%d%%" % pct, 15, "cyan", "w")
             self.text(x0 + 134, y, note, 13, "text", "w")
             self.bar(x1 - 82, y - 8, 70, 16, pct / 100, colour)
-        if s.get("build_line"):   # the build line: job count, median RAM per job (B-10)
-            for k, part in enumerate(self.wrap_parts(s["build_line"], x1 - x0 - 24, 12)):   # line 1 the job count, line 2 the RAM per job; more only when too narrow
-                self.text(x0 + 12, y0 + 121 + k * 14, part, 12, "cyan", "w")
 
     # Draw open questions and queued integrations.
     def queue(self, s, x0, y0, x1, y1):

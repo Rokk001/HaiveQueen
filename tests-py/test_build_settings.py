@@ -344,7 +344,7 @@ class QueenMonitorTest(RoundCase):
     """B-6c: the count handed out at acquire replaces the one from the Queen start in the measurement."""
 
     def test_the_measurement_divides_by_the_count_of_acquire(self):
-        """The Queen was started with 2 jobs; acquire handed out 5: the stored use per job is the peak / 5."""
+        """The Queen was started with 2 jobs; acquire handed out 5: the stored use per job is the peak / min(5, processes seen); the test sees its own one process."""
         name = Path(sys.executable).name
         runtime.upsert_agent(self.conn, "testproj", "Q-queen", {"status": "running", "phase": "queen", "plan_path": REL})
         self.conn.execute("INSERT INTO hive_integration (project, plan_path, acquired, build_jobs) VALUES ('testproj', ?, 1, 5)", (REL,))
@@ -359,7 +359,7 @@ class QueenMonitorTest(RoundCase):
         rows = self.conn.execute("SELECT jobs, per_job_mb, peak_mb FROM build_measurements WHERE project='testproj'").fetchall()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["jobs"], 5)
-        self.assertAlmostEqual(rows[0]["per_job_mb"], round(rows[0]["peak_mb"] / 5), delta=1)
+        self.assertAlmostEqual(rows[0]["per_job_mb"], round(rows[0]["peak_mb"] / 1), delta=1)
 
 
 class RunnerVariablesTest(RunnerBase):

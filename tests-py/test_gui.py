@@ -226,10 +226,11 @@ class SnapshotTest(unittest.TestCase):
 
     # The build line is part of the dashboard data and of the SYSTEM panel.
     def test_build_line_in_snapshot_without_build_table(self):
-        """CFG has no buildJobs table: the snapshot still carries the build line (defaults, not measured yet) for the SYSTEM panel."""
+        """CFG has no buildJobs table: the STATUS panel SYSTEM section still carries the build line; the SYSTEM meter panel does not."""
         self.assertNotIn("buildJobs", CFG)
-        self.assertRegex(self.snap["build_line"], r"^Build jobs \d+ of \d+ cores \((running|next build)\) \| per job not measured yet")
-        self.assertIn(self.snap["build_line"], [t for title, lines in self.snap["info"] if title == "SYSTEM" for t, _c in lines])
+        self.assertNotIn("build_line", self.snap)
+        lines = [t for title, ls in self.snap["info"] if title == "SYSTEM" for t, _c in ls]
+        self.assertTrue(any(re.match(r"^Build jobs \d+ of \d+ cores \((running|next build)\) \| per job not measured yet", t) for t in lines), lines)
 
     # One state tells the user whether HaiveQueen runs, waits or stands still.
     def test_orchestrator_state(self):
@@ -284,65 +285,6 @@ class StateButtonTest(unittest.TestCase):
         for name in ("app.ico", "app_icon.png"):
             self.assertTrue((gui.ASSETS / name).is_file(), name)
         self.assertEqual(gui.REPO_URL, "https://github.com/Rokk001/HaiveQueen")
-
-
-# The build line of the SYSTEM panel wraps instead of being cut off.
-class BuildLineWrapTest(unittest.TestCase):
-    """The build line is wrapped at its separators, so the median RAM per job stays readable."""
-
-    # The whole line fits on two lines at the normal panel width.
-    def test_build_line_wraps_without_cutting(self):
-        """No part of the line is lost and no line is cut with an ellipsis."""
-        from haivequeen import gui
-        fake = types.SimpleNamespace(tw=lambda t, size: len(t) * 6.5)
-        fake.fit = lambda t, w, size: gui.Dashboard.fit(fake, t, w, size)
-        line = "Build jobs 3 of 8 cores (running) | per job 1234 MB | active: 3 cores"
-        parts = gui.Dashboard.wrap_parts(fake, line, 298, 12)
-        self.assertEqual(parts[0], "Build jobs 3 of 8 cores (running)")
-        self.assertLessEqual(len(parts), 2)
-        self.assertIn("per job 1234 MB", " ".join(parts))
-        self.assertIn("active: 3 cores", " ".join(parts))
-        self.assertFalse(any("…" in x for x in parts))
-
-
-# The SYSTEM panel shows both build lines completely at every window size.
-class BuildLinePanelTest(unittest.TestCase):
-    """Drawn dashboard: line 1 is the job count, line 2 the RAM per job; nothing is cut and everything stays inside the panel."""
-
-    def test_two_full_lines_at_default_and_1280x720(self):
-        import tkinter as tk
-        from haivequeen import gui
-        try:
-            root = tk.Tk()
-            root.attributes("-alpha", 0.0)
-        except tk.TclError:
-            self.skipTest("no display")
-        tmp = tempfile.TemporaryDirectory()
-        conn = db.connect(Path(tmp.name) / "o.db")
-        try:
-            gui.REFRESH_MS = 10 ** 9
-            win = gui.Dashboard(root, conn)
-            for geo in ("1672x912", "1280x720"):
-                root.geometry(geo)
-                root.update()
-                win.snap["build_line"] = "Build jobs 6 of 8 cores (next build) | per job 1234 MB | active: 3 cores"
-                win.draw()
-                items = [i for i in win.canvas.find_all() if win.canvas.type(i) == "text"]
-                texts = {win.canvas.itemcget(i, "text"): i for i in items}
-                self.assertIn("Build jobs 6 of 8 cores (next build)", texts, geo)
-                second = [t for t in texts if t.startswith("per job")]
-                self.assertEqual(len(second), 1, geo)
-                self.assertIn("1234 MB", second[0])
-                self.assertFalse([t for t in texts if "…" in t and ("per job" in t or "Build jobs" in t)], geo)
-                for t in ("Build jobs 6 of 8 cores (next build)", second[0]):
-                    box = win.canvas.bbox(texts[t])
-                    self.assertGreaterEqual(box[0], 515 * win.scale - 1, geo)
-                    self.assertLessEqual(box[2], 837 * win.scale + 1, geo)
-                    self.assertLessEqual(box[3], 858 * win.scale + 1, geo)
-        finally:
-            root.destroy()
-            conn.close()
-            tmp.cleanup()
 
 
 # Draw the window once when a display exists.
