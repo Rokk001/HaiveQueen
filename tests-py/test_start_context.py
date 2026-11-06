@@ -227,54 +227,74 @@ class StartTileTest(Base):
         """Insert one start row."""
         startctx.record(self.conn, project, plan, agent, kind, provider, tokens, parts or {}, started_at=iso(ago))
 
-    def test_average_per_cli_and_overlay(self):
-        """The tile shows the average per provider of today's starts ('–' for none); the overlay has averages per Apiary and Hive and the split per file for Queens and Bees."""
+    def bench(self, provider, project, hq, own, ago=5):
+        """Store one benchmark pair."""
+        startctx.store_benchmark(self.conn, provider, project, "hq", hq, when=iso(ago))
+        startctx.store_benchmark(self.conn, provider, project, "own", own, when=iso(ago))
+
+    def rows(self, block):
+        """The overlay rows of one block."""
+        return [r for r in self.snap()["overlays"]["start"]["rows"] if r["block"] == block]
+
+    def test_tile_is_the_mean_saving_over_all_measurements(self):
+        """The tile is one value: the mean saving in percent over all stored measurements of all providers and Apiaries; no benchmark = None; starts do not count."""
+        self.start("ODP", PLAN, "ODP__queen", "queen", "claude", 20000)
+        self.assertEqual(self.snap()["tiles"]["start_ctx"], {"saving": None, "n": 0})
+        self.bench("claude", "ODP", 20, 100)   # -80
+        self.bench("claude", "ZED", 40, 100)   # -60
+        self.bench("codex", "ODP", 30, 100)    # -70
+        self.assertEqual(self.snap()["tiles"]["start_ctx"], {"saving": -70, "n": 3})
+        startctx.store_benchmark(self.conn, "codex", "ZED", "hq", 5000)   # one value of a pair is no measurement
+        self.assertEqual(self.snap()["tiles"]["start_ctx"]["n"], 3)
+
+    def test_block_one_per_provider_and_all_providers_last(self):
+        """Block 1: per provider the average over its Apiaries, a provider without benchmark says so, the last row is 'All providers'."""
+        self.bench("claude", "ODP", 20000, 100000)
+        self.bench("claude", "ZED", 40000, 100000)
+        rows = self.rows(1)
+        self.assertEqual([r["name"] for r in rows], ["claude", "codex", "opencode", "All providers"])
+        self.assertEqual((rows[0]["hq"], rows[0]["own"], rows[0]["saving"]), (30000, 100000, -70))
+        self.assertTrue(rows[1]["missing"])
+        self.assertEqual((rows[3]["hq"], rows[3]["own"], rows[3]["saving"]), (30000, 100000, -70))
+
+    def test_block_two_per_apiary_and_three_per_provider_within_apiary(self):
+        """Block 2: per Apiary the average over the providers measured there. Block 3: per provider within each Apiary, the single measurement with its date."""
+        self.bench("claude", "ODP", 20000, 100000)
+        self.bench("codex", "ODP", 60000, 100000)
+        self.bench("claude", "ZED", 10000, 50000, ago=60 * 30)
+        two = self.rows(2)
+        self.assertEqual([(r["name"], r["hq"], r["own"], r["saving"]) for r in two], [("ODP", 40000, 100000, -60), ("ZED", 10000, 50000, -80)])
+        three = self.rows(3)
+        self.assertEqual([(r["group"], r["name"], r["hq"], r["own"], r["saving"]) for r in three],
+                         [("ODP", "claude", 20000, 100000, -80), ("ODP", "codex", 60000, 100000, -40), ("ZED", "claude", 10000, 50000, -80)])
+        self.assertEqual(three[0]["date"], iso(5)[:10])
+        self.assertEqual(three[2]["date"], iso(60 * 30)[:10])
+
+    def test_overlay_text_has_no_lone_numbers_and_no_split(self):
+        """The overlay lines carry the headline, the columns, no today averages, no Hive values, no split per file."""
+        from haivequeen import gui_overlays
         self.start("ODP", PLAN, "ODP__queen", "queen", "claude", 20000, {"role": 3000, "rules": {"CLAUDE.md": 5000}, "task": 1000})
-        self.start("ODP", PLAN, "ODP__sophia", "bee", "claude", 10000, {"role": 2000, "rules": {"CLAUDE.md": 5000}, "task": 500})
-        self.start("ODP", PLAN, "Mira", "subbee", "claude", 12000)
-        self.start("ZED", PLAN2, "ZED__old", "bee", "claude", 99000, ago=60 * 30)   # an earlier day does not count
-        s = self.snap()
-        self.assertEqual(s["tiles"]["start_ctx"], {"avg": 14000, "n": 3})   # one value: the average over all of today's starts of all providers
-        row = next(r for r in s["overlays"]["start"]["rows"] if r["provider"] == "claude")
-        self.assertEqual(row["apiaries"][0]["name"], "ODP")
-        self.assertEqual(row["apiaries"][0]["avg"], 14000)
-        self.assertEqual(row["hives"][0]["avg"], 14000)
-        self.assertEqual(row["split"]["queen"]["parts"], {"role": 3000, "rules CLAUDE.md": 5000, "task": 1000})
-        self.assertEqual(row["split"]["queen"]["rest"], 11000)   # 20000 minus the three parts: the CLI's own part
-        self.assertEqual(row["split"]["bee"]["avg"], 11000)   # the process Bee and the subagent Bee
-        self.assertTrue(row["split"]["queen"]["approximate"])
-
-    def test_tile_averages_over_all_providers(self):
-        """The tile value is the average of all starts of today over all providers; none = None."""
-        self.assertEqual(self.snap()["tiles"]["start_ctx"], {"avg": None, "n": 0})
-        self.start("ODP", PLAN, "ODP__queen", "queen", "claude", 10000)
-        self.start("ZED", PLAN2, "ZED__queen", "queen", "codex", 30000)
-        self.assertEqual(self.snap()["tiles"]["start_ctx"], {"avg": 20000, "n": 2})
-
-    def test_split_parts_never_exceed_the_start_context(self):
-        """Whatever was stored, no part and no sum of parts in the overlay exceeds the average start context."""
-        self.start("ODP", PLAN, "ODP__queen", "queen", "claude", 17000, {"role": 83, "rules": {"CLAUDE.md": 3000}, "task": 142000})
-        row = next(r for r in self.snap()["overlays"]["start"]["rows"] if r["provider"] == "claude")
-        sp = row["split"]["queen"]
-        self.assertLessEqual(sum(sp["parts"].values()), sp["avg"])
-        self.assertTrue(all(v <= sp["avg"] for v in sp["parts"].values()))
-        self.assertGreaterEqual(sp["rest"], 0)
+        self.bench("claude", "ODP", 18000, 61000)
+        text = " | ".join(t for t, _c in gui_overlays.lines(self.snap(), "start"))
+        self.assertIn("Start context per agent start", text)
+        for word in ("WITHOUT HaiveQueen", "WITH HaiveQueen", "Saving", "All providers", "no benchmark yet - run it in the settings"):
+            self.assertIn(word, text)
+        for bad in ("today", "Hive ", "CLAUDE.md", "rules", "CLI's own", "Queens:", "Bees:", "average"):
+            self.assertNotIn(bad, text)
+        self.assertFalse(hasattr(startctx, "fit_parts"))
+        self.assertFalse(hasattr(startctx, "today_starts"))
 
     def test_approx_parts_count_the_message_sent_not_the_prompt_file(self):
         """The task part is the first message of the run (tiny), the role and rules are counted once."""
         parts = startctx.approx_parts("r" * 332, [("CLAUDE.md", "c" * 400)], "t" * 40)
         self.assertEqual(parts, {"role": 83, "rules": {"CLAUDE.md": 100}, "task": 10})
 
-    def test_benchmark_comparison_or_no_benchmark_yet(self):
-        """Per CLI and Apiary the benchmark shows 'HaiveQueen 18k, own profile 61k, -70 %' or 'no benchmark yet'."""
-        self.start("ODP", PLAN, "ODP__queen", "queen", "claude", 20000)
-        startctx.store_benchmark(self.conn, "claude", "ODP", "hq", 18000, when=iso(5))
-        startctx.store_benchmark(self.conn, "claude", "ODP", "own", 61000, when=iso(5))
-        s = self.snap()
-        row = next(r for r in s["overlays"]["start"]["rows"] if r["provider"] == "claude")
-        self.assertEqual(row["apiaries"][0]["benchmark"], "HaiveQueen 18k, own profile 61k, -70 %")
+    def test_benchmark_text_or_no_benchmark_yet(self):
+        """benchmark_text shows 'HaiveQueen 18k, own profile 61k, -70 %' or 'no benchmark yet' (used by the settings)."""
+        self.bench("claude", "ODP", 18000, 61000)
+        self.assertEqual(startctx.benchmark_text(self.conn, "claude", "ODP"), "HaiveQueen 18k, own profile 61k, -70 %")
         startctx.store_benchmark(self.conn, "claude", "ZED", "hq", 5000, when=iso(5))
-        self.assertEqual(startctx.benchmark_text(self.conn, "claude", "ZED"), "no benchmark yet")   # one value of the pair is no comparison
+        self.assertEqual(startctx.benchmark_text(self.conn, "claude", "ZED"), "no benchmark yet")
         self.assertEqual(startctx.benchmark_text(self.conn, "codex", "ODP"), "no benchmark yet")
 
 
@@ -458,7 +478,7 @@ class ButtonTest(unittest.TestCase):
             with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", return_value=result) as bench:
                 win.benchmark_click(wait=True)
                 self.assertEqual(bench.call_args[0][2], "claude")
-            self.assertIn("not logged in", win.benchmark_status.cget("text"))
+            self.assertIn("not logged in", win.benchmark_win.error.cget("text"))
 
 
 class TileDrawTest(unittest.TestCase):
@@ -477,7 +497,8 @@ class TileDrawTest(unittest.TestCase):
         conn = db.connect(Path(tmp.name) / "o.db")
         self.addCleanup(conn.close)
         db.upsert_project(conn, "ODP", None, "cyan", 1)
-        startctx.record(conn, "ODP", PLAN, "ODP__queen", "queen", "claude", 12000, {}, started_at=datetime.now().isoformat(timespec="seconds"))
+        startctx.store_benchmark(conn, "claude", "ODP", "hq", 32000)
+        startctx.store_benchmark(conn, "claude", "ODP", "own", 100000)
         from haivequeen import gui
         gui.REFRESH_MS = 10 ** 9
         root.geometry("1672x901")
@@ -489,14 +510,14 @@ class TileDrawTest(unittest.TestCase):
         self.assertEqual(len(images), 1)
         texts = [win.canvas.itemcget(i, "text") for i in win.canvas.find_overlapping(x0 + 2, y0 + 2, x1 - 2, y1 - 2) if win.canvas.type(i) == "text"]
         self.assertIn("START CONTEXT", texts)
-        self.assertTrue(any("12" in t and "claude" not in t for t in texts), texts)
-        self.assertFalse(any("claude" in t for t in texts), texts)
+        self.assertIn("-68 %", texts)
+        self.assertNotIn("average today", texts)   # no second line
 
 
 class ProgressButtonTest(ButtonTest):
-    """U-8: the page shows the progress while the benchmark runs."""
+    """U-8 / U2: the Benchmark window shows the progress while the benchmark runs."""
 
-    def test_progress_is_shown_on_the_page_until_the_result(self):
+    def test_progress_is_shown_in_the_window_until_the_result(self):
         import threading
         from haivequeen import gui_config
         release = threading.Event()
@@ -512,16 +533,16 @@ class ProgressButtonTest(ButtonTest):
                 win.benchmark_click()
                 import time
                 end = time.time() + 10
-                while time.time() < end and "2/4" not in win.benchmark_status.cget("text"):
+                while time.time() < end and "2/4" not in win.benchmark_win.progress.cget("text"):
                     self.root.update()
                     time.sleep(0.05)
-                self.assertIn("2/4: ODP with the HaiveQueen profile ...", win.benchmark_status.cget("text"))
+                self.assertIn("2/4: ODP with the HaiveQueen profile ...", win.benchmark_win.progress.cget("text"))
                 release.set()
                 end = time.time() + 10
-                while time.time() < end and "2/4" in win.benchmark_status.cget("text"):
+                while time.time() < end and win.benchmark_button.cget("state") != "normal":
                     self.root.update()
                     time.sleep(0.05)
-                self.assertNotIn("2/4", win.benchmark_status.cget("text"))
+                self.assertEqual(win.benchmark_button.cget("state"), "normal")
 
 
 class HoverTest(unittest.TestCase):
@@ -551,6 +572,15 @@ class HoverTest(unittest.TestCase):
             win.hover(type("E", (), {"x": int((x0 + x1) / 2 * win.scale), "y": int((y0 + y1) / 2 * win.scale)})())
             self.assertEqual(win.overlay_key, key)
             self.assertTrue(win.canvas.find_withtag("overlay"), key)
+        startctx.store_benchmark(conn, "claude", "ODP", "hq", 18000)
+        startctx.store_benchmark(conn, "claude", "ODP", "own", 61000)
+        win.refresh()
+        box = next(b for b in win.tile_boxes if b[0] == "start")
+        win.overlay_key = None
+        win.hover(type("E", (), {"x": int((box[1] + box[3]) / 2 * win.scale), "y": int((box[2] + box[4]) / 2 * win.scale)})())
+        texts = [win.canvas.itemcget(i, "text") for i in win.canvas.find_withtag("overlay") if win.canvas.type(i) == "text"]
+        self.assertIn("Start context per agent start", texts)
+        self.assertIn("-70 %", texts)
         win.hover(type("E", (), {"x": 5, "y": 700})())
         self.assertIsNone(win.overlay_key)
         self.assertFalse(win.canvas.find_withtag("overlay"))

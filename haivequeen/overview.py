@@ -292,7 +292,7 @@ def provider_lines(conn, cfg, agents) -> list:
         source = provider["limit"]
         used_slots = sum(1 for agent in agents if agent.get("status") in sch.ACTIVE
                          and sch.row_provider(agent) == provider["name"])
-        used, hours, reset_at = None, None, None
+        used, hours, reset_at, stale_hours = None, None, None, None
         if source in ("claude", "codex"):
             limits_path = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
             if limits_path and Path(limits_path).is_file():
@@ -308,12 +308,20 @@ def provider_lines(conn, cfg, agents) -> list:
                     if window.get("At"):
                         reset_at = float(window["At"])
                         hours = max(0.0, (reset_at - time.time()) / 3600)
+                elif source == "claude":   # the newest check failed: show the last verified reading while it is younger than RETAIN_HOURS
+                    kept = usage.retained_weekly(conn)
+                    if kept:
+                        used, stale_hours = float(kept[0]), usage.retained_age_hours(conn)
+                        if kept[1]:
+                            reset_at = float(kept[1])
+                            hours = max(0.0, (reset_at - time.time()) / 3600)
         ratio = None
         if used is not None and hours is not None:
             remaining_week = max(0.0, float(hours)) / 168.0
             remaining_quota = max(0.0, 100.0 - used) / 100.0
             ratio = remaining_quota / remaining_week if remaining_week else float("inf")
         rows.append({"name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
+                     "stale": stale_hours is not None, "stale_hours": stale_hours,
                      "has_limit": source in ("claude", "codex"),
                      "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
                      "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),

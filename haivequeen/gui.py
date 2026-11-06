@@ -400,15 +400,13 @@ class Dashboard:
             self.text(x0 + 74, 208, value, max(12, min(28, (x1 - x0 - 80) / (0.62 * len(value)))), "cyan", "nw")
             self.text(x0 + 74, 236, sub, min(15, (x1 - x0 - 80) / (0.6 * len(sub))), "dim", "nw")
             self.tile_boxes.append((key, x0, 165, x1, 255))
-        sc = t["start_ctx"]   # the Start Context tile: one value, the average start context of all of today's starts; the split is in the overlay
+        sc = t["start_ctx"]   # the Start Context tile: exactly one value, the mean saving of all benchmark measurements; the comparison is in the overlay
         x0, x1 = 830, 1035
         self.rect(x0, 165, x1, 255, fill="panel", outline="edge", width=2)
         self.pic("t_start", x0 + 6, 172)
         self.text(x0 + 74, 183, "START CONTEXT", 16, "text", "nw")
-        value = gui_data.fmt_tokens(sc["avg"]) if sc["avg"] is not None else "–"
+        value = "%d %%" % sc["saving"] if sc["saving"] is not None else "no benchmark"
         self.text(x0 + 74, 208, value, max(12, min(28, (x1 - x0 - 80) / (0.62 * len(value)))), "cyan", "nw")
-        sub = "average today"
-        self.text(x0 + 74, 236, sub, min(15, (x1 - x0 - 80) / (0.6 * len(sub))), "dim", "nw")
         self.tile_boxes.append(("start", x0, 165, x1, 255))
 
     # ---- overlays ----
@@ -435,6 +433,9 @@ class Dashboard:
         if not self.overlay_key or self.snap is None:
             return
         from . import gui_overlays
+        if self.overlay_key == "start" and (self.snap.get("overlays") or {}).get("start", {}).get("rows"):
+            self.draw_start_overlay(gui_overlays)
+            return
         rows = gui_overlays.lines(self.snap, self.overlay_key)
         limit = 34
         if len(rows) > limit:
@@ -448,6 +449,58 @@ class Dashboard:
         self.rect(x0, y0, x0 + width, y0 + 12 + step * len(rows), fill="panel", outline="cyan", width=2)
         for i, (text, col) in enumerate(rows):
             self.text(x0 + 14, y0 + 8 + i * step, text, size, col, "nw")
+        for item in set(self.canvas.find_all()) - before:
+            self.canvas.addtag_withtag("overlay", item)
+
+    # Draw the side-by-side comparison of the Start Context tile.
+    def draw_start_overlay(self, gui_overlays):
+        """Draw the comparison table of the Start Context overlay: per row the name, a bar WITHOUT HaiveQueen, a bar WITH HaiveQueen and the saving; all bars share one scale."""
+        rows = self.snap["overlays"]["start"]["rows"]
+        size, step, namew, barw, savew = 14, 19, 190, 210, 130
+        top = max([r["own"] for r in rows if not r["missing"]] + [r["hq"] for r in rows if not r["missing"]] + [1])
+        titles = {1: "Per provider (average over its Apiaries)", 2: "Per Apiary (average over the providers measured there)", 3: "Per provider within each Apiary"}
+        lines, group, block = [], None, None   # (kind, payload)
+        lines.append(("head", gui_overlays.HEADLINE))
+        lines.append(("cols", None))
+        for r in rows:
+            if r["block"] != block:
+                block, group = r["block"], None
+                lines.append(("title", titles[block]))
+            if r["block"] == 3 and r["group"] != group:
+                group = r["group"]
+                lines.append(("group", group))
+            lines.append(("row", r))
+        width = namew + 2 * barw + savew + 40
+        box = next(b for b in self.tile_boxes if b[0] == "start")
+        x0 = max(10, min(box[1], 1660 - width))
+        y0 = box[4] + 6
+        before = set(self.canvas.find_all())
+        self.rect(x0, y0, x0 + width, y0 + 12 + step * len(lines), fill="panel", outline="cyan", width=2)
+        cx = (x0 + 14, x0 + 14 + namew, x0 + 14 + namew + barw, x0 + 14 + namew + 2 * barw)
+        for i, (kind, item) in enumerate(lines):
+            y = y0 + 8 + i * step
+            if kind == "head":
+                self.text(cx[0], y, item, size, "gold", "nw")
+            elif kind == "cols":
+                for x, label in zip(cx[1:], gui_overlays.COLUMNS):
+                    self.text(x, y, label, size, "dim", "nw")
+            elif kind == "title":
+                self.text(cx[0], y, item, size, "cyan", "nw")
+            elif kind == "group":
+                self.text(cx[0] + 10, y, item, size, "text", "nw")
+            else:
+                r = item
+                indent = 20 if r["block"] == 3 else 0
+                self.text(cx[0] + indent, y, r["name"], size, "text", "nw")
+                if r["missing"]:
+                    self.text(cx[1], y, gui_overlays.MISSING, size, "dim", "nw")
+                    continue
+                for x, value, col in ((cx[1], r["own"], "edge"), (cx[2], r["hq"], "cyan")):
+                    self.rect(x, y + 2, x + max(2, (barw - 70) * value / top), y + step - 4, fill=col)
+                    self.text(x + max(2, (barw - 70) * value / top) + 6, y, gui_overlays._tok(value), size - 2, "text", "nw")
+                self.text(cx[3], y, "%+d %%" % r["saving"], size, "text", "nw")
+                if r["date"]:
+                    self.text(cx[3] + 52, y + 3, r["date"], 10, "dim", "nw")
         for item in set(self.canvas.find_all()) - before:
             self.canvas.addtag_withtag("overlay", item)
 

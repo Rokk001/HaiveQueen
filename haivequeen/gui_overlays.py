@@ -38,45 +38,40 @@ def io_rows(usage, agents_today) -> list:
     return rows
 
 
-def start_rows(conn, providers, apiaries, hive_names, since) -> tuple:
-    """(tile value, overlay rows) of the Start Context tile: the tile is {"avg", "n"} = the average start context of all of today's starts of all providers (avg None = none);
-    the overlay has per provider as named in the settings the average, per Apiary and Hive, the split per file for Queens and Bees, and the benchmark comparison per Apiary."""
-    starts = startctx.today_starts(conn, since)
-    names = list(dict.fromkeys(list(providers) + [s["provider"] for s in starts]))
-    bench = {}
-    for b in startctx.benchmarks(conn):
-        bench.setdefault(b["provider"], set()).add(b["project"])
+MISSING = "no benchmark yet - run it in the settings"
+HEADLINE = "Start context per agent start"
+COLUMNS = ("WITHOUT HaiveQueen", "WITH HaiveQueen", "Saving")
 
-    def avg(rows):
-        """Rounded average of the tokens of start rows; None for no rows."""
-        return round(sum(r["tokens"] for r in rows) / len(rows)) if rows else None
 
-    def split(rows):
-        """Average start context of a group of starts, the average approximate parts of HaiveQueen and the rest (the CLI's own part). The parts of one start are
-        scaled down together when they sum to more than its start context, so no part and no sum exceeds the average shown."""
-        if not rows:
-            return {"n": 0, "avg": None, "parts": {}, "rest": None, "approximate": False}
-        withparts = [r for r in rows if r["parts"]]
-        parts = {}
-        for r in withparts:
-            for label, n in startctx.fit_parts(r["parts"], r["tokens"]).items():
-                parts[label] = parts.get(label, 0) + n
-        parts = {k: round(v / len(withparts)) for k, v in parts.items()}
-        mean = avg(rows)
-        rest = max(0, round(sum(r["tokens"] for r in withparts) / len(withparts)) - sum(parts.values())) if withparts else None
-        return {"n": len(rows), "avg": mean, "parts": parts, "rest": rest, "approximate": bool(withparts)}
-    tile, overlay = {"avg": avg(starts), "n": len(starts)}, []   # the tile: one value over all providers
-    for name in names:
-        mine = [s for s in starts if s["provider"] == name]
-        if not mine and name not in bench:
-            continue
-        projects = sorted({s["project"] for s in mine} | bench.get(name, set()))
-        hives = sorted({(s["project"], s["plan_path"]) for s in mine if s["plan_path"]})
-        overlay.append({"provider": name, "avg": avg(mine), "n": len(mine),
-                        "apiaries": [{"name": p, "avg": avg([s for s in mine if s["project"] == p]), "benchmark": startctx.benchmark_text(conn, name, p)} for p in projects],
-                        "hives": [{"apiary": p, "name": hive_names.get((p, pl), pl), "avg": avg([s for s in mine if (s["project"], s["plan_path"]) == (p, pl)])} for p, pl in hives],
-                        "split": {"queen": split([s for s in mine if s["kind"] == "queen"]), "bee": split([s for s in mine if s["kind"] in ("bee", "subbee")])}})
-    return tile, overlay
+def _mean(values) -> float:
+    """Mean of a non-empty list."""
+    return sum(values) / len(values)
+
+
+def _row(block, name, pairs, group=None, date=None) -> dict:
+    """One comparison row: the mean of the `pairs` (measurements) as WITHOUT (own), WITH (hq) and the mean saving in percent; no pairs = a provider without benchmark."""
+    if not pairs:
+        return {"block": block, "group": group, "name": name, "missing": True, "own": None, "hq": None, "saving": None, "date": None}
+    return {"block": block, "group": group, "name": name, "missing": False, "own": round(_mean([p["own"] for p in pairs])), "hq": round(_mean([p["hq"] for p in pairs])),
+            "saving": round(_mean([p["saving"] for p in pairs])), "date": date}
+
+
+def start_rows(conn, providers) -> tuple:
+    """(tile value, overlay rows) of the Start Context tile. The tile is {"saving", "n"}: the mean saving in percent over all stored measurements of all providers and
+    Apiaries (a minus number; None = no benchmark). The overlay rows are comparison rows only, in three blocks: 1 per provider (mean over its Apiaries, a provider without
+    benchmark is marked missing, last row 'All providers'), 2 per Apiary (mean over the providers measured there), 3 per provider within each Apiary (single measurements
+    with their date, `group` = the Apiary)."""
+    pairs = startctx.pairs(conn)
+    tile = {"saving": round(_mean([p["saving"] for p in pairs])) if pairs else None, "n": len(pairs)}
+    names = list(dict.fromkeys(list(providers) + [p["provider"] for p in pairs]))
+    rows = [_row(1, n, [p for p in pairs if p["provider"] == n]) for n in names]
+    if pairs:
+        rows.append(_row(1, "All providers", pairs))
+    apiaries = sorted({p["project"] for p in pairs})
+    rows += [_row(2, a, [p for p in pairs if p["project"] == a]) for a in apiaries]
+    for a in apiaries:
+        rows += [_row(3, p["provider"], [p], group=a, date=str(p["measured_at"])[:10]) for p in sorted((p for p in pairs if p["project"] == a), key=lambda p: p["provider"])]
+    return tile, rows
 
 
 def build(conn, usage, agents_all, hive_rows, bees, apiaries, day, providers) -> tuple:
@@ -95,8 +90,7 @@ def build(conn, usage, agents_all, hive_rows, bees, apiaries, day, providers) ->
         per = (round(h["hive_tin"] / h["done"]), round(h["hive_tout"] / h["done"])) if h["done"] else None
         hives.append({"name": h["name"], "apiary": h["apiary"], "tin": i, "tout": o, "done": h["done"], "per_package": per})
     row = lambda r: {"name": r["name"], "hive": r["hive"], "apiary": r["apiary"], "tin": r["tin"], "tout": r["tout"]}   # noqa: E731
-    hive_names = {(h["apiary"], h["plan_path"]): h["name"] for h in hive_rows}
-    tile, start = start_rows(conn, providers, apiaries, hive_names, day.isoformat(timespec="seconds"))
+    tile, start = start_rows(conn, providers)
     overlays = {"apiaries": {"rows": [{"name": a, "tin": per_apiary.get(a, [0, 0])[0], "tout": per_apiary.get(a, [0, 0])[1]} for a in apiaries]},
                 "hives": {"rows": hives},
                 "queens": {"rows": [row(r) for r in bees if r["kind"] == "queen"]},
@@ -133,18 +127,13 @@ def lines(snap, key) -> list:
         out.append(("%s | Hive | run in / out" % ("Queen" if key == "queens" else "Bee"), "dim"))
         out += [("%s | %s (%s) | %s / %s" % (r["name"], r["hive"], r["apiary"], _tok(r["tin"]), _tok(r["tout"])), "text") for r in rows]
     else:
-        for r in rows:
-            out.append(("%s | average %s over %d start%s today" % (r["provider"], _tok(r["avg"]), r["n"], "" if r["n"] == 1 else "s"), "cyan"))
-            for a in r["apiaries"]:
-                out.append(("  Apiary %s: %s | %s" % (a["name"], _tok(a["avg"]), a["benchmark"]), "text"))
-            for h in r["hives"]:
-                out.append(("  Hive %s (%s): %s" % (h["name"], h["apiary"], _tok(h["avg"])), "text"))
-            for who in ("queen", "bee"):
-                s = r["split"][who]
-                if not s["n"]:
-                    continue
-                out.append(("  %ss: average %s%s" % (who.capitalize(), _tok(s["avg"]), " (parts of HaiveQueen approximate)" if s["approximate"] else ""), "dim"))
-                out += [("    %s %s" % (k, _tok(v)), "text") for k, v in s["parts"].items()]
-                if s["rest"] is not None:
-                    out.append(("    CLI's own part %s" % _tok(s["rest"]), "text"))
+        return [(HEADLINE, "gold"), ("   |   ".join(("",) + COLUMNS), "dim")] + [(_start_text(r), "dim" if r["missing"] else "text") for r in rows]
     return out
+
+
+def _start_text(r) -> str:
+    """One comparison row as text: name, WITHOUT, WITH, Saving (and the date of a single measurement)."""
+    if r["missing"]:
+        return "%s   %s" % (r["name"], MISSING)
+    text = "%s   %s   %s   %+d %%" % (r["name"], _tok(r["own"]), _tok(r["hq"]), r["saving"])
+    return text + ("   (%s)" % r["date"] if r["date"] else "")

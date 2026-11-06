@@ -436,6 +436,8 @@ def limit_bars(d) -> list:
             reset = sch.format_reset_time(p["reset_at"]) if p["reset_at"] else ""
             quota = "" if p["ratio"] is None else "quota %.2fx" % p["ratio"]
             note = " | ".join(part for part in ("resets " + reset if reset else "reset unknown", quota) if part)
+            if p.get("stale"):
+                note = "not current, %s ago | %s" % ("%dh" % int(p["stale_hours"]) if p["stale_hours"] >= 1 else "%dmin" % int(p["stale_hours"] * 60), note)
             out.append({"label": p["name"].capitalize() + " 7d", "pct": None if p["used_pct"] is None else round(p["used_pct"]), "note": note, "level": level(p["used_pct"])})
         total = int(p["total_slots"] or 0)
         out.append({"label": p["name"].capitalize() + " slots", "pct": round(100 * p["used_slots"] / total) if total else None,
