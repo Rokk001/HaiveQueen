@@ -171,6 +171,17 @@ def changed_files(live, old: str, new: str, run) -> list:
     return out.split() if code == 0 else []
 
 
+def start_pending_refusal(out: str) -> bool:
+    """True when `start` refused (exit 1) only because another start is already bringing the loop up: that loop counts, the first round is awaited."""
+    for line in reversed((out or "").splitlines()):
+        if line.startswith("{"):
+            try:
+                return bool(json.loads(line).get("starting"))
+            except ValueError:
+                return False
+    return False
+
+
 def rollback(conn, live, old: str, new: str, why: str, run, restart) -> tuple:
     """Reset the live folder to `old` (git reset --keep), install again when pyproject.toml differed, start the loop, file the open question.
 
@@ -222,13 +233,13 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
         wait_until_quiet(conn, sleep, poll, alive, loop_pid)
 
         def restart():
-            """Start the loop through the live code; (True, '') when `start` answered with exit 0."""
+            """Start the loop through the live code; (True, '') when `start` answered with exit 0 (or refused only because a start is pending)."""
             os.environ[RESTART_VAR] = "1"   # the started process inherits it: its start is allowed while this worker holds the lock
             try:
                 code, out = run([osplat.python_executable(), "-m", "haivequeen", "start", "--keep-pause"], live)
             finally:
                 os.environ.pop(RESTART_VAR, None)
-            return code == 0, out.strip()
+            return code == 0 or start_pending_refusal(out), out.strip()
 
         if version is not None:
             steps = (["fetch", "origin", "tag", "v%s" % version, "--no-tags"], ["merge", "--ff-only", "v%s" % version])
