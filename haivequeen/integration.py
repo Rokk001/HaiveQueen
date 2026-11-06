@@ -137,11 +137,10 @@ def start_text(env, plan, provider_name):
                "--parallel value of the build command (also in the variable named by ParallelVar); the build starts only while the free RAM is at least MinFreeGB. These values win over a "
                "--parallel value or RAM minimum in a project rule: do not ask a question about that difference. If it reports waiting for integration, write a handoff and end until restarted. "
                "After acquiring the place, abort any unfinished merge in the project integration checkout before integrating again." % (env.name, plan))
-    order = [acquire]
+    order = [("Run the compile check of the project yourself in this run with the exact command compileCheck of the project configuration (bzz ready looks for its green result), then register your own branch with bzz ready."
+              if on["compileCheck"] else "Register your own branch with bzz ready."), acquire]
     if states["Deploy"] == "queen":
         order.append("If the release worktree of the project is missing, create it again and build it according to the integration rules of the project; only the Queen who holds the integration place may do this.")
-    order.append(("Run the compile check of the project yourself in this run with the exact command compileCheck of the project configuration (bzz ready looks for its green result), then register your own branch with bzz ready."
-                  if on["compileCheck"] else "Register your own branch with bzz ready."))
     order.append("Integrate your own branch, then release the integration place with bzz integration release --project %s --plan %s." % (env.name, plan))
     text = "Then follow this order. " + " ".join("%d. %s" % (i + 1, step) for i, step in enumerate(order))
     text += " If only open owner questions remain, write a handoff and end your final report with WAITING_FOR_OWNER."

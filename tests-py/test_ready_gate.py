@@ -96,6 +96,7 @@ class ListTests(unittest.TestCase):
         self.assertEqual(readygate.parse_verdict("x\nREADY-CHECK: PASSED\n"), ("passed", ""))
         verdict, points = readygate.parse_verdict("READY-CHECK: PASSED\nmore\nREADY-CHECK: FAILED\n- G-2 not in code\n")
         self.assertEqual((verdict, points), ("failed", "- G-2 not in code"))
+        self.assertEqual(readygate.parse_verdict("READY-CHECK: FAILED - G-2 missing"), ("failed", "- G-2 missing"))
         self.assertEqual(readygate.parse_verdict("no verdict")[0], "unavailable")
 
     def test_role_file(self):
@@ -233,6 +234,36 @@ class GateTests(RoundCase):
             code, res = self.ready()
         self.assertEqual(code, 0, res)
         self.assertIn("G-2", self.requests[0]["prompt"])
+
+    def test_runner_uses_free_provider_and_configured_class(self):
+        env = self.env()
+        env.settings["readyCheckClass"] = "heavy"
+        env.providers = [dict(p, name=name, endpoint="", classes={"heavy": {"model": "m"}}) for p, name in zip([env.providers[0]] * 2, ("busy", "free"))]
+        chosen = []
+        def start(ctx, action, forced_pick):
+            chosen.append((action["type"], action["class"]))
+            ctx["state"]["names"].append("check")
+            return 1
+        with mock.patch("haivequeen.scheduler.provider_free", return_value={"busy": 0, "free": 1}), mock.patch("haivequeen.usage.limit_windows", return_value=[]), mock.patch("haivequeen.loop._do_start", side_effect=start), mock.patch.object(runtime, "get_agent", return_value={"status": "done"}), mock.patch.object(readygate, "parse_verdict", return_value=("passed", "")):
+            readygate.start_check_agent(env, self.queen, {"prompt": "x", "plan": REL, "cwd": str(self.wt)}, sleep=lambda _: None)
+        self.assertEqual(chosen, [("free", "heavy")])
+
+    def test_runner_waits_for_row_and_reads_codex_failed_verdict(self):
+        env = self.env()
+        def start(ctx, action, forced_pick):
+            ctx["state"]["names"].append("check")
+            return 1
+        calls = []
+        def pause(_):
+            calls.append(1)
+            if len(calls) == 2:
+                folder = env.run_dir("check")
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "final.txt").write_text("READY-CHECK: FAILED\n- G-2 missing\n", encoding="utf-8")
+        with mock.patch("haivequeen.loop._do_start", side_effect=start), mock.patch.object(runtime, "get_agent", side_effect=[None, {"status": "done"}, {"status": "done"}]), mock.patch("haivequeen.agent_process.is_live", side_effect=[True, False]):
+            verdict = readygate.start_check_agent(env, self.queen, {"prompt": "x", "plan": REL, "cwd": str(self.wt)}, sleep=pause)
+        self.assertEqual(verdict, ("failed", "- G-2 missing"))
+        self.assertEqual(len(calls), 2)
 
     def test_default_runner_without_start_is_unavailable(self):
         """The real runner reports unavailable when no agent can be started."""

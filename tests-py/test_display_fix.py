@@ -41,10 +41,10 @@ class QueenNameTest(RoundCase):
 
 
 class QueenOrderTest(RoundCase):
-    """The Queen order names the integration place first: the release worktree may only be recreated by the Queen who holds the place."""
+    """The Queen order runs ready before acquiring the integration place: the release worktree may only be recreated by the Queen who holds the place."""
 
-    def test_acquire_comes_before_the_release_worktree_the_compile_check_and_ready(self):
-        """Order in the Queen prompt: acquire, then the release worktree, then the compile check, then bzz ready, then her own integration and release."""
+    def test_ready_precedes_acquire_and_release_worktree(self):
+        """The Queen runs the compile check and ready before acquiring the place."""
         self.conn.execute("UPDATE projects SET legacy_deploy=1")   # the release worktree step is in the text only with deploy on
         for entry in self.machine["providers"]:   # and only for a Queen whose provider has the Deploy tick (H-46(d))
             entry.update(capabilitiesVersion=1, capabilities=["Coding", "Queen", "Build", "Deploy"])
@@ -52,7 +52,7 @@ class QueenOrderTest(RoundCase):
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")
         text = (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8")
-        marks = ["bzz integration acquire", "release worktree", "compile check", "bzz ready", "bzz integration release"]
+        marks = ["compile check", "bzz ready", "bzz integration acquire", "release worktree", "bzz integration release"]
         at = [text.find(m) for m in marks]
         self.assertNotIn(-1, at, dict(zip(marks, at)))
         self.assertEqual(at, sorted(at), dict(zip(marks, at)))

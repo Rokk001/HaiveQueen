@@ -369,7 +369,7 @@ class StartTextTests(IntegrationCase):
         self.use(self.providers[0], deployEnabled=False, compileCheckEnabled=False)
         self.hive()
         text = self.text()
-        self.assertIn("2. Register your own branch", text)
+        self.assertIn("1. Register your own branch", text)
         self.assertIn("3. Integrate your own branch", text)
         self.assertNotIn("4. ", text)
         self.assertIn("compile check is switched off", text)

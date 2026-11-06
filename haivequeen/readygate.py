@@ -5,7 +5,7 @@
    plan, lines `- <id>: <text>`) and of the state file (its own section Requirements) must appear there exactly once with status done and an
    evidence. Requirements covered only by owner-verified packages, and ids an active decision of the owner names (set aside), are listed separately
    and do not block. The count line `Open requirements: <n>` does not decide here.
-2. The check agent. A fresh agent (class medium, provider chosen like a Bee's, loads like a Bee, took no part in the plan) compares the plan as
+2. The check agent. A fresh agent (configured class, eligible free provider, took no part in the plan) compares the plan as
    submitted with the list and the branch and ends with `READY-CHECK: PASSED` or `READY-CHECK: FAILED` plus the missing points. Only a passed
    result accepts the branch. When the agent cannot run, `bzz ready` waits and the Queen calls it again next round.
 """
@@ -19,7 +19,7 @@ CHECK_RUNNER = None   # tests replace this: callable(request dict) -> (verdict, 
 
 COMPLETENESS_HEADING = re.compile(r"(?im)^#{1,6}\s*completeness\s*$")
 LIST_LINE = re.compile(r"^\s*[-*]\s*([A-Za-z0-9_.-]+)\s*:\s*(.*?)\s*$")
-VERDICT_LINE = re.compile(r"(?im)^\s*READY-CHECK:\s*(PASSED|FAILED)\b.*$")
+VERDICT_LINE = re.compile(r"(?im)^[ \t]*READY-CHECK:[ \t]*(PASSED|FAILED)\b")
 DONE_STATUS = ("done", "erledigt")
 
 
@@ -139,10 +139,10 @@ def gate(env, plan, queen):
 def start_check_agent(env, queen, request, sleep=time.sleep):
     """Start the check agent through the agent runner like a Bee and wait for its answer; returns (verdict, text).
 
-    Provider and class are chosen like a Bee's (class medium; the Queen's provider or an endpoint provider; a free slot, not at its limit), and it
+    The configured ready-check class runs on an eligible provider with a free slot and limit, and it
     takes a slot like a Bee. No provider, no slot, a failed start, an agent that ends without verdict or a timeout (setting readyCheckTimeoutSec)
     give `unavailable`."""
-    from . import agent_process, bees, hives, loop, scheduler, usage
+    from . import agent_process, hives, loop, scheduler, usage
     plan = request["plan"]
     hive = hives.get(env.conn, env.name, plan)
     if not hive:
@@ -151,10 +151,12 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
     running = [{**a, "status": "running"} for a in active if agent_process.counts(a)]
     free = scheduler.provider_free(env.providers, running)
     limited = [p["name"] for p in env.providers if any(w["used_pct"] >= 100 for w in usage.limit_windows(env.conn, p))]
-    route = bees.select_route(env.providers, free, hive["provider"], "medium", (), env.settings.get("excludedProviders", []), False, limited)
-    if not route:
-        return "unavailable", "no provider with a free slot and class medium"
-    provider, cls = route
+    cls = str(env.settings.get("readyCheckClass", "medium"))
+    candidates = [p for p in env.providers if p["name"] not in env.settings.get("excludedProviders", []) and p["name"] not in limited]
+    pick = scheduler.select_provider(candidates, cls, [], free, conn=env.conn)
+    if not pick:
+        return "unavailable", "no provider with a free slot and class %s" % cls
+    provider = pick["name"]
     existing = [a["name"] for a in runtime.list_agents(env.conn, env.name, "all")]
     state = {"names": existing, "busy": [], "plan_status": {scheduler.norm_plan(plan): "IN_PROGRESS"}, "by_path": {scheduler.norm_plan(plan): {"path": plan}}}
     ctx = {"env": env, "state": state, "pool": loop.Pool(free, 0), "report": [], "dry": False, "settle": 0}
@@ -165,8 +167,9 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
     name = state["names"][-1]
     deadline = time.monotonic() + float(env.settings.get("readyCheckTimeoutSec", 3600))
     while time.monotonic() < deadline:
+        # bzz done can set a terminal status before the runner writes final.txt.
         row = runtime.get_agent(env.conn, env.name, name)
-        if row is None or row.get("status") not in scheduler.ACTIVE:
+        if row is not None and row.get("status") not in scheduler.ACTIVE and not agent_process.is_live(row):
             try:
                 text = (env.run_dir(name) / "final.txt").read_text(encoding="utf-8-sig")
             except OSError:
