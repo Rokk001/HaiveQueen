@@ -73,7 +73,7 @@ class CheckTests(RoundCase):
         self.assertEqual(len(self.calls), 1)
 
     def test_http_404_means_no_release_published_yet_not_a_failed_check(self):
-        """Owner answer 372 (4): while GitHub has no release (HTTP 404) the header says so instead of "update check failed"."""
+        """while GitHub has no release (HTTP 404) the header says so instead of "update check failed"."""
         from io import BytesIO
         from urllib.error import HTTPError
         from haivequeen import releases

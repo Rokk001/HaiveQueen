@@ -314,7 +314,7 @@ class StoppedPackageTests(RoundCase):
         return f.read_text(encoding="utf-8") if f.is_file() else ""
 
     def test_stop_bee_on_an_embedded_bee_stays_pending_until_its_end_is_confirmed(self):
-        """Owner answer 220: X on an embedded (subagent) Bee stops its package and tells the Queen to end it, but the row stays open and keeps its Bee place
+        """X on an embedded (subagent) Bee stops its package and tells the Queen to end it, but the row stays open and keeps its Bee place
         until the Queen confirms its end; only her result for the package closes it with the outcome stopped."""
         from haivequeen import gui
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
@@ -351,7 +351,7 @@ class StoppedPackageTests(RoundCase):
         self.assertEqual(self.stop_notice(), "")
 
     def test_a_pending_stop_survives_a_replacement_and_a_queen_restart(self):
-        """Neither a new Bee start for the package nor a Queen restart proves that the stopped subagent ended: its row stays open (owner answer 220)."""
+        """Neither a new Bee start for the package nor a Queen restart proves that the stopped subagent ended: its row stays open."""
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
         bees.record_embedded_start(self.conn, "testproj", REL, "P2", "Dia", "medium", "claude")
         bees.stop_package(self.conn, "testproj", REL, "P1")
@@ -373,7 +373,7 @@ class StoppedPackageTests(RoundCase):
         bees.after_queen_start(self.conn, "testproj", REL)
 
     def test_a_queen_restart_keeps_every_unconfirmed_subagent_bee(self):
-        """Owner answer 220: a Queen ending proves no end of her native Bees: every open row keeps its place, running or stopping, and the new Queen is told."""
+        """a Queen ending proves no end of her native Bees: every open row keeps its place, running or stopping, and the new Queen is told."""
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
         bees.record_embedded_start(self.conn, "testproj", REL, "P2", "Dia", "medium", "claude", queen="Queen-A")
         bees.stop_package(self.conn, "testproj", REL, "P1")

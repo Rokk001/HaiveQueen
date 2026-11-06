@@ -81,7 +81,7 @@ def record_step_count(conn, project, plan, package, steps):
 def record_embedded_start(conn, project, plan, package, name, cls, provider, model='', effort='', queen=''):
     """An embedded Bee has no agent row of its own: store it so the window can show it under its Queen `queen`.
 
-    An older open row of the package is never closed here: a new start does not prove that the older subagent ended (owner answer 220), so
+    An older open row of the package is never closed here: a new start does not prove that the older subagent ended, so
     start_process refuses a new Bee while one is open."""
     ensure_attempts(conn)
     conn.execute('INSERT INTO embedded_bees(project,plan_path,package,name,class,provider,model,effort,started_at,queen) VALUES (?,?,?,?,?,?,?,?,?,?)',
@@ -102,7 +102,7 @@ def close_embedded(conn, project, plan, package=None, outcome='done', keep_stopp
     """Close the open embedded Bees of a package, or of the whole plan when no package is given, with the outcome that ended them.
 
     A Bee whose stop is pending (outcome STOPPING) is closed only by a confirmation of its end (its result reported by its Queen), then with the outcome
-    stopped. `keep_stopping` leaves such a Bee open: a replacement or a Queen restart does not prove that the subagent ended (owner answer 220).
+    stopped. `keep_stopping` leaves such a Bee open: a replacement or a Queen restart does not prove that the subagent ended.
     Returns the number of rows closed whose stop was pending."""
     ensure_attempts(conn)
     where, args = ' WHERE project=? AND plan_path=? AND ended_at IS NULL', [project, plan]
@@ -367,7 +367,7 @@ def write_stop_notice(conn, project, plan):
 
 def after_queen_start(conn, project, plan):
     """A new Queen of the plan has started. The embedded Bees of her predecessor stay open with their Bee places: a Queen ending proves no end of her
-    native Bees (owner answer 220). The new Queen is told of them (OPEN-BEES) and of stopped packages (STOP-PACKAGES)."""
+    native Bees. The new Queen is told of them (OPEN-BEES) and of stopped packages (STOP-PACKAGES)."""
     inherited = unconfirmed_embedded(conn, project, plan)
     if inherited:
         runtime.append_event(conn, project, 'New Queen of %s: subagent Bees %s keep their Bee places until their end is confirmed' % (
@@ -379,7 +379,7 @@ def stop_package(conn, project, plan, package):
     """Mark the package as stopped by the owner; no Bee of it starts again until resume_package.
 
     An open embedded (subagent) Bee of the package has no process HaiveQueen could end: its stop is pending (outcome STOPPING), its row stays open and
-    keeps its Bee place, and the running Queen is told to end it and confirm its end; only that confirmation closes the row (owner answer 220)."""
+    keeps its Bee place, and the running Queen is told to end it and confirm its end; only that confirmation closes the row."""
     ensure_attempts(conn)
     runtime.kv_set(conn, project, STOP_KEY + '%s|%s' % (plan, package), db.now())
     pending = conn.execute('UPDATE embedded_bees SET outcome=? WHERE project=? AND plan_path=? AND package=? AND ended_at IS NULL',
@@ -654,7 +654,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         if pending:
             return refuse(env, package, 'the stopped subagent Bee %s of this package has not confirmed its end; once it has ended, report it with bzz bee result --outcome interrupted' % pending[0][2])
         unconfirmed = unconfirmed_embedded(env.conn, env.name, plan, package)
-        if unconfirmed:   # owner answer 220: no replacement while the earlier subagent Bee may still run
+        if unconfirmed:   # no replacement while the earlier subagent Bee may still run
             if own_embedded(unconfirmed[0], queen):
                 return refuse(env, package, 'the subagent Bee %s of this package has not confirmed its end; record its result with bzz bee result first' % unconfirmed[0]['name'])
             return refuse(env, package, 'the subagent Bee %s of the earlier Queen %s has not confirmed its end; record its result with bzz bee result --ended-evidence first' % (

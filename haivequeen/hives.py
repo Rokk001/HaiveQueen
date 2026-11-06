@@ -1025,7 +1025,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
                     raise
                 if count:
-                    # the embedded Bees of the old Queen keep their rows and places until their end is confirmed (owner answer 220)
+                    # the embedded Bees of the old Queen keep their rows and places until their end is confirmed
                     bees.after_queen_start(conn, env.name, path)
                     runtime.kv_set(conn, env.name, 'hive-blocker:' + path, '')
                     for package in runtime.list_packages(conn, env.name, path):

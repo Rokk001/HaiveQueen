@@ -1,4 +1,4 @@
-"""K10, owner decision 740: the release repository, the base version, the tags and releases and the commit of a release are those of the code
+"""The release repository, the base version, the tags and releases and the commit of a release are those of the code
 repository of the Apiary (codeRepo when it is set, else the workspace), also for the GitHub check that offers the switch. Tested with a workspace and
 a codeRepo that are different Git repositories with different remotes."""
 import json
@@ -105,7 +105,7 @@ class ReleaseRepositoryTests(CodeRepoCase):
         self.assertNotIn(self.ws_head, [p[2] for p in self.published])
 
     def test_releases_in_the_workspace_repository_do_not_count(self):
-        """Decision 740 (2): the releases v0.0.1 and v0.0.2 published by mistake at the workspace remote are not counted up from."""
+        """Releases in the workspace repository do not affect the code repository version."""
         self.releases["owner/workspace"] = "0.0.2"
         runtime.kv_set(self.conn, "testproj", publish.LAST_KEY, "0.0.2")   # recorded before the repository was stored
         self.assertEqual(self.integrate()["version"], "2.0.1")

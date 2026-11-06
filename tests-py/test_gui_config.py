@@ -377,7 +377,7 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(win.status.cget("text"), "Saved.")
         self.assertEqual(gui_config.load_raw(self.folder / "ws" / ".haivequeen" / "project.toml")["priority"], 5)
 
-    # Owner answer 372 (1): three tabs, no file selection.
+    # three tabs, no file selection.
     def test_window_has_three_tabs_and_no_file_selection(self):
         """The window offers the tabs General, Providers and Apiaries; no File choice and no file name is shown; each tab lists only its own pages."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
@@ -393,7 +393,7 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(win.add_button.cget("text"), "Add Apiary")
         self.assertTrue(win.side.winfo_manager())
 
-    # Owner answer 372 (2): every setting of an Apiary on one page, each once.
+    # every setting of an Apiary on one page, each once.
     def test_apiary_page_holds_all_its_settings_once(self):
         """The page of an Apiary shows its name and workspace from config.toml and all settings of its project.toml, including the four switches; no key twice."""
         with mock.patch("haivequeen.publish.github_repository", return_value="owner/name"):
@@ -412,7 +412,7 @@ class WindowTest(unittest.TestCase):
         self.assertIsNone(win.build_vars)
         self.assertFalse([p for p, _g, _l in win.getters if p[-1] in ("slots", "hives", "capabilities")])   # no machine or provider setting on an Apiary page
 
-    # H-54 with owner answer 372: Save rewrites no unchanged project.toml.
+    # Save rewrites no unchanged project.toml.
     def test_save_rewrites_no_unchanged_apiary_file(self):
         """Saving after only looking at an Apiary page leaves its project.toml untouched and keeps the provider capabilities as they are."""
         path = self.folder / "ws" / ".haivequeen" / "project.toml"
@@ -428,7 +428,7 @@ class WindowTest(unittest.TestCase):
         codex = gui_config.load_raw(self.folder / "config.toml")["providers"][1]
         self.assertEqual((codex["capabilities"], codex["use"]), (["images"], "capability-only"))
 
-    # Owner answer 372 (3): the capabilities stay on the provider pages.
+    # the capabilities stay on the provider pages.
     def test_capabilities_are_on_the_provider_pages_only(self):
         """A provider page offers the capability ticks; a changed tick is saved for that provider."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
@@ -440,7 +440,7 @@ class WindowTest(unittest.TestCase):
         claude = gui_config.load_raw(self.folder / "config.toml")["providers"][0]
         self.assertIn("Deploy", claude["capabilities"])
 
-    # Owner answer 372 (2): Add Apiary creates its project.toml in the background.
+    # Add Apiary creates its project.toml in the background.
     def test_add_apiary_creates_its_project_file(self):
         """Add Apiary adds a page; with a name and an existing workspace Save writes config.toml, registers the Apiary and creates its project.toml with the switches set on the page."""
         new = self.folder / "fresh"
