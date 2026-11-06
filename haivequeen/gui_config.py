@@ -406,6 +406,30 @@ def _update_document(document, data):
             document[key] = value
 
 
+def edits_of(base, data) -> dict:
+    """The settings of `data` that differ from `base` (nested tables compared key by key): the unsaved edits of a page."""
+    edits = {}
+    for key, value in data.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            inner = edits_of(base[key], value)
+            if inner:
+                edits[key] = inner
+        elif key not in base or base[key] != value:
+            edits[key] = value
+    return edits
+
+
+def with_edits(base, edits) -> dict:
+    """A copy of `base` with `edits` laid over it (nested tables merged key by key)."""
+    merged = json.loads(json.dumps(base))
+    for key, value in edits.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = with_edits(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 # Convert text typed into the editor to the right type.
 def parse_typed(text, like=None):
     """Convert `text` to the type of `like` (bool, int, float, str); without a model value guess: true/false, whole number, decimal, else text."""
@@ -677,9 +701,7 @@ class ConfigWindow:
         apiary = self.apiaries[self.node[1]]
         entry = apiary["entry"]
         if entry is not None:
-            typed = str(entry.get("workspace") or "")
-            if not apiary["exists"] and apiary["name"] not in self.registered() and typed != apiary["workspace"]:
-                apiary.update({k: v for k, v in self.apiary_record(entry, {}).items() if not apiary["file"] or k not in ("file", "saved")}, workspace=typed)   # a workspace typed for a new Apiary
+            self.adopt_workspace(apiary)
             self.fields(self.form, dict(entry), ("entry",))
         else:
             row = self.tk.Frame(self.form)
@@ -692,6 +714,33 @@ class ConfigWindow:
         self.fields(self.form, {**first, **shown}, ("file",))
         self.add_row(self.form, ("file",))
         self.initial_values = {path: getter() for path, getter, _like in self.getters}
+
+    def adopt_workspace(self, apiary) -> bool:
+        """For an Apiary not registered yet whose workspace in config.toml was changed: take the project.toml of that workspace (if any) as its settings
+        and lay the unsaved edits of the page over them, so neither the edits nor the unchanged values of the file are lost. True when the record changed."""
+        entry = apiary["entry"]
+        if entry is None or apiary["name"] in self.registered():
+            return False
+        typed = str(entry.get("workspace") or "")
+        if typed == apiary["workspace"]:
+            return False
+        edits = edits_of(json.loads(apiary["saved"]), apiary["file"])
+        record = self.apiary_record(entry, {})
+        record["file"] = with_edits(record["file"], edits)
+        apiary.update(record)
+        return True
+
+    # The workspace of an Apiary page was typed.
+    def workspace_entered(self, _event=None):
+        """Keep the typed values and, when the typed workspace already holds a project.toml (or no longer does), show its settings at once."""
+        if self.node[0] != "apiaries" or self.node[1] is None:
+            return
+        apiary = self.apiaries[self.node[1]]
+        if not self.collect():
+            return
+        saved = apiary["saved"]
+        if self.adopt_workspace(apiary) and apiary["saved"] != saved:
+            self.build_form()
 
     def github_repository(self, shown):
         """owner/name of the GitHub remote of the shown Apiary (its remoteName), or None."""
@@ -892,6 +941,11 @@ class ConfigWindow:
                 continue
             tk.Label(row, text=tr(SETTING_LABELS[key]) if key in SETTING_LABELS and path[:1] == ("file",) else key, width=22, anchor="nw", justify="left", wraplength=190, font=(self.mono, 10)).pack(side="left", anchor="n")
             self.getters.append((path + (key,), self.editor(row, key, value), value))
+            if path + (key,) == ("entry", "workspace"):
+                for widget in row.winfo_children():
+                    if isinstance(widget, tk.Entry):
+                        widget.bind("<FocusOut>", self.workspace_entered, add="+")   # the settings of an existing project.toml appear when the workspace is entered
+                        widget.bind("<Return>", self.workspace_entered, add="+")
 
     # One editor widget for a value; returns the function that reads it back.
     def editor(self, parent, key, value):
@@ -1079,6 +1133,8 @@ class ConfigWindow:
         """Collect the shown part, check everything, write config.toml and the project.toml of every changed or new Apiary and tell the main window; a problem is shown and nothing is written."""
         if not self.collect():
             return
+        for apiary in self.apiaries:
+            self.adopt_workspace(apiary)   # a workspace typed just before Save: its project.toml is the base, never replaced by the edits alone
         writes, problems = self.apiary_writes()
         problems = check(self.data, True) + problems
         if problems:
