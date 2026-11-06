@@ -392,12 +392,12 @@ class WindowTest(unittest.TestCase):
 
     # Draw at many window sizes and check that nothing is drawn outside the canvas.
     def test_sizes(self):
-        """At six window sizes the picture scale never exceeds its layout slot and every canvas item stays inside the canvas."""
+        """At seven window sizes, check the layout on screens at least 1280 pixels wide."""
         import tkinter as tk
         from haivequeen import gui
         gui.REFRESH_MS = 10 ** 9
         checked = 0
-        for width, height in ((800, 500), (1000, 600), (1366, 768), (1600, 900), (1920, 1050), (2400, 1300)):
+        for width, height in ((800, 500), (1000, 600), (1200, 700), (1366, 768), (1600, 900), (1920, 1050), (2400, 1300)):
             try:
                 root = tk.Tk()
                 root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
