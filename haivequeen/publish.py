@@ -17,6 +17,7 @@ import json
 import os
 import re
 import tomllib
+from datetime import datetime
 
 from . import db, releases, runtime
 
@@ -24,7 +25,7 @@ QUEUE_KEY = "release-queue"       # JSON list of the integrations not yet publis
 PENDING_KEY = "release-pending"   # the single pending entry of the first K10 version; taken over into the queue
 LAST_KEY = "release-last"         # the version HaiveQueen published last
 ERROR_KEY = "release-error"
-SINCE_KEY = "release-since"       # switch-on time (first observation for legacy configurations); older integrations get no release
+SINCE_KEY = "release-since"       # switch-on time; older integrations get no release
 BEFORE_KEY = "release-before-switch"  # integrated queue IDs already present at switch-on
 DONE_PREFIX = "release-done:"
 
@@ -218,10 +219,14 @@ def pending_releases(conn, project) -> list:
 
 
 def _since(conn, env) -> str:
-    """The recorded switch-on time; legacy configurations fall back to the first observation."""
+    """Use the configuration edit time when an external edit enabled releases."""
     value = runtime.kv_get(conn, env.name, SINCE_KEY)
     if not value:
-        value = db.now()
+        try:
+            modified = (env.workspace / ".haivequeen" / "project.toml").stat().st_mtime
+            value = min(datetime.fromtimestamp(modified).isoformat(timespec="seconds"), db.now())
+        except (OSError, OverflowError, ValueError):
+            value = db.now()
         runtime.kv_set(conn, env.name, SINCE_KEY, value)
     return value
 
