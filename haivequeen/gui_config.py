@@ -32,12 +32,15 @@ BUILD_FIELDS = (
 
 # The settings of the Apiary page, each with the value that applies without an entry (for an Apiary from before the switches deploy stays on, see apiary_settings).
 APIARY_DEFAULTS = (("ownerTopics", []), ("ownerCheckText", ""), ("compileCheckEnabled", True), ("buildEnabled", True), ("deployEnabled", False),
-                   ("integrationBranch", "main"), ("remoteName", "origin"), ("worktreeLocation", ""), ("deleteFinishedWorktrees", True), ("deleteIntegratedBranches", False))
+                   ("integrationBranch", "main"), ("remoteName", "origin"), ("worktreeLocation", ""), ("deleteFinishedWorktrees", True), ("deleteIntegratedBranches", False),
+                   ("publishReleases", False), ("nextVersion", ""))
+RELEASE_KEYS = ("publishReleases", "nextVersion")   # offered only for an Apiary whose remote is on GitHub (H-43)
 SETTING_LABELS = {
     "ownerTopics": N_("Topics that always go to the owner (one per line)"), "ownerCheckText": N_("Owner-check question (empty: default text)"),
     "compileCheckEnabled": N_("Run the compile check"), "buildEnabled": N_("Run the build"), "deployEnabled": N_("Run the deploy"),
     "integrationBranch": N_("Integration branch"), "remoteName": N_("Remote name"), "worktreeLocation": N_("Worktree location (empty: beside the repository)"),
     "deleteFinishedWorktrees": N_("Delete finished worktrees automatically"), "deleteIntegratedBranches": N_("Delete integrated branches (local and remote)"),
+    "publishReleases": N_("Publish release at integration"), "nextVersion": N_("Next version (empty: count the last digit up)"),
 }
 
 
@@ -50,6 +53,15 @@ def apiary_settings(shown, legacy_deploy=False):
     for key, default in APIARY_DEFAULTS:
         out.setdefault(key, list(default) if isinstance(default, list) else default)
     return out
+
+
+# Hide the release settings of an Apiary whose remote is not on GitHub.
+def release_fields(shown, repository):
+    """`shown` without publishReleases and nextVersion when `repository` (owner/name of the GitHub remote) is None (H-43: only for a remote on GitHub)."""
+    if not repository:
+        for key in RELEASE_KEYS:
+            shown.pop(key, None)
+    return shown
 
 
 # The number of logical cores of this machine.
@@ -225,6 +237,17 @@ def check(data, machine=True) -> list:
     for key, label in (("remoteName", "Remote name"), ("integrationBranch", "Integration branch")):
         if data.get(key) and not re.fullmatch(r"[\w][\w./-]*", str(data[key])):
             problems.append(tr("%s: letters, digits and . / - _ are expected, starting with a letter or digit", tr(label)))
+    if str(data.get("nextVersion") or "").strip():
+        from . import releases
+        try:
+            releases.next_version(str(data["nextVersion"]).strip())
+        except ValueError:
+            problems.append(tr("Next version: three numbers like 2.1.0 are expected"))
+    update = data.get("update")
+    if update is not None:
+        hours = update.get("checkHours", 24) if isinstance(update, dict) else None
+        if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not math.isfinite(hours) or hours < 0:
+            problems.append(tr("update.checkHours: a number of hours from 0 up is expected (0 = no daily check)"))
     if machine and not problems:
         from . import scheduler
         try:
@@ -535,6 +558,7 @@ class ConfigWindow:
             shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
             if not self.machine():
                 shown = apiary_settings(shown, self.files[self.index][3])
+                shown = release_fields(shown, self.github_repository(shown))
         if kind == "providers":
             from . import scheduler
             shown["capabilities"] = scheduler.provider_capabilities(data)
@@ -546,6 +570,16 @@ class ConfigWindow:
             shown.setdefault("beeMode", "process" if shown.get("protocol") == "codex" else "subagent")   # always offer the setting, with the value that applies without an entry
         self.fields(self.form, shown, ())
         self.add_row(self.form, ())
+
+    def github_repository(self, shown):
+        """owner/name of the GitHub remote of the shown Apiary (its remoteName), or None."""
+        from . import publish
+        from types import SimpleNamespace
+        workspace = self.files[self.index][1].parent.parent
+        try:
+            return publish.github_repository(SimpleNamespace(workspace=workspace, settings={"remoteName": shown.get("remoteName") or "origin"}))
+        except Exception:
+            return None
 
     def bzz_row(self):
         """Offer profile installation and show the result for each CLI."""

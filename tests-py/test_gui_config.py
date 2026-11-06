@@ -250,6 +250,9 @@ class WindowTest(unittest.TestCase):
         win.pick_file(label)
         keys = {path[0]: like for path, _getter, like in win.getters}
         for key, default in gui_config.APIARY_DEFAULTS:
+            if key in gui_config.RELEASE_KEYS:
+                self.assertNotIn(key, keys)   # H-43: the release settings are offered only for a remote on GitHub, this Apiary has none
+                continue
             self.assertEqual(keys[key], default, key)
         texts = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
         self.assertIn("Run the deploy", texts)

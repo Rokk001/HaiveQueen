@@ -724,6 +724,13 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
         except Exception as exc:
             for env in envs[:1]:
                 env.log("RETENTION ERROR %s" % exc)
+        try:
+            from . import publish, updates
+            updates.scheduled_check(machine)   # H-42: once per interval, the result is kept for the GUI
+            publish.retry_pending(conn, envs)   # H-43: a release that failed at integration is published again
+        except Exception as exc:
+            for env in envs[:1]:
+                env.log("UPDATE ERROR %s" % exc)
         done += 1
         nxt = datetime.fromtimestamp(time.time() + minutes * 60)
         state.update(busy=False, since=datetime.now(), next_at=nxt)
@@ -820,6 +827,9 @@ def cmd_start(args, conn) -> int:
     if args.foreground and getattr(args, "desktop", False):
         raise ValueError(i18n.tr("The desktop message supports only the background start."))
     machine = config.load_config()
+    from . import updates
+    if updates.draining() and not os.environ.get("BZZ_UPDATE_RESTART"):   # H-46(i): the update waits for running agents, nothing starts meanwhile
+        return command_result(args, {"ok": False, "updating": True, "note": "An update is waiting for running agents; HaiveQueen starts again after it."})
     pid = loop_running()
     if pid:
         if stop_flag().exists():
