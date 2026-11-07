@@ -136,7 +136,7 @@ def _is_codex(entry) -> bool:
 
 
 def migrate(cfg) -> dict:
-    """The settings dict in the new form (HQ-PROVIDER-FORM): old endpoint entries and [[servers]] entries are taken over into the providers (see `fold_servers`).
+    """The settings dict in the new form: old endpoint entries and [[servers]] entries are taken over into the providers (see `fold_servers`).
     The dict that is passed in is not changed; the same dict is returned when nothing is to be migrated."""
     step = migrate_endpoints(cfg)
     return fold_servers(step)

@@ -1,4 +1,4 @@
-"""Rework of the provider form (HQ-PROVIDER-FORM F1): texts, the Saved message, the ready line after a test, no Custom CLI for a wrapper command (F-7 dropped),
+"""Rework of the provider form: texts, the Saved message, the ready line after a test, no Custom CLI for a wrapper command,
 providers without limit first (F-13), the switch Enabled (F-14), offline providers (F-15) and the mouse wheel over comboboxes (F-16)."""
 import json
 import os

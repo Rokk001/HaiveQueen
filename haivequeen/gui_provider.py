@@ -1,4 +1,4 @@
-"""The provider form of the settings window (HQ-PROVIDER-FORM).
+"""The provider form of the settings window.
 
 One form per provider: name, the dropdown "Access type" (Subscription, API key or Local LLM) and below it the sections CLI, the fields of the chosen access type,
 Models, Use and Advanced (closed each time the page opens). Changing the access type changes the form at once. Every field has a one-line explanation in the
