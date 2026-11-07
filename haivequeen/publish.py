@@ -47,9 +47,14 @@ def _run(argv, cwd):
 def code_folder(env) -> Path:
     """The code repository of the Apiary: codeRepo (older files: repo) when it is set, else the workspace.
 
-    Its remote, pyproject.toml version, tags, releases and commits are those of every release; the workspace is never used for them."""
-    value = env.settings.get("codeRepo") or env.settings.get("repo")
+    Its remote, pyproject.toml version, tags, releases and commits are those of every release; the workspace is never used for them.
+    An env without these settings but with a code_repo (the project of the scheduler, the GUI check) uses that folder."""
+    settings = getattr(env, "settings", None) or {}
+    value = settings.get("codeRepo") or settings.get("repo") or getattr(env, "code_repo", None)
     return Path(value) if value else Path(env.workspace)
+
+
+_repo = code_folder   # older name of the code repository lookup
 
 
 def github_repository(env, run=None):
