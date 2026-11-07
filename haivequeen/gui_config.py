@@ -643,14 +643,13 @@ class ConfigWindow(ProviderPages):
 
     def migrate_allowed_tools(self):
         """Stage provider grants for branches unique to one existing Apiary."""
-        branches = Counter(str(a["file"].get("integrationBranch") or "main") for a in self.apiaries)
         for provider in self.data.get("providers") or []:
             rest, tools, position = split_args(provider.get("args"))
             keep = []
             for tool in tools:
-                matches = [a for a in self.apiaries if a["exists"] and branches[str(a["file"].get("integrationBranch") or "main")] == 1
-                           and re.search(r"(?<![\w./-])" + re.escape(str(a["file"].get("integrationBranch") or "main")) + r"(?![\w./-])", tool)]
-                if len(matches) != 1:
+                matches = [a for a in self.apiaries
+                           if re.search(r"(?<![\w./-])" + re.escape(str(a["file"].get("integrationBranch") or "main")) + r"(?![\w./-])", tool)]
+                if len(matches) != 1 or not matches[0]["exists"]:
                     keep.append(tool)
                     continue
                 target = matches[0]["file"].setdefault("allowedTools", [])

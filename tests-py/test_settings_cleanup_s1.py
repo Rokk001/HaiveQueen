@@ -67,6 +67,17 @@ class SettingsCleanupTests(ApiaryPageCase):
         win.save()
         self.assertIn("Bash(git push origin main)", config.read_text(encoding="utf-8"))
 
+    def test_grant_naming_two_branches_stays_at_provider(self):
+        config = self.base / "config.toml"
+        grant = "Bash(git push origin integration/one main)"
+        config.write_text(config.read_text(encoding="utf-8").replace("Read,Edit", "Read," + grant), encoding="utf-8")
+        project = self.plain / ".haivequeen" / "project.toml"
+        project.write_text(self.plain_text + 'integrationBranch = "integration/one"\n', encoding="utf-8")
+        win = self.window("Plain")
+        self.assertNotIn(grant, self.shown(win)[("file", "allowedTools")])
+        win.save()
+        self.assertIn(grant, config.read_text(encoding="utf-8"))
+
     def test_empty_overrides_inherit_general(self):
         settings = scheduler.build_settings({"language": "German", "escalateAfter": 7}, {"language": "", "escalateAfter": ""})
         self.assertEqual(settings["language"], "German")
