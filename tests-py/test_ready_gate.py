@@ -149,6 +149,30 @@ class ListTests(unittest.TestCase):
             texts = readygate.plan_versions(str(plan), current)
             self.assertEqual({rid for text in texts for rid, _ in plans.parse_requirements(text)}, {'G-0', 'G-1', 'G-2'})
 
+    def test_plan_history_stops_at_a_copy(self):
+        """Plan B created as a copy of plan A and changed afterwards: git reports status C, plan_versions(B) raises no error and holds versions of B only."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            body = '# Plan\n\n## Requirements\n\n' + ''.join('- A-%d: line %d of the shared text\n' % (i, i) for i in range(1, 12))
+            (root / 'A.md').write_text(body, encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'A.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'plan A'], check=True)
+            (root / 'B.md').write_text(body + '- B-1: own\n', encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'B.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'plan B as a copy of A'], check=True)
+            current = body + '- B-1: own\n- B-2: added later\n'
+            (root / 'B.md').write_text(current, encoding='utf-8')
+            subprocess.run(['git', '-C', str(root), 'add', 'B.md'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'change plan B'], check=True)
+            status = subprocess.run(['git', '-C', str(root), 'log', '--follow', '--format=COMMIT:%H', '--name-status', '--', 'B.md'], capture_output=True, text=True, check=True).stdout
+            self.assertRegex(status, r'(?m)^C\d+\t', "git must report the copy with status C, else this test proves nothing")
+            texts = readygate.plan_versions(str(root / 'B.md'), current)
+            self.assertEqual(len(texts), 3)   # the current text, the change commit and the commit that created B
+            self.assertTrue(all('B-1: own' in text for text in texts))
+
     def test_plan_history_read_error_is_not_silently_ignored(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -253,8 +277,80 @@ class GateTests(RoundCase):
         """Rows of the integration queue."""
         return self.conn.execute("SELECT * FROM queue WHERE project='testproj'").fetchall()
 
+    def git_repo(self, folder):
+        """Make folder a Git repository with one commit; returns the HEAD commit."""
+        def git(*args):
+            return subprocess.run(["git", "-C", str(folder)] + list(args), check=True, capture_output=True, text=True).stdout.strip()
+        git("init", "-q")
+        git("config", "user.name", "Test")
+        git("config", "user.email", "test@example.invalid")
+        git("add", "-A")
+        git("commit", "-qm", "first", "--allow-empty")
+        return git("rev-parse", "HEAD")
+
+    def release(self, text, plan=None, item="owner-release"):
+        """File an owner decision for the plan."""
+        runtime.add_decision(self.conn, "testproj", "owner", text, plan=REL if plan is None else plan, item=item)
+
+    def test_check_agent_gets_only_the_current_text_of_a_changed_requirement(self):
+        """The owner changed the text of G-3: the check agent sees the new text only, the old one is no target any more."""
+        text = (self.repo / REL).read_text(encoding="utf-8")
+        self.git_repo(self.repo)
+        (self.repo / REL).write_text(text.replace("third thing", "third thing, now different"), encoding="utf-8")
+        self.state(*FULL)
+        with self.runner("passed"):
+            code, res = self.ready()
+        self.assertEqual(code, 0, res)
+        prompt = self.requests[-1]["prompt"]
+        self.assertIn("G-3: third thing, now different", prompt)
+        self.assertNotIn("G-3: third thing\n", prompt + "\n")
+
+    def test_owner_release_for_the_head_commit_accepts_without_the_check_agent(self):
+        """An active owner-release of this plan naming the HEAD commit (full or 7 characters) accepts; the list is still required."""
+        folder = self.queen.get("cwd") or str(self.repo)
+        head = self.git_repo(folder)
+        for named in (head, head[:7]):
+            self.release("released for commit %s" % named)
+            self.state(*FULL)
+            with self.runner("failed", "must not be asked"):
+                code, res = self.ready()
+            self.assertEqual(code, 0, res)
+            self.assertEqual(self.requests, [])
+            self.conn.execute("DELETE FROM decisions")
+            self.conn.execute("DELETE FROM queue")
+            self.conn.commit()
+        self.release("released for any commit")
+        with self.runner("failed", "must not be asked"):
+            code, res = self.ready()
+        self.assertEqual((code, self.requests), (0, []))
+        self.conn.execute("DELETE FROM decisions")
+        self.conn.commit()
+        self.release("released for any commit")
+        self.state(*FULL[:2])   # G-3 missing: the list stays mandatory
+        with self.runner("passed"):
+            code, res = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("G-3", res["error"])
+
+    def test_owner_release_of_another_plan_or_commit_takes_the_normal_way(self):
+        """A release for another plan, another commit, another item or a short id under 7 characters does not skip the check agent."""
+        folder = self.queen.get("cwd") or str(self.repo)
+        head = self.git_repo(folder)
+        other = ("0" if head[0] != "0" else "1") * 40
+        self.state(*FULL)
+        for plan, text, item in (("plans/OTHER-PLAN.md", "any commit", "owner-release"), (REL, "released for commit %s" % other, "owner-release"),
+                                 (REL, "released for commit %s" % head[:6], "owner-release"), (REL, "any commit", "something-else")):
+            self.release(text, plan=plan, item=item)
+            self.requests.clear()
+            with self.runner("failed", "- G-2 missing"):
+                code, res = self.ready()
+            self.assertEqual(code, 1, (plan, text, item))
+            self.assertEqual(len(self.requests), 1, (plan, text, item))
+            self.conn.execute("DELETE FROM decisions")
+            self.conn.commit()
+
     def test_check_agent_gets_the_requirements_of_every_plan_version(self):
-        """H-27 end to end: a requirement only an earlier committed version had is required at bzz ready and is handed to the check agent."""
+        """H-27 end to end: a requirement only an earlier committed version had is required at bzz ready (it blocks until listed); the check agent is handed the current version only."""
         def git(*args):
             subprocess.run(["git", "-C", str(self.repo)] + list(args), check=True, capture_output=True)
         git("init", "-q")
@@ -275,7 +371,7 @@ class GateTests(RoundCase):
         with self.runner("passed"):
             code, res = self.ready()
         self.assertEqual(code, 0, res)
-        self.assertIn("H-77: removed later", self.requests[-1]["prompt"])
+        self.assertNotIn("H-77", self.requests[-1]["prompt"])
 
     def test_list_refusal_starts_no_check_agent(self):
         """A bad list is refused with the ids and the check agent is not asked."""
