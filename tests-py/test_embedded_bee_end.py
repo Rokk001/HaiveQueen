@@ -214,27 +214,27 @@ class QueenEndTests(EndCase):
         self.queen(pid=4005, identity="win:7", started=60, ended=20)
         self.assertEqual(self.close(), 1)
 
-    def test_the_six_rows_of_the_background_are_freed_and_a_running_queen_keeps_hers(self):
-        names = {"Bea-51": "Rosa", "Fia-26": "Rina", "Mia-22": "Bea", "Cleo-21": "Mia", "Ada-19": "Dina"}
+    def test_the_six_open_rows_are_freed_and_a_running_queen_keeps_hers(self):
+        names = {"Queen-1": "Bee-1", "Queen-2": "Bee-2", "Queen-3": "Bee-4", "Queen-4": "Bee-5", "Queen-5": "Bee-6"}
         for i, queen in enumerate(names):
             self.queen(name=queen, pid=5000 + i, identity="win:%d" % i)
-        self.bee("Rosa", "P1", "Bea-51")
-        self.bee("Rina", "P2", "Fia-26")
-        self.bee("Mira", "P1", "Fia-26")
-        self.bee("Bea", "P2", "Mia-22")
-        self.bee("Mia", "P1", "Cleo-21")
-        self.bee("Dina", "P2", "Ada-19")
+        self.bee("Bee-1", "P1", "Queen-1")
+        self.bee("Bee-2", "P2", "Queen-2")
+        self.bee("Bee-3", "P1", "Queen-2")
+        self.bee("Bee-4", "P2", "Queen-3")
+        self.bee("Bee-5", "P1", "Queen-4")
+        self.bee("Bee-6", "P2", "Queen-5")
         self.assertEqual(self.close(), 6)
         self.assertEqual(self.open_names(), [])
         # again, with one Queen still running
-        for n in ("Rosa", "Rina", "Mira", "Bea", "Mia", "Dina"):
+        for n in ("Bee-1", "Bee-2", "Bee-3", "Bee-4", "Bee-5", "Bee-6"):
             self.conn.execute("DELETE FROM embedded_bees WHERE name=?", (n,))
-        self.conn.execute("UPDATE agents SET status='running', ended_at=NULL WHERE name='Ada-19'")
+        self.conn.execute("UPDATE agents SET status='running', ended_at=NULL WHERE name='Queen-5'")
         self.world[5004] = "win:4"
-        for n, p, q in (("Rosa", "P1", "Bea-51"), ("Rina", "P2", "Fia-26"), ("Mira", "P1", "Fia-26"), ("Bea", "P2", "Mia-22"), ("Mia", "P1", "Cleo-21"), ("Dina", "P2", "Ada-19")):
+        for n, p, q in (("Bee-1", "P1", "Queen-1"), ("Bee-2", "P2", "Queen-2"), ("Bee-3", "P1", "Queen-2"), ("Bee-4", "P2", "Queen-3"), ("Bee-5", "P1", "Queen-4"), ("Bee-6", "P2", "Queen-5")):
             self.bee(n, p, q)
         self.assertEqual(self.close(), 5)
-        self.assertEqual(self.open_names(), ["Dina"])
+        self.assertEqual(self.open_names(), ["Bee-6"])
 
     def test_a_later_queen_can_report_the_package_as_succeeded_after_the_close(self):
         self.queen(pid=4001, identity="win:1")
@@ -274,6 +274,12 @@ class OwnQueenResultTests(EndCase):
         with self.cli_as("Queen-A"):
             self.assertEqual(cli.cmd_bee(args, self.conn), 0)
         self.assertEqual(self.open_names(), [])
+
+    def test_a_bee_of_an_earlier_run_of_the_same_queen_name_is_not_taken_as_hers(self):
+        self.conn.execute("DELETE FROM embedded_bees")
+        self.bee("Old", started=90)   # started before this run of the Queen name: it belongs to an earlier run
+        self.assertIn("no matching agent row", self.run_result("succeeded", self.result_file()))
+        self.assertEqual(self.open_names(), ["Old"])
 
     def test_without_a_file_it_is_refused(self):
         self.assertIn("--ended-evidence", self.run_result("succeeded"))

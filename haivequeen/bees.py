@@ -218,8 +218,10 @@ def own_embedded(row, queen) -> bool:
     A row without a recorded Queen (written before the Queen was recorded) counts as hers when it started after her."""
     if not queen:
         return False
+    started = str(queen.get('started_at') or '')
     if row.get('queen'):
-        return row['queen'] == queen.get('name')
+        # A Queen name can be used by two agent rows: a Bee that started before this Queen belongs to an earlier one.
+        return row['queen'] == queen.get('name') and (not started or str(row.get('started_at') or '') >= started)
     return bool(queen.get('started_at')) and str(row.get('started_at') or '') >= str(queen['started_at'])
 
 
