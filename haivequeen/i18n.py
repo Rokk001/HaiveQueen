@@ -249,6 +249,7 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     (r"^the owner stopped this package; it starts again only after the owner resumes it$", r"der Besitzer hat dieses Paket gestoppt; es startet erst wieder, wenn der Besitzer es fortsetzt"),
     (r"^Queen (\S+) told to start the startable packages (.+)$", r"Queen \1 aufgefordert, die startbaren Pakete \2 zu starten"),
     (r"^startable packages not reported: ", r"startbare Pakete nicht gemeldet: "),
+    (r"^Bee slots not reserved: ", r"Bee-Slots nicht reserviert: "),
     (r"^plan (.+?): the owner takes over the existing branch (.+)$", r"Plan \1: der Besitzer übernimmt den bestehenden Branch \2"),
     (r"^plan (.+?): the owner wants a new branch; (\S+) is created instead of (.+)$", r"Plan \1: der Besitzer will einen neuen Branch; \2 wird statt \3 angelegt"),
     (r"^Fault loop_vanished resolved: ", r"Fehler loop_vanished behoben: "),
