@@ -60,9 +60,9 @@ class DataTest(unittest.TestCase):
         self.assertEqual((res["text"], res["level"]), ("+0 %", "ok"))
 
     def test_no_limit_source_and_switched_off_check(self):
-        """L-3/L-5/L-10 (f): a provider without limit source shows 'no limit' and 'no weekly limit' in muted colour."""
+        """L-3/L-5/L-10 (f), F-13: a provider without limit source shows +99 % in green and 'no weekly limit' in muted colour."""
         row = rows_of(prow(has_limit=False, used_pct=None, ratio=None, hours=None, reset_at=None))[0]
-        self.assertEqual((row["reserve"]["text"], row["reserve"]["level"]), ("no limit", "dim"))
+        self.assertEqual((row["reserve"]["text"], row["reserve"]["level"]), ("+99 %", "ok"))
         self.assertEqual((row["weekly"]["text"], row["weekly"]["pct"], row["weekly"]["level"]), ("no weekly limit", None, "dim"))
 
     def test_last_verified_reading_keeps_colour_and_shows_age(self):
@@ -124,7 +124,7 @@ class DataTest(unittest.TestCase):
         self.assertEqual(de[0]["reserve"]["hover"], "27 %% mehr Quota übrig als Zeit bis zum Reset (%s)" % date)
         self.assertEqual(de[1]["reserve"]["hover"], "15 %% weniger Quota übrig als Zeit bis zum Reset (%s)" % date)
         self.assertEqual((de[2]["reserve"]["text"], de[2]["weekly"]["text"], de[2]["slots"]["none"], de[2]["slots"]["running"]),
-                         ("kein Limit", "kein Wochenlimit", "keine Slots", "2 laufen"))
+                         ("+99 %", "kein Wochenlimit", "keine Slots", "2 laufen"))
         self.assertEqual((de[3]["reserve"]["text"], de[3]["weekly"]["text"]), ("unbekannt", "7d unbekannt"))
         self.assertEqual((de[4]["reserve"]["text"], de[4]["weekly"]["text"], de[4]["five"]), ("Reset jetzt", "7d 40 % · Reset jetzt", "5h neues Fenster"))
         self.assertEqual(de[5]["weekly"]["text"], "7d 40 % · Reset unbekannt")

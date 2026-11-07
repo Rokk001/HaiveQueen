@@ -462,11 +462,11 @@ def readiness(prov, has_login) -> tuple:
         result = kept(server)
         label, path = INTERFACES.get(prov.get("protocol"), (prov.get("protocol"), ""))
         if not result:
-            return False, tr("the connection to server %s has not been tested yet", server["name"])
+            return False, tr("the connection to the Local LLM %s has not been tested yet", server["name"])
         if not result.get("reachable"):
-            return False, tr("server %s does not answer", server["name"])
+            return False, tr("the Local LLM %s does not answer", server["name"])
         if prov.get("protocol") in INTERFACES and not (result.get("interfaces") or {}).get(prov["protocol"], {}).get("ok"):
-            return False, tr("server %s does not offer %s, which %s needs", server["name"], path, label)
+            return False, tr("the Local LLM %s does not offer %s, which %s needs", server["name"], path, label)
     elif not has_login:
         return False, tr("the login is missing")
     available = known_models(prov)

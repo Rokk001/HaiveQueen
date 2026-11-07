@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, db, plans, profile, runtime, servers
+from . import config, db, offline, plans, profile, runtime, servers
 from . import platform as osplat
 from . import localtime
 from .i18n import tr
@@ -42,6 +42,7 @@ DEFAULT_SETTINGS = {
     "roundMinutes": 5,
     "escalateAfter": 3,
     "clockJumpSeconds": 120,   # a wall clock jump above this many seconds during an agent run counts as laptop sleep
+    "providerRecheckMinutes": 5,   # how often an offline provider (its agent ended with a 5xx or connection error) is checked again
     "retryWaitMinutes": [1, 2, 4, 8, 15],   # wait before the n-th retry of consecutive interrupted ends (API, connection); the last value repeats
     "rateLimitWaitMinutes": 15,   # wait after a rate limit when no reset time of the limited provider is known
     "contextLimitTokens": 300000,
@@ -67,7 +68,7 @@ DEFAULT_SETTINGS = {
     "buildProcessNames": [],
     "capabilityRules": [],
 }
-MACHINE_ONLY = ("hives", "excludedProviders", "providers", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
+MACHINE_ONLY = ("hives", "excludedProviders", "providers", "providerRecheckMinutes", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
 
 
 def effective_verify(settings: dict, verify) -> str:
@@ -184,7 +185,7 @@ def get_providers(settings: dict) -> list:
         limit = p.get("limit")
         capabilities = provider_capabilities(p)
         out.append({
-            "name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto), "beeMode": bee_mode,
+            "name": name, "enabled": p.get("enabled", True) is not False, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto), "beeMode": bee_mode,
             "args": [str(a) for a in (p.get("args") or [])],
             "slots": int(p.get("slots", settings.get("slots", 0)) or 0), "use": use,
             "capabilities": capabilities, "capabilitiesVersion": 1,
@@ -197,6 +198,11 @@ def get_providers(settings: dict) -> list:
         # Ready: with account login the login in the HaiveQueen profile, with an own server the last connection test and the models; not ready = not available
         out[-1]["login"], out[-1]["notReady"] = servers.readiness(out[-1], profile.has_login(out[-1]))
     return out
+
+
+def active_providers(settings: dict) -> list:
+    """The providers of the settings that are switched on (a disabled provider gets no usage check and no readiness notice)."""
+    return [p for p in get_providers(settings) if p["enabled"]]
 
 
 def get_provider(providers: list, name: str):
@@ -309,6 +315,11 @@ def codex_usage(sessions_dir=None) -> dict:
     return res
 
 
+def without_limit(provider: dict) -> bool:
+    """True for a provider without a usage limit (limit source none, as every Local LLM has): it never runs out."""
+    return str(provider.get("limit") or "") in ("", "none")
+
+
 # Do not rank a provider using a quota reading whose refresh failed.
 def provider_limit(provider: dict, conn=None, limits=None) -> dict:
     """Weekly limit of a provider as {FreePct, Hours}: 100 minus the used percent and the hours until the reset.
@@ -398,7 +409,8 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
     Candidates have slots above 0 and a free slot, the class in their entry, all needed capabilities (a package that needs one goes
     only to providers that have it and the weekly limit does not matter then); `capability-only` providers only get packages that need
     a capability. Without a need, providers at their weekly limit drop out. `preferred` and `capability-only` come first, `fallback`
-    only when none of them has a free slot. The highest (100 - used percent) / hours to reset wins, then list order. `prefer` keeps a
+    only when none of them has a free slot. A provider without a limit (limit source none, every Local LLM) always comes first (list order among them);
+    then the highest (100 - used percent) / hours to reset wins, then list order. `prefer` keeps a
     follow-up with an earlier provider when it is a candidate, `avoid` (verify) prefers another provider, `protocol` limits to claude or codex.
     """
     cname = CLASS_NAMES[class_index(cls)]
@@ -433,7 +445,7 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
         other = [c for c in pool if c[0]["name"] != avoid]
         if other:
             pool = other
-    return sorted(pool, key=lambda c: (-c[2], c[1]))[0][0]
+    return sorted(pool, key=lambda c: (not without_limit(c[0]), 0 if without_limit(c[0]) else -c[2], c[1]))[0][0]
 
 
 def endpoint_args(provider: dict) -> list:
@@ -527,7 +539,7 @@ class ProjectEnv:
         self.settings = settings
         self.colour = colour
         self.priority = priority
-        self.providers = get_providers(settings)
+        self.providers = offline.apply_state(get_providers(settings), conn)   # a disabled or offline provider has 0 slots
 
     @property
     def code_repo(self) -> Path:

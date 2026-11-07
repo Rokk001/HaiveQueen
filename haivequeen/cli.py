@@ -353,7 +353,7 @@ def cmd_plan(args, conn):
     if not path.is_file():
         return fail("plan file not found: %s" % plan)
     parsed = plan_mod.load_plan(str(path))
-    problems = plan_mod.check_plan(parsed, {c for p in env.providers for c in p.get("capabilities", [])}, plan_mod.load_requirements(str(path)))
+    problems = plan_mod.check_plan(parsed, {c for p in env.providers if p.get("enabled", True) for c in p.get("capabilities", [])}, plan_mod.load_requirements(str(path)))
     if problems:
         return fail("the plan is not cut properly: " + "; ".join(problems))
     status = parsed.status

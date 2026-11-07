@@ -903,7 +903,10 @@ class Dashboard:
             # right: slot cells, weekly bar, 5-hour line
             sl = r["slots"]
             cy = top + 4 + CELL / math.sqrt(3)
-            if sl["none"]:
+            if sl.get("offline"):
+                self.text(rx, cy, sl["offline"], 14, "red", "w", True)
+                self.tip_boxes.append((self.px(rx), self.px(top + 4), self.px(rx + rw), self.px(top + 4 + CELL * 2 / math.sqrt(3)), sl["hover"]))
+            elif sl["none"]:
                 label = self.text(rx, cy, sl["none"], 14, "dim", "w")
                 if sl["running"]:
                     self.text(self.canvas.bbox(label)[2] / sc + 10, cy, sl["running"], 14, "text", "w")
@@ -1274,7 +1277,7 @@ class Dashboard:
         queen_class = env.settings.get("queenClass", "medium")
         excluded = env.settings.get("excludedProviders", [])
         current = (hives.get(self.conn, hive["apiary"], hive["plan_path"]) or {}).get("provider")
-        return [p["name"] for p in env.providers if p["name"] not in excluded and p["name"] != current and not (p.get("endpoint") or p.get("server"))
+        return [p["name"] for p in env.providers if p["name"] not in excluded and p["name"] != current and not p.get("unavailable") and not (p.get("endpoint") or p.get("server"))
                 and (p.get("classes", {}).get(queen_class) or {}).get("model")]
 
     # Pause, stop, reject or start again the plan of a Hive.

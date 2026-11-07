@@ -15,7 +15,8 @@ ACCESS = (("subscription", N_("Subscription")), ("api", N_("API key")), ("llm", 
 TYPE_FIELDS = ("apiKey", "address", "contextWindow")   # the entry values that belong to one access type only
 # (label, explanation) of every field of the two pages, by the key the page uses.
 TEXT = {
-    "name": (N_("Name"), N_("How this provider is called in HaiveQueen; it follows the CLI and the model source until you change it yourself.")),
+    "enabled": (N_("Enabled"), N_("A disabled provider gets no new work and shows nowhere in the dashboard; its settings stay.")),
+    "name": (N_("Name"), N_("How this provider is called in HaiveQueen; it follows the CLI and the access type until you change it yourself.")),
     "cli": (N_("CLI"), N_("The program HaiveQueen starts for the agents of this provider.")),
     "protocol": (N_("Protocol"), N_("How HaiveQueen talks to your own CLI and reads its output: claude, codex, opencode or kilo.")),
     "command": (N_("Command"), N_("The command that starts your own CLI.")),
@@ -44,7 +45,7 @@ TEXT = {
     "test": (N_("Test connection"), N_("Checks the address, reads the model list and tests the interface each CLI needs; the result is kept.")),
 }
 SHARED_LOGIN = N_("This login is shared by all providers with this CLI.")
-HANDLED = {"name", "nameEdited", "access", "apiKey", "address", "contextWindow", "protocol", "command", "server", "slots", "use", "capabilities", "capabilitiesVersion", "beeMode", "allowedTools", "args",
+HANDLED = {"enabled", "name", "nameEdited", "access", "apiKey", "address", "contextWindow", "protocol", "command", "server", "slots", "use", "capabilities", "capabilitiesVersion", "beeMode", "allowedTools", "args",
            "limit", "classes", "profileEnv", "loginCommand", "loginFiles", "outputFormat"}
 USAGE_SOURCES = ("none", "claude", "codex")
 
@@ -155,6 +156,7 @@ class ProviderPages:
         top = tk.LabelFrame(self.form, text="", padx=6, pady=4)   # same border and padding as the sections, so all fields share one column
         top.pack(fill="x", anchor="w")
         self.top = top
+        self.field(top, top, ("enabled",), data.get("enabled", True) is not False, "enabled")
         self.field(top, top, ("name",), str(data.get("name") or ""), "name")
         item, row = self.line(top, "access")
         self.access_values = [tr(label) for _k, label in ACCESS]
@@ -249,7 +251,7 @@ class ProviderPages:
                 entry.pack(side="left", padx=(0, 6))
                 self.model_entries[cls] = entry
             else:
-                combo = gui_dialog.combobox(row, self.model_vars[cls], [""] + list(models), self.mono)
+                combo = gui_dialog.combobox(row, self.model_vars[cls], [""] + list(models), self.mono, wheel=self.wheel)
                 combo.pack(side="left", padx=(0, 6))
                 self.model_boxes[cls] = combo
             if self.effort_values:
@@ -494,6 +496,7 @@ class ProviderPages:
                     self.win.after(100, poll)
                 elif self.node == shown and getattr(self, "result_label", None) is not None:
                     self.result_label.config(text=outcome.get("error") or servers.summary(server))
+                    self.refresh_state()   # the red ready line follows the new result at once
             except self.tk.TclError:
                 pass
         self.win.after(100, poll)

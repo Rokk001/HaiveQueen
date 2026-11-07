@@ -43,7 +43,7 @@ SETTING_LABELS = {
     "publishReleases": N_("Publish release at integration"), "nextVersion": N_("Next version (empty: count the last digit up)"),
     # Owner decision 741 (3): every field of the Apiary page has an understandable label; the internal key names stay in project.toml only.
     "name": N_("Name"), "repository": N_("Repository"), "plansFolder": N_("Plans folder (empty: docs/plans of the repository)"),
-    "colour": N_("Colour"), "priority": N_("Priority"), "owner": N_("Owner name"), "language": N_("Language of owner texts (empty: General language)"), "escalateAfter": N_("Escalate after (empty: General value)"), "allowedTools": N_("Commands allowed without asking"),
+    "colour": N_("Colour"), "priority": N_("Priority"), "owner": N_("Owner name"), "language": N_("Language of owner texts (empty: General language)"), "escalateAfter": N_("Failed attempts before a stronger model (empty: General value)"), "allowedTools": N_("Commands allowed without asking"),
     "planGlobs": N_("Plan files (patterns, one per line)"), "planExclude": N_("Files that are not plans (patterns, one per line)"),
     "ignoredBuildOutput": N_("Build output to ignore (one per line)"), "buildFlowDoc": N_("Build instructions document"),
     "integratorInstructions": N_("Extra instructions for the integration"), "buildProcessNames": N_("Build program names (one per line)"),
@@ -76,9 +76,9 @@ SETTING_HELP = {
     "views.questions": N_("A Markdown file that shows the open questions."), "views.decisions": N_("A Markdown file that shows the decisions."),
     "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
 }
-GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Default escalation delay")}
-GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("Default delay before a question is escalated to the owner.")}
-SETTING_HELP.update({"escalateAfter": N_("Override the General escalation delay for this Apiary."), "allowedTools": N_("Commands agents of this Apiary may run without asking.")})
+GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model")}
+GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of a Bee, HaiveQueen uses the next stronger model class.")}
+SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Apiary."), "allowedTools": N_("Commands agents of this Apiary may run without asking.")})
 OTHER_HELP = N_("A further setting of this Apiary, as written in its settings file.")   # the explanation of a setting the page has no own text for
 # Owner decision 741: the main part of the Apiary page, the collapsed section Advanced and the keys the page never shows as fields of their own.
 MAIN_KEYS = ("colour", "priority", "owner", "language", "escalateAfter") + tuple(key for key, _default in APIARY_DEFAULTS)
@@ -606,7 +606,7 @@ class ConfigWindow(ProviderPages):
         window = canvas.create_window((0, 0), window=self.form, anchor="nw")
         self.form.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
-        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units")))
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", self.wheel))
         canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
         foot = tk.Frame(self.win)
         foot.pack(fill="x", side="bottom", padx=8, pady=6, before=body)   # packed before the body so the shrinking body never pushes it out
@@ -617,10 +617,20 @@ class ConfigWindow(ProviderPages):
             button = tk.Button(bottom, text=tr(text), width=12, command=command)
             button.pack(side="left", padx=4)
             self.bottom_buttons.append(button)
-        self.bottom_note = tk.Label(foot, text=tr("Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak."), fg=COL["dim"], justify="left", anchor="w")
+        self.hint = tr("Changes apply to the running HaiveQueen without a restart. The old file is kept as <name>.bak.")
+        self.bottom_note = tk.Label(foot, text=self.hint, fg=COL["dim"], justify="left", anchor="w")
         self.bottom_note.pack(fill="x", pady=(6, 0))   # its own row below the buttons over the full width, wraps to as many lines as needed
         self.bottom_note.bind("<Configure>", lambda e: self.bottom_note.configure(wraplength=max(120, e.width)))
         self.reload()
+
+    def wheel(self, event):
+        """The mouse wheel scrolls the page (also over a combobox, which never changes its value by the wheel)."""
+        delta = getattr(event, "delta", 0) or {4: 120, 5: -120}.get(getattr(event, "num", 0), 0)
+        self.canvas.yview_scroll(int(-delta / 120) or (-1 if delta > 0 else 1 if delta < 0 else 0), "units")
+
+    def show_hint(self):
+        """The bottom line shows the standing hint again (after the message Saved.)."""
+        self.bottom_note.config(text=self.hint, fg=self.col["dim"])
 
     # Is the shown page a page of config.toml (General or a provider)?
     def machine(self) -> bool:
@@ -700,7 +710,8 @@ class ConfigWindow(ProviderPages):
         """The text of a page in the left list."""
         kind, i = node
         if kind == "providers":
-            return str(self.data[kind][i].get("name", "?"))
+            entry = self.data[kind][i]
+            return tr("%s (disabled)", entry.get("name", "?")) if entry.get("enabled", True) is False else str(entry.get("name", "?"))
         if kind == "apiaries":
             return self.apiaries[i]["name"] or "?"
         return tr("General")
@@ -709,14 +720,22 @@ class ConfigWindow(ProviderPages):
         """Show the pages of `tab` in the left list (hidden on the General tab) and the matching Add button."""
         self.tab_var.set(tab)
         self.visible = [node for node in self.entries if node[0] == tab]
-        self.nodes.delete(0, "end")
-        for node in self.visible:
-            self.nodes.insert("end", self.label(node))
+        self.refresh_list()
         if tab == "general":
             self.side.pack_forget()
         else:
             self.add_button.config(text=tr({"providers": "Add provider"}.get(tab, "Add Apiary")))
             self.side.pack(side="left", fill="y", before=self.canvas)
+
+    def refresh_list(self):
+        """Write the texts of the list on the left again (a name or the switch Enabled changed); a disabled provider stays in it, dimmed, with "(disabled)"."""
+        self.nodes.delete(0, "end")
+        for k, node in enumerate(self.visible):
+            self.nodes.insert("end", self.label(node))
+            if node[0] == "providers" and self.data["providers"][node[1]].get("enabled", True) is False:
+                self.nodes.itemconfigure(k, fg=self.col["dim"])
+        if self.node in self.visible:
+            self.nodes.selection_set(self.visible.index(self.node))
 
     # A tab was clicked.
     def pick_tab(self, tab):
@@ -781,6 +800,8 @@ class ConfigWindow(ProviderPages):
         """Fill the right side with the page of the shown part: General (one row per setting), a provider (the form of its access type) or an Apiary (its entry of
         config.toml and all settings of its project.toml on one page)."""
         self.clear_form()
+        self.show_hint()
+        self.refresh_list()
         kind, i = self.node
         self.position = None
         if kind != "general" and i is None:
@@ -1362,7 +1383,8 @@ class ConfigWindow(ProviderPages):
         # Write provider removals last: a failed project write must not discard grants.
         save_file(self.config_path, self.data)
         self.test_servers(old_data)
-        self.status.config(text=tr("Saved."), fg=self.col["green"])
+        self.status.config(text="")
+        self.bottom_note.config(text=tr("Saved."), fg=self.col["green"])   # in the bottom line beside the buttons, until another page is shown
         self.fresh = []
         self.refresh_state()
         if self.on_saved:

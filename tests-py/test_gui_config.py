@@ -374,7 +374,7 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(win.nodes.get(0, "end"), ("ODP",))
         self.type_into_entry(win, "2", "5")
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertEqual(gui_config.load_raw(self.folder / "ws" / ".haivequeen" / "project.toml")["priority"], 5)
 
     # three tabs, no file selection.
@@ -424,7 +424,7 @@ class WindowTest(unittest.TestCase):
         win.select(2)
         win.pick_tab("apiaries")
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertEqual(path.read_text(encoding="utf-8"), before)
         self.assertFalse(path.with_name("project.toml.bak").exists())
         codex = gui_config.load_raw(self.folder / "config.toml")["providers"][1]
@@ -457,7 +457,7 @@ class WindowTest(unittest.TestCase):
         win.target()["file"]["buildEnabled"] = False
         win.build_form()
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         listed = gui_config.load_raw(self.folder / "config.toml")["projects"]
         self.assertEqual(listed[-1], {"name": "Fresh", "workspace": str(new)})
         self.assertEqual(gui_config.load_raw(new / ".haivequeen" / "project.toml"), {"buildEnabled": False, "worktreePrefix": "Fresh"})   # decision 741 (2): the prefix follows the name
@@ -508,7 +508,7 @@ class WindowTest(unittest.TestCase):
         shown = self.shown(win)
         self.assertEqual((shown["priority"], shown["planGlobs"], shown["deployEnabled"]), ("9", ["docs/*.md"], False))
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         saved = (folder / ".haivequeen" / "project.toml").read_text(encoding="utf-8")
         self.assertEqual(tomllib.loads(saved), {"priority": 9, "planGlobs": ["docs/*.md"], "deployEnabled": False})
         self.assertIn("# kept", saved)
@@ -523,7 +523,7 @@ class WindowTest(unittest.TestCase):
         win.build_form()
         self.type_into_entry(win, "", str(folder))
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertEqual(gui_config.load_raw(folder / ".haivequeen" / "project.toml"),
                          {"priority": 7, "planGlobs": ["docs/*.md"], "deployEnabled": False, "buildEnabled": False})
 
@@ -534,7 +534,7 @@ class WindowTest(unittest.TestCase):
         self.new_apiary_in(win, folder)
         win.workspace_entered()
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         path = folder / ".haivequeen" / "project.toml"
         self.assertEqual(path.read_text(encoding="utf-8"), text)
         self.assertFalse(path.with_name("project.toml.bak").exists())

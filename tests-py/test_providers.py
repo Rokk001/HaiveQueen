@@ -42,7 +42,7 @@ class SelectTest(unittest.TestCase):
         ps = [provider("A", 2, limit="x"), provider("L", 1)]
         free = {"A": 2, "L": 1}
         self.assertEqual(self.pick(ps, free=free, limits={"A": {"usedPercent": 95, "resetHours": 10}}), "L")
-        self.assertEqual(self.pick(ps, free=free, limits={"A": {"usedPercent": 10, "resetHours": 100}}), "A")
+        self.assertEqual(self.pick(ps, free=free, limits={"A": {"usedPercent": 10, "resetHours": 100}}), "L")   # F-13: a provider without limit always comes first
         lim = sch.provider_limit(sch.get_providers(settings(provider("L", 1)))[0], None, {})
         self.assertEqual(lim["FreePct"], 100)
 

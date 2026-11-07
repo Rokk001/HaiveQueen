@@ -11,7 +11,7 @@ import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import buildjobs, config, db, i18n, localtime, platform as osplat, runstate, runtime, scheduler as sch, usage
+from . import buildjobs, config, db, i18n, localtime, offline, platform as osplat, runstate, runtime, scheduler as sch, usage
 from .i18n import N_, tr
 
 FINISHED_HOURS = 1
@@ -238,7 +238,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         sysinfo = live_sysinfo(conn, project)
     host = sysinfo["host"]
     try:
-        codex = [p for p in sch.get_providers(cfg) if p.get("limit") == "codex"]
+        codex = [p for p in sch.active_providers(cfg) if p.get("limit") == "codex"]
         for provider in codex:
             usage.refresh_codex_usage(conn, min_interval=provider.get("usageInterval", 60), provider=provider)
     except Exception:
@@ -272,8 +272,8 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         "now": now, "project": project, "projects": scope, "colours": colours, "cfg": cfg, "sysinfo": sysinfo,
         "run": runstate.get_state(conn), "hives": hive_counts(conn, project), "agents": agents, "fin": fin, "blocked": blocked_tasks(agents_all, now),
         "provider_limits": provider_lines(conn, cfg, agents_all),
-        "claude_error": usage.claude_refresh_error(conn) if not sch.get_providers(cfg or {}) and not usage.retained_claude(conn) else "",
-        "cu": window_usage((usage.retained_claude(conn) or _kv(conn, "usage-claude")) if not sch.get_providers(cfg or {}) else None, now), "xu": window_usage(_kv(conn, "usage-codex"), now),
+        "claude_error": usage.claude_refresh_error(conn) if not sch.active_providers(cfg or {}) and not usage.retained_claude(conn) else "",
+        "cu": window_usage((usage.retained_claude(conn) or _kv(conn, "usage-claude")) if not sch.active_providers(cfg or {}) else None, now), "xu": window_usage(_kv(conn, "usage-codex"), now),
         "usage": usage_models(conn, agents_all, day), "counts": counts, "drafts": drafts,
         "status": db.project_status(conn, project),
         "qs": db.open_questions(conn, project, only_open=True),
@@ -288,7 +288,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
 # Build weekly provider usage and slot rows and mark the next medium provider.
 def provider_lines(conn, cfg, agents) -> list:
     """Build the provider weekly quota and slot rows, marking the scheduler's next medium provider."""
-    providers = sch.get_providers(cfg or {})
+    providers = offline.apply_state([p for p in sch.get_providers(cfg or {}) if p["enabled"]], conn)   # a disabled provider appears nowhere
     free = sch.provider_free(providers, agents)
     next_provider = sch.select_provider(providers, "medium", [], free, conn=conn)
     rows = []
@@ -340,7 +340,8 @@ def provider_lines(conn, cfg, agents) -> list:
         five = five_file or five
         rows.append({"stale": stale_hours is not None, "stale_hours": stale_hours, "five_hour": five, "error": error, "age_minutes": age_minutes, "name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
                      "has_limit": source in ("claude", "codex"),
-                     "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],
+                     "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["configuredSlots"],
+                     "offline": offline.since_text(provider["offline"]) if provider["offline"] else "",
                      "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),
                      "next": provider is next_provider})
     return rows

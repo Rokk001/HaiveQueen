@@ -49,16 +49,12 @@ def label_of(key) -> str:
 
 
 def key_for(entry) -> str:
-    """The key of the CLI a provider entry is set to: the custom key when the entry carries the fields of an own CLI or its command is not the command of a
-    built-in CLI (for example a wrapper script), else the preset whose protocol it has."""
+    """The key of the CLI a provider entry is set to: the custom key when the entry carries the fields of an own CLI, else the preset whose protocol it has;
+    a different command (for example a wrapper script) does not make a provider a Custom CLI."""
     if any(field in entry for field in CUSTOM_KEYS):
         return CUSTOM
     proto = str(entry.get("protocol") or entry.get("name") or "")
-    key = next((k for k, p in PRESETS.items() if p["protocol"] == proto), CUSTOM)
-    command = str(entry.get("command") or "")
-    if key != CUSTOM and command and command != PRESETS[key]["command"]:
-        return CUSTOM
-    return key
+    return next((k for k, p in PRESETS.items() if p["protocol"] == proto), CUSTOM)
 
 
 def keys_for_access(access) -> list:

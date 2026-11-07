@@ -37,7 +37,7 @@ def capable_providers(providers, need) -> list:
 
 def select_route(providers, free, hive_provider, package_class, capability, excluded, escalated, limited=()):
     """Pick a permitted Bee provider and class, returning None when it must wait."""
-    providers = [p for p in providers if p['name'] not in excluded]
+    providers = [p for p in providers if p['name'] not in excluded and not p.get('unavailable')]   # a disabled or offline provider gets no new Bee
     candidates = route_candidates(providers, hive_provider, capability, escalated)
     index = scheduler.class_index(package_class)
     for cls in scheduler.CLASS_NAMES[index:]:
@@ -806,8 +806,9 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         limited = [p['name'] for p in env.providers if any(w['used_pct'] >= 100 for w in usage.limit_windows(env.conn, p))]
         ensure_attempts(env.conn)
         assigned = env.conn.execute('SELECT class,provider FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
-        if assigned and assigned[0] == current and assigned[1] not in {p['name'] for p in route_candidates(env.providers, hive['provider'], need, current != base_class or use_other_provider)}:
-            assigned = None   # the stored provider is no longer allowed for this package: route it again
+        usable = [p for p in env.providers if not p.get('unavailable') and p.get('slots', 1) > 0]
+        if assigned and assigned[0] == current and assigned[1] not in {p['name'] for p in route_candidates(usable, hive['provider'], need, current != base_class or use_other_provider)}:
+            assigned = None   # the stored provider is no longer allowed for this package, or is offline, disabled or has no slots: route it again
         if assigned and assigned[0] == current:
             provider = scheduler.get_provider(env.providers, assigned[1])
             if not provider or provider['name'] in excluded or provider['name'] in limited or route_free.get(provider['name'], 0) <= 0:

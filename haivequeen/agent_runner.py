@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import buildjobs, config, db, interrupt, localtime, overview, profile, roles, runtime, scheduler, servers, startctx
+from . import buildjobs, config, db, interrupt, localtime, offline, overview, profile, roles, runtime, scheduler, servers, startctx
 from . import platform as osplat
 from .i18n import tr
 
@@ -1237,6 +1237,11 @@ def run_agent(a, out=None):
     # An end caused by sleep, network, API error or a vanished process is marked interrupted: it is no failure and is tried again after a wait.
     err_text = err_file.read_text(encoding="utf-8", errors="replace") if err_file.is_file() else ""
     kind = interrupt.classify_end(status == "failed", run.api_errors, err_text, bool(clock_jumps), run.last)
+    if kind in (interrupt.API, interrupt.CONNECTION):   # a 5xx or connection error: the provider is offline until a check of it succeeds (a rate limit keeps its own handling)
+        try:
+            offline.mark(conn, a.provider, run.last)
+        except Exception:
+            pass
     run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx, "subCtx": run.sub_ctx,
                          **({"startCtx": run.start_ctx} if run.start_ctx else {}), **({"cacheRead": run.cache_read, "cacheWrite": run.cache_write} if run.cache_read is not None else {}),
                          "interrupted": kind, "retryAt": ""})

@@ -173,7 +173,7 @@ class ApiaryPageTests(ApiaryPageCase):
         self.assertEqual(shown[("place", "repository")], str(self.plain))
         self.assertEqual(shown[("place", "plansFolder")], "")
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertEqual((self.plain / ".haivequeen" / "project.toml").read_text(encoding="utf-8"), self.plain_text)
 
     def test_apiary_with_a_separate_plans_folder_keeps_its_values(self):
@@ -197,7 +197,7 @@ class ApiaryPageTests(ApiaryPageCase):
         win = self.window("HaiveQueen")
         self.set_entry(win, ("place", "repository"), str(other))
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         saved = gui_config.load_raw(self.split_file)
         self.assertEqual(saved["codeRepo"], str(other))
         self.assertEqual(saved["worktreePrefix"], "HQ")   # an existing prefix stays
@@ -215,7 +215,7 @@ class ApiaryPageTests(ApiaryPageCase):
         self.set_entry(win, ("place", "repository"), str(self.plans))
         self.set_entry(win, ("place", "plansFolder"), "")
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertNotIn("codeRepo", gui_config.load_raw(self.split_file))
 
     def new_apiary(self, win, name, repository, plans=""):
@@ -235,7 +235,7 @@ class ApiaryPageTests(ApiaryPageCase):
         win.target()["file"]["buildEnabled"] = False
         win.build_form()
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertEqual(gui_config.load_raw(self.base / "config.toml")["projects"][-1], {"name": "Fresh Game", "workspace": str(repo)})
         self.assertEqual(gui_config.load_raw(repo / ".haivequeen" / "project.toml"), {"buildEnabled": False, "worktreePrefix": "Fresh-Game"})
         self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='Fresh Game'").fetchone()[0], str(repo.resolve()))
@@ -250,7 +250,7 @@ class ApiaryPageTests(ApiaryPageCase):
         self.assertEqual(self.shown(win)[("place", "repository")], str(repo))
         self.assertEqual(self.shown(win)[("place", "plansFolder")], str(plans))
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertEqual(gui_config.load_raw(self.base / "config.toml")["projects"][-1], {"name": "Two", "workspace": str(plans)})
         self.assertEqual(gui_config.load_raw(plans / ".haivequeen" / "project.toml"), {"codeRepo": str(repo), "worktreePrefix": "Two"})
         self.assertFalse((repo / ".haivequeen").exists())

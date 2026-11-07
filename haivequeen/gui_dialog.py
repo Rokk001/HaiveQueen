@@ -124,10 +124,20 @@ def option_menu(parent, var, values, mono, command=None):
 
 
 # A combobox (text field with a list of values) in the dashboard look.
-def combobox(parent, var, values, mono, width=34):
-    """A ttk.Combobox for the StringVar `var` with `values`; its dark style comes from `apply_style` (style TCombobox), so it is dark like every other field."""
+def combobox(parent, var, values, mono, width=34, wheel=None):
+    """A ttk.Combobox for the StringVar `var` with `values`; its dark style comes from `apply_style` (style TCombobox), so it is dark like every other field.
+    The mouse wheel over it never changes the value (the ttk class binding does on Windows): `wheel(event)`, when given, scrolls the page instead."""
     from tkinter import ttk
-    return ttk.Combobox(parent, textvariable=var, values=list(values), width=width, font=(mono, 10), style="TCombobox")
+    box = ttk.Combobox(parent, textvariable=var, values=list(values), width=width, font=(mono, 10), style="TCombobox")
+
+    def on_wheel(event):
+        """Hand the wheel to the page and stop the class binding that would change the value."""
+        if wheel:
+            wheel(event)
+        return "break"
+    for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+        box.bind(sequence, on_wheel)
+    return box
 
 
 # A modal message window in the dashboard look.

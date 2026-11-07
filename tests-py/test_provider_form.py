@@ -320,20 +320,6 @@ class AccessType(FormCase):
         win.choose_cli("Custom CLI")
         self.assertIn(("command",), self.paths(win))
 
-    def test_f7_wrapper_command_is_custom_cli_with_subscription_and_works(self):
-        win = self.window()
-        self.provider(win, "wrapped")
-        self.assertEqual(win.cli_var.get(), "Custom CLI")
-        self.assertEqual(win.access_var.get(), "Subscription")
-        self.assertTrue({("protocol",), ("command",)} <= self.paths(win))
-        self.assertEqual(cli_presets.key_for({"protocol": "claude", "command": "claude-local.cmd"}), cli_presets.CUSTOM)
-        self.assertEqual(cli_presets.key_for({"protocol": "claude", "command": "claude"}), "claude")
-        p = self.resolved(win, "wrapped")
-        self.assertTrue(p["command"].endswith("claude-local.cmd"))
-        self.assertEqual(p["args"], ["--x"])
-        win.save()
-        self.assertTrue([q for q in self.raw()["providers"] if q["name"] == "wrapped"][0]["command"].endswith("claude-local.cmd"))
-
     def test_f8_add_provider_proposes_names_per_type(self):
         (self.folder / "config.toml").write_text(ONE.replace('name = "x"', 'name = "claude"'), encoding="utf-8")
         win = self.window()

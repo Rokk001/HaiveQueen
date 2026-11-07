@@ -174,7 +174,7 @@ class SettingsWindowTests(ApiaryCase):
         win.data.setdefault("projects", []).append({"name": "paged", "workspace": str(self.workspace)})
         win.fill_nodes()
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertFalse(self.deploy(conn, "paged"))
 
     def test_deploy_can_be_switched_on_for_an_apiary_without_a_file(self):
@@ -187,7 +187,7 @@ class SettingsWindowTests(ApiaryCase):
         win.target()["file"].update({"deployEnabled": True})
         win.build_form()
         win.save()
-        self.assertEqual(win.status.cget("text"), "Saved.")
+        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertTrue(self.deploy(conn, "bare"))
 
 

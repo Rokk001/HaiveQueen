@@ -340,11 +340,17 @@ def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
     envs = envs if envs is not None else sch.load_projects(conn, machine)
     if not dry_run:
         # Fetch account metadata before taking the Hive scheduling lock.
-        usage.refresh_claude_usage(conn, sch.get_providers(machine))
-        profile.notify_missing(conn, sch.get_providers(machine))
+        usage.refresh_claude_usage(conn, sch.active_providers(machine))   # a disabled provider gets no usage check and no notice
+        profile.notify_missing(conn, sch.active_providers(machine))
+        try:   # an offline provider is checked again every providerRecheckMinutes; when it answers it is online at once
+            from . import offline
+            offline.recheck(conn, sch.active_providers(machine), machine.get("providerRecheckMinutes", sch.DEFAULT_SETTINGS["providerRecheckMinutes"]))
+        except Exception as exc:
+            for env in envs[:1]:
+                env.log("PROVIDER CHECK ERROR %s" % exc)
         try:   # a provider with an own server that is not ready because of the connection test: test again once per round, then it is ready as soon as the server answers
             from . import servers
-            if servers.retest_not_ready(sch.get_providers(machine)):
+            if servers.retest_not_ready(sch.active_providers(machine)):
                 for env in envs:
                     servers.refresh_readiness(env.providers)
         except Exception as exc:   # a server that cannot be tested must never stop the round
@@ -698,7 +704,7 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
     def wait_refresh() -> bool:
         """Reload settings and refresh; return whether accepted settings changed."""
         changed = reload_settings()
-        for action in (lambda: usage.refresh_claude_usage(conn, sch.get_providers(machine)), refresh):
+        for action in (lambda: usage.refresh_claude_usage(conn, sch.active_providers(machine)), refresh):
             try:
                 action()
             except Exception as exc:
@@ -719,7 +725,7 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
     done = 0
     try:   # at the start of HaiveQueen every server that a provider uses is tested
         from . import servers
-        if servers.test_used(sch.get_providers(machine)):
+        if servers.test_used(sch.active_providers(machine)):
             for env in envs:
                 servers.refresh_readiness(env.providers)
     except Exception as exc:

@@ -745,11 +745,14 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
     from . import faults, inbox, views
     free_ram = free_ram or loop.ram_gb
     result = {'skipped': None, 'projects': {}}
+    from . import offline
+    for env in envs:
+        offline.apply_state(env.providers, conn)   # the lists of a running loop follow the offline state (another process sets it) and the switch Enabled
     if not dry_run:
         for env in envs:
             reconcile_completed(conn, env, alive=alive, plan_files=plan_files)
         try:
-            codex = [p for p in sch.get_providers(machine) if p.get("limit") == "codex"]
+            codex = [p for p in sch.active_providers(machine) if p.get("limit") == "codex"]
             for provider in codex:
                 usage.refresh_codex_usage(conn, min_interval=provider.get("usageInterval", 60), provider=provider)
         except Exception:
@@ -1002,7 +1005,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 topics = integration_steps.owner_topics_text(env)
                 if topics:
                     prompt += '\n' + topics
-                prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint') or p.get('server')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)
+                prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint') or p.get('server')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', []) and not p.get('unavailable')], ensure_ascii=False)
                 prompt += ' Project integration configuration: ' + json.dumps(integration_steps.configuration(env, path), ensure_ascii=False)
                 if plan['status'] in plan_mod.CUT_STATUSES:   # a plan the owner sent as free text: the Queen cuts it into packages before any Bee starts
                     prompt += '\n' + roles.role_text('queen-cut', {'project': env.name, 'plan': path})

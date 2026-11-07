@@ -466,8 +466,8 @@ def limit_rows(d) -> list:
         due = p.get("hours") is not None and p["hours"] <= 0
         reset = sch.format_reset_time(p["reset_at"]) if p.get("reset_at") else ""
         reserve = {"text": "", "level": "dim", "hover": "", "age": ""}
-        if not p["has_limit"]:
-            reserve["text"] = tr("no limit")
+        if not p["has_limit"]:   # a provider without a limit never runs out and gets work first: the reserve shows the highest value
+            reserve.update(text="+99 %", level="ok", hover=tr("No limit: this provider never runs out and gets work first."))
         elif p["used_pct"] is None:
             reserve["text"] = (tr("Claude limit unknown") + ": " + p["error"]) if p.get("error") else tr("unknown")
         else:
@@ -486,6 +486,9 @@ def limit_rows(d) -> list:
         used = int(p["used_slots"] or 0)
         slots = {"total": total, "used": used, "extra": max(0, used - total), "none": tr("no slots") if not total else "",
                  "running": tr("%d running", used) if not total and used else ""}
+        if p.get("offline"):   # an offline provider shows "offline" in red instead of its free slots
+            slots["offline"] = tr("offline")
+            slots["hover"] = tr("Offline since %s. HaiveQueen checks again and uses this provider as soon as it answers.", p["offline"])
         if not p["has_limit"]:
             weekly = {"pct": None, "level": "dim", "text": tr("no weekly limit")}
         elif p["used_pct"] is None:
