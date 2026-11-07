@@ -92,7 +92,7 @@ def build_settings(machine: dict, project_cfg: dict, legacy_deploy: bool = False
     """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project. With legacy_deploy (an Apiary from before the switches) the default of deployEnabled is on."""
     defaults = {**DEFAULT_SETTINGS, "deployEnabled": True} if legacy_deploy else DEFAULT_SETTINGS
     merged = deep_merge(defaults, {k: v for k, v in machine.items() if k not in ("projects",)})
-    over = {k: v for k, v in project_cfg.items() if k not in MACHINE_ONLY}
+    over = {k: v for k, v in project_cfg.items() if k not in MACHINE_ONLY and not (k in ("language", "escalateAfter") and v == "")}
     merged = deep_merge(merged, over)
     for key in ("progressVerifies", "planStallHours", "minClass", "bundle", "openMarker", "triage", "brain", "integratorSlots"):
         merged.pop(key, None)

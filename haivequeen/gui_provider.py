@@ -33,7 +33,7 @@ TEXT = {
     "use": (N_("Priority"), N_("A preferred provider gets work first; a fallback provider only when the preferred ones are busy or not available.")),
     "capabilities": (N_("Capabilities"), N_("What this provider may be used for; a task only goes to a provider that has the capability it needs.")),
     "beeMode": (N_("Bee mode"), N_("subagent runs Bees inside the session of the Queen (Claude Code only); process starts every Bee as a process of its own.")),
-    "allowedTools": (N_("Allowed tools"), N_("The tools an agent may use without asking, one per line.")),
+    "allowedTools": (N_("Commands allowed without asking"), N_("Commands agents may run without asking, one per line.")),
     "args": (N_("Arguments"), N_("The arguments HaiveQueen gives to the CLI, one per line; {model}, {effort} and the like are filled in at the start.")),
     "limit": (N_("Usage check"), N_("Where HaiveQueen reads how much of the usage limit is left: none, claude or codex.")),
     "own": (N_("Own settings"), N_("Other settings of this provider exactly as they stand in config.toml; a new setting is written as typed.")),
