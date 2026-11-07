@@ -209,7 +209,7 @@ def load_raw(path) -> dict:
 
 # Read config.toml in the new form (old endpoint entries migrated); the file itself is not changed.
 def load_migrated(path) -> dict:
-    """The parsed content of the TOML file `path` with old Codex endpoint entries read as providers with an own server; the file stays as it is until the owner saves."""
+    """The parsed content of the TOML file `path` in the new form (old endpoint and [[servers]] entries taken over into the providers); the file stays as it is until the owner saves."""
     from . import servers
     return servers.migrate(load_raw(path))
 
@@ -550,9 +550,9 @@ def parse_typed(text, like=None):
 
 # The window of the editor.
 class ConfigWindow(ProviderPages):
-    """A Toplevel with four tabs: General (the machine settings), Providers, Servers and Apiaries; the files config.toml and project.toml stay in the background."""
+    """A Toplevel with three tabs: General (the machine settings), Providers and Apiaries; the files config.toml and project.toml stay in the background."""
 
-    TABS = (("general", N_("General")), ("providers", N_("Providers")), ("servers", N_("Servers")), ("apiaries", N_("Apiaries")))
+    TABS = (("general", N_("General")), ("providers", N_("Providers")), ("apiaries", N_("Apiaries")))
 
     # Build the window for the settings files of `conn`.
     def __init__(self, root, conn, config_dir, mono="Consolas", on_saved=None):
@@ -565,6 +565,7 @@ class ConfigWindow(ProviderPages):
         self.data, self.node, self.getters, self.entries, self.visible, self.position, self.rows = {}, ("general", None), [], [], [], None, {}
         self.apiaries, self.initial_values, self.initial_build = [], {}, None
         self.build_vars, self.fresh = None, []   # fresh: the providers added in this window and not saved yet
+        self.type_stash = []   # [(provider entry, values of the access types not shown)]: kept while the window is open
         self.ready_label = self.test_button = self.result_label = None
         self.advanced_open = False   # the section Advanced of the Apiary page starts collapsed and stays as the owner left it while the window is open
         self.win = tk.Toplevel(root)
@@ -675,7 +676,7 @@ class ConfigWindow(ProviderPages):
     # Read the files again and show their parts.
     def reload(self):
         """Drop unsaved changes: read config.toml and the project.toml of every Apiary and show the General tab."""
-        self.fresh = []
+        self.fresh, self.type_stash = [], []
         self.data = load_migrated(self.config_path)   # old endpoint entries in the new form; the file changes only when saved
         self.load_apiaries()
         self.status.config(text="")
@@ -692,13 +693,13 @@ class ConfigWindow(ProviderPages):
             old = {id(a["entry"]): a for a in self.apiaries if a["entry"] is not None}
             self.apiaries = [old.get(id(e)) or self.apiary_record(e, registered) for e in listed] + [a for a in self.apiaries if a["entry"] is None]
         self.entries = ([("general", None)] + [("providers", i) for i in range(len(self.data.get("providers") or []))]
-                        + [("servers", i) for i in range(len(self.data.get("servers") or []))] + [("apiaries", k) for k in range(len(self.apiaries))])
+                        + [("apiaries", k) for k in range(len(self.apiaries))])
         self.show_tab(self.node[0])
 
     def label(self, node) -> str:
         """The text of a page in the left list."""
         kind, i = node
-        if kind in ("providers", "servers"):
+        if kind == "providers":
             return str(self.data[kind][i].get("name", "?"))
         if kind == "apiaries":
             return self.apiaries[i]["name"] or "?"
@@ -714,7 +715,7 @@ class ConfigWindow(ProviderPages):
         if tab == "general":
             self.side.pack_forget()
         else:
-            self.add_button.config(text=tr({"providers": "Add provider", "servers": "Add server"}.get(tab, "Add Apiary")))
+            self.add_button.config(text=tr({"providers": "Add provider"}.get(tab, "Add Apiary")))
             self.side.pack(side="left", fill="y", before=self.canvas)
 
     # A tab was clicked.
@@ -777,7 +778,7 @@ class ConfigWindow(ProviderPages):
 
     # Build the form of the shown part.
     def build_form(self):
-        """Fill the right side with the page of the shown part: General (one row per setting), a provider (five sections), a server or an Apiary (its entry of
+        """Fill the right side with the page of the shown part: General (one row per setting), a provider (the form of its access type) or an Apiary (its entry of
         config.toml and all settings of its project.toml on one page)."""
         self.clear_form()
         kind, i = self.node
@@ -789,10 +790,6 @@ class ConfigWindow(ProviderPages):
             return
         if kind == "providers":
             self.provider_form()
-            self.initial_build = None
-            return
-        if kind == "servers":
-            self.server_form()
             self.initial_build = None
             return
         data = self.target()
@@ -1202,8 +1199,8 @@ class ConfigWindow(ProviderPages):
         for path, raw in values.items():
             if (self.node[0] == "providers" and path in (("allowedTools",), ("args",))) or path[:1] == ("place",) or current[path] == self.initial_values[path]:
                 continue
-            if self.node[0] == "servers" and path in (("name",), ("apiKey",), ("contextWindow",)):
-                continue   # handled below: a rename reaches the providers, the key is masked, the window is a whole number
+            if self.node[0] == "providers" and path in (("apiKey",), ("contextWindow",)):
+                continue   # handled below: the key is masked, the window is a whole number
             target = data
             for step in path[:-1]:
                 target = target.setdefault(step, {})
@@ -1217,7 +1214,7 @@ class ConfigWindow(ProviderPages):
                     return False
             else:
                 target[path[-1]] = raw
-        if self.node[0] == "servers" and not self.collect_server(data, current):
+        if self.node[0] == "providers" and not self.collect_access(data, current):
             return False
         if self.node[0] == "providers":
             self.collect_models(data, current)
@@ -1245,14 +1242,14 @@ class ConfigWindow(ProviderPages):
             self.refresh_state()
         return True
 
-    # The values of the shown server that need more than a copy.
-    def collect_server(self, data, current) -> bool:
-        """Apply name (renamed in the providers that use the server), API key (the mask means unchanged; empty removes it) and context window (whole tokens,
-        empty removes it) of the server page; show the first wrong value in the status line and return False."""
+    # The values of the shown provider that need more than a copy.
+    def collect_access(self, data, current) -> bool:
+        """Apply the API key (the mask means unchanged; empty removes it) and the context window (whole tokens, empty removes it) of the provider form and move the
+        kept test result along with a renamed Local LLM; show the first wrong value in the status line and return False."""
         from . import servers
         try:
             window = str(current.get(("contextWindow",), "")).strip()
-            if window != self.initial_values.get(("contextWindow",)):
+            if ("contextWindow",) in current and window != self.initial_values.get(("contextWindow",)):
                 if not window:
                     data.pop("contextWindow", None)
                 elif not window.isdigit() or int(window) <= 0:
@@ -1260,17 +1257,17 @@ class ConfigWindow(ProviderPages):
                 else:
                     data["contextWindow"] = int(window)
             key = current.get(("apiKey",), "")
-            if key != self.initial_values.get(("apiKey",)):
+            if ("apiKey",) in current and key != self.initial_values.get(("apiKey",)):
                 if not key:
                     data.pop("apiKey", None)
                 elif key != servers.MASK:
                     data["apiKey"] = key
-            name = str(current.get(("name",), "")).strip()
-            if name != self.initial_values.get(("name",)):
-                servers.rename_server(self.data, self.initial_values[("name",)], name)
         except ValueError as exc:
             self.status.config(text=str(exc), fg=self.col["red"])
             return False
+        old_name, name = self.initial_values.get(("name",)), str(current.get(("name",), "")).strip()
+        if servers.access_of(data) == "llm" and old_name and name != old_name:
+            servers.rename_result(old_name, name)
         return True
 
     # The model rows of the shown provider.
@@ -1293,11 +1290,9 @@ class ConfigWindow(ProviderPages):
 
     # The Add button of the left list.
     def add_entry(self):
-        """Add a provider on the tab Providers, a server on the tab Servers, an Apiary on the tab Apiaries."""
+        """Add a provider on the tab Providers, an Apiary on the tab Apiaries."""
         if self.tab_var.get() == "providers":
             self.add_provider()
-        elif self.tab_var.get() == "servers":
-            self.add_server()
         elif self.tab_var.get() == "apiaries":
             self.add_apiary()
 
@@ -1315,23 +1310,10 @@ class ConfigWindow(ProviderPages):
         kind, i = self.node
         if kind == "general" or i is None or (kind == "apiaries" and self.apiaries[i]["entry"] is None):
             return
-        from . import gui_dialog, servers
-        if kind == "servers":
-            name = self.data["servers"][i].get("name")
-            try:
-                if not self.collect():
-                    return
-                used = servers.providers_using(self.data, name)
-                if used:
-                    raise ValueError(tr("Server %s is used by: %s", name, ", ".join(used)))
-            except ValueError as exc:
-                gui_dialog.info(self.win, "HaiveQueen", str(exc), self.mono)   # refused, the providers are named
-                return
-        question = {"providers": "Remove this provider from the settings?", "servers": "Remove this server from the settings?"}.get(kind, "Remove this Apiary from the settings?")
+        from . import gui_dialog
+        question = {"providers": "Remove this provider from the settings?"}.get(kind, "Remove this Apiary from the settings?")
         if gui_dialog.ask(self.win, "HaiveQueen", tr(question), self.mono):
-            if kind == "servers":
-                servers.remove_server(self.data, name)
-            elif kind == "providers":
+            if kind == "providers":
                 del self.data["providers"][i]
             else:
                 entry = self.apiaries.pop(i)["entry"]
@@ -1388,7 +1370,7 @@ class ConfigWindow(ProviderPages):
 
     # Test the servers the save touched.
     def test_servers(self, old_data):
-        """After a save: test, in the background, every server that is new or changed or used by a changed provider; the result is kept for the server page."""
+        """After a save: test, in the background, every Local LLM provider that is new or changed; the result is kept for the provider form."""
         import threading
         from . import servers
         new_data = self.data

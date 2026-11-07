@@ -378,10 +378,10 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(gui_config.load_raw(self.folder / "ws" / ".haivequeen" / "project.toml")["priority"], 5)
 
     # three tabs, no file selection.
-    def test_window_has_four_tabs_and_no_file_selection(self):
-        """The window offers the tabs General, Providers, Servers and Apiaries; no File choice and no file name is shown; each tab lists only its own pages."""
+    def test_window_has_three_tabs_and_no_file_selection(self):
+        """The window offers the tabs General, Providers and Apiaries (no Servers tab); no File choice and no file name is shown; each tab lists only its own pages."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
-        self.assertEqual([b.cget("text") for b in win.tab_buttons.values()], ["General", "Providers", "Servers", "Apiaries"])
+        self.assertEqual([b.cget("text") for b in win.tab_buttons.values()], ["General", "Providers", "Apiaries"])
         texts = [w.cget("text") for w in descendants(win.win) if w.winfo_class() in ("Label", "Button", "Menubutton", "Radiobutton")]
         self.assertFalse([text for text in texts if "File:" in text or "config.toml (" in text or "project.toml (" in text], texts)
         self.assertFalse(win.side.winfo_manager())   # the General tab has no list

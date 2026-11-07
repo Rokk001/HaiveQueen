@@ -39,6 +39,14 @@ def apply_style(root, mono):
         style.configure(name, background=edge, troughcolor=track, bordercolor=bg, lightcolor=edge, darkcolor=edge, arrowcolor=gold, relief="flat", gripcount=0)
         style.map(name, background=[("active", gold), ("pressed", gold)])
     font = (mono, 10)
+    # drop-down fields (ttk.Combobox, for example the model fields): dark field, light text, also in the state readonly/disabled and in the list that opens
+    style.configure("TCombobox", fieldbackground=track, background=select, foreground=text, arrowcolor=gold, bordercolor=selectedge, lightcolor=track,
+                    darkcolor=track, insertcolor=text, selectbackground=selectedge, selectforeground=text, padding=3)
+    style.map("TCombobox", fieldbackground=[("readonly", track), ("disabled", track), ("active", track)], foreground=[("readonly", text), ("disabled", dim)],
+              background=[("active", selectedge), ("pressed", selectedge)], selectbackground=[("!focus", selectedge)], selectforeground=[("!focus", text)],
+              bordercolor=[("focus", gold)], arrowcolor=[("disabled", dim)])
+    for name, value in (("background", track), ("foreground", text), ("selectBackground", select), ("selectForeground", gold)):
+        root.option_add("*TCombobox*Listbox.%s" % name, value, 60)
     style.configure("Treeview", background=panel, fieldbackground=panel, foreground=text, font=font, rowheight=24, relief="flat", borderwidth=0,
                     bordercolor=bg, lightcolor=panel, darkcolor=panel)
     style.map("Treeview", background=[("selected", select)], foreground=[("selected", gold)])
@@ -113,6 +121,13 @@ def option_menu(parent, var, values, mono, command=None):
     var.trace_add("write", show)
     show()
     return button
+
+
+# A combobox (text field with a list of values) in the dashboard look.
+def combobox(parent, var, values, mono, width=34):
+    """A ttk.Combobox for the StringVar `var` with `values`; its dark style comes from `apply_style` (style TCombobox), so it is dark like every other field."""
+    from tkinter import ttk
+    return ttk.Combobox(parent, textvariable=var, values=list(values), width=width, font=(mono, 10), style="TCombobox")
 
 
 # A modal message window in the dashboard look.

@@ -49,11 +49,32 @@ def label_of(key) -> str:
 
 
 def key_for(entry) -> str:
-    """The key of the CLI a provider entry is set to: the custom key when the entry carries the fields of an own CLI, else the preset whose protocol it has."""
+    """The key of the CLI a provider entry is set to: the custom key when the entry carries the fields of an own CLI or its command is not the command of a
+    built-in CLI (for example a wrapper script), else the preset whose protocol it has."""
     if any(field in entry for field in CUSTOM_KEYS):
         return CUSTOM
     proto = str(entry.get("protocol") or entry.get("name") or "")
-    return next((k for k, p in PRESETS.items() if p["protocol"] == proto), CUSTOM)
+    key = next((k for k, p in PRESETS.items() if p["protocol"] == proto), CUSTOM)
+    command = str(entry.get("command") or "")
+    if key != CUSTOM and command and command != PRESETS[key]["command"]:
+        return CUSTOM
+    return key
+
+
+def keys_for_access(access) -> list:
+    """The keys of the CLIs offered for an access type: Subscription all built-in CLIs and Custom CLI, API key the CLIs that can run with an API key,
+    Local LLM all built-in CLIs (each can be pointed at an address)."""
+    from . import servers
+    if access == "api":
+        return servers.api_key_clis()
+    if access == "llm":
+        return list(PRESETS)
+    return list(PRESETS) + [CUSTOM]
+
+
+def labels_for_access(access) -> list:
+    """The labels of the CLI choice for an access type, in the order of `keys_for_access`."""
+    return [label_of(k) for k in keys_for_access(access)]
 
 
 def apply(entry, key) -> None:

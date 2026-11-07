@@ -58,26 +58,40 @@ def window_of(entry) -> int:
     return value if value > 0 else 0
 
 
+ACCESS = ("subscription", "api", "llm")   # the access types of a provider (field `access` of its entry; absent = subscription)
+# The environment variable through which each built-in CLI takes an API key. A CLI that is not listed cannot run with a single API key (OpenCode and Kilo
+# Code read a key per model vendor) and is not offered for the access type API key.
+API_KEY_ENV = {"claude": "ANTHROPIC_API_KEY", "codex": "CODEX_API_KEY"}
+
+
+def access_of(p) -> str:
+    """The access type of a provider entry: subscription, api or llm (an entry that still names a server counts as llm)."""
+    access = str(p.get("access") or "").lower()
+    if access in ACCESS:
+        return access
+    return "llm" if p.get("server") else "subscription"
+
+
+def api_key_clis() -> list:
+    """The keys of the built-in CLIs that can run with an API key."""
+    return [k for k in CLI_KEYS if k in API_KEY_ENV]
+
+
+def server_of(p):
+    """The Local LLM of a provider entry as {name, address, apiKey, contextWindow} (name = provider name), or None for another access type."""
+    if access_of(p) != "llm":
+        return None
+    return {"name": str(p.get("name") or ""), "address": clean_address(p.get("address")), "apiKey": str(p.get("apiKey") or ""), "contextWindow": window_of(p)}
+
+
 def get_servers(cfg) -> list:
-    """The server entries of a settings dict as dicts {name, address, apiKey, contextWindow} (old endpoint entries are read in the new form first).
-    A server without a name or address raises ValueError."""
-    out = []
-    for s in (migrate(cfg).get("servers") or []):
-        name = str(s.get("name") or "").strip()
-        address = clean_address(s.get("address"))
-        if not name:
-            raise ValueError(tr("a server entry has no name"))
-        if not address:
-            raise ValueError(tr("server %s has no address", name))
-        out.append({"name": name, "address": address, "apiKey": str(s.get("apiKey") or ""), "contextWindow": window_of(s)})
-    names = [s["name"] for s in out]
-    if len(set(names)) != len(names):
-        raise ValueError(tr("server names must be unique"))
-    return out
+    """The Local LLMs of a settings dict (old [[servers]] entries and endpoints are read in the new form first) as dicts {name, address, apiKey, contextWindow},
+    one per provider of access type llm; the name is the provider name."""
+    return [server_of(p) for p in migrate(cfg).get("providers") or [] if access_of(p) == "llm"]
 
 
 def get_server(cfg, name):
-    """The server entry with that name or None."""
+    """The Local LLM of the provider with that name or None."""
     return next((s for s in get_servers(cfg) if s["name"] == name), None)
 
 
@@ -86,59 +100,31 @@ def mask_key(key) -> str:
     return MASK if str(key or "") else ""
 
 
-def providers_using(cfg, name) -> list:
-    """The names of the providers that use the server."""
-    return [str(p.get("name")) for p in cfg.get("providers") or [] if p.get("server") == name]
-
-
 def is_local(p) -> bool:
-    """True for a provider with an own server or an endpoint: it counts as local (Bees of every Hive first, a Queen only when ticked)."""
-    return bool(p.get("server") or p.get("endpoint") or p.get("local"))
+    """True for a provider with a Local LLM or an endpoint: it counts as local (Bees of every Hive first, a Queen only when ticked). An API key provider is not local."""
+    return bool(p.get("server") or p.get("endpoint") or p.get("local") or access_of(p) == "llm")
 
 
-def remove_server(cfg, name) -> None:
-    """Remove the server from the settings dict; ValueError naming the providers when a provider uses it (nothing is removed then)."""
-    used = providers_using(cfg, name)
-    if used:
-        raise ValueError(tr("Server %s is used by: %s", name, ", ".join(used)))
-    cfg["servers"] = [s for s in cfg.get("servers") or [] if s.get("name") != name]
-    forget(name)
+def clear_type_values(entry) -> None:
+    """Remove the values that belong to one access type only (key, address, context window) from a provider entry."""
+    for field in ("apiKey", "address", "contextWindow", "server"):
+        entry.pop(field, None)
 
 
-def rename_server(cfg, old, new) -> None:
-    """Rename the server in the settings dict and in the providers that use it (provider names stay). ValueError for an empty or taken name."""
-    new = str(new or "").strip()
-    if not new:
-        raise ValueError(tr("a server entry has no name"))
-    if new == old:
-        return
-    if any(s.get("name") == new for s in cfg.get("servers") or []):
-        raise ValueError(tr("server names must be unique"))
-    for s in cfg.get("servers") or []:
-        if s.get("name") == old:
-            s["name"] = new
-    for p in cfg.get("providers") or []:
-        if p.get("server") == old:
-            p["server"] = new
-    results = _read_tests()
-    if old in results:
-        results[new] = results.pop(old)
-        _write_tests(results)
-
-
-def set_source(entry, server=None, new=False) -> None:
-    """Switch a provider entry between account login (server None) and an own server. The capability ticks stay as they are (an entry from before the
-    ticks keeps what it offers now); the usage check is set to none only for a new provider (`new`) that gets a server, never for an existing one."""
+def set_access(entry, access, new=False) -> None:
+    """Set the access type of a provider entry. Subscription writes no `access` field. The capability ticks stay as they are (an entry from before the ticks
+    keeps what it offers now); the usage check is set to none for a new provider (`new`) that gets api or llm, never for an existing one."""
     from . import scheduler
     if not entry.get("capabilitiesVersion"):
         entry["capabilities"] = scheduler.provider_capabilities(entry)
         entry["capabilitiesVersion"] = 1
-    if server:
-        entry["server"] = server
+    entry.pop("server", None)
+    if access == "subscription":
+        entry.pop("access", None)
+    else:
+        entry["access"] = access
         if new:
             entry["limit"] = {"source": "none"}
-    else:
-        entry.pop("server", None)
 
 
 # ---------------------------------------------------------------- migration of old endpoint entries
@@ -150,7 +136,14 @@ def _is_codex(entry) -> bool:
 
 
 def migrate(cfg) -> dict:
-    """The settings dict in the new form: a Codex CLI provider with `endpoint` becomes a provider with `server`, with a server entry made from its
+    """The settings dict in the new form (HQ-PROVIDER-FORM): old endpoint entries and [[servers]] entries are taken over into the providers (see `fold_servers`).
+    The dict that is passed in is not changed; the same dict is returned when nothing is to be migrated."""
+    step = migrate_endpoints(cfg)
+    return fold_servers(step)
+
+
+def migrate_endpoints(cfg) -> dict:
+    """A Codex CLI provider with `endpoint` becomes a provider with `server`, with a server entry made from its
     baseUrl (address without /v1, name = endpoint name of the first such provider, else the provider name; a second different address with a taken name
     gets a number; the same address shares one entry). Other providers keep their endpoint untouched. The dict that is passed in is not changed; the
     same dict is returned when nothing is to be migrated."""
@@ -178,6 +171,50 @@ def migrate(cfg) -> dict:
         p.pop("endpoint", None)
         p.setdefault("nameEdited", True)
     return out
+
+
+def fold_servers(cfg) -> dict:
+    """Take the [[servers]] entries over into the providers: every provider that names a server becomes a Local LLM provider (access llm) with the address, key and
+    context window of that entry; an entry no provider uses becomes a Local LLM provider of the same name (a taken name gets a number) with 0 simultaneous
+    agents and priority fallback, so it starts no agent. The key `servers` is gone from the result (so the next save removes it); nothing a user set is lost.
+    The input is not changed; the same dict is returned when it has no `servers`."""
+    if "servers" not in cfg:
+        return cfg
+    from . import cli_presets
+    out = copy.deepcopy(cfg)
+    entries = [s for s in out.pop("servers") or [] if isinstance(s, dict) and str(s.get("name") or "").strip()]
+    providers = out.setdefault("providers", [])
+    used = set()
+    for p in providers:
+        entry = next((s for s in entries if s.get("name") == p.get("server")), None)
+        if entry is None:
+            continue
+        used.add(entry["name"])
+        p.pop("server")
+        p["access"] = "llm"
+        fold_values(p, entry)
+    taken = {str(p.get("name")) for p in providers}
+    for entry in entries:
+        if entry["name"] in used:
+            continue
+        name, n = str(entry["name"]), 1
+        while name in taken:
+            n += 1
+            name = "%s-%d" % (entry["name"], n)
+        taken.add(name)
+        p = {"name": name, "access": "llm", "slots": 0, "use": "fallback", "capabilities": ["Coding"], "capabilitiesVersion": 1, "nameEdited": True,
+             "limit": {"source": "none"}, "classes": {}}
+        cli_presets.apply(p, "claude")
+        fold_values(p, entry)
+        providers.append(p)
+    return out
+
+
+def fold_values(p, entry) -> None:
+    """Copy address, key and context window of a server entry into a provider entry; other keys of the entry are kept under their own name unless the provider has them."""
+    for key, value in entry.items():
+        if key != "name":
+            p.setdefault(key, value)
 
 
 # ---------------------------------------------------------------- handing a server to a CLI
@@ -221,6 +258,9 @@ def _opencode_config(prov, server) -> dict:
 
 def environment(prov) -> dict:
     """The variables a provider with an own server adds to the environment of its CLI (empty without a server; only the agent's environment, never a profile file)."""
+    if prov.get("access") == "api":
+        var = API_KEY_ENV.get(prov.get("protocol"))
+        return {var: prov["apiKey"]} if var and prov.get("apiKey") else {}
     server = prov.get("server")
     if not server:
         return {}
@@ -411,7 +451,14 @@ def readiness(prov, has_login) -> tuple:
     answers and offers the interface of the CLI; every model of a class must be in the model list of its source, unless the class entry marks it as an
     own entry (`customModel = true`, an own entry counts as available), or the list is not known."""
     server = prov.get("server")
-    if server:
+    if prov.get("access") == "api":
+        if not prov.get("apiKey"):
+            return False, tr("the API key is missing")
+        if prov.get("protocol") not in API_KEY_ENV:
+            return False, tr("this CLI cannot run with an API key")
+    elif server:
+        if not clean_address(server.get("address")):
+            return False, tr("the address of the Local LLM is missing")
         result = kept(server)
         label, path = INTERFACES.get(prov.get("protocol"), (prov.get("protocol"), ""))
         if not result:
@@ -468,22 +515,26 @@ def refresh_readiness(providers, has_login=None) -> None:
             p["login"], p["notReady"] = ok, why
 
 
+def rename_result(old, new) -> None:
+    """Move the kept test result of a Local LLM to its new provider name."""
+    results = _read_tests()
+    if old != new and old in results:
+        results[new] = results.pop(old)
+        _write_tests(results)
+
+
 def test_after_save(old, new, timeout=TIMEOUT_S) -> list:
-    """After the settings window saved: test every server of the saved settings that is new, whose address or key changed, or that a changed
-    provider uses. Returns the names tested."""
+    """After the settings window saved: test every Local LLM provider of the saved settings that is new, whose address or key changed, or that changed.
+    Returns the names tested."""
     old_servers = {s["name"]: s for s in get_servers(old or {})}
-    old_providers = {p.get("name"): p for p in (old or {}).get("providers") or []}
-    names = set()
-    for s in get_servers(new):
-        before = old_servers.get(s["name"])
-        if not before or fingerprint(before) != fingerprint(s):
-            names.add(s["name"])
-    for p in new.get("providers") or []:
-        if p.get("server") and p != old_providers.get(p.get("name")):
-            names.add(p["server"])
+    old_providers = {p.get("name"): p for p in (migrate(old or {})).get("providers") or []}
     tested = []
-    for s in get_servers(new):
-        if s["name"] in names:
+    for p in migrate(new).get("providers") or []:
+        s = server_of(p)
+        if not s or not s["address"]:
+            continue
+        before = old_servers.get(s["name"])
+        if not before or fingerprint(before) != fingerprint(s) or p != old_providers.get(p.get("name")):
             run_test(s, timeout=timeout)
             tested.append(s["name"])
     return tested

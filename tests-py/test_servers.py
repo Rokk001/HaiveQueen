@@ -99,15 +99,16 @@ class Base(unittest.TestCase):
 
 
 class ServerEntries(Base):
-    def test_server_entry_read_and_written(self):
-        """A [[servers]] entry with name, address, key and context window is read and written in config.toml."""
+    def test_local_llm_is_read_and_written_in_the_provider_entry(self):
+        """A Local LLM provider holds name, address, key and context window itself; an old [[servers]] entry is read into the providers that use it."""
         path = Path(config.config_dir()) / "config.toml"
-        data = {"slots": 2, "servers": [{"name": "lms", "address": "http://192.168.1.20:1234", "apiKey": "secret-key", "contextWindow": 120000}], "providers": []}
-        gui_config.save_file(path, data)
-        text = path.read_text(encoding="utf-8")
-        self.assertIn("[[servers]]", text)
-        self.assertEqual(config.load_config()["servers"], data["servers"])
-        self.assertEqual(servers.get_servers(config.load_config()), [{"name": "lms", "address": "http://192.168.1.20:1234", "apiKey": "secret-key", "contextWindow": 120000}])
+        entry = self.entry("lms", "claude", access="llm", address="http://192.168.1.20:1234", apiKey="secret-key", contextWindow=120000)
+        gui_config.save_file(path, {"slots": 2, "providers": [entry]})
+        self.assertNotIn("[[servers]]", path.read_text(encoding="utf-8"))
+        want = [{"name": "lms", "address": "http://192.168.1.20:1234", "apiKey": "secret-key", "contextWindow": 120000}]
+        self.assertEqual(servers.get_servers(config.load_config()), want)
+        old = {"servers": [self.server(key="secret-key", window=120000)], "providers": [self.entry("lms", "claude", "lms")]}
+        self.assertEqual(servers.get_servers(old), want)
 
     def test_key_is_masked_and_stored_only_in_config(self):
         """The page shows a mask; the key is in config.toml and in no other file the server code writes."""
@@ -127,7 +128,7 @@ class ServerEntries(Base):
             self.assertEqual(servers.clean_address(text).lower(), "http://h:1234")
         cfg = {"servers": [self.server(address="http://h:1234/v1")], "providers": [self.entry("c", "codex", "lms")]}
         args = self.providers(cfg)["c"]["args"] + sch.endpoint_args(self.providers(cfg)["c"])
-        self.assertIn("model_providers.lms.base_url=http://h:1234/v1", args)
+        self.assertIn("model_providers.c.base_url=http://h:1234/v1", args)
         self.assertFalse([a for a in args if "/v1/v1" in a])
 
     def test_one_server_for_two_providers_with_different_clis(self):
@@ -136,34 +137,11 @@ class ServerEntries(Base):
         ps = self.providers(cfg)
         self.assertEqual(ps["a"]["server"]["address"], ps["b"]["server"]["address"])
         self.assertIn("ANTHROPIC_BASE_URL", servers.environment(ps["a"]))
-        self.assertIn("model_provider=lms", sch.endpoint_args(ps["b"]))
+        self.assertIn("model_provider=b", sch.endpoint_args(ps["b"]))
 
     def test_unknown_server_is_refused(self):
         with self.assertRaises(ValueError):
             sch.get_providers({"providers": [self.entry("a", "claude", "nope")]})
-
-    def test_removing_a_used_server_is_refused_naming_the_providers(self):
-        cfg = {"servers": [self.server()], "providers": [self.entry("a", "claude", "lms"), self.entry("b", "codex", "lms"), self.entry("c", "claude")]}
-        with self.assertRaises(ValueError) as ctx:
-            servers.remove_server(cfg, "lms")
-        self.assertIn("a", str(ctx.exception))
-        self.assertIn("b", str(ctx.exception))
-        self.assertEqual(len(cfg["servers"]), 1)
-        cfg["providers"] = [cfg["providers"][2]]
-        servers.remove_server(cfg, "lms")
-        self.assertEqual(cfg["servers"], [])
-
-    def test_renaming_a_server_renames_it_in_its_providers_but_not_their_names(self):
-        cfg = {"servers": [self.server()], "providers": [self.entry("a", "claude", "lms"), self.entry("c", "claude")]}
-        servers.rename_server(cfg, "lms", "gpu-box")
-        self.assertEqual(cfg["servers"][0]["name"], "gpu-box")
-        self.assertEqual([p.get("server") for p in cfg["providers"]], ["gpu-box", None])
-        self.assertEqual([p["name"] for p in cfg["providers"]], ["a", "c"])   # P-19 (h)
-        self.assertEqual(gui_config.check(cfg), [])
-
-    def test_server_names_must_be_unique(self):
-        self.assertTrue(gui_config.check({"servers": [self.server(), self.server()], "providers": []}))
-
 
 class HandOver(Base):
     def cfg(self, cli, key="", window=0, models=None):
@@ -185,7 +163,7 @@ class HandOver(Base):
         self.assertEqual(servers.environment(p)[servers.KEY_ENV], servers.PLACEHOLDER_KEY)
         self.assertFalse([a for a in servers.arguments(p) if a.startswith("model_context_window")])
         oc = json.loads(servers.environment(self.providers(self.cfg("opencode"))["p"])["OPENCODE_CONFIG_CONTENT"])
-        self.assertNotIn("limit", oc["provider"]["lms"]["models"]["m-med"])
+        self.assertNotIn("limit", oc["provider"]["p"]["models"]["m-med"])
 
     def test_claude_environment_in_the_agent_environment_only_and_user_key_removed(self):
         p = self.providers(self.cfg("claude", key="tok"))["p"]
@@ -198,9 +176,9 @@ class HandOver(Base):
     def test_codex_gets_a_model_provider_with_v1_and_the_window(self):
         p = self.providers(self.cfg("codex", key="tok", window=64000))["p"]
         args = sch.endpoint_args(p)
-        self.assertIn("model_provider=lms", args)
-        self.assertIn("model_providers.lms.base_url=http://192.168.1.20:1234/v1", args)
-        self.assertIn("model_providers.lms.wire_api=responses", args)
+        self.assertIn("model_provider=p", args)
+        self.assertIn("model_providers.p.base_url=http://192.168.1.20:1234/v1", args)
+        self.assertIn("model_providers.p.wire_api=responses", args)
         self.assertIn("model_context_window=64000", args)
         self.assertNotIn("tok", " ".join(args))   # the key goes through the environment, never into a command line
         self.assertEqual(servers.environment(p)[servers.KEY_ENV], "tok")
@@ -212,7 +190,7 @@ class HandOver(Base):
         for cli, var in (("opencode", "OPENCODE_CONFIG_CONTENT"), ("kilo", "KILO_CONFIG_CONTENT")):
             p = self.providers(self.cfg(cli, key="tok", window=50000, models=models))["p"]
             conf = json.loads(servers.environment(p)[var])
-            block = conf["provider"]["lms"]
+            block = conf["provider"]["p"]
             self.assertEqual(block["npm"], "@ai-sdk/openai-compatible")
             self.assertEqual(block["options"], {"baseURL": "http://192.168.1.20:1234/v1", "apiKey": "tok"})
             self.assertEqual(sorted(block["models"]), ["big", "small"])
@@ -220,7 +198,7 @@ class HandOver(Base):
             self.assertEqual("providers" in conf, cli == "opencode")
             from haivequeen import agent_runner
             args = agent_runner.build_args(self.passed(self.cfg(cli, models=models))["p"], {"model": "small", "cwd": "/w"})
-            self.assertEqual(args[args.index("--model") + 1], "lms/small")
+            self.assertEqual(args[args.index("--model") + 1], "p/small")
 
     def test_other_clis_take_the_model_unchanged(self):
         from haivequeen import agent_runner
@@ -295,14 +273,13 @@ class ConnectionTest(Base):
         self.assertIsNone(servers.kept({**s, "address": srv.address + "/x"}))
         self.assertIsNotNone(servers.kept({**s, "address": srv.address + "/v1"}))   # the same address
 
-    def test_rename_keeps_and_remove_clears_the_result(self):
+    def test_rename_moves_the_result(self):
         srv = self.stub(ALL)
-        cfg = {"servers": [{"name": "lms", "address": srv.address}], "providers": []}
-        servers.run_test(cfg["servers"][0])
-        servers.rename_server(cfg, "lms", "box")
-        self.assertIsNotNone(servers.kept(cfg["servers"][0]))
-        servers.remove_server(cfg, "box")
-        self.assertIsNone(servers.kept({"name": "box", "address": srv.address}))
+        entry = {"name": "lms", "address": srv.address}
+        servers.run_test(entry)
+        servers.rename_result("lms", "box")
+        self.assertIsNotNone(servers.kept({**entry, "name": "box"}))
+        self.assertIsNone(servers.kept(entry))
 
 
 class ReadyCheck(Base):
@@ -312,13 +289,17 @@ class ReadyCheck(Base):
             e["classes"] = models
         return {"servers": [{"name": "lms", "address": srv.address}], "providers": [e]}
 
+    @staticmethod
+    def run_for(cfg, name):
+        return servers.run_test(servers.get_server(cfg, name))
+
     def test_not_ready_without_a_test_then_ready_after_it(self):
         srv = self.stub(ALL)
         cfg = self.cfg(srv)
         p = self.providers(cfg)["p"]
         self.assertFalse(p["login"])
         self.assertIn("not been tested", p["notReady"])
-        servers.run_test(cfg["servers"][0])
+        self.run_for(cfg, "p")
         p = self.providers(cfg)["p"]
         self.assertFalse(p["login"])
         self.assertIn("m-light", p["notReady"])   # the server does not list the model of the class
@@ -329,18 +310,19 @@ class ReadyCheck(Base):
     def test_missing_interface_names_it(self):
         srv = self.stub({"/v1/chat/completions": 400})
         cfg = self.cfg(srv, "codex", {"medium": {"model": "other-model"}})
-        servers.run_test(cfg["servers"][0])
+        self.run_for(cfg, "p")
         p = self.providers(cfg)["p"]
         self.assertFalse(p["login"])
         self.assertIn("/v1/responses", p["notReady"])
         cfg["providers"].append(self.entry("q", "opencode", "lms", classes={"medium": {"model": "other-model"}}))
+        self.run_for(cfg, "q")
         self.assertTrue(self.providers(cfg)["q"]["login"])
 
     def test_model_must_be_in_the_list_but_an_own_entry_counts(self):
         """P-13 and P-19 (d): a model that the server does not list is missing, unless the class entry is marked as an own entry."""
         srv = self.stub(ALL)
         cfg = self.cfg(srv, "claude", {"medium": {"model": "not-listed"}})
-        servers.run_test(cfg["servers"][0])
+        self.run_for(cfg, "p")
         p = self.providers(cfg)["p"]
         self.assertFalse(p["login"])
         self.assertIn("not-listed", p["notReady"])
@@ -380,37 +362,37 @@ class ReadyCheck(Base):
 
 
 class Rounds(Base):
-    def test_test_runs_on_save_for_new_changed_and_used_servers(self):
+    def test_test_runs_on_save_for_new_and_changed_local_llm_providers(self):
         a, b = self.stub(ALL), self.stub(ALL)
-        old = {"servers": [{"name": "one", "address": a.address}, {"name": "two", "address": b.address}], "providers": [self.entry("p", "claude", "one")]}
+        old = {"providers": [self.entry("p", "claude", access="llm", address=a.address), self.entry("q", "claude", access="llm", address=b.address)]}
         new = copy.deepcopy(old)
         self.assertEqual(servers.test_after_save(old, new), [])
-        new["servers"][1]["address"] = b.address + "/v1x"   # changed address
-        new["servers"].append({"name": "three", "address": a.address})   # new
-        self.assertEqual(sorted(servers.test_after_save(old, new)), ["three", "two"])
-        new["providers"][0]["slots"] = 3   # a provider using "one" changed
-        self.assertIn("one", servers.test_after_save(old, new))
+        new["providers"][1]["address"] = b.address + "/v1x"   # changed address
+        new["providers"].append(self.entry("r", "claude", access="llm", address=a.address))   # new
+        self.assertEqual(sorted(servers.test_after_save(old, new)), ["q", "r"])
+        new["providers"][0]["slots"] = 3   # the provider changed
+        self.assertIn("p", servers.test_after_save(old, new))
 
     def test_retest_once_per_round_until_the_server_answers(self):
         srv = self.stub({})   # up, but no interface yet
         cfg = {"servers": [{"name": "lms", "address": srv.address}], "providers": [self.entry("p", "claude", "lms", classes={"medium": {"model": "other-model"}})]}
         ps = sch.get_providers(cfg)
         self.assertFalse(ps[0]["login"])
-        self.assertEqual(servers.retest_not_ready(ps), ["lms"])
+        self.assertEqual(servers.retest_not_ready(ps), ["p"])
         servers.refresh_readiness(ps)
         self.assertFalse(ps[0]["login"])
         srv.paths.update(ALL)   # the server machine woke up / the interface is on
-        self.assertEqual(servers.retest_not_ready(ps), ["lms"])
+        self.assertEqual(servers.retest_not_ready(ps), ["p"])
         servers.refresh_readiness(ps)
         self.assertTrue(ps[0]["login"], ps[0]["notReady"])
         hits = len(srv.hits)
         self.assertEqual(servers.retest_not_ready(ps), [])   # ready: no more tests
         self.assertEqual(len(srv.hits), hits)
 
-    def test_start_tests_every_used_server(self):
+    def test_start_tests_every_local_llm_provider(self):
         a = self.stub(ALL)
         cfg = {"servers": [{"name": "lms", "address": a.address}, {"name": "unused", "address": a.address}], "providers": [self.entry("p", "codex", "lms")]}
-        self.assertEqual(servers.test_used(sch.get_providers(cfg)), ["lms"])
+        self.assertEqual(servers.test_used(sch.get_providers(cfg)), ["p", "unused"])   # the unused entry is a Local LLM provider now
 
     def test_the_round_retests_not_ready_servers(self):
         """run_round repeats the test for a provider that is not ready because of it and updates the readiness of the running list."""
@@ -438,23 +420,23 @@ class LocalRules(Base):
 
     def test_usage_check_off_for_a_new_server_provider_and_switching_keeps_ticks_and_check(self):
         e = self.entry("n", "claude", capabilities=["Coding", "Queen"], capabilitiesVersion=1)
-        servers.set_source(e, "lms", new=True)
+        servers.set_access(e, "llm", new=True)
         self.assertEqual(e["limit"], {"source": "none"})
         self.assertEqual(e["capabilities"], ["Coding", "Queen"])
         # P-19 (g): an existing provider keeps its usage check when the source changes
         old = self.entry("o", "claude", limit={"source": "claude"})
-        servers.set_source(old, "lms")
+        servers.set_access(old, "llm")
         self.assertEqual(old["limit"], {"source": "claude"})
-        servers.set_source(old, None)
-        self.assertNotIn("server", old)
+        servers.set_access(old, "subscription")
+        self.assertNotIn("access", old)
         self.assertEqual(old["limit"], {"source": "claude"})
 
     def test_switching_the_source_keeps_the_ticks_of_an_entry_from_before_the_ticks(self):
         e = self.entry("o", "claude")   # no capabilitiesVersion: ticks derived (Coding, Queen)
         before = sch.provider_capabilities(e)
-        servers.set_source(e, "lms")
+        servers.set_access(e, "llm")
         self.assertEqual(sch.provider_capabilities(e), before)
-        self.assertEqual(sch.get_providers({"servers": [self.server()], "providers": [e]})[0]["capabilities"], before)
+        self.assertEqual(sch.get_providers({"providers": [e]})[0]["capabilities"], before)
 
     def test_hand_off_limit_is_the_smaller_of_window_and_todays_limit(self):
         cfg = {"servers": [self.server(window=100000)], "providers": [self.entry("a", "claude", "lms"), self.entry("b", "claude", "lms", classes={"medium": {"model": "m", "contextLimitTokens": 50000}}),
@@ -481,8 +463,9 @@ class Migration(Base):
     def test_codex_endpoint_becomes_an_own_server_provider(self):
         cfg = {"providers": [self.old()]}
         new = servers.migrate(cfg)
-        self.assertEqual(new["servers"], [{"name": "LM Studio", "address": "http://192.168.1.20:1234"}])
-        self.assertEqual(new["providers"][0]["server"], "LM Studio")
+        self.assertNotIn("servers", new)
+        self.assertEqual((new["providers"][0]["access"], new["providers"][0]["address"]), ("llm", "http://192.168.1.20:1234"))
+        self.assertNotIn("server", new["providers"][0])
         self.assertNotIn("endpoint", new["providers"][0])
         self.assertIn("endpoint", cfg["providers"][0])   # the input is not changed
         p = sch.get_providers(cfg)[0]
@@ -494,15 +477,8 @@ class Migration(Base):
     def test_same_base_url_shares_one_server_and_the_first_name_wins(self):
         cfg = {"providers": [self.old("a", ep_name="First"), self.old("b", base="http://192.168.1.20:1234", ep_name="Second"), self.old("c", base="http://10.0.0.5:1")]}
         new = servers.migrate(cfg)
-        self.assertEqual([s["name"] for s in new["servers"]], ["First", "LM Studio"])
-        self.assertEqual([p["server"] for p in new["providers"]], ["First", "First", "LM Studio"])
-
-    def test_taken_name_gets_a_number_and_missing_endpoint_name_uses_the_provider_name(self):
-        cfg = {"providers": [self.old("a", ep_name="Box"), self.old("b", base="http://10.0.0.5:1", ep_name="Box")]}
-        self.assertEqual([s["name"] for s in servers.migrate(cfg)["servers"]], ["Box", "Box-2"])
-        e = self.old("named")
-        e["endpoint"] = {"baseUrl": "http://h:1"}
-        self.assertEqual(servers.migrate({"providers": [e]})["servers"][0]["name"], "named")
+        self.assertEqual([p["address"] for p in new["providers"]], ["http://192.168.1.20:1234", "http://192.168.1.20:1234", "http://10.0.0.5:1"])
+        self.assertEqual([p["name"] for p in new["providers"]], ["a", "b", "c"])
 
     def test_only_codex_is_migrated_others_keep_account_login_and_endpoint(self):
         """P-19 (b)."""
@@ -510,7 +486,7 @@ class Migration(Base):
         new = servers.migrate(cfg)
         self.assertEqual(new["providers"][0], cfg["providers"][0])
         self.assertEqual(new["providers"][1], cfg["providers"][1])
-        self.assertEqual(new["providers"][2]["server"], "LM Studio")
+        self.assertEqual(new["providers"][2]["access"], "llm")
         ps = {p["name"]: p for p in sch.get_providers(cfg)}
         self.assertIsNone(ps["cl"]["server"])
         self.assertTrue(ps["cl"]["endpoint"])
@@ -548,21 +524,22 @@ class Migration(Base):
         gui_config.save_file(path, {"providers": [self.old()]})
         before = path.read_bytes()
         loaded = config.load_config()
-        self.assertEqual(loaded["servers"][0]["address"], "http://192.168.1.20:1234")
+        self.assertEqual(loaded["providers"][0]["address"], "http://192.168.1.20:1234")
         self.assertNotIn("endpoint", loaded["providers"][0])
-        self.assertEqual(gui_config.load_migrated(path)["servers"], loaded["servers"])
+        self.assertEqual(gui_config.load_migrated(path)["providers"], loaded["providers"])
         sch.get_providers(loaded)
         self.assertEqual(path.read_bytes(), before)
         gui_config.save_file(path, gui_config.load_migrated(path))   # the owner saves: the new form is written
         text = path.read_text(encoding="utf-8")
-        self.assertIn("[[servers]]", text)
+        self.assertIn('access = "llm"', text)
+        self.assertNotIn("[[servers]]", text)
         self.assertNotIn("endpoint", text)
 
     def test_agent_runner_reads_the_old_form_too(self):
         p = self.passed({"providers": [self.old()]})["codex"]
         self.assertEqual(p["server"]["address"], "http://192.168.1.20:1234")
         from haivequeen import agent_runner
-        self.assertIn("model_providers.lm-studio.base_url=http://192.168.1.20:1234/v1", agent_runner.endpoint_args(p))
+        self.assertIn("model_providers.codex.base_url=http://192.168.1.20:1234/v1", agent_runner.endpoint_args(p))
 
 
 if __name__ == "__main__":
