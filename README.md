@@ -157,6 +157,15 @@ bzz stop                              # no new agents; running agents finish the
 
 Put your machine settings (providers, slots) into `config.toml` (see [`examples/config.example.toml`](examples/config.example.toml); folder: `%APPDATA%\HaiveQueen` on Windows, `~/.config/HaiveQueen` on Linux).
 
+### Setting up a provider
+
+Open the settings window (`config`) and use **Add provider**. The page has five sections: **CLI** (Claude Code, Codex CLI, OpenCode, Kilo Code or Custom CLI), **Model source**, **Models** (light, medium, heavy: model and effort), **Use** (simultaneous agents, priority, capabilities) and **Advanced** (closed). Every field has a one-line explanation. A provider that is not ready shows one line "Not ready: ..." with what is missing and gets no agents until it is.
+
+- **Account login.** Choose the CLI, keep the model source "Account login" and press **Login** (or log in as described above). The login belongs to the CLI, so all providers with the same CLI share it.
+- **Own server** (for example [LM Studio](https://lmstudio.ai) on another machine). Open the **Servers** tab, press **Add server** and enter a name, the address (for example `http://192.168.1.20:1234`), an API key if the server needs one, and the context window in tokens; press **Test connection**. The test lists the server's models and shows for each CLI whether the server offers the interface it needs (Claude Code: Anthropic Messages, Codex: Responses, OpenCode and Kilo Code: OpenAI-compatible). Then add a provider, choose the CLI, set the model source to "Own server", pick the server and choose the models. HaiveQueen starts the CLI with the server's address, key and context window itself, only inside its own profile and the agent's environment; no wrapper script and nothing outside the settings window is needed. This works the same on Windows, Linux and macOS. A provider with an own server counts as local and needs no login.
+
+Servers are machine settings: address and key are stored only in the machine `config.toml`.
+
 The loop and all agents run as hidden background processes; the dashboard window is the only interface. Closing the window leaves the loop running, and `bzz start` opens it again without restarting agents. A start during a pending stop, during a running update or while another start is under way is refused: `bzz start` then exits with 1, and the reason is an event and a line in `runs/beekeeper.log`. A start while the loop runs still exits with 0. Windows desktop shortcuts can use `bzz start --desktop` and `bzz stop --desktop` for a visible result or error dialog; ordinary CLI calls keep their JSON output.
 
 ## Plans
