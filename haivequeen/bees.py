@@ -132,6 +132,87 @@ def unconfirmed_embedded(conn, project, plan, package=None):
     return [dict(zip(names, r)) for r in cur.fetchall()]
 
 
+# State of one recorded process of a Queen.
+def _process_state(pid, identity, bound_row, alive):
+    """'absent', 'present' or 'unknown' for one recorded process of a Queen; 'none' when nothing is recorded for it.
+
+    With a recorded identity the process is hers when its identity matches; without one, when its pid matches and the start-time check of agent_process
+    does not mark it as reused. An identity that cannot be read (for example access denied) leaves the answer unknown."""
+    from . import agent_process, platform as osplat
+    try:
+        pid = int(pid or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    if pid <= 0:
+        return 'unknown' if identity else 'none'   # an identity without a pid cannot be looked up
+    if not alive(pid):
+        return 'absent'
+    if identity:
+        current = osplat.process_identity(pid)
+        if current is None:
+            return 'unknown'
+        return 'present' if current == identity else 'absent'
+    if osplat.process_inaccessible(pid):
+        return 'unknown'
+    return 'absent' if agent_process.pid_reused(bound_row) else 'present'
+
+
+def queen_of_embedded(conn, row):
+    """The agent row (dict) of the Queen of an embedded Bee row: the row with the recorded Queen name in the same Apiary and plan whose start is the latest
+    before the Bee's start; None when the name is empty or no such row exists."""
+    name = row.get('queen') or ''
+    if not name:
+        return None
+    best = None
+    for r in conn.execute("SELECT * FROM agents WHERE project=? AND name=? AND plan_path=? AND phase='queen' ORDER BY id", (row['project'], name, row['plan_path'])):
+        agent = runtime._agent_out(r)
+        started = str(agent.get('started_at') or '')
+        if started and started <= str(row['started_at'] or '') and (best is None or started >= str(best.get('started_at') or '')):
+            best = agent
+    return best
+
+
+def queen_has_ended(conn, row, alive=None):
+    """True only when it is certain that the Queen of the embedded Bee row has ended: her agent row is no longer active and neither her runner process
+    nor the CLI process it started runs. Everything uncertain (E-3) answers False."""
+    from . import platform as osplat
+    alive = alive or osplat.process_alive
+    queen = queen_of_embedded(conn, row)
+    if not queen or queen.get('status') in runtime.ACTIVE_STATUSES:
+        return False
+    runner = _process_state(queen.get('pid'), queen.get('processIdentity'), queen, alive)
+    cli = _process_state(queen.get('cliPid'), queen.get('cliIdentity'), {**queen, 'pid': queen.get('cliPid')}, alive)
+    if runner == 'none':
+        return False   # neither pid nor identity recorded
+    return runner == 'absent' and cli in ('absent', 'none')
+
+
+def close_ended_embedded(conn, project=None, alive=None) -> int:
+    """E-1: close every open embedded Bee row whose Queen has certainly ended, with the outcome interrupted (stopped for a pending stop). No attempt is
+    counted and no package state changes: the next Queen reads the result file, if any, and reports the package. Returns the number of rows closed."""
+    ensure_attempts(conn)
+    sql, args = 'SELECT rowid AS rid, * FROM embedded_bees WHERE ended_at IS NULL', []
+    if project:
+        sql += ' AND project=?'
+        args.append(project)
+    cur = conn.execute(sql + ' ORDER BY started_at', args)
+    names = [c[0] for c in cur.description]
+    closed, plans = [], set()
+    for values in cur.fetchall():
+        row = dict(zip(names, values))
+        if not queen_has_ended(conn, row, alive):
+            continue
+        outcome = 'stopped' if row.get('outcome') == STOPPING else 'interrupted'
+        conn.execute('UPDATE embedded_bees SET ended_at=?, outcome=? WHERE rowid=? AND ended_at IS NULL', (db.now(), outcome, row['rid']))
+        closed.append(row)
+        plans.add((row['project'], row['plan_path']))
+    for row in closed:
+        runtime.append_event(conn, row['project'], 'The subagent Bee %s (%s) ended with its Queen %s; its Bee place is free' % (row['name'], row['package'], row['queen']), kind='note', mirror='none')
+    for proj, plan in plans:
+        write_stop_notice(conn, proj, plan)
+    return len(closed)
+
+
 def own_embedded(row, queen) -> bool:
     """True when the open embedded Bee row is a native subagent of the running Queen `queen` (agent dict): only she sees its end directly.
     A row without a recorded Queen (written before the Queen was recorded) counts as hers when it started after her."""
@@ -142,32 +223,38 @@ def own_embedded(row, queen) -> bool:
     return bool(queen.get('started_at')) and str(row.get('started_at') or '') >= str(queen['started_at'])
 
 
-def release_refusal(conn, project, plan, package, queen, evidence=''):
-    """Require an existing result AND an ended Bee row or a known, absent Bee process.
+def release_refusal(conn, project, plan, package, queen, evidence='', outcome=''):
+    """What stops `bzz bee result` from releasing the open embedded Bees of the package ('' when nothing does).
 
-    Neither the Queen's end nor a recent file proves that a Bee ended. Check every
-    open Bee, including those of this Queen, before releasing any of their places."""
+    A Bee of the running Queen herself has returned its result to her: succeeded or failed needs the result file the Bee wrote after its start
+    (--ended-evidence), interrupted (her confirmation of a Bee she stopped) needs none. A Bee of an earlier Queen is closed by HaiveQueen once that
+    Queen has ended (close_ended_embedded); while its row is still open, a result needs a file written after its start and an ended Bee agent row or
+    a known absent Bee process."""
     from pathlib import Path
     from . import platform
     foreign = unconfirmed_embedded(conn, project, plan, package)
     if not foreign:
         return ''
+    own = [r for r in foreign if own_embedded(r, queen)]
+    earlier = [r for r in foreign if r not in own]
+    if own and not earlier and outcome == 'interrupted':
+        return ''
     row = foreign[-1]
     who = 'the subagent Bee %s (%s) of Queen %s' % (row['name'], package, row.get('queen') or 'unknown')
     if not evidence:
-        return ('%s has no confirmed end; record its result only with --ended-evidence <file the Bee wrote at its end, such as its final report>. '
-                'Without such evidence leave it open: it keeps its Bee place' % who)
+        return ('%s has no confirmed end; record its result only with --ended-evidence <the result file the Bee wrote at its end, such as its final report>. '
+                'Without such a file leave it open: it keeps its Bee place' % who)
     path = Path(evidence)
     if not path.is_file():
         return 'the evidence %s for %s does not exist or is no file' % (evidence, who)
     started = max(db.parse_time(r['started_at']) for r in foreign)
     if path.stat().st_mtime < started.timestamp():
         return 'the evidence %s was written before %s started, so it proves no end of it' % (evidence, who)
-    for bee in foreign:
+    for bee in earlier:
         agent = runtime.get_agent(conn, project, bee['name'])
         if not (agent and agent.get('phase') == 'bee' and agent.get('plan_path') == plan and agent.get('package') == package
                 and str(agent.get('started_at') or '') >= bee['started_at']):
-            return 'Bee %s has no matching agent row proving its end; its row and Bee place stay open' % bee['name']
+            return 'Bee %s has no matching agent row proving its end; its row and Bee place stay open until its Queen has ended' % bee['name']
         ended = str(agent.get('ended_at') or '') >= bee['started_at'] and agent.get('status') not in runtime.ACTIVE_STATUSES
         try:
             pid = int(agent.get('pid') or 0)
@@ -341,8 +428,10 @@ def open_bees_text(conn, project, plan, queen):
     if not inherited:
         return ''
     return ('These subagent Bees of an earlier Queen of your plan have no confirmed end: %s. Each keeps its Bee place and its package gets no new Bee. '
-            'Do not start them again. Only when the Bee agent row has ended or its known process no longer exists AND its result exists, record its result with bzz bee result '
-            '--ended-evidence <that file> for its package; otherwise leave it open and go on with the other packages.\n') % ', '.join(
+            'Do not start them again. A subagent Bee counts as ended when its Queen has ended: HaiveQueen itself closes its row in its next round as interrupted '
+            '(no attempt, no failure, the package state stays); a Bee still listed here is not closed yet, so leave it open. '
+            'Once it is closed, look for the result file of such a Bee; when its work is on the branch report the package with bzz bee result --outcome succeeded, '
+            'otherwise start a new Bee for the package.\n') % ', '.join(
         '%s (%s, Queen %s)' % (r['name'], r['package'], r.get('queen') or 'unknown') for r in inherited)
 
 

@@ -1170,6 +1170,10 @@ def run_agent(a, out=None):
             argv = [cmd, "-p", prompt] + arg_list if protocol == "claude" else [cmd] + arg_list + [prompt]
             with open(str(err_file), "wb") as err, open(str(events_file), "ab") as raw:
                 proc = subprocess.Popen(argv, cwd=a.cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
+                try:   # E-1: a Queen's subagents run inside this CLI process, so its pid and identity tell whether the Bees can still run
+                    runtime.upsert_agent(conn, a.project, a.name, {"cliPid": proc.pid, "cliIdentity": osplat.process_identity(proc.pid)}, create=False)
+                except Exception:
+                    pass
                 last_output, watch_stop = [time.monotonic()], threading.Event()
                 if stall_limit > 0:
                     threading.Thread(target=stall_watch, daemon=True, args=(last_output, stall_limit, mark_stalled, clear_stalled, watch_stop)).start()
