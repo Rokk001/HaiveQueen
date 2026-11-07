@@ -18,6 +18,7 @@ import os
 import re
 import tomllib
 from datetime import datetime
+from pathlib import Path
 
 from . import db, releases, runtime
 
@@ -39,11 +40,20 @@ def _run(argv, cwd):
     return selfupdate.run_command(argv, cwd)
 
 
+def _repo(env):
+    """The Git repository of the Apiary: its code repository (codeRepo), never a separate plans folder (owner decision 741 (1)); the workspace without one."""
+    repo = getattr(env, "code_repo", None)
+    if repo is None:
+        code = (getattr(env, "settings", None) or {}).get("codeRepo")
+        repo = Path(code) if code else env.workspace
+    return Path(repo)
+
+
 def github_repository(env, run=None):
     """owner/name when the remote of the Apiary (remoteName, default origin) is on GitHub, else None."""
     run = run or _run
     remote = str(env.settings.get("remoteName") or "origin")
-    code, out = run(["git", "-C", str(env.workspace), "remote", "get-url", remote], env.workspace)
+    code, out = run(["git", "-C", str(_repo(env)), "remote", "get-url", remote], _repo(env))
     if code != 0:
         return None
     try:
@@ -67,7 +77,7 @@ def token(run=None) -> str:
 def base_version(env) -> str:
     """The version of the pyproject.toml of the Apiary, else 0.0.0 (the first release counts up from it)."""
     try:
-        with open(env.workspace / "pyproject.toml", "rb") as handle:
+        with open(_repo(env) / "pyproject.toml", "rb") as handle:
             value = str(tomllib.load(handle)["project"]["version"])
         releases.next_version(value)
         return value
@@ -94,7 +104,7 @@ def _sha(text) -> str:
 
 def _git(env, run, *args):
     """Run git in the Apiary folder; returns (exit code, output)."""
-    return run(["git", "-C", str(env.workspace)] + list(args), env.workspace)
+    return run(["git", "-C", str(_repo(env))] + list(args), _repo(env))
 
 
 def branch_heads(env, run=None, fetch=False) -> list:

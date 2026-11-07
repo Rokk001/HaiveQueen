@@ -401,7 +401,9 @@ class WindowTest(unittest.TestCase):
         keys = [path[-1] for path in paths]
         self.assertEqual(len(keys), len(set(keys)), keys)
         self.assertIn(("entry", "name"), paths)
-        self.assertIn(("entry", "workspace"), paths)
+        self.assertIn(("place", "repository"), paths)   # decision 741 (1): Repository and Plans folder replace workspace and codeRepo
+        self.assertIn(("place", "plansFolder"), paths)
+        self.assertNotIn(("entry", "workspace"), paths)
         self.assertTrue({("file", "priority"), ("file", "planGlobs")} <= set(paths))
         labels = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
         for label in ("Run the compile check", "Run the build", "Run the deploy", "Publish release at integration"):
@@ -456,7 +458,7 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(win.status.cget("text"), "Saved.")
         listed = gui_config.load_raw(self.folder / "config.toml")["projects"]
         self.assertEqual(listed[-1], {"name": "Fresh", "workspace": str(new)})
-        self.assertEqual(gui_config.load_raw(new / ".haivequeen" / "project.toml"), {"buildEnabled": False})
+        self.assertEqual(gui_config.load_raw(new / ".haivequeen" / "project.toml"), {"buildEnabled": False, "worktreePrefix": "Fresh"})   # decision 741 (2): the prefix follows the name
         self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='Fresh'").fetchone()[0], str(new.resolve()))
 
     # A new Apiary in a workspace that already has a project.toml (Vera-7 open point).
@@ -556,7 +558,7 @@ class WindowTest(unittest.TestCase):
         win.target()["file"]["deployEnabled"] = True
         before = (self.folder / "config.toml").read_text(encoding="utf-8")
         win.save()
-        self.assertIn("workspace folder does not exist", win.status.cget("text"))
+        self.assertIn("repository or plans folder does not exist", win.status.cget("text"))
         self.assertEqual((self.folder / "config.toml").read_text(encoding="utf-8"), before)
 
     # Adding and removing a provider.
