@@ -464,3 +464,16 @@ class ApiaryTexts(apiary_page.ApiaryPageCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FoldKeepsTestResult(unittest.TestCase):
+    def test_last_test_moves_to_provider_with_other_name(self):
+        from haivequeen import servers
+        entry = {"name": "lms", "address": "http://localhost:1234", "apiKey": ""}
+        stored = {}
+        stored["lms"] = {"fingerprint": servers.fingerprint(entry), "models": ["m1"], "reachable": True}
+        with mock.patch.object(servers, "_read_tests", side_effect=lambda: dict(stored)), \
+             mock.patch.object(servers, "_write_tests", side_effect=lambda d: stored.update(d)):
+            out = servers.fold_servers({"servers": [entry], "providers": [{"name": "local", "server": "lms"}]})
+        self.assertEqual(stored["local"]["models"], ["m1"])
+        self.assertEqual(out["providers"][0]["address"], "http://localhost:1234")

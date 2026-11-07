@@ -193,6 +193,7 @@ def fold_servers(cfg) -> dict:
         p.pop("server")
         p["access"] = "llm"
         fold_values(p, entry)
+        _carry_test(entry["name"], p)
     taken = {str(p.get("name")) for p in providers}
     for entry in entries:
         if entry["name"] in used:
@@ -208,6 +209,22 @@ def fold_servers(cfg) -> dict:
         fold_values(p, entry)
         providers.append(p)
     return out
+
+
+def _carry_test(old_name, p) -> None:
+    """Keep the last test result of a server entry for a provider of another name (the result is stored per name), so its last test and model list are not lost."""
+    name = str(p.get("name") or "")
+    if not name or name == old_name:
+        return
+    try:
+        results = _read_tests()
+        if old_name in results and name not in results:
+            moved = dict(results[old_name])
+            moved["fingerprint"] = fingerprint(p)
+            results[name] = moved
+            _write_tests(results)
+    except Exception:
+        pass
 
 
 def fold_values(p, entry) -> None:
