@@ -31,6 +31,25 @@ Every value above (non-interactive command, JSON output, profile variables, logi
 
 Kilo Code is a fork of OpenCode and writes the same JSON lines (`step_start`, `text`, `tool_use`, `step_finish`, `error`), so both use one reader.
 
+## Own LLM server
+
+A server entry (`[[servers]]` in the machine `config.toml`) has `name`, `address` (for example `http://192.168.1.20:1234`, without `/v1`), `apiKey` (optional; shown masked, stored only in `config.toml`) and `contextWindow` (tokens, optional). A provider names it in `server = "<name>"`; one server can serve any number of providers with any built-in CLI. HaiveQueen starts the CLI itself with the server, the same way on Windows, Linux and macOS, without a wrapper script, only through the environment and arguments of the agent it starts. Nothing is written to the user's own profile and no file to the HaiveQueen profile. An empty key is handed over as the placeholder `lmstudio` where a CLI needs a value. With an empty context window nothing about the window is handed over.
+
+| CLI | What HaiveQueen hands over | Interface the server needs | Source |
+|---|---|---|---|
+| Claude Code | `ANTHROPIC_BASE_URL` = address, `ANTHROPIC_AUTH_TOKEN` = key, `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` = context window; `ANTHROPIC_API_KEY` of the user is removed from the agent environment so it is never sent to the server | Anthropic Messages, `/v1/messages` | [LM Studio: Claude Code](https://lmstudio.ai/docs/integrations/claude-code), [Environment variables](https://code.claude.com/docs/en/env-vars) |
+| Codex CLI | arguments `-c model_provider=<id>`, `-c model_providers.<id>.name`, `.base_url=<address>/v1`, `.wire_api=responses`, `.env_key=HAIVEQUEEN_SERVER_KEY` (the key is in that variable, never in the command line), `-c model_context_window=<window>` | Responses, `/v1/responses` | [LM Studio: Codex](https://lmstudio.ai/docs/integrations/codex), [config sample](https://developers.openai.com/codex/config-sample) |
+| OpenCode | variable `OPENCODE_CONFIG_CONTENT` with an OpenAI-compatible provider block (`@ai-sdk/openai-compatible`, `options.baseURL` = address + `/v1`, `options.apiKey`, the models of the classes with `limit.context`) and the model named `<server id>/<model>`. The block is written in both spellings, `provider`/`npm`/`options` (OpenCode 1.x) and `providers`/`package`/`settings` (current documentation); an OpenCode reads the one it knows | OpenAI-compatible, `/v1/chat/completions` | [Providers](https://opencode.ai/docs/providers/), [Models](https://opencode.ai/docs/models/), [Config](https://opencode.ai/docs/config/) |
+| Kilo Code | variable `KILO_CONFIG_CONTENT` with the same provider block (`provider`/`npm`/`options`) | OpenAI-compatible, `/v1/chat/completions` | [Kilo CLI](https://kilo.ai/docs/code-with-ai/platforms/cli) (names `KILO_CONFIG_CONTENT` and refers to the OpenCode config documentation) |
+
+The output limit of an OpenCode/Kilo model, which the block needs next to the context limit, is half the context window, at most 32000 tokens (the fallback the OpenCode documentation names for models without an entry is 32000).
+
+**Connection test.** The test asks `/v1/models` (reachability and model list) and sends an empty request to the interface of each CLI; a path that answers anything but 404, 405 or 501 counts as offered (no model is loaded by the test). The result (time, models, one line per CLI) is kept in `server-tests.json` in the data folder until the next test, also over a restart, and is dropped when address or key change. It runs on the button, after the settings window saved a new or changed server or a provider using it, at the start of HaiveQueen, and once per round while a provider is not ready because of it.
+
+**Ready check.** With account login the login must exist; with an own server the last test must show that the server answers and offers the interface of the chosen CLI; every model of a class must be in the model list of its source (a class entry with `customModel = true` is an own entry and counts as available). A provider that is not ready gets no agents.
+
+**Old settings.** A Codex CLI provider with `endpoint` is read as a provider with an own server (address = `baseUrl` without `/v1`; providers with the same address share one server); other providers keep their `endpoint` as before. `config.toml` is rewritten in the new form only when the owner saves the settings window.
+
 ## Personal inbox command
 
 The machine settings page offers **Install /bzz**. It creates user commands in

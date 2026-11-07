@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, db, plans, profile, runtime
+from . import config, db, plans, profile, runtime, servers
 from . import platform as osplat
 from . import localtime
 from .i18n import tr
@@ -150,7 +150,7 @@ def provider_capabilities(p):
     if not p.get("capabilitiesVersion"):
         if p.get("use") != "capability-only" and "Coding" not in capabilities:
             capabilities.append("Coding")
-        if not p.get("endpoint") and "Queen" not in capabilities:
+        if not servers.is_local(p) and "Queen" not in capabilities:
             capabilities.append("Queen")
     return list(dict.fromkeys(capabilities))
 
@@ -161,10 +161,15 @@ def get_providers(settings: dict) -> list:
     A provider without `slots` gets the machine value `slots`. A wrong `use` or `protocol` raises ValueError.
     """
     out = []
+    settings = servers.migrate(settings)   # an old endpoint entry of the Codex CLI is read as a provider with an own server
+    by_name = {s["name"]: s for s in servers.get_servers(settings)}
     for p in settings.get("providers") or []:
         name = str(p.get("name") or "")
         if not name:
             raise ValueError(tr("a provider entry has no name"))
+        server = by_name.get(p["server"]) if p.get("server") else None
+        if p.get("server") and not server:
+            raise ValueError(tr("provider %s: server %s does not exist", name, p["server"]))
         use = str(p.get("use") or "preferred")
         old_capability_only = use == "capability-only"
         if old_capability_only:
@@ -186,9 +191,11 @@ def get_providers(settings: dict) -> list:
             "classes": p.get("classes") or {},
             "limit": str(limit.get("source", "")) if isinstance(limit, dict) else str(limit or ""),
             "usageInterval": float(limit.get("interval", 60)) if isinstance(limit, dict) else 60,
-            "endpoint": p.get("endpoint"), **profile.custom_fields(p),
+            "endpoint": p.get("endpoint"), "server": server, "nameEdited": bool(p.get("nameEdited", True)), **profile.custom_fields(p),
         })
-        out[-1]["login"] = profile.has_login(out[-1])   # the login in the HaiveQueen profile; without it the provider counts as not available
+        out[-1]["local"] = servers.is_local(out[-1])
+        # Ready: with account login the login in the HaiveQueen profile, with an own server the last connection test and the models; not ready = not available
+        out[-1]["login"], out[-1]["notReady"] = servers.readiness(out[-1], profile.has_login(out[-1]))
     return out
 
 
@@ -203,8 +210,11 @@ def get_provider(providers: list, name: str):
 def context_limit(settings: dict, providers: list, provider, cls) -> int:
     """Return the context size at which an agent of that provider and class is asked to hand off: the contextLimitTokens of its model entry
     under [providers.classes], else the global contextLimitTokens (project.toml over config.toml), else 300000."""
-    entry = ((get_provider(providers, provider) or {}).get("classes") or {}).get(cls) or {}
-    return int(entry.get("contextLimitTokens") or settings.get("contextLimitTokens") or 300000)
+    found = get_provider(providers, provider) or {}
+    entry = (found.get("classes") or {}).get(cls) or {}
+    limit = int(entry.get("contextLimitTokens") or settings.get("contextLimitTokens") or 300000)
+    window = servers.window_of(found.get("server") or {})
+    return min(limit, window) if window else limit   # an own server: hand off before the window of the server is full
 
 
 def row_provider(row: dict) -> str:
@@ -369,7 +379,8 @@ def _local_confidential(provider):
     import ipaddress
     endpoint = provider.get("endpoint") or {}
     try:
-        host = urlparse(endpoint.get("baseUrl", "")).hostname if isinstance(endpoint, dict) else None
+        url = (provider.get("server") or {}).get("address") or (endpoint.get("baseUrl", "") if isinstance(endpoint, dict) else "")
+        host = urlparse(url).hostname
         return host == "localhost" or ipaddress.ip_address(host).is_loopback
     except (ValueError, TypeError):
         return False
@@ -426,7 +437,10 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
 
 
 def endpoint_args(provider: dict) -> list:
-    """Extra arguments of a provider with an endpoint: a model_provider of the codex CLI with the base URL (-c key=value)."""
+    """Extra arguments of a provider with an endpoint (a Custom CLI or another CLI than Codex, kept as before) or an own server: a model_provider of the codex CLI
+    with the base URL (-c key=value)."""
+    if provider.get("server"):
+        return servers.arguments(provider)
     ep = provider.get("endpoint") or {}
     if not ep.get("baseUrl"):
         return []

@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import buildjobs, config, db, interrupt, localtime, overview, profile, roles, runtime, scheduler, startctx
+from . import buildjobs, config, db, interrupt, localtime, overview, profile, roles, runtime, scheduler, servers, startctx
 from . import platform as osplat
 from .i18n import tr
 
@@ -85,17 +85,21 @@ def class_index(cls):
 # ---------------------------------------------------------------- providers (machine config)
 
 def get_providers(cfg):
-    """Return the provider entries of config.toml as dicts (name, protocol, command, args, classes, endpoint)."""
+    """Return the provider entries of config.toml as dicts (name, protocol, command, args, classes, endpoint, server). An old Codex endpoint entry is read as a provider with an own server."""
     out = []
+    cfg = servers.migrate(cfg)
+    by_name = {s["name"]: s for s in servers.get_servers(cfg)}
     for p in cfg.get("providers") or []:
         name = str(p.get("name") or "")
         if not name:
             raise ValueError("a provider entry has no name")
         proto = str(p.get("protocol") or name)
         fmt = profile.check_protocol(name, proto, p.get("outputFormat"))
+        if p.get("server") and p["server"] not in by_name:
+            raise ValueError("provider %s: server %s does not exist" % (name, p["server"]))
         out.append({"name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto),
                     "args": [str(x) for x in (p.get("args") or [])], "classes": p.get("classes") or {},
-                    "endpoint": p.get("endpoint") or None, **profile.custom_fields(p)})
+                    "endpoint": p.get("endpoint") or None, "server": by_name.get(p.get("server")), **profile.custom_fields(p)})
     return out
 
 
@@ -105,7 +109,9 @@ def get_provider(cfg, name):
 
 
 def endpoint_args(prov):
-    """Return the extra arguments of a provider with an endpoint (a model_provider of the codex CLI)."""
+    """Return the extra arguments of a provider with an own server or an endpoint (a model_provider of the codex CLI)."""
+    if prov.get("server"):
+        return servers.arguments(prov)
     ep = prov.get("endpoint")
     if not ep or not ep.get("baseUrl"):
         return []
@@ -903,6 +909,10 @@ def report_prompt(prompt_file, project, agent_id, phase=None):
 
 def build_args(prov, vars_):
     """Return the argument list of the provider entry (plus the endpoint arguments) with {name} replaced by the variables."""
+    vars_ = dict(vars_)
+    if "model" in vars_:
+        vars_["model"] = servers.cli_model(prov, vars_["model"])   # OpenCode and Kilo Code name a model of an own server "<server id>/<model>"
+
     def sub(arg):
         return re.sub(r"\{(\w+)\}", lambda m: str(vars_[m.group(1)]) if m.group(1) in vars_ else m.group(0), arg)
     return [sub(a) for a in prov["args"] + endpoint_args(prov)]

@@ -67,7 +67,8 @@ def _load_toml(path: Path) -> dict:
 
 def load_config() -> dict:
     """Load config.toml from the settings folder, filling in defaults."""
-    return _merge(DEFAULT_CONFIG, _load_toml(config_dir() / "config.toml"))
+    from . import servers
+    return servers.migrate(_merge(DEFAULT_CONFIG, _load_toml(config_dir() / "config.toml")))   # old endpoint entries are read in the new form; the file stays as it is until the owner saves
 
 
 def load_project(workspace) -> dict:

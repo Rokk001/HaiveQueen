@@ -117,6 +117,10 @@ def environment(prov, base=None) -> dict:
         home = str(provider_home(prov))
         for key, value in s["env"].items():
             env[key] = value.replace("{home}", home)
+    from . import servers
+    for key in servers.drop_variables(prov or {}):
+        env.pop(key, None)
+    env.update(servers.environment(prov or {}))   # an own server: its address and key for this CLI, only in the agent's environment
     return env
 
 
@@ -203,7 +207,7 @@ def sessions_dir(protocol: str) -> Path:
 
 def has_login(prov) -> bool:
     """True when the provider has its login in the profile (a provider that cannot be kept to the profile has none)."""
-    if os.environ.get(NO_CHECK_ENV):
+    if os.environ.get(NO_CHECK_ENV) or (prov or {}).get("server"):   # a provider with an own server needs no login
         return True
     s = spec(prov)
     return bool(s) and any((provider_home(prov) / f).is_file() for f in s["login"])

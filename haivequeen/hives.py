@@ -278,7 +278,7 @@ def provider_wait_check(conn, env, hive, provider, free, plan):
         if any(w.get('unknown') for w in full):
             return False, 'usage unknown, no recent reading (%s)' % (usage.claude_refresh_error(conn, provider=provider) or 'check failed')
         return False, 'quota used up'
-    needed = 1 + (1 if provider['name'] == hive['provider'] and provider.get('beeMode') == 'process' and not provider.get('endpoint') else 0)
+    needed = 1 + (1 if provider['name'] == hive['provider'] and provider.get('beeMode') == 'process' and not (provider.get('endpoint') or provider.get('server')) else 0)
     if provider['slots'] < needed:
         if not runtime.list_questions(conn, env.name, status='open', plan=plan, item='provider-slots'):
             db.add_question(conn, env.name, plan, 'provider-slots',
@@ -998,7 +998,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 topics = integration_steps.owner_topics_text(env)
                 if topics:
                     prompt += '\n' + topics
-                prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)
+                prompt += '\nConfigured Bee providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint') or p.get('server')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', [])], ensure_ascii=False)
                 prompt += ' Project integration configuration: ' + json.dumps(integration_steps.configuration(env, path), ensure_ascii=False)
                 if plan['status'] in plan_mod.CUT_STATUSES:   # a plan the owner sent as free text: the Queen cuts it into packages before any Bee starts
                     prompt += '\n' + roles.role_text('queen-cut', {'project': env.name, 'plan': path})

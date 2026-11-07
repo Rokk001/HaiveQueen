@@ -25,8 +25,8 @@ def route_candidates(providers, hive_provider, capability, escalated):
     providers = [p for p in providers if "Coding" in scheduler.provider_capabilities(p)]
     if escalated:
         return list(providers)
-    candidates = [p for p in providers if p.get('endpoint') or p['name'] == hive_provider]
-    candidates.sort(key=lambda p: not bool(p.get('endpoint')))
+    candidates = [p for p in providers if (p.get('endpoint') or p.get('server')) or p['name'] == hive_provider]
+    candidates.sort(key=lambda p: not bool((p.get('endpoint') or p.get('server'))))
     return candidates
 
 
@@ -665,7 +665,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         need = routine.package_needs_for(env, plan, package)
         allowed = [p for p in env.providers if p['name'] not in excluded and
                    (p in capable_providers(env.providers, need) if need else
-                    (p.get('endpoint') or p['name'] == hive['provider']))]
+                    ((p.get('endpoint') or p.get('server')) or p['name'] == hive['provider']))]
         base_class = next((name for name in scheduler.CLASS_NAMES[scheduler.class_index(requested_class):]
                            if any((p.get('classes', {}).get(name) or {}).get('model') for p in allowed)), None)
         use_other_provider = False
@@ -707,7 +707,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
             return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
         queen_provider = scheduler.get_provider(env.providers, hive['provider'])
-        embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not queen_provider.get('endpoint') and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
+        embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not (queen_provider.get('endpoint') or queen_provider.get('server')) and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
         free = scheduler.provider_free(env.providers, running)
         route_free = dict(free)
         if embedded:

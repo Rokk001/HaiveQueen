@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import isolation  # noqa: E402,F401  (redirects the default data and settings folders to a temp folder before anything is imported)
-from haivequeen import config, db, loop, runtime  # noqa: E402
+from haivequeen import config, db, loop, runtime, servers  # noqa: E402
 from haivequeen import scheduler as sch  # noqa: E402
 
 ENV_KEYS = ("BZZ_DATA_DIR", "BZZ_CONFIG_DIR", "BZZ_LOG_DIR", "BZZ_RUNTIME_OVERRIDE", "BZZ_TEST_NOSTART", "BZZ_PROVIDER_LIMITS_FILE", "BZZ_HOST")
@@ -78,6 +78,10 @@ class RoundCase(unittest.TestCase):
         """Create the temp runtime, the database and the dummy project."""
         from unittest import mock
         patcher = mock.patch("haivequeen.platform.process_inaccessible", return_value=False)   # the tests use made-up PIDs that may belong to real system processes
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        answers = {"reachable": True, "models": [], "interfaces": {cli: {"ok": True} for cli in servers.INTERFACES}}   # the own server of a provider (also a migrated endpoint) answers in these tests
+        patcher = mock.patch.object(servers, "kept", lambda server: dict(answers, fingerprint=servers.fingerprint(server)))
         patcher.start()
         self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory()

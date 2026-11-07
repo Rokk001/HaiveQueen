@@ -122,6 +122,13 @@ def load_raw(path) -> dict:
         return tomllib.load(handle)
 
 
+# Read config.toml in the new form (old endpoint entries migrated); the file itself is not changed.
+def load_migrated(path) -> dict:
+    """The parsed content of the TOML file `path` with old Codex endpoint entries read as providers with an own server; the file stays as it is until the owner saves."""
+    from . import servers
+    return servers.migrate(load_raw(path))
+
+
 # Cut a comma separated tool list into its entries.
 def split_tools(text) -> list:
     """Split `Bash(git merge *),Read` at the commas outside parentheses; empty entries are dropped and entries are trimmed."""
@@ -258,6 +265,8 @@ def check(data, machine=True) -> list:
             names = [p.get("name") for p in data.get("providers") or []]
             if len(set(names)) != len(names):
                 problems.append(tr("provider names must be unique"))
+            from . import servers
+            servers.get_servers(data)
         except (ValueError, TypeError, AttributeError) as exc:
             problems.append(str(exc))
     return problems
@@ -556,7 +565,7 @@ class ConfigWindow:
     # Read the files again and show their parts.
     def reload(self):
         """Drop unsaved changes: read config.toml and the project.toml of every Apiary and show the General tab."""
-        self.data = load_raw(self.config_path)
+        self.data = load_migrated(self.config_path)   # old endpoint entries in the new form; the file changes only when saved
         self.load_apiaries()
         self.status.config(text="")
         self.node = ("general", None)
@@ -1127,7 +1136,9 @@ class ConfigWindow:
             self.status.config(text="; ".join(problems)[:300], fg=self.col["red"])
             return
         from . import init
+        old_data = load_migrated(self.config_path)
         save_file(self.config_path, self.data)
+        self.test_servers(old_data)
         init.register_listed(self.conn, self.data.get("projects"))   # an Apiary added on this tab is an Apiary from now on
         for apiary, path in writes:
             save_project_file(self.conn, path, apiary["file"])
@@ -1135,6 +1146,14 @@ class ConfigWindow:
         self.status.config(text=tr("Saved."), fg=self.col["green"])
         if self.on_saved:
             self.on_saved()
+
+    # Test the servers the save touched.
+    def test_servers(self, old_data):
+        """After a save: test, in the background, every server that is new or changed or used by a changed provider; the result is kept for the server page."""
+        import threading
+        from . import servers
+        new_data = self.data
+        threading.Thread(target=lambda: servers.test_after_save(old_data, new_data), daemon=True).start()
 
     # Open the settings folder.
     def open_folder(self):

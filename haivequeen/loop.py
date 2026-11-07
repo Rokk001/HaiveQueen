@@ -342,6 +342,14 @@ def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
         # Fetch account metadata before taking the Hive scheduling lock.
         usage.refresh_claude_usage(conn, sch.get_providers(machine))
         profile.notify_missing(conn, sch.get_providers(machine))
+        try:   # a provider with an own server that is not ready because of the connection test: test again once per round, then it is ready as soon as the server answers
+            from . import servers
+            if servers.retest_not_ready(sch.get_providers(machine)):
+                for env in envs:
+                    servers.refresh_readiness(env.providers)
+        except Exception as exc:   # a server that cannot be tested must never stop the round
+            for env in envs[:1]:
+                env.log("SERVER TEST ERROR %s" % exc)
         from . import worktrees
         for env in envs:
             worktrees.cleanup(env)
@@ -709,6 +717,14 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
         env.log("loop started (roundMinutes=%s)" % minutes)
         env.event("Beekeeper started (round every %s minutes)" % minutes)
     done = 0
+    try:   # at the start of HaiveQueen every server that a provider uses is tested
+        from . import servers
+        if servers.test_used(sch.get_providers(machine)):
+            for env in envs:
+                servers.refresh_readiness(env.providers)
+    except Exception as exc:
+        for env in envs[:1]:
+            env.log("SERVER TEST ERROR %s" % exc)
     while not stop_flag().exists() and (not rounds or done < rounds):
         reload_settings()
         state.update(busy=True)

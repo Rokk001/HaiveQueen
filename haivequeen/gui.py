@@ -1162,7 +1162,7 @@ class Dashboard:
         queen_class = env.settings.get("queenClass", "medium")
         excluded = env.settings.get("excludedProviders", [])
         current = (hives.get(self.conn, hive["apiary"], hive["plan_path"]) or {}).get("provider")
-        return [p["name"] for p in env.providers if p["name"] not in excluded and p["name"] != current and not p.get("endpoint")
+        return [p["name"] for p in env.providers if p["name"] not in excluded and p["name"] != current and not (p.get("endpoint") or p.get("server"))
                 and (p.get("classes", {}).get(queen_class) or {}).get("model")]
 
     # Pause, stop, reject or start again the plan of a Hive.
