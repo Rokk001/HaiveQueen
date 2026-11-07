@@ -22,6 +22,14 @@ class BeePolicyTests(unittest.TestCase):
         self.free['local'] = 0
         self.assertEqual(bees.select_route(self.providers, self.free, 'cloud', 'medium', [], [], False), ('cloud', 'medium'))
 
+    def test_bee_falls_back_to_another_coding_provider_when_queen_full(self):
+        from bzztest import provider
+        providers = [provider('claude', 1), provider('codex', 2)]
+        from haivequeen import scheduler
+        providers = scheduler.get_providers({'providers': providers})
+        self.assertEqual(bees.select_route(providers, {'claude': 0, 'codex': 2}, 'claude', 'medium', [], [], False), ('codex', 'medium'))
+        self.assertIsNone(bees.select_route(providers, {'claude': 0, 'codex': 0}, 'claude', 'medium', [], [], False))
+
     # Check image waits if codex busy.
     def test_image_waits_if_codex_busy(self):
         self.free['images'] = 0
