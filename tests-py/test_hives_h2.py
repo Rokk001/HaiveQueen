@@ -506,6 +506,23 @@ class QueenIntegrationTests(RoundCase):
         bees.report_attempt(self.env(), REL, 'P1', 'medium', 'succeeded', 'Ada')
         self.assertIsNotNone(self.conn.execute('SELECT ended_at FROM embedded_bees').fetchone()['ended_at'])
 
+    def test_full_queen_provider_moves_assigned_bee_to_process_provider(self):
+        from unittest import mock
+        from haivequeen import hives
+        from bzztest import REL
+        self.machine['providers'][0]['slots'] = 1
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        bees.ensure_attempts(self.conn)
+        self.conn.execute('INSERT INTO bee_assignments(project,plan_path,package,class,provider) VALUES(?,?,?,?,?)', ('testproj', REL, 'P1', 'medium', 'claude'))
+        wt = self.base / 'bee-wt'
+        wt.mkdir()
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), mock.patch('haivequeen.loop._do_start', return_value=True):
+            result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], cwd=str(wt))
+        self.assertEqual((result['kind'], result['provider']), ('process', 'codex'))
+        self.assertEqual(self.conn.execute('SELECT provider FROM bee_assignments WHERE package=?', ('P1',)).fetchone()[0], 'codex')
+
     def test_raise_to_queen_class_is_logged(self):
         from haivequeen import hives
         from bzztest import REL
