@@ -279,6 +279,52 @@ class PanelDrawTest(unittest.TestCase):
         self.assertEqual((len(win.canvas.find_withtag("slot_full")), len(win.canvas.find_withtag("slot_empty"))), (2, 3))
         self.assertFalse([t for t in found if "next" in t.lower() and t != "NEXT"] or [t for t in found if "◀" in t])
 
+    def test_honeycomb_geometry_and_screenshot(self):
+        """S-10: regular hexagons share edges for free, full and mixed rows."""
+        import math
+        win = self.open(rows_of(prow(used_slots=0, total_slots=5), prow(name="codex", used_slots=3, total_slots=3),
+                                prow(name="local", used_slots=2, total_slots=5)))
+        cells = [i for i in win.canvas.find_all() if "slot_full" in win.canvas.gettags(i) or "slot_empty" in win.canvas.gettags(i)]
+        self.assertEqual(len(cells), 8)
+        for start, count in ((0, 5), (5, 3)):
+            polygons = [win.canvas.coords(i) for i in cells[start:start + count]]
+            for pts in polygons:
+                sides = [math.hypot(pts[2*k] - pts[2*((k+1)%6)], pts[2*k+1] - pts[2*((k+1)%6)+1]) for k in range(6)]
+                self.assertLess(max(sides) - min(sides), 0.01)
+            for a, b in zip(polygons, polygons[1:]):
+                edges = lambda p: {frozenset(((round(p[2*k], 3), round(p[2*k+1], 3)), (round(p[2*((k+1)%6)], 3), round(p[2*((k+1)%6)+1], 3)))) for k in range(6)}
+                self.assertTrue(edges(a) & edges(b), (a, b))
+        # Capture the rendered panel, including all three rows, for visual inspection.
+        try:
+            from PIL import ImageGrab
+        except ImportError:
+            self.skipTest("Pillow is required for screen capture")
+        self.root.attributes("-alpha", 1.0)
+        self.root.update()
+        x, y = win.canvas.winfo_rootx(), win.canvas.winfo_rooty()
+        box = tuple(round(v * win.scale) for v in self.BOX)
+        shot = ImageGrab.grab((x + box[0], y + box[1], x + box[2], y + box[3]))
+        self.assertGreater(sum(1 for pixel in shot.convert("RGB").getdata() if pixel == (246, 184, 0)), 30)
+        win.scroll["limits"] = 2
+        win.draw()
+        self.root.update()
+        mixed = [i for i in win.canvas.find_all() if "slot_full" in win.canvas.gettags(i) or "slot_empty" in win.canvas.gettags(i)]
+        mixed = mixed[-5:]
+        self.assertEqual(["slot_full" in win.canvas.gettags(i) for i in mixed], [True, True, False, False, False])
+        shot = ImageGrab.grab((x + box[0], y + box[1], x + box[2], y + box[3])).convert("RGB")
+        self.assertGreater(sum(1 for pixel in shot.getdata() if pixel == (246, 184, 0)), 30)
+
+    def test_slot_hover_localized_and_current(self):
+        """S-10: hovering cells explains the current counts in both languages."""
+        for german, expected in ((False, "Agent slots of Claude: 2 of 5 in use. A filled cell is a running agent, an empty cell a free slot."),
+                                 (True, "Agent-Slots von Claude: 2 von 5 belegt. Eine volle Wabe ist ein laufender Agent, eine leere ein freier Slot.")):
+            with self.subTest(german=german), mock.patch("haivequeen.i18n.machine_language", return_value="German" if german else "English"):
+                win = self.open(rows_of(prow(used_slots=2, total_slots=5), german=german))
+                cell = win.canvas.find_withtag("slot_full")[0]
+                pts = win.canvas.coords(cell)
+                win.hover(mock.Mock(x=sum(pts[::2])/6, y=sum(pts[1::2])/6))
+                self.assertEqual(win.tip_text, expected)
+
     def test_no_badge_when_none_is_next(self):
         """L-2: no NEXT badge when no row is next."""
         win = self.open(rows_of(prow(), prow(name="codex")))

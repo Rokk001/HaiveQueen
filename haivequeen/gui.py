@@ -25,7 +25,7 @@ COL = {"bg": "#000608", "panel": "#010608", "gold": "#f6b800", "edge": "#d8a400"
        "select": "#4b3802", "selectedge": "#8a6a10", "track": "#15222c", "seg": "#f9ce3a"}
 LEVEL_COL = {"ok": "green", "warn": "yellow", "bad": "red", "dim": "dim", "text": "text"}
 STATUS_COL = {"ok": "green", "idle": "blue", "wait": "amber"}
-CELL, CELL_GAP, GOLD = 18, 0.2, "#f6b800"   # slot cell: normal design size, gap as share of the size, the gold of the logo
+CELL, GOLD = 18, "#f6b800"   # slot cell width at normal size and the gold of the logo
 LEVEL_FILL = {"ok": "green", "warn": "yellow", "bad": "red", "slots": "#2b8cff", "dim": "dim"}   # bar colour of a model limit by its level
 REPO_URL = "https://github.com/Rokk001/HaiveQueen"   # opened by a click on the repository name in the header
 TAG_COL = {"QUEEN": "gold", "BEE": "cyan", "APIARY": "green", "SYSTEM": "green"}
@@ -68,7 +68,7 @@ def launch_detached() -> dict:
 # The size of the slot cells that fit a row.
 def slot_cell_size(total, room, normal=CELL):
     """Design size of `total` cells in `room` design pixels: `normal` when they fit, smaller down to half of it, else None (the row shows a number)."""
-    size = room / (total * (1 + CELL_GAP) - CELL_GAP)
+    size = room / total
     return normal if size >= normal else (size if size >= normal / 2 else None)
 
 
@@ -866,7 +866,7 @@ class Dashboard:
         lx, mx = x0 + 14, x0 + 14 + lw + 16
         rx = mx + mw + 16
         rw = x1 - 30 - rx
-        row_h = max(CELL + 4 + 5 + 3 + (3 if wrap else 2) * small, th(18) + 2 + small, small + 2 + th(20)) + 4   # the tallest column decides; every row has this height
+        row_h = max(CELL * 2 / math.sqrt(3) + 4 + 5 + 3 + (3 if wrap else 2) * small, th(18) + 2 + small, small + 2 + th(20)) + 4   # the tallest column decides; every row has this height
         room = max(1, int((y1 - y0 - 56) // row_h))
         off = self.offset("limits", len(rows), room)
         self.area("limits", x0, y0, x1, y1)
@@ -902,7 +902,7 @@ class Dashboard:
                 self.tip_boxes.append((self.px(mx), self.px(top + 4), self.px(mx + mw), self.px(vy + th(20) / 2), tip))
             # right: slot cells, weekly bar, 5-hour line
             sl = r["slots"]
-            cy = top + 4 + CELL / 2
+            cy = top + 4 + CELL / math.sqrt(3)
             if sl["none"]:
                 label = self.text(rx, cy, sl["none"], 14, "dim", "w")
                 if sl["running"]:
@@ -913,12 +913,14 @@ class Dashboard:
                 if size is None:
                     self.text(rx, cy, "%d / %d" % (sl["used"], sl["total"]), 14, "text", "w")
                 else:
-                    step = size * (1 + CELL_GAP)
+                    step = size
                     for i in range(sl["total"]):
-                        self.hexagon(rx + size / 2 + i * step, cy, size / 2, i < sl["used"])
+                        self.hexagon(rx + size / 2 + i * step, cy, size / math.sqrt(3), i < sl["used"])
                     if extra:
                         self.text(rx + (sl["total"] - 1) * step + size + 8, cy, extra, 14, "gold", "w", True)
-            by = top + 4 + CELL + 4
+                tip = tr("Agent slots of %s: %d of %d in use. A filled cell is a running agent, an empty cell a free slot.") % (r["name"], sl["used"], sl["total"])
+                self.tip_boxes.append((self.px(rx), self.px(top + 4), self.px(rx + rw), self.px(top + 4 + CELL * 2 / math.sqrt(3)), tip))
+            by = top + 4 + CELL * 2 / math.sqrt(3) + 4
             wk = r["weekly"]
             if wk["pct"] is not None:
                 self.bar(rx, by, rw, 5, wk["pct"] / 100, LEVEL_FILL.get(wk["level"], "dim"))
@@ -936,7 +938,7 @@ class Dashboard:
         """Draw a hexagon of radius r around the design point; filled in the gold of the logo when `full`, else only its outline."""
         pts = []
         for k in range(6):
-            a = math.pi / 3 * k
+            a = math.pi / 6 + math.pi / 3 * k
             pts += [self.px(cx + r * math.cos(a)), self.px(cy + r * math.sin(a))]
         self.canvas.create_polygon(*pts, fill=GOLD if full else "", outline=GOLD, width=max(1, round(self.px(1.5))),
                                    tags=("slot_full" if full else "slot_empty",))
