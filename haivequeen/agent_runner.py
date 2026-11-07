@@ -907,7 +907,7 @@ def report_prompt(prompt_file, project, agent_id, phase=None):
     return text.replace('"', "")
 
 
-def build_args(prov, vars_):
+def build_args(prov, vars_, allowed_tools=None):
     """Return the argument list of the provider entry (plus the endpoint arguments) with {name} replaced by the variables."""
     vars_ = dict(vars_)
     if "model" in vars_:
@@ -915,7 +915,13 @@ def build_args(prov, vars_):
 
     def sub(arg):
         return re.sub(r"\{(\w+)\}", lambda m: str(vars_[m.group(1)]) if m.group(1) in vars_ else m.group(0), arg)
-    return [sub(a) for a in prov["args"] + endpoint_args(prov)]
+    args = list(prov["args"])
+    if allowed_tools:
+        from .gui_config import split_args, join_args
+        rest, tools, position = split_args(args)
+        tools.extend(tool for tool in allowed_tools if tool not in tools)
+        args = join_args(rest, tools, position)
+    return [sub(a) for a in args + endpoint_args(prov)]
 
 
 # Estimate the parts of HaiveQueen in the start context of a Queen or Bee.
@@ -1063,7 +1069,7 @@ def run_agent(a, out=None):
                                 tr("Provider %s (protocol %s) cannot be kept to the HaiveQueen profile, so it would read private files. This package is stopped. Which provider may run it?", a.provider, protocol, language=language),
                                 tr("Give the package to a provider that can be kept to the profile.", language=language))
             raise ValueError("provider %s cannot be kept to the HaiveQueen profile" % a.provider)
-        arg_list = build_args(prov, vars_)
+        arg_list = build_args(prov, vars_, pcfg.get("allowedTools") if protocol == "claude" else None)
         if protocol == "claude" and a.phase == "queen" and a.plan:
             settings = scheduler.build_settings(cfg, pcfg)
             grants = profile.claude_integration_permissions(a.project, a.plan, settings.get("remoteName") or "origin",

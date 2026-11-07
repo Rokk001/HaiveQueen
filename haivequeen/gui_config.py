@@ -43,11 +43,11 @@ SETTING_LABELS = {
     "publishReleases": N_("Publish release at integration"), "nextVersion": N_("Next version (empty: count the last digit up)"),
     # Owner decision 741 (3): every field of the Apiary page has an understandable label; the internal key names stay in project.toml only.
     "name": N_("Name"), "repository": N_("Repository"), "plansFolder": N_("Plans folder (empty: docs/plans of the repository)"),
-    "colour": N_("Colour"), "priority": N_("Priority"), "owner": N_("Owner name"), "language": N_("Language of the owner texts"),
+    "colour": N_("Colour"), "priority": N_("Priority"), "owner": N_("Owner name"), "language": N_("Language of owner texts (empty: General language)"), "escalateAfter": N_("Escalate after (empty: General value)"), "allowedTools": N_("Commands allowed without asking"),
     "planGlobs": N_("Plan files (patterns, one per line)"), "planExclude": N_("Files that are not plans (patterns, one per line)"),
     "ignoredBuildOutput": N_("Build output to ignore (one per line)"), "buildFlowDoc": N_("Build instructions document"),
     "integratorInstructions": N_("Extra instructions for the integration"), "buildProcessNames": N_("Build program names (one per line)"),
-    "compileCheck": N_("Compile check command"), "claudeTools": N_("Tools allowed in Claude Code"), "protectedWorktrees": N_("Protected worktrees (one per line)"),
+    "compileCheck": N_("Compile check command"), "claudeTools": N_("Tools available to Claude agents"), "protectedWorktrees": N_("Protected worktrees (one per line)"),
     "onEvent": N_("Command after each event"), "onEvent.command": N_("Command"), "onEvent.workDir": N_("Working folder"), "onEvent.timeoutSeconds": N_("Time limit (seconds)"),
     "views": N_("Generated overviews"), "views.queue": N_("Queue overview file"), "views.questions": N_("Open questions file"), "views.decisions": N_("Decisions file"),
     "prompts": N_("Own prompt texts"), "prompts.integrator": N_("Instructions of the integrating Queen"),
@@ -69,21 +69,24 @@ SETTING_HELP = {
     "planGlobs": N_("Where the plans are found, relative to the folder with the settings."), "planExclude": N_("Files matching a plan pattern that are not plans."),
     "ignoredBuildOutput": N_("Files the build writes that do not count as changes."), "buildFlowDoc": N_("A document that describes how the product is built."),
     "integratorInstructions": N_("Text added to the instructions of the integrating Queen."), "buildProcessNames": N_("Running programs that show a build is still busy."),
-    "compileCheck": N_("The command that compiles the code and runs the tests."), "claudeTools": N_("The tools Claude Code may use without asking, separated by commas."),
+    "compileCheck": N_("The command that compiles the code and runs the tests."), "claudeTools": N_("The tools available to a Claude agent, separated by commas."),
     "protectedWorktrees": N_("Worktrees that are never removed automatically."),
     "onEvent.command": N_("A program started after each event, for example to sync files."), "onEvent.workDir": N_("The folder the command runs in."),
     "onEvent.timeoutSeconds": N_("The command is stopped after this many seconds."), "views.queue": N_("A Markdown file that shows the queue."),
     "views.questions": N_("A Markdown file that shows the open questions."), "views.decisions": N_("A Markdown file that shows the decisions."),
     "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
 }
+GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Default escalation delay")}
+GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("Default delay before a question is escalated to the owner.")}
+SETTING_HELP.update({"escalateAfter": N_("Override the General escalation delay for this Apiary."), "allowedTools": N_("Commands agents of this Apiary may run without asking.")})
 OTHER_HELP = N_("A further setting of this Apiary, as written in its settings file.")   # the explanation of a setting the page has no own text for
 # Owner decision 741: the main part of the Apiary page, the collapsed section Advanced and the keys the page never shows as fields of their own.
-MAIN_KEYS = ("colour", "priority", "owner", "language") + tuple(key for key, _default in APIARY_DEFAULTS)
+MAIN_KEYS = ("colour", "priority", "owner", "language", "escalateAfter") + tuple(key for key, _default in APIARY_DEFAULTS)
 ADVANCED_DEFAULTS = (("planGlobs", ["docs/plans/*.md"]), ("planExclude", []), ("ignoredBuildOutput", []), ("buildFlowDoc", ""), ("integratorInstructions", ""),
-                     ("buildProcessNames", []), ("compileCheck", ""))
-HIDDEN_KEYS = ("name", "workspace", "preferredProvider", "codeRepo", "repo", "worktreePrefix")   # name and folders are the fields Name, Repository and Plans folder; the prefix follows the name
+                     ("buildProcessNames", []), ("compileCheck", ""), ("claudeTools", ""), ("allowedTools", []))
+HIDDEN_KEYS = ("name", "workspace", "preferredProvider", "codeRepo", "repo", "worktreePrefix", "roundMinutes")   # name and folders are the fields Name, Repository and Plans folder; the prefix follows the name
 # Owner decision 742: a field is as wide as its kind of value needs, never the full window width.
-SHORT_WIDTH, PATH_WIDTH, LABEL_WIDTH = 20, 60, 30   # characters: short values, paths and commands (they scroll inside), the label column
+SHORT_WIDTH, PATH_WIDTH, LABEL_WIDTH = 20, 60, 34   # characters: short values, paths and commands (they scroll inside), the label column
 SHORT_KEYS = frozenset(("name", "colour", "color", "priority", "integrationBranch", "remoteName", "nextVersion", "worktreePrefix", "owner", "language", "model", "effort",
                         "slots", "protocol", "outputFormat", "use", "beeMode", "queenClass", "source", "hives", "roundMinutes", "timeoutSeconds", "checkHours", "version", "branch"))
 
@@ -636,6 +639,28 @@ class ConfigWindow(ProviderPages):
         for name in sorted(registered):
             if name not in listed and registered[name][0] and Path(registered[name][0]).is_dir():
                 self.apiaries.append(self.apiary_record(None, registered, name))
+        self.migrate_allowed_tools()
+
+    def migrate_allowed_tools(self):
+        """Stage provider grants for branches unique to one existing Apiary."""
+        branches = Counter(str(a["file"].get("integrationBranch") or "main") for a in self.apiaries)
+        for provider in self.data.get("providers") or []:
+            rest, tools, position = split_args(provider.get("args"))
+            keep = []
+            for tool in tools:
+                matches = [a for a in self.apiaries if a["exists"] and branches[str(a["file"].get("integrationBranch") or "main")] == 1
+                           and re.search(r"(?<![\w./-])" + re.escape(str(a["file"].get("integrationBranch") or "main")) + r"(?![\w./-])", tool)]
+                if len(matches) != 1:
+                    keep.append(tool)
+                    continue
+                target = matches[0]["file"].setdefault("allowedTools", [])
+                if not isinstance(target, list):
+                    keep.append(tool)
+                    continue
+                if tool not in target:
+                    target.append(tool)
+            if keep != tools:
+                provider["args"] = join_args(rest, keep, position)
 
     def apiary_record(self, entry, registered, name=None):
         """The record of one Apiary: its entry in config.toml (None for an Apiary only in the database), its name, the workspace whose project.toml it uses
@@ -778,9 +803,15 @@ class ConfigWindow(ProviderPages):
         self.build_block()
         self.bzz_row()
         shown.pop("preferredProvider", None)
-        shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
-        self.fields(self.form, shown, ())
-        self.add_row(self.form, ())
+        shown.setdefault("language", "English")
+        shown.setdefault("slots", 2)
+        shown.setdefault("roundMinutes", 5)
+        shown.setdefault("escalateAfter", 3)
+        main = {k: shown.pop(k) for k in ("language", "slots", "roundMinutes", "escalateAfter") if k in shown}
+        self.fields(self.form, main, ())
+        box = self.advanced_section()
+        self.fields(box, shown, ())
+        self.add_row(box, ())
         self.initial_values = {path: getter() for path, getter, _like in self.getters}
         self.initial_build = tuple(v.get() for v in self.build_vars) if self.build_vars else None
 
@@ -807,7 +838,8 @@ class ConfigWindow(ProviderPages):
             self.explain(cell, ("place", key))
             self.getters.append((("place", key), var.get, value))
         shown = {k: v for k, v in apiary["file"].items() if k not in HIDDEN_KEYS}   # the name is that of config.toml, the folders are Repository and Plans folder (no setting twice)
-        shown.setdefault("language", "English")
+        shown.setdefault("language", "")
+        shown.setdefault("escalateAfter", "")
         shown = release_fields(apiary_settings(shown, apiary["legacy"]), self.github_repository(shown))
         main = {key: shown.pop(key) for key in MAIN_KEYS if key in shown}
         for key, default in ADVANCED_DEFAULTS:
@@ -888,13 +920,16 @@ class ConfigWindow(ProviderPages):
         name = ".".join(path[1:])
         if self.node[0] == "apiaries" and path[:1] in (("file",), ("entry",), ("place",)):
             return tr(SETTING_LABELS[name]) if name in SETTING_LABELS else readable(path[-1])
+        if self.node[0] == "general":
+            return tr(GENERAL_LABELS.get(path[-1], readable(path[-1])))
         return str(path[-1])
 
     def explain(self, cell, path):
         """The one line of explanation of a setting of an Apiary page below its field."""
         name = ".".join(path[1:])
-        if self.node[0] == "apiaries":
-            self.tk.Label(cell, text=tr(SETTING_HELP.get(name, OTHER_HELP)), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9),
+        if self.node[0] in ("apiaries", "general"):
+            help_text = SETTING_HELP.get(name, OTHER_HELP) if self.node[0] == "apiaries" else GENERAL_HELP.get(path[-1], OTHER_HELP)
+            self.tk.Label(cell, text=tr(help_text), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9),
                           wraplength=PATH_WIDTH * self.char_px).pack(anchor="w")
 
     def adopt_workspace(self, apiary) -> bool:
@@ -968,7 +1003,7 @@ class ConfigWindow(ProviderPages):
             item.pack(fill="x", pady=2, anchor="w")
             row = tk.Frame(item)
             row.pack(fill="x", anchor="w")
-            tk.Label(row, text=tr(label), width=LABEL_WIDTH, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+            tk.Label(row, text=tr(label), width=LABEL_WIDTH, anchor="nw", justify="left", wraplength=LABEL_WIDTH * self.char_px, font=(self.mono, 10)).pack(side="left", anchor="n")
             if key == "cores":
                 self.dialog.option_menu(row, var, [str(n) for n in range(1, cores + 1)], self.mono).pack(side="left")
             else:
@@ -1147,7 +1182,7 @@ class ConfigWindow(ProviderPages):
                 where = path
                 raw = getter()
                 current[path] = raw
-                values[path] = raw if isinstance(raw, (bool, list, dict)) or isinstance(like, (bool, list)) else parse_typed(raw, like)
+                values[path] = raw if (self.node[0] == "apiaries" and path == ("file", "escalateAfter")) or isinstance(raw, (bool, list, dict)) or isinstance(like, (bool, list)) else parse_typed(raw, like)
         except (ValueError, TypeError) as exc:
             self.status.config(text="%s: %s" % (self.text_of(where) if self.node[0] == "apiaries" else ".".join(where), exc), fg=self.col["red"])
             return False
@@ -1173,7 +1208,16 @@ class ConfigWindow(ProviderPages):
             target = data
             for step in path[:-1]:
                 target = target.setdefault(step, {})
-            target[path[-1]] = raw
+            if self.node[0] == "apiaries" and path in (("file", "language"), ("file", "escalateAfter")) and not str(raw).strip():
+                target.pop(path[-1], None)
+            elif self.node[0] == "apiaries" and path == ("file", "escalateAfter"):
+                try:
+                    target[path[-1]] = int(raw)
+                except (ValueError, TypeError):
+                    self.status.config(text=tr("a number is expected"), fg=self.col["red"])
+                    return False
+            else:
+                target[path[-1]] = raw
         if self.node[0] == "servers" and not self.collect_server(data, current):
             return False
         if self.node[0] == "providers":
@@ -1330,12 +1374,13 @@ class ConfigWindow(ProviderPages):
             return
         from . import init
         old_data = load_migrated(self.config_path)
-        save_file(self.config_path, self.data)
-        self.test_servers(old_data)
         init.register_listed(self.conn, self.data.get("projects"))   # an Apiary added on this tab is an Apiary from now on
         for apiary, path in writes:
             save_project_file(self.conn, path, apiary["file"])
             apiary.update(path=path, workspace=str(path.parent.parent), saved=json.dumps(apiary["file"], sort_keys=True), exists=True)
+        # Write provider removals last: a failed project write must not discard grants.
+        save_file(self.config_path, self.data)
+        self.test_servers(old_data)
         self.status.config(text=tr("Saved."), fg=self.col["green"])
         self.fresh = []
         self.refresh_state()
