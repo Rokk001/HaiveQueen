@@ -162,14 +162,14 @@ def get_providers(settings: dict) -> list:
     """
     out = []
     settings = servers.migrate(settings)   # an old endpoint entry of the Codex CLI is read as a provider with an own server
-    by_name = {s["name"]: s for s in servers.get_servers(settings)}
     for p in settings.get("providers") or []:
         name = str(p.get("name") or "")
         if not name:
             raise ValueError(tr("a provider entry has no name"))
-        server = by_name.get(p["server"]) if p.get("server") else None
-        if p.get("server") and not server:
+        if p.get("server"):   # a [[servers]] entry that does not exist (the existing ones are folded into the providers by servers.migrate)
             raise ValueError(tr("provider %s: server %s does not exist", name, p["server"]))
+        server = servers.server_of(p)
+        access = servers.access_of(p)
         use = str(p.get("use") or "preferred")
         old_capability_only = use == "capability-only"
         if old_capability_only:
@@ -191,7 +191,7 @@ def get_providers(settings: dict) -> list:
             "classes": p.get("classes") or {},
             "limit": str(limit.get("source", "")) if isinstance(limit, dict) else str(limit or ""),
             "usageInterval": float(limit.get("interval", 60)) if isinstance(limit, dict) else 60,
-            "endpoint": p.get("endpoint"), "server": server, "nameEdited": bool(p.get("nameEdited", True)), **profile.custom_fields(p),
+            "endpoint": p.get("endpoint"), "server": server, "access": access, "apiKey": str(p.get("apiKey") or "") if access == "api" else "", "nameEdited": bool(p.get("nameEdited", True)), **profile.custom_fields(p),
         })
         out[-1]["local"] = servers.is_local(out[-1])
         # Ready: with account login the login in the HaiveQueen profile, with an own server the last connection test and the models; not ready = not available

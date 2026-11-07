@@ -88,18 +88,18 @@ def get_providers(cfg):
     """Return the provider entries of config.toml as dicts (name, protocol, command, args, classes, endpoint, server). An old Codex endpoint entry is read as a provider with an own server."""
     out = []
     cfg = servers.migrate(cfg)
-    by_name = {s["name"]: s for s in servers.get_servers(cfg)}
     for p in cfg.get("providers") or []:
         name = str(p.get("name") or "")
         if not name:
             raise ValueError("a provider entry has no name")
         proto = str(p.get("protocol") or name)
         fmt = profile.check_protocol(name, proto, p.get("outputFormat"))
-        if p.get("server") and p["server"] not in by_name:
+        if p.get("server"):
             raise ValueError("provider %s: server %s does not exist" % (name, p["server"]))
         out.append({"name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto),
                     "args": [str(x) for x in (p.get("args") or [])], "classes": p.get("classes") or {},
-                    "endpoint": p.get("endpoint") or None, "server": by_name.get(p.get("server")), **profile.custom_fields(p)})
+                    "endpoint": p.get("endpoint") or None, "server": servers.server_of(p), "access": servers.access_of(p),
+                    "apiKey": str(p.get("apiKey") or "") if servers.access_of(p) == "api" else "", **profile.custom_fields(p)})
     return out
 
 

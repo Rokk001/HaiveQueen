@@ -1,17 +1,18 @@
-"""The provider page and the server page of the settings window.
+"""The provider form of the settings window (HQ-PROVIDER-FORM).
 
-The provider page shows five sections from top to bottom: CLI, Model source, Models, Use and Advanced (closed each time the page opens).
-Every field has a one-line explanation in the language of the language setting. The server page holds the fields of a server entry and the
-"Test connection" button. `ProviderPages` is a mixin of `gui_config.ConfigWindow`: it uses the rows, getters and collect of that class.
+One form per provider: name, the dropdown "Access type" (Subscription, API key or Local LLM) and below it the sections CLI, the fields of the chosen access type,
+Models, Use and Advanced (closed each time the page opens). Changing the access type changes the form at once. Every field has a one-line explanation in the
+language of the language setting. `ProviderPages` is a mixin of `gui_config.ConfigWindow`: it uses the rows, getters and collect of that class.
 """
+import copy
 import threading
 
-from . import cli_presets, servers
+from . import cli_presets, gui_dialog, servers
 from .i18n import N_, tr
 
 CLASSES = ("light", "medium", "heavy")
-SOURCES = (N_("Account login"), N_("Own server"))
-NEW_SERVER = N_("New server")
+ACCESS = (("subscription", N_("Subscription")), ("api", N_("API key")), ("llm", N_("Local LLM")))   # (key, label) of the access types, in the order of the dropdown
+TYPE_FIELDS = ("apiKey", "address", "contextWindow")   # the entry values that belong to one access type only
 # (label, explanation) of every field of the two pages, by the key the page uses.
 TEXT = {
     "name": (N_("Name"), N_("How this provider is called in HaiveQueen; it follows the CLI and the model source until you change it yourself.")),
@@ -22,8 +23,7 @@ TEXT = {
     "loginCommand": (N_("Login command"), N_("The command that makes the login of your own CLI.")),
     "loginFiles": (N_("Login files"), N_("The login files of your own CLI, relative to its profile folder, one per line.")),
     "profileEnv": (N_("Profile variables"), N_("Variables that point your own CLI to its profile folder; {home} stands for that folder.")),
-    "source": (N_("Model source"), N_("Where the models come from: the login of your account, or an LLM server of your own.")),
-    "server": (N_("Server"), N_("The server this provider uses; servers are set up on the tab Servers.")),
+    "access": (N_("Access type"), N_("How this provider reaches its models: with the login of a subscription, with an API key, or with a local LLM of your own.")),
     "login": (N_("Login"), N_("The login of the HaiveQueen profile of this CLI; use the Login button when it is missing.")),
     "light": (N_("Light"), N_("Model and effort for small tasks; leave the model empty and this provider does not offer this class.")),
     "medium": (N_("Medium"), N_("Model and effort for normal tasks; leave the model empty and this provider does not offer this class.")),
@@ -37,15 +37,14 @@ TEXT = {
     "args": (N_("Arguments"), N_("The arguments HaiveQueen gives to the CLI, one per line; {model}, {effort} and the like are filled in at the start.")),
     "limit": (N_("Usage check"), N_("Where HaiveQueen reads how much of the usage limit is left: none, claude or codex.")),
     "own": (N_("Own settings"), N_("Other settings of this provider exactly as they stand in config.toml; a new setting is written as typed.")),
-    "serverName": (N_("Name"), N_("How this server is called in the provider pages; renaming it renames it in the providers that use it.")),
-    "address": (N_("Address"), N_("Where the server answers, for example http://192.168.1.20:1234, without /v1.")),
-    "apiKey": (N_("API key"), N_("The key of the server; optional, shown masked and kept only in config.toml of this machine.")),
-    "contextWindow": (N_("Context window (tokens)"), N_("How many tokens the model of the server can hold; empty means nothing is handed to the CLI.")),
+    "address": (N_("Address"), N_("Where the local LLM answers, for example http://192.168.1.20:1234, without /v1.")),
+    "apiKey": (N_("API key"), N_("The key of the local LLM; optional, shown masked and kept only in config.toml of this machine.")),
+    "providerKey": (N_("API key"), N_("Your API key; shown masked, kept only in config.toml of this machine and handed only to the agents HaiveQueen starts.")),
+    "contextWindow": (N_("Context window (tokens)"), N_("How many tokens the model of the local LLM can hold; empty means nothing is handed to the CLI.")),
     "test": (N_("Test connection"), N_("Checks the address, reads the model list and tests the interface each CLI needs; the result is kept.")),
 }
 SHARED_LOGIN = N_("This login is shared by all providers with this CLI.")
-CUSTOM_SOURCE = N_("A custom CLI takes only the account login: HaiveQueen does not know how it takes a server address.")
-HANDLED = {"name", "nameEdited", "protocol", "command", "server", "slots", "use", "capabilities", "capabilitiesVersion", "beeMode", "allowedTools", "args",
+HANDLED = {"name", "nameEdited", "access", "apiKey", "address", "contextWindow", "protocol", "command", "server", "slots", "use", "capabilities", "capabilitiesVersion", "beeMode", "allowedTools", "args",
            "limit", "classes", "profileEnv", "loginCommand", "loginFiles", "outputFormat"}
 USAGE_SOURCES = ("none", "claude", "codex")
 
@@ -111,11 +110,12 @@ class ProviderPages:
         return any(entry is e for e in self.fresh)
 
     def proposed_name(self, entry) -> str:
-        """The name proposed from CLI and source ("codex", "codex-lmstudio"); a taken name gets a number added ("codex-2")."""
+        """The name proposed from CLI and access type: Subscription the CLI name ("codex"), API key plus "-api", Local LLM plus "-llm", Custom CLI "custom";
+        a taken name gets a number added ("codex-2")."""
         key = cli_presets.key_for(entry)
         base = key if key != cli_presets.CUSTOM else "custom"
-        if entry.get("server"):
-            base += "-" + servers.server_id(entry["server"])
+        if key != cli_presets.CUSTOM:
+            base += {"api": "-api", "llm": "-llm"}.get(servers.access_of(entry), "")
         taken = {p.get("name") for p in self.data.get("providers") or [] if p is not entry}
         name, n = base, 1
         while name in taken:
@@ -129,17 +129,14 @@ class ProviderPages:
             entry["name"] = self.proposed_name(entry)
 
     def offered(self, entry):
-        """(models, efforts, own_only) the Models section offers: the list of the server (last test) or of the CLI; a custom CLI offers only the own entry."""
+        """(models, efforts, own_only) the Models section offers: the list of the Local LLM (last test) or of the CLI; a custom CLI offers only the own entry."""
         key = cli_presets.key_for(entry)
         if key == cli_presets.CUSTOM:
             return [], [], True
         efforts = cli_presets.effort_list(key)
-        if entry.get("server"):
-            try:
-                server = servers.get_server(self.data, entry["server"])
-            except ValueError:
-                server = None
-            result = servers.kept(server) if server else None
+        server = servers.server_of(entry)
+        if server:
+            result = servers.kept(server)
             return (list(result["models"]) if result else []), efforts, False
         return cli_presets.model_list(key), efforts, False
 
@@ -148,16 +145,26 @@ class ProviderPages:
         tk = self.tk
         data = self.target()
         key = cli_presets.key_for(data)
+        if key == cli_presets.CUSTOM and servers.access_of(data) != "subscription":   # a Custom CLI has the access type Subscription
+            servers.clear_type_values(data)
+            servers.set_access(data, "subscription")
+        access = servers.access_of(data)
         if isinstance(data.get("limit"), str):
             data["limit"] = {"source": data["limit"]}   # the same meaning, the form of a table
         self.sections, self.notes, self.note_sources, self.frame_of = [], {}, {}, {}
         top = tk.LabelFrame(self.form, text="", padx=6, pady=4)   # same border and padding as the sections, so all fields share one column
         top.pack(fill="x", anchor="w")
+        self.top = top
         self.field(top, top, ("name",), str(data.get("name") or ""), "name")
+        item, row = self.line(top, "access")
+        self.access_values = [tr(label) for _k, label in ACCESS]
+        self.access_var = tk.StringVar(value=tr(dict(ACCESS)[access]))
+        self.dialog.option_menu(row, self.access_var, self.access_values, self.mono, self.choose_access).pack(side="left")
+        self.note(item, "access")
         self.ready_label = tk.Label(top, anchor="w", justify="left", fg=self.col["red"], font=(self.mono, 10, "bold"))
         self.ready_label.pack(fill="x", anchor="w", pady=(0, 6))
-        self.cli_section(self.section("cli", N_("CLI")), key, data)
-        self.source_section(self.section("source", N_("Model source")), key, data)
+        self.cli_section(self.section("cli", N_("CLI")), key, data, access)
+        self.access_section(self.section("source", dict(ACCESS)[access] if access != "subscription" else N_("Login")), data, access)
         self.models_section(self.section("models", N_("Models")), key, data)
         self.use_section(self.section("use", N_("Use")), data)
         self.provider_advanced(key, data)
@@ -165,11 +172,12 @@ class ProviderPages:
         self.refresh_login()
         self.refresh_state()
 
-    def cli_section(self, box, key, data):
-        """CLI: the choice of the CLIs; protocol, command and the own-CLI values only for Custom CLI."""
+    def cli_section(self, box, key, data, access):
+        """CLI: the choice of the CLIs offered for the access type (Custom CLI only for Subscription); protocol, command and the own-CLI values only for Custom CLI."""
         item, row = self.line(box, "cli")
         self.cli_var = self.tk.StringVar(value=cli_presets.label_of(key))
-        self.dialog.option_menu(row, self.cli_var, cli_presets.labels(), self.mono, self.choose_cli).pack(side="left")
+        self.cli_values = cli_presets.labels_for_access(access)
+        self.dialog.option_menu(row, self.cli_var, self.cli_values, self.mono, self.choose_cli).pack(side="left")
         self.note(item, "cli")
         if key != cli_presets.CUSTOM:
             return
@@ -182,36 +190,46 @@ class ProviderPages:
         self.field(box, box, ("profileEnv",), dict(data.get("profileEnv") or {}), "profileEnv")
         self.mark(start, box)
 
-    def source_section(self, box, key, data):
-        """Model source: Account login (status, Login button, shared-login sentence) or Own server (choice of servers and New server)."""
+    def access_section(self, box, data, access):
+        """The fields of the chosen access type: Subscription the login (status, Login button, shared-login sentence), API key the masked key, Local LLM the
+        address, the optional key, the context window and the Test connection button with the last result."""
         tk = self.tk
-        custom = key == cli_presets.CUSTOM
-        self.source_values = [tr(SOURCES[0])] if custom else [tr(s) for s in SOURCES]
-        item, row = self.line(box, "source")
-        self.source_var = tk.StringVar(value=tr(SOURCES[1]) if data.get("server") and not custom else tr(SOURCES[0]))
-        self.dialog.option_menu(row, self.source_var, self.source_values, self.mono, self.choose_source).pack(side="left")
-        self.note(item, "source")
         self.login_status = self.login_button = None
-        self.server_var, self.server_values = None, []
-        if custom:
-            tk.Label(box, text=tr(CUSTOM_SOURCE), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=500).pack(fill="x", anchor="w", padx=(4, 0))
-        if data.get("server") and not custom:
-            names = [s.get("name") for s in self.data.get("servers") or []]
-            self.server_values = names + [tr(NEW_SERVER)]
-            item, row = self.line(box, "server")
-            self.server_var = tk.StringVar(value=str(data["server"]))
-            self.dialog.option_menu(row, self.server_var, self.server_values, self.mono, self.choose_server).pack(side="left")
-            self.note(item, "server")
-            return
-        item, row = self.line(box, "login")
-        flow = tk.Frame(row)
-        flow.pack(side="left", anchor="n")
-        self.login_status = tk.Label(flow, anchor="w", font=(self.mono, 10, "bold"))
-        self.login_button = tk.Button(flow, text=tr("Login"), width=12, command=self.login_click)
-        self.login_status.pack(side="left", padx=(0, 8))
-        self.login_button.pack(side="left")
-        self.note(item, "login")
-        tk.Label(item, text=tr(SHARED_LOGIN), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9)).pack(fill="x", anchor="w", padx=(4, 0))
+        if access == "api":
+            self.key_field(box, data, "providerKey")
+        elif access == "llm":
+            self.field(box, box, ("address",), str(data.get("address") or ""), "address")
+            self.key_field(box, data, "apiKey")
+            window = servers.window_of(data)
+            self.field(box, box, ("contextWindow",), str(window) if window else "", "contextWindow")
+            item, row = self.line(box, "test")
+            self.test_button = tk.Button(row, text=tr("Test connection"), command=self.test_click)
+            self.test_button.pack(side="left")
+            self.note(item, "test")
+            self.result_label = tk.Label(box, anchor="w", justify="left", font=(self.mono, 10))
+            self.result_label.pack(fill="x", anchor="w", pady=4)
+            self.show_result()
+        else:
+            item, row = self.line(box, "login")
+            flow = tk.Frame(row)
+            flow.pack(side="left", anchor="n")
+            self.login_status = tk.Label(flow, anchor="w", font=(self.mono, 10, "bold"))
+            self.login_button = tk.Button(flow, text=tr("Login"), width=12, command=self.login_click)
+            self.login_status.pack(side="left", padx=(0, 8))
+            self.login_button.pack(side="left")
+            self.note(item, "login")
+            tk.Label(item, text=tr(SHARED_LOGIN), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9)).pack(fill="x", anchor="w", padx=(4, 0))
+
+    def key_field(self, box, data, texts):
+        """The API key row: a masked entry (the stored key is never shown, the mask stands for it); the getter is registered under ("apiKey",)."""
+        tk = self.tk
+        item, row = self.line(box, texts)
+        var = tk.StringVar(value=servers.mask_key(data.get("apiKey")))
+        tk.Entry(row, textvariable=var, show="*", width=40, font=(self.mono, 10)).pack(side="left", fill="x", expand=True)
+        self.rows[("apiKey",)] = row
+        self.getters.append((("apiKey",), var.get, var.get()))
+        self.frame_of[("apiKey",)] = box
+        self.note(item, "apiKey", TEXT[texts][1])
 
     def models_section(self, box, key, data):
         """Models: three rows light, medium, heavy with a model choice (list plus own entry) and an effort choice; a custom CLI offers only the own entry."""
@@ -231,8 +249,7 @@ class ProviderPages:
                 entry.pack(side="left", padx=(0, 6))
                 self.model_entries[cls] = entry
             else:
-                from tkinter import ttk
-                combo = ttk.Combobox(row, textvariable=self.model_vars[cls], values=[""] + list(models), width=34, font=(self.mono, 10))
+                combo = gui_dialog.combobox(row, self.model_vars[cls], [""] + list(models), self.mono)
                 combo.pack(side="left", padx=(0, 6))
                 self.model_boxes[cls] = combo
             if self.effort_values:
@@ -319,69 +336,82 @@ class ProviderPages:
     # ------------------------------------------------------------ choices on the provider page
 
     def choose_cli(self, label):
-        """Set the shown provider to the chosen CLI (protocol, command, arguments, Bee mode); Custom CLI keeps the values and offers only the account login;
-        a provider whose name the user did not edit takes the new proposal."""
+        """Set the shown provider to the chosen CLI (protocol, command, arguments, Bee mode); a CLI that is not offered for the access type (Custom CLI is
+        offered only for Subscription) changes nothing; Custom CLI keeps the values; a provider whose name the user did not edit takes the new proposal."""
         if not self.collect():
             return
         data = self.target()
         key = cli_presets.key_of_label(label)
+        if key not in cli_presets.keys_for_access(servers.access_of(data)):
+            self.reshow()
+            return
         if key == cli_presets.CUSTOM:
             data.setdefault("outputFormat", "")
-            data.pop("server", None)
         else:
             cli_presets.apply(data, key)
         self.follow_name(data)
         self.reshow()
 
-    def choose_source(self, label):
-        """Switch the model source: Account login, or Own server (the first server; a new one when there is none). The ticks and the usage check stay (a new provider gets the usage check off)."""
+    def stash_of(self, entry) -> dict:
+        """The values of the access types that are not shown now, for this provider entry; kept only while the window is open (never written)."""
+        for held, values in self.type_stash:
+            if held is entry:
+                return values
+        values = {}
+        self.type_stash.append((entry, values))
+        return values
+
+    def choose_access(self, label):
+        """Switch the access type of the shown provider at once. CLI, Use and Advanced stay; the values of the old type (key, address, context window, models)
+        are kept in memory until the window is closed, so switching back shows them again; the entry holds only the chosen type. When the CLI is not offered
+        for the new type, the first CLI offered for it is chosen. The usage check is set to none for a new provider with API key or Local LLM."""
         if not self.collect():
             return
         data = self.target()
-        if label == tr(SOURCES[1]):
-            names = [s.get("name") for s in self.data.get("servers") or []]
-            if not names:
-                self.new_server(data)
-                return
-            servers.set_source(data, names[0], new=self.is_fresh(data))
-        else:
-            servers.set_source(data, None)
+        new = next((k for k, text in ACCESS if tr(text) == label), None)
+        old = servers.access_of(data)
+        if new is None or new == old:
+            return
+        stash = self.stash_of(data)
+        stash[old] = {"values": {k: copy.deepcopy(data[k]) for k in TYPE_FIELDS if k in data}, "models": self.models_of(data)}
+        servers.clear_type_values(data)
+        servers.set_access(data, new, new=self.is_fresh(data))
+        kept = stash.get(new)
+        if kept is None and old != "llm" and new != "llm":
+            kept = {"values": {}, "models": copy.deepcopy(stash[old]["models"])}   # Subscription and API key share the model list of the CLI
+        data.update(copy.deepcopy((kept or {}).get("values") or {}))
+        self.put_models(data, (kept or {}).get("models") or {})
+        offered = cli_presets.keys_for_access(new)
+        if cli_presets.key_for(data) not in offered:
+            cli_presets.apply(data, offered[0])
+            self.put_models(data, {})
         self.follow_name(data)
         self.reshow()
 
-    def choose_server(self, label):
-        """Use the chosen server, or set up a new one on its own page."""
-        if not self.collect():
-            return
-        data = self.target()
-        if label == tr(NEW_SERVER):
-            self.new_server(data)
-            return
-        servers.set_source(data, label, new=False)
-        self.follow_name(data)
-        self.reshow()
+    @staticmethod
+    def models_of(data) -> dict:
+        """{class: {model, customModel}} of the models a provider entry names."""
+        out = {}
+        for cls, entry in (data.get("classes") or {}).items():
+            if isinstance(entry, dict):
+                out[cls] = {k: entry[k] for k in ("model", "customModel") if k in entry}
+        return out
 
-    def new_server(self, provider=None):
-        """Add a server entry (given to `provider` when there is one) and show its page."""
-        names = {s.get("name") for s in self.data.get("servers") or []}
-        name, n = "server", 1
-        while name in names:
-            n += 1
-            name = "server-%d" % n
-        self.data.setdefault("servers", []).append({"name": name, "address": ""})
-        if provider is not None:
-            servers.set_source(provider, name, new=self.is_fresh(provider))
-            self.follow_name(provider)
-        self.fill_nodes()
-        self.pick_tab_quiet("servers")
-        self.select(self.entries.index(("servers", len(self.data["servers"]) - 1)))
-
-    def pick_tab_quiet(self, tab):
-        """Show the pages of `tab` in the list without collecting (the caller did)."""
-        self.show_tab(tab)
+    @staticmethod
+    def put_models(data, models) -> None:
+        """Set the models of the classes to `models` ({class: {model, customModel}}); a class without an entry there has no model."""
+        classes = data.setdefault("classes", {})
+        for cls in CLASSES:
+            entry = classes.get(cls)
+            if isinstance(entry, dict):
+                entry.pop("model", None)
+                entry.pop("customModel", None)
+        for cls, values in models.items():
+            if values:
+                classes.setdefault(cls, {}).update(copy.deepcopy(values))
 
     def add_provider(self):
-        """Append a new provider (Claude Code, account login, name proposed from CLI and source) and show it."""
+        """Append a new provider (Subscription, Claude Code, name proposed from CLI and access type) and show it."""
         if not self.collect():
             return
         entry = {"name": "", "slots": 1, "use": "fallback", "capabilities": ["Coding", "Queen"], "capabilitiesVersion": 1, "nameEdited": False,
@@ -392,11 +422,6 @@ class ProviderPages:
         self.fresh.append(entry)
         self.fill_nodes()
         self.select(len(self.data["providers"]))
-
-    def add_server(self):
-        """Append a new server entry and show its page."""
-        if self.collect():
-            self.new_server()
 
     # ------------------------------------------------------------ ready line and benchmark button
 
@@ -428,37 +453,11 @@ class ProviderPages:
         if self.benchmark_button is not None:
             self.benchmark_button.config(state="normal" if ready and self.saved_provider() else "disabled")
 
-    # ------------------------------------------------------------ the server page
-
-    def server_form(self):
-        """Fill the form with the page of one server: name, address, API key (masked), context window and the Test connection button."""
-        tk = self.tk
-        data = self.target()
-        self.notes, self.note_sources, self.frame_of = {}, {}, {}
-        form = self.form
-        self.field(form, form, ("name",), str(data.get("name") or ""), "name", texts="serverName")
-        self.field(form, form, ("address",), str(data.get("address") or ""), "address")
-        item, row = self.line(form, "apiKey")
-        key_var = tk.StringVar(value=servers.mask_key(data.get("apiKey")))
-        tk.Entry(row, textvariable=key_var, show="*", width=40, font=(self.mono, 10)).pack(side="left", fill="x", expand=True)
-        self.getters.append((("apiKey",), key_var.get, key_var.get()))
-        self.note(item, "apiKey")
-        window = servers.window_of(data)
-        self.field(form, form, ("contextWindow",), str(window) if window else "", "contextWindow")
-        item, row = self.line(form, "test")
-        self.test_button = tk.Button(row, text=tr("Test connection"), command=self.test_click)
-        self.test_button.pack(side="left")
-        self.note(item, "test")
-        self.result_label = tk.Label(form, anchor="w", justify="left", font=(self.mono, 10))
-        self.result_label.pack(fill="x", anchor="w", pady=4)
-        self.show_result()
-        self.initial_values = {path: getter() for path, getter, _like in self.getters}
+    # ------------------------------------------------------------ the test of a Local LLM
 
     def server_entry(self) -> dict:
-        """The shown server as the tests use it: name, address without /v1, the stored API key and the context window."""
-        data = self.target()
-        return {"name": str(data.get("name") or ""), "address": servers.clean_address(data.get("address")), "apiKey": str(data.get("apiKey") or ""),
-                "contextWindow": servers.window_of(data)}
+        """The shown Local LLM as the tests use it: name (the provider name), address without /v1, the stored API key and the context window."""
+        return servers.server_of({**self.target(), "access": "llm"})
 
     def show_result(self):
         """Show the kept result of the last test of the shown server (time and one line per CLI)."""
@@ -471,7 +470,7 @@ class ProviderPages:
             return
         server = self.server_entry()
         if not server["address"]:
-            self.result_label.config(text=tr("server %s has no address", server["name"]))
+            self.result_label.config(text=tr("the address of the Local LLM is missing"))
             return
         self.result_label.config(text=tr("Testing ..."))
         outcome = {}

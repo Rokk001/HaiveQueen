@@ -1,4 +1,4 @@
-"""Provider page rework (HQ-PROVIDER-SETUP S2): the five sections, model source, models, use, advanced, explanations, name proposal, ready line, server page."""
+"""Provider page (HQ-PROVIDER-SETUP S2, reworked by HQ-PROVIDER-FORM): the sections, models, use, advanced, explanations, name proposal, ready line."""
 import json
 import os
 import sys
@@ -102,7 +102,7 @@ class PageCase(unittest.TestCase):
     def paths(self, win):
         return {path for path, _g, _l in win.getters}
 
-    def keep_test(self, name="lms", models=("qwen/qwen3-27b", "other"), ok=True):
+    def keep_test(self, name="codex", models=("qwen/qwen3-27b", "other"), ok=True):
         server = servers.get_server(gui_config.load_migrated(self.folder / "config.toml"), name)
         iface = {c: {"ok": ok, "path": "/x"} for c in servers.CLI_KEYS}
         data = servers._read_tests()
@@ -137,47 +137,41 @@ class FiveSections(PageCase):
         self.provider(win, "wrapped")   # a command that is not a built-in CLI
         self.assertTrue({("protocol",), ("command",)} <= self.paths(win))
 
-    def test_account_login_shows_login_and_shared_sentence(self):
-        """P-7: Account login shows the status, the Login button and the shared-login sentence."""
+    def test_subscription_shows_login_and_shared_sentence(self):
+        """P-7: Subscription shows the status, the Login button and the shared-login sentence."""
         win = self.window()
         self.provider(win, "claude")
-        self.assertEqual(win.source_var.get(), "Account login")
+        self.assertEqual(win.access_var.get(), "Subscription")
         self.assertIsNotNone(win.login_button)
         self.assertEqual(win.login_status.cget("text"), "Login missing")
         self.assertIn("This login is shared by all providers with this CLI.", label_texts(win.form))
 
-    def test_own_server_shows_server_choice_and_no_login(self):
-        """P-7: Own server shows the server choice with New server, and neither status nor Login button."""
+    def test_local_llm_shows_address_fields_and_no_login(self):
+        """A provider that used a server is a Local LLM provider: address, key, window, no status and no Login button."""
         win = self.window()
         self.provider(win, "codex")
-        self.assertEqual(win.source_var.get(), "Own server")
+        self.assertEqual(win.access_var.get(), "Local LLM")
         self.assertIsNone(win.login_button)
         self.assertIsNone(win.login_status)
-        self.assertEqual(win.server_var.get(), "lms")
-        self.assertEqual(win.server_values, ["lms", "New server"])
-        win.choose_server("New server")
-        self.assertEqual(win.node[0], "servers")   # the new server is set up on its page
-        self.assertEqual(len(win.data["servers"]), 2)
+        self.assertEqual(win.target()["address"], "http://192.168.1.20:1234")
 
-    def test_switch_source_keeps_ticks_and_usage_check(self):
+    def test_switch_access_keeps_ticks_and_usage_check(self):
         """P-14, P-19 (g): switching an existing provider keeps capabilities and usage check."""
         win = self.window()
         self.provider(win, "claude")
         before = win.collect() and (list(win.target().get("capabilities") or ["-"]), dict(win.target()["limit"]))
-        win.choose_source("Own server")
-        self.assertEqual(win.target()["server"], "lms")
+        win.choose_access("Local LLM")
+        self.assertEqual(win.target()["access"], "llm")
         self.assertEqual(win.target()["limit"], {"source": "claude"})
         self.assertEqual(win.target().get("capabilities") or ["-"], before[0] if before[0] != ["-"] else ["Coding", "Queen"])
-        win.choose_source("Account login")
-        self.assertNotIn("server", win.target())
+        win.choose_access("Subscription")
+        self.assertNotIn("access", win.target())
 
-    def test_custom_cli_offers_only_account_login_and_says_so(self):
-        """P-7, P-19 (e)."""
+    def test_custom_cli_is_subscription(self):
+        """P-7, F-7: a command that is no built-in CLI is a Custom CLI with the access type Subscription."""
         win = self.window()
         self.provider(win, "wrapped")
-        self.assertEqual(win.source_values, ["Account login"])
-        self.assertIn("A custom CLI takes only the account login: HaiveQueen does not know how it takes a server address.", label_texts(win.form))
-
+        self.assertEqual((win.access_var.get(), win.cli_var.get()), ("Subscription", "Custom CLI"))
 
 class Models(PageCase):
     def test_three_rows_with_cli_list_and_own_entry(self):
@@ -290,7 +284,7 @@ class UseAndAdvanced(PageCase):
                     self.assertTrue(win.notes)
                     for key, text in win.notes.items():
                         self.assertTrue(text and "\n" not in text, (name, key))
-                    wanted = {"cli", "source", "light", "medium", "heavy", "slots", "use", "capabilities", "beeMode", "allowedTools", "args", "limit", "name"}
+                    wanted = {"cli", "access", "light", "medium", "heavy", "slots", "use", "capabilities", "beeMode", "allowedTools", "args", "limit", "name"}
                     self.assertTrue(wanted <= set(win.notes), wanted - set(win.notes))
                     for key, text in win.notes.items():
                         source = win.note_sources[key]
@@ -299,8 +293,8 @@ class UseAndAdvanced(PageCase):
 
 
 class NameAndAdd(PageCase):
-    def test_add_provider_proposes_name_from_cli_and_source_and_follows(self):
-        """P-12."""
+    def test_add_provider_proposes_name_from_cli_and_access_type_and_follows(self):
+        """P-12, F-8."""
         win = self.window()
         win.add_provider()
         entry = win.target()
@@ -310,10 +304,10 @@ class NameAndAdd(PageCase):
         self.assertEqual(win.target()["name"], "opencode")
         win.choose_cli("Codex CLI")
         self.assertEqual(win.target()["name"], "codex-2")   # "codex" is taken
-        win.choose_source("Own server")
-        self.assertEqual(win.target()["name"], "codex-lms")
-        self.assertEqual(win.target()["limit"], {"source": "none"})   # P-14: created with an own server
-        win.choose_source("Account login")
+        win.choose_access("Local LLM")
+        self.assertEqual(win.target()["name"], "codex-llm")
+        self.assertEqual(win.target()["limit"], {"source": "none"})   # P-14: created with a Local LLM
+        win.choose_access("Subscription")
         self.assertEqual(win.target()["name"], "codex-2")
         self.assertIn("codex-2", win.nodes.get(0, "end"))
 
@@ -345,16 +339,15 @@ class NameAndAdd(PageCase):
                 return
         self.fail("no name entry")
 
-    def test_server_rename_leaves_provider_names(self):
-        """P-19 (h)."""
+    def test_renaming_a_local_llm_provider_keeps_its_test_result(self):
         win = self.window()
-        win.select(win.entries.index(("servers", 0)))
-        self.type_name(win, "lms", "studio")
+        self.keep_test()
+        self.provider(win, "codex")
+        self.type_name(win, "codex", "studio")
+        self.assertIsNotNone(servers.kept(servers.server_of(win.target())))
         win.save()
         saved = gui_config.load_raw(self.folder / "config.toml")
-        self.assertEqual(saved["servers"][0]["name"], "studio")
-        self.assertEqual([p["name"] for p in saved["providers"]], ["claude", "codex", "wrapped"])
-        self.assertEqual(saved["providers"][1]["server"], "studio")
+        self.assertEqual([p["name"] for p in saved["providers"]], ["claude", "studio", "wrapped"])
 
 
 class ReadyLine(PageCase):
@@ -368,7 +361,7 @@ class ReadyLine(PageCase):
         self.assertEqual(self.ready(win), "Not ready: the login is missing")
         self.provider(win, "codex")
         self.assertIn("Not ready: ", self.ready(win))
-        self.assertIn("lms", self.ready(win))
+        self.assertIn("codex", self.ready(win))
         self.keep_test(ok=False)
         self.provider(win, "claude")
         self.provider(win, "codex")
@@ -410,56 +403,8 @@ class ReadyLine(PageCase):
         self.provider(win, "claude")
         self.assertEqual(str(win.benchmark_button.cget("state")), "disabled")   # no login
         win.add_provider()
-        win.choose_source("Own server")
+        win.choose_access("Local LLM")
         self.assertEqual(str(win.benchmark_button.cget("state")), "disabled")   # not saved yet
-
-
-class ServerPage(PageCase):
-    def test_add_server_creates_a_page_with_fields_and_test_button(self):
-        """P-2, P-11: Add server on the Servers tab."""
-        win = self.window()
-        win.pick_tab("servers")
-        self.assertEqual(win.add_button.cget("text"), "Add server")
-        win.add_entry()
-        self.assertEqual(win.node[0], "servers")
-        self.assertTrue({("name",), ("address",), ("apiKey",), ("contextWindow",)} <= self.paths(win))
-        self.assertIsNotNone(win.test_button)
-        self.assertEqual(win.test_button.cget("text"), "Test connection")
-        self.assertTrue({"name", "address", "apiKey", "contextWindow"} <= set(win.notes))
-
-    def test_key_is_masked_and_test_button_shows_the_result(self):
-        win = self.window()
-        win.select(win.entries.index(("servers", 0)))
-        keys = [w for w in descendants(win.form) if w.winfo_class() == "Entry" and w.cget("show")]
-        self.assertEqual(len(keys), 1)
-        self.assertEqual(keys[0].get(), servers.MASK)
-        self.assertNotIn("secret-key", [w.get() for w in descendants(win.form) if w.winfo_class() == "Entry"])
-        self.assertEqual(win.result_label.cget("text"), "Not tested yet")
-        result = {"time": "2026-01-01 10:00:00", "lines": ["Codex CLI: not usable, the server does not offer /v1/responses"]}
-
-        def fake(server, **_k):
-            self.assertEqual(server["apiKey"], "secret-key")   # the stored key, not the mask
-            self.keep_test()
-            return result
-        with mock.patch.object(servers, "run_test", side_effect=fake):
-            win.test_button.invoke()
-            for _ in range(400):
-                win.win.update()
-                if "Tested at" in win.result_label.cget("text"):
-                    break
-                import time
-                time.sleep(0.05)
-        self.assertIn("Tested at 2026-01-01 10:00:00", win.result_label.cget("text"))
-        win.save()
-        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["servers"][0]["apiKey"], "secret-key")   # kept as it was
-
-    def test_remove_used_server_is_refused_naming_the_providers(self):
-        win = self.window()
-        win.select(win.entries.index(("servers", 0)))
-        with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.gui_dialog.info") as info:
-            win.remove_node()
-        self.assertEqual(len(win.data["servers"]), 1)
-        self.assertIn("codex", str(info.call_args))
 
 
 class CliDataFile(unittest.TestCase):

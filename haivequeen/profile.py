@@ -207,7 +207,7 @@ def sessions_dir(protocol: str) -> Path:
 
 def has_login(prov) -> bool:
     """True when the provider has its login in the profile (a provider that cannot be kept to the profile has none)."""
-    if os.environ.get(NO_CHECK_ENV) or (prov or {}).get("server"):   # a provider with an own server needs no login
+    if os.environ.get(NO_CHECK_ENV) or (prov or {}).get("server") or (prov or {}).get("access") == "api":   # a Local LLM or an API key provider needs no login
         return True
     s = spec(prov)
     return bool(s) and any((provider_home(prov) / f).is_file() for f in s["login"])
