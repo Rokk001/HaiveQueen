@@ -926,7 +926,9 @@ class ConfigWindow:
         from . import publish
         from types import SimpleNamespace
         apiary = self.apiaries[self.node[1]]
-        repository = apiary_place(apiary["workspace"], apiary["file"])[0]
+        settings = dict(apiary.get("file") or {})   # the page hides codeRepo from `shown`; a caller may still pass it there
+        settings.update({key: shown[key] for key in ("codeRepo", "repo") if shown.get(key)})
+        repository = apiary_place(apiary.get("workspace"), settings)[0]
         if not repository:
             return None
         try:
