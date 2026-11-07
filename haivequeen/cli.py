@@ -219,7 +219,9 @@ def cmd_export(args, conn) -> int:
 
 def cmd_init(args, conn) -> int:
     """Create the project files in a folder; existing files are kept."""
-    out({"ok": True, "files": init_mod.init_project(args.folder)})
+    messages = []
+    files = init_mod.init_project(args.folder, messages)
+    out({"ok": True, "files": files, "messages": messages})
     return 0
 
 

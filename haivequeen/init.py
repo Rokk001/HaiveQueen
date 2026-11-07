@@ -1,6 +1,7 @@
 """Project setup: `bzz init` creates the project files, `bzz register` records a project."""
 import json
 import os
+import subprocess
 from pathlib import Path
 
 from . import config, db
@@ -37,11 +38,33 @@ def _write_new(path: Path, text: str, report: list) -> None:
     report.append({"path": str(path), "result": "created"})
 
 
-def init_project(folder) -> list:
+def _ignore_local_folder(ws: Path) -> list:
+    """Keep machine-local project files out of Git and report tracked files."""
+    ignore = ws / ".gitignore"
+    old = ignore.read_bytes() if ignore.exists() else b""
+    messages = []
+    if b".haivequeen/" not in old.splitlines():
+        separator = b"" if not old or old.endswith((b"\n", b"\r")) else b"\n"
+        ignore.write_bytes(old + separator + b".haivequeen/\n")
+        messages.append("Added .haivequeen/ to " + str(ignore))
+    try:
+        tracked = subprocess.run(["git", "ls-files", "--", ".haivequeen/"], cwd=ws,
+                                 capture_output=True, check=False)
+        if tracked.returncode == 0 and tracked.stdout:
+            messages.append("The folder " + str(ws / ".haivequeen") + " is tracked; remove it from git.")
+    except FileNotFoundError:
+        pass
+    return messages
+
+
+def init_project(folder, messages=None) -> list:
     """Create .haivequeen/project.toml, AGENTS.md, CLAUDE.md (only if missing) and docs/plans/; returns a report."""
     ws = Path(folder)
     ws.mkdir(parents=True, exist_ok=True)
     report = []
+    ignore_messages = _ignore_local_folder(ws)
+    if messages is not None:
+        messages.extend(ignore_messages)
     toml = (EXAMPLES / "project.example.toml").read_text(encoding="utf-8").replace(
         'name = "example"', "name = " + json.dumps(ws.resolve().name), 1)
     _write_new(ws / ".haivequeen" / "project.toml", toml, report)
@@ -79,6 +102,7 @@ def register_project(conn, folder) -> dict:
     """Add the project to config.toml (registered projects) and to the projects table; safe to repeat."""
     ws = Path(folder).resolve()
     proj = config.load_project(ws)
+    messages = _ignore_local_folder(ws)
     name = proj["name"]
     cfg_file = config.config_dir() / "config.toml"
     listed = any(p.get("name") == name for p in config.load_config()["projects"])
@@ -89,4 +113,4 @@ def register_project(conn, folder) -> dict:
         block = f"\n[[projects]]\nname = {json.dumps(name)}\nworkspace = {json.dumps(str(ws))}\n"
         cfg_file.write_text(old + sep + block, encoding="utf-8", newline="\n")
     db.upsert_project(conn, name, str(ws), proj["colour"], proj["priority"])
-    return {"ok": True, "project": name, "workspace": str(ws), "config": "kept" if listed else "added"}
+    return {"ok": True, "project": name, "workspace": str(ws), "config": "kept" if listed else "added", "messages": messages}

@@ -108,6 +108,9 @@ bzz init /path/to/my-project          # creates .haivequeen/project.toml, AGENTS
 bzz register /path/to/my-project      # adds the project to config.toml and the database
 ```
 
+Each Apiary’s `.haivequeen/` folder contains machine-local settings and runtime files; keep it local to each machine and do not commit it. `bzz init` and `bzz register` add it to the project folder’s `.gitignore` and warn if it is already tracked.
+
+
 To install a particular release instead of the newest code, check out its tag after cloning (for example `git checkout v2.0.1`) before `pip install -e .`. Keep the clone where it is: the update function below installs new versions into that folder.
 
 ### Updates

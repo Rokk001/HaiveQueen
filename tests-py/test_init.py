@@ -69,6 +69,53 @@ class InitTest(unittest.TestCase):
         self.assertEqual((self.ws / ".haivequeen" / "project.toml").read_text(encoding="utf-8"),
                          'name = "changed"\n')
 
+    def test_gitignore_missing_and_existing_contents(self):
+        """Init creates the ignore file or preserves its existing bytes when appending."""
+        result = self.orch("init", str(self.ws))
+        ignore = self.ws / ".gitignore"
+        self.assertEqual(ignore.read_bytes(), b".haivequeen/\n")
+        self.assertIn(".haivequeen/", json.dumps(result))
+        ignore.write_bytes(b"# keep\r\n*.tmp")
+        result = self.orch("init", str(self.ws))
+        self.assertEqual(ignore.read_bytes(), b"# keep\r\n*.tmp\n.haivequeen/\n")
+        self.assertIn(".haivequeen/", json.dumps(result))
+
+    def test_gitignore_existing_line_unchanged(self):
+        """An existing exact entry is kept byte for byte, including line endings."""
+        self.ws.mkdir()
+        ignore = self.ws / ".gitignore"
+        original = b"# keep\r\n.haivequeen/\r\n*.tmp"
+        ignore.write_bytes(original)
+        self.orch("init", str(self.ws))
+        self.assertEqual(ignore.read_bytes(), original)
+
+    def test_register_adds_gitignore_for_existing_project(self):
+        """Register adds the entry and reports it, and repeating it does not duplicate it."""
+        self.ws.mkdir()
+        ignore = self.ws / ".gitignore"
+        ignore.write_bytes(b"other\n")
+        result = self.orch("register", str(self.ws))
+        self.assertIn(".haivequeen/", json.dumps(result))
+        self.orch("register", str(self.ws))
+        self.assertEqual(ignore.read_bytes(), b"other\n.haivequeen/\n")
+
+    def test_tracked_folder_warns_without_changing_index(self):
+        """Both commands warn for tracked files and leave the index unchanged."""
+        self.ws.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.ws)], check=True)
+        folder = self.ws / ".haivequeen"
+        folder.mkdir()
+        (folder / "project.toml").write_text('name = "myproj"\n', encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.ws), "add", ".haivequeen/project.toml"], check=True)
+        before = subprocess.check_output(["git", "-C", str(self.ws), "ls-files", "--stage"])
+        for command in ("init", "register"):
+            result = self.orch(command, str(self.ws))
+            message = json.dumps(result).lower()
+            self.assertIn(".haivequeen", message)
+            self.assertIn("remove", message)
+            self.assertIn("git", message)
+            self.assertEqual(subprocess.check_output(["git", "-C", str(self.ws), "ls-files", "--stage"]), before)
+
     def test_register_idempotent(self):
         """Registering twice gives one config entry and one projects row."""
         self.orch("init", str(self.ws))
