@@ -4,6 +4,7 @@ It shows the state read by haivequeen/overview.py through haivequeen/gui_data.py
 The logo and icons are cut out of the mockup (assets/gui, made by scripts/make_gui_assets.py). The controls are pause/resume, stop/start, apiary filter and the live view of an agent (Enter or double click on a row).
 `bzz gui` opens the window, `bzz start` starts the orchestrator without a terminal window and opens it.
 """
+import math
 import os
 import subprocess
 import sys
@@ -24,6 +25,7 @@ COL = {"bg": "#000608", "panel": "#010608", "gold": "#f6b800", "edge": "#d8a400"
        "select": "#4b3802", "selectedge": "#8a6a10", "track": "#15222c", "seg": "#f9ce3a"}
 LEVEL_COL = {"ok": "green", "warn": "yellow", "bad": "red", "dim": "dim", "text": "text"}
 STATUS_COL = {"ok": "green", "idle": "blue", "wait": "amber"}
+CELL, CELL_GAP, GOLD = 18, 0.2, "#f6b800"   # slot cell: normal design size, gap as share of the size, the gold of the logo
 LEVEL_FILL = {"ok": "green", "warn": "yellow", "bad": "red", "slots": "#2b8cff", "dim": "dim"}   # bar colour of a model limit by its level
 REPO_URL = "https://github.com/Rokk001/HaiveQueen"   # opened by a click on the repository name in the header
 TAG_COL = {"QUEEN": "gold", "BEE": "cyan", "APIARY": "green", "SYSTEM": "green"}
@@ -63,6 +65,13 @@ def launch_detached() -> dict:
 
 
 # Find the zoom/subsample pair (tk can only scale pictures by whole-number ratios) closest to a scale factor.
+# The size of the slot cells that fit a row.
+def slot_cell_size(total, room, normal=CELL):
+    """Design size of `total` cells in `room` design pixels: `normal` when they fit, smaller down to half of it, else None (the row shows a number)."""
+    size = room / (total * (1 + CELL_GAP) - CELL_GAP)
+    return normal if size >= normal else (size if size >= normal / 2 else None)
+
+
 def best_fraction(factor) -> tuple:
     """(zoom, subsample) with both <= 8 and a ratio closest to `factor` but not above it (a picture must never be larger than its layout slot)."""
     fits = [(n, m) for n in range(1, 9) for m in range(1, 9) if n / m <= factor]
@@ -397,6 +406,15 @@ class Dashboard:
             final.append(row)
         return final
 
+    # Height of a text line in design pixels.
+    def lh(self, size):
+        """Design height of one text line of font size `size`, measured with the dashboard font (an estimate before the font exists)."""
+        px = -max(8, round(self.px(size)))
+        self.tw("x", size)   # makes sure the font exists
+        font = self.fonts.get(px)
+        real = font.metrics("linespace") if font is not None else 1.3 * abs(px)
+        return (real + 1) / max(self.scale, 0.01)
+
     # Width of a text in design pixels.
     def tw(self, s, size):
         """Design width of `s` drawn at font size `size`, measured with the dashboard font (an estimate before the font exists)."""
@@ -420,7 +438,7 @@ class Dashboard:
         self.scale = max(0.3, min(c.winfo_width() / DESIGN_W, c.winfo_height() / DESIGN_H))
         self.fraction = best_fraction(self.scale)
         c.delete("all")
-        self.hits, self.bars, self.areas = [], {}, []
+        self.hits, self.bars, self.areas, self.tip_boxes, self.tip_text = [], {}, [], [], None
         if self.snap is None:
             self.text(20, 20, self.error or tr("loading…"), 18, "dim")
             return
@@ -501,10 +519,24 @@ class Dashboard:
             self.overlay_key = key
             self.canvas.delete("overlay")
             self.draw_overlay()
+        tip = next((t for x0, y0, x1, y1, t in getattr(self, "tip_boxes", []) if x0 <= event.x <= x1 and y0 <= event.y <= y1), None)
+        if tip != getattr(self, "tip_text", None):
+            self.tip_text = tip
+            self.canvas.delete("tip")
+            if tip:
+                w = self.tw(tip, 13) + 20
+                x = max(4, min(event.x / self.scale + 12, DESIGN_W - 4 - w))
+                y = event.y / self.scale + 20
+                y = y if y + 26 < DESIGN_H else y - 50
+                self.canvas.create_rectangle(self.px(x), self.px(y), self.px(x + w), self.px(y + 26), fill=COL["panel"], outline=COL["edge"], tags=("tip",))
+                self.canvas.create_text(self.px(x + 10), self.px(y + 13), text=tip, fill=COL["text"], anchor="w",
+                                        font=(self.mono, -max(8, round(self.px(13))), "normal"), tags=("tip",))
 
     # The pointer left the window.
     def hover_leave(self, _event):
-        """Close the open overlay."""
+        """Close the open overlay and the tooltip."""
+        self.tip_text = None
+        self.canvas.delete("tip")
         if self.overlay_key:
             self.overlay_key = None
             self.canvas.delete("overlay")
@@ -812,24 +844,102 @@ class Dashboard:
         if not lines:
             self.text(x0 + 14, y0 + 62, tr("no log lines"), 13, "dim", "w")
 
-    # Draw the model limits as bars.
+    # Draw the model limits, one row per provider.
     def limits_panel(self, s, x0, y0, x1, y1):
-        """Draw the Claude/Codex 5-hour windows and per provider the weekly quota and the used slots as bars with a note beside each; scrolls when there are more."""
-        self.panel(x0, y0, x1, y1, tr("MODEL LIMITS"), tr("used share, resets and slots"), icon="icon_system")
+        """Draw one row per provider: name, model and the NEXT badge, the quota reserve, the slot cells, the weekly bar and the 5-hour line; scrolls when there are more rows."""
+        self.panel(x0, y0, x1, y1, tr("MODEL LIMITS"), tr("reserve, slots and weekly limit"), icon="icon_system")
         rows = s["limits"]
-        room = int((y1 - y0 - 56) // 26)
+        sc = self.scale
+        th = self.lh
+        small = th(12)
+        # The three columns take the width their texts need (capped); when the panel is too narrow the left and middle column give way first.
+        badge_w = self.tw("NEXT", 11) + 12
+        need_l = min(220, max([self.tw(r["name"], 18) + (badge_w + 8 if r["next"] else 0) for r in rows] + [self.tw(r["model"], 12) for r in rows] + [60]))
+        need_m = min(170, max([self.tw(tr("Quota reserve"), 12)] + [self.tw(r["reserve"]["text"], 20 if r["reserve"]["text"][:1] in ("+", "−") else 14)
+                                                                  + (self.tw(r["reserve"]["age"], 12) + 6 if r["reserve"]["age"] else 0) for r in rows]))
+        avail = x1 - 30 - (x0 + 14) - 32
+        wrap = max([self.tw(r["weekly"]["text"], 12) for r in rows] + [0]) > 0.45 * avail   # a weekly line that takes too much of the row continues on a second line (in every row)
+        need_r = max([self.tw(part, 12) for r in rows for part in (r["weekly"]["text"].split(" · ") if wrap else [r["weekly"]["text"]])]
+                     + [self.tw(r["five"], 12) for r in rows] + [150])
+        shrink = min(1.0, max(0.4, (avail - need_r) / (need_l + need_m)))
+        lw, mw = need_l * shrink + 1, need_m * shrink + 1
+        lx, mx = x0 + 14, x0 + 14 + lw + 16
+        rx = mx + mw + 16
+        rw = x1 - 30 - rx
+        row_h = max(CELL + 4 + 5 + 3 + (3 if wrap else 2) * small, th(18) + 2 + small, small + 2 + th(20)) + 4   # the tallest column decides; every row has this height
+        room = max(1, int((y1 - y0 - 56) // row_h))
         off = self.offset("limits", len(rows), room)
         self.area("limits", x0, y0, x1, y1)
         self.scrollbar("limits", x1 - 16, y0 + 50, y1 - 8, len(rows), room)
         for n, r in enumerate(rows[off:off + room]):
-            y = y0 + 66 + n * 26
-            self.text(x0 + 14, y, r["label"][:15], 14, "text", "w")
-            fill = LEVEL_FILL.get(r["level"], "dim")
-            self.bar(x0 + 150, y - 7, 140, 14, (r["pct"] or 0) / 100, fill, 18)
-            self.text(x0 + 298, y, "%d%%" % r["pct"] if r["pct"] is not None else tr("n/a"), 14, "cyan" if r["pct"] is not None else "dim", "w")
-            self.text(x0 + 345, y, self.fit(r["note"], x1 - x0 - 345 - 30, 12), 12, "dim", "w")
+            top = y0 + 54 + n * row_h
+            # left: provider, model, NEXT badge
+            name_w = lw
+            if r["next"]:
+                name_w -= badge_w + 8
+            ny = top + 4 + th(18) / 2
+            name = self.text(lx, ny, self.fit(r["name"], name_w, 18), 18, "text", "w")
+            if r["next"]:
+                bx = self.canvas.bbox(name)[2] / sc + 8
+                box = self.rect(bx, ny - th(11) / 2 - 2, bx + badge_w, ny + th(11) / 2 + 2, fill="gold", outline="gold")
+                self.canvas.itemconfigure(box, tags=("next_badge",))
+                self.text(bx + badge_w / 2, ny, tr("NEXT"), 11, "#000608", "center", True)
+            self.text(lx, top + 4 + th(18) + 2 + small / 2, self.fit(r["model"], lw, 12), 12, "dim", "w")
+            # middle: quota reserve
+            res = r["reserve"]
+            self.text(mx, top + 4 + small / 2, self.fit(tr("Quota reserve"), mw, 12), 12, "dim", "w")
+            numeric = res["text"][:1] in ("+", "−")
+            age_w = self.tw(res["age"], 12) + 6 if res["age"] else 0
+            size = 20 if numeric else 14
+            colour = {"ok": "green", "bad": "red"}.get(res["level"], "dim")
+            vy = top + 4 + small + 2 + th(20) / 2
+            shown = self.fit(res["text"], mw - age_w, size)
+            value = self.text(mx, vy, shown, size, colour, "w")
+            if res["age"]:
+                self.text(self.canvas.bbox(value)[2] / sc + 6, vy, res["age"], 12, "dim", "w")
+            tip = res["hover"] or (res["text"] if shown != res["text"] else "")
+            if tip:
+                self.tip_boxes.append((self.px(mx), self.px(top + 4), self.px(mx + mw), self.px(vy + th(20) / 2), tip))
+            # right: slot cells, weekly bar, 5-hour line
+            sl = r["slots"]
+            cy = top + 4 + CELL / 2
+            if sl["none"]:
+                label = self.text(rx, cy, sl["none"], 14, "dim", "w")
+                if sl["running"]:
+                    self.text(self.canvas.bbox(label)[2] / sc + 10, cy, sl["running"], 14, "text", "w")
+            else:
+                extra = "+%d" % sl["extra"] if sl["extra"] else ""
+                size = slot_cell_size(sl["total"], rw - (self.tw(extra, 14) + 8 if extra else 0))
+                if size is None:
+                    self.text(rx, cy, "%d / %d" % (sl["used"], sl["total"]), 14, "text", "w")
+                else:
+                    step = size * (1 + CELL_GAP)
+                    for i in range(sl["total"]):
+                        self.hexagon(rx + size / 2 + i * step, cy, size / 2, i < sl["used"])
+                    if extra:
+                        self.text(rx + (sl["total"] - 1) * step + size + 8, cy, extra, 14, "gold", "w", True)
+            by = top + 4 + CELL + 4
+            wk = r["weekly"]
+            if wk["pct"] is not None:
+                self.bar(rx, by, rw, 5, wk["pct"] / 100, LEVEL_FILL.get(wk["level"], "dim"))
+            wy = by + 5 + 3 + small / 2
+            parts = wk["text"].split(" · ") if wrap else [wk["text"]]
+            for k, part in enumerate(parts):
+                self.text(rx, wy + k * small, self.fit(part, rw, 12), 12, "dim" if wk["pct"] is None else "text", "w")
+            if r["five"]:
+                self.text(rx, wy + len(parts if wrap else [0]) * small, self.fit(r["five"], rw, 12), 12, "dim", "w")
         if not rows:
             self.text(x0 + 14, y0 + 66, tr("no limit data"), 14, "dim", "w")
+
+    # Draw one honeycomb cell.
+    def hexagon(self, cx, cy, r, full):
+        """Draw a hexagon of radius r around the design point; filled in the gold of the logo when `full`, else only its outline."""
+        pts = []
+        for k in range(6):
+            a = math.pi / 3 * k
+            pts += [self.px(cx + r * math.cos(a)), self.px(cy + r * math.sin(a))]
+        self.canvas.create_polygon(*pts, fill=GOLD if full else "", outline=GOLD, width=max(1, round(self.px(1.5))),
+                                   tags=("slot_full" if full else "slot_empty",))
 
     # Draw the status sections.
     def status_panel(self, s, x0, y0, x1, y1):

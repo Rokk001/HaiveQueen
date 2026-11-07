@@ -148,14 +148,12 @@ class RowsTest(unittest.TestCase):
         self.assertEqual((var.get(), picked, button.cget("text")), ("b", ["b"], "b  ▾"))
         self.assertEqual(gui_dialog.scrollbar(self.root, None).winfo_class(), "TScrollbar")
 
-    # The 5-hour bar only exists when the provider reports a 5-hour window.
-    def test_no_five_hour_bar_without_a_window(self):
-        """With no 5-hour reading of Claude or Codex the limit bars hold no 5h row."""
+    # The 5-hour windows have no rows of their own.
+    def test_no_rows_without_providers(self):
+        """Without providers the limit rows are empty; 5-hour readings of Claude or Codex add no separate row."""
         from haivequeen import gui_data
-        d = {"cu": {"FiveHour": None}, "xu": {"FiveHour": None}, "provider_limits": []}
-        self.assertEqual(gui_data.limit_bars(d), [])
-        d["cu"]["FiveHour"] = {"pct": 40, "reset": "18:00"}
-        self.assertEqual([r["label"] for r in gui_data.limit_bars(d)], ["Claude 5h"])
+        d = {"cu": {"FiveHour": {"pct": 40, "reset": "18:00"}}, "xu": {"FiveHour": None}, "provider_limits": []}
+        self.assertEqual(gui_data.limit_rows(d), [])
 
     # A subagent Bee is busy in its Hive.
     def test_embedded_bee_counts_as_busy_in_its_hive(self):

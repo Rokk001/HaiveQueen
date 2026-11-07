@@ -41,7 +41,88 @@ SETTING_LABELS = {
     "integrationBranch": N_("Integration branch"), "remoteName": N_("Remote name"), "worktreeLocation": N_("Worktree location (empty: beside the repository)"),
     "deleteFinishedWorktrees": N_("Delete finished worktrees automatically"), "deleteIntegratedBranches": N_("Delete integrated branches (local and remote)"),
     "publishReleases": N_("Publish release at integration"), "nextVersion": N_("Next version (empty: count the last digit up)"),
+    # Owner decision 741 (3): every field of the Apiary page has an understandable label; the internal key names stay in project.toml only.
+    "name": N_("Name"), "repository": N_("Repository"), "plansFolder": N_("Plans folder (empty: docs/plans of the repository)"),
+    "colour": N_("Colour"), "priority": N_("Priority"), "owner": N_("Owner name"), "language": N_("Language of the owner texts"),
+    "planGlobs": N_("Plan files (patterns, one per line)"), "planExclude": N_("Files that are not plans (patterns, one per line)"),
+    "ignoredBuildOutput": N_("Build output to ignore (one per line)"), "buildFlowDoc": N_("Build instructions document"),
+    "integratorInstructions": N_("Extra instructions for the integration"), "buildProcessNames": N_("Build program names (one per line)"),
+    "compileCheck": N_("Compile check command"), "claudeTools": N_("Tools allowed in Claude Code"), "protectedWorktrees": N_("Protected worktrees (one per line)"),
+    "onEvent": N_("Command after each event"), "onEvent.command": N_("Command"), "onEvent.workDir": N_("Working folder"), "onEvent.timeoutSeconds": N_("Time limit (seconds)"),
+    "views": N_("Generated overviews"), "views.queue": N_("Queue overview file"), "views.questions": N_("Open questions file"), "views.decisions": N_("Decisions file"),
+    "prompts": N_("Own prompt texts"), "prompts.integrator": N_("Instructions of the integrating Queen"),
 }
+# One line of explanation per field of the Apiary page (owner decision 741 (3)).
+SETTING_HELP = {
+    "name": N_("The name of the Apiary in HaiveQueen; new worktree names start with it."),
+    "repository": N_("The Git repository of the code; releases, version, branches and worktrees always use it."),
+    "plansFolder": N_("Only for plans kept outside the repository; this folder also holds the settings of the Apiary."),
+    "colour": N_("The colour of the Apiary in the main window."), "priority": N_("Apiaries with a higher number get free places first."),
+    "owner": N_("How the Queens and Bees call you in their texts."), "language": N_("The language of the texts HaiveQueen writes to you for this Apiary."),
+    "ownerTopics": N_("Questions about these topics are never answered automatically."), "ownerCheckText": N_("The question HaiveQueen asks you when a plan is integrated."),
+    "compileCheckEnabled": N_("Check that the code compiles and the tests pass before integration."), "buildEnabled": N_("Build the product after integration."),
+    "deployEnabled": N_("Deploy the built product after integration."), "integrationBranch": N_("The branch finished plans are merged into."),
+    "remoteName": N_("The Git remote HaiveQueen pushes to and fetches from."), "worktreeLocation": N_("The folder that holds the worktrees of the Bees; a relative path counts from the repository."),
+    "deleteFinishedWorktrees": N_("Remove a worktree once its work is integrated and nothing is lost."),
+    "deleteIntegratedBranches": N_("Remove plan branches once they are integrated and nothing is lost."),
+    "publishReleases": N_("Publish a GitHub release of the repository at each integration."), "nextVersion": N_("The version of the next release, for example 2.1.0."),
+    "planGlobs": N_("Where the plans are found, relative to the folder with the settings."), "planExclude": N_("Files matching a plan pattern that are not plans."),
+    "ignoredBuildOutput": N_("Files the build writes that do not count as changes."), "buildFlowDoc": N_("A document that describes how the product is built."),
+    "integratorInstructions": N_("Text added to the instructions of the integrating Queen."), "buildProcessNames": N_("Running programs that show a build is still busy."),
+    "compileCheck": N_("The command that compiles the code and runs the tests."), "claudeTools": N_("The tools Claude Code may use without asking, separated by commas."),
+    "protectedWorktrees": N_("Worktrees that are never removed automatically."),
+    "onEvent.command": N_("A program started after each event, for example to sync files."), "onEvent.workDir": N_("The folder the command runs in."),
+    "onEvent.timeoutSeconds": N_("The command is stopped after this many seconds."), "views.queue": N_("A Markdown file that shows the queue."),
+    "views.questions": N_("A Markdown file that shows the open questions."), "views.decisions": N_("A Markdown file that shows the decisions."),
+    "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
+}
+OTHER_HELP = N_("A further setting of this Apiary, as written in its settings file.")   # the explanation of a setting the page has no own text for
+# Owner decision 741: the main part of the Apiary page, the collapsed section Advanced and the keys the page never shows as fields of their own.
+MAIN_KEYS = ("colour", "priority", "owner", "language") + tuple(key for key, _default in APIARY_DEFAULTS)
+ADVANCED_DEFAULTS = (("planGlobs", ["docs/plans/*.md"]), ("planExclude", []), ("ignoredBuildOutput", []), ("buildFlowDoc", ""), ("integratorInstructions", ""),
+                     ("buildProcessNames", []), ("compileCheck", ""))
+HIDDEN_KEYS = ("name", "workspace", "preferredProvider", "codeRepo", "repo", "worktreePrefix")   # name and folders are the fields Name, Repository and Plans folder; the prefix follows the name
+# Owner decision 742: a field is as wide as its kind of value needs, never the full window width.
+SHORT_WIDTH, PATH_WIDTH, LABEL_WIDTH = 20, 60, 30   # characters: short values, paths and commands (they scroll inside), the label column
+SHORT_KEYS = frozenset(("name", "colour", "color", "priority", "integrationBranch", "remoteName", "nextVersion", "worktreePrefix", "owner", "language", "model", "effort",
+                        "slots", "protocol", "outputFormat", "use", "beeMode", "queenClass", "source", "hives", "roundMinutes", "timeoutSeconds", "checkHours", "version", "branch"))
+
+
+def field_width(key, value) -> int:
+    """The width in characters of the line editor of `key`: short for numbers, names, branches, remotes, priorities, colours and versions, else that of a path."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return SHORT_WIDTH
+    return SHORT_WIDTH if key in SHORT_KEYS else PATH_WIDTH
+
+
+def readable(key) -> str:
+    """A label made of the words of a key HaiveQueen has no label for: planSuffixRegex gives "Plan suffix regex" (owner decision 741 (3): no raw key names)."""
+    words = re.findall(r"[A-Z]{2,}(?=[A-Z][a-z]||[0-9_-])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+", str(key))
+    if not words:
+        return str(key)
+    text = " ".join(w if w.isupper() and len(w) > 1 else w.lower() for w in words)
+    return text[:1].upper() + text[1:]
+
+
+def same_dir(a, b) -> bool:
+    """True when both texts name the same folder (case and separators ignored)."""
+    return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+
+
+# Owner decision 741 (1): the folders of an Apiary as the page shows them.
+def apiary_place(workspace, settings) -> tuple:
+    """(repository, plans folder) of an Apiary: the repository is codeRepo (or the old repo) of its project.toml, else the folder of the settings;
+    the plans folder is the folder of the settings when it is not the repository, else empty (the plans are in the repository)."""
+    code = str(settings.get("codeRepo") or settings.get("repo") or "")
+    workspace = str(workspace or "")
+    if code and workspace and not same_dir(code, workspace):
+        return code, workspace
+    return code or workspace, ""
+
+
+def worktree_prefix(name) -> str:
+    """The name prefix of new worktrees derived from the Apiary name (owner decision 741 (2)): letters, digits, '.', '_' and '-', others become '-'."""
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", str(name or "")).strip("-.") or "wt"
 
 
 # The values the Apiary page shows.
@@ -478,11 +559,14 @@ class ConfigWindow(ProviderPages):
         from . import gui_dialog   # imported here: gui_dialog imports gui, which imports this module only on demand
         self.dialog = gui_dialog
         self.config_path = Path(config_dir) / "config.toml"
-        self.data, self.node, self.getters, self.entries, self.visible, self.position = {}, ("general", None), [], [], [], None
+        self.data, self.node, self.getters, self.entries, self.visible, self.position, self.rows = {}, ("general", None), [], [], [], None, {}
         self.apiaries, self.initial_values, self.initial_build = [], {}, None
         self.build_vars, self.fresh = None, []   # fresh: the providers added in this window and not saved yet
         self.ready_label = self.test_button = self.result_label = None
+        self.advanced_open = False   # the section Advanced of the Apiary page starts collapsed and stays as the owner left it while the window is open
         self.win = tk.Toplevel(root)
+        import tkinter.font
+        self.char_px = max(1, tkinter.font.Font(root=self.win, family=mono, size=10).measure("0"))   # one character of the field font
         self.win.title(tr("HaiveQueen settings"))
         self.win.geometry("1100x700")
         self.win.minsize(640, 420)
@@ -661,6 +745,7 @@ class ConfigWindow(ProviderPages):
         for child in self.form.winfo_children():
             child.destroy()
         self.getters, self.initial_values, self.initial_build = [], {}, None
+        self.rows = {}   # {path: frame of its editor} of the shown page
         self.build_vars = None   # the three variables of the block "Build" while the General page is shown
         self.login_status = self.login_button = self.benchmark_button = self.benchmark_status = None   # benchmark_status stays None: no text on the page
         self.ready_label = self.test_button = self.result_label = None
@@ -700,23 +785,117 @@ class ConfigWindow(ProviderPages):
         self.initial_build = tuple(v.get() for v in self.build_vars) if self.build_vars else None
 
     def apiary_form(self):
-        """The page of one Apiary: name and workspace from config.toml, then every setting of its project.toml (the switches and the other Apiary settings first), each once."""
+        """The page of one Apiary (owner decision 741): Name, Repository and Plans folder, the settings a normal user needs, each with a label and one line of
+        explanation, and the collapsed section Advanced with the other settings of its project.toml; every setting once."""
         apiary = self.apiaries[self.node[1]]
         entry = apiary["entry"]
         if entry is not None:
             self.adopt_workspace(apiary)
-            self.fields(self.form, dict(entry), ("entry",))
+            self.fields(self.form, {"name": str(entry.get("name") or "")}, ("entry",))
         else:
-            row = self.tk.Frame(self.form)
-            row.pack(fill="x", pady=2, anchor="w")
-            self.tk.Label(row, text="%s  (%s)" % (apiary["name"], apiary["workspace"]), anchor="w", font=(self.mono, 10)).pack(side="left")
-        shown = {k: v for k, v in apiary["file"].items() if k not in ("name", "workspace", "preferredProvider")}   # the name and the workspace are those of config.toml (no setting twice)
+            holder, cell = self.field_row(self.form, ("entry", "name"))
+            self.tk.Label(holder, text=apiary["name"], anchor="w", font=(self.mono, 10)).pack(side="left")
+            self.explain(cell, ("entry", "name"))
+        repository, plans = apiary_place(apiary["workspace"], apiary["file"])
+        for key, value in (("repository", repository), ("plansFolder", plans)):
+            holder, cell = self.field_row(self.form, ("place", key))
+            var = self.tk.StringVar(value=value)
+            entry_widget = self.tk.Entry(holder, textvariable=var, width=PATH_WIDTH, font=(self.mono, 10))
+            entry_widget.pack(side="left")
+            entry_widget.bind("<FocusOut>", self.workspace_entered, add="+")   # the settings of an existing project.toml appear when the folder is entered
+            entry_widget.bind("<Return>", self.workspace_entered, add="+")
+            self.explain(cell, ("place", key))
+            self.getters.append((("place", key), var.get, value))
+        shown = {k: v for k, v in apiary["file"].items() if k not in HIDDEN_KEYS}   # the name is that of config.toml, the folders are Repository and Plans folder (no setting twice)
         shown.setdefault("language", "English")
         shown = release_fields(apiary_settings(shown, apiary["legacy"]), self.github_repository(shown))
-        first = {key: shown.pop(key) for key, _default in APIARY_DEFAULTS if key in shown}
-        self.fields(self.form, {**first, **shown}, ("file",))
-        self.add_row(self.form, ("file",))
+        main = {key: shown.pop(key) for key in MAIN_KEYS if key in shown}
+        for key, default in ADVANCED_DEFAULTS:
+            shown.setdefault(key, list(default) if isinstance(default, list) else default)
+        advanced = {key: shown.pop(key) for key, _default in ADVANCED_DEFAULTS}
+        advanced.update(shown)
+        self.fields(self.form, main, ("file",))
+        box = self.advanced_section()
+        if entry is not None:
+            self.fields(box, {k: v for k, v in entry.items() if k not in ("name", "workspace")}, ("entry",))   # other values of its entry in config.toml
+        self.fields(box, advanced, ("file",))
+        self.add_row(box, ("file",))
         self.initial_values = {path: getter() for path, getter, _like in self.getters}
+
+    def advanced_section(self):
+        """The section Advanced below the main settings of an Apiary page, collapsed until the owner opens it; returns the frame its fields go into."""
+        tk = self.tk
+        head = tk.Frame(self.form)
+        head.pack(fill="x", pady=(10, 2), anchor="w")
+        box = tk.Frame(self.form)
+
+        def show():
+            """Show or hide the fields and the arrow of the heading."""
+            self.advanced_button.config(text=("▾ " if self.advanced_open else "▸ ") + tr("Advanced"))
+            if self.advanced_open:
+                box.pack(fill="x", anchor="w", after=head)
+            else:
+                box.pack_forget()
+
+        def toggle():
+            """Open or close the section."""
+            self.advanced_open = not self.advanced_open
+            show()
+        self.advanced_button = tk.Button(head, command=toggle, relief="flat", anchor="w", font=(self.mono, 10, "bold"))
+        self.advanced_button.pack(side="left")
+        self.advanced_box = box
+        show()
+        return box
+
+    def apply_place(self, apiary, repository, plans):
+        """Write the typed Repository and Plans folder of `apiary` into its settings: the folder of project.toml (the plans folder, else the repository) and
+        codeRepo (only with a separate plans folder). The folder of project.toml of a registered Apiary stays; returns a problem text or None."""
+        repository, plans = str(repository).strip(), str(plans).strip()
+        if plans and not repository:
+            return tr("Repository: the folder of the Git repository is expected")
+        home = plans or repository
+        if apiary["name"] in self.registered():
+            if not home or not same_dir(home, apiary["workspace"]):
+                return tr("The settings of this Apiary are kept in %s: enter that folder as plans folder or, when the plans are in the repository, as repository", apiary["workspace"])
+        elif apiary["entry"] is not None:
+            apiary["entry"]["workspace"] = home
+        data = apiary["file"]
+        current = str(data.get("codeRepo") or data.get("repo") or "")
+        code = repository if plans and not same_dir(repository, plans) else ""
+        if not code:
+            data.pop("codeRepo", None)
+            data.pop("repo", None)
+        elif not current or not same_dir(code, current):
+            data["codeRepo"] = code
+            data.pop("repo", None)
+        return None
+
+    def field_row(self, parent, path):
+        """A row with the label of `path` in the label column; returns (frame for the editor, column frame below which the explanation goes)."""
+        tk = self.tk
+        row = tk.Frame(parent)
+        row.pack(fill="x", pady=2, anchor="w")
+        tk.Label(row, text=self.text_of(path), width=LABEL_WIDTH, anchor="nw", justify="left", wraplength=LABEL_WIDTH * self.char_px, font=(self.mono, 10)).pack(side="left", anchor="n")
+        cell = tk.Frame(row)
+        cell.pack(side="left", anchor="n")
+        holder = tk.Frame(cell)
+        holder.pack(anchor="w")
+        self.rows[path] = holder
+        return holder, cell
+
+    def text_of(self, path) -> str:
+        """The label of a setting: on an Apiary page its understandable label (the words of the key for a setting HaiveQueen has no label for), else the key."""
+        name = ".".join(path[1:])
+        if self.node[0] == "apiaries" and path[:1] in (("file",), ("entry",), ("place",)):
+            return tr(SETTING_LABELS[name]) if name in SETTING_LABELS else readable(path[-1])
+        return str(path[-1])
+
+    def explain(self, cell, path):
+        """The one line of explanation of a setting of an Apiary page below its field."""
+        name = ".".join(path[1:])
+        if self.node[0] == "apiaries":
+            self.tk.Label(cell, text=tr(SETTING_HELP.get(name, OTHER_HELP)), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9),
+                          wraplength=PATH_WIDTH * self.char_px).pack(anchor="w")
 
     def adopt_workspace(self, apiary) -> bool:
         """For an Apiary not registered yet whose workspace in config.toml was changed: take the project.toml of that workspace (if any) as its settings
@@ -746,15 +925,17 @@ class ConfigWindow(ProviderPages):
             self.build_form()
 
     def github_repository(self, shown):
-        """owner/name of the GitHub remote (its remoteName) of the code repository of the shown Apiary (codeRepo, else the workspace), or None."""
+        """owner/name of the GitHub remote of the repository of the shown Apiary (its remoteName), or None; never that of a separate plans folder."""
         from . import publish
         from types import SimpleNamespace
-        workspace = self.apiaries[self.node[1]]["workspace"]
-        if not workspace:
+        apiary = self.apiaries[self.node[1]]
+        settings = dict(apiary.get("file") or {})   # the page hides codeRepo from `shown`; a caller may still pass it there
+        settings.update({key: shown[key] for key in ("codeRepo", "repo") if shown.get(key)})
+        repository = apiary_place(apiary.get("workspace"), settings)[0]
+        if not repository:
             return None
         try:
-            settings = {"remoteName": shown.get("remoteName") or "origin", "codeRepo": str(shown.get("codeRepo") or shown.get("repo") or "").strip()}
-            return publish.github_repository(SimpleNamespace(workspace=Path(workspace), settings=settings))
+            return publish.github_repository(SimpleNamespace(workspace=Path(repository), code_repo=Path(repository), settings={"remoteName": shown.get("remoteName") or "origin"}))
         except Exception:
             return None
 
@@ -787,7 +968,7 @@ class ConfigWindow(ProviderPages):
             item.pack(fill="x", pady=2, anchor="w")
             row = tk.Frame(item)
             row.pack(fill="x", anchor="w")
-            tk.Label(row, text=tr(label), width=32, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
+            tk.Label(row, text=tr(label), width=LABEL_WIDTH, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
             if key == "cores":
                 self.dialog.option_menu(row, var, [str(n) for n in range(1, cores + 1)], self.mono).pack(side="left")
             else:
@@ -871,21 +1052,17 @@ class ConfigWindow(ProviderPages):
         """Add one labelled editor per key of `data` below `parent`; `path` names the nesting for the collected values."""
         tk = self.tk
         for key, value in data.items():
-            row = tk.Frame(parent)
-            row.pack(fill="x", pady=2, anchor="w")
             if isinstance(value, dict):
-                box = tk.LabelFrame(row, text=key, padx=6, pady=4)
-                box.pack(fill="x", expand=True)
+                row = tk.Frame(parent)
+                row.pack(fill="x", pady=2, anchor="w")
+                box = tk.LabelFrame(row, text=self.text_of(path + (key,)), padx=6, pady=4)
+                box.pack(anchor="w")   # as wide as its fields need (owner decision 742)
                 self.fields(box, value, path + (key,))
                 self.add_row(box, path + (key,))
                 continue
-            tk.Label(row, text=tr(SETTING_LABELS[key]) if key in SETTING_LABELS and path[:1] == ("file",) else key, width=22, anchor="nw", justify="left", wraplength=190, font=(self.mono, 10)).pack(side="left", anchor="n")
-            self.getters.append((path + (key,), self.editor(row, key, value), value))
-            if path + (key,) == ("entry", "workspace"):
-                for widget in row.winfo_children():
-                    if isinstance(widget, tk.Entry):
-                        widget.bind("<FocusOut>", self.workspace_entered, add="+")   # the settings of an existing project.toml appear when the workspace is entered
-                        widget.bind("<Return>", self.workspace_entered, add="+")
+            holder, cell = self.field_row(parent, path + (key,))
+            self.getters.append((path + (key,), self.editor(holder, key, value), value))
+            self.explain(cell, path + (key,))
 
     # One editor widget for a value; returns the function that reads it back.
     def editor(self, parent, key, value, choices=None):
@@ -893,7 +1070,7 @@ class ConfigWindow(ProviderPages):
         tk = self.tk
         if key == "capabilities" and self.node[0] == "providers":
             box = tk.Frame(parent)
-            box.pack(side="left", fill="x", expand=True)
+            box.pack(side="left", anchor="w")
             choices = list(dict.fromkeys(CAPABILITIES + tuple(value)))
             variables = [(name, tk.BooleanVar(value=name in value)) for name in choices]
             labels = {"Coding": "Coding (including tests, docs and review)", "Queen": "Queen (plan cutting and coordination)", "Build": "Build (with this machine’s tools)", "Vision": "Vision (understand images and screenshots)", "Confidential data": "Confidential data (local models only)"}
@@ -901,9 +1078,9 @@ class ConfigWindow(ProviderPages):
                 tk.Checkbutton(box, text=tr(labels.get(name, name)), variable=var, anchor="w").pack(anchor="w")
             custom = tk.StringVar()
             row = tk.Frame(box)
-            row.pack(fill="x")
+            row.pack(anchor="w")
             tk.Label(row, text=tr("Add own")).pack(side="left")
-            tk.Entry(row, textvariable=custom).pack(side="left", fill="x", expand=True)
+            tk.Entry(row, textvariable=custom, width=SHORT_WIDTH, font=(self.mono, 10)).pack(side="left")
             return lambda: [name for name, var in variables if var.get()] + [name.strip() for name in custom.get().split(",") if name.strip()]
         if isinstance(value, bool):
             var = tk.BooleanVar(value=value)
@@ -919,15 +1096,15 @@ class ConfigWindow(ProviderPages):
             return var.get
         if isinstance(value, (int, float, str)):
             var = tk.StringVar(value=str(value))
-            tk.Entry(parent, textvariable=var, font=(self.mono, 10)).pack(side="left", fill="x", expand=True)
+            tk.Entry(parent, textvariable=var, width=field_width(key, value), font=(self.mono, 10)).pack(side="left")   # a longer value scrolls inside the field
             return var.get
-        text = tk.Text(parent, height=min(max(len(value) if isinstance(value, list) else 3, 2), 14), width=90, font=(self.mono, 10), wrap="none")
+        text = tk.Text(parent, height=min(max(len(value) if isinstance(value, list) else 3, 2), 14), width=PATH_WIDTH, font=(self.mono, 10), wrap="none")
         if isinstance(value, list) and all(isinstance(v, str) for v in value):
             text.insert("1.0", "\n".join(value))
-            text.pack(side="left", fill="x", expand=True)
+            text.pack(side="left")
             return lambda: text.get("1.0", "end-1c").split("\n") if text.get("1.0", "end-1c") else []
         text.insert("1.0", json.dumps(value))
-        text.pack(side="left", fill="x", expand=True)
+        text.pack(side="left")
         def read_json():
             """The typed JSON value; a wrong one raises ValueError with the message."""
             try:
@@ -943,8 +1120,8 @@ class ConfigWindow(ProviderPages):
         row = tk.Frame(parent)
         row.pack(fill="x", pady=(6, 2), anchor="w")
         key, value = tk.StringVar(), tk.StringVar()
-        tk.Label(row, text=tr("new setting"), width=22, anchor="w", fg=self.col["dim"], font=(self.mono, 10)).pack(side="left")
-        tk.Entry(row, textvariable=key, width=22, font=(self.mono, 10)).pack(side="left")
+        tk.Label(row, text=tr("new setting"), width=LABEL_WIDTH, anchor="w", fg=self.col["dim"], font=(self.mono, 10)).pack(side="left")
+        tk.Entry(row, textvariable=key, width=SHORT_WIDTH, font=(self.mono, 10)).pack(side="left")
         tk.Entry(row, textvariable=value, width=40, font=(self.mono, 10)).pack(side="left", padx=4)
 
         def add():
@@ -972,7 +1149,7 @@ class ConfigWindow(ProviderPages):
                 current[path] = raw
                 values[path] = raw if isinstance(raw, (bool, list, dict)) or isinstance(like, (bool, list)) else parse_typed(raw, like)
         except (ValueError, TypeError) as exc:
-            self.status.config(text="%s: %s" % (".".join(where[1:] if self.node[0] == "apiaries" else where), exc), fg=self.col["red"])
+            self.status.config(text="%s: %s" % (self.text_of(where) if self.node[0] == "apiaries" else ".".join(where), exc), fg=self.col["red"])
             return False
         if self.build_vars is not None and tuple(v.get() for v in self.build_vars) != self.initial_build:
             try:
@@ -980,9 +1157,16 @@ class ConfigWindow(ProviderPages):
             except ValueError as exc:
                 self.status.config(text=str(exc), fg=self.col["red"])
                 return False
+        place = (("place", "repository"), ("place", "plansFolder"))
+        if self.node[0] == "apiaries" and place[0] in current and any(current[p] != self.initial_values.get(p) for p in place):
+            problem = self.apply_place(self.apiaries[self.node[1]], current[place[0]], current[place[1]])
+            if problem:
+                self.status.config(text=problem, fg=self.col["red"])
+                return False
+            data = self.target()   # the entry of an Apiary only in the database stays a fresh dict
         old_entry = dict(data) if self.node[0] == "providers" else None
         for path, raw in values.items():
-            if (self.node[0] == "providers" and path in (("allowedTools",), ("args",))) or current[path] == self.initial_values[path]:
+            if (self.node[0] == "providers" and path in (("allowedTools",), ("args",))) or path[:1] == ("place",) or current[path] == self.initial_values[path]:
                 continue
             if self.node[0] == "servers" and path in (("name",), ("apiKey",), ("contextWindow",)):
                 continue   # handled below: a rename reaches the providers, the key is masked, the window is a whole number
@@ -1123,9 +1307,11 @@ class ConfigWindow(ProviderPages):
             changed = json.dumps(apiary["file"], sort_keys=True) != apiary["saved"]
             if path is None:
                 if changed:
-                    problems.append(tr("%s: the workspace folder does not exist", apiary["name"]))
+                    problems.append(tr("%s: the repository or plans folder does not exist", apiary["name"]))
                 continue
             if changed or not path.is_file():
+                if not path.is_file():   # owner decision 741 (2): the worktree names of a new Apiary start with its name; an existing project.toml keeps its prefix
+                    apiary["file"].setdefault("worktreePrefix", worktree_prefix((apiary["entry"] or {}).get("name") or apiary["name"]))
                 problems += ["%s: %s" % (apiary["name"], text) for text in check(apiary["file"], machine=False)]
                 writes.append((apiary, path))
         return writes, problems

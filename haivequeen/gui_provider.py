@@ -159,7 +159,7 @@ class ProviderPages:
         self.source_section(self.section("source", N_("Model source")), key, data)
         self.models_section(self.section("models", N_("Models")), key, data)
         self.use_section(self.section("use", N_("Use")), data)
-        self.advanced_section(key, data)
+        self.provider_advanced(key, data)
         self.initial_values = {path: getter() for path, getter, _like in self.getters}
         self.refresh_login()
         self.refresh_state()
@@ -257,7 +257,7 @@ class ProviderPages:
         self.field(box, box, ("use",), use, "use")
         self.field(box, box, ("capabilities",), scheduler.provider_capabilities(data), "capabilities")
 
-    def advanced_section(self, key, data):
+    def provider_advanced(self, key, data):
         """Advanced (closed): Bee mode, allowed tools, arguments, usage check and the own settings (other class settings and any other key)."""
         from . import gui_config
         tk = self.tk

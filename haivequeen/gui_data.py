@@ -446,46 +446,59 @@ def log_meta(event, plan_of) -> dict:
     return {"project": event["project"], "agent": event["agent"], "hive": hive_name(plan) if plan else "", "noise": is_noise(event)}
 
 
-# Describe the provider limits as bars.
-def limit_bars(d) -> list:
-    """[{label, pct, note, level}] for the Claude/Codex 5-hour windows and, per provider, the weekly quota used and the slots in use.
+# Describe the provider limits as one row per provider.
+def limit_rows(d) -> list:
+    """One dict per provider in the order of the settings: {name, model, next, reserve, slots, weekly, five}.
 
-    `pct` is the used share in percent (None = unknown), `level` is ok, warn or bad by how much is used (dim when unknown, slots for slot bars)
-    and `note` is the text beside the bar."""
+    `reserve` is {text, level, hover, age}: the quota reserve in whole percent ((quota factor - 1) x 100), its colour level (ok, bad or dim),
+    the hover sentence and the age of a last verified reading. `slots` is {total, used, extra, none, running}. `weekly` is {pct, level, text}
+    (`pct` None = no bar) and `five` the 5-hour line ("" = none). All texts are in the language of the GUI."""
     def level(pct):
         """Colour level of a used share."""
         return {"green": "ok", "yellow": "warn", "red": "bad"}[overview.level_colour(pct)] if pct is not None else "dim"
+    def age_text(p):
+        """Age of the last verified reading, like 2h or 15min."""
+        minutes = p["age_minutes"] if p.get("age_minutes") is not None else int((p.get("stale_hours") or 0) * 60)
+        return "%dh" % (minutes // 60) if minutes >= 60 else "%dmin" % minutes
     out = []
-    for label, entry in (("Claude 5h", d["cu"]["FiveHour"]), ("Codex 5h", d["xu"]["FiveHour"])):
-        if entry is None:   # the provider reports no 5-hour window: no bar
-            continue
-        if entry["pct"] is None:
-            out.append({"label": label, "pct": None, "note": tr(entry["reset"]), "level": "dim"})
-        else:
-            out.append({"label": label, "pct": entry["pct"], "note": tr("resets %s", entry["reset"]).strip(), "level": level(entry["pct"])})
-    if d.get("claude_error") and d["cu"]["FiveHour"] is None and d["cu"]["SevenDay"] is None:
-        out.append({"label": "Claude", "pct": None, "note": tr("Claude limit unknown") + ": " + d["claude_error"], "level": "bad"})
     for p in d["provider_limits"]:
-        marker = tr("  ◀ next") if p["next"] else ""
-        if p.get("five_hour"):
-            five = p["five_hour"]
-            note = tr("resets %s", five["reset"]).strip()
-            if p.get("age_minutes") is not None:
-                note = tr("Reading age: %d minutes", p["age_minutes"]) + " | " + note
-            out.append({"label": tr("%s 5h", p["name"].capitalize()), "pct": five["pct"], "note": note, "level": level(five["pct"])})
-        if p["has_limit"]:
-            reset = sch.format_reset_time(p["reset_at"]) if p["reset_at"] else ""
-            quota = "" if p["ratio"] is None else i18n.decimal(tr("quota %.2fx", p["ratio"]))
-            note = " | ".join(part for part in (tr("resets %s", reset) if reset else tr("reset unknown"), quota) if part)
-            if p.get("error"):
-                note = (tr("Claude limit unknown") + ": " + p["error"]) if p.get("age_minutes") is None else tr("Reading age: %d minutes", p["age_minutes"]) + " | " + note
-            if p.get("stale"):
-                age = "%dh" % int(p["stale_hours"]) if p["stale_hours"] >= 1 else "%dmin" % int(p["stale_hours"] * 60)
-                note = tr("not current, %s ago", age) + " | " + note
-            out.append({"label": tr("%s 7d", p["name"].capitalize()), "pct": None if p["used_pct"] is None else round(p["used_pct"]), "note": note, "level": level(p["used_pct"])})
+        verified = bool(p.get("stale")) or (bool(p.get("error")) and p.get("age_minutes") is not None)   # the newest check failed, an older reading is shown
+        due = p.get("hours") is not None and p["hours"] <= 0
+        reset = sch.format_reset_time(p["reset_at"]) if p.get("reset_at") else ""
+        reserve = {"text": "", "level": "dim", "hover": "", "age": ""}
+        if not p["has_limit"]:
+            reserve["text"] = tr("no limit")
+        elif p["used_pct"] is None:
+            reserve["text"] = (tr("Claude limit unknown") + ": " + p["error"]) if p.get("error") else tr("unknown")
+        else:
+            if verified:
+                reserve["age"] = age_text(p)
+            if due:
+                reserve["text"] = tr("reset now")
+            elif p["ratio"] is None:
+                reserve["text"] = tr("unknown")
+            else:
+                pct = int(round((min(p["ratio"], 1e6) - 1) * 100))
+                reserve["text"] = ("+%d %%" if pct >= 0 else "−%d %%") % abs(pct)
+                reserve["level"] = "ok" if pct >= 0 else "bad"
+                reserve["hover"] = tr("%d %% more quota left than time until the reset (%s)" if pct >= 0 else "%d %% less quota left than time until the reset (%s)", abs(pct), reset)
         total = int(p["total_slots"] or 0)
-        out.append({"label": tr("%s slots", p["name"].capitalize()), "pct": round(100 * p["used_slots"] / total) if total else None,
-                    "note": "%d/%d | %s%s" % (p["used_slots"], total, p["model"] or tr("no medium model"), marker), "level": "slots"})
+        used = int(p["used_slots"] or 0)
+        slots = {"total": total, "used": used, "extra": max(0, used - total), "none": tr("no slots") if not total else "",
+                 "running": tr("%d running", used) if not total and used else ""}
+        if not p["has_limit"]:
+            weekly = {"pct": None, "level": "dim", "text": tr("no weekly limit")}
+        elif p["used_pct"] is None:
+            weekly = {"pct": None, "level": "dim", "text": tr("7d unknown")}
+        else:
+            pct = round(p["used_pct"])
+            when = tr("reset now") if due else (tr("reset %s", reset) if reset else tr("reset unknown"))
+            weekly = {"pct": pct, "level": level(p["used_pct"]), "text": "7d %d %% · %s" % (pct, when)}
+        five = ""
+        if p.get("five_hour") and not verified:
+            five = tr("5h new window") if p["five_hour"]["pct"] is None else "5h %d %%" % p["five_hour"]["pct"]
+        out.append({"name": p["name"].capitalize(), "model": p["model"] or tr("no medium model"), "next": bool(p["next"]),
+                    "reserve": reserve, "slots": slots, "weekly": weekly, "five": five})
     return out
 
 
@@ -501,7 +514,7 @@ def usage_lines(d) -> list:
 
 # Collect the sections of the status panel: everything the overview data holds that has no place in the other panels.
 def info_sections(d) -> list:
-    """[(title, [(text, colour)])] for run state, usage, system, plans, questions, round errors and the last self-update (the limits are bars, see limit_bars)."""
+    """[(title, [(text, colour)])] for run state, usage, system, plans, questions, round errors and the last self-update (the limits have their own panel, see limit_rows)."""
     run = d["run"]
     state = {"RUNNING": "ok", "PAUSED": "warn"}[run["state"]]
     sub = {"RUNNING": "", "PAUSED": tr("no new agents")}[run["state"]]
@@ -645,7 +658,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
             "projects": [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")],
             "log": [log_line(e, who) for e in reversed(events)], "log_ids": [e["id"] for e in reversed(events)], "log_meta": [log_meta(e, plan_of) for e in reversed(events)], "activity": activity_rows(agents_all, now),
             "system": sysinfo if sysinfo is not None else system_info(d["sysinfo"]), "queue": queue_panel(conn, project),
-            "info": info_sections({**d, "global_faults": _global_faults(conn, now)}), "limits": limit_bars(d)}
+            "info": info_sections({**d, "global_faults": _global_faults(conn, now)}), "limits": limit_rows(d)}
 
 
 # Find the live text file of an agent.

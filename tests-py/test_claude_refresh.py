@@ -288,11 +288,9 @@ class ClaudeRefreshTests(RoundCase):
             self.assertEqual(row['used_pct'], 90)
             self.assertTrue(row['stale'])
             self.assertAlmostEqual(row['stale_hours'], 2, delta=0.1)
-            bars = gui_data.limit_bars({'cu': {'FiveHour': None}, 'xu': {'FiveHour': None}, 'provider_limits': [row]})
-            seven = [b for b in bars if b['label'].endswith('7d')][0]
-            self.assertEqual(seven['pct'], 90)
-            self.assertIn('not current', seven['note'])
-            self.assertIn('2h', seven['note'])
+            shown = gui_data.limit_rows({'provider_limits': [row]})[0]
+            self.assertEqual(shown['weekly']['pct'], 90)
+            self.assertEqual(shown['reserve']['age'], '2h')
             old = (datetime.now(timezone.utc) - timedelta(hours=usage.RETAIN_HOURS + 1)).isoformat()
             runtime.kv_set(self.conn, '*', 'usage-claude', json.dumps({'saved': old, 'refresh_error': 'x',
                 'sevenDay': {'utilization': 0.9, 'resetsAt': int(self.reset.timestamp())}}))
