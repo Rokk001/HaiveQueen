@@ -207,6 +207,7 @@ def fold_servers(cfg) -> dict:
              "limit": {"source": "none"}, "classes": {}}
         cli_presets.apply(p, "claude")
         fold_values(p, entry)
+        _carry_test(entry["name"], p)
         providers.append(p)
     return out
 
