@@ -159,8 +159,9 @@ def bee_tables(conn) -> tuple:
     assigned = {(r[0], r[1], r[2]): (r[3], r[4]) for r in conn.execute("SELECT project,plan_path,package,class,provider FROM bee_assignments")} if "bee_assignments" in have else {}
     completed = {(r[0], r[1], r[2]) for r in conn.execute("SELECT project,plan_path,package FROM bee_completed")} if "bee_completed" in have else set()
     if "package_progress" in have:
-        completed |= {(r[0], r[1], r[2]) for r in conn.execute("SELECT project,plan_path,package FROM package_progress WHERE state='done'")}
-        completed -= {(r[0], r[1], r[2]) for r in conn.execute("SELECT project,plan_path,package FROM package_progress WHERE state='rejected'")}   # the owner did not accept it: not done
+        progress = {(r[0], r[1], r[2]): r[3] for r in conn.execute("SELECT project,plan_path,package,state FROM package_progress")}
+        completed = {item for item in completed if progress.get(item, "done") == "done"}
+        completed |= {item for item, state in progress.items() if state == "done"}
     return assigned, completed
 
 

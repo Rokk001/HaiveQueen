@@ -98,6 +98,18 @@ class PackageProgressTest(RoundCase):
             self.assertEqual(self.report('P2', 'implemented'), 0)
             self.assertEqual(cli.cmd_ready(args, self.conn), 0)
 
+    def test_reopened_package_progress_overrides_historical_completion(self):
+        """A reopened package is not shown as done from its old Bee completion or Queen state."""
+        self.assertEqual(self.report('P1', 'done'), 0)
+        self.conn.execute("INSERT INTO bee_completed(project,plan_path,package) VALUES ('testproj',?,'P2')", (REL,))
+        self.conn.commit()
+        self.assertEqual(self.report('P1', 'working'), 0)
+        self.assertEqual(self.report('P2', 'implemented'), 0)
+        assigned, completed = gui_data.bee_tables(self.conn)
+        self.assertNotIn(('testproj', REL, 'P1'), completed)
+        self.assertNotIn(('testproj', REL, 'P2'), completed)
+        self.assertEqual(gui_data.implemented_counts(self.conn)[('testproj', REL)], 1)
+
     # The Queen instruction names the command.
     def test_queen_instruction_names_the_package_command(self):
         """The Queen is told to report package progress."""

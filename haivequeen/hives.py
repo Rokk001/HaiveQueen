@@ -725,10 +725,11 @@ def hive_data(conn, project, agents, plan=None):
             name, package, step, task = match.groups()
             if name in bees or (note['agent'] in queens and package in packages):
                 n, m = map(int, step.split('/'))
-                if n >= m:
-                    bees.pop(name, None)
-                else:
-                    bees[name] = {'name': name, 'task': task or package, 'step': step}
+                if m > 0 and 0 <= n <= m:
+                    if n >= m:
+                        bees.pop(name, None)
+                    else:
+                        bees[name] = {'name': name, 'task': task or package, 'step': step}
         hive['bees'] = list(bees.values())
         hive['package_steps'] = package_steps(conn, hive['project'], hive['plan_path'], packages, active, step_notes)
         hive['blocker'] = runtime.kv_get(conn, hive['project'], 'hive-blocker:' + hive['plan_path'])

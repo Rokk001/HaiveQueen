@@ -99,6 +99,19 @@ class StepBarTest(unittest.TestCase):
         self.note("ODP__Sophia", "Sophia: step 3/4 without a package")
         self.assertEqual(self.row("Sophia")["step"], "1/4")
 
+    def test_out_of_range_step_reports_are_ignored(self):
+        """Step reports must stay within 0..m and use a positive total."""
+        bees.record_step_count(self.conn, "ODP", PLAN, "P1", 4)
+        self.process_bee("Sophia", "P1")
+        self.note("ODP__Sophia", "Sophia P1: step 5/4 outside range")
+        self.assertEqual(self.row("Sophia")["step"], "0/4")
+        hive = hives.hive_data(self.conn, "ODP", runtime.list_agents(self.conn, "ODP", "all"), PLAN)[0]
+        self.assertEqual([(bee["name"], bee["step"]) for bee in hive["bees"]], [("Sophia", "")])
+        self.note("ODP__Sophia", "Sophia P1: step 2/0 invalid total")
+        self.assertEqual(self.row("Sophia")["step"], "0/4")
+        hive = hives.hive_data(self.conn, "ODP", runtime.list_agents(self.conn, "ODP", "all"), PLAN)[0]
+        self.assertEqual([(bee["name"], bee["step"]) for bee in hive["bees"]], [("Sophia", "")])
+
     # U-5: a replacement keeps the last state until its own first report.
     def test_replacement_bee_keeps_the_last_state_until_its_first_step(self):
         """The replacement Bee of a package shows the last reported state, with the old step count, until it reports its own first step; then its own count counts."""
