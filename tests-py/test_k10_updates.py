@@ -359,6 +359,10 @@ class DrainTests(RoundCase):
 
     def setUp(self):
         super().setUp()
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop(selfupdate.RESTART_VAR, None)   # a test run started by an update restart inherits it
         self.base = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.base, True)
 

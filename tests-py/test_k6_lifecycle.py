@@ -385,7 +385,7 @@ class StoppedPackageTests(RoundCase):
         notice = self.queen_notice("Queen-B")
         self.assertIn("Dia (P2", notice)
         self.assertIn("Cia (P1", notice)
-        self.assertIn("--ended-evidence", notice)
+        self.assertIn("bzz bee result --outcome succeeded", notice)
 
     def test_a_new_bee_start_is_refused_while_an_unconfirmed_bee_holds_the_package(self):
         """No replacement for a subagent Bee whose end is not confirmed: the start is refused and the old row stays open."""

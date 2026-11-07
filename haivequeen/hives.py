@@ -783,6 +783,10 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
         if not dry_run:
             routine.repair_stale_agents(env, alive=alive)
             repair_technical_ends(conn, env.name)
+            try:   # E-1: a subagent Bee counts as ended once its Queen has certainly ended
+                __import__('haivequeen.bees', fromlist=['x']).close_ended_embedded(conn, env.name, alive=alive)
+            except Exception as exc:
+                env.log('ended subagent Bees not closed: %s' % exc)
             technical_start_faults(conn, env.name)
             runtime.archive_agents(conn, env.name, 12)
     all_active = runtime.list_agents(conn, None, 'active')
