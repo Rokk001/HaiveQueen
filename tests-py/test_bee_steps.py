@@ -137,6 +137,22 @@ class StepBarTest(unittest.TestCase):
         self.note("ODP__queen", "Nora P2: step 1/3 started over")
         self.assertEqual(self.row("Nora")["step"], "1/3")
 
+    def test_step_range_parser_keeps_only_valid_reports(self):
+        """The Hive table and per-package progress use the same 0..m step range."""
+        bees.record_step_count(self.conn, "ODP", PLAN, "P1", 4)
+        self.process_bee("Sophia", "P1")
+        self.note("ODP__Sophia", "Sophia P1: step 2/4 valid")
+        self.note("ODP__Sophia", "Sophia P1: step 5/4 outside range")
+        self.note("ODP__Sophia", "Sophia P1: step 2/0 invalid total")
+        agents = runtime.list_agents(self.conn, "ODP", "all")
+        rows = hives.hive_data(self.conn, "ODP", agents, PLAN)
+        self.assertEqual(rows[0]["package_steps"]["P1"]["step"], "2/4")
+        self.assertEqual(hives.package_steps(self.conn, "ODP", PLAN, {"P1"}, agents, [
+            {"project": "ODP", "agent": "ODP__Sophia", "text": "Sophia P1: step 2/4 valid"},
+            {"project": "ODP", "agent": "ODP__Sophia", "text": "Sophia P1: step 5/4 outside range"},
+            {"project": "ODP", "agent": "ODP__Sophia", "text": "Sophia P1: step 2/0 invalid total"},
+        ])["P1"]["step"], "2/4")
+
 
 class SubagentRulesTest(RoundCase):
     """A subagent Bee gets the Bee rules of roles/bee.md, and both kinds of Bee record how many steps they were given."""
@@ -151,15 +167,23 @@ class SubagentRulesTest(RoundCase):
         self.machine['providers'][1]['beeMode'] = 'subagent'
 
     # Run bzz bee start.
-    def start(self):
+    def start(self, no_subagents=False):
         """Return the parsed answer of bzz bee start for package P1."""
         args = cli.build_parser().parse_args(['bee', 'start', '--project', 'testproj', '--plan', REL, '--package', 'P1', '--class', 'medium', '--name', 'Ada',
-                                              '--task', 'build the thing', '--steps', '["read", "write", "test"]', '--cwd', str(self.wt)])
+                                              '--task', 'build the thing', '--steps', '["read", "write", "test"]', '--cwd', str(self.wt)] + (['--no-subagents'] if no_subagents else []))
         output = io.StringIO()
         with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), mock.patch.object(cli.config, 'load_config', return_value=self.machine), \
                 mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), contextlib.redirect_stdout(output):
             self.assertEqual(cli.cmd_bee(args, self.conn), 0, output.getvalue())
         return json.loads(output.getvalue().strip().splitlines()[-1])
+
+    def test_process_start_marks_package_working(self):
+        """A successful process Bee start records the package as working."""
+        self.machine['providers'][1]['beeMode'] = 'process'
+        with mock.patch('haivequeen.loop._do_start', return_value=True):
+            out = self.start(no_subagents=True)
+        self.assertEqual(out['kind'], 'process')
+        self.assertEqual(self.conn.execute("SELECT state FROM package_progress WHERE package='P1'").fetchone()[0], 'working')
 
     # The prompt a subagent gets.
     def test_start_of_a_subagent_returns_the_bee_prompt_and_records_the_steps(self):
@@ -171,6 +195,7 @@ class SubagentRulesTest(RoundCase):
         self.assertIn("3. test", out["prompt"])
         self.assertIn("Ada P1: step n/3", out["prompt"])
         self.assertEqual(self.conn.execute("SELECT steps FROM bee_step_counts WHERE package='P1'").fetchone()[0], 3)
+        self.assertEqual(self.conn.execute("SELECT state FROM package_progress WHERE package='P1'").fetchone()[0], "working")
 
     # The Queen is told to hand the prompt on.
     def test_queen_role_tells_to_use_the_returned_prompt(self):

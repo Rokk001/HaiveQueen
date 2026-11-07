@@ -681,7 +681,7 @@ def package_steps(conn, project, plan, packages, active, notes):
         text = note['text'] or ''
         step = STEP_WORD.search(text)
         n, m = int(step.group(1)), int(step.group(2))
-        if m <= 0 or n > m:
+        if m <= 0 or not 0 <= n <= m:
             continue
         first = re.split(r"[\s:,;()\[\]-]+", text.strip(), 1)[0]
         if note['agent'] not in mine and first not in people:
