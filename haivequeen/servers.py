@@ -230,9 +230,14 @@ def _carry_test(old_name, p, entry=None) -> None:
 
 
 def fold_values(p, entry) -> None:
-    """Copy address, key and context window of a server entry into a provider entry; other keys of the entry are kept under their own name unless the provider has them."""
+    """Copy address, key and context window of a server entry into a provider entry (the server entry wins, the provider named it as its server); other keys of
+    the entry are kept under their own name unless the provider has them."""
     for key, value in entry.items():
-        if key != "name":
+        if key == "name":
+            continue
+        if key in ("address", "apiKey", "contextWindow"):
+            p[key] = value
+        else:
             p.setdefault(key, value)
 
 

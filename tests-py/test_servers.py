@@ -512,6 +512,13 @@ class Migration(Base):
         self.assertTrue(sch.get_providers({"providers": [self.entry("a", "claude")]})[0]["nameEdited"])
         self.assertFalse(sch.get_providers({"providers": [self.entry("a", "claude", nameEdited=False)]})[0]["nameEdited"])
 
+    def test_server_entry_values_win_over_conflicting_provider_fields(self):
+        """F-5: address, key and context window of the server entry are not lost to same-named fields of the provider."""
+        cfg = {"servers": [{"name": "s", "address": "http://a:1", "apiKey": "k", "contextWindow": 9}],
+               "providers": [{"name": "p", "protocol": "claude", "command": "claude", "server": "s", "address": "http://old:2", "apiKey": "x", "contextWindow": 1}]}
+        p = servers.migrate(cfg)["providers"][0]
+        self.assertEqual((p["address"], p["apiKey"], p["contextWindow"]), ("http://a:1", "k", 9))
+
     def test_migrated_provider_has_the_usage_check_it_had(self):
         e = self.old()
         self.assertNotIn("limit", servers.migrate({"providers": [e]})["providers"][0])
