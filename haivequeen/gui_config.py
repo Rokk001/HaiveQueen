@@ -100,7 +100,7 @@ def field_width(key, value) -> int:
 
 def readable(key) -> str:
     """A label made of the words of a key HaiveQueen has no label for: planSuffixRegex gives "Plan suffix regex" (owner decision 741 (3): no raw key names)."""
-    words = re.findall(r"[A-Z]{2,}(?=[A-Z][a-z]||[0-9_-])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+", str(key))
+    words = re.findall(r"[A-Z]{2,}(?=[A-Z][a-z]|\b|[0-9_-])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+", str(key))
     if not words:
         return str(key)
     text = " ".join(w if w.isupper() and len(w) > 1 else w.lower() for w in words)

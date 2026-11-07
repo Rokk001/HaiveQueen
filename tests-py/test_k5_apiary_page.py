@@ -51,7 +51,7 @@ queue = "views/QUEUE.md"
 INTERNAL = ("workspace", "codeRepo", "repo", "worktreePrefix", "worktreeLocation", "planGlobs", "planExclude", "ignoredBuildOutput", "buildFlowDoc",
             "integratorInstructions", "buildProcessNames", "compileCheck", "compileCheckEnabled", "integrationBranch", "remoteName", "ownerTopics", "views", "queue")
 # A typical value of each kind (owner decision 742): it must show without clipping.
-TYPICAL = {"short": "HaiveQueen-Pilot", "path": r"C:\Users\mario\GitHub\Moreya-Internal\hq\plans"}
+TYPICAL = {"short": "HaiveQueen-Pilot", "path": r"C:\Users\example\Projects\Example-Workspace\hq\plans"}
 
 
 def esc(path) -> str:
@@ -96,7 +96,7 @@ class ApiaryPageCase(unittest.TestCase):
         (self.plain / ".haivequeen" / "project.toml").write_text(self.plain_text, encoding="utf-8")
         self.code = self.base / "HaiveQueen"
         self.code.mkdir()
-        self.plans = self.base / "Moreya-Internal" / "hq"
+        self.plans = self.base / "Example-Workspace" / "hq"
         (self.plans / ".haivequeen").mkdir(parents=True)
         self.split_text = SPLIT % esc(self.code)
         self.split_file = self.plans / ".haivequeen" / "project.toml"
@@ -280,6 +280,7 @@ class ApiaryPageTests(ApiaryPageCase):
         self.assertIn(gui_config.OTHER_HELP, labels)
         self.assertTrue(str(win.rows[("file", "planSuffixRegex")]).startswith(str(win.advanced_box)))
         self.assertEqual(gui_config.readable("paneCloseDelaySeconds"), "Pane close delay seconds")
+        self.assertEqual(gui_config.readable("APIKey"), "API key")
 
     def test_advanced_settings_are_collapsed_until_opened(self):
         win = self.window("HaiveQueen")
