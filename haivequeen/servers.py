@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -260,7 +261,24 @@ def arguments(prov) -> list:
 
 def tests_file():
     """The file with the kept results of the last test of every server (machine data folder, so it survives a restart and is not part of config.toml)."""
-    return config.data_dir() / TEST_FILE
+    return (_pinned.folder or config.data_dir()) / TEST_FILE
+
+
+class _Pin(threading.local):
+    folder = None
+
+
+_pinned = _Pin()
+
+
+def in_thread(func):
+    """Return a function for a background thread that keeps the results in the data folder of this call ( whatever happens to the environment later)."""
+    folder = config.data_dir()
+
+    def run():
+        _pinned.folder = folder
+        func()
+    return run
 
 
 def _read_tests() -> dict:

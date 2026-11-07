@@ -1348,7 +1348,7 @@ class ConfigWindow(ProviderPages):
         import threading
         from . import servers
         new_data = self.data
-        threading.Thread(target=lambda: servers.test_after_save(old_data, new_data), daemon=True).start()
+        threading.Thread(target=servers.in_thread(lambda: servers.test_after_save(old_data, new_data)), daemon=True).start()
 
     # Open the settings folder.
     def open_folder(self):

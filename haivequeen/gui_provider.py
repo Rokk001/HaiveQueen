@@ -85,6 +85,7 @@ class ProviderPages:
         """A labelled editor for the setting at `path` with its explanation (label and explanation of TEXT[texts or key]); the getter is registered for
         collect and belongs to `frame`."""
         item, row = self.line(parent, texts or key)
+        self.rows[path] = row
         self.getters.append((path, self.editor(row, path[-1], value, choices), value))
         self.frame_of[path] = frame
         self.note(item, key, TEXT[texts or key][1])
@@ -150,7 +151,7 @@ class ProviderPages:
         if isinstance(data.get("limit"), str):
             data["limit"] = {"source": data["limit"]}   # the same meaning, the form of a table
         self.sections, self.notes, self.note_sources, self.frame_of = [], {}, {}, {}
-        top = tk.Frame(self.form)
+        top = tk.LabelFrame(self.form, text="", padx=6, pady=4)   # same border and padding as the sections, so all fields share one column
         top.pack(fill="x", anchor="w")
         self.field(top, top, ("name",), str(data.get("name") or ""), "name")
         self.ready_label = tk.Label(top, anchor="w", justify="left", fg=self.col["red"], font=(self.mono, 10, "bold"))
@@ -481,7 +482,7 @@ class ProviderPages:
                 servers.run_test(server)
             except Exception as exc:   # shown on the page, never lost in the thread
                 outcome["error"] = str(exc)
-        thread = threading.Thread(target=work, daemon=True)
+        thread = threading.Thread(target=servers.in_thread(work), daemon=True)
         thread.start()
         shown = self.node
 
