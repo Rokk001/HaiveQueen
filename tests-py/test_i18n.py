@@ -224,7 +224,7 @@ class GermanTextsTest(unittest.TestCase):
         self.assertTrue(gui_data.is_noise(event))
         self.assertEqual(i18n.log_text("an agent note in any language"), "an agent note in any language")
         self.assertEqual(i18n.log_text("ROUND ERROR boom"), "RUNDENFEHLER boom")
-        self.assertEqual(i18n.log_text("no free slot (needs 2, 1 free)"), "kein freier Slot (braucht 2, 1 frei)")
+        self.assertEqual(i18n.log_text("no free slot"), "kein freier Slot")
         self.assertEqual(i18n.log_text("restart: re-attached 3 running agent(s), 1 gone"), "Neustart: 3 laufende(r) Agent(en) wieder verbunden, 1 verschwunden")
         self.assertEqual(i18n.log_text("Provider codex needs its login in the HaiveQueen profile (once). Run `x y` with the environment A=b. Its packages wait until then, all others go on."),
                          "Anbieter codex braucht einmalig seinen Login im HaiveQueen-Profil. Führe `x y` mit der Umgebung A=b aus. Seine Pakete warten bis dahin, alle anderen laufen weiter.")

@@ -35,8 +35,11 @@ def capable_providers(providers, need) -> list:
     return [p for p in providers if ('Confidential data' not in [scheduler.canonical_capability(n) for n in need] or scheduler._local_confidential(p)) and all(scheduler.canonical_capability(n) in [scheduler.canonical_capability(c) for c in p.get('capabilities', [])] for n in need)]
 
 
-def select_route(providers, free, hive_provider, package_class, capability, excluded, escalated, limited=()):
-    """Pick a permitted Bee provider and class, returning None when it must wait."""
+def select_route(providers, free, hive_provider, package_class, capability, excluded, escalated, limited=(), conn=None):
+    """Pick a permitted Bee provider and class, returning None when it must wait.
+
+    C-2: when the permitted providers of the class (a free local provider, the Queen's own one) have no free slot, the Bee goes to another
+    provider by the normal provider choice (class, capabilities, quota reserve, free slot); with no free slot anywhere it waits."""
     providers = [p for p in providers if p['name'] not in excluded and not p.get('unavailable')]   # a disabled or offline provider gets no new Bee
     candidates = route_candidates(providers, hive_provider, capability, escalated)
     index = scheduler.class_index(package_class)
@@ -47,7 +50,10 @@ def select_route(providers, free, hive_provider, package_class, capability, excl
         for p in matching:
             if free.get(p['name'], 0) > 0 and p['name'] not in limited:
                 return p['name'], cls
-        return None
+        others = [{**p, 'slots': p.get('slots', 1), 'use': p.get('use', 'preferred'), 'limit': p.get('limit', ''), 'protocol': p.get('protocol', ''),
+                   'capabilities': scheduler.provider_capabilities(p)} for p in providers if p['name'] not in limited]
+        pick = scheduler.select_provider(others, cls, capability, free, conn=conn)
+        return (pick['name'], cls) if pick else None
     return None
 
 
@@ -799,23 +805,19 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
         queen_provider = scheduler.get_provider(env.providers, hive['provider'])
         embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not (queen_provider.get('endpoint') or queen_provider.get('server')) and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
-        free = scheduler.provider_free(env.providers, running)
+        free = scheduler.provider_free(env.providers, running, env.conn)   # C-1: a subagent Bee needs a free slot of the Queen's provider like a Bee process
         route_free = dict(free)
-        if embedded:
-            route_free[hive['provider']] = max(1, route_free.get(hive['provider'], 0))
         limited = [p['name'] for p in env.providers if any(w['used_pct'] >= 100 for w in usage.limit_windows(env.conn, p))]
         ensure_attempts(env.conn)
         assigned = env.conn.execute('SELECT class,provider FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
         usable = [p for p in env.providers if not p.get('unavailable') and p.get('slots', 1) > 0]
         if assigned and assigned[0] == current and assigned[1] not in {p['name'] for p in route_candidates(usable, hive['provider'], need, current != base_class or use_other_provider)}:
             assigned = None   # the stored provider is no longer allowed for this package, or is offline, disabled or has no slots: route it again
-        if assigned and assigned[0] == current:
-            provider = scheduler.get_provider(env.providers, assigned[1])
-            if not provider or provider['name'] in excluded or provider['name'] in limited or route_free.get(provider['name'], 0) <= 0:
-                return refuse(env, package, 'the assigned provider %s is unknown, excluded, at its limit or has no free slot' % assigned[1])
+        provider = scheduler.get_provider(env.providers, assigned[1]) if assigned and assigned[0] == current else None
+        if provider and provider['name'] not in excluded and provider['name'] not in limited and route_free.get(provider['name'], 0) > 0:
             route = (provider['name'], current)
-        else:
-            route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, current != base_class or use_other_provider, limited)
+        else:   # C-2: a stored assignment whose provider is full, limited or gone does not keep the Bee waiting; it moves to the provider the Bee starts on
+            route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, current != base_class or use_other_provider, limited, conn=env.conn)
         if not route:
             return refuse(env, package, 'no provider with a free slot offers class %s' % current)
         provider, selected_class = route

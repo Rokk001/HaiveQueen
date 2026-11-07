@@ -179,9 +179,12 @@ class BeePolicyTests(unittest.TestCase):
             self.assertIn(text, prompt)
 
     # Check no codex for regular work before escalation.
-    def test_no_codex_for_regular_work_before_escalation(self):
+    # C-2: with the Queen's provider and the local one full, regular work goes to another provider with a free slot, and waits when none has one.
+    def test_regular_work_moves_to_another_provider_when_queen_and_local_full(self):
         self.free['cloud'] = 0
         self.free['local'] = 0
+        self.assertEqual(bees.select_route(self.providers, self.free, 'cloud', 'medium', [], [], False), ('images', 'medium'))
+        self.free['images'] = 0
         self.assertIsNone(bees.select_route(self.providers, self.free, 'cloud', 'medium', [], [], False))
 
     # Check codex fallback under codex queen.
@@ -402,10 +405,11 @@ class QueenIntegrationTests(RoundCase):
         self.assertTrue(any(a['phase'] == 'queen' and a['status'] == 'running' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
 
     # A native subagent consumes no additional provider process slot and can start while paused.
-    def test_native_bee_needs_no_slot_and_continues_during_pause(self):
+    # C-1: a native Bee takes a slot of the Queen's provider; it still starts during a pause.
+    def test_native_bee_takes_a_slot_and_continues_during_pause(self):
         from haivequeen import hives, runstate
         from bzztest import REL
-        self.machine['providers'][0]['slots'] = 1
+        self.machine['providers'][0]['slots'] = 2
         self.plan('READY', [{'id': 'P1', 'title': 'First'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
@@ -650,7 +654,8 @@ class QueenIntegrationTests(RoundCase):
         self.assertIn('class heavy was requested', bees.LAST_REFUSAL)
 
     # A limited Bee provider remains assigned even when another provider is free.
-    def test_interrupted_bee_does_not_switch_provider(self):
+    # C-2: the stored provider of an interrupted Bee at its limit does not keep the Bee waiting: it moves to the provider it starts on.
+    def test_interrupted_bee_moves_from_limited_assigned_provider(self):
         from unittest import mock
         from haivequeen import hives, usage
         from bzztest import REL
@@ -665,10 +670,9 @@ class QueenIntegrationTests(RoundCase):
         bee_wt.mkdir()
         limited = lambda conn, provider: [{'used_pct': 100}] if provider['name'] == 'local' else []
         with mock.patch.object(usage, 'limit_windows', side_effect=limited), mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
-            self.assertFalse(bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(bee_wt)))
-        with mock.patch.object(usage, 'limit_windows', return_value=[]), mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
-            self.assertTrue(bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(bee_wt)))
-        self.assertEqual(runtime.get_agent(self.conn, 'testproj', 'Ada')['provider'], 'local')
+            result = bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(bee_wt))
+        self.assertEqual((result['kind'], result['provider']), ('subagent', 'claude'))
+        self.assertEqual(self.conn.execute('SELECT provider FROM bee_assignments WHERE package=?', ('P1',)).fetchone()[0], 'claude')
 
     # A stored provider that is no longer allowed for the package is replaced instead of blocking the Bee.
     def test_stale_codex_assignment_is_routed_again(self):
@@ -877,7 +881,7 @@ class AttemptSignalTests(unittest.TestCase):
     # A replacement Queen retries a vanished Bee at the same class and provider.
     def test_prompt_retries_vanished_bee(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
-        for text in ('after a queen restart', 'bee process vanished', 'same class and provider', 'interruption is never a failure'):
+        for text in ('after a queen restart', 'bee process vanished', 'same class; bzz bee start chooses its provider again', 'interruption is never a failure'):
             self.assertIn(text, prompt)
     # Missing signal data does not turn an unsolved outcome into a failure.
     def test_missing_signals_do_not_count(self):
