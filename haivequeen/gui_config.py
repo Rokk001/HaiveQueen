@@ -14,6 +14,7 @@ from pathlib import Path
 import tomlkit
 
 from . import gui_data, localtime
+from .gui_provider import ProviderPages
 from .i18n import N_, decimal, tr
 
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
@@ -464,10 +465,10 @@ def parse_typed(text, like=None):
 
 
 # The window of the editor.
-class ConfigWindow:
-    """A Toplevel with three tabs: General (the machine settings), Providers and Apiaries; the files config.toml and project.toml stay in the background."""
+class ConfigWindow(ProviderPages):
+    """A Toplevel with four tabs: General (the machine settings), Providers, Servers and Apiaries; the files config.toml and project.toml stay in the background."""
 
-    TABS = (("general", N_("General")), ("providers", N_("Providers")), ("apiaries", N_("Apiaries")))
+    TABS = (("general", N_("General")), ("providers", N_("Providers")), ("servers", N_("Servers")), ("apiaries", N_("Apiaries")))
 
     # Build the window for the settings files of `conn`.
     def __init__(self, root, conn, config_dir, mono="Consolas", on_saved=None):
@@ -479,7 +480,8 @@ class ConfigWindow:
         self.config_path = Path(config_dir) / "config.toml"
         self.data, self.node, self.getters, self.entries, self.visible, self.position = {}, ("general", None), [], [], [], None
         self.apiaries, self.initial_values, self.initial_build = [], {}, None
-        self.build_vars = None
+        self.build_vars, self.fresh = None, []   # fresh: the providers added in this window and not saved yet
+        self.ready_label = self.test_button = self.result_label = None
         self.win = tk.Toplevel(root)
         self.win.title(tr("HaiveQueen settings"))
         self.win.geometry("1100x700")
@@ -565,6 +567,7 @@ class ConfigWindow:
     # Read the files again and show their parts.
     def reload(self):
         """Drop unsaved changes: read config.toml and the project.toml of every Apiary and show the General tab."""
+        self.fresh = []
         self.data = load_migrated(self.config_path)   # old endpoint entries in the new form; the file changes only when saved
         self.load_apiaries()
         self.status.config(text="")
@@ -580,14 +583,15 @@ class ConfigWindow:
             registered = self.registered()   # entries added to or removed from config.toml outside the buttons
             old = {id(a["entry"]): a for a in self.apiaries if a["entry"] is not None}
             self.apiaries = [old.get(id(e)) or self.apiary_record(e, registered) for e in listed] + [a for a in self.apiaries if a["entry"] is None]
-        self.entries = [("general", None)] + [("providers", i) for i in range(len(self.data.get("providers") or []))] + [("apiaries", k) for k in range(len(self.apiaries))]
+        self.entries = ([("general", None)] + [("providers", i) for i in range(len(self.data.get("providers") or []))]
+                        + [("servers", i) for i in range(len(self.data.get("servers") or []))] + [("apiaries", k) for k in range(len(self.apiaries))])
         self.show_tab(self.node[0])
 
     def label(self, node) -> str:
         """The text of a page in the left list."""
         kind, i = node
-        if kind == "providers":
-            return str(self.data["providers"][i].get("name", "?"))
+        if kind in ("providers", "servers"):
+            return str(self.data[kind][i].get("name", "?"))
         if kind == "apiaries":
             return self.apiaries[i]["name"] or "?"
         return tr("General")
@@ -602,7 +606,7 @@ class ConfigWindow:
         if tab == "general":
             self.side.pack_forget()
         else:
-            self.add_button.config(text=tr("Add provider") if tab == "providers" else tr("Add Apiary"))
+            self.add_button.config(text=tr({"providers": "Add provider", "servers": "Add server"}.get(tab, "Add Apiary")))
             self.side.pack(side="left", fill="y", before=self.canvas)
 
     # A tab was clicked.
@@ -659,11 +663,13 @@ class ConfigWindow:
         self.getters, self.initial_values, self.initial_build = [], {}, None
         self.build_vars = None   # the three variables of the block "Build" while the General page is shown
         self.login_status = self.login_button = self.benchmark_button = self.benchmark_status = None   # benchmark_status stays None: no text on the page
+        self.ready_label = self.test_button = self.result_label = None
+        self.sections, self.notes, self.note_sources, self.frame_of = [], {}, {}, {}
 
     # Build the form of the shown part.
     def build_form(self):
-        """Fill the right side with one row per setting of the shown part; a provider gets its allowed tools and other arguments as two lists;
-        an Apiary gets its entry of config.toml and all settings of its project.toml on one page."""
+        """Fill the right side with the page of the shown part: General (one row per setting), a provider (five sections), a server or an Apiary (its entry of
+        config.toml and all settings of its project.toml on one page)."""
         self.clear_form()
         kind, i = self.node
         self.position = None
@@ -672,34 +678,22 @@ class ConfigWindow:
         if kind == "apiaries":
             self.apiary_form()
             return
+        if kind == "providers":
+            self.provider_form()
+            self.initial_build = None
+            return
+        if kind == "servers":
+            self.server_form()
+            self.initial_build = None
+            return
         data = self.target()
-        shown = {k: v for k, v in data.items() if kind != "general" or k not in ("providers", "projects")}
-        if kind == "providers":
-            from . import cli_presets
-            key = cli_presets.key_for(data)
-            if key == cli_presets.CUSTOM:
-                shown.setdefault("profileEnv", {})   # variables pointing to the CLI profile folder ({home} = its profile folder)
-                shown.setdefault("loginCommand", "")   # the command that makes the login
-                shown.setdefault("loginFiles", [])   # the login files, relative to the profile folder of the CLI
-                shown.setdefault("outputFormat", "")   # the output format the CLI writes: claude, codex or opencode
-            self.cli_row(key)
-            self.login_row()
-        if kind == "general":
-            shown.pop("buildJobs", None)   # the build settings are the block "Build" below, never the raw table
-            shown.pop("ramReserveMb", None)   # machine-only, settable in config.toml only; not offered here, the stored value stays untouched on save
-            self.build_block()
-            self.bzz_row()
-            shown.pop("preferredProvider", None)
-            shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
-        if kind == "providers":
-            from . import scheduler
-            shown["capabilities"] = scheduler.provider_capabilities(data)
-            shown["use"] = "preferred" if data.get("use") == "capability-only" else data.get("use", "preferred")
-            shown.pop("capabilitiesVersion", None)
-            rest, tools, self.position = split_args(shown.get("args"))
-            shown = {k: v for k, v in shown.items() if k != "args"}
-            shown["allowedTools"], shown["args"] = tools, rest
-            shown.setdefault("beeMode", "process" if shown.get("protocol") == "codex" else "subagent")   # always offer the setting, with the value that applies without an entry
+        shown = {k: v for k, v in data.items() if k not in ("providers", "projects", "servers")}
+        shown.pop("buildJobs", None)   # the build settings are the block "Build" below, never the raw table
+        shown.pop("ramReserveMb", None)   # machine-only, settable in config.toml only; not offered here, the stored value stays untouched on save
+        self.build_block()
+        self.bzz_row()
+        shown.pop("preferredProvider", None)
+        shown.setdefault("language", "English")   # always offer the language of the owner texts, with the value that applies without an entry
         self.fields(self.form, shown, ())
         self.add_row(self.form, ())
         self.initial_values = {path: getter() for path, getter, _like in self.getters}
@@ -812,59 +806,6 @@ class ConfigWindow:
         proto = str(raw.get("protocol") or name)
         return {"name": name, "protocol": proto, "command": str(raw.get("command") or proto), **profile.custom_fields(raw)}
 
-    # The CLI choice of a provider page.
-    def cli_row(self, key):
-        """Add the list of the CLIs that run (and Custom CLI) at the top of a provider page; choosing one sets all its values."""
-        from . import cli_presets
-        tk = self.tk
-        row = tk.Frame(self.form)
-        row.pack(fill="x", pady=(0, 8), anchor="w")
-        tk.Label(row, text="cli", width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
-        self.cli_var = tk.StringVar(value=cli_presets.label_of(key))
-        self.dialog.option_menu(row, self.cli_var, cli_presets.labels(), self.mono, self.choose_cli).pack(side="left")
-
-    # A CLI was chosen in the list.
-    def choose_cli(self, label):
-        """Set the shown provider to the chosen CLI (protocol, command, arguments, Bee mode); Custom CLI keeps the values and offers the fields of an own CLI."""
-        from . import cli_presets
-        if not self.collect():
-            return
-        data = self.target()
-        key = cli_presets.key_of_label(label)
-        if key == cli_presets.CUSTOM:
-            data.setdefault("outputFormat", "")
-        else:
-            cli_presets.apply(data, key)
-        self.build_form()
-
-    # Status line and Login button of a provider page.
-    def login_row(self):
-        """Add the login status ("Login present" or "Login missing", from the profile) and the Login button at the top of a provider page."""
-        tk = self.tk
-        row = tk.Frame(self.form)
-        row.pack(fill="x", pady=(0, 8), anchor="w")
-        tk.Label(row, text=tr("login"), width=22, anchor="nw", font=(self.mono, 10)).pack(side="left", anchor="n")
-        flow = tk.Frame(row)   # status and buttons: wrapped to the next row when the form is too narrow, never cut
-        flow.pack(side="left", fill="x", expand=True, anchor="n")
-        self.login_status = tk.Label(flow, anchor="w", font=(self.mono, 10, "bold"))
-        self.login_button = tk.Button(flow, text=tr("Login"), width=12, command=self.login_click)
-        self.benchmark_button = tk.Button(flow, text=tr("Benchmark Start Context"), command=self.benchmark_click)
-        items = [self.login_status, self.login_button, self.benchmark_button]
-
-        def layout(_e=None):
-            """Place the three widgets left to right and start a new row where the next one would not fit."""
-            width, x, y, high = max(flow.winfo_width(), 1), 0, 0, 0
-            for item in items:
-                w, h = item.winfo_reqwidth() + 12, item.winfo_reqheight() + 4
-                if x and x + w > width:
-                    x, y, high = 0, y + high, 0
-                item.place(x=x, y=y)
-                x, high = x + w, max(high, h)
-            flow.config(height=y + high)
-        flow.bind("<Configure>", layout)
-        layout()
-        self.refresh_login()
-
     # Show whether the shown provider has its login in the profile.
     def refresh_login(self):
         """Read the login state again from the profile folder and show it; does nothing on a page without a login row."""
@@ -873,6 +814,7 @@ class ConfigWindow:
             return
         present = profile.has_login(self.login_provider())
         self.login_status.config(text=tr("Login present") if present else tr("Login missing"), fg=self.col["green"] if present else self.col["red"])
+        self.refresh_state()
 
     # The Login button.
     def login_click(self):
@@ -898,6 +840,9 @@ class ConfigWindow:
         """Open the benchmark window for the selected provider."""
         from . import gui_benchmark
         if not self.collect():
+            return
+        self.refresh_state()
+        if self.benchmark_button is None or str(self.benchmark_button.cget("state")) == "disabled":
             return
         name = self.login_provider()["name"]
         old = getattr(self, "benchmark_win", None)
@@ -943,8 +888,8 @@ class ConfigWindow:
                         widget.bind("<Return>", self.workspace_entered, add="+")
 
     # One editor widget for a value; returns the function that reads it back.
-    def editor(self, parent, key, value):
-        """Make the editor for `value` (check box, choice, line, one entry per line, or JSON for anything else) and return its getter."""
+    def editor(self, parent, key, value, choices=None):
+        """Make the editor for `value` (check box, choice from `choices` or CHOICES, line, one entry per line, or JSON for anything else) and return its getter."""
         tk = self.tk
         if key == "capabilities" and self.node[0] == "providers":
             box = tk.Frame(parent)
@@ -968,9 +913,9 @@ class ConfigWindow:
             var = tk.StringVar(value=value)
             self.dialog.option_menu(parent, var, list(dict.fromkeys(("English", "German", value))), self.mono).pack(side="left")
             return var.get
-        if isinstance(value, str) and key in CHOICES:
+        if isinstance(value, str) and (choices or key in CHOICES):
             var = tk.StringVar(value=value)
-            self.dialog.option_menu(parent, var, list(dict.fromkeys(CHOICES[key] + (value,))), self.mono).pack(side="left")
+            self.dialog.option_menu(parent, var, list(dict.fromkeys(tuple(choices or CHOICES[key]) + (value,))), self.mono).pack(side="left")
             return var.get
         if isinstance(value, (int, float, str)):
             var = tk.StringVar(value=str(value))
@@ -1039,11 +984,18 @@ class ConfigWindow:
         for path, raw in values.items():
             if (self.node[0] == "providers" and path in (("allowedTools",), ("args",))) or current[path] == self.initial_values[path]:
                 continue
+            if self.node[0] == "servers" and path in (("name",), ("apiKey",), ("contextWindow",)):
+                continue   # handled below: a rename reaches the providers, the key is masked, the window is a whole number
             target = data
             for step in path[:-1]:
                 target = target.setdefault(step, {})
             target[path[-1]] = raw
+        if self.node[0] == "servers" and not self.collect_server(data, current):
+            return False
         if self.node[0] == "providers":
+            self.collect_models(data, current)
+            if current.get(("name",)) != self.initial_values.get(("name",)):
+                data["nameEdited"] = True   # a name typed by the user no longer follows CLI and source
             if any(current.get((key,)) != self.initial_values.get((key,)) for key in ("capabilities", "use")):
                 keep_legacy_entry(data, old_entry)
             rest = values.get(("args",), [])
@@ -1062,24 +1014,65 @@ class ConfigWindow:
         self.initial_values = current
         self.initial_build = tuple(v.get() for v in self.build_vars) if self.build_vars else None
         self.status.config(text="")
+        if self.node[0] == "providers":
+            self.refresh_state()
         return True
+
+    # The values of the shown server that need more than a copy.
+    def collect_server(self, data, current) -> bool:
+        """Apply name (renamed in the providers that use the server), API key (the mask means unchanged; empty removes it) and context window (whole tokens,
+        empty removes it) of the server page; show the first wrong value in the status line and return False."""
+        from . import servers
+        try:
+            window = str(current.get(("contextWindow",), "")).strip()
+            if window != self.initial_values.get(("contextWindow",)):
+                if not window:
+                    data.pop("contextWindow", None)
+                elif not window.isdigit() or int(window) <= 0:
+                    raise ValueError("contextWindow: " + tr("a number is expected"))
+                else:
+                    data["contextWindow"] = int(window)
+            key = current.get(("apiKey",), "")
+            if key != self.initial_values.get(("apiKey",)):
+                if not key:
+                    data.pop("apiKey", None)
+                elif key != servers.MASK:
+                    data["apiKey"] = key
+            name = str(current.get(("name",), "")).strip()
+            if name != self.initial_values.get(("name",)):
+                servers.rename_server(self.data, self.initial_values[("name",)], name)
+        except ValueError as exc:
+            self.status.config(text=str(exc), fg=self.col["red"])
+            return False
+        return True
+
+    # The model rows of the shown provider.
+    def collect_models(self, data, current):
+        """A model that was changed and is not in the list of the source is an own entry (customModel); a class given a model gets an effort when it has none."""
+        for cls in ("light", "medium", "heavy"):
+            model = str(current.get(("classes", cls, "model"), "") or "")
+            if model == self.initial_values.get(("classes", cls, "model")) and current.get(("classes", cls, "effort")) == self.initial_values.get(("classes", cls, "effort")):
+                continue
+            entry = (data.get("classes") or {}).get(cls)
+            if not isinstance(entry, dict) or not model:
+                continue
+            if not entry.get("effort"):
+                entry["effort"] = "medium" if "medium" in self.effort_values or not self.effort_values else self.effort_values[0]
+            if model != self.initial_values.get(("classes", cls, "model")) and not self.offered_own_only:
+                if model in self.offered_models:
+                    entry.pop("customModel", None)
+                else:
+                    entry["customModel"] = True
 
     # The Add button of the left list.
     def add_entry(self):
-        """Add a provider on the tab Providers, an Apiary on the tab Apiaries."""
+        """Add a provider on the tab Providers, a server on the tab Servers, an Apiary on the tab Apiaries."""
         if self.tab_var.get() == "providers":
             self.add_provider()
+        elif self.tab_var.get() == "servers":
+            self.add_server()
         elif self.tab_var.get() == "apiaries":
             self.add_apiary()
-
-    # Add a provider with the fields the loop needs.
-    def add_provider(self):
-        """Append a new provider (claude protocol, one slot, fallback use) and show it."""
-        if self.collect():
-            self.data.setdefault("providers", []).append({"name": "new-provider", "protocol": "claude", "command": "claude", "args": [], "slots": 1, "use": "fallback",
-                                                          "capabilities": ["Coding", "Queen"], "capabilitiesVersion": 1, "classes": {"medium": {"model": "", "effort": "medium"}}})
-            self.fill_nodes()
-            self.select(len(self.data["providers"]))
 
     # Add an Apiary.
     def add_apiary(self):
@@ -1095,9 +1088,23 @@ class ConfigWindow:
         kind, i = self.node
         if kind == "general" or i is None or (kind == "apiaries" and self.apiaries[i]["entry"] is None):
             return
-        from . import gui_dialog
-        if gui_dialog.ask(self.win, "HaiveQueen", tr("Remove this provider from the settings?") if kind == "providers" else tr("Remove this Apiary from the settings?"), self.mono):
-            if kind == "providers":
+        from . import gui_dialog, servers
+        if kind == "servers":
+            name = self.data["servers"][i].get("name")
+            try:
+                if not self.collect():
+                    return
+                used = servers.providers_using(self.data, name)
+                if used:
+                    raise ValueError(tr("Server %s is used by: %s", name, ", ".join(used)))
+            except ValueError as exc:
+                gui_dialog.info(self.win, "HaiveQueen", str(exc), self.mono)   # refused, the providers are named
+                return
+        question = {"providers": "Remove this provider from the settings?", "servers": "Remove this server from the settings?"}.get(kind, "Remove this Apiary from the settings?")
+        if gui_dialog.ask(self.win, "HaiveQueen", tr(question), self.mono):
+            if kind == "servers":
+                servers.remove_server(self.data, name)
+            elif kind == "providers":
                 del self.data["providers"][i]
             else:
                 entry = self.apiaries.pop(i)["entry"]
@@ -1144,6 +1151,8 @@ class ConfigWindow:
             save_project_file(self.conn, path, apiary["file"])
             apiary.update(path=path, workspace=str(path.parent.parent), saved=json.dumps(apiary["file"], sort_keys=True), exists=True)
         self.status.config(text=tr("Saved."), fg=self.col["green"])
+        self.fresh = []
+        self.refresh_state()
         if self.on_saved:
             self.on_saved()
 

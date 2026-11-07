@@ -50,6 +50,15 @@ The output limit of an OpenCode/Kilo model, which the block needs next to the co
 
 **Old settings.** A Codex CLI provider with `endpoint` is read as a provider with an own server (address = `baseUrl` without `/v1`; providers with the same address share one server); other providers keep their `endpoint` as before. `config.toml` is rewritten in the new form only when the owner saves the settings window.
 
+**Models and effort values of the provider page.** The choice lists of the provider page come from `haivequeen/cli-models.json` (per CLI: `models`, `efforts`, `source`). A file of the same name in the data folder replaces the entry of a CLI; an entry there may be only a list of models. With an own server the model list is the list of the last connection test. The ready check uses only a list the owner put in the data folder, so a model the documentation does not list yet never stops a working provider (the page still shows a model outside the list as an own entry).
+
+| CLI | Models | Effort values | Source |
+|---|---|---|---|
+| Claude Code | the aliases `fable`, `opus`, `sonnet`, `haiku`, `best`, `opusplan`, `sonnet[1m]`, `opus[1m]` and the full names of the model page | `low`, `medium`, `high`, `xhigh`, `max` | [Model configuration](https://code.claude.com/docs/en/model-config) (Available models, Adjust effort level) |
+| Codex CLI | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` (the levels depend on the model) | [Codex models](https://developers.openai.com/codex/models), [Configuration reference](https://developers.openai.com/codex/config-reference) (`model_reasoning_effort`) |
+| OpenCode | none: the catalog depends on the connected providers (models.dev); the page offers the own entry | `low`, `medium`, `high`, `max` (variant names; not every model has all of them) | [Models](https://opencode.ai/docs/models) (Variants) |
+| Kilo Code | none: its documentation has no fixed list; the page offers the own entry | none documented; the page offers the own entry | [CLI](https://kilo.ai/docs/code-with-ai/platforms/cli) |
+
 ## Personal inbox command
 
 The machine settings page offers **Install /bzz**. It creates user commands in

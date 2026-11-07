@@ -376,17 +376,16 @@ def summary(server) -> str:
 
 def known_models(prov):
     """The models a provider may choose from, or None when they are not known: the model list of its server (last test); with account login the list of
-    the CLI from the data file `cli-models.json` of the data folder when there is one."""
+    the CLI from the file `cli-models.json` of the data folder when the owner put one there (the shipped list only fills the choice on the provider page)."""
     server = prov.get("server")
     if server:
         result = kept(server)
         return list(result["models"]) if result and result.get("models") else None
-    try:
-        data = json.loads((config.data_dir() / "cli-models.json").read_text(encoding="utf-8"))
-        models = data.get(prov.get("protocol"))
-        return [str(m) for m in models] if isinstance(models, list) and models else None
-    except (OSError, ValueError, AttributeError):
-        return None
+    from . import cli_presets
+    preset = cli_presets.PRESETS.get(prov.get("protocol"))
+    if not preset or preset["command"] != prov.get("command"):
+        return None   # a custom CLI offers only its own entry
+    return cli_presets.model_list(prov["protocol"], shipped=False) or None   # only the list of the owner: the shipped list fills the choice on the page
 
 
 def readiness(prov, has_login) -> tuple:

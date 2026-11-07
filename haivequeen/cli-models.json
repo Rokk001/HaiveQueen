@@ -1,0 +1,68 @@
+{
+ "claude": {
+  "source": "https://code.claude.com/docs/en/model-config",
+  "models": [
+   "fable",
+   "opus",
+   "sonnet",
+   "haiku",
+   "best",
+   "opusplan",
+   "sonnet[1m]",
+   "opus[1m]",
+   "claude-fable-5-1",
+   "claude-fable-5",
+   "claude-opus-5-5",
+   "claude-opus-5",
+   "claude-opus-4-8",
+   "claude-opus-4-7",
+   "claude-opus-4-6",
+   "claude-sonnet-5-5",
+   "claude-sonnet-5",
+   "claude-sonnet-4-6",
+   "claude-sonnet-4-5",
+   "claude-haiku-5-5",
+   "claude-haiku-4-5"
+  ],
+  "efforts": [
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ]
+ },
+ "codex": {
+  "source": "https://developers.openai.com/codex/models",
+  "effortSource": "https://developers.openai.com/codex/config-reference",
+  "models": [
+   "gpt-6-astra",
+   "gpt-6.1-sol",
+   "gpt-6.1-terra",
+   "gpt-6-luna"
+  ],
+  "efforts": [
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max",
+   "ultra"
+  ]
+ },
+ "opencode": {
+  "source": "https://opencode.ai/docs/models",
+  "models": [],
+  "efforts": [
+   "low",
+   "medium",
+   "high",
+   "max"
+  ]
+ },
+ "kilo": {
+  "source": "https://kilo.ai/docs/code-with-ai/platforms/cli",
+  "models": [],
+  "efforts": []
+ }
+}

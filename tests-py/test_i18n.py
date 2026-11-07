@@ -14,7 +14,7 @@ from bzztest import RoundCase, ROOT
 from haivequeen import bees, cli_presets, db, desktop, gui, gui_config, gui_data, gui_dialog, gui_hives, gui_overlays, gui_questions, hives, i18n, inbox, localtime, loop, overview, readygate, routine, startctx, views
 
 PACKAGE = ROOT / "haivequeen"
-GUI_FILES = ("gui.py", "gui_data.py", "gui_config.py", "gui_dialog.py", "gui_hives.py", "gui_overlays.py", "gui_questions.py")
+GUI_FILES = ("gui.py", "gui_data.py", "gui_config.py", "gui_provider.py", "gui_dialog.py", "gui_hives.py", "gui_overlays.py", "gui_questions.py")
 TRANSLATED_FILES = GUI_FILES + ("desktop.py", "overview.py", "buildjobs.py", "startctx.py", "bees.py", "hives.py", "agent_runner.py", "scheduler.py", "loop.py", "cli_presets.py")
 LOG_CALLS = {"log": 0, "event": 0, "say": 0, "refuse": 2, "not_started": 2, "set_stalled": 2, "append_event": 2, "add_event": 3, "_transition": 4}   # calls that store a line: index of its text
 NOT_LOG_TEXT = {"Test milestone 1: this is a long line that should wrap in a narrow window so that the line wrapping becomes visible.",   # only with the fake agent of the tests

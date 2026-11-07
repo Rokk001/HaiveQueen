@@ -18,4 +18,4 @@ bzz = "haivequeen.cli:main"
 include = ["haivequeen*"]
 
 [tool.setuptools.package-data]
-haivequeen = ["bee_names.txt"]
+haivequeen = ["bee_names.txt", "cli-models.json"]

@@ -65,3 +65,36 @@ def apply(entry, key) -> None:
     for field in CUSTOM_KEYS:
         entry.pop(field, None)
     entry.update(protocol=preset["protocol"], command=preset["command"], args=list(preset["args"]), beeMode=preset["beeMode"])
+
+
+# ---------------------------------------------------------------- models and effort values of each CLI (data file)
+
+MODELS_FILE = "cli-models.json"   # the shipped file (official documentation, with its source per CLI); a file of the same name in the data folder replaces the entry of a CLI
+
+
+def _models_entry(protocol, shipped=True) -> dict:
+    """{models, efforts, source} of a CLI from the data folder (a list there means only the models) or else, with `shipped`, from the shipped file; empty for an unknown CLI."""
+    import json
+    from pathlib import Path
+    from . import config
+    for path in (config.data_dir() / MODELS_FILE, Path(__file__).with_name(MODELS_FILE))[:2 if shipped else 1]:
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8")).get(protocol)
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(entry, list):
+            return {"models": [str(m) for m in entry], "efforts": []}
+        if isinstance(entry, dict):
+            return entry
+    return {}
+
+
+def model_list(protocol, shipped=True) -> list:
+    """The models of a built-in CLI according to its documentation (empty when the documentation has no fixed list); with `shipped` False only a list
+    the owner put in the data folder (the ready check uses that one, so a model the documentation does not list yet never stops a working provider)."""
+    return [str(m) for m in _models_entry(protocol, shipped).get("models") or []]
+
+
+def effort_list(protocol) -> list:
+    """The effort values a built-in CLI accepts according to its documentation (empty when none are documented)."""
+    return [str(e) for e in _models_entry(protocol).get("efforts") or []]
