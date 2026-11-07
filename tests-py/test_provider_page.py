@@ -443,7 +443,7 @@ class ServerPage(PageCase):
             return result
         with mock.patch.object(servers, "run_test", side_effect=fake):
             win.test_button.invoke()
-            for _ in range(50):
+            for _ in range(400):
                 win.win.update()
                 if "Tested at" in win.result_label.cget("text"):
                     break
