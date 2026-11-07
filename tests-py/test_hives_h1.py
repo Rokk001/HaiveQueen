@@ -726,9 +726,25 @@ class HiveRoundTests(RoundCase):
         """Three in-session Bees and their Queen take four slots."""
         from bzztest import provider
         providers = scheduler.get_providers({"providers": [provider("claude", 4)]})
-        rows = [{"status": "running", "phase": "queen", "provider": "claude", "pid": 11,
-                 "embedded_bees": ["Bee1", "Bee2", "Bee3"]}]
-        self.assertEqual(scheduler.provider_free(providers, rows)["claude"], 0)
+        from haivequeen import bees, overview
+        from bzztest import REL
+        rows = [{"status": "running", "phase": "queen", "provider": "claude", "pid": 11}]
+        for n in range(3):
+            bees.record_embedded_start(self.conn, "testproj", REL, "P%d" % n, "Bee%d" % n, "medium", "claude")
+        self.assertEqual(scheduler.provider_free(providers, rows, self.conn)["claude"], 0)
+        line = overview.provider_lines(self.conn, {"providers": [provider("claude", 4)]}, rows)[0]
+        self.assertEqual((line["used_slots"], line["slots"]), (4, 0))
+        self.assertIsNone(scheduler.select_provider(providers, "medium", [], scheduler.provider_free(providers, rows, self.conn), conn=self.conn))
+
+    def test_unconfirmed_embedded_bee_keeps_slot(self):
+        from haivequeen import bees
+        from bzztest import provider, REL
+        providers = scheduler.get_providers({"providers": [provider("claude", 1)]})
+        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Bee1", "medium", "claude")
+        self.conn.execute("UPDATE embedded_bees SET outcome=? WHERE name=?", (bees.STOPPING, "Bee1"))
+        self.assertEqual(scheduler.provider_free(providers, [], self.conn)["claude"], 0)
+        self.conn.execute("UPDATE embedded_bees SET ended_at='2026-01-01' WHERE name='Bee1'")
+        self.assertEqual(scheduler.provider_free(providers, [], self.conn)["claude"], 1)
 
     # A full five-hour window rests the Hive even if the weekly window has room.
     def test_five_hour_limit_also_rests_queen(self):
