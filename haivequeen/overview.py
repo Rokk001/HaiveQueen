@@ -296,13 +296,15 @@ def provider_lines(conn, cfg, agents) -> list:
         source = provider["limit"]
         used_slots = sum(1 for agent in agents if agent.get("status") in sch.ACTIVE
                          and sch.row_provider(agent) == provider["name"])
-        used, hours, reset_at, stale_hours = None, None, None, None
+        used, hours, reset_at, stale_hours, five_file = None, None, None, None, None
         if source in ("claude", "codex"):
             limits_path = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
             if limits_path and Path(limits_path).is_file():
                 entry = json.loads(Path(limits_path).read_text(encoding="utf-8-sig")).get(provider["name"]) or {}
                 if entry.get("usedPercent") is not None:
                     used, hours = float(entry["usedPercent"]), entry.get("resetHours")
+                    if entry.get("fiveHourPercent") is not None:
+                        five_file = {"pct": round(float(entry["fiveHourPercent"])), "reset": ""}
                     if hours is not None:
                         reset_at = time.time() + float(hours) * 3600
             elif not os.environ.get("BZZ_RUNTIME_OVERRIDE"):
@@ -333,6 +335,9 @@ def provider_lines(conn, cfg, agents) -> list:
         age_minutes = max(0, int((datetime.now(timezone.utc) - saved.astimezone(timezone.utc)).total_seconds() // 60)) if saved else None
         error = usage.claude_refresh_error(conn, provider=provider) if source == "claude" else ""
         five = window_usage(kept or usage._claude_snapshot(conn, provider=provider), datetime.now(timezone.utc)).get("FiveHour") if source == "claude" else None
+        if source == "codex" and not five_file and not os.environ.get("BZZ_PROVIDER_LIMITS_FILE"):   # the 5-hour window of a Codex provider
+            five = window_usage(_kv(conn, usage.CODEX_USAGE_KEY + ":" + provider["name"]) or _kv(conn, usage.CODEX_USAGE_KEY), datetime.now(timezone.utc)).get("FiveHour")
+        five = five_file or five
         rows.append({"stale": stale_hours is not None, "stale_hours": stale_hours, "five_hour": five, "error": error, "age_minutes": age_minutes, "name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
                      "has_limit": source in ("claude", "codex"),
                      "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["slots"],

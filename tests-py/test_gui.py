@@ -145,13 +145,12 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual((bee["tin"], bee["tout"]), (120000, 3000))
         self.assertEqual(bee["ctx_limit"], gui_data.CONTEXT_FALLBACK)
 
-    # The model limits are bars.
-    def test_limits_are_bars(self):
-        """Every limit entry has a label, a used share (or None), a level and a note; each provider has a slots bar."""
-        self.assertTrue(self.snap["limits"])
+    # The model limits are one row per provider.
+    def test_limits_are_rows_per_provider(self):
+        """Every provider of the settings has one limit row with its reserve, slots, weekly line and 5-hour line."""
+        self.assertEqual([r["name"] for r in self.snap["limits"]], ["Claude", "Codex"])
         for item in self.snap["limits"]:
-            self.assertEqual(set(item), {"label", "pct", "note", "level"})
-        self.assertTrue(any(item["label"].endswith("slots") for item in self.snap["limits"]))
+            self.assertEqual(set(item), {"name", "model", "next", "reserve", "slots", "weekly", "five"})
 
     # Everything the window prints is English.
     def test_no_german_words_in_the_window(self):
