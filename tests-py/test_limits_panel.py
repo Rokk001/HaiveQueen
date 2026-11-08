@@ -15,6 +15,52 @@ from haivequeen import db, gui_data, overview, scheduler as sch  # noqa: E402
 MINUS = "−"
 
 
+# The pixels of a Tk widget as Windows draws its window, independent of the screen.
+def capture(widget):
+    """RGB image of `widget` drawn by Windows itself (PrintWindow): the test window stays invisible (alpha 0) and nothing on the screen,
+    another window on top, a locked desktop or a remote session, changes the result. None where PrintWindow is not available."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    from PIL import Image
+
+    class Header(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
+                    ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD), ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+    user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+    user32.GetDC.restype = gdi32.CreateCompatibleDC.restype = gdi32.CreateCompatibleBitmap.restype = ctypes.c_void_p
+    user32.GetDC.argtypes = [ctypes.c_void_p]
+    user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    user32.PrintWindow.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+    gdi32.CreateCompatibleDC.argtypes = [ctypes.c_void_p]
+    gdi32.CreateCompatibleBitmap.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    gdi32.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    gdi32.DeleteObject.argtypes = gdi32.DeleteDC.argtypes = [ctypes.c_void_p]
+    gdi32.GetDIBits.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+    widget.update()
+    hwnd = widget.winfo_id()
+    rect = wintypes.RECT()
+    user32.GetClientRect(ctypes.c_void_p(hwnd), ctypes.byref(rect))
+    width, height = rect.right, rect.bottom
+    screen = user32.GetDC(hwnd)
+    memory = gdi32.CreateCompatibleDC(screen)
+    bitmap = gdi32.CreateCompatibleBitmap(screen, width, height)
+    try:
+        gdi32.SelectObject(memory, bitmap)
+        if not user32.PrintWindow(hwnd, memory, 3):   # PW_CLIENTONLY | PW_RENDERFULLCONTENT
+            return None
+        pixels = ctypes.create_string_buffer(width * height * 4)
+        header = Header(ctypes.sizeof(Header), width, -height, 1, 32, 0, 0, 0, 0, 0, 0)
+        gdi32.GetDIBits(memory, bitmap, 0, height, pixels, ctypes.byref(header), 0)
+        return Image.frombuffer("RGB", (width, height), pixels, "raw", "BGRX", 0, 1)
+    finally:
+        gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(memory)
+        user32.ReleaseDC(hwnd, screen)
+
+
 # A provider row as overview.provider_lines builds it.
 def prow(**kw):
     """A provider row with a reading, a reset in 100 hours and 1 of 3 slots used; `kw` overrides single fields."""
@@ -294,25 +340,24 @@ class PanelDrawTest(unittest.TestCase):
             for a, b in zip(polygons, polygons[1:]):
                 edges = lambda p: {frozenset(((round(p[2*k], 3), round(p[2*k+1], 3)), (round(p[2*((k+1)%6)], 3), round(p[2*((k+1)%6)+1], 3)))) for k in range(6)}
                 self.assertTrue(edges(a) & edges(b), (a, b))
-        # Capture the rendered panel, including all three rows, for visual inspection.
+        # Capture the rendered panel, including all three rows, from the window itself: it stays invisible and the screen does not matter.
         try:
-            from PIL import ImageGrab
+            import PIL  # noqa: F401
         except ImportError:
-            self.skipTest("Pillow is required for screen capture")
-        self.root.attributes("-alpha", 1.0)
-        self.root.update()
-        x, y = win.canvas.winfo_rootx(), win.canvas.winfo_rooty()
+            self.skipTest("Pillow is required for the window capture")
         box = tuple(round(v * win.scale) for v in self.BOX)
-        shot = ImageGrab.grab((x + box[0], y + box[1], x + box[2], y + box[3]))
-        self.assertGreater(sum(1 for pixel in shot.convert("RGB").getdata() if pixel == (246, 184, 0)), 30)
+        image = capture(win.canvas)
+        if image is None:
+            self.skipTest("the window capture needs Windows PrintWindow")
+        honey = lambda shot: sum(1 for pixel in shot.getdata() if pixel == (246, 184, 0))
+        self.assertGreater(honey(image.crop(box)), 30)
         win.scroll["limits"] = 2
         win.draw()
         self.root.update()
         mixed = [i for i in win.canvas.find_all() if "slot_full" in win.canvas.gettags(i) or "slot_empty" in win.canvas.gettags(i)]
         mixed = mixed[-5:]
         self.assertEqual(["slot_full" in win.canvas.gettags(i) for i in mixed], [True, True, False, False, False])
-        shot = ImageGrab.grab((x + box[0], y + box[1], x + box[2], y + box[3])).convert("RGB")
-        self.assertGreater(sum(1 for pixel in shot.getdata() if pixel == (246, 184, 0)), 30)
+        self.assertGreater(honey(capture(win.canvas).crop(box)), 30)
 
     def test_slot_hover_localized_and_current(self):
         """S-10: hovering cells explains the current counts in both languages."""

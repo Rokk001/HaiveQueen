@@ -19,6 +19,11 @@ class IsolationActiveTest(unittest.TestCase):
                     "profile/codex/state_5.sqlite", "profile/opencode/data/opencode/storage/x.json", "profile/kilo/data/kilo/kilo.db"):
             self.assertTrue(isolation.is_live(isolation.Path(rel)), rel)
 
+    def test_files_the_running_loop_and_dashboard_rewrite_are_live(self):
+        """The loop's periodic server test result and the dashboard's update check are rewritten while the suite runs: not a change made by a test."""
+        for rel in ("server-tests.json", "update-check.json"):
+            self.assertTrue(isolation.is_live(isolation.Path(rel)), rel)
+
     def test_files_haivequeen_writes_itself_are_not_live(self):
         """The settings files HaiveQueen writes into the profile and everything outside the profile still count: a test that writes them is found."""
         for rel in ("profile/claude/settings.json", "profile/codex/config.toml", "config.toml", "logs/notes.txt", "profile/stray.txt"):
