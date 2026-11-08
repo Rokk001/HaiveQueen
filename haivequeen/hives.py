@@ -655,7 +655,7 @@ def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen
         conn.execute("UPDATE hives SET state='requeen',requested_provider=?,reset_at=NULL WHERE project=? AND plan_path=?", (provider, project, plan))
 
 
-STEP_WORD = re.compile(r"(?i)\b(?:step|schritt)\s*(\d+)\s*(?:/|of|von)\s*(\d+)")   # "step 2/5", "Step 2 of 5", "Schritt 2/5"
+STEP_WORD = re.compile(r"(?i)\b(?:step|schritt)\s*(\d+)(?:\s*-\s*(\d+))?\s*(?:/|of|von)\s*(\d+)")   # "step 2/5", "Step 2 of 5", "Schritt 2/5"
 
 
 # Find the latest step report of each package of a Hive.
@@ -675,8 +675,11 @@ def package_steps(conn, project, plan, packages, active, notes):
             continue
         text = note['text'] or ''
         step = STEP_WORD.search(text)
-        n, m = int(step.group(1)), int(step.group(2))
-        if m <= 0 or not 0 <= n <= m:
+        if not step:
+            continue
+        start, end, total = step.groups()
+        n, m = int(end or start), int(total)
+        if m <= 0 or not 0 <= int(start) <= n <= m:
             continue
         first = re.split(r"[\s:,;()\[\]-]+", text.strip(), 1)[0]
         if note['agent'] not in mine and first not in people:
@@ -714,13 +717,17 @@ def hive_data(conn, project, agents, plan=None):
         for note in notes:
             if note['project'] != hive['project']:
                 continue
-            match = re.match(r"^([^ ]+) ([^:]+): step (\d+/\d+)\s*(.*)$", note['text'] or '')
-            if not match:
+            text = note['text'] or ''
+            match = re.match(r"^([^ ]+) ([^:]+): ", text)
+            step_match = STEP_WORD.match(text, match.end()) if match else None
+            if not step_match:
                 continue
-            name, package, step, task = match.groups()
+            name, package = match.groups()
+            start, end, total = step_match.groups()
+            n, m = int(end or start), int(total)
+            step, task = '%d/%d' % (n, m), text[step_match.end():].strip()
             if name in bees or (note['agent'] in queens and package in packages):
-                n, m = map(int, step.split('/'))
-                if m > 0 and 0 <= n <= m:
+                if m > 0 and 0 <= int(start) <= n <= m:
                     if n >= m:
                         bees.pop(name, None)
                     else:

@@ -112,6 +112,26 @@ class StepBarTest(unittest.TestCase):
         hive = hives.hive_data(self.conn, "ODP", runtime.list_agents(self.conn, "ODP", "all"), PLAN)[0]
         self.assertEqual([(bee["name"], bee["step"]) for bee in hive["bees"]], [("Sophia", "")])
 
+    def test_step_ranges_show_the_highest_step_in_both_readers(self):
+        """A range report advances the Bee and package displays to its end."""
+        bees.record_step_count(self.conn, "ODP", PLAN, "P1", 6)
+        self.process_bee("Sophia", "P1")
+        self.note("ODP__Sophia", "Sophia P1: step 2-5/6 tests done")
+        hive = hives.hive_data(self.conn, "ODP", runtime.list_agents(self.conn, "ODP", "all"), PLAN)[0]
+        self.assertEqual(hive["bees"][0]["step"], "5/6")
+        self.assertEqual(hive["bees"][0]["task"], "tests done")
+        self.assertEqual(hive["package_steps"]["P1"], {"step": "5/6", "task": "tests done"})
+        self.assertEqual(self.row("Sophia")["step"], "5/6")
+        for invalid in ("step 5-2/6", "step 2-7/6", "step 2-5/0"):
+            self.note("ODP__Sophia", "Sophia P1: " + invalid)
+            hive = hives.hive_data(self.conn, "ODP", runtime.list_agents(self.conn, "ODP", "all"), PLAN)[0]
+            self.assertEqual(hive["bees"][0]["step"], "5/6", invalid)
+            self.assertEqual(hive["package_steps"]["P1"]["step"], "5/6", invalid)
+        self.note("ODP__Sophia", "Sophia P1: step 5-6/6 finished")
+        hive = hives.hive_data(self.conn, "ODP", runtime.list_agents(self.conn, "ODP", "all"), PLAN)[0]
+        self.assertEqual(hive["bees"], [])
+        self.assertEqual(hive["package_steps"]["P1"]["step"], "6/6")
+
     # U-5: a replacement keeps the last state until its own first report.
     def test_replacement_bee_keeps_the_last_state_until_its_first_step(self):
         """The replacement Bee of a package shows the last reported state, with the old step count, until it reports its own first step; then its own count counts."""
