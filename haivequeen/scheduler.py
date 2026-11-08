@@ -179,7 +179,7 @@ def get_providers(settings: dict) -> list:
             raise ValueError(tr("provider %s: use must be preferred, fallback or capability-only, not '%s'", name, use))
         proto = str(p.get("protocol") or name)
         fmt = profile.check_protocol(name, proto, p.get("outputFormat"))   # a CLI HaiveQueen cannot read is refused here, with a clear message
-        bee_mode = servers.bee_mode_of(p)   # the embedded Bee mode is a Claude Code feature with an access type other than Local LLM (M-6)
+        bee_mode = servers.bee_mode_of(p)   # the embedded Bee mode is a Claude Code feature with an access type other than Local LLM
         if bee_mode not in BEE_MODES:
             raise ValueError(tr("provider %s: beeMode must be subagent or process, not '%s'", name, bee_mode))
         limit = p.get("limit")
@@ -190,7 +190,7 @@ def get_providers(settings: dict) -> list:
             "slots": int(p.get("slots", settings.get("slots", 0)) or 0), "use": use,
             "capabilities": capabilities, "capabilitiesVersion": 1,
             "classes": p.get("classes") or {},
-            "limit": servers.limit_source(p),   # M-7: derived from the CLI and the access type, a stored source is not used
+            "limit": servers.limit_source(p),   # derived from the CLI and the access type, a stored source is not used
             "usageInterval": float(limit.get("interval", 60)) if isinstance(limit, dict) else 60,
             "endpoint": p.get("endpoint"), "server": server, "access": access, "apiKey": str(p.get("apiKey") or "") if access == "api" else "", "nameEdited": bool(p.get("nameEdited", True)), **profile.custom_fields(p),
         })
@@ -370,7 +370,7 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
 
 
 def provider_reserve(provider: dict, conn=None, limits=None, now=None):
-    """M-2 quota reserve of a provider from both usage windows: weekly quota x 5-hour quota (the 5-hour one counts at most 1.0).
+    """The quota reserve of a provider from both usage windows: weekly quota x 5-hour quota (the 5-hour one counts at most 1.0).
 
     None for a provider without limit (+99 %); a used-up window gives 0 (no new work until it resets, capability packages included).
     A passed reset counts as reset; an unknown reading counts as a full week free. A kept reading of a failed Claude check counts with both windows.
@@ -391,7 +391,7 @@ def provider_reserve(provider: dict, conn=None, limits=None, now=None):
 
 
 def _five_hour_window(provider: dict, conn=None, limits=None, now=None):
-    """The 5-hour usage window of a provider as {free_pct, reset_epoch}, or None when it is not known (M-2)."""
+    """The 5-hour usage window of a provider as {free_pct, reset_epoch}, or None when it is not known."""
     name = provider["name"]
     now = time.time() if now is None else now
     table = limits
@@ -421,7 +421,7 @@ def _five_hour_window(provider: dict, conn=None, limits=None, now=None):
 
 
 def reserve_zero(provider: dict, conn=None):
-    """M-2: True when a usage window of the provider is used up (quota reserve 0): no new work until it resets."""
+    """True when a usage window of the provider is used up (quota reserve 0): no new work until it resets."""
     resv = provider_reserve(provider, conn)
     return resv is not None and resv <= 0
 
@@ -474,9 +474,9 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
 
     Candidates have slots above 0 and a free slot, the class in their entry, all needed capabilities (a package that needs one goes
     only to providers that have it); `capability-only` providers only get packages that need
-    a capability. A provider with a used-up usage window (quota reserve 0, M-2) drops out for every package. `preferred` and `capability-only` come first, `fallback`
+    a capability. A provider with a used-up usage window (quota reserve 0) drops out for every package. `preferred` and `capability-only` come first, `fallback`
     only when none of them has a free slot. A provider without a limit (limit source none, every Local LLM) always comes first (list order among them);
-    then the best quota reserve from both usage windows (M-2) wins; equal reserves go to a local provider first, then list order. `prefer` keeps a
+    then the best quota reserve from both usage windows wins; equal reserves go to a local provider first, then list order. `prefer` keeps a
     follow-up with an earlier provider when it is a candidate, `avoid` (verify) prefers another provider, `protocol` limits to claude or codex.
     """
     cname = CLASS_NAMES[class_index(cls)]
@@ -497,9 +497,9 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
             continue
         if "Coding" not in p["capabilities"] and not needs:
             continue
-        resv = provider_reserve(p, conn, limits, now)   # M-2: the quota reserve from both usage windows; None without limit (+99 %)
+        resv = provider_reserve(p, conn, limits, now)   # the quota reserve from both usage windows; None without limit (+99 %)
         if resv is not None and resv <= 0:
-            continue   # a used-up window blocks every package until it resets (M-2), capability packages included
+            continue   # a used-up window blocks every package until it resets, capability packages included
         cand.append((p, idx, resv))
     if not cand:
         return None

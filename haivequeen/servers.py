@@ -80,14 +80,14 @@ def embedded_bees(p) -> bool:
 
 
 def bee_mode_of(p) -> str:
-    """The Bee mode a provider entry runs with (M-6): its beeMode, by default subagent for protocol claude and process otherwise; subagent counts as
+    """The Bee mode a provider entry runs with: its beeMode, by default subagent for protocol claude and process otherwise; subagent counts as
     process where `embedded_bees` is False, from the first load on, before any save."""
     mode = str(p.get("beeMode") or ("subagent" if str(p.get("protocol") or p.get("name") or "") == "claude" else "process"))
     return "process" if mode == "subagent" and not embedded_bees(p) else mode
 
 
 def limit_source(p) -> str:
-    """The limit source HaiveQueen derives from the CLI and the access type (M-7): Claude Code or Codex with Subscription reads its own usage (claude or
+    """The limit source HaiveQueen derives from the CLI and the access type: Claude Code or Codex with Subscription reads its own usage (claude or
     codex); every other combination (API key, Local LLM, another CLI) reads none. A stored source is not used."""
     from . import cli_presets
     key = cli_presets.key_for(p)

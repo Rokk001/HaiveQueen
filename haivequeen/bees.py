@@ -48,7 +48,7 @@ def select_route(providers, free, hive_provider, package_class, capability, excl
         matching = [p for p in candidates if (p.get('classes', {}).get(cls) or {}).get('model')]
         if not matching:
             continue
-        if escalated:   # M-1: an escalated package takes, among the providers it may use, the one with the best reserve (M-2), not list order
+        if escalated:   # an escalated package takes, among the providers it may use, the one with the best reserve, not list order
             others = [{**p, 'slots': p.get('slots', 1), 'use': p.get('use', 'preferred'), 'limit': p.get('limit', ''), 'protocol': p.get('protocol', ''),
                        'capabilities': scheduler.provider_capabilities(p)} for p in providers if p['name'] not in limited]
             pick = scheduler.select_provider(others, cls, capability, free, conn=conn)
@@ -662,7 +662,7 @@ def other_provider_for_waiting(env, plan, waited, free, excluded=()):
     from . import routine
     ensure_attempts(env.conn)
     usable = [p for p in env.providers if p['name'] not in excluded and not p.get('unavailable') and p.get('slots', 1) > 0
-              and free.get(p['name'], 0) > 0 and not scheduler.reserve_zero(p, env.conn)]   # M-2: a used-up window (reserve 0) blocks the provider
+              and free.get(p['name'], 0) > 0 and not scheduler.reserve_zero(p, env.conn)]   # a used-up window (reserve 0) blocks the provider
     others = [p for p in usable if p['name'] != waited]
     if not others:
         return None
@@ -681,13 +681,13 @@ def other_provider_for_waiting(env, plan, waited, free, excluded=()):
 
 
 def by_reserve(candidates, providers, conn=None) -> list:
-    """`candidates` in the order of the normal provider choice: providers without a limit first (list order among them, F-13), then the best quota reserve from both usage windows (M-2), equal reserves go to a local provider first, then the order of the settings."""
+    """`candidates` in the order of the normal provider choice: providers without a limit first (list order among them, F-13), then the best quota reserve from both usage windows, equal reserves go to a local provider first, then the order of the settings."""
     from . import scheduler
     order = [p['name'] for p in providers]
     now = time.time()   # one clock reading for all candidates, so equal usage gives exactly equal reserves
 
     def key(p):
-        resv = scheduler.provider_reserve(p, conn, now=now)   # M-2: the quota reserve from both usage windows; None without limit (+99 %)
+        resv = scheduler.provider_reserve(p, conn, now=now)   # the quota reserve from both usage windows; None without limit (+99 %)
         unlimited = resv is None
         # the raw reserve decides (never a rounded one); equal reserves, also two providers without a limit (+99 %), go to a local provider first, then the settings order
         return (not unlimited, 0 if unlimited else -resv, not servers.is_local(p), order.index(p['name']) if p['name'] in order else len(order))
@@ -885,11 +885,11 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not (queen_provider.get('endpoint') or queen_provider.get('server')) and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
         free = scheduler.provider_free(env.providers, running, env.conn)   # C-1: a subagent Bee needs a free slot of the Queen's provider like a Bee process
         route_free = dict(free)
-        limited = [p['name'] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # M-2: a used-up window (reserve 0) blocks the provider
+        limited = [p['name'] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # a used-up window (reserve 0) blocks the provider
         ensure_attempts(env.conn)
-        if embedded:   # M-1: a subagent Bee takes a free local provider first, else stays on the Queen's provider, else another one as in C-2; an escalated package takes the best reserve among them
+        if embedded:   # a subagent Bee takes a free local provider first, else stays on the Queen's provider, else another one as in C-2; an escalated package takes the best reserve among them
             route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, current != base_class or use_other_provider, limited, conn=env.conn)
-        else:   # M-1: a process Bee is placed by the normal provider choice like a Queen; the stored assignment keeps only the class (above), the provider is chosen again here
+        else:   # a process Bee is placed by the normal provider choice like a Queen; the stored assignment keeps only the class (above), the provider is chosen again here
             route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, True, limited, conn=env.conn)
         if not route:
             return refuse(env, package, 'no provider with a free slot offers class %s' % current)

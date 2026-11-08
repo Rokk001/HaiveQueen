@@ -1369,7 +1369,7 @@ class ConfigWindow(ProviderPages):
             return
         from . import servers
         for entry in self.data.get("providers") or []:
-            servers.settle(entry)   # M-6: a provider that cannot run embedded Bees is saved as process
+            servers.settle(entry)   # a provider that cannot run embedded Bees is saved as process
         for apiary in self.apiaries:
             self.adopt_workspace(apiary)   # a workspace typed just before Save: its project.toml is the base, never replaced by the edits alone
         writes, problems = self.apiary_writes()

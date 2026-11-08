@@ -148,7 +148,7 @@ class ProviderPages:
             servers.clear_type_values(data)
             servers.set_access(data, "subscription")
         access = servers.access_of(data)
-        servers.settle(data, new=self.is_fresh(data))   # M-6, M-7: the Bee mode and the limit source as derived from the CLI and the access type
+        servers.settle(data, new=self.is_fresh(data))   # the Bee mode and the limit source as derived from the CLI and the access type
         self.sections, self.notes, self.note_sources, self.frame_of = [], {}, {}, {}
         top = tk.LabelFrame(self.form, text="", padx=6, pady=4)   # same border and padding as the sections, so all fields share one column
         top.pack(fill="x", anchor="w")
@@ -276,7 +276,7 @@ class ProviderPages:
         self.bee_field(box, data)
 
     def bee_field(self, box, data):
-        """Bee mode in Use (M-6): Subagent or Process with one explanation. Subagent is greyed out where HaiveQueen has no embedded Bees (another CLI than
+        """Bee mode in Use: Subagent or Process with one explanation. Subagent is greyed out where HaiveQueen has no embedded Bees (another CLI than
         Claude Code, a Local LLM provider); such a provider shows Process."""
         from . import servers
         labels = {"subagent": tr("Subagent"), "process": tr("Process")}

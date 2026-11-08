@@ -215,7 +215,7 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
     active = runtime.list_agents(env.conn, None, "active")
     running = [{**a, "status": "running"} for a in active if agent_process.counts(a)]
     free = scheduler.provider_free(env.providers, running, env.conn)
-    limited = [p["name"] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # M-2: a used-up window (reserve 0) blocks the provider
+    limited = [p["name"] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # a used-up window (reserve 0) blocks the provider
     cls = str(env.settings.get("readyCheckClass", "medium"))
     candidates = [p for p in env.providers if p["name"] not in env.settings.get("excludedProviders", []) and p["name"] not in limited]
     pick = scheduler.select_provider(candidates, cls, [], free, conn=env.conn)
