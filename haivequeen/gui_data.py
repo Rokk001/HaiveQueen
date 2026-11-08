@@ -5,7 +5,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import config, db, gui_overlays, hives, overview, runstate, runtime
+from . import config, db, gui_overlays, hives, overview, runstate, runtime, reserve as quota_reserve
 from . import platform as osplat
 from . import i18n, localtime
 from . import scheduler as sch
@@ -463,7 +463,8 @@ def limit_rows(d) -> list:
     for p in d["provider_limits"]:
         verified = bool(p.get("stale")) or (bool(p.get("error")) and p.get("age_minutes") is not None)   # the newest check failed, an older reading is shown
         due = p.get("hours") is not None and p["hours"] <= 0
-        reset = sch.format_reset_time(p["reset_at"]) if p.get("reset_at") else ""
+        reset_date = datetime.fromtimestamp(p["reset_at"]) if p.get("reset_at") else None
+        reset = reset_date.strftime("%H:%M" if reset_date.date() == datetime.now().date() else "%d.%m. %H:%M") if reset_date else ""
         reserve = {"text": "", "level": "dim", "hover": "", "age": ""}
         if not p["has_limit"]:   # a provider without a limit never runs out and gets work first: the reserve shows the highest value
             reserve.update(text="+99 %", level="ok", hover=tr("No limit: this provider never runs out and gets work first."))
@@ -472,15 +473,14 @@ def limit_rows(d) -> list:
         else:
             if verified:
                 reserve["age"] = age_text(p)
-            if due:
-                reserve["text"] = tr("reset now")
-            elif p["ratio"] is None:
+            ratio = p.get("quota_reserve", p["ratio"])
+            if ratio is None:
                 reserve["text"] = tr("unknown")
             else:
-                pct = int(round((min(p["ratio"], 1e6) - 1) * 100))
-                reserve["text"] = ("+%d %%" if pct >= 0 else "−%d %%") % abs(pct)
-                reserve["level"] = "ok" if pct >= 0 else "bad"
-                reserve["hover"] = tr("%d %% more quota left than time until the reset (%s)" if pct >= 0 else "%d %% less quota left than time until the reset (%s)", abs(pct), reset)
+                reserve["text"] = quota_reserve.display(min(ratio, 2.0))
+                reserve["level"] = "bad" if ratio == 0 or reserve["text"].startswith("−") else "ok"
+                pct = abs(round((ratio - 1) * 100)) if ratio != float("inf") else 99
+                reserve["hover"] = tr("%d %% more quota left than time until the reset (%s)" if ratio >= 1 else "%d %% less quota left than time until the reset (%s)", pct, reset)
         total = int(p["total_slots"] or 0)
         used = int(p["used_slots"] or 0)
         slots = {"total": total, "used": used, "extra": max(0, used - total), "none": tr("no slots") if not total else "",
@@ -489,16 +489,20 @@ def limit_rows(d) -> list:
             slots["offline"] = tr("offline")
             slots["hover"] = tr("Offline since %s. HaiveQueen checks again and uses this provider as soon as it answers.", p["offline"])
         if not p["has_limit"]:
-            weekly = {"pct": None, "level": "dim", "text": tr("no weekly limit")}
+            weekly = {"pct": None, "level": "dim", "text": tr("no limit")}
         elif p["used_pct"] is None:
             weekly = {"pct": None, "level": "dim", "text": tr("7d unknown")}
         else:
             pct = round(p["used_pct"])
-            when = tr("reset now") if due else (tr("reset %s", reset) if reset else tr("reset unknown"))
+            when = tr("reset now") if due else (reset if reset else tr("reset unknown"))
             weekly = {"pct": pct, "level": level(p["used_pct"]), "text": "7d %d %% · %s" % (pct, when)}
         five = ""
-        if p.get("five_hour") and not verified:
-            five = tr("5h new window") if p["five_hour"]["pct"] is None else "5h %d %%" % p["five_hour"]["pct"]
+        if p.get("five_hour"):
+            five = tr("5h reset now") if p["five_hour"]["pct"] is None else "5h %d %%" % p["five_hour"]["pct"]
+            if p["five_hour"].get("reset") and p["five_hour"]["pct"] is not None:
+                five += " · " + p["five_hour"]["reset"]
+            if verified:
+                five += " · " + age_text(p)
         out.append({"name": p["name"].capitalize(), "model": p["model"] or tr("no medium model"), "next": bool(p["next"]),
                     "reserve": reserve, "slots": slots, "weekly": weekly, "five": five})
     return out

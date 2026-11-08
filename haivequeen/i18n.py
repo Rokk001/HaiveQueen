@@ -402,7 +402,7 @@ GERMAN = {
     "SYSTEM": "SYSTEM", "(%d cores)": "(%d Kerne)",
     "APIARY QUEUE": "WARTESCHLANGE", "questions: %d": "Fragen: %d", "queued: %d": "wartend: %d",
     "LOGS": "LOG", "all": "alle", "save": "speichern", "clear": "leeren", "Auto-scroll": "Auto-Scroll", "On": "An", "Off": "Aus", "no log lines": "keine Log-Zeilen",
-    "MODEL LIMITS": "MODELL-LIMITS", "reserve, slots and weekly limit": "Reserve, Slots und Wochenlimit", "n/a": "k. A.", "no limit data": "keine Limit-Daten",
+    "MODEL LIMITS": "MODELL-LIMITS", "reserve, slots and weekly limit": "Reserve, Slots und Wochenlimit", "reserve, slots and limits": "Reserve, Slots und Limits", "n/a": "k. A.", "no limit data": "keine Limit-Daten",
     "state, usage, plans and questions": "Zustand, Nutzung, Pläne und Fragen",
     "apiaries": "Apiaries", "apiary:%s": "Apiary:%s", "hives": "Hives", "questions": "Fragen", "config": "Einstellungen", "help": "Hilfe",
     "BUILD  •  ORCHESTRATE  •  EVOLVE": "BAUEN  •  STEUERN  •  ENTWICKELN",

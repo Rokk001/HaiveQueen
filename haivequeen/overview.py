@@ -339,7 +339,7 @@ def provider_lines(conn, cfg, agents) -> list:
         if source == "codex" and not five_file and not os.environ.get("BZZ_PROVIDER_LIMITS_FILE"):   # the 5-hour window of a Codex provider
             five = window_usage(_kv(conn, usage.CODEX_USAGE_KEY + ":" + provider["name"]) or _kv(conn, usage.CODEX_USAGE_KEY), datetime.now(timezone.utc)).get("FiveHour")
         five = five_file or five
-        rows.append({"stale": stale_hours is not None, "stale_hours": stale_hours, "five_hour": five, "error": error, "age_minutes": age_minutes, "name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio,
+        rows.append({"stale": stale_hours is not None, "stale_hours": stale_hours, "five_hour": five, "error": error, "age_minutes": age_minutes, "name": provider["name"], "used_pct": used, "hours": hours, "reset_at": reset_at, "ratio": ratio, "quota_reserve": sch.provider_reserve(provider, conn),
                      "has_limit": source in ("claude", "codex"),
                      "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["configuredSlots"],
                      "offline": offline.since_text(provider["offline"]) if provider["offline"] else "",

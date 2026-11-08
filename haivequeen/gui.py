@@ -846,104 +846,83 @@ class Dashboard:
 
     # Draw the model limits, one row per provider.
     def limits_panel(self, s, x0, y0, x1, y1):
-        """Draw one row per provider: name, model and the NEXT badge, the quota reserve, the slot cells, the weekly bar and the 5-hour line; scrolls when there are more rows."""
-        self.panel(x0, y0, x1, y1, tr("MODEL LIMITS"), tr("reserve, slots and weekly limit"), icon="icon_system")
-        rows = s["limits"]
-        sc = self.scale
-        th = self.lh
-        small = th(12)
-        # The three columns take the width their texts need (capped); when the panel is too narrow the left and middle column give way first.
-        badge_w = self.tw("NEXT", 11) + 12
-        need_l = min(220, max([self.tw(r["name"], 18) + (badge_w + 8 if r["next"] else 0) for r in rows] + [self.tw(r["model"], 12) for r in rows] + [60]))
-        need_m = min(170, max([self.tw(tr("Quota reserve"), 12)] + [self.tw(r["reserve"]["text"], 20 if r["reserve"]["text"][:1] in ("+", "−") else 14)
-                                                                  + (self.tw(r["reserve"]["age"], 12) + 6 if r["reserve"]["age"] else 0) for r in rows]))
-        avail = x1 - 30 - (x0 + 14) - 32
-        wrap = max([self.tw(r["weekly"]["text"], 12) for r in rows] + [0]) > 0.45 * avail   # a weekly line that takes too much of the row continues on a second line (in every row)
-        need_r = max([self.tw(part, 12) for r in rows for part in (r["weekly"]["text"].split(" · ") if wrap else [r["weekly"]["text"]])]
-                     + [self.tw(r["five"], 12) for r in rows] + [150])
-        shrink = min(1.0, max(0.4, (avail - need_r) / (need_l + need_m)))
-        lw, mw = need_l * shrink + 1, need_m * shrink + 1
-        lx, mx = x0 + 14, x0 + 14 + lw + 16
-        rx = mx + mw + 16
+        """Draw compact provider rows with independent usage windows."""
+        self.panel(x0, y0, x1, y1, tr("MODEL LIMITS"), tr("reserve, slots and limits"), icon="icon_system")
+        rows, sc = s["limits"], self.scale
+        lx, mx, rx = x0 + 14, x0 + 158, x0 + 265
         rw = x1 - 30 - rx
-        row_h = max(CELL * 2 / math.sqrt(3) + 4 + 5 + 3 + (3 if wrap else 2) * small, th(18) + 2 + small, small + 2 + th(20)) + 4   # the tallest column decides; every row has this height
-        room = max(1, int((y1 - y0 - 56) // row_h))
+        row_h = (y1 - y0 - 56) / 3
+        room = 3
         off = self.offset("limits", len(rows), room)
         self.area("limits", x0, y0, x1, y1)
         self.scrollbar("limits", x1 - 16, y0 + 50, y1 - 8, len(rows), room)
         for n, r in enumerate(rows[off:off + room]):
             top = y0 + 54 + n * row_h
-            # left: provider, model, NEXT badge
-            name_w = lw
+            ny = top + self.lh(18) / 2
+            badge_w = self.tw("NEXT", 11) + 12
+            name = self.text(lx, ny, self.fit(r["name"], mx - lx - (badge_w + 12 if r["next"] else 8), 18), 18, "text", "w")
             if r["next"]:
-                name_w -= badge_w + 8
-            ny = top + 4 + th(18) / 2
-            name = self.text(lx, ny, self.fit(r["name"], name_w, 18), 18, "text", "w")
-            if r["next"]:
-                bx = self.canvas.bbox(name)[2] / sc + 8
-                box = self.rect(bx, ny - th(11) / 2 - 2, bx + badge_w, ny + th(11) / 2 + 2, fill="gold", outline="gold")
+                bx = self.canvas.bbox(name)[2] / sc + 6
+                box = self.rect(bx, ny - self.lh(11) / 2 - 2, bx + badge_w, ny + self.lh(11) / 2 + 2, fill="gold", outline="gold")
                 self.canvas.itemconfigure(box, tags=("next_badge",))
                 self.text(bx + badge_w / 2, ny, tr("NEXT"), 11, "#000608", "center", True)
-            self.text(lx, top + 4 + th(18) + 2 + small / 2, self.fit(r["model"], lw, 12), 12, "dim", "w")
-            # middle: quota reserve
+            self.text(lx, top + self.lh(18) + self.lh(12) / 2, self.fit(r["model"], mx - lx - 8, 12), 12, "dim", "w")
             res = r["reserve"]
-            self.text(mx, top + 4 + small / 2, self.fit(tr("Quota reserve"), mw, 12), 12, "dim", "w")
-            numeric = res["text"][:1] in ("+", "−")
-            age_w = self.tw(res["age"], 12) + 6 if res["age"] else 0
-            size = 20 if numeric else 14
-            colour = {"ok": "green", "bad": "red"}.get(res["level"], "dim")
-            vy = top + 4 + small + 2 + th(20) / 2
-            shown = self.fit(res["text"], mw - age_w, size)
-            value = self.text(mx, vy, shown, size, colour, "w")
-            if res["age"]:
-                self.text(self.canvas.bbox(value)[2] / sc + 6, vy, res["age"], 12, "dim", "w")
-            tip = res["hover"] or (res["text"] if shown != res["text"] else "")
+            value = self.fit(res["text"], rx - mx - 10, 20 if res["level"] != "dim" else 14)
+            self.text(mx, top + 20, value, 20 if res["level"] != "dim" else 14, {"ok": "green", "bad": "red"}.get(res["level"], "dim"), "w")
+            tip = res["hover"] or (res["text"] if value != res["text"] else "")
             if tip:
-                self.tip_boxes.append((self.px(mx), self.px(top + 4), self.px(mx + mw), self.px(vy + th(20) / 2), tip))
-            # right: slot cells, weekly bar, 5-hour line
+                self.tip_boxes.append((self.px(mx), self.px(top), self.px(rx - 5), self.px(top + row_h), tip))
             sl = r["slots"]
-            cy = top + 4 + CELL / math.sqrt(3)
-            if sl.get("offline"):
-                self.text(rx, cy, sl["offline"], 14, "red", "w", True)
-                self.tip_boxes.append((self.px(rx), self.px(top + 4), self.px(rx + rw), self.px(top + 4 + CELL * 2 / math.sqrt(3)), sl["hover"]))
-            elif sl["none"]:
-                label = self.text(rx, cy, sl["none"], 14, "dim", "w")
+            cy = top + CELL / math.sqrt(3)
+            if sl.get("offline") or sl["none"]:
+                label = sl.get("offline") or sl["none"]
+                item = self.text(rx, cy, label, 14, "red" if sl.get("offline") else "dim", "w")
                 if sl["running"]:
-                    self.text(self.canvas.bbox(label)[2] / sc + 10, cy, sl["running"], 14, "text", "w")
+                    self.text(self.canvas.bbox(item)[2] / sc + 10, cy, sl["running"], 14, "text", "w")
+                if sl.get("offline"):
+                    self.tip_boxes.append((self.px(rx), self.px(top), self.px(rx + rw), self.px(top + row_h), sl["hover"]))
+                continue
+            extra = "+%d" % sl["extra"] if sl["extra"] else ""
+            blocked = res["text"] == "0 %"
+            if sl["total"] > 16:
+                count = "%d/%d" % (sl["used"], sl["total"])
+                cw = self.tw(count, 14) + 12
+                self.rect(rx, top, rx + cw, top + CELL * 2 / math.sqrt(3), fill="bg", outline="dim" if blocked or sl["used"] >= sl["total"] else "gold")
+                self.text(rx + cw / 2, cy, count, 14, "dim" if blocked or sl["used"] >= sl["total"] else "text", "center")
             else:
-                extra = "+%d" % sl["extra"] if sl["extra"] else ""
-                size = slot_cell_size(sl["total"], rw - (self.tw(extra, 14) + 8 if extra else 0))
-                if size is None:
-                    self.text(rx, cy, "%d / %d" % (sl["used"], sl["total"]), 14, "text", "w")
-                else:
-                    step = size
-                    for i in range(sl["total"]):
-                        self.hexagon(rx + size / 2 + i * step, cy, size / math.sqrt(3), i < sl["used"])
-                    if extra:
-                        self.text(rx + (sl["total"] - 1) * step + size + 8, cy, extra, 14, "gold", "w", True)
-                tip = tr("Agent slots of %s: %d of %d in use. A filled cell is a running agent, an empty cell a free slot.") % (r["name"], sl["used"], sl["total"])
-                self.tip_boxes.append((self.px(rx), self.px(top + 4), self.px(rx + rw), self.px(top + 4 + CELL * 2 / math.sqrt(3)), tip))
-            by = top + 4 + CELL * 2 / math.sqrt(3) + 4
-            wk = r["weekly"]
+                size = min(CELL, (rw - (self.tw(extra, 14) + 8 if extra else 0)) / sl["total"])
+                for i in range(sl["total"]):
+                    self.hexagon(rx + size / 2 + i * size, cy, size / math.sqrt(3), i < sl["used"], blocked)
+                if extra:
+                    self.text(rx + sl["total"] * size + 8, cy, extra, 14, "gold", "w", True)
+            tip = tr("Agent slots of %s: %d of %d in use. A filled cell is a running agent, an empty cell a free slot.") % (r["name"], sl["used"], sl["total"])
+            self.tip_boxes.append((self.px(rx), self.px(top), self.px(rx + rw), self.px(top + CELL * 2 / math.sqrt(3)), tip))
+            by = top + CELL * 2 / math.sqrt(3) + 2
+            wk, five = r["weekly"], r["five"]
+            width = (rw - 12) / 2 if five else rw
             if wk["pct"] is not None:
-                self.bar(rx, by, rw, 5, wk["pct"] / 100, LEVEL_FILL.get(wk["level"], "dim"))
-            wy = by + 5 + 3 + small / 2
-            parts = wk["text"].split(" · ") if wrap else [wk["text"]]
-            for k, part in enumerate(parts):
-                self.text(rx, wy + k * small, self.fit(part, rw, 12), 12, "dim" if wk["pct"] is None else "text", "w")
-            if r["five"]:
-                self.text(rx, wy + len(parts if wrap else [0]) * small, self.fit(r["five"], rw, 12), 12, "dim", "w")
+                self.bar(rx, by, width, 5, wk["pct"] / 100, LEVEL_FILL.get(wk["level"], "dim"))
+            txt = wk["text"] + ((" · " + res["age"]) if res["age"] else "")
+            self.text(rx, by + 5 + self.lh(12) / 2, self.fit(txt, width, 12), 12, "text" if wk["pct"] is not None else "dim", "w")
+            if five:
+                import re
+                match = re.search(r"5h (\d+)", five)
+                if match:
+                    pct = int(match.group(1))
+                    self.bar(rx + width + 12, by, width, 5, pct / 100, LEVEL_FILL.get("ok" if pct < 60 else "warn" if pct <= 85 else "bad"))
+                self.text(rx + width + 12, by + 5 + self.lh(12) / 2, self.fit(five, width, 12), 12, "text", "w")
         if not rows:
             self.text(x0 + 14, y0 + 66, tr("no limit data"), 14, "dim", "w")
 
     # Draw one honeycomb cell.
-    def hexagon(self, cx, cy, r, full):
+    def hexagon(self, cx, cy, r, full, blocked=False):
         """Draw a hexagon of radius r around the design point; filled in the gold of the logo when `full`, else only its outline."""
         pts = []
         for k in range(6):
             a = math.pi / 6 + math.pi / 3 * k
             pts += [self.px(cx + r * math.cos(a)), self.px(cy + r * math.sin(a))]
-        self.canvas.create_polygon(*pts, fill=GOLD if full else "", outline=GOLD, width=max(1, round(self.px(1.5))),
+        self.canvas.create_polygon(*pts, fill=("#606060" if blocked else GOLD) if full else "", outline="#606060" if blocked else GOLD, width=max(1, round(self.px(1.5))),
                                    tags=("slot_full" if full else "slot_empty",))
 
     # Draw the status sections.
