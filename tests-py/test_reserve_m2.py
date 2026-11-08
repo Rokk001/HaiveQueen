@@ -47,19 +47,19 @@ class Reserve(unittest.TestCase):
 
     def test_used_up_five_hour_window_blocks(self):
         # week 80 % free / 50 % time left = 1.6, 5 h 0 % free = 0 -> reserve 0 (blocked)
-        self.assertEqual(rsv.reserve(1.6, rsv.window_quota(0, now=0, reset_epoch=2 * 3600)), 0.0)
+        self.assertEqual(rsv.reserve(1.6, rsv.window_quota(0, now=0, reset_epoch=2 * 3600, window_hours=5)), 0.0)
 
     def test_full_five_hour_window_never_raises(self):
         # week 1.6, 5 h 60 % free / 60 % time = 1.0 -> the reserve stays at the weekly quota (+60 %)
-        self.assertAlmostEqual(rsv.reserve(1.6, rsv.window_quota(60, now=0, reset_epoch=3 * 3600)), 1.6)
+        self.assertAlmostEqual(rsv.reserve(1.6, rsv.window_quota(60, now=0, reset_epoch=3 * 3600, window_hours=5)), 1.6)
 
     def test_five_hour_quota_is_capped_at_one(self):
         # week 1.0, 5 h 90 % free / 20 % time = 4.5 capped at 1.0 -> +0 %
-        self.assertAlmostEqual(rsv.reserve(1.0, rsv.window_quota(90, now=0, reset_epoch=3600)), 1.0)
+        self.assertAlmostEqual(rsv.reserve(1.0, rsv.window_quota(90, now=0, reset_epoch=3600, window_hours=5)), 1.0)
 
     def test_low_five_hour_window_lowers(self):
         # week 1.0, 5 h 30 % free / 60 % time = 0.5 -> -50 %
-        self.assertAlmostEqual(rsv.reserve(1.0, rsv.window_quota(30, now=0, reset_epoch=3 * 3600)), 0.5)
+        self.assertAlmostEqual(rsv.reserve(1.0, rsv.window_quota(30, now=0, reset_epoch=3 * 3600, window_hours=5)), 0.5)
 
     def test_without_five_hour_window_the_week_counts_alone(self):
         # no 5-hour window: the weekly quota alone is the reserve
@@ -67,7 +67,7 @@ class Reserve(unittest.TestCase):
 
     def test_only_a_five_hour_window_counts_the_week_as_one(self):
         # a provider that reports only a 5-hour window counts its weekly quota as 1.0
-        self.assertAlmostEqual(rsv.reserve(1.0, rsv.window_quota(30, now=0, reset_epoch=3 * 3600)), 0.5)
+        self.assertAlmostEqual(rsv.reserve(1.0, rsv.window_quota(30, now=0, reset_epoch=3 * 3600, window_hours=5)), 0.5)
 
     def test_passed_reset_counts_as_reset_in_the_reserve(self):
         # the weekly window already reset (quota 1.0), the 5-hour window is used up: still blocked
