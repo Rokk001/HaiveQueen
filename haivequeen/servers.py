@@ -504,7 +504,7 @@ def known_models(prov):
 
 
 def readiness(prov, has_login) -> tuple:
-    """(ready, what is missing) of a provider (P-13): with account login the login must exist; with an own server the last test must show that the server
+    """(ready, what is missing) of a provider: with account login the login must exist; with an own server the last test must show that the server
     answers and offers the interface of the CLI; every model of a class must be in the model list of its source, unless the class entry marks it as an
     own entry (`customModel = true`, an own entry counts as available), or the list is not known."""
     server = prov.get("server")

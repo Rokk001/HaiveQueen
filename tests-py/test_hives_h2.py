@@ -179,7 +179,7 @@ class BeePolicyTests(unittest.TestCase):
             self.assertIn(text, prompt)
 
     # Check no codex for regular work before escalation.
-    # C-2: with the Queen's provider and the local one full, regular work goes to another provider with a free slot, and waits when none has one.
+    # With the Queen's provider and the local one full, regular work goes to another provider with a free slot, and waits when none has one.
     def test_regular_work_moves_to_another_provider_when_queen_and_local_full(self):
         self.free['cloud'] = 0
         self.free['local'] = 0
@@ -405,7 +405,7 @@ class QueenIntegrationTests(RoundCase):
         self.assertTrue(any(a['phase'] == 'queen' and a['status'] == 'running' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
 
     # A native subagent consumes no additional provider process slot and can start while paused.
-    # C-1: a native Bee takes a slot of the Queen's provider; it still starts during a pause.
+    # A native Bee takes a slot of the Queen's provider; it still starts during a pause.
     def test_native_bee_takes_a_slot_and_continues_during_pause(self):
         from haivequeen import hives, runstate
         from bzztest import REL
@@ -653,13 +653,13 @@ class QueenIntegrationTests(RoundCase):
         self.assertFalse(bees.start_process(self.env(), REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], []))
         self.assertIn('class heavy was requested', bees.LAST_REFUSAL)
 
-    # C-2: the stored provider of an interrupted Bee at its limit does not keep the Bee waiting: it moves to the provider it starts on.
+    # The stored provider of an interrupted Bee at its limit does not keep the Bee waiting: it moves to the provider it starts on.
     def test_interrupted_bee_moves_from_limited_assigned_provider(self):
         from unittest import mock
         from haivequeen import hives
         from bzztest import REL
         self.add_local_provider()
-        self.machine['providers'][-1].pop('endpoint')  # M-7: a Codex subscription has a derived limit source
+        self.machine['providers'][-1].pop('endpoint')  # A Codex subscription has a derived limit source
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'heavy'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)

@@ -1,4 +1,4 @@
-"""Regression tests for settings cleanup S1."""
+"""Regression tests for settings cleanup."""
 import tkinter.font
 import unittest
 import tomllib

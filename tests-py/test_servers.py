@@ -123,7 +123,7 @@ class ServerEntries(Base):
                 self.assertNotIn("secret-key", f.read_text(encoding="utf-8", errors="replace"), str(f))
 
     def test_address_with_or_without_v1_gives_the_same_address(self):
-        """P-19 (a): no /v1/v1, in the entry, the hand-over and the migration."""
+        """No /v1/v1, in the entry, the hand-over and the migration."""
         for text in ("http://h:1234", "http://h:1234/", "http://h:1234/v1", "http://h:1234/v1/", " HTTP://h:1234/V1 "):
             self.assertEqual(servers.clean_address(text).lower(), "http://h:1234")
         cfg = {"servers": [self.server(address="http://h:1234/v1")], "providers": [self.entry("c", "codex", "lms")]}
@@ -319,7 +319,7 @@ class ReadyCheck(Base):
         self.assertTrue(self.providers(cfg)["q"]["login"])
 
     def test_model_must_be_in_the_list_but_an_own_entry_counts(self):
-        """P-13 and P-19 (d): a model that the server does not list is missing, unless the class entry is marked as an own entry."""
+        """A model that the server does not list is missing, unless the class entry is marked as an own entry."""
         srv = self.stub(ALL)
         cfg = self.cfg(srv, "claude", {"medium": {"model": "not-listed"}})
         self.run_for(cfg, "p")
@@ -423,7 +423,7 @@ class LocalRules(Base):
         servers.set_access(e, "llm", new=True)
         self.assertEqual(e["limit"], {"source": "none"})
         self.assertEqual(e["capabilities"], ["Coding", "Queen"])
-        # M-7: the limit source follows the access type; the check interval of the table stays
+        # The limit source follows the access type; the check interval of the table stays
         old = self.entry("o", "claude", limit={"source": "claude", "interval": 120})
         servers.set_access(old, "llm")
         self.assertEqual(old["limit"], {"source": "none", "interval": 120})
@@ -481,7 +481,7 @@ class Migration(Base):
         self.assertEqual([p["name"] for p in new["providers"]], ["a", "b", "c"])
 
     def test_only_codex_is_migrated_others_keep_account_login_and_endpoint(self):
-        """P-19 (b)."""
+        """Provider page check."""
         cfg = {"providers": [self.old("cl", proto="claude"), self.old("oc", proto="opencode"), self.old("cx")]}
         new = servers.migrate(cfg)
         self.assertEqual(new["providers"][0], cfg["providers"][0])
@@ -494,7 +494,7 @@ class Migration(Base):
         self.assertEqual(sch.endpoint_args(ps["cl"])[:2], ["-c", "model_provider=lms"])   # works as today
 
     def test_custom_cli_stays_custom_with_all_values_and_works_as_today(self):
-        """A custom command stays a Custom CLI; with an endpoint it keeps it, needs its login and is local (P-16, P-19 (i))."""
+        """A custom command stays a Custom CLI; with an endpoint it keeps it, needs its login and is local."""
         custom = {"name": "lmstudio", "protocol": "claude", "command": "C:\\bin\\claude-local.cmd", "args": ["--x"], "slots": 1, "outputFormat": "claude",
                   "profileEnv": {"A": "{home}"}, "loginFiles": ["x.json"], "loginCommand": "foo login", "endpoint": {"id": "e", "baseUrl": "http://h:1/v1"}}
         cfg = {"providers": [copy.deepcopy(custom)]}
@@ -507,13 +507,13 @@ class Migration(Base):
         self.assertTrue(sch.get_providers({"providers": [plain]})[0]["command"].endswith("claude-local.cmd"))
 
     def test_existing_and_migrated_providers_keep_their_name(self):
-        """P-19 (h): the edited-name mark is true for existing and migrated providers."""
+        """The edited-name mark is true for existing and migrated providers."""
         self.assertTrue(servers.migrate({"providers": [self.old()]})["providers"][0]["nameEdited"])
         self.assertTrue(sch.get_providers({"providers": [self.entry("a", "claude")]})[0]["nameEdited"])
         self.assertFalse(sch.get_providers({"providers": [self.entry("a", "claude", nameEdited=False)]})[0]["nameEdited"])
 
     def test_server_entry_values_win_over_conflicting_provider_fields(self):
-        """F-5: address, key and context window of the server entry are not lost to same-named fields of the provider."""
+        """Address, key and context window of the server entry are not lost to same-named fields of the provider."""
         cfg = {"servers": [{"name": "s", "address": "http://a:1", "apiKey": "k", "contextWindow": 9}],
                "providers": [{"name": "p", "protocol": "claude", "command": "claude", "server": "s", "address": "http://old:2", "apiKey": "x", "contextWindow": 1}]}
         p = servers.migrate(cfg)["providers"][0]

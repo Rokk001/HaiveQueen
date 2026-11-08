@@ -191,7 +191,7 @@ class OverviewTest(unittest.TestCase):
                                   ("no-reset-provider", "fallback", "codex"),
                                   ("lmstudio", "fallback", ""),
                                   ("local", "fallback", "")):
-            access = {"access": "llm"} if name in ("lmstudio", "local") else {}   # a Local LLM has no usage limit (M-7)
+            access = {"access": "llm"} if name in ("lmstudio", "local") else {}   # a Local LLM has no usage limit
             providers.append({"name": name, "protocol": "codex", "use": use, "slots": 2, "limit": source, **access,
                 "classes": {"medium": {"model": name + "-model"}}})
         limits = Path(self.tmp.name) / "limits.json"

@@ -29,22 +29,22 @@ class SelectTest(unittest.TestCase):
         self.assertEqual(self.pick([provider("A", 1), provider("B", 1)], free={"A": 1, "B": 1}), "A")
 
     def test_capability(self):
-        """A needed capability goes to the provider with it, also at a low reserve; a used-up window (reserve 0) drops out for every package, capabilities included (M-2); without a need a provider at its limit drops out."""
+        """A needed capability goes to the provider with it, also at a low reserve; a used-up window (reserve 0) drops out for every package, capabilities included; without a need a provider at its limit drops out."""
         ps = [provider("A", 2, limit="x"), provider("G", 2, caps=("images",), limit="x")]
         free = {"A": 2, "G": 2}
         lim = {"A": {"usedPercent": 0, "resetHours": 10}, "G": {"usedPercent": 50, "resetHours": 10}}
         self.assertEqual(self.pick(ps, free=free, limits=lim), "A")
         self.assertEqual(self.pick(ps, needs=["images"], free=free, limits=lim), "G")   # a needed capability goes to the provider with it, also at a low reserve
         lim = {"A": {"usedPercent": 0, "resetHours": 10}, "G": {"usedPercent": 100, "resetHours": 10}}
-        self.assertEqual(self.pick(ps, needs=["images"], free=free, limits=lim), "none")   # M-2: a used-up window (reserve 0) blocks even capability packages
+        self.assertEqual(self.pick(ps, needs=["images"], free=free, limits=lim), "none")   # A used-up window (reserve 0) blocks even capability packages
         self.assertEqual(self.pick(ps, needs=["voice"], free=free, limits=lim), "none")
 
     def test_no_limit_counts_full(self):
         """A provider without a weekly limit counts as 100 % free."""
-        ps = [provider("A", 2, limit="x"), provider("L", 1, proto="opencode")]   # opencode has no limit source (M-7)
+        ps = [provider("A", 2, limit="x"), provider("L", 1, proto="opencode")]   # opencode has no limit source
         free = {"A": 2, "L": 1}
         self.assertEqual(self.pick(ps, free=free, limits={"A": {"usedPercent": 95, "resetHours": 10}}), "L")
-        self.assertEqual(self.pick(ps, free=free, limits={"A": {"usedPercent": 10, "resetHours": 100}}), "L")   # F-13: a provider without limit always comes first
+        self.assertEqual(self.pick(ps, free=free, limits={"A": {"usedPercent": 10, "resetHours": 100}}), "L")   # A provider without limit always comes first
         lim = sch.provider_limit(sch.get_providers(settings(provider("L", 1, proto="opencode")))[0], None, {})
         self.assertEqual(lim["FreePct"], 100)
 

@@ -113,7 +113,7 @@ class PageCase(unittest.TestCase):
 
 class FiveSections(PageCase):
     def test_sections_in_order_with_advanced_closed_at_every_opening(self):
-        """P-5, P-10: CLI, model source, models, use, advanced (closed each time the page opens)."""
+        """CLI, model source, models, use, advanced (closed each time the page opens)."""
         win = self.window()
         self.provider(win, "claude")
         self.assertEqual([k for k, _w in win.sections], ["cli", "source", "models", "use", "advanced"])
@@ -128,7 +128,7 @@ class FiveSections(PageCase):
         self.assertEqual(win.advanced_frame.winfo_manager(), "")
 
     def test_protocol_and_command_only_for_custom_cli(self):
-        """P-6."""
+        """Provider page check."""
         win = self.window()
         self.provider(win, "claude")
         self.assertFalse({("protocol",), ("command",)} & self.paths(win))
@@ -138,7 +138,7 @@ class FiveSections(PageCase):
         self.assertTrue({("protocol",), ("command",)} <= self.paths(win))
 
     def test_subscription_shows_login_and_shared_sentence(self):
-        """P-7: Subscription shows the status, the Login button and the shared-login sentence."""
+        """Subscription shows the status, the Login button and the shared-login sentence."""
         win = self.window()
         self.provider(win, "claude")
         self.assertEqual(win.access_var.get(), "Subscription")
@@ -156,7 +156,7 @@ class FiveSections(PageCase):
         self.assertEqual(win.target()["address"], "http://192.168.1.20:1234")
 
     def test_switch_access_keeps_ticks_and_derives_limit_source(self):
-        """P-14, P-19 (g): switching an existing provider keeps capabilities; the limit source follows the new access type (M-7)."""
+        """Switching an existing provider keeps capabilities; the limit source follows the new access type."""
         win = self.window()
         self.provider(win, "claude")
         before = win.collect() and (list(win.target().get("capabilities") or ["-"]), dict(win.target()["limit"]))
@@ -168,14 +168,14 @@ class FiveSections(PageCase):
         self.assertNotIn("access", win.target())
 
     def test_custom_cli_is_subscription(self):
-        """P-7, F-7: a command that is no built-in CLI is a Custom CLI with the access type Subscription."""
+        """A command that is no built-in CLI is a Custom CLI with the access type Subscription."""
         win = self.window()
         self.provider(win, "wrapped")
         self.assertEqual((win.access_var.get(), win.cli_var.get()), ("Subscription", "Custom CLI"))
 
 class Models(PageCase):
     def test_three_rows_with_cli_list_and_own_entry(self):
-        """P-8: three class rows with a model list (data file of the CLI) and an effort list."""
+        """Three class rows with a model list (data file of the CLI) and an effort list."""
         win = self.window()
         self.provider(win, "claude")
         self.assertEqual(list(win.model_boxes), ["light", "medium", "heavy"])
@@ -197,7 +197,7 @@ class Models(PageCase):
         self.assertEqual(win.effort_values, ["low"])
 
     def test_own_server_lists_its_models_and_only_own_entry_without_test(self):
-        """P-8: with own server the model list is the list of the last test; without a result only the own entry."""
+        """With own server the model list is the list of the last test; without a result only the own entry."""
         win = self.window()
         self.provider(win, "codex")
         self.assertEqual(list(win.model_boxes["medium"].cget("values")), [""])
@@ -207,7 +207,7 @@ class Models(PageCase):
         self.assertEqual(list(win.model_boxes["medium"].cget("values")), ["", "qwen/qwen3-27b", "other"])
 
     def test_empty_model_means_class_not_offered_and_own_entry_is_marked(self):
-        """P-8, P-19 (d): an empty model stays empty; a typed own model is marked customModel."""
+        """An empty model stays empty; a typed own model is marked customModel."""
         win = self.window()
         self.provider(win, "claude")
         win.model_vars["medium"].set("")
@@ -221,7 +221,7 @@ class Models(PageCase):
         self.assertNotIn("heavy", [c for c, e in saved.items() if not e.get("model")])
 
     def test_custom_cli_offers_only_the_own_entry(self):
-        """P-19 (e): free text for model and effort."""
+        """Free text for model and effort."""
         win = self.window()
         self.provider(win, "wrapped")
         self.assertEqual(win.model_boxes, {})
@@ -229,7 +229,7 @@ class Models(PageCase):
         self.assertEqual(win.effort_values, [])
 
     def test_other_class_settings_are_in_advanced(self):
-        """P-19 (f)."""
+        """Provider page check."""
         win = self.window()
         self.provider(win, "claude")
         self.assertIn(("classes", "light", "contextLimitTokens"), self.paths(win))
@@ -240,7 +240,7 @@ class Models(PageCase):
 
 class UseAndAdvanced(PageCase):
     def test_use_section(self):
-        """P-9."""
+        """Provider page check."""
         win = self.window()
         self.provider(win, "claude")
         inside = {path for path, _g, _l in win.getters if win.in_frame(path, win.use_frame)}
@@ -250,20 +250,20 @@ class UseAndAdvanced(PageCase):
         self.assertIn("Priority", texts)
 
     def test_advanced_holds_bee_mode_tools_args_usage_check_and_own_settings(self):
-        """P-10, P-19 (i)."""
+        """Provider page check."""
         win = self.window()
         self.provider(win, "claude")
         inside = {path for path, _g, _l in win.getters if win.in_frame(path, win.advanced_frame)}
         self.assertTrue({("allowedTools",), ("args",)} <= inside)
-        self.assertNotIn(("beeMode",), inside)   # M-6: in Use
-        self.assertNotIn(("limit", "source"), inside)   # M-7: no Usage check field
+        self.assertNotIn(("beeMode",), inside)   # In Use
+        self.assertNotIn(("limit", "source"), inside)   # No Usage check field
         win.select(1 + 2)   # the custom CLI with a kept endpoint
         inside = {path for path, _g, _l in win.getters if win.in_frame(path, win.advanced_frame)}
         self.assertIn(("endpoint", "baseUrl"), inside)
         self.assertIn(("loginCommand",), self.paths(win))
 
     def test_no_value_twice_and_no_raw_key_outside_advanced(self):
-        """P-17."""
+        """Provider page check."""
         win = self.window()
         raw = {"protocol", "command", "slots", "use", "beeMode", "allowedTools", "args", "limit", "classes", "capabilities", "server", "name", "cli", "login", "nameEdited"}
         for name in ("claude", "codex", "wrapped"):
@@ -277,7 +277,7 @@ class UseAndAdvanced(PageCase):
                 self.assertNotIn("claude-local.cmd", values)
 
     def test_every_field_has_a_one_line_explanation_in_english_and_german(self):
-        """P-11."""
+        """Provider page check."""
         for language in ("English", "German"):
             with self.subTest(language=language), mock.patch("haivequeen.i18n.machine_language", return_value=language):
                 win = self.window()
@@ -296,7 +296,7 @@ class UseAndAdvanced(PageCase):
 
 class NameAndAdd(PageCase):
     def test_add_provider_proposes_name_from_cli_and_access_type_and_follows(self):
-        """P-12, F-8."""
+        """Provider page check."""
         win = self.window()
         win.add_provider()
         entry = win.target()
@@ -308,13 +308,13 @@ class NameAndAdd(PageCase):
         self.assertEqual(win.target()["name"], "codex-2")   # "codex" is taken
         win.choose_access("Local LLM")
         self.assertEqual(win.target()["name"], "codex-llm")
-        self.assertEqual(win.target()["limit"], {"source": "none"})   # P-14: created with a Local LLM
+        self.assertEqual(win.target()["limit"], {"source": "none"})   # Created with a Local LLM
         win.choose_access("Subscription")
         self.assertEqual(win.target()["name"], "codex-2")
         self.assertIn("codex-2", win.nodes.get(0, "end"))
 
     def test_edited_name_stops_following_and_survives_save_and_restart(self):
-        """P-12, P-19 (h)."""
+        """Provider page check."""
         win = self.window()
         win.add_provider()
         self.type_name(win, "claude-2", "mine")
@@ -357,7 +357,7 @@ class ReadyLine(PageCase):
         return win.ready_label.cget("text")
 
     def test_missing_login_failed_test_and_missing_model(self):
-        """P-13: one line Not ready: ..."""
+        """One line Not ready: ..."""
         win = self.window()
         self.provider(win, "claude")
         self.assertEqual(self.ready(win), "Not ready: the login is missing")
@@ -378,7 +378,7 @@ class ReadyLine(PageCase):
         self.assertEqual(self.ready(win), "")
 
     def test_account_login_model_missing_in_the_owner_list_and_shipped_list_never_blocks(self):
-        """P-13: with the owner's list a model outside it is missing; the shipped list only fills the choice (a working provider is never stopped by it)."""
+        """With the owner's list a model outside it is missing; the shipped list only fills the choice (a working provider is never stopped by it)."""
         with mock.patch.object(profile, "has_login", return_value=True):
             win = self.window()
             self.provider(win, "claude")
@@ -391,7 +391,7 @@ class ReadyLine(PageCase):
             self.assertIn("not-in-the-docs", self.ready(win))
 
     def test_benchmark_button_needs_saved_and_ready(self):
-        """P-13."""
+        """Provider page check."""
         win = self.window()
         self.keep_test()
         self.provider(win, "codex")
@@ -470,7 +470,7 @@ limit = { source = "claude" }
 
 
 class BeeModeAndLimitSource(PageCase):
-    """R3 (M-6, M-7): Bee mode in Use with both values, Subagent greyed where unsupported, no Usage check field, the limit source derived."""
+    """Bee mode in Use with both values, Subagent greyed where unsupported, no Usage check field, the limit source derived."""
 
     def setUp(self):
         super().setUp()
@@ -494,7 +494,7 @@ class BeeModeAndLimitSource(PageCase):
         return {p["name"]: p for p in gui_config.load_migrated(self.folder / "config.toml")["providers"]}
 
     def test_bee_mode_is_in_use_with_both_values_and_one_sentence(self):
-        """M-6: the choice sits in the section Use, always visible, with Subagent and Process and one sentence of explanation."""
+        """The choice sits in the section Use, always visible, with Subagent and Process and one sentence of explanation."""
         win = self.window()
         self.provider(win, "claude")
         inside_use = {path for path, _g, _l in win.getters if win.in_frame(path, win.use_frame)}
@@ -512,7 +512,7 @@ class BeeModeAndLimitSource(PageCase):
         self.assertNotIn("\n", note)
 
     def test_subagent_is_greyed_out_for_codex_custom_cli_and_local_llm(self):
-        """M-6: Subagent cannot be chosen for a CLI without embedded Bees and for a Local LLM provider; it shows as Process there."""
+        """Subagent cannot be chosen for a CLI without embedded Bees and for a Local LLM provider; it shows as Process there."""
         win = self.window()
         for name in ("codex", "wrapped", "lms"):
             with self.subTest(provider=name):
@@ -527,7 +527,7 @@ class BeeModeAndLimitSource(PageCase):
                 self.assertEqual(self.bee_getter(win)(), "subagent")
 
     def test_subagent_greys_out_when_the_cli_or_access_type_changes(self):
-        """M-6: switching the shown provider to Codex CLI or to Local LLM greys Subagent at once."""
+        """Switching the shown provider to Codex CLI or to Local LLM greys Subagent at once."""
         win = self.window()
         self.provider(win, "claude")
         win.choose_cli("Codex CLI")
@@ -539,7 +539,7 @@ class BeeModeAndLimitSource(PageCase):
         self.assertEqual(self.bee_getter(win)(), "process")
 
     def test_stored_subagent_of_codex_and_local_llm_is_process_before_any_save(self):
-        """M-6: such a provider with subagent in config.toml counts as Process from the first load (scheduler, before any save) and is shown so."""
+        """Such a provider with subagent in config.toml counts as Process from the first load (scheduler, before any save) and is shown so."""
         from haivequeen import scheduler as sch
         providers = {p["name"]: p for p in sch.get_providers(gui_config.load_migrated(self.folder / "config.toml"))}
         self.assertEqual(providers["codex"]["beeMode"], "process")
@@ -549,7 +549,7 @@ class BeeModeAndLimitSource(PageCase):
         self.assertEqual(providers["claude-api"]["beeMode"], "subagent")
 
     def test_stored_subagent_of_codex_and_local_llm_is_saved_as_process(self):
-        """M-6: shown as Process, so a save writes process for them."""
+        """Shown as Process, so a save writes process for them."""
         win = self.window()
         win.save()
         saved = self.saved()
@@ -558,7 +558,7 @@ class BeeModeAndLimitSource(PageCase):
         self.assertEqual(saved["claude"]["beeMode"], "subagent")
 
     def test_no_usage_check_field_on_the_provider_page(self):
-        """M-7: the field Usage check is removed from every provider page."""
+        """The field Usage check is removed from every provider page."""
         win = self.window()
         for name in ("claude", "claude-api", "codex", "lms", "wrapped"):
             with self.subTest(provider=name):
@@ -568,7 +568,7 @@ class BeeModeAndLimitSource(PageCase):
                 self.assertNotIn("limit", win.notes)
 
     def test_limit_source_is_derived_for_every_cli_and_access_type(self):
-        """M-7: Claude Code with Subscription -> claude, Codex with Subscription -> codex, every other combination -> none."""
+        """Claude Code with Subscription -> claude, Codex with Subscription -> codex, every other combination -> none."""
         cases = [
             ({"protocol": "claude"}, "claude"),
             ({"protocol": "claude", "access": "api"}, "none"),
@@ -588,7 +588,7 @@ class BeeModeAndLimitSource(PageCase):
                 self.assertEqual(servers.limit_source(stored), wanted)
 
     def test_old_limit_source_is_replaced_at_load_and_save_and_the_interval_is_kept(self):
-        """M-7: an existing limit source is replaced by the derived one at the next load and save; the check interval stays in config.toml."""
+        """An existing limit source is replaced by the derived one at the next load and save; the check interval stays in config.toml."""
         from haivequeen import scheduler as sch
         loaded = {p["name"]: p for p in sch.get_providers(gui_config.load_migrated(self.folder / "config.toml"))}
         self.assertEqual(loaded["claude-api"]["limit"], "none")

@@ -39,7 +39,7 @@ def capable_providers(providers, need) -> list:
 def select_route(providers, free, hive_provider, package_class, capability, excluded, escalated, limited=(), conn=None):
     """Pick a permitted Bee provider and class, returning None when it must wait.
 
-    C-2: when the permitted providers of the class (a free local provider, the Queen's own one) have no free slot, the Bee goes to another
+    when the permitted providers of the class (a free local provider, the Queen's own one) have no free slot, the Bee goes to another
     provider by the normal provider choice (class, capabilities, quota reserve, free slot); with no free slot anywhere it waits."""
     providers = [p for p in providers if p['name'] not in excluded and not p.get('unavailable')]   # a disabled or offline provider gets no new Bee
     candidates = route_candidates(providers, hive_provider, capability, escalated)
@@ -532,7 +532,7 @@ STARTABLE_KEY = 'hive-startable:'
 def startable_not_started(env, plan, alive=None):
     """Ids of the packages of the plan that are not finished, waiting, stopped or worked by a live or embedded Bee and whose dependencies are done.
 
-    C-2: a package whose Bee only waits for a provider (waiting, reason provider) counts as startable: its Bee starts again as soon as an
+    a package whose Bee only waits for a provider (waiting, reason provider) counts as startable: its Bee starts again as soon as an
     eligible provider has a free slot, so the round reserves that slot for it and tells the Queen to start it."""
     from . import agent_process
     ensure_attempts(env.conn)
@@ -556,7 +556,7 @@ def startable_not_started(env, plan, alive=None):
 
 
 def reservation_route(env, plan, package, hive_provider, free, excluded=(), limited=()):
-    """C-2: the provider whose slot a Bee of `package` would take now, by the rule of bzz bee start (class, capabilities, the Queen's own or a
+    """The provider whose slot a Bee of `package` would take now, by the rule of bzz bee start (class, capabilities, the Queen's own or a
     local provider directly, else the normal provider choice); None when no eligible provider has a free slot. Failure escalation is not
     foreseen: the plan class, or the stored class of an escalated package, decides."""
     from . import routine
@@ -654,7 +654,7 @@ def wait_for_provider(conn, project, plan, provider, is_codex=None, reset_at=Non
         conn.execute('DELETE FROM hive_integration WHERE project=? AND plan_path=?', (project, plan))
 
 
-# A provider other than the awaited one that can take a waiting package now (C-2, C-3).
+# A provider other than the awaited one that can take a waiting package now.
 def other_provider_for_waiting(env, plan, waited, free, excluded=()):
     """Name of a provider other than `waited` that is usable now (enabled, online, not excluded, no limit used up, a free slot) and offers the
     capabilities of at least one unfinished package whose dependencies are done; None when only the awaited provider can help.
@@ -681,7 +681,7 @@ def other_provider_for_waiting(env, plan, waited, free, excluded=()):
 
 
 def by_reserve(candidates, providers, conn=None) -> list:
-    """`candidates` in the order of the normal provider choice: providers without a limit first (list order among them, F-13), then the best quota reserve from both usage windows, equal reserves go to a local provider first, then the order of the settings."""
+    """`candidates` in the order of the normal provider choice: providers without a limit first (list order among them), then the best quota reserve from both usage windows, equal reserves go to a local provider first, then the order of the settings."""
     from . import scheduler
     order = [p['name'] for p in providers]
     now = time.time()   # one clock reading for all candidates, so equal usage gives exactly equal reserves
@@ -696,7 +696,7 @@ def by_reserve(candidates, providers, conn=None) -> list:
 
 # Wake a waiting Hive only when its provider has a slot and no limit, or when another provider can take a waiting package.
 def provider_available(conn, project, plan, provider, free, limited, other=None):
-    """Wake the Hive when its waiting provider is usable or, with `other`, when another provider can take a waiting package (C-2, C-3)."""
+    """Wake the Hive when its waiting provider is usable or, with `other`, when another provider can take a waiting package."""
     if (free <= 0 or limited) and not other:
         return False
     row = conn.execute('SELECT provider FROM bee_provider_wait WHERE project=? AND plan_path=?', (project, plan)).fetchone()
@@ -883,11 +883,11 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
         queen_provider = scheduler.get_provider(env.providers, hive['provider'])
         embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not (queen_provider.get('endpoint') or queen_provider.get('server')) and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
-        free = scheduler.provider_free(env.providers, running, env.conn)   # C-1: a subagent Bee needs a free slot of the Queen's provider like a Bee process
+        free = scheduler.provider_free(env.providers, running, env.conn)   # A subagent Bee needs a free slot of the Queen's provider like a Bee process
         route_free = dict(free)
         limited = [p['name'] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # a used-up window (reserve 0) blocks the provider
         ensure_attempts(env.conn)
-        if embedded:   # a subagent Bee takes a free local provider first, else stays on the Queen's provider, else another one as in C-2; an escalated package takes the best reserve among them
+        if embedded:   # a subagent Bee takes a free local provider first, else stays on the Queen's provider, else another one as for other Bees; an escalated package takes the best reserve among them
             route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, current != base_class or use_other_provider, limited, conn=env.conn)
         else:   # a process Bee is placed by the normal provider choice like a Queen; the stored assignment keeps only the class (above), the provider is chosen again here
             route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, True, limited, conn=env.conn)

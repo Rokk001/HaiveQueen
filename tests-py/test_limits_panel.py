@@ -82,14 +82,14 @@ class DataTest(unittest.TestCase):
     """The data of the rows (texts, levels, order)."""
 
     def test_one_row_per_provider_in_order_with_name_and_model(self):
-        """L-1/L-2: the rows follow the order of the providers; each has its name, the medium model or 'no medium model'."""
+        """The rows follow the order of the providers; each has its name, the medium model or 'no medium model'."""
         rows = rows_of(prow(name="codex", model="gpt"), prow(name="claude"), prow(name="local", model=None))
         self.assertEqual([r["name"] for r in rows], ["Codex", "Claude", "Local"])
         self.assertEqual([r["model"] for r in rows], ["gpt", "claude-sonnet", "no medium model"])
         self.assertEqual(rows_of(prow(model=None), german=True)[0]["model"], "kein Medium-Modell")
 
     def test_reserve_is_whole_percent_with_colour_and_hover(self):
-        """L-3: factor 1.27 gives +27 % (green), 0.85 gives minus 15 % (red); the hover sentence names the date; no bare factor."""
+        """Factor 1.27 gives +27 % (green), 0.85 gives minus 15 % (red); the hover sentence names the date; no bare factor."""
         up = rows_of(prow(ratio=1.27))[0]["reserve"]
         down = rows_of(prow(ratio=0.85))[0]["reserve"]
         self.assertEqual((up["text"], up["level"]), ("+27 %", "ok"))
@@ -101,18 +101,18 @@ class DataTest(unittest.TestCase):
         self.assertNotIn("1,27", json.dumps(rows_of(prow(ratio=1.27), german=True)))
 
     def test_zero_after_rounding_is_green(self):
-        """L-10 (c): a factor of 0.996 shows +0 % in green."""
+        """A factor of 0.996 shows +0 % in green."""
         res = rows_of(prow(ratio=0.996))[0]["reserve"]
         self.assertEqual((res["text"], res["level"]), ("+0 %", "ok"))
 
     def test_no_limit_source_and_switched_off_check(self):
-        """L-3/L-5/L-10 (f), F-13: a provider without limit source shows +99 % in green and 'no limit' in muted colour."""
+        """A provider without limit source shows +99 % in green and 'no limit' in muted colour."""
         row = rows_of(prow(has_limit=False, used_pct=None, ratio=None, hours=None, reset_at=None))[0]
         self.assertEqual((row["reserve"]["text"], row["reserve"]["level"]), ("+99 %", "ok"))
         self.assertEqual((row["weekly"]["text"], row["weekly"]["pct"], row["weekly"]["level"]), ("no limit", None, "dim"))
 
     def test_last_verified_reading_keeps_colour_and_shows_age(self):
-        """L-3/L-10 (i): the reserve of a last verified reading keeps green/red and has its age; without reset time it is unknown with the age."""
+        """The reserve of a last verified reading keeps green/red and has its age; without reset time it is unknown with the age."""
         old = rows_of(prow(ratio=0.85, stale=True, stale_hours=2.0, error="x", age_minutes=120))[0]["reserve"]
         self.assertEqual((old["text"], old["level"], old["age"]), (MINUS + "15 %", "bad", "2h"))
         young = rows_of(prow(ratio=1.1, error="x", age_minutes=15))[0]["reserve"]
@@ -121,7 +121,7 @@ class DataTest(unittest.TestCase):
         self.assertEqual((none["text"], none["age"]), ("unknown", "1h"))
 
     def test_without_reading_shows_the_error_or_unknown(self):
-        """L-3: no reading shows 'unknown' with the stored error in its hover; the weekly line says '7d unknown'."""
+        """No reading shows 'unknown' with the stored error in its hover; the weekly line says '7d unknown'."""
         gone = dict(used_pct=None, ratio=None, hours=None, reset_at=None)
         row = rows_of(prow(error="Claude usage refresh failed: x", **gone))[0]
         self.assertEqual(row["reserve"]["text"], "unknown")
@@ -130,25 +130,25 @@ class DataTest(unittest.TestCase):
         self.assertEqual(rows_of(prow(**gone))[0]["reserve"]["text"], "unknown")
 
     def test_reset_due_now(self):
-        """L-3/L-10 (j): with no time left the weekly line says 'reset now' and the reserve remains a percentage."""
+        """With no time left the weekly line says 'reset now' and the reserve remains a percentage."""
         row = rows_of(prow(hours=0.0, ratio=float("inf")))[0]
         self.assertEqual(row["reserve"]["text"], "+99 %")
         self.assertEqual(row["weekly"]["text"], "7d 40 % · reset now")
 
     def test_reading_without_reset_time(self):
-        """L-10 (b): a reading without reset time gives the reserve 'unknown' and 'reset unknown' in the weekly line."""
+        """A reading without reset time gives the reserve 'unknown' and 'reset unknown' in the weekly line."""
         row = rows_of(prow(ratio=None, hours=None, reset_at=None))[0]
         self.assertEqual(row["reserve"]["text"], "unknown")
         self.assertEqual(row["weekly"]["text"], "7d 40 % · reset unknown")
 
     def test_weekly_line_and_colour_by_used_share(self):
-        """L-5: the weekly line holds percent and reset; the colour follows the used share as before."""
+        """The weekly line holds percent and reset; the colour follows the used share as before."""
         date = time.strftime("%d.%m. %H:%M", time.localtime(prow()["reset_at"]))
         self.assertEqual(rows_of(prow(used_pct=60.0))[0]["weekly"], {"pct": 60, "level": "warn", "text": "7d 60 % · " + date})
         self.assertEqual([rows_of(prow(used_pct=u))[0]["weekly"]["level"] for u in (10.0, 70.0, 90.0)], ["ok", "warn", "bad"])
 
     def test_five_hour_line(self):
-        """L-5/L-10 (d)(e): the 5h percent, reset status and age of a kept reading."""
+        """The 5h percent, reset status and age of a kept reading."""
         self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}))[0]["five"], "5h 12 %")
         self.assertEqual(rows_of(prow(five_hour={"pct": None, "reset": "new window"}))[0]["five"], "5h reset now")
         self.assertEqual(rows_of(prow())[0]["five"], "")
@@ -156,14 +156,14 @@ class DataTest(unittest.TestCase):
         self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}, stale=True, stale_hours=1.0))[0]["five"], "5h 12 % · 1h")
 
     def test_slots(self):
-        """L-4/L-10 (a): totals, used and the extra agents above the slot count; 0 slots says 'no slots' and the running agents."""
+        """Totals, used and the extra agents above the slot count; 0 slots says 'no slots' and the running agents."""
         self.assertEqual(rows_of(prow(used_slots=4, total_slots=3))[0]["slots"], {"total": 3, "used": 4, "extra": 1, "none": "", "running": "", "blocked": False})
         zero = rows_of(prow(used_slots=2, total_slots=0))[0]["slots"]
         self.assertEqual((zero["none"], zero["running"]), ("no slots", "2 running"))
         self.assertEqual(rows_of(prow(used_slots=0, total_slots=0))[0]["slots"]["running"], "")
 
     def test_german_texts(self):
-        """L-10 (k): every new text exists in German as listed."""
+        """Every new text exists in German as listed."""
         de = rows_of(prow(ratio=1.27), prow(ratio=0.85), prow(has_limit=False, used_pct=None, ratio=None, hours=None, reset_at=None, total_slots=0, used_slots=2),
                      prow(used_pct=None, ratio=None, hours=None, reset_at=None), prow(hours=0.0, ratio=float("inf"), five_hour={"pct": None, "reset": ""}),
                      prow(ratio=None, hours=None, reset_at=None, five_hour={"pct": None, "reset": ""}), german=True)
@@ -204,7 +204,7 @@ class ProviderLinesTest(unittest.TestCase):
                 "classes": {"medium": {"model": model}}}
 
     def test_next_badge_on_the_picked_provider_only(self):
-        """L-2: exactly the provider select_provider picks is marked next; with no free slot no row is."""
+        """Exactly the provider select_provider picks is marked next; with no free slot no row is."""
         readings = {"claude": {"usedPercent": 60, "resetHours": 50}, "codex": {"usedPercent": 10, "resetHours": 100}}
         _raw, rows = self.lines(readings, [self.provider("claude", 2, "claude"), self.provider("codex", 2, "codex")])
         self.assertEqual(sum(r["next"] for r in rows), 1)
@@ -212,7 +212,7 @@ class ProviderLinesTest(unittest.TestCase):
         self.assertEqual([r["next"] for r in rows], [False, False])
 
     def test_five_hour_percent_at_every_provider_with_that_source(self):
-        """L-5: every provider with a limit source that reports a 5-hour window shows its percent; one without shows none."""
+        """Every provider with a limit source that reports a 5-hour window shows its percent; one without shows none."""
         readings = {"claude": {"usedPercent": 60, "resetHours": 50, "fiveHourPercent": 12}, "codex": {"usedPercent": 10, "resetHours": 100, "fiveHourPercent": 33},
                     "other": {"usedPercent": 10, "resetHours": 100}}
         providers = [self.provider("claude", 2, "claude"), self.provider("codex", 2, "codex"), self.provider("other", 2, "codex")]
@@ -221,7 +221,7 @@ class ProviderLinesTest(unittest.TestCase):
         self.assertEqual(len([r for r in rows]), 3)   # no separate 5h rows
 
     def test_codex_five_hour_from_the_stored_reading(self):
-        """L-5: without a limits file the 5-hour window of a Codex provider comes from its stored reading."""
+        """Without a limits file the 5-hour window of a Codex provider comes from its stored reading."""
         from haivequeen import runtime
         reset = int(time.time()) + 3600
         runtime.kv_set(self.conn, "*", "usage-codex:codex", json.dumps({"fiveHour": {"utilization": 0.25, "resetsAt": reset}}))
@@ -231,7 +231,7 @@ class ProviderLinesTest(unittest.TestCase):
         self.assertTrue(gui_data.limit_rows({"provider_limits": rows})[0]["five"].startswith("5h 25 % · "))
 
     def test_snapshot_limits_are_the_rows(self):
-        """L-6: the snapshot holds the rows; a slot that becomes used shows in the next snapshot."""
+        """The snapshot holds the rows; a slot that becomes used shows in the next snapshot."""
         cfg = {"slots": 2, "providers": [self.provider("claude", 3, "none")]}
         before = gui_data.snapshot(self.conn, cfg=cfg, sysinfo={"cores": 8, "cpu": 1, "ram_used_gb": 1.0, "ram_total_gb": 8.0, "ram_pct": 10,
                                                                     "disk_used_tb": 1.0, "disk_total_tb": 2.0, "disk_pct": 10, "host": "h"})
@@ -248,7 +248,7 @@ class CellSizeTest(unittest.TestCase):
     """The size of the slot cells."""
 
     def test_cells_shrink_to_half_then_become_a_number(self):
-        """L-4: normal size when they fit, smaller down to half the normal size, else None."""
+        """Normal size when they fit, smaller down to half the normal size, else None."""
         from haivequeen import gui
         self.assertEqual(gui.slot_cell_size(3, 215), gui.CELL)
         mid = gui.slot_cell_size(14, 215)
@@ -340,7 +340,7 @@ class PanelDrawTest(unittest.TestCase):
         self.assertIn("0 %", [t[4] for t in self.texts(win)])
 
     def test_row_content_cells_and_badge(self):
-        """L-2/L-4: name, model, one NEXT badge, filled and empty cells, no percent of slots and no old next text."""
+        """Name, model, one NEXT badge, filled and empty cells, no percent of slots and no old next text."""
         rows = rows_of(prow(name="claude", next=True, used_slots=2, total_slots=5), prow(name="codex", model="gpt", used_slots=0, total_slots=0))
         win = self.open(rows)
         found = [t[4] for t in self.texts(win)]
@@ -352,7 +352,7 @@ class PanelDrawTest(unittest.TestCase):
         self.assertFalse([t for t in found if "next" in t.lower() and t != "NEXT"] or [t for t in found if "◀" in t])
 
     def test_honeycomb_geometry_and_screenshot(self):
-        """S-10: regular hexagons share edges for free, full and mixed rows."""
+        """Regular hexagons share edges for free, full and mixed rows."""
         import math
         win = self.open(rows_of(prow(used_slots=0, total_slots=5), prow(name="codex", used_slots=3, total_slots=3),
                                 prow(name="local", used_slots=2, total_slots=5)))
@@ -386,7 +386,7 @@ class PanelDrawTest(unittest.TestCase):
         self.assertGreater(honey(capture(win.canvas).crop(box)), 30)
 
     def test_slot_hover_localized_and_current(self):
-        """S-10: hovering cells explains the current counts in both languages."""
+        """Hovering cells explains the current counts in both languages."""
         for german, expected in ((False, "Agent slots of Claude: 2 of 5 in use. A filled cell is a running agent, an empty cell a free slot."),
                                  (True, "Agent-Slots von Claude: 2 von 5 belegt. Eine volle Wabe ist ein laufender Agent, eine leere ein freier Slot.")):
             with self.subTest(german=german), mock.patch("haivequeen.i18n.machine_language", return_value="German" if german else "English"):
@@ -397,12 +397,12 @@ class PanelDrawTest(unittest.TestCase):
                 self.assertEqual(win.tip_text, expected)
 
     def test_no_badge_when_none_is_next(self):
-        """L-2: no NEXT badge when no row is next."""
+        """No NEXT badge when no row is next."""
         win = self.open(rows_of(prow(), prow(name="codex")))
         self.assertEqual(len(win.canvas.find_withtag("next_badge")), 0)
 
     def test_extra_agents_and_running_without_slots(self):
-        """L-10 (a): all cells filled plus +N; 0 slots with agents shows 'no slots' and 'N running'."""
+        """All cells filled plus +N; 0 slots with agents shows 'no slots' and 'N running'."""
         win = self.open(rows_of(prow(used_slots=5, total_slots=3), prow(name="codex", used_slots=2, total_slots=0)))
         found = [t[4] for t in self.texts(win)]
         self.assertEqual((len(win.canvas.find_withtag("slot_full")), len(win.canvas.find_withtag("slot_empty"))), (3, 0))
@@ -411,13 +411,13 @@ class PanelDrawTest(unittest.TestCase):
         self.assertIn("2 running", found)
 
     def test_many_slots_become_a_number(self):
-        """L-4: more than 16 slots use one cell and a used/total count."""
+        """More than 16 slots use one cell and a used/total count."""
         win = self.open(rows_of(prow(used_slots=7, total_slots=60)))
         self.assertEqual(len(win.canvas.find_withtag("slot_full")) + len(win.canvas.find_withtag("slot_empty")), 1)
         self.assertIn("7/60", [t[4] for t in self.texts(win)])
 
     def test_weekly_and_five_hour_lines_with_equal_row_height(self):
-        """L-5: the weekly and 5h texts sit side by side, with equal row heights."""
+        """The weekly and 5h texts sit side by side, with equal row heights."""
         rows = rows_of(prow(used_pct=60.0, five_hour={"pct": 12, "reset": ""}), prow(name="codex", used_pct=60.0))
         win = self.open(rows)
         found = self.texts(win)
@@ -429,7 +429,7 @@ class PanelDrawTest(unittest.TestCase):
         self.assertAlmostEqual(weekly[1][1] - weekly[0][1], names[1][1] - names[0][1], delta=2)
 
     def test_hover_shows_the_sentence(self):
-        """L-3: hovering over the reserve shows the one-sentence explanation."""
+        """Hovering over the reserve shows the one-sentence explanation."""
         win = self.open(rows_of(prow(ratio=1.27)))
         x0, y0, x1, y1, _tip = win.tip_boxes[0]
         x, y = (x0 + x1) / 2, (y0 + y1) / 2
@@ -441,7 +441,7 @@ class PanelDrawTest(unittest.TestCase):
         self.assertEqual(len(win.canvas.find_withtag("tip")), 0)
 
     def test_panel_keeps_its_box_and_subtitle(self):
-        """L-7/L-8: the panel frame is where it was and the subtitle reads 'reserve, slots and limits'."""
+        """The panel frame is where it was and the subtitle reads 'reserve, slots and limits'."""
         win = self.open(rows_of(prow()))
         self.assertTrue(any(t[4].startswith("| reserve, slots and limits") for t in
                             [(0, 0, 0, 0, win.canvas.itemcget(i, "text")) for i in win.canvas.find_all() if win.canvas.type(i) == "text"]))
@@ -449,7 +449,7 @@ class PanelDrawTest(unittest.TestCase):
         self.assertIn((1045, 395, 1662, 600), frames)
 
     def test_rows_inside_the_panel_without_overlap_at_every_size(self):
-        """L-7: at the default size and at the sizes of the size test every shown row is inside the panel and no text overlaps another."""
+        """At the default size and at the sizes of the size test every shown row is inside the panel and no text overlaps another."""
         rows = rows_of(prow(next=True, five_hour={"pct": 12, "reset": ""}), prow(name="codex", model="gpt-5.5-codex", used_slots=2, total_slots=14),
                        prow(name="local", has_limit=False, used_pct=None, ratio=None, hours=None, reset_at=None, total_slots=0))
         for width, height in ((1672, 901), (800, 500), (1000, 600), (1200, 700), (1366, 768), (1600, 900), (1920, 1050), (2400, 1300)):
@@ -472,7 +472,7 @@ class PanelDrawTest(unittest.TestCase):
                             self.fail("%r is cut at the panel border at %dx%d" % (win.canvas.itemcget(item, "text"), width, height))
 
     def test_scroll_bar_and_scrolling_with_many_providers(self):
-        """L-7: with more providers than fit the panel scrolls; the first row differs after scrolling and rows keep their height."""
+        """With more providers than fit the panel scrolls; the first row differs after scrolling and rows keep their height."""
         rows = rows_of(*[prow(name="p%d" % n) for n in range(8)])
         win = self.open(rows)
         self.assertIn("limits", win.bars)
@@ -485,7 +485,7 @@ class PanelDrawTest(unittest.TestCase):
         self.assertEqual(len(after), len(first))
 
     def test_weekly_bar_colours(self):
-        """L-5: the weekly bar is green, yellow or red by used share."""
+        """The weekly bar is green, yellow or red by used share."""
         fills = []
         for used in (10.0, 70.0, 95.0):
             win = self.open(rows_of(prow(used_pct=used)))

@@ -1,5 +1,5 @@
 """Rework of the provider form: texts, the Saved message, the ready line after a test, no Custom CLI for a wrapper command,
-providers without limit first (F-13), the switch Enabled (F-14), offline providers (F-15) and the mouse wheel over comboboxes (F-16)."""
+providers without limit first, the switch Enabled, offline providers and the mouse wheel over comboboxes."""
 import json
 import os
 import sys
@@ -131,7 +131,7 @@ class Texts(pf.FormCase):
         self.assertTrue([q for q in self.raw()["providers"] if q["name"] == "wrapped"][0]["command"].endswith("claude-local.cmd"))
 
 
-# ---------------------------------------------------------------- item 5: F-13
+# ---------------------------------------------------------------- item 5
 
 
 class NoLimitFirst(srv.Base):
@@ -184,7 +184,7 @@ class PanelNoLimit(unittest.TestCase):
         self.assertEqual(self.row("German")["reserve"]["hover"], "Kein Limit: dieser Provider geht nie aus und bekommt zuerst Arbeit.")
 
 
-# ---------------------------------------------------------------- item 6: F-14
+# ---------------------------------------------------------------- item 6
 
 
 class Enabled(pf.FormCase):
@@ -275,7 +275,7 @@ class DisabledProvider(StateBase):
         self.assertEqual(seen, [["c"]])
 
 
-# ---------------------------------------------------------------- item 7: F-15
+# ---------------------------------------------------------------- item 7
 
 
 class OfflineState(StateBase):
@@ -397,7 +397,7 @@ class OfflineFromRunner(tar.RunnerBase):
         self.assertEqual(offline.read(self.conn), {})
 
 
-# ---------------------------------------------------------------- item 8: F-16
+# ---------------------------------------------------------------- item 8
 
 
 class WheelOverComboboxes(pf.FormCase):

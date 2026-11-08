@@ -238,7 +238,7 @@ def embedded_slots(conn) -> dict:
 # Free slots per provider: subtract every running or starting agent process and every open subagent Bee; never below 0.
 def provider_free(providers: list, rows: list, conn=None) -> dict:
     """Free slots per provider: subtract every running or starting agent process and, with `conn`, every subagent Bee that is still open
-    (C-1: a Bee inside its Queen holds a slot of her provider too); never below 0."""
+    (a Bee inside its Queen holds a slot of her provider too); never below 0."""
     free = {}
     embedded = embedded_slots(conn)
     for p in providers:

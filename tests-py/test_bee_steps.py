@@ -177,7 +177,7 @@ class StepBarTest(unittest.TestCase):
 class SubagentRulesTest(RoundCase):
     """A subagent Bee gets the Bee rules of roles/bee.md, and both kinds of Bee record how many steps they were given."""
 
-    # A Queen of a provider whose Bees run as subagents (Claude Code only, M-6).
+    # A Queen of a provider whose Bees run as subagents (Claude Code only).
     def setUp(self):
         """Plan with P1 and a running Queen."""
         super().setUp()

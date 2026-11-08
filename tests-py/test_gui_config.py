@@ -287,7 +287,7 @@ class WindowTest(unittest.TestCase):
 
     # Every provider offers the Bee mode with the value that applies when the file has no entry.
     def test_provider_offers_the_bee_mode_with_its_default(self):
-        """A claude provider shows subagent and a codex provider shows process; a subagent set for codex is shown and saved as process (M-6)."""
+        """A claude provider shows subagent and a codex provider shows process; a subagent set for codex is shown and saved as process."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.select(1)   # provider claude
         self.assertEqual({path: getter() for path, getter, _like in win.getters}[("beeMode",)], "subagent")

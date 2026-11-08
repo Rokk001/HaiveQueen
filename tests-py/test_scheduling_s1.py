@@ -1,5 +1,5 @@
-"""S1 of the scheduling fix: every Bee holds a slot of its provider (C-1), a Bee goes to another provider when the Queen's is full (C-2),
-a new Queen of an existing Hive chooses her provider by the normal provider choice (C-3), and the texts describe it (C-6)."""
+"""Scheduling fix: every Bee holds a slot of its provider , a Bee goes to another provider when the Queen's is full,
+a new Queen of an existing Hive chooses her provider by the normal provider choice, and the texts describe it."""
 import json
 import os
 import unittest
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class SlotAndProviderChoiceTests(RoundCase):
-    """Database-backed rounds and Bee starts for C-1 to C-3."""
+    """Database-backed rounds and Bee starts."""
 
     def limits(self, **used):
         """Make the quota reserve of the providers known: name -> used percent, all with the same reset."""
@@ -26,7 +26,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         """The Queen rows of the test project in one of these states."""
         return [a for a in runtime.list_agents(self.conn, 'testproj', 'all') if a['phase'] == 'queen' and a['status'] in status]
 
-    # C-1: a claude Queen with two subagent Bees holds three claude slots in the round, so a new Hive's Queen goes elsewhere.
+    # A claude Queen with two subagent Bees holds three claude slots in the round, so a new Hive's Queen goes elsewhere.
     def test_subagent_bees_take_slots_in_the_round(self):
         self.machine['providers'][0]['slots'] = 3
         self.plan('READY', [{'id': 'P1', 'title': 'First'}])
@@ -45,7 +45,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         line = next(l for l in overview.provider_lines(self.conn, self.machine, rows) if l['name'] == 'claude')
         self.assertEqual(line['used_slots'], 3)
 
-    # C-1: a Queen needs one free slot of her own to start; the owner question provider-slots is not asked.
+    # A Queen needs one free slot of her own to start; the owner question provider-slots is not asked.
     def test_queen_starts_with_one_free_slot(self):
         self.machine['providers'] = [provider('claude', 1)]
         self.machine['providers'][0]['beeMode'] = 'process'
@@ -54,7 +54,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.assertEqual([a['provider'] for a in self.queens()], ['claude'])
         self.assertFalse(runtime.list_questions(self.conn, 'testproj', item='provider-slots'))
 
-    # C-2: a waiting Bee of a running Queen gets the last free slot before a new Queen.
+    # A waiting Bee of a running Queen gets the last free slot before a new Queen.
     def test_waiting_bee_gets_last_slot_before_new_queen(self):
         self.machine['providers'][0]['slots'] = 2
         self.machine['providers'][1]['slots'] = 0
@@ -68,7 +68,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.assertIn('P1', (self.env().run_dir('Ada') / bees.NOTICE_FILE).read_text(encoding='utf-8'))
         self.assertIn('no provider with a free slot', runtime.kv_get(self.conn, 'testproj', 'hive-blocker:' + other))
 
-    # C-2: with no free slot on any provider the Bee waits.
+    # With no free slot on any provider the Bee waits.
     def test_bee_waits_when_no_provider_has_a_free_slot(self):
         self.machine['providers'][0]['slots'] = 1
         self.machine['providers'][1]['slots'] = 1
@@ -84,7 +84,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.assertIn('no provider with a free slot', bees.LAST_REFUSAL)
         self.assertFalse(bees.unconfirmed_embedded(self.conn, 'testproj', REL))
 
-    # C-2: a subagent Bee on the Queen's own provider needs a free slot of it.
+    # A subagent Bee on the Queen's own provider needs a free slot of it.
     def test_subagent_bee_takes_a_free_slot_of_the_queen_provider(self):
         self.machine['providers'][0]['slots'] = 2
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
@@ -95,7 +95,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         rows = [{**a, 'status': 'running'} for a in runtime.list_agents(self.conn, None, 'active')]
         self.assertEqual(sch.provider_free(self.env().providers, rows, self.conn)['claude'], 0)
 
-    # C-3: a new Queen of an existing Hive goes to codex when codex has the higher reserve and a free slot.
+    # A new Queen of an existing Hive goes to codex when codex has the higher reserve and a free slot.
     def test_new_queen_of_existing_hive_chooses_by_reserve(self):
         self.limits(claude=69, codex=56)
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
@@ -107,7 +107,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.assertEqual([a['provider'] for a in self.queens()], ['codex'])
         self.assertEqual(hives.get(self.conn, 'testproj', REL)['provider'], 'codex')
 
-    # C-3: a running Queen is never moved or ended, even when another provider has the higher reserve.
+    # A running Queen is never moved or ended, even when another provider has the higher reserve.
     def test_running_queen_stays_on_her_provider(self):
         self.limits(claude=90, codex=10)
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
@@ -118,7 +118,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.assertEqual([(a['name'], a['provider']) for a in self.queens()], [('Ada', 'claude')])
         self.assertEqual(hives.get(self.conn, 'testproj', REL)['provider'], 'claude')
 
-    # C-3: a Queen restarted after a vanished run keeps her class and chooses her provider by reserve.
+    # A Queen restarted after a vanished run keeps her class and chooses her provider by reserve.
     def test_vanished_queen_keeps_class_and_chooses_by_reserve(self):
         self.machine['retryWaitMinutes'] = [0]
         self.limits(claude=80, codex=10)
@@ -132,7 +132,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         new = [a for a in self.queens() if a['name'] != 'Ada']
         self.assertEqual([(a['provider'], a['class']) for a in new], [('codex', 'heavy')])
 
-    # C-3: a Hive that waited for a provider does not bind the next Queen to that provider.
+    # A Hive that waited for a provider does not bind the next Queen to that provider.
     def test_provider_wait_does_not_bind_next_queen(self):
         self.limits(claude=80, codex=10)
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
@@ -143,7 +143,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.round()
         self.assertEqual([a['provider'] for a in self.queens()], ['codex'])
 
-    # C-2, C-3: a Hive waiting for a full provider wakes when another provider can take its waiting package and seat the next Queen.
+    # A Hive waiting for a full provider wakes when another provider can take its waiting package and seat the next Queen.
     def test_provider_wait_wakes_on_another_free_provider(self):
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
@@ -184,7 +184,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         """Add a third provider that offers images like codex, after codex in the list."""
         self.machine['providers'].append(provider('gemini', 2, caps=('images',), limit='codex', proto='codex'))
 
-    # C-2: the Queen's provider is full and two providers offer the needed capability: the Bee goes to the one with the higher reserve, not the first free one.
+    # The Queen's provider is full and two providers offer the needed capability: the Bee goes to the one with the higher reserve, not the first free one.
     def test_bee_with_capability_goes_to_higher_reserve_provider(self):
         self.third_images_provider()
         self.machine['providers'][0]['slots'] = 1
@@ -199,7 +199,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         row = self.conn.execute('SELECT provider FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', ('testproj', REL, 'I1')).fetchone()
         self.assertEqual(row[0] if row else bees.LAST_REFUSAL, 'gemini')
 
-    # C-2 ready check: with the awaited provider full, the provider named for a waiting capability package is the one with the higher reserve.
+    # With the awaited provider full, the provider named for a waiting capability package is the one with the higher reserve.
     def test_ready_check_names_higher_reserve_capable_provider(self):
         self.third_images_provider()
         self.limits(claude=0, codex=90, gemini=10)
@@ -220,7 +220,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('Ada', phase='queen', status='running', provider='claude', pid=42)
 
-    # C-2 ready check: a package whose Bee waits for a provider keeps its slot reserved before a new Queen, and the Queen is told to start it again.
+    # A package whose Bee waits for a provider keeps its slot reserved before a new Queen, and the Queen is told to start it again.
     def test_bee_waiting_for_provider_keeps_its_slot_before_new_queen(self):
         self.machine['providers'][0]['slots'] = 2
         self.machine['providers'][1]['slots'] = 0
@@ -241,7 +241,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.round(alive=lambda pid: True)
         self.assertEqual([a['provider'] for a in self.queens() if a['plan_path'] == other], ['claude'])
 
-    # C-2: a capability package reserves the slot of the provider that offers the capability, not the Queen's own: the new Queen takes the other slot.
+    # A capability package reserves the slot of the provider that offers the capability, not the Queen's own: the new Queen takes the other slot.
     def test_reservation_takes_the_capable_provider_slot(self):
         self.machine['providers'][0]['slots'] = 2
         self.machine['providers'][1]['slots'] = 1
@@ -251,7 +251,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.assertEqual([a['provider'] for a in self.queens() if a['plan_path'] == other], ['claude'])
         self.assertIn('I1', (self.env().run_dir('Ada') / bees.NOTICE_FILE).read_text(encoding='utf-8'))
 
-    # C-2: a package of a class only another provider offers reserves that provider's slot: the new Queen takes the Queen provider's slot.
+    # A package of a class only another provider offers reserves that provider's slot: the new Queen takes the Queen provider's slot.
     def test_reservation_takes_a_slot_of_a_provider_with_the_class(self):
         self.machine['providers'] = [provider('claude', 2, classes=('light', 'medium')), provider('codex', 1, proto='codex')]
         self.running_queen([{'id': 'P1', 'title': 'Heavy', 'class': 'heavy'}])
@@ -260,7 +260,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.assertEqual([a['provider'] for a in self.queens() if a['plan_path'] == other], ['claude'])
         self.assertIn('P1', (self.env().run_dir('Ada') / bees.NOTICE_FILE).read_text(encoding='utf-8'))
 
-    # C-3: an explicit owner choice 'restart the Queen on provider X' binds the Hive to X until the owner changes it.
+    # An explicit owner choice 'restart the Queen on provider X' binds the Hive to X until the owner changes it.
     def test_owner_restart_choice_binds_the_hive(self):
         self.limits(claude=10, codex=80)
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
@@ -283,7 +283,7 @@ class SlotAndProviderChoiceTests(RoundCase):
 
 
 class SlotTextTests(unittest.TestCase):
-    """C-6: README, owner question texts and the Queen role text describe C-1 to C-3."""
+    """README, owner question texts and the Queen role text describe the slot and routing rules."""
 
     def texts(self):
         readme = (ROOT / 'README.md').read_text(encoding='utf-8')
