@@ -248,7 +248,7 @@ class ClaudeRefreshTests(RoundCase):
                 {'kind': 'weekly_all', 'percent': 100, 'resets_at': None}]
         self.assertTrue(self.refresh(run=mock.Mock(return_value=self.response(rows))))
         known = usage.get_claude_usage(self.conn)
-        self.assertEqual(known['five_hour'], {'pct': 100, 'reset': ''})
+        self.assertEqual(known['five_hour'], {'pct': 100, 'reset': '', 'at': None})
         self.assertEqual(known['seven_day'], {'pct': 100, 'reset': '', 'at': None})
         windows = usage.limit_windows(self.conn, {'limit': 'claude'}, read_pc=True)
         self.assertEqual(windows, [{'used_pct': 100, 'reset_epoch': None}, {'used_pct': 100, 'reset_epoch': None}])
@@ -302,7 +302,7 @@ class ClaudeRefreshTests(RoundCase):
         providers = [{'name': 'claude', 'protocol': 'claude', 'use': 'preferred', 'slots': 2, 'limit': 'claude',
                       'classes': {'medium': {'model': 'm'}}}]
         saved = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-        runtime.kv_set(self.conn, '*', 'usage-claude', json.dumps({'saved': saved, 'refresh_error': 'Claude usage refresh failed: x',
+        runtime.kv_set(self.conn, '*', 'usage-claude:claude', json.dumps({'saved': saved, 'refresh_error': 'Claude usage refresh failed: x',
             'sevenDay': {'utilization': 0.9, 'resetsAt': int(self.reset.timestamp())}}))
         env = {k: v for k, v in os.environ.items() if k != 'BZZ_RUNTIME_OVERRIDE'}
         with mock.patch.dict(os.environ, env, clear=True):
@@ -314,7 +314,7 @@ class ClaudeRefreshTests(RoundCase):
             self.assertEqual(shown['weekly']['pct'], 90)
             self.assertEqual(shown['reserve']['age'], '2h')
             old = (datetime.now(timezone.utc) - timedelta(hours=usage.RETAIN_HOURS + 1)).isoformat()
-            runtime.kv_set(self.conn, '*', 'usage-claude', json.dumps({'saved': old, 'refresh_error': 'x',
+            runtime.kv_set(self.conn, '*', 'usage-claude:claude', json.dumps({'saved': old, 'refresh_error': 'x',
                 'sevenDay': {'utilization': 0.9, 'resetsAt': int(self.reset.timestamp())}}))
             row = overview.provider_lines(self.conn, {'providers': providers}, [])[0]
             self.assertIsNone(row['used_pct'])
@@ -368,3 +368,31 @@ class ClaudeReadingDisplayTests(ClaudeRefreshTests):
         events.insert(1, {'type': 'assistant', 'usage_report': {'rate_limits': None}})
         full.stdout = '\n'.join(json.dumps(e) for e in events)
         self.assertTrue(self.refresh(run=mock.Mock(return_value=full)))
+
+    def test_retained_reading_of_a_named_provider_keeps_its_reset_time(self):
+        self.store(2)
+        row = self.row()
+        self.assertIsNotNone(row['reset_at'])
+        self.assertAlmostEqual(row['hours'], 3 * 24 + 2, delta=0.1)
+        self.assertAlmostEqual(row['stale_hours'], 2, delta=0.1)
+
+    def test_fresh_five_hour_reading_keeps_its_reset_time_for_the_reserve(self):
+        from haivequeen import scheduler
+        now = datetime.now(timezone.utc)
+        reset = int((now + timedelta(hours=1)).timestamp())
+        runtime.kv_set(self.conn, '*', 'usage-claude:claude', json.dumps({
+            'saved': now.isoformat(), 'fiveHour': {'utilization': 0.5, 'resetsAt': reset},
+            'sevenDay': {'utilization': 0.1, 'resetsAt': int((now + timedelta(days=6)).timestamp())}}))
+        env = {k: v for k, v in os.environ.items() if k not in ('BZZ_RUNTIME_OVERRIDE', 'BZZ_PROVIDER_LIMITS_FILE')}
+        with mock.patch.dict(os.environ, env, clear=True):
+            window = scheduler._five_hour_window(self.providers()[0], self.conn)
+        self.assertEqual(window['reset_epoch'], reset)
+
+    def test_weekly_window_that_has_reset_shows_reset_now(self):
+        now = datetime.now(timezone.utc)
+        runtime.kv_set(self.conn, '*', 'usage-claude:claude', json.dumps({
+            'saved': now.isoformat(),
+            'sevenDay': {'utilization': 0.9, 'resetsAt': int((now - timedelta(hours=1)).timestamp())}}))
+        shown = gui_data.limit_rows({'provider_limits': [self.row()]})[0]
+        self.assertIn('reset now', shown['weekly']['text'])
+        self.assertNotEqual(shown['reserve']['text'], 'unknown')

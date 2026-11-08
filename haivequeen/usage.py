@@ -190,11 +190,11 @@ def retained_claude(conn, project=GLOBAL_PROJECT, provider=None):
 
 
 # How old the retained reading is.
-def retained_age_hours(conn, project=GLOBAL_PROJECT):
+def retained_age_hours(conn, project=GLOBAL_PROJECT, provider=None):
     """Age in hours of the retained reading, or None when there is none."""
-    if retained_claude(conn, project) is None:
+    if retained_claude(conn, project, provider) is None:
         return None
-    saved = datetime.fromisoformat(str(_claude_snapshot(conn, project).get('saved')))
+    saved = datetime.fromisoformat(str(_claude_snapshot(conn, project, provider).get('saved')))
     if saved.tzinfo is None:
         saved = saved.astimezone()
     return max(0.0, (datetime.now(timezone.utc) - saved).total_seconds() / 3600)
@@ -382,7 +382,7 @@ def get_claude_usage(conn, project: str = GLOBAL_PROJECT, provider=None) -> dict
         if j.get("refresh_error"):
             return res
         now = int(datetime.now(timezone.utc).timestamp())
-        res["five_hour"] = _claude_window(j.get("fiveHour"), False, now)
+        res["five_hour"] = _claude_window(j.get("fiveHour"), True, now)
         res["seven_day"] = _claude_window(j.get("sevenDay"), True, now)
     except (ValueError, KeyError, TypeError):
         pass

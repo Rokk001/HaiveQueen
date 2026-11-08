@@ -315,10 +315,12 @@ def provider_lines(conn, cfg, agents) -> list:
                     if window.get("At"):
                         reset_at = float(window["At"])
                         hours = max(0.0, (reset_at - time.time()) / 3600)
+                elif source == "claude" and not usage.claude_refresh_failed(conn, provider=provider) and (w := usage.get_claude_usage(conn, provider=provider).get("seven_day")) and w.get("pct") is None:
+                    used, hours = 0.0, 0.0   # the weekly window has reset: it shows "reset now" with the new reserve instead of unknown
                 elif source == "claude":   # the newest check failed: show the last verified reading while it is younger than RETAIN_HOURS
-                    kept = usage.retained_weekly(conn)
+                    kept = usage.retained_weekly(conn, provider=provider)
                     if kept:
-                        used, stale_hours = float(kept[0]), usage.retained_age_hours(conn)
+                        used, stale_hours = float(kept[0]), usage.retained_age_hours(conn, provider=provider)
                         if kept[1]:
                             reset_at = float(kept[1])
                             hours = max(0.0, (reset_at - time.time()) / 3600)
