@@ -33,10 +33,9 @@ TEXT = {
     "slots": (N_("Simultaneous agents"), N_("How many agents of this provider may work at the same time.")),
     "use": (N_("Priority"), N_("A preferred provider gets work first; a fallback provider only when the preferred ones are busy or not available.")),
     "capabilities": (N_("Capabilities"), N_("What this provider may be used for; a task only goes to a provider that has the capability it needs.")),
-    "beeMode": (N_("Bee mode"), N_("subagent runs Bees inside the session of the Queen (Claude Code only); process starts every Bee as a process of its own.")),
+    "beeMode": (N_("Bee mode"), N_("Subagent: the Queen runs her Bees inside her own process on the same provider; Process: every Bee is a separate agent and goes to the provider with the best reserve.")),
     "allowedTools": (N_("Commands allowed without asking"), N_("Commands agents may run without asking, one per line.")),
     "args": (N_("Arguments"), N_("The arguments HaiveQueen gives to the CLI, one per line; {model}, {effort} and the like are filled in at the start.")),
-    "limit": (N_("Usage check"), N_("Where HaiveQueen reads how much of the usage limit is left: none, claude or codex.")),
     "own": (N_("Own settings"), N_("Other settings of this provider exactly as they stand in config.toml; a new setting is written as typed.")),
     "address": (N_("Address"), N_("Where the local LLM answers, for example http://192.168.1.20:1234, without /v1.")),
     "apiKey": (N_("API key"), N_("The key of the local LLM; optional, shown masked and kept only in config.toml of this machine.")),
@@ -47,7 +46,6 @@ TEXT = {
 SHARED_LOGIN = N_("This login is shared by all providers with this CLI.")
 HANDLED = {"enabled", "name", "nameEdited", "access", "apiKey", "address", "contextWindow", "protocol", "command", "server", "slots", "use", "capabilities", "capabilitiesVersion", "beeMode", "allowedTools", "args",
            "limit", "classes", "profileEnv", "loginCommand", "loginFiles", "outputFormat"}
-USAGE_SOURCES = ("none", "claude", "codex")
 
 
 class ProviderPages:
@@ -150,8 +148,7 @@ class ProviderPages:
             servers.clear_type_values(data)
             servers.set_access(data, "subscription")
         access = servers.access_of(data)
-        if isinstance(data.get("limit"), str):
-            data["limit"] = {"source": data["limit"]}   # the same meaning, the form of a table
+        servers.settle(data, new=self.is_fresh(data))   # M-6, M-7: the Bee mode and the limit source as derived from the CLI and the access type
         self.sections, self.notes, self.note_sources, self.frame_of = [], {}, {}, {}
         top = tk.LabelFrame(self.form, text="", padx=6, pady=4)   # same border and padding as the sections, so all fields share one column
         top.pack(fill="x", anchor="w")
@@ -276,9 +273,27 @@ class ProviderPages:
         use = "preferred" if data.get("use") == "capability-only" else data.get("use", "preferred")
         self.field(box, box, ("use",), use, "use")
         self.field(box, box, ("capabilities",), scheduler.provider_capabilities(data), "capabilities")
+        self.bee_field(box, data)
+
+    def bee_field(self, box, data):
+        """Bee mode in Use (M-6): Subagent or Process with one explanation. Subagent is greyed out where HaiveQueen has no embedded Bees (another CLI than
+        Claude Code, a Local LLM provider); such a provider shows Process."""
+        from . import servers
+        labels = {"subagent": tr("Subagent"), "process": tr("Process")}
+        value = servers.bee_mode_of(data)
+        item, row = self.line(box, "beeMode")
+        self.rows[("beeMode",)] = row
+        self.bee_var = self.tk.StringVar(value=labels[value])
+        grey = () if servers.embedded_bees(data) else (labels["subagent"],)
+        self.bee_button = self.dialog.option_menu(row, self.bee_var, [labels["subagent"], labels["process"]], self.mono, disabled=grey)
+        self.bee_button.pack(side="left")
+        self.note(item, "beeMode")
+        back = {text: key for key, text in labels.items()}
+        self.getters.append((("beeMode",), lambda: back[self.bee_var.get()], value))
+        self.frame_of[("beeMode",)] = box
 
     def provider_advanced(self, key, data):
-        """Advanced (closed): Bee mode, allowed tools, arguments, usage check and the own settings (other class settings and any other key)."""
+        """Advanced (closed): allowed tools, arguments and the own settings (other class settings, the check interval and any other key)."""
         from . import gui_config
         tk = self.tk
         outer = tk.Frame(self.form)
@@ -290,12 +305,10 @@ class ProviderPages:
         frame = tk.Frame(outer, padx=6, pady=4)
         self.advanced_frame = frame
         self.show_advanced()
-        self.field(frame, frame, ("beeMode",), str(data.get("beeMode") or ("process" if data.get("protocol") == "codex" else "subagent")), "beeMode")
         rest, tools, self.position = gui_config.split_args(data.get("args"))
         self.field(frame, frame, ("allowedTools",), tools, "allowedTools")
         self.field(frame, frame, ("args",), rest, "args")
         limit = data.get("limit") if isinstance(data.get("limit"), dict) else {}
-        self.field(frame, frame, ("limit", "source"), str(limit.get("source") or "none"), "limit", USAGE_SOURCES)
         # own settings: every key without a field above, the other settings of a class and the kept endpoint
         start = len(self.getters)
         item = tk.Frame(frame)
@@ -366,7 +379,7 @@ class ProviderPages:
     def choose_access(self, label):
         """Switch the access type of the shown provider at once. CLI, Use and Advanced stay; the values of the old type (key, address, context window, models)
         are kept in memory until the window is closed, so switching back shows them again; the entry holds only the chosen type. When the CLI is not offered
-        for the new type, the first CLI offered for it is chosen. The usage check is set to none for a new provider with API key or Local LLM."""
+        for the new type, the first CLI offered for it is chosen. The limit source follows the new access type (see `servers.settle`)."""
         if not self.collect():
             return
         data = self.target()

@@ -161,7 +161,7 @@ class NoLimitFirst(srv.Base):
         self.assertEqual(self.pick({"claude": 2, "codex": 2, "loc": 1}, providers), "claude")
 
     def test_among_providers_without_limit_the_list_order_decides_and_fallback_stays_fallback(self):
-        providers = sch.get_providers({"providers": [srv.Base.entry("a", "claude"), srv.Base.entry("b", "claude", access="llm", address="http://h:1"),
+        providers = sch.get_providers({"providers": [srv.Base.entry("a", "opencode"), srv.Base.entry("b", "claude", access="llm", address="http://h:1"),
                                                       lim(srv.Base.entry("c", "claude"), "claude")]})
         self.assertEqual(sch.select_provider(providers, "medium", [], {"a": 1, "b": 1, "c": 1}, limits=self.LIMITS)["name"], "a")
         providers = self.providers()

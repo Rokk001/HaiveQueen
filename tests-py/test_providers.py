@@ -41,11 +41,11 @@ class SelectTest(unittest.TestCase):
 
     def test_no_limit_counts_full(self):
         """A provider without a weekly limit counts as 100 % free."""
-        ps = [provider("A", 2, limit="x"), provider("L", 1)]
+        ps = [provider("A", 2, limit="x"), provider("L", 1, proto="opencode")]   # opencode has no limit source (M-7)
         free = {"A": 2, "L": 1}
         self.assertEqual(self.pick(ps, free=free, limits={"A": {"usedPercent": 95, "resetHours": 10}}), "L")
         self.assertEqual(self.pick(ps, free=free, limits={"A": {"usedPercent": 10, "resetHours": 100}}), "L")   # F-13: a provider without limit always comes first
-        lim = sch.provider_limit(sch.get_providers(settings(provider("L", 1)))[0], None, {})
+        lim = sch.provider_limit(sch.get_providers(settings(provider("L", 1, proto="opencode")))[0], None, {})
         self.assertEqual(lim["FreePct"], 100)
 
     def test_slots_zero(self):

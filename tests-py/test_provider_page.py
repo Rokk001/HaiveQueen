@@ -155,14 +155,14 @@ class FiveSections(PageCase):
         self.assertIsNone(win.login_status)
         self.assertEqual(win.target()["address"], "http://192.168.1.20:1234")
 
-    def test_switch_access_keeps_ticks_and_usage_check(self):
-        """P-14, P-19 (g): switching an existing provider keeps capabilities and usage check."""
+    def test_switch_access_keeps_ticks_and_derives_limit_source(self):
+        """P-14, P-19 (g): switching an existing provider keeps capabilities; the limit source follows the new access type (M-7)."""
         win = self.window()
         self.provider(win, "claude")
         before = win.collect() and (list(win.target().get("capabilities") or ["-"]), dict(win.target()["limit"]))
         win.choose_access("Local LLM")
         self.assertEqual(win.target()["access"], "llm")
-        self.assertEqual(win.target()["limit"], {"source": "claude"})
+        self.assertEqual(win.target()["limit"], {"source": "none"})
         self.assertEqual(win.target().get("capabilities") or ["-"], before[0] if before[0] != ["-"] else ["Coding", "Queen"])
         win.choose_access("Subscription")
         self.assertNotIn("access", win.target())
@@ -244,7 +244,7 @@ class UseAndAdvanced(PageCase):
         win = self.window()
         self.provider(win, "claude")
         inside = {path for path, _g, _l in win.getters if win.in_frame(path, win.use_frame)}
-        self.assertEqual(inside, {("slots",), ("use",), ("capabilities",)})
+        self.assertEqual(inside, {("slots",), ("use",), ("capabilities",), ("beeMode",)})
         texts = label_texts(win.use_frame)
         self.assertIn("Simultaneous agents", texts)
         self.assertIn("Priority", texts)
@@ -254,7 +254,9 @@ class UseAndAdvanced(PageCase):
         win = self.window()
         self.provider(win, "claude")
         inside = {path for path, _g, _l in win.getters if win.in_frame(path, win.advanced_frame)}
-        self.assertTrue({("beeMode",), ("allowedTools",), ("args",), ("limit", "source")} <= inside)
+        self.assertTrue({("allowedTools",), ("args",)} <= inside)
+        self.assertNotIn(("beeMode",), inside)   # M-6: in Use
+        self.assertNotIn(("limit", "source"), inside)   # M-7: no Usage check field
         win.select(1 + 2)   # the custom CLI with a kept endpoint
         inside = {path for path, _g, _l in win.getters if win.in_frame(path, win.advanced_frame)}
         self.assertIn(("endpoint", "baseUrl"), inside)
@@ -284,7 +286,7 @@ class UseAndAdvanced(PageCase):
                     self.assertTrue(win.notes)
                     for key, text in win.notes.items():
                         self.assertTrue(text and "\n" not in text, (name, key))
-                    wanted = {"cli", "access", "light", "medium", "heavy", "slots", "use", "capabilities", "beeMode", "allowedTools", "args", "limit", "name"}
+                    wanted = {"cli", "access", "light", "medium", "heavy", "slots", "use", "capabilities", "beeMode", "allowedTools", "args", "name"}
                     self.assertTrue(wanted <= set(win.notes), wanted - set(win.notes))
                     for key, text in win.notes.items():
                         source = win.note_sources[key]
@@ -405,6 +407,202 @@ class ReadyLine(PageCase):
         win.add_provider()
         win.choose_access("Local LLM")
         self.assertEqual(str(win.benchmark_button.cget("state")), "disabled")   # not saved yet
+
+
+R3_CONFIG = '''slots = 8
+
+[[providers]]
+name = "claude"
+protocol = "claude"
+command = "claude"
+args = ["--output-format", "stream-json"]
+slots = 5
+use = "preferred"
+beeMode = "subagent"
+limit = { source = "claude", interval = 120 }
+[providers.classes]
+medium = { model = "claude-sonnet-5-5", effort = "medium" }
+
+[[providers]]
+name = "claude-api"
+protocol = "claude"
+command = "claude"
+access = "api"
+apiKey = "key-of-the-test"
+slots = 2
+beeMode = "subagent"
+limit = { source = "claude", interval = 120 }
+[providers.classes]
+medium = { model = "claude-sonnet-5-5", effort = "medium" }
+
+[[providers]]
+name = "codex"
+protocol = "codex"
+command = "codex"
+args = ["exec", "--json"]
+slots = 1
+beeMode = "subagent"
+limit = { source = "claude" }
+[providers.classes]
+medium = { model = "gpt-6.1-terra", effort = "medium" }
+
+[[providers]]
+name = "lms"
+protocol = "claude"
+command = "claude"
+access = "llm"
+address = "http://192.168.1.20:1234"
+slots = 1
+beeMode = "subagent"
+limit = { source = "claude" }
+[providers.classes]
+medium = { model = "qwen/qwen3-27b", effort = "medium" }
+
+[[providers]]
+name = "wrapped"
+protocol = "claude"
+command = "claude-local.cmd"
+loginCommand = "claude auth login"
+slots = 1
+beeMode = "subagent"
+limit = { source = "claude" }
+'''
+
+
+class BeeModeAndLimitSource(PageCase):
+    """R3 (M-6, M-7): Bee mode in Use with both values, Subagent greyed where unsupported, no Usage check field, the limit source derived."""
+
+    def setUp(self):
+        super().setUp()
+        (self.folder / "config.toml").write_text(R3_CONFIG, encoding="utf-8")
+
+    def bee_menu(self, win):
+        return win.bee_button.nametowidget(win.bee_button["menu"])
+
+    def bee_labels(self, win):
+        menu = self.bee_menu(win)
+        return [menu.entrycget(i, "label") for i in range(menu.index("end") + 1)]
+
+    def bee_states(self, win):
+        menu = self.bee_menu(win)
+        return [menu.entrycget(i, "state") for i in range(menu.index("end") + 1)]
+
+    def bee_getter(self, win):
+        return next(getter for path, getter, _l in win.getters if path == ("beeMode",))
+
+    def saved(self):
+        return {p["name"]: p for p in gui_config.load_migrated(self.folder / "config.toml")["providers"]}
+
+    def test_bee_mode_is_in_use_with_both_values_and_one_sentence(self):
+        """M-6: the choice sits in the section Use, always visible, with Subagent and Process and one sentence of explanation."""
+        win = self.window()
+        self.provider(win, "claude")
+        inside_use = {path for path, _g, _l in win.getters if win.in_frame(path, win.use_frame)}
+        inside_advanced = {path for path, _g, _l in win.getters if win.in_frame(path, win.advanced_frame)}
+        self.assertIn(("beeMode",), inside_use)
+        self.assertNotIn(("beeMode",), inside_advanced)
+        self.assertEqual(self.bee_labels(win), ["Subagent", "Process"])
+        self.assertEqual(self.bee_getter(win)(), "subagent")
+        self.assertIn("Bee mode", label_texts(win.use_frame))
+        note = win.notes["beeMode"]
+        self.assertIn("Subagent", note)
+        self.assertIn("Process", note)
+        self.assertIn("inside her own process", note)
+        self.assertIn("best reserve", note)
+        self.assertNotIn("\n", note)
+
+    def test_subagent_is_greyed_out_for_codex_custom_cli_and_local_llm(self):
+        """M-6: Subagent cannot be chosen for a CLI without embedded Bees and for a Local LLM provider; it shows as Process there."""
+        win = self.window()
+        for name in ("codex", "wrapped", "lms"):
+            with self.subTest(provider=name):
+                self.provider(win, name)
+                self.assertEqual(self.bee_states(win), ["disabled", "normal"])
+                self.assertEqual(self.bee_getter(win)(), "process")
+                self.assertEqual(win.bee_var.get(), "Process")
+        for name in ("claude", "claude-api"):
+            with self.subTest(provider=name):
+                self.provider(win, name)
+                self.assertEqual(self.bee_states(win), ["normal", "normal"])
+                self.assertEqual(self.bee_getter(win)(), "subagent")
+
+    def test_subagent_greys_out_when_the_cli_or_access_type_changes(self):
+        """M-6: switching the shown provider to Codex CLI or to Local LLM greys Subagent at once."""
+        win = self.window()
+        self.provider(win, "claude")
+        win.choose_cli("Codex CLI")
+        self.assertEqual(self.bee_states(win), ["disabled", "normal"])
+        self.assertEqual(self.bee_getter(win)(), "process")
+        win.choose_cli("Claude Code")
+        win.choose_access("Local LLM")
+        self.assertEqual(self.bee_states(win), ["disabled", "normal"])
+        self.assertEqual(self.bee_getter(win)(), "process")
+
+    def test_stored_subagent_of_codex_and_local_llm_is_process_before_any_save(self):
+        """M-6: such a provider with subagent in config.toml counts as Process from the first load (scheduler, before any save) and is shown so."""
+        from haivequeen import scheduler as sch
+        providers = {p["name"]: p for p in sch.get_providers(gui_config.load_migrated(self.folder / "config.toml"))}
+        self.assertEqual(providers["codex"]["beeMode"], "process")
+        self.assertEqual(providers["lms"]["beeMode"], "process")
+        self.assertEqual(providers["wrapped"]["beeMode"], "process")
+        self.assertEqual(providers["claude"]["beeMode"], "subagent")
+        self.assertEqual(providers["claude-api"]["beeMode"], "subagent")
+
+    def test_stored_subagent_of_codex_and_local_llm_is_saved_as_process(self):
+        """M-6: shown as Process, so a save writes process for them."""
+        win = self.window()
+        win.save()
+        saved = self.saved()
+        self.assertEqual(saved["codex"]["beeMode"], "process")
+        self.assertEqual(saved["lms"]["beeMode"], "process")
+        self.assertEqual(saved["claude"]["beeMode"], "subagent")
+
+    def test_no_usage_check_field_on_the_provider_page(self):
+        """M-7: the field Usage check is removed from every provider page."""
+        win = self.window()
+        for name in ("claude", "claude-api", "codex", "lms", "wrapped"):
+            with self.subTest(provider=name):
+                self.provider(win, name)
+                self.assertNotIn("Usage check", label_texts(win.form))
+                self.assertNotIn(("limit", "source"), self.paths(win))
+                self.assertNotIn("limit", win.notes)
+
+    def test_limit_source_is_derived_for_every_cli_and_access_type(self):
+        """M-7: Claude Code with Subscription -> claude, Codex with Subscription -> codex, every other combination -> none."""
+        cases = [
+            ({"protocol": "claude"}, "claude"),
+            ({"protocol": "claude", "access": "api"}, "none"),
+            ({"protocol": "claude", "access": "llm"}, "none"),
+            ({"protocol": "codex"}, "codex"),
+            ({"protocol": "codex", "access": "api"}, "none"),
+            ({"protocol": "codex", "access": "llm"}, "none"),
+            ({"protocol": "opencode"}, "none"),
+            ({"protocol": "kilo"}, "none"),
+            ({"protocol": "claude", "command": "claude-local.cmd", "loginCommand": "claude auth login"}, "none"),
+            ({"protocol": "codex", "profileEnv": {"CODEX_HOME": "{home}"}}, "none"),
+        ]
+        for entry, wanted in cases:
+            with self.subTest(entry=entry):
+                self.assertEqual(servers.limit_source(entry), wanted)
+                stored = dict(entry, limit={"source": "claude" if wanted != "claude" else "codex"})
+                self.assertEqual(servers.limit_source(stored), wanted)
+
+    def test_old_limit_source_is_replaced_at_load_and_save_and_the_interval_is_kept(self):
+        """M-7: an existing limit source is replaced by the derived one at the next load and save; the check interval stays in config.toml."""
+        from haivequeen import scheduler as sch
+        loaded = {p["name"]: p for p in sch.get_providers(gui_config.load_migrated(self.folder / "config.toml"))}
+        self.assertEqual(loaded["claude-api"]["limit"], "none")
+        self.assertEqual(loaded["claude"]["limit"], "claude")
+        self.assertEqual(loaded["codex"]["limit"], "codex")
+        win = self.window()
+        self.provider(win, "claude-api")
+        self.assertEqual(win.target()["limit"], {"source": "none", "interval": 120})
+        win.save()
+        saved = self.saved()
+        self.assertEqual(saved["claude-api"]["limit"], {"source": "none", "interval": 120})
+        self.assertEqual(saved["claude"]["limit"], {"source": "claude", "interval": 120})
+        self.assertEqual(saved["codex"]["limit"], {"source": "codex"})
+        self.assertEqual(saved["lms"]["limit"], {"source": "none"})
 
 
 class CliDataFile(unittest.TestCase):

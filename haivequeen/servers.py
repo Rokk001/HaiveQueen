@@ -72,6 +72,40 @@ def access_of(p) -> str:
     return "llm" if p.get("server") else "subscription"
 
 
+def embedded_bees(p) -> bool:
+    """True when a provider entry may run its Bees as embedded subagents: Claude Code with an access type other than Local LLM (HaiveQueen has no embedded
+    Bees for another CLI or for a Local LLM provider)."""
+    from . import cli_presets
+    return cli_presets.key_for(p) == "claude" and access_of(p) != "llm"
+
+
+def bee_mode_of(p) -> str:
+    """The Bee mode a provider entry runs with (M-6): its beeMode, by default subagent for protocol claude and process otherwise; subagent counts as
+    process where `embedded_bees` is False, from the first load on, before any save."""
+    mode = str(p.get("beeMode") or ("subagent" if str(p.get("protocol") or p.get("name") or "") == "claude" else "process"))
+    return "process" if mode == "subagent" and not embedded_bees(p) else mode
+
+
+def limit_source(p) -> str:
+    """The limit source HaiveQueen derives from the CLI and the access type (M-7): Claude Code or Codex with Subscription reads its own usage (claude or
+    codex); every other combination (API key, Local LLM, another CLI) reads none. A stored source is not used."""
+    from . import cli_presets
+    key = cli_presets.key_for(p)
+    return key if access_of(p) == "subscription" and key in ("claude", "codex") else "none"
+
+
+def settle(entry, new=False) -> None:
+    """Write the derived settings into a provider entry: the Bee mode (see `bee_mode_of`) where the entry has one, and the limit source (see
+    `limit_source`) where it has a limit or is new (`new`). The other settings of the limit table, the check interval, stay."""
+    if "beeMode" in entry:
+        entry["beeMode"] = bee_mode_of(entry)
+    if "limit" in entry or new:
+        limit = entry.get("limit")
+        table = dict(limit) if isinstance(limit, dict) else {}
+        table["source"] = limit_source(entry)
+        entry["limit"] = table
+
+
 def api_key_clis() -> list:
     """The keys of the built-in CLIs that can run with an API key."""
     return [k for k in CLI_KEYS if k in API_KEY_ENV]
@@ -113,7 +147,7 @@ def clear_type_values(entry) -> None:
 
 def set_access(entry, access, new=False) -> None:
     """Set the access type of a provider entry. Subscription writes no `access` field. The capability ticks stay as they are (an entry from before the ticks
-    keeps what it offers now); the usage check is set to none for a new provider (`new`) that gets api or llm, never for an existing one."""
+    keeps what it offers now); the limit source is derived again from the access type (see `settle`)."""
     from . import scheduler
     if not entry.get("capabilitiesVersion"):
         entry["capabilities"] = scheduler.provider_capabilities(entry)
@@ -123,8 +157,7 @@ def set_access(entry, access, new=False) -> None:
         entry.pop("access", None)
     else:
         entry["access"] = access
-        if new:
-            entry["limit"] = {"source": "none"}
+    settle(entry, new=new)
 
 
 # ---------------------------------------------------------------- migration of old endpoint entries

@@ -177,14 +177,14 @@ class StepBarTest(unittest.TestCase):
 class SubagentRulesTest(RoundCase):
     """A subagent Bee gets the Bee rules of roles/bee.md, and both kinds of Bee record how many steps they were given."""
 
-    # A Queen of a provider whose Bees run as subagents.
+    # A Queen of a provider whose Bees run as subagents (Claude Code only, M-6).
     def setUp(self):
         """Plan with P1 and a running Queen."""
         super().setUp()
         self.plan('IN_PROGRESS', [{'id': 'P1'}])
-        hives.create(self.conn, 'testproj', REL, 'codex', '123456')
-        self.agent('queen', phase='queen', status='running', provider='codex', pid=42)
-        self.machine['providers'][1]['beeMode'] = 'subagent'
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        self.machine['providers'][0]['beeMode'] = 'subagent'
 
     # Run bzz bee start.
     def start(self, no_subagents=False):

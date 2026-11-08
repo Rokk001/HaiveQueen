@@ -179,7 +179,7 @@ def get_providers(settings: dict) -> list:
             raise ValueError(tr("provider %s: use must be preferred, fallback or capability-only, not '%s'", name, use))
         proto = str(p.get("protocol") or name)
         fmt = profile.check_protocol(name, proto, p.get("outputFormat"))   # a CLI HaiveQueen cannot read is refused here, with a clear message
-        bee_mode = str(p.get("beeMode") or ("subagent" if proto == "claude" else "process"))   # the embedded Bee mode is a Claude Code feature
+        bee_mode = servers.bee_mode_of(p)   # the embedded Bee mode is a Claude Code feature with an access type other than Local LLM (M-6)
         if bee_mode not in BEE_MODES:
             raise ValueError(tr("provider %s: beeMode must be subagent or process, not '%s'", name, bee_mode))
         limit = p.get("limit")
@@ -190,7 +190,7 @@ def get_providers(settings: dict) -> list:
             "slots": int(p.get("slots", settings.get("slots", 0)) or 0), "use": use,
             "capabilities": capabilities, "capabilitiesVersion": 1,
             "classes": p.get("classes") or {},
-            "limit": str(limit.get("source", "")) if isinstance(limit, dict) else str(limit or ""),
+            "limit": servers.limit_source(p),   # M-7: derived from the CLI and the access type, a stored source is not used
             "usageInterval": float(limit.get("interval", 60)) if isinstance(limit, dict) else 60,
             "endpoint": p.get("endpoint"), "server": server, "access": access, "apiKey": str(p.get("apiKey") or "") if access == "api" else "", "nameEdited": bool(p.get("nameEdited", True)), **profile.custom_fields(p),
         })
