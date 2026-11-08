@@ -259,7 +259,7 @@ class SnapshotTest(unittest.TestCase):
         """Token counts and elapsed times use the compact forms of the mockup."""
         self.assertEqual((gui_data.fmt_tokens(964000), gui_data.fmt_tokens(1_100_000), gui_data.fmt_tokens(36000)), ("964k", "1.1M", "36k"))
         self.assertEqual(gui_data.fmt_elapsed(iso(1), NOW), "01:00")
-        self.assertEqual(gui_data.hive_name("docs/plans/HQ-ROLES-PLAN.md"), "HQ-ROLES")
+        self.assertEqual(gui_data.hive_name("docs/plans/DEMO-PLAN.md"), "DEMO")
 
 
 # Test the pure parts of the state button, the app icon and the repository link.
