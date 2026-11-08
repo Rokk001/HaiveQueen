@@ -101,6 +101,7 @@ class PackageProgressTest(RoundCase):
     def test_reopened_package_progress_overrides_historical_completion(self):
         """A reopened package is not shown as done from its old Bee completion or Queen state."""
         self.assertEqual(self.report('P1', 'done'), 0)
+        self.agent('old-bee', phase='bee', status='done', provider='claude', pid=43, package='P1')
         self.conn.execute("INSERT INTO bee_completed(project,plan_path,package) VALUES ('testproj',?,'P2')", (REL,))
         self.conn.commit()
         self.assertEqual(self.report('P1', 'working'), 0)
@@ -108,7 +109,18 @@ class PackageProgressTest(RoundCase):
         assigned, completed = gui_data.bee_tables(self.conn)
         self.assertNotIn(('testproj', REL, 'P1'), completed)
         self.assertNotIn(('testproj', REL, 'P2'), completed)
+        self.assertEqual(self.hive()['done'], 0)
         self.assertEqual(gui_data.implemented_counts(self.conn)[('testproj', REL)], 1)
+
+    def test_historical_bee_without_progress_state_is_not_done(self):
+        """An archived successful Bee does not prove current completion when no package progress row exists."""
+        bees.ensure_attempts(self.conn)
+        self.agent('old-bee', phase='bee', status='done', provider='claude', pid=43, package='P1')
+        self.conn.execute("INSERT INTO bee_completed(project,plan_path,package) VALUES ('testproj',?,'P1')", (REL,))
+        self.conn.commit()
+        assigned, completed = gui_data.bee_tables(self.conn)
+        self.assertNotIn(('testproj', REL, 'P1'), completed)
+        self.assertEqual(self.hive()['done'], 0)
 
     # The Queen instruction names the command.
     def test_queen_instruction_names_the_package_command(self):
