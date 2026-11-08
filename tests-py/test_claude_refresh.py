@@ -38,6 +38,28 @@ class ClaudeRefreshTests(RoundCase):
             return usage.refresh_claude_usage(self.conn, [{'command': 'claude', 'limit': {'source': 'claude'}}],
                                               run=run or mock.Mock(return_value=self.response()), **kwargs)
 
+    def test_transient_missing_limits_retries_before_failing(self):
+        """A transient empty rate-limit response is retried without losing the reading."""
+        self.seed()
+        empty = self.response()
+        events = [json.loads(line) for line in empty.stdout.splitlines()]
+        events[0]['usage_report']['rate_limits']['limits'] = None
+        empty.stdout = "\n".join(json.dumps(event) for event in events)
+        runner = mock.Mock(side_effect=[empty, self.response()])
+        self.assertTrue(self.refresh(run=runner))
+        self.assertEqual(runner.call_count, 2)
+        self.assertFalse(usage.claude_refresh_failed(self.conn))
+
+    def test_retention_expires_at_six_hours(self):
+        """A reading exactly six hours old is no longer younger than six hours."""
+        fixed = datetime(2026, 11, 8, tzinfo=timezone.utc)
+        runtime.kv_set(self.conn, '*', 'usage-claude', json.dumps({
+            'saved': (fixed - timedelta(hours=6)).isoformat(), 'refresh_error': 'failed',
+            'sevenDay': {'utilization': 0.2, 'resetsAt': None}}))
+        with mock.patch('haivequeen.usage.datetime', wraps=datetime) as clock:
+            clock.now.return_value = fixed
+            self.assertIsNone(usage.retained_claude(self.conn))
+
     # A current global reading replaces stale data even when is_active is false.
     def test_stale_ninety_becomes_current_hundred(self):
         """Missing session quota remains unknown rather than copying the old value."""
