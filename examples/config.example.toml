@@ -20,7 +20,7 @@ retryWaitMinutes = [1, 2, 4, 8, 15]     # wait before the 1st, 2nd, ... retry of
 rateLimitWaitMinutes = 15               # wait after a rate limit when no reset time of the limited provider is known
 
 # Providers: slots = tasks at once (shared by all projects); use = preferred | fallback; classes = model and effort per class.
-# limit.source says where the weekly usage comes from (claude | codex | none); interval is seconds (default 60); the scheduler picks the provider with the most weekly limit left per hour.
+# The limit source is derived from access type and CLI; limit.interval is seconds (default 60). Quota reserve is weekly quota multiplied by 5-hour quota (capped at 1), each quota being unused fraction divided by time remaining fraction; zero blocks the provider until reset.
 [[providers]]
 name = "claude"
 protocol = "claude"
@@ -28,8 +28,7 @@ command = "claude"
 args = ["--output-format", "stream-json", "--verbose", "--model", "{model}", "--permission-mode", "auto", "--effort", "{effort}", "--add-dir", "{repo}", "--add-dir", "{tools}", "--disable-slash-commands", "--strict-mcp-config", "--tools", "{claudeTools}", "--setting-sources", "", "--append-system-prompt-file", "{rules}"]
 slots = 2
 use = "preferred"
-beeMode = "subagent"   # how the Queen of this provider runs her Bees: subagent (embedded, default for claude) | process (separate agents, default for codex)
-limit = { source = "claude" }
+beeMode = "subagent"   # how the Queen of this provider runs her Bees: subagent (embedded, Claude Code only) | process (separate agents)
 [providers.classes]
 light = { model = "claude-haiku-5-5", effort = "medium" }
 medium = { model = "claude-sonnet-5-5", effort = "medium" }   # optional per model: add contextLimitTokens = 200000 inside the braces to override the global value
@@ -45,7 +44,6 @@ use = "preferred"
 beeMode = "process"
 capabilities = ["Coding", "Queen", "Image generation"]
 capabilitiesVersion = 1
-limit = { source = "codex" }
 [providers.classes]
 light = { model = "gpt-6-luna", effort = "medium" }
 medium = { model = "gpt-6.1-terra", effort = "medium" }
