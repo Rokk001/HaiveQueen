@@ -156,8 +156,8 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.assertEqual([a['provider'] for a in self.queens()], ['codex'])
         self.assertFalse(self.conn.execute('SELECT 1 FROM bee_provider_wait WHERE project=? AND plan_path=?', ('testproj', REL)).fetchone())
 
-    # The wake needs room for the next Queen and her Bee: one free slot elsewhere is not enough, so the Hive keeps waiting.
-    def test_provider_wait_stays_without_room_for_queen_and_bee(self):
+    # The next Queen may start with one slot; her Bee takes its slot later.
+    def test_provider_wait_wakes_with_one_slot_elsewhere(self):
         self.machine['providers'][1]['slots'] = 1
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
@@ -166,8 +166,7 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.agent('bee-b', phase='bee', provider='claude', status='running', pid=42)
         bees.wait_for_provider(self.conn, 'testproj', REL, 'claude')
         self.round(alive=lambda pid: pid in (41, 42))
-        self.assertFalse(self.queens())
-        self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'provider_wait')
+        self.assertEqual([a['provider'] for a in self.queens()], ['codex'])
 
     # A package that needs a capability only the awaited provider has keeps the Hive waiting although another provider is free.
     def test_provider_wait_stays_for_a_capability_only_it_has(self):

@@ -619,17 +619,13 @@ def wait_for_provider(conn, project, plan, provider, is_codex=None, reset_at=Non
 # A provider other than the awaited one that can take a waiting package now (C-2, C-3).
 def other_provider_for_waiting(env, plan, waited, free, excluded=()):
     """Name of a provider other than `waited` that is usable now (enabled, online, not excluded, no limit used up, a free slot) and offers the
-    capabilities of at least one unfinished package whose dependencies are done, while the next Queen still finds a slot of her own (on any
-    Queen provider, or a second free slot of that provider); None when only the awaited provider can help."""
+    capabilities of at least one unfinished package whose dependencies are done; None when only the awaited provider can help.
+    The next Queen needs one slot to start; her Bee takes a slot only when it starts."""
     from . import routine, usage
     ensure_attempts(env.conn)
     usable = [p for p in env.providers if p['name'] not in excluded and not p.get('unavailable') and p.get('slots', 1) > 0
               and free.get(p['name'], 0) > 0 and not any(w['used_pct'] >= 100 for w in usage.limit_windows(env.conn, p))]
-    queen_seats = [p['name'] for p in usable if 'Queen' in p.get('capabilities', [])]
-
-    def room(name):
-        return any(q != name for q in queen_seats) or (name in queen_seats and free.get(name, 0) >= 2)
-    others = [p for p in usable if p['name'] != waited and room(p['name'])]
+    others = [p for p in usable if p['name'] != waited]
     if not others:
         return None
     states = {r[0]: r[1] for r in env.conn.execute('SELECT package,state FROM package_progress WHERE project=? AND plan_path=?', (env.name, plan))}
