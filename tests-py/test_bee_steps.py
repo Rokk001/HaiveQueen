@@ -1,4 +1,4 @@
-"""Tests of the step bar of running Bees (process Bees and subagent Bees) in the Queens and Bees table, and of the Bee rules a subagent Bee gets."""
+"""Tests of the step bar of running Agents (process Agents and subagent Agents) in the Queens and Agents table, and of the Agent rules a subagent Agent gets."""
 import contextlib
 import io
 import json
@@ -20,7 +20,7 @@ CFG = {"slots": 2, "providers": [{"name": "claude"}]}
 
 
 class StepBarTest(unittest.TestCase):
-    """One Hive with a running Queen, packages P1 and P2, and the Bees of the tests."""
+    """One Plan with a running Queen, packages P1 and P2, and the Agents of the tests."""
 
     # Build the data.
     def setUp(self):
@@ -46,7 +46,7 @@ class StepBarTest(unittest.TestCase):
 
     # Start a process Bee.
     def process_bee(self, name, package, status="running", agent=None):
-        """Store a Bee process row of `package`."""
+        """Store an Agent process row of `package`."""
         runtime.upsert_agent(self.conn, "ODP", agent or "ODP__" + name, {"plan": PLAN, "phase": "bee", "provider": "claude", "status": status, "startedAt": db.now(),
                                                                          "person": name, "package": package})
 
@@ -57,13 +57,13 @@ class StepBarTest(unittest.TestCase):
 
     # The row of a Bee in the window's data.
     def row(self, name):
-        """The Bees-table row of the Bee `name`."""
+        """The Agents-table row of the Agent `name`."""
         snap = gui_data.snapshot(self.conn, now=datetime.now(), cfg=CFG, sysinfo=SYS)
         return next(r for r in snap["bees"] if r["name"] == name)
 
     # U-5: a process Bee starts at 0/m.
     def test_process_bee_shows_the_bar_from_its_start(self):
-        """A running process Bee that has not reported shows 0/m of the step count it was started with, and an empty bar."""
+        """A running process Agent that has not reported shows 0/m of the step count it was started with, and an empty bar."""
         bees.record_step_count(self.conn, "ODP", PLAN, "P1", 4)
         self.process_bee("Sophia", "P1")
         row = self.row("Sophia")
@@ -71,7 +71,7 @@ class StepBarTest(unittest.TestCase):
 
     # U-5: a subagent Bee starts at 0/m, too.
     def test_subagent_bee_shows_the_bar_from_its_start(self):
-        """A running subagent Bee shows 0/m, and the Queen's step report moves the bar."""
+        """A running subagent Agent shows 0/m, and the Queen's step report moves the bar."""
         bees.record_embedded_start(self.conn, "ODP", PLAN, "P2", "Mona", "heavy", "claude", "claude-opus-5-5", "medium")
         bees.record_step_count(self.conn, "ODP", PLAN, "P2", 5)
         self.assertEqual(self.row("Mona")["step"], "0/5")
@@ -113,7 +113,7 @@ class StepBarTest(unittest.TestCase):
         self.assertEqual([(bee["name"], bee["step"]) for bee in hive["bees"]], [("Sophia", "")])
 
     def test_step_ranges_show_the_highest_step_in_both_readers(self):
-        """A range report advances the Bee and package displays to its end."""
+        """A range report advances the Agent and package displays to its end."""
         bees.record_step_count(self.conn, "ODP", PLAN, "P1", 6)
         self.process_bee("Sophia", "P1")
         self.note("ODP__Sophia", "Sophia P1: step 2-5/6 tests done")
@@ -134,7 +134,7 @@ class StepBarTest(unittest.TestCase):
 
     # U-5: a replacement keeps the last state until its own first report.
     def test_replacement_bee_keeps_the_last_state_until_its_first_step(self):
-        """The replacement Bee of a package shows the last reported state, with the old step count, until it reports its own first step; then its own count counts."""
+        """The replacement Agent of a package shows the last reported state, with the old step count, until it reports its own first step; then its own count counts."""
         bees.record_step_count(self.conn, "ODP", PLAN, "P1", 4)
         self.process_bee("Sophia", "P1")
         self.note("ODP__Sophia", "Sophia P1: step 3/4 almost there")
@@ -147,7 +147,7 @@ class StepBarTest(unittest.TestCase):
 
     # U-5: a replacement subagent likewise.
     def test_replacement_subagent_keeps_the_last_state(self):
-        """A replaced subagent Bee of the same package keeps the last reported state."""
+        """A replaced subagent Agent of the same package keeps the last reported state."""
         bees.record_embedded_start(self.conn, "ODP", PLAN, "P2", "Mona", "heavy", "claude")
         bees.record_step_count(self.conn, "ODP", PLAN, "P2", 5)
         self.note("ODP__queen", "Mona P2: step 4/5 nearly")
@@ -158,7 +158,7 @@ class StepBarTest(unittest.TestCase):
         self.assertEqual(self.row("Nora")["step"], "1/3")
 
     def test_step_range_parser_keeps_only_valid_reports(self):
-        """The Hive table and per-package progress use the same 0..m step range."""
+        """The Plan table and per-package progress use the same 0..m step range."""
         bees.record_step_count(self.conn, "ODP", PLAN, "P1", 4)
         self.process_bee("Sophia", "P1")
         self.note("ODP__Sophia", "Sophia P1: step 2/4 valid")
@@ -175,7 +175,7 @@ class StepBarTest(unittest.TestCase):
 
 
 class SubagentRulesTest(RoundCase):
-    """A subagent Bee gets the Bee rules of roles/bee.md, and both kinds of Bee record how many steps they were given."""
+    """A subagent Agent gets the Agent rules of roles/agent.md, and both kinds of Agent record how many steps they were given."""
 
     # A Queen of a provider whose Bees run as subagents (Claude Code only).
     def setUp(self):
@@ -188,7 +188,7 @@ class SubagentRulesTest(RoundCase):
 
     # Run bzz bee start.
     def start(self, no_subagents=False):
-        """Return the parsed answer of bzz bee start for package P1."""
+        """Return the parsed answer of bzz agent start for package P1."""
         args = cli.build_parser().parse_args(['bee', 'start', '--project', 'testproj', '--plan', REL, '--package', 'P1', '--class', 'medium', '--name', 'Ada',
                                               '--task', 'build the thing', '--steps', '["read", "write", "test"]', '--cwd', str(self.wt)] + (['--no-subagents'] if no_subagents else []))
         output = io.StringIO()
@@ -198,7 +198,7 @@ class SubagentRulesTest(RoundCase):
         return json.loads(output.getvalue().strip().splitlines()[-1])
 
     def test_process_start_marks_package_working(self):
-        """A successful process Bee start records the package as working."""
+        """A successful process Agent start records the package as working."""
         self.machine['providers'][1]['beeMode'] = 'process'
         with mock.patch('haivequeen.loop._do_start', return_value=True):
             out = self.start(no_subagents=True)
@@ -210,7 +210,7 @@ class SubagentRulesTest(RoundCase):
         """bzz bee start answers kind subagent with the prompt built from roles/bee.md (task, numbered steps, the step report format) and stores the step count."""
         out = self.start()
         self.assertEqual(out["kind"], "subagent")
-        self.assertIn("You are a Bee", out["prompt"])
+        self.assertIn("You are an Agent", out["prompt"])
         self.assertIn("build the thing", out["prompt"])
         self.assertIn("3. test", out["prompt"])
         self.assertIn("Ada P1: step n/3", out["prompt"])

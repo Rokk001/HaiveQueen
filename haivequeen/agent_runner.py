@@ -650,8 +650,8 @@ class AgentRun:
 
     # Remember the first model turn of this run.
     def note_start(self, tokens, kind=None, agent=None):
-        """Store the start context (the context of the first model turn) of this run, or of a subagent Bee of it when `kind` is "subbee"; Queens and
-        Bees are stored, other phases and runs without a database (the benchmark) are not."""
+        """Store the start context (the context of the first model turn) of this run, or of a subagent Agent of it when `kind` is "subbee"; Queens and
+        Agents are stored, other phases and runs without a database (the benchmark) are not."""
         kind = kind or self.phase
         if not tokens:
             return

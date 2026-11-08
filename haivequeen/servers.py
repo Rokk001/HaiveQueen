@@ -73,14 +73,14 @@ def access_of(p) -> str:
 
 
 def embedded_bees(p) -> bool:
-    """True when a provider entry may run its Bees as embedded subagents: Claude Code with an access type other than Local LLM (HaiveQueen has no embedded
-    Bees for another CLI or for a Local LLM provider)."""
+    """True when a provider entry may run its Agents as embedded subagents: Claude Code with an access type other than Local LLM (HaiveQueen has no embedded
+    Agents for another CLI or for a Local LLM provider)."""
     from . import cli_presets
     return cli_presets.key_for(p) == "claude" and access_of(p) != "llm"
 
 
 def bee_mode_of(p) -> str:
-    """The Bee mode a provider entry runs with: its beeMode, by default subagent for protocol claude and process otherwise; subagent counts as
+    """The Agent mode a provider entry runs with: its beeMode, by default subagent for protocol claude and process otherwise; subagent counts as
     process where `embedded_bees` is False, from the first load on, before any save."""
     mode = str(p.get("beeMode") or ("subagent" if str(p.get("protocol") or p.get("name") or "") == "claude" else "process"))
     return "process" if mode == "subagent" and not embedded_bees(p) else mode
@@ -95,7 +95,7 @@ def limit_source(p) -> str:
 
 
 def settle(entry, new=False) -> None:
-    """Write the derived settings into a provider entry: the Bee mode (see `bee_mode_of`) where the entry has one, and the limit source (see
+    """Write the derived settings into a provider entry: the Agent mode (see `bee_mode_of`) where the entry has one, and the limit source (see
     `limit_source`) where it has a limit or is new (`new`). The other settings of the limit table, the check interval, stay."""
     if "beeMode" in entry:
         entry["beeMode"] = bee_mode_of(entry)
@@ -135,7 +135,7 @@ def mask_key(key) -> str:
 
 
 def is_local(p) -> bool:
-    """True for a provider with a Local LLM or an endpoint: it counts as local (Bees of every Hive first, a Queen only when ticked). An API key provider is not local."""
+    """True for a provider with a Local LLM or an endpoint: it counts as local (Agents of every Plan first, a Queen only when ticked). An API key provider is not local."""
     return bool(p.get("server") or p.get("endpoint") or p.get("local") or access_of(p) == "llm")
 
 

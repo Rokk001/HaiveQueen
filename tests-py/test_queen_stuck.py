@@ -1,4 +1,4 @@
-"""A Queen that cannot go on asks one concrete question and waits; the Beekeeper never restarts a Queen at once after an unfinished end without a new commit."""
+"""A Queen that cannot go on asks one concrete question and waits; the Orchestrator never restarts a Queen at once after an unfinished end without a new commit."""
 import json
 import os
 import subprocess
@@ -40,12 +40,12 @@ class QueenInstructionTests(unittest.TestCase):
         self.assertIn("A product question pauses only that item; all independent work continues.", text)
         self.assertIn("record the decision", text)
         self.assertIn("behaviour, content or design", text)
-        self.assertIn("topics configured by the Apiary", text)
+        self.assertIn("topics configured by the Project", text)
         self.assertIn("in doubt", text)
 
 
 class UnfinishedEndTests(RoundCase):
-    """After a Queen ended without a report of waiting and without new commit, the Hive waits for an answer and carries her end text as a question (A8)."""
+    """After a Queen ended without a report of waiting and without new commit, the Plan waits for an answer and carries her end text as a question (A8)."""
 
     def git(self, *args, date=None):
         """Run git in the Queen worktree, with an optional fixed commit date."""
@@ -79,7 +79,7 @@ class UnfinishedEndTests(RoundCase):
         return [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen"]
 
     def test_end_without_commit_waits_for_an_answer(self):
-        """No new commit and no waiting report: no new Queen, the Hive is in 'answer' with one open question that holds the end text."""
+        """No new commit and no waiting report: no new Queen, the Plan is in 'answer' with one open question that holds the end text."""
         first = self.queen()
         self.finish(first["name"], final="Projektregel verbietet die Freigabe bei offenen Teilanforderungen.")
         self.round()
@@ -117,7 +117,7 @@ class UnfinishedEndTests(RoundCase):
         return [db.add_question(self.conn, "testproj", REL, "item-%d" % i, "Question %d?" % i, "Recommendation") for i in range(n)]
 
     def test_open_owner_questions_and_an_empty_final_report_wait_for_the_answer(self):
-        """A Queen that ends without a new commit while owner questions are open sends the Hive to 'answer' whatever her final text says; no new question is filed."""
+        """A Queen that ends without a new commit while owner questions are open sends the Plan to 'answer' whatever her final text says; no new question is filed."""
         ids = self.ask(3)
         first = self.queen()
         self.finish(first["name"], final="")
@@ -129,7 +129,7 @@ class UnfinishedEndTests(RoundCase):
         self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="open", plan=REL)), 3)
 
     def test_a_provider_wait_does_not_hide_the_unfinished_end(self):
-        """The Queen asked for a Bee (Hive in codex_wait) and then ended without a commit while owner questions are open: no new Queen at once, the Hive waits for an answer."""
+        """The Queen asked for an Agent (Plan in codex_wait) and then ended without a commit while owner questions are open: no new Queen at once, the Plan waits for an answer."""
         self.ask(2)
         first = self.queen()
         bees.wait_for_provider(self.conn, "testproj", REL, "codex")
@@ -151,7 +151,7 @@ class UnfinishedEndTests(RoundCase):
         self.assertEqual(len(self.queens()), 2)
 
     def test_answer_starts_the_next_queen(self):
-        """When the owner answers the automatic question, the Hive starts the next Queen."""
+        """When the owner answers the automatic question, the Plan starts the next Queen."""
         from haivequeen import db
         first = self.queen()
         self.finish(first["name"], final="Stuck.")

@@ -470,7 +470,7 @@ limit = { source = "claude" }
 
 
 class BeeModeAndLimitSource(PageCase):
-    """Bee mode in Use with both values, Subagent greyed where unsupported, no Usage check field, the limit source derived."""
+    """Agent mode in Use with both values, Subagent greyed where unsupported, no Usage check field, the limit source derived."""
 
     def setUp(self):
         super().setUp()
@@ -503,7 +503,7 @@ class BeeModeAndLimitSource(PageCase):
         self.assertNotIn(("beeMode",), inside_advanced)
         self.assertEqual(self.bee_labels(win), ["Subagent", "Process"])
         self.assertEqual(self.bee_getter(win)(), "subagent")
-        self.assertIn("Bee mode", label_texts(win.use_frame))
+        self.assertIn("Agent mode", label_texts(win.use_frame))
         note = win.notes["beeMode"]
         self.assertIn("Subagent", note)
         self.assertIn("Process", note)
@@ -512,7 +512,7 @@ class BeeModeAndLimitSource(PageCase):
         self.assertNotIn("\n", note)
 
     def test_subagent_is_greyed_out_for_codex_custom_cli_and_local_llm(self):
-        """Subagent cannot be chosen for a CLI without embedded Bees and for a Local LLM provider; it shows as Process there."""
+        """Subagent cannot be chosen for a CLI without embedded Agents and for a Local LLM provider; it shows as Process there."""
         win = self.window()
         for name in ("codex", "wrapped", "lms"):
             with self.subTest(provider=name):

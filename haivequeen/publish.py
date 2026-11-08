@@ -1,11 +1,11 @@
-"""Release at integration: with the Apiary switch publishReleases on and a remote on GitHub, HaiveQueen itself (never an agent)
+"""Release at integration: with the Project switch publishReleases on and a remote on GitHub, HaiveQueen itself (never an agent)
 publishes every integration into the integration branch as a GitHub release.
 
 Repository: the GitHub repository, the base version (pyproject.toml), the tags and releases and the commit of a release are always those of the
-code repository of the Apiary (codeRepo when it is set, else the workspace); a release recorded for another repository does not count.
+code repository of the Project (codeRepo when it is set, else the workspace); a release recorded for another repository does not count.
 
 The version counts the last digit of the latest release up (2.0.1, 2.0.2, ...); without a release yet it counts up from the version of the
-pyproject.toml of the Apiary. A bigger step is taken only when the owner enters it as nextVersion on the Apiary page; a nextVersion that is not newer
+pyproject.toml of the Project. A bigger step is taken only when the owner enters it as nextVersion on the Project page; a nextVersion that is not newer
 than the latest release is already used and is ignored.
 
 Every integration is recorded at `bzz integration release` in an ordered queue (kv release-queue) with its queue row tip and the commit at which
@@ -45,7 +45,7 @@ def _run(argv, cwd):
 
 
 def code_folder(env) -> Path:
-    """The code repository of the Apiary: codeRepo (older files: repo) when it is set, else the workspace.
+    """The code repository of the Project: codeRepo (older files: repo) when it is set, else the workspace.
 
     Its remote, pyproject.toml version, tags, releases and commits are those of every release; the workspace is never used for them.
     An env without these settings but with a code_repo (the project of the scheduler, the GUI check) uses that folder."""
@@ -58,7 +58,7 @@ _repo = code_folder   # older name of the code repository lookup
 
 
 def github_repository(env, run=None):
-    """owner/name when the remote (remoteName, default origin) of the code repository of the Apiary is on GitHub, else None."""
+    """owner/name when the remote (remoteName, default origin) of the code repository of the Project is on GitHub, else None."""
     run = run or _run
     remote = str(env.settings.get("remoteName") or "origin")
     folder = code_folder(env)
@@ -84,7 +84,7 @@ def token(run=None) -> str:
 
 
 def base_version(env) -> str:
-    """The version of the pyproject.toml of the code repository of the Apiary, else 0.0.0 (the first release counts up from it)."""
+    """The version of the pyproject.toml of the code repository of the Project, else 0.0.0 (the first release counts up from it)."""
     try:
         with open(code_folder(env) / "pyproject.toml", "rb") as handle:
             value = str(tomllib.load(handle)["project"]["version"])
@@ -112,7 +112,7 @@ def _sha(text) -> str:
 
 
 def _git(env, run, *args):
-    """Run git in the code repository of the Apiary; returns (exit code, output)."""
+    """Run git in the code repository of the Project; returns (exit code, output)."""
     folder = code_folder(env)
     return run(["git", "-C", str(folder)] + list(args), folder)
 
@@ -346,7 +346,7 @@ def discover(conn, env, run=None) -> list:
 
 
 def _separate_code_repo(env) -> bool:
-    """True when the Apiary has a code repository apart from its workspace."""
+    """True when the Project has a code repository apart from its workspace."""
     try:
         return code_folder(env).resolve() != Path(env.workspace).resolve()
     except OSError:
@@ -439,7 +439,7 @@ def after_integration(conn, env, plan, run=None, latest=None, publisher=None, to
 
 
 def retry_pending(conn, envs, run=None, latest=None, publisher=None, token=None) -> list:
-    """Publish the queued releases of every Apiary with the switch on (one loop round), after queueing the integrations no
+    """Publish the queued releases of every Project with the switch on (one loop round), after queueing the integrations no
     `bzz integration release` recorded; returns the published entries."""
     run = run or _run
     latest = latest or releases.latest_version

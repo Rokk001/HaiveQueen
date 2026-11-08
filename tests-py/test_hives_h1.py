@@ -1,4 +1,4 @@
-"""Tests for the Hive configuration and plan parsing."""
+"""Tests for the Plan configuration and plan parsing."""
 import unittest
 
 from haivequeen import plans, scheduler
@@ -10,7 +10,7 @@ class HiveConfigurationTests(unittest.TestCase):
 
     # A machine starts two Hives and Queens use medium with three Bees.
     def test_hive_defaults(self):
-        """A machine starts two Hives and Queens use medium with three Bees."""
+        """A machine starts two Plans and Queens use medium with three Agents."""
         settings = scheduler.build_settings({}, {})
         self.assertEqual(settings["hives"], 2)
         self.assertEqual(settings["queenClass"], "medium")
@@ -30,7 +30,7 @@ from bzztest import RoundCase, runtime
 
 # Exercise Hive scheduling in an isolated runtime.
 class HiveRoundTests(RoundCase):
-    """Exercise Hive scheduling in an isolated runtime."""
+    """Exercise Plan scheduling in an isolated runtime."""
 
     # Simulate a finished runner, including its process exit.
     def finish(self, name, final="", status="done", project="testproj"):
@@ -58,13 +58,13 @@ class HiveRoundTests(RoundCase):
 
     # Project settings cannot override the machine-wide Hive limit.
     def test_hive_count_is_machine_wide(self):
-        """Project settings cannot override the machine-wide Hive limit."""
+        """Project settings cannot override the machine-wide Plan limit."""
         settings = scheduler.build_settings({"hives": 2}, {"hives": 8})
         self.assertEqual(settings["hives"], 2)
 
     # A project may set its Queen class and number of Bees.
     def test_queen_settings_may_be_overridden_by_project(self):
-        """A project may set its Queen class and number of Bees."""
+        """A project may set its Queen class and number of Agents."""
         settings = scheduler.build_settings({"queenClass": "medium", "beesPerQueen": 3}, {"queenClass": "heavy", "beesPerQueen": 1})
         self.assertEqual(settings["queenClass"], "heavy")
         self.assertEqual(settings["beesPerQueen"], 1)
@@ -95,7 +95,7 @@ class HiveRoundTests(RoundCase):
 
     # The owner can dequeen or requeen a named Hive from the CLI.
     def test_owner_commands_accept_hive_and_optional_provider(self):
-        """The owner can dequeen or requeen a named Hive from the CLI."""
+        """The owner can dequeen or requeen a named Plan from the CLI."""
         from haivequeen import cli
         parser = cli.build_parser()
         self.assertEqual(parser.parse_args(["dequeen", "hive-1"]).command, "dequeen")
@@ -114,7 +114,7 @@ class HiveRoundTests(RoundCase):
 
     # A branch outside any Hive remains untouched.
     def test_ready_row_without_hive_does_not_start_agent(self):
-        """A branch outside any Hive remains untouched."""
+        """A branch outside any Plan remains untouched."""
         runtime.queue_upsert(self.conn, "testproj", "outside-branch", tip="abc", status="ready")
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] in ("running", "starting")]
@@ -135,7 +135,7 @@ class HiveRoundTests(RoundCase):
 
     # Starting a Hive updates its plan status in the plan file.
     def test_started_plan_becomes_in_progress(self):
-        """Starting a Hive updates its plan status in the plan file."""
+        """Starting a Plan updates its plan status in the plan file."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         from bzztest import REL
@@ -199,7 +199,7 @@ class HiveRoundTests(RoundCase):
         from pathlib import Path
         text = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
         self.assertNotIn("embedded, small context, no extra slot", text)
-        self.assertIn("every Bee takes one slot", text)
+        self.assertIn("every Agent takes one slot", text)
 
     # A finished context handoff starts a new Queen on the same provider.
     def test_context_handoff_restarts_same_hive_and_provider(self):
@@ -248,7 +248,7 @@ class HiveRoundTests(RoundCase):
 
     # A rate-limited Queen leaves her Hive resting even if another provider has room.
     def test_rate_limited_hive_does_not_switch_provider(self):
-        """A rate-limited Queen leaves her Hive resting even if another provider has room."""
+        """A rate-limited Queen leaves her Plan resting even if another provider has room."""
         import json
         import os
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -279,7 +279,7 @@ class HiveRoundTests(RoundCase):
 
     # A living Queen remains running when the Beekeeper restarts.
     def test_running_queen_is_reattached_after_restart(self):
-        """A living Queen remains running when the Beekeeper restarts."""
+        """A living Queen remains running when the Orchestrator restarts."""
         from haivequeen import reattach
         self.agent("Ada", phase="queen", status="running", pid=1234)
         result = reattach.reattach(self.conn, "testproj", lambda pid: pid == 1234)
@@ -299,7 +299,7 @@ class HiveRoundTests(RoundCase):
 
     # A second Hive waits for its project's integration place in arrival order.
     def test_integration_reservation_is_per_project_and_serial(self):
-        """A second Hive waits for its project's integration place in arrival order."""
+        """A second Plan waits for its project's integration place in arrival order."""
         from haivequeen import hives
         self.assertTrue(hives.take_integration(self.conn, "testproj", "first"))
         self.assertFalse(hives.take_integration(self.conn, "testproj", "second"))
@@ -311,7 +311,7 @@ class HiveRoundTests(RoundCase):
 
     # Answering an open owner question wakes the waiting Hive.
     def test_answer_wakes_waiting_hive(self):
-        """Answering an open owner question wakes the waiting Hive."""
+        """Answering an open owner question wakes the waiting Plan."""
         from haivequeen import db, hives
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -332,7 +332,7 @@ class HiveRoundTests(RoundCase):
 
     # Dequeening ends only the Hive Queen and suppresses automatic restart.
     def test_dequeen_preserves_hive_until_requeen(self):
-        """Dequeening ends only the Hive Queen and suppresses automatic restart."""
+        """Dequeening ends only the Plan Queen and suppresses automatic restart."""
         from haivequeen import hives
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -371,7 +371,7 @@ class HiveRoundTests(RoundCase):
 
     # Persisted Hive identity survives reconnecting to the database.
     def test_hive_colour_and_provider_survive_database_reopen(self):
-        """Persisted Hive identity survives reconnecting to the database."""
+        """Persisted Plan identity survives reconnecting to the database."""
         from haivequeen import db, hives
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -388,7 +388,7 @@ class HiveRoundTests(RoundCase):
 
     # A Hive waiting for its owner lets another READY plan use the place.
     def test_resting_hive_does_not_consume_hive_place(self):
-        """A Hive waiting for its owner lets another READY plan use the place."""
+        """A Plan waiting for its owner lets another READY plan use the place."""
         from haivequeen import db, hives
         rel1 = "docs/plans/one/ONE-PLAN.md"
         rel2 = "docs/plans/two/TWO-PLAN.md"
@@ -422,7 +422,7 @@ class HiveRoundTests(RoundCase):
 
     # A Hive with an answer gets the next available place before a new plan.
     def test_answered_waiting_hive_has_priority_over_new_plan(self):
-        """A Hive with an answer gets the next available place before a new plan."""
+        """A Plan with an answer gets the next available place before a new plan."""
         from haivequeen import db, hives
         rel1 = "docs/plans/one/ONE-PLAN.md"
         rel2 = "docs/plans/two/TWO-PLAN.md"
@@ -473,7 +473,7 @@ class HiveRoundTests(RoundCase):
 
     # Three old unfinished work runs do not block a Hive or ask the owner.
     def test_old_work_streak_does_not_stop_hive(self):
-        """Three old unfinished work runs do not block a Hive or ask the owner."""
+        """Three old unfinished work runs do not block a Plan or ask the owner."""
         from bzztest import REL
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
         for n in range(3):
@@ -498,7 +498,7 @@ class HiveRoundTests(RoundCase):
 
     # The handoff waits for the two running Bees and forbids another Bee.
     def test_context_limit_blocks_new_bees_until_running_bees_finish(self):
-        """The handoff waits for the two running Bees and forbids another Bee."""
+        """The handoff waits for the two running Agents and forbids another Agent."""
         from haivequeen import hives
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -517,7 +517,7 @@ class HiveRoundTests(RoundCase):
 
     # An unfinished normal end starts another Queen on the same Hive.
     def test_unfinished_queen_restarts_without_handoff(self):
-        """An unfinished normal end starts another Queen on the same Hive."""
+        """An unfinished normal end starts another Queen on the same Plan."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] in ("running", "starting")]
@@ -532,7 +532,7 @@ class HiveRoundTests(RoundCase):
 
     # Two active Hives get different persistent colours.
     def test_running_hives_have_distinct_colours(self):
-        """Two active Hives get different persistent colours."""
+        """Two active Plans get different persistent colours."""
         from haivequeen import hives
         rel1 = "docs/plans/one/ONE-PLAN.md"
         rel2 = "docs/plans/two/TWO-PLAN.md"
@@ -559,7 +559,7 @@ class HiveRoundTests(RoundCase):
 
     # Preference never blocks a Hive when another provider has capacity.
     def test_preferred_provider_busy_uses_another_available_provider(self):
-        """Preference never blocks a Hive when another provider has capacity."""
+        """Preference never blocks a Plan when another provider has capacity."""
         from bzztest import provider
         entries = [provider("a", 1), provider("b", 1)]
         providers = scheduler.get_providers({"providers": entries})
@@ -577,7 +577,7 @@ class HiveRoundTests(RoundCase):
 
     # A process Bee uses a slot in addition to its Queen.
     def test_queen_and_process_bee_consume_separate_slots(self):
-        """A process Bee uses a slot in addition to its Queen."""
+        """A process Agent uses a slot in addition to its Queen."""
         from bzztest import provider
         providers = scheduler.get_providers({"providers": [provider("claude", 3), provider("codex", 1, proto="codex")]})
         rows = [{"status": "running", "phase": "queen", "provider": "claude", "pid": 11},
@@ -588,7 +588,7 @@ class HiveRoundTests(RoundCase):
 
     # A resting Hive retains its provider and waits until the reset time.
     def test_limit_reset_wakes_only_when_reset_is_due(self):
-        """A resting Hive retains its provider and waits until the reset time."""
+        """A resting Plan retains its provider and waits until the reset time."""
         from haivequeen import hives
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -604,7 +604,7 @@ class HiveRoundTests(RoundCase):
 
     # A resting Hive cannot hold the project integration place.
     def test_resting_hive_releases_integration_place(self):
-        """A resting Hive cannot hold the project integration place."""
+        """A resting Plan cannot hold the project integration place."""
         from haivequeen import hives
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -626,7 +626,7 @@ class HiveRoundTests(RoundCase):
 
     # Repeated old verification records do not lock the Hive.
     def test_old_verification_streak_does_not_stop_hive(self):
-        """Repeated old verification records do not lock the Hive."""
+        """Repeated old verification records do not lock the Plan."""
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
         for n in range(3):
             name = f"old-verify-{n}"
@@ -658,7 +658,7 @@ class HiveRoundTests(RoundCase):
 
     # A resting Hive and its reset time survive reconnecting.
     def test_resting_state_survives_database_reopen(self):
-        """A resting Hive and its reset time survive reconnecting."""
+        """A resting Plan and its reset time survive reconnecting."""
         from haivequeen import db, hives
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -673,7 +673,7 @@ class HiveRoundTests(RoundCase):
 
     # Dequeen ends its own process Bees without touching another Hive.
     def test_dequeen_stops_own_process_bees_only(self):
-        """Dequeen ends its own process Bees without touching another Hive."""
+        """Dequeen ends its own process Agents without touching another Plan."""
         from haivequeen import hives
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -705,7 +705,7 @@ class HiveRoundTests(RoundCase):
 
     # An explicit requeen bypasses the machine Hive count when a slot is free.
     def test_owner_requeen_may_exceed_hive_limit(self):
-        """An explicit requeen bypasses the machine Hive count when a slot is free."""
+        """An explicit requeen bypasses the machine Plan count when a slot is free."""
         from haivequeen import hives
         from bzztest import REL
         self.machine["hives"] = 1
@@ -723,7 +723,7 @@ class HiveRoundTests(RoundCase):
 
     # Each in-session Bee takes a provider slot in addition to its Queen.
     def test_embedded_subagents_take_provider_slots(self):
-        """Three in-session Bees and their Queen take four slots."""
+        """Three in-session Agents and their Queen take four slots."""
         from bzztest import provider
         providers = scheduler.get_providers({"providers": [provider("claude", 4)]})
         from haivequeen import bees, overview
@@ -748,7 +748,7 @@ class HiveRoundTests(RoundCase):
 
     # A full five-hour window rests the Hive even if the weekly window has room.
     def test_five_hour_limit_also_rests_queen(self):
-        """A full five-hour window rests the Hive even if the weekly window has room."""
+        """A full five-hour window rests the Plan even if the weekly window has room."""
         import json
         import os
         from datetime import datetime
@@ -778,7 +778,7 @@ class HiveRoundTests(RoundCase):
 
     # Owner dequeening survives a Beekeeper restart.
     def test_queenless_state_survives_database_reopen(self):
-        """Owner dequeening survives a Beekeeper restart."""
+        """Owner dequeening survives a Orchestrator restart."""
         from haivequeen import db, hives
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -803,7 +803,7 @@ class HiveRoundTests(RoundCase):
 
     # The owner can requeen a resting Hive on another configured provider.
     def test_owner_requeen_moves_rate_limited_hive_to_chosen_provider(self):
-        """The owner can requeen a resting Hive on another configured provider."""
+        """The owner can requeen a resting Plan on another configured provider."""
         import json
         import os
         from haivequeen import hives
@@ -861,7 +861,7 @@ class HiveRoundTests(RoundCase):
 
     # At the context limit the round waits for Bees before restarting the Queen.
     def test_round_context_handoff_waits_for_real_bee_rows(self):
-        """At the context limit the round waits for Bees before restarting the Queen."""
+        """At the context limit the round waits for Agents before restarting the Queen."""
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
@@ -920,7 +920,7 @@ class HiveRoundTests(RoundCase):
 
     # A Queen report makes the Hive wait until its existing question is answered.
     def test_owner_wait_is_recorded_from_actual_queen_report(self):
-        """A Queen report makes the Hive wait until its existing question is answered."""
+        """A Queen report makes the Plan wait until its existing question is answered."""
         from haivequeen import db
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -936,7 +936,7 @@ class HiveRoundTests(RoundCase):
 
     # The local LLM is used for Bees, while a Hive Queen uses Claude or Codex.
     def test_local_llm_is_not_selected_as_hive_queen(self):
-        """The local LLM is used for Bees, while a Hive Queen uses Claude or Codex."""
+        """The local LLM is used for Agents, while a Plan Queen uses Claude or Codex."""
         from bzztest import provider
         local = provider("local", 1, proto="codex")
         local["endpoint"] = {"baseUrl": "http://127.0.0.1:1234/v1"}
@@ -949,7 +949,7 @@ class HiveRoundTests(RoundCase):
 
     # A provider with a full short window is not chosen for a new Hive.
     def test_full_five_hour_window_excludes_queen_provider(self):
-        """A provider with a full short window is not chosen for a new Hive."""
+        """A provider with a full short window is not chosen for a new Plan."""
         import json
         import os
         from bzztest import provider
@@ -988,7 +988,7 @@ class HiveRoundTests(RoundCase):
 
     # Historical queue rows do not mark an unrelated new Hive done.
     def test_old_integrated_row_does_not_finish_new_hive(self):
-        """Historical queue rows do not mark an unrelated new Hive done."""
+        """Historical queue rows do not mark an unrelated new Plan done."""
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
         runtime.queue_upsert(self.conn, "testproj", "older-branch", tip="abc", plan=REL, status="integrated")
@@ -1027,6 +1027,7 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(len(asked), 1)   # the system filed the owner check itself
         from haivequeen import db
         db.answer_question(self.conn, asked[0]["id"], "ok", "owner")
+        self.conn.execute("UPDATE questions SET status='answered',owner_check_result=? WHERE id=?", ("accepted", asked[0]["id"]))
         self.round()
         self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "DONE")
 
@@ -1065,6 +1066,7 @@ class HiveRoundTests(RoundCase):
         from bzztest import REL
         qid = db.add_question(self.conn, "testproj", REL, "owner-check-answered", "Check it", "")
         db.answer_question(self.conn, qid, "ist ok", "owner")
+        self.conn.execute("UPDATE questions SET status='answered',owner_check_result=? WHERE id=?", ("accepted", qid))
         self.assertTrue(hives.owner_accepted(self.conn, "testproj", REL, "2000-01-01T00:00:00"))
         self.assertFalse(hives.owner_accepted(self.conn, "testproj", REL, "2999-01-01T00:00:00"))
 
@@ -1086,7 +1088,7 @@ class HiveRoundTests(RoundCase):
         self.round()
         queen = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"][0]
         prompt = (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8-sig")
-        self.assertIn("Queen of this Hive", prompt)
+        self.assertIn("Queen of this Plan", prompt)
         self.assertNotIn("one task, then you end", prompt)
 
     # A connection interruption waits before starting the next Queen.
@@ -1102,7 +1104,7 @@ class HiveRoundTests(RoundCase):
 
     # Existing project views are still refreshed by a Hive round.
     def test_hive_round_updates_existing_project_views(self):
-        """Existing project views are still refreshed by a Hive round."""
+        """Existing project views are still refreshed by a Plan round."""
         from unittest.mock import patch
         from haivequeen import views
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -1195,7 +1197,7 @@ class HiveRoundTests(RoundCase):
 
     # The waiting Hive retains its queue place after its Queen ends.
     def test_waiting_queen_keeps_integration_order_after_handoff(self):
-        """The waiting Hive retains its queue place after its Queen ends."""
+        """The waiting Plan retains its queue place after its Queen ends."""
         import argparse
         import contextlib
         import io
@@ -1227,7 +1229,7 @@ class HiveRoundTests(RoundCase):
 
     # A paused Beekeeper blocks new Bee processes but not in-session subagents.
     def test_pause_blocks_only_new_bee_processes(self):
-        """A paused Beekeeper blocks new Bee processes but not in-session subagents."""
+        """A paused Orchestrator blocks new Agent processes but not in-session subagents."""
         from haivequeen import hives, runstate
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
@@ -1238,17 +1240,17 @@ class HiveRoundTests(RoundCase):
 
     # The actual Queen prompt forbids new Bees and waits for running Bees at handoff.
     def test_queen_handoff_prompt_waits_for_bees(self):
-        """The actual Queen prompt forbids new Bees and waits for running Bees at handoff."""
+        """The actual Queen prompt forbids new Agents and waits for running Agents at handoff."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         queen = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"][0]
         prompt = (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8-sig")
-        self.assertIn("do not start new Bees", prompt)
-        self.assertIn("wait for running Bees", prompt)
+        self.assertIn("do not start new Agents", prompt)
+        self.assertIn("wait for running Agents", prompt)
 
     # A waiting Hive retains its queue position without holding a free place.
     def test_waiting_integration_does_not_reserve_without_free_queen_slot(self):
-        """A waiting Hive retains its queue position without holding a free place."""
+        """A waiting Plan retains its queue position without holding a free place."""
         import argparse
         import contextlib
         import io
@@ -1335,7 +1337,7 @@ class HiveRoundTests(RoundCase):
 
     # A new Hive cannot take the colour of one resting until a reset.
     def test_resting_hive_colour_stays_reserved(self):
-        """A new Hive cannot take the colour of one resting until a reset."""
+        """A new Plan cannot take the colour of one resting until a reset."""
         from haivequeen import hives
         from bzztest import REL
         self.machine["hives"] = 1

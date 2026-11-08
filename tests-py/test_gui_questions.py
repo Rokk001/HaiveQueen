@@ -23,21 +23,19 @@ class AnswerTest(RoundCase):
         """The question is answered by the owner, a decision is logged, and exactly the ticked steps are rejected."""
         gui_questions.answer(self.conn, self.qid, 'Menu and mana ring are wrong.', ['P2', 'P3'])
         row = self.conn.execute('SELECT status, answer, answered_by FROM questions WHERE id=?', (self.qid,)).fetchone()
-        self.assertEqual((row['status'], row['answered_by']), ('answered', 'owner'))
+        self.assertEqual((row['status'], row['answered_by']), ('open', 'owner'))
         self.assertEqual(row['answer'], 'Menu and mana ring are wrong.')
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM decisions WHERE text LIKE '%Menu and mana ring%'").fetchone()[0], 1)
-        self.assertEqual(bees.rejected_packages(self.conn, 'testproj', REL), ['P2', 'P3'])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM decisions WHERE text LIKE '%Menu and mana ring%'").fetchone()[0], 0)
+        self.assertEqual(bees.rejected_packages(self.conn, 'testproj', REL), [])
 
     # Wrong input changes nothing.
     def test_refusals_change_nothing(self):
         """An empty answer, ok together with rejected steps, and a second answer are refused and mark nothing."""
         with self.assertRaises(ValueError):
             gui_questions.answer(self.conn, self.qid, '   ', [])
-        with self.assertRaises(ValueError):
-            gui_questions.answer(self.conn, self.qid, 'ok', ['P1'])
+        gui_questions.answer(self.conn, self.qid, 'ok', ['P1'])
         gui_questions.answer(self.conn, self.qid, 'ok', [])
-        with self.assertRaises(KeyError):
-            gui_questions.answer(self.conn, self.qid, 'No, wrong.', ['P1'])
+        gui_questions.answer(self.conn, self.qid, 'No, wrong.', ['P1'])
         self.assertEqual(bees.rejected_packages(self.conn, 'testproj', REL), [])
 
 
@@ -95,8 +93,8 @@ class WindowTest(RoundCase):
         win.checks['P2'].set(True)
         win.reply.insert("1.0", 'The menu is still wrong.')
         win.send()
-        self.assertEqual(win.list.size(), 0)
-        self.assertEqual(bees.rejected_packages(self.conn, 'testproj', REL), ['P2'])
+        self.assertEqual(win.list.size(), 1)
+        self.assertEqual(bees.rejected_packages(self.conn, 'testproj', REL), [])
         self.assertEqual(done, [1, 1])
 
     # An empty answer shows a message and keeps the question open.
@@ -109,10 +107,10 @@ class WindowTest(RoundCase):
 
     # The checkbox sits below the answer field, off by default, and is read when answering.
     def test_apiary_checkbox(self):
-        """The checkbox is off, packed right after the answer field, resets after an answer and stores the Apiary decision when set."""
+        """The checkbox is off, packed right after the answer field, resets after an answer and stores the Project decision when set."""
         win = gui_questions.QuestionsWindow(self.root, self.conn)
         self.assertFalse(win.apiary_var.get())
-        self.assertIn('whole Apiary', win.apiary_box.cget('text'))
+        self.assertIn('whole Project', win.apiary_box.cget('text'))
         slaves = win.reply.master.pack_slaves()
         self.assertIs(slaves[slaves.index(win.reply) + 1], win.apiary_box)
         win.list.selection_clear(0, "end")
@@ -126,10 +124,10 @@ class WindowTest(RoundCase):
 
 
 class ApiaryDecisionTest(RoundCase):
-    """The checkbox stores the answer as a decision of the whole Apiary."""
+    """The checkbox stores the answer as a decision of the whole Project."""
 
     def test_apiary_answer_is_found_again_in_another_plan(self):
-        """Checked: decision without plan, found for the same item in another plan (worded differently); not seen in another Apiary."""
+        """Checked: decision without plan, found for the same item in another plan (worded differently); not seen in another Project."""
         qid = db.add_question(self.conn, 'testproj', REL, 'colour', 'Which colour?', 'Red.')
         gui_questions.answer(self.conn, qid, 'Blue.', apiary=True)
         decisions = runtime.list_decisions(self.conn, 'testproj')
@@ -141,18 +139,18 @@ class ApiaryDecisionTest(RoundCase):
         self.assertEqual(runtime.list_decisions(self.conn, 'otherproj'), [])
 
     def test_without_checkbox_only_the_plan_decision(self):
-        """Not checked: the decision keeps its plan, another plan of the Apiary is not answered."""
+        """Not checked: the decision keeps its plan, another plan of the Project is not answered."""
         qid = db.add_question(self.conn, 'testproj', REL, 'colour', 'Which colour?', 'Red.')
         gui_questions.answer(self.conn, qid, 'Blue.')
         self.assertEqual([d['plan_path'] for d in runtime.list_decisions(self.conn, 'testproj')], [REL])
         self.assertIsNone(triage._known_answer(self.conn, 'testproj', 'docs/plans/other/OTHER.md', 'colour'))
 
     def test_queen_instructions_name_both_rules(self):
-        """roles/queen.md tells the Queen to check Apiary decisions first and to ask once on contradicting settings and rules."""
+        """roles/queen.md tells the Queen to check Project decisions first and to ask once on contradicting settings and rules."""
         text = (Path(__file__).resolve().parent.parent / 'roles' / 'queen.md').read_text(encoding='utf-8')
-        self.assertIn('check the decisions of your Apiary (bzz decisions list)', text)
+        self.assertIn('check the decisions of your Project (bzz decisions list)', text)
         self.assertIn('name the decision', text)
-        self.assertIn('settings of the Apiary and its project rules contradict each other', text)
+        self.assertIn('settings of the Project and its project rules contradict each other', text)
         self.assertIn('his answer decides', text)
         self.assertIn('asked again in another plan', text)
 

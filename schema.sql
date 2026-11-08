@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS questions (
     answer TEXT,
     answered_by TEXT CHECK (answered_by IS NULL OR answered_by IN ('owner','coordinator','auto')),
     created_at TEXT NOT NULL,
-    answered_at TEXT
+    answered_at TEXT,
+    owner_check_result TEXT
 );
 
 CREATE TABLE IF NOT EXISTS decisions (

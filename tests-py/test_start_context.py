@@ -1,5 +1,5 @@
 """Tests of U-6 to U-8: the token overlays of the five tiles, the Start Context tile and its overlay, the capture of the start context in the runner
-(Queen, process Bee, subagent Bee) and the benchmark of the start context per provider and Apiary."""
+(Queen, process Agent, subagent Agent) and the benchmark of the start context per provider and Project."""
 import os
 import sys
 import tempfile
@@ -35,7 +35,7 @@ def claude_msg(mid, ctx_parts, out=5, sub=None):
 
 
 class Base(unittest.TestCase):
-    """A temp database with two Apiaries, two Hives, a running Queen with a process Bee and an embedded Bee."""
+    """A temp database with two Projects, two Plans, a running Queen with a process Agent and an embedded Agent."""
 
     def setUp(self):
         """Create the invented data."""
@@ -94,7 +94,7 @@ class OverlayTest(Base):
         self.assertEqual((gpt["tin"], gpt["cached"], gpt["fresh"]), (2000, None, None))   # the earlier day's run is not in today's use
 
     def test_apiaries_and_hives(self):
-        """Apiaries: the Apiaries of the tile with today's tokens; Hives: the active Hives with today's tokens and the tokens per finished package (whole use / done packages)."""
+        """Projects: the Projects of the tile with today's tokens; Plans: the active Plans with today's tokens and the tokens per finished package (whole use / done packages)."""
         s = self.snap()
         self.assertEqual({r["name"]: (r["tin"], r["tout"]) for r in s["overlays"]["apiaries"]["rows"]}, {"ODP": (1900, 190), "ZED": (2000, 200)})
         self.assertEqual(len(s["overlays"]["apiaries"]["rows"]), s["tiles"]["apiaries"])
@@ -111,7 +111,7 @@ class OverlayTest(Base):
         self.assertEqual(zed["per_package"], None)
 
     def test_queens_and_busy_bees(self):
-        """Queens: the online Queens; Busy Bees: the running Bees; each with the tokens of its run as in the table."""
+        """Queens: the online Queens; Busy Agents: the running Agents; each with the tokens of its run as in the table."""
         s = self.snap()
         self.assertEqual([(r["name"], r["tin"], r["tout"]) for r in s["overlays"]["queens"]["rows"]], [("Ava", 1000, 100), ("Eva", 2000, 200)])
         self.assertEqual([(r["name"], r["tin"], r["tout"]) for r in s["overlays"]["bees"]["rows"]], [("Sophia", 600, 60)])
@@ -128,7 +128,7 @@ class OverlayTest(Base):
             self.assertEqual(s["overlays"][key]["rows"], [], key)
 
     def test_subagent_bee_tokens_are_counted_once(self):
-        """The tokens of a subagent Bee are shown at the Bee and not again at the Queen; the Hive total and the Total I/O count them once."""
+        """The tokens of a subagent Agent are shown at the Agent and not again at the Queen; the Plan total and the Total I/O count them once."""
         bees.record_embedded_start(self.conn, "ODP", PLAN, "P3", "Mona", "heavy", "claude", "claude-sonnet-5-5", "medium")
         queen = next(a for a in runtime.list_agents(self.conn, "ODP", "active") if a["phase"] == "queen")
         runtime.upsert_agent(self.conn, "ODP", queen["name"], {"subCtx": {"toolu_1": {"desc": "P3 Mona: work", "ctx": 90000, "tin": 400, "tout": 40}}})
@@ -145,7 +145,7 @@ class OverlayTest(Base):
 
 
 class CaptureTest(unittest.TestCase):
-    """U-7: the runner stores context, tokens and the start context from the first turn, also of a subagent Bee."""
+    """U-7: the runner stores context, tokens and the start context from the first turn, also of a subagent Agent."""
 
     def setUp(self):
         """A temp database and run folder."""
@@ -204,7 +204,7 @@ class CaptureTest(unittest.TestCase):
         self.assertIsNone(runtime.get_agent(self.conn, "ODP", "ODP__cx").get("cacheRead"))
 
     def test_subagent_bee_is_captured_without_agent_id(self):
-        """A subagent message is told by its parent tool use id alone; the Task call names the Bee; context, tokens and the start of the subagent are stored and the Queen's context stays hers."""
+        """A subagent message is told by its parent tool use id alone; the Task call names the Agent; context, tokens and the start of the subagent are stored and the Queen's context stays hers."""
         events = [
             claude_msg("q1", (10, 0, 990)),
             {"type": "assistant", "message": {"id": "q2", "usage": {"input_tokens": 5, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 995, "output_tokens": 5},
@@ -238,7 +238,7 @@ class StartTileTest(Base):
         return [r for r in self.snap()["overlays"]["start"]["rows"] if r["block"] == block]
 
     def test_tile_is_the_mean_saving_over_all_measurements(self):
-        """The tile is one value: the mean saving in percent over all stored measurements of all providers and Apiaries; no benchmark = None; starts do not count."""
+        """The tile is one value: the mean saving in percent over all stored measurements of all providers and Projects; no benchmark = None; starts do not count."""
         self.start("ODP", PLAN, "ODP__queen", "queen", "claude", 20000)
         self.assertEqual(self.snap()["tiles"]["start_ctx"], {"saving": None, "n": 0})
         self.bench("claude", "ODP", 20, 100)   # -80
@@ -249,7 +249,7 @@ class StartTileTest(Base):
         self.assertEqual(self.snap()["tiles"]["start_ctx"]["n"], 3)
 
     def test_block_one_per_provider_and_all_providers_last(self):
-        """Block 1: per provider the average over its Apiaries, a provider without benchmark says so, the last row is 'All providers'."""
+        """Block 1: per provider the average over its Projects, a provider without benchmark says so, the last row is 'All providers'."""
         self.bench("claude", "ODP", 20000, 100000)
         self.bench("claude", "ZED", 40000, 100000)
         rows = self.rows(1)
@@ -259,7 +259,7 @@ class StartTileTest(Base):
         self.assertEqual((rows[3]["hq"], rows[3]["own"], rows[3]["saving"]), (30000, 100000, -70))
 
     def test_block_two_per_apiary_and_three_per_provider_within_apiary(self):
-        """Block 2: per Apiary the average over the providers measured there. Block 3: per provider within each Apiary, the single measurement with its date."""
+        """Block 2: per Project the average over the providers measured there. Block 3: per provider within each Project, the single measurement with its date."""
         self.bench("claude", "ODP", 20000, 100000)
         self.bench("codex", "ODP", 60000, 100000)
         self.bench("claude", "ZED", 10000, 50000, ago=60 * 30)
@@ -272,7 +272,7 @@ class StartTileTest(Base):
         self.assertEqual(three[2]["date"], iso(60 * 30)[:10])
 
     def test_overlay_text_has_no_lone_numbers_and_no_split(self):
-        """The overlay lines carry the headline, the columns, no today averages, no Hive values, no split per file."""
+        """The overlay lines carry the headline, the columns, no today averages, no Plan values, no split per file."""
         from haivequeen import gui_overlays
         self.start("ODP", PLAN, "ODP__queen", "queen", "claude", 20000, {"role": 3000, "rules": {"CLAUDE.md": 5000}, "task": 1000})
         self.bench("claude", "ODP", 18000, 61000)
@@ -280,7 +280,7 @@ class StartTileTest(Base):
         self.assertIn("Start context per agent start", text)
         for word in ("WITHOUT HaiveQueen", "WITH HaiveQueen", "Saving", "All providers", "no benchmark yet - run it in the settings"):
             self.assertIn(word, text)
-        for bad in ("today", "Hive ", "CLAUDE.md", "rules", "CLI's own", "Queens:", "Bees:", "average"):
+        for bad in ("today", "Plan ", "CLAUDE.md", "rules", "CLI's own", "Queens:", "Bees:", "average"):
             self.assertNotIn(bad, text)
         self.assertFalse(hasattr(startctx, "fit_parts"))
         self.assertFalse(hasattr(startctx, "today_starts"))
@@ -300,10 +300,10 @@ class StartTileTest(Base):
 
 
 class BenchmarkTest(unittest.TestCase):
-    """U-8: the benchmark measures every registered Apiary of a provider with and without the profile."""
+    """U-8: the benchmark measures every registered Project of a provider with and without the profile."""
 
     def setUp(self):
-        """A temp database with two Apiaries that have a code folder."""
+        """A temp database with two Projects that have a code folder."""
         self.tmp = tempfile.TemporaryDirectory()
         self.conn = db.connect(Path(self.tmp.name) / "o.db")
         for name in ("ODP", "ZED"):
@@ -318,7 +318,7 @@ class BenchmarkTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_measures_each_apiary_twice_with_the_same_task_and_replaces_old_values(self):
-        """Two runs per Apiary (with and without profile), the same minimal task, both stored with the date; a new measurement replaces the old one."""
+        """Two runs per Project (with and without profile), the same minimal task, both stored with the date; a new measurement replaces the old one."""
         calls = []
 
         def measure(prov, cwd, hq, task):
@@ -482,7 +482,7 @@ class ButtonTest(unittest.TestCase):
     def test_table_columns_fit_headers_and_values(self):
         from tkinter import font
         from haivequeen import gui_config
-        long_name = "A very long Apiary name that must remain visible"
+        long_name = "A very long Project name that must remain visible"
         startctx.store_benchmark(self.conn, "claude", long_name, "hq", 18000)
         startctx.store_benchmark(self.conn, "claude", long_name, "own", 61000)
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):

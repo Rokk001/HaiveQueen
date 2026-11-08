@@ -1,4 +1,4 @@
-"""K5: Apiary switches, delegation of integration steps, command recognition and branch cleanup."""
+"""K5: Project switches, delegation of integration steps, command recognition and branch cleanup."""
 import argparse
 import io
 import json
@@ -24,17 +24,17 @@ def provider(name, *capabilities, **extra):
 
 
 class IntegrationCase(RoundCase):
-    """A Hive of the dummy plan with one package; the machine settings name the providers."""
+    """A Plan of the dummy plan with one package; the machine settings name the providers."""
 
     providers = [provider("claude", "Coding", "Queen", "Build", "Deploy")]
 
     def setUp(self):
-        """The Apiary of these tests is one from before the switches, so its deploy is on without an entry."""
+        """The Project of these tests is one from before the switches, so its deploy is on without an entry."""
         super().setUp()
         self.conn.execute("UPDATE projects SET legacy_deploy=1")
 
     def hive(self, name="claude", status="IN_PROGRESS"):
-        """Write the plan and create its Hive on provider `name`."""
+        """Write the plan and create its Plan on provider `name`."""
         self.plan(status, [{"id": "P1", "title": "Work", "class": "medium"}])
         hives.create(self.conn, "testproj", REL, name, "123456")
         return self.env()
@@ -211,7 +211,7 @@ class ReadyAndReleaseGateTests(IntegrationCase):
     """Bzz ready, integration acquire and release enforce the steps in code."""
 
     def queen(self, cwd=None):
-        """Register the running Queen of the Hive, with her worktree when `cwd` is given."""
+        """Register the running Queen of the Plan, with her worktree when `cwd` is given."""
         fields = {"status": "running", "phase": "queen", "plan_path": REL, "pid": 4242, "provider": "claude"}
         runtime.upsert_agent(self.conn, "testproj", "Ada", {**fields, "cwd": cwd} if cwd else fields)
         patcher = mock.patch.dict(os.environ, {"BZZ_AGENT": "Ada"})
@@ -323,7 +323,7 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         self.hive()
         code, result = self.call(cli.cmd_compile_check)
         self.assertEqual(code, 1)
-        self.assertIn("not this Hive's Queen", result["error"])
+        self.assertIn("not this Plan's Queen", result["error"])
 
     def test_compile_check_does_nothing_when_switched_off(self):
         self.use(self.providers[0], compileCheck="npm test", compileCheckEnabled=False)
@@ -546,7 +546,7 @@ class OwnerCheckTextTests(IntegrationCase):
 
 
 class MigrationTests(unittest.TestCase):
-    """At the change existing Apiaries and providers keep today's behaviour; new ones get the defaults."""
+    """At the change existing Projects and providers keep today's behaviour; new ones get the defaults."""
 
     @staticmethod
     def old(**extra):
@@ -732,7 +732,7 @@ class RemoteAndLocationTests(unittest.TestCase):
 
 
 class SettingsPageTests(unittest.TestCase):
-    """The Apiary page shows every setting with its default and a translated label."""
+    """The Project page shows every setting with its default and a translated label."""
 
     def test_defaults_of_the_apiary_page(self):
         shown = gui_config.apiary_settings({})

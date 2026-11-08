@@ -90,7 +90,7 @@ def deep_merge(base: dict, over: dict) -> dict:
 
 # Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project.
 def build_settings(machine: dict, project_cfg: dict, legacy_deploy: bool = False) -> dict:
-    """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project. With legacy_deploy (an Apiary from before the switches) the default of deployEnabled is on."""
+    """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project. With legacy_deploy (a Project from before the switches) the default of deployEnabled is on."""
     defaults = {**DEFAULT_SETTINGS, "deployEnabled": True} if legacy_deploy else DEFAULT_SETTINGS
     merged = deep_merge(defaults, {k: v for k, v in machine.items() if k not in ("projects",)})
     over = {k: v for k, v in project_cfg.items() if k not in MACHINE_ONLY and not (k in ("language", "escalateAfter") and v == "")}
@@ -229,7 +229,7 @@ def row_provider(row: dict) -> str:
 
 
 def embedded_slots(conn) -> dict:
-    """Slots held by subagent Bees per provider: every embedded Bee whose end HaiveQueen has not closed yet (table embedded_bees, all Apiaries)."""
+    """Slots held by subagent Agents per provider: every embedded Agent whose end HaiveQueen has not closed yet (table embedded_bees, all Projects)."""
     if conn is None or not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedded_bees'").fetchone():
         return {}
     return {str(r[0]): int(r[1]) for r in conn.execute("SELECT provider, COUNT(*) FROM embedded_bees WHERE ended_at IS NULL GROUP BY provider")}
@@ -237,8 +237,8 @@ def embedded_slots(conn) -> dict:
 
 # Free slots per provider: subtract every running or starting agent process and every open subagent Bee; never below 0.
 def provider_free(providers: list, rows: list, conn=None) -> dict:
-    """Free slots per provider: subtract every running or starting agent process and, with `conn`, every subagent Bee that is still open
-    (a Bee inside its Queen holds a slot of her provider too); never below 0."""
+    """Free slots per provider: subtract every running or starting agent process and, with `conn`, every subagent Agent that is still open
+    (an Agent inside its Queen holds a slot of her provider too); never below 0."""
     free = {}
     embedded = embedded_slots(conn)
     for p in providers:

@@ -21,7 +21,7 @@ class AttemptCountingTest(RoundCase):
 
     # Run the real `bzz bee result` handler as the Queen and return the exit code.
     def result(self, package, outcome, attempt, *extra):
-        """Exit code of `bzz bee result` for one attempt."""
+        """Exit code of `bzz agent result` for one attempt."""
         args = cli.build_parser().parse_args(['bee', 'result', '--project', 'testproj', '--plan', REL, '--package', package,
                                               '--class', 'medium', '--outcome', outcome, '--attempt', attempt, *extra])
         with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), mock.patch.object(cli.config, 'load_config', return_value=self.machine), \

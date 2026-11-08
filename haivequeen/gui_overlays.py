@@ -1,14 +1,14 @@
 """The data of the overlays that open over the six tiles of the dashboard (U-6, U-7), and the lines they show.
 
 Every overlay shows the state now: the units its tile counts, each with the numbers of today. `build()` returns {tile key: {"rows": [...]}}; a tile
-without units has no rows and the window writes "none". The tokens of a Bee that runs as a subagent of its Queen are shown at the Bee only
+without units has no rows and the window writes "none". The tokens of an Agent that runs as a subagent of its Queen are shown at the Agent only
 (gui_data.hive_row takes them from the Queen's row), so every sum counts them once."""
 from . import runtime, scheduler as sch, startctx
 from . import overview
 from .i18n import N_, tr
 
 KEYS = ("apiaries", "hives", "queens", "bees", "io", "start")
-TITLES = {"apiaries": N_("APIARIES"), "hives": N_("HIVES"), "queens": N_("QUEENS"), "bees": N_("BUSY BEES"), "io": N_("TOTAL I/O"), "start": N_("START CONTEXT")}
+TITLES = {"apiaries": N_("PROJECTS"), "hives": N_("PLANS"), "queens": N_("QUEENS"), "bees": N_("BUSY AGENTS"), "io": N_("TOTAL I/O"), "start": N_("START CONTEXT")}
 
 
 def _tokens(agent) -> tuple:
@@ -59,9 +59,9 @@ def _row(block, name, pairs, group=None, date=None) -> dict:
 
 def start_rows(conn, providers) -> tuple:
     """(tile value, overlay rows) of the Start Context tile. The tile is {"saving", "n"}: the mean saving in percent over all stored measurements of all providers and
-    Apiaries (a minus number; None = no benchmark). The overlay rows are comparison rows only, in three blocks: 1 per provider (mean over its Apiaries, a provider without
-    benchmark is marked missing, last row 'All providers'), 2 per Apiary (mean over the providers measured there), 3 per provider within each Apiary (single measurements
-    with their date, `group` = the Apiary)."""
+    Projects (a minus number; None = no benchmark). The overlay rows are comparison rows only, in three blocks: 1 per provider (mean over its Projects, a provider without
+    benchmark is marked missing, last row 'All providers'), 2 per Project (mean over the providers measured there), 3 per provider within each Project (single measurements
+    with their date, `group` = the Project)."""
     pairs = startctx.pairs(conn)
     tile = {"saving": round(_mean([p["saving"] for p in pairs])) if pairs else None, "n": len(pairs)}
     names = list(dict.fromkeys(list(providers) + [p["provider"] for p in pairs]))
@@ -76,7 +76,7 @@ def start_rows(conn, providers) -> tuple:
 
 
 def build(conn, usage, agents_all, hive_rows, bees, apiaries, day, providers) -> tuple:
-    """(overlays, start tile rows). `day` = the start of today, `hive_rows` = the Hives the tile counts, `bees` = the rows of the Queens-and-Bees table."""
+    """(overlays, start tile rows). `day` = the start of today, `hive_rows` = the Plans the tile counts, `agents` = the rows of the Queens-and-Agents table."""
     today = [a for a in agents_all if str(a.get("started_at") or "") >= day.isoformat(timespec="seconds")]
     per_apiary = {}
     for a in today:
@@ -125,14 +125,14 @@ def lines(snap, key) -> list:
         out.append((tr("model | in / out | fresh in | cached in"), "dim"))
         out += [("%s | %s / %s | %s | %s" % (r["model"], _tok(r["tin"]), _tok(r["tout"]), _tok(r["fresh"]), _tok(r["cached"])), "text") for r in rows]
     elif key == "apiaries":
-        out.append((tr("Apiary | in / out today"), "dim"))
+        out.append((tr("Project | in / out today"), "dim"))
         out += [("%s | %s / %s" % (r["name"], _tok(r["tin"]), _tok(r["tout"])), "text") for r in rows]
     elif key == "hives":
-        out.append((tr("Hive | in / out today | per finished package"), "dim"))
+        out.append((tr("Plan | in / out today | per finished package"), "dim"))
         out += [("%s (%s) | %s / %s | %s" % (r["name"], r["apiary"], _tok(r["tin"]), _tok(r["tout"]),
                                               "%s / %s" % (_tok(r["per_package"][0]), _tok(r["per_package"][1])) if r["per_package"] else "–"), "text") for r in rows]
     elif key in ("queens", "bees"):
-        out.append((tr("Queen | Hive | run in / out") if key == "queens" else tr("Bee | Hive | run in / out"), "dim"))
+        out.append((tr("Queen | Plan | run in / out") if key == "queens" else tr("Agent | Plan | run in / out"), "dim"))
         out += [("%s | %s (%s) | %s / %s" % (r["name"], r["hive"], r["apiary"], _tok(r["tin"]), _tok(r["tout"])), "text") for r in rows]
     else:
         return [(HEADLINE, "gold"), ("   |   ".join(("",) + COLUMNS), "dim")] + [(_start_text(r), "dim" if r["missing"] else "text") for r in rows]

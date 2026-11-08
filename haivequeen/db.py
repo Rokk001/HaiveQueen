@@ -10,7 +10,7 @@ from pathlib import Path
 from . import platform as osplat
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 15   # 15: plan statuses SENT, PREPARING, QUEUED, RUNNING, WAITING, REVIEW and CANCELLED replace SUBMITTED, READY, IN_PROGRESS and REJECTED; 14: Apiaries from before the integration switches keep deploy on (projects.legacy_deploy); 13: remove the retired one-time Hive migration; 12: build measurements from the RAM of the build processes (peak_mb, parallel); 11: start contexts and start benchmarks; 10: plan status REJECTED; 9: plan status SUBMITTED; 8: verify field of a package; 7: persistent Hive state and integration queue
+SCHEMA_VERSION = 16
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -154,7 +154,7 @@ def rebuild_plans_table(conn: sqlite3.Connection, schema_text: str) -> None:
 
 # Tell the Apiaries from before the integration switches from later ones.
 def mark_existing_apiaries(conn: sqlite3.Connection) -> None:
-    """Add projects.legacy_deploy to a database from before the switches and set it on every Apiary in it; in one step, so an Apiary registered later is never marked."""
+    """Add projects.legacy_deploy to a database from before the switches and set it on every Project in it; in one step, so a Project registered later is never marked."""
     with transaction(conn):
         if "legacy_deploy" not in [r[1] for r in conn.execute("PRAGMA table_info(projects)")]:
             conn.execute("ALTER TABLE projects ADD COLUMN legacy_deploy INTEGER NOT NULL DEFAULT 0")
@@ -179,6 +179,21 @@ def migrate(conn: sqlite3.Connection) -> None:
                     if "duplicate column" not in str(exc):
                         raise
         mark_existing_apiaries(conn)
+        if version < 16:
+            # Freeze historical decisions once; answers that have not been processed remain open.
+            with transaction(conn):
+                # Re-read under the write lock: another process may have upgraded first.
+                migrated = conn.execute('PRAGMA user_version').fetchone()[0] >= 16
+                have = [r[1] for r in conn.execute('PRAGMA table_info(questions)')]
+                if 'owner_check_result' not in have:
+                    conn.execute('ALTER TABLE questions ADD COLUMN owner_check_result TEXT')
+                accepted = {'ok', 'okay', 'yes', 'good', 'all good', 'looks good', 'passt', 'gut', 'alles ok', 'alles gut', 'passt so', 'in ordnung', 'ja', 'ist ok'}
+                for row in conn.execute("SELECT q.id, q.answer FROM questions q WHERE q.status='answered' AND q.owner_check_result IS NULL AND (q.item='owner-check-answered' OR ((q.item='owner-check' OR q.item LIKE 'owner-check-%') AND EXISTS (SELECT 1 FROM plans p WHERE p.project=q.project AND p.path=q.plan_path AND p.status='DONE')))").fetchall() if not migrated else []:
+                    normalized = ' '.join(re.sub(r'[^\w ]', '', str(row[1] or '').lower()).split())
+                    conn.execute('UPDATE questions SET owner_check_result=? WHERE id=?', ('accepted' if normalized in accepted else 'rejected', row[0]))
+                if not migrated:
+                    conn.execute("UPDATE questions SET status='open' WHERE status='answered' AND owner_check_result IS NULL AND (item='owner-check' OR (item LIKE 'owner-check-%' AND item!='owner-check-answered'))")
+                conn.execute('PRAGMA user_version = 16')
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_archived ON agents (project, archived)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_kind ON providers_usage (kind, ts)")
         conn.execute("DELETE FROM kv WHERE key IN ('hives-migration','hives-migrated')")
@@ -301,10 +316,16 @@ def add_question(conn, project, plan_path, item, question, recommendation, statu
 
 
 # Record an answer and its decision for an eligible question.
+def owner_check_result(conn, qid):
+    """Read the stored decision without interpreting its free text or extending public question fields."""
+    row = conn.execute('SELECT owner_check_result FROM questions WHERE id=?', (qid,)).fetchone()
+    return row[0] if row else None
+
+
 def answer_question(conn, qid: int, text: str, by: str, apiary: bool = False) -> dict:
     """Answer an open question, or a pending fault by the coordinator, and log the decision.
 
-    With `apiary` the decision is stored without a plan: it then holds for every plan of this Apiary (never for another Apiary), and the same item is not asked again."""
+    With `project` the decision is stored without a plan: it then holds for every plan of this Project (never for another Project), and the same item is not asked again."""
     if by not in ("owner", "coordinator", "auto"):
         raise ValueError("answered_by must be owner, coordinator or auto")
     with transaction(conn):
@@ -313,6 +334,11 @@ def answer_question(conn, qid: int, text: str, by: str, apiary: bool = False) ->
             raise KeyError(f"unknown question {qid}")
         if row["status"] != "open" and not (row["status"] == "fault_check" and by == "coordinator"):
             raise KeyError(f"question {qid} is already answered")
+        item = row['item'] or ''
+        if item == 'owner-check' or (item.startswith('owner-check-') and item != 'owner-check-answered'):
+            conn.execute('UPDATE questions SET answer=?, answered_by=?, answered_at=? WHERE id=?', (text, by, now(), qid))
+            add_event(conn, row['project'], 'note', text, data={'question_id': qid, 'by': by})
+            return {'id': qid, 'project': row['project'], 'answered_by': by}
         conn.execute(
             "UPDATE questions SET status='answered', answer=?, answered_by=?, answered_at=? WHERE id=?",
             (text, by, now(), qid),

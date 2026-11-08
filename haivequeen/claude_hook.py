@@ -1,4 +1,4 @@
-"""Claude Code PreToolUse hook that allows a Queen's own-Hive bzz commands and its integration push.
+"""Claude Code PreToolUse hook that allows a Queen's own-Plan bzz commands and its integration push.
 
 The hook is run as `python -I claude_hook.py <policy.json>` and therefore uses only the standard library.
 It reads the hook event from stdin and prints an "allow" decision only for one simple command whose
@@ -196,10 +196,12 @@ def _value_ok(kind, value, policy, lookup=live_branch):
 
 
 def bzz_allowed(args, policy, lookup=live_branch):
-    """True when args are one accepted own-Hive bzz command: exact option names, each at most once, no extras."""
+    """True when args are one accepted own-Plan bzz command: exact option names, each at most once, no extras."""
     if not args:
         return False
     command, rest = args[0], args[1:]
+    if command == 'agent':
+        command = 'bee'  # The legacy command and its replacement share the same policy.
     action = rest[0] if rest and not rest[0].startswith("-") else None
     schema = SCHEMA.get((command, action))
     if schema is None:
@@ -255,7 +257,7 @@ def decide(event, policy, lookup=live_branch):
         return "HaiveQueen: push to the integration branch of this Queen"
     args = bzz_arguments(words, policy)
     if args is not None and bzz_allowed(args, policy, lookup):
-        return "HaiveQueen: own-Hive bzz command of this Queen"
+        return "HaiveQueen: own-Plan bzz command of this Queen"
     return None
 
 

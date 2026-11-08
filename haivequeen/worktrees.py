@@ -103,7 +103,7 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
                                         'a.project=w.project AND a.plan_path=w.plan_path AND a.package=w.package '
                                         'WHERE w.project=? AND w.plan_path=?', (agent.get('project'), agent.get('plan_path')))
                 if any(_within(row[0], path) for row in rows):
-                    return 'used by assigned Bee'
+                    return 'used by assigned Agent'
     status = _git(path, 'status', '--porcelain', '--untracked-files=all')
     if status.returncode:
         return 'git status failed'
@@ -192,7 +192,7 @@ def cmd_worktrees(args, conn):
     envs = scheduler.load_projects(conn, config.load_config())
     selected = [env for env in envs if not args.project or env.name == args.project]
     if args.project and not selected:
-        print(json.dumps({'ok': False, 'error': 'unknown Apiary'}))
+        print(json.dumps({'ok': False, 'error': 'unknown Project'}))
         return 1
     print(json.dumps({env.name: prune(env, dry=args.dry_run) for env in selected}, ensure_ascii=False))
     return 0
@@ -418,7 +418,7 @@ def _process_busy(path):
 
 # The branches of plans that are still being worked on.
 def _open_plan_branches(env, plan):
-    """Branches named by the other plans of the Apiary that are not finished; a branch of one of them, or below it, is never cleaned up with `plan`."""
+    """Branches named by the other plans of the Project that are not finished; a branch of one of them, or below it, is never cleaned up with `plan`."""
     from . import bees
     found = set()
     for other in runtime.list_plans(env.conn, env.name):
@@ -485,7 +485,7 @@ def _delete_plan_branches(env, plan, row, remote_name, heads, local, checked_out
 
 # Find the integrated plans and clean up their branches.
 def _delete_branches_locked(env):
-    """Check every plan whose newest queue row is integrated and whose Hive knows that row; the integration branch is read fresh from the remote first."""
+    """Check every plan whose newest queue row is integrated and whose Plan knows that row; the integration branch is read fresh from the remote first."""
     result = {'deleted': [], 'kept': []}
     integration_branch = str(env.settings.get('integrationBranch') or 'main')
     remote_name = str(env.settings.get('remoteName') or 'origin')
@@ -560,7 +560,7 @@ def delete_integrated_branches(env):
 
 # The cleanup after an integration and in every round.
 def cleanup(env):
-    """Run the cleanup steps the Apiary switched on and log each result; a failing step never stops the next one or the caller."""
+    """Run the cleanup steps the Project switched on and log each result; a failing step never stops the next one or the caller."""
     import json
     if env.settings.get('deleteFinishedWorktrees', True):
         try:

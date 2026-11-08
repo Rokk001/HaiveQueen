@@ -3,7 +3,7 @@
 `file_fault` is the only place that creates these questions. Their plan_path is the fixed text `HQ-FAULTS` (there is no plan file); the round starts
 no triage and no work agent for them. Confirmed or unresolved faults are opened for the coordinator. `check_round` detects the fault kinds:
 no_start (startable packages and 0 starts for 2 rounds in a row), runner_vanished, agent_no_result, loop_vanished (unexpected loop end), self_update_rollback and self_update_pane.
-A fault of an Apiary goes into the inbox of that Apiary. A fault that belongs to no Apiary (loop_vanished and the self-update faults) is never an inbox
+A fault of a Project goes into the inbox of that Project. A fault that belongs to no Project (loop_vanished and the self-update faults) is never an inbox
 question: `file_global_fault` shows it in the status panel of the GUI and as a desktop message.
 """
 import json
@@ -24,7 +24,7 @@ GLOBAL_SHOWN_HOURS = 24          # a global fault without recovery evidence is s
 
 # File one fault for automatic checking or immediate review when confirmed.
 def file_fault(conn, project, kind, text):
-    """File one fault of an Apiary for automatic checking; deduplicate by kind and day. A fault of the program itself (GLOBAL_KINDS) is shown instead (file_global_fault)."""
+    """File one fault of a Project for automatic checking; deduplicate by kind and day. A fault of the program itself (GLOBAL_KINDS) is shown instead (file_global_fault)."""
     if kind in GLOBAL_KINDS:
         return file_global_fault(conn, kind, text)
     today = db.now()[:10]
@@ -35,7 +35,7 @@ def file_fault(conn, project, kind, text):
 
 
 def file_global_fault(conn, kind, text, notify=None):
-    """Show a fault that belongs to no Apiary in the GUI status panel and as a desktop message, never as an inbox question; one per kind and day.
+    """Show a fault that belongs to no Project in the GUI status panel and as a desktop message, never as an inbox question; one per kind and day.
 
     Returns the stored record, or None for a repeat on the same day."""
     from . import desktop
@@ -114,7 +114,7 @@ def _check_agents(env) -> None:
         else:
             kind, what = "agent_no_result", "it ended (%s) without a final result" % a["status"]
         if not first:
-            file_fault(conn, env.name, kind, "Agent %s of Apiary %s: %s." % (a["name"], env.name, what))
+            file_fault(conn, env.name, kind, "Agent %s of Project %s: %s." % (a["name"], env.name, what))
     runtime.kv_set(conn, env.name, SEEN_KEY, json.dumps(sorted(seen)[-500:]))
 
 
@@ -131,7 +131,7 @@ def _check_idle(env, started: int, can_start: bool) -> None:
     n = int(runtime.kv_get(conn, env.name, IDLE_KEY) or 0) + 1 if stuck else 0
     runtime.kv_set(conn, env.name, IDLE_KEY, str(n))
     if n >= IDLE_ROUNDS:
-        file_fault(conn, env.name, "no_start", "Apiary %s: %d rounds in a row with startable packages and no agent started." % (env.name, n))
+        file_fault(conn, env.name, "no_start", "Project %s: %d rounds in a row with startable packages and no agent started." % (env.name, n))
 
 
 # Resolve open fault reports only when subsequent observations establish recovery.
@@ -152,14 +152,14 @@ def _resolve_open(env, started: int, now: datetime) -> None:
         kind, answer, evidence, confirmed = q["item"], None, None, False
         text = q["question"] or ""
         if kind == "no_start" and any(("%s %s:" % (label, env.name)) in text for label in ("Apiary", "Project")):
-            evidence = "Last rounds of Apiary %s: %s" % (env.name, history)
+            evidence = "Last rounds of Project %s: %s" % (env.name, history)
             if len(history) == 2 and all(ok and db.parse_time(t) > created for t, ok in history):
-                answer = "The last two rounds of Apiary %s both started agents (%s and %s)." % (env.name, history[0][0], history[1][0])
+                answer = "The last two rounds of Project %s both started agents (%s and %s)." % (env.name, history[0][0], history[1][0])
         elif kind in ("runner_vanished", "agent_no_result"):
-            match = re.search(r"Agent (.+?) of (?:Apiary|project) (.+?):", text)
+            match = re.search(r"Agent (.+?) of (?:Apiary|Project|project) (.+?):", text)
             if match and match.group(2) == env.name:
                 agents = env.agents("all")
-                evidence = "No later done run found for agent %s of Apiary %s." % (match.group(1), env.name)
+                evidence = "No later done run found for agent %s of Project %s." % (match.group(1), env.name)
                 original = next((a for a in agents if a.get("name") == match.group(1)), None)
                 for a in agents:
                     same_work = a.get("name") == match.group(1) or (original and original.get("package") and a.get("plan_path") == original.get("plan_path") and a.get("package") == original.get("package") and a.get("phase") == original.get("phase"))
@@ -176,7 +176,7 @@ def _resolve_open(env, started: int, now: datetime) -> None:
         elif kind in ("self_update_rollback", "self_update_pane"):
             evidence = "Self-update fault requires review: %s" % text
         if not answer and not evidence and q["status"] == "fault_check" and kind in KINDS + ("loop_vanished",) and now - created >= timedelta(minutes=60):
-            owner = (re.search(r"Agent .+? of (?:Apiary|project) (.+?):", text) if kind in ("runner_vanished", "agent_no_result")
+            owner = (re.search(r"Agent .+? of (?:Apiary|Project|project) (.+?):", text) if kind in ("runner_vanished", "agent_no_result")
                      else re.search(r"(?:Apiary|Project) (.+?):", text) if kind == "no_start" else None)
             project = owner.group(1) if owner else None
             if not project or project == env.name or not _project_known(conn, project):

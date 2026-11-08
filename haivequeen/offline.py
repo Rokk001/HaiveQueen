@@ -1,7 +1,7 @@
 """Offline providers: a provider whose agent ended with a 5xx or a connection error is offline until a short check of it succeeds.
 
 The state lives in the global kv key `provider-offline` ({provider name: {since, reason, checked}}), so the agent runner (another process), the loop and the
-dashboard see the same state. An offline provider gets no new Queen and no new Bee and no retry (`apply_state` sets its slots to 0 in the provider list, the
+dashboard see the same state. An offline provider gets no new Queen and no new Agent and no retry (`apply_state` sets its slots to 0 in the provider list, the
 same way a disabled provider is treated); agents that run keep running. Every `providerRecheckMinutes` (config.toml, default 5) HaiveQueen checks an offline
 provider: a Local LLM with its connection test, a Subscription or API key provider with a short call of its CLI; when that works the provider is online at once.
 A rate limit does not make a provider offline (it keeps its own handling).

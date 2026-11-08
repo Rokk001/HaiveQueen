@@ -86,7 +86,7 @@ class PlanControlTests(RoundCase):
         self.assertEqual(len(self.live()), 1)
 
     def test_stop_ends_queen_and_bees_and_pauses(self):
-        """Stop ends the Queen and her Bees, sets PAUSED and keeps hive, packages and the earlier status."""
+        """Stop ends the Queen and her Bees, sets PAUSED and keeps plan, packages and the earlier status."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         self.agent("Bee1", plan_path=REL, phase="bee", status="running", pid=401)

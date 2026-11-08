@@ -277,7 +277,7 @@ def reset_cut_assignments(conn, project, plan):
 
 def _recover_cut(conn, project, plan, plan_text):
     """Inside a transaction: an older QUEUED plan without a cut record gets its current header as record only when no Queen or
-    Bee of this generation has started yet, so no agent can have changed the header after the owner wrote it."""
+    Agent of this generation has started yet, so no agent can have changed the header after the owner wrote it."""
     if _cut_record(kv_get(conn, project, CUT_KEY + plan)) is not None:
         return False
     since = kv_get(conn, project, CUT_RESET_KEY + plan) or ""
@@ -403,7 +403,7 @@ def _workspace(conn, project, override=None) -> Path:
         return Path(override)
     row = conn.execute("SELECT workspace FROM projects WHERE name=?", (project,)).fetchone()
     if row is None or not row[0]:
-        raise CmdError(f"Apiary {project} has no workspace (register it or pass --workspace)")
+        raise CmdError(f"Project {project} has no workspace (register it or pass --workspace)")
     return Path(row[0])
 
 
@@ -556,7 +556,7 @@ def queue_upsert(conn, project, branch, tip=None, plan=None, status=None, note=N
 # List visible questions, or explicitly select a particular status.
 def list_questions(conn, project=None, status=None, plan=None, item=None) -> list:
     """List visible questions, or explicitly select a status, filtered by project, plan and item."""
-    sql, args = "SELECT * FROM questions WHERE 1=1", []
+    sql, args = "SELECT id,project,plan_path,item,question,recommendation,status,answer,answered_by,created_at,answered_at FROM questions WHERE 1=1", []
     if not status:
         sql += " AND status != 'fault_check'"
     for col, val in (("project", project), ("status", status), ("plan_path", plan), ("item", item)):

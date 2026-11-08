@@ -1,11 +1,11 @@
-"""Regression tests for technical Hive ends."""
+"""Regression tests for technical Plan ends."""
 import unittest
 from bzztest import RoundCase, runtime, REL
 from haivequeen import db, hives, reattach
 
 
 class TechnicalEndTests(RoundCase):
-    """Technical ends are interrupted and never stop the Hive."""
+    """Technical ends are interrupted and never stop the Plan."""
 
     def test_reattach_marks_queen_and_bee(self):
         """Vanished processes are explicitly recorded as interrupted."""
@@ -39,7 +39,7 @@ class TechnicalEndTests(RoundCase):
         self.assertEqual(hives.get(self.conn, "testproj", REL)["state"], "waiting")
 
     def test_matching_bee_failure_is_taken_back_once(self):
-        """Only a vanished Bee's recorded result is removed from its class."""
+        """Only a vanished Agent's recorded result is removed from its class."""
         from haivequeen import bees
         self.agent("Bea", phase="bee", package="P1", status="failed", last_line="runner process vanished", **{"class": "medium"})
         bees.ensure_attempts(self.conn)
@@ -72,7 +72,7 @@ class TechnicalEndTests(RoundCase):
         self.assertEqual(hives.get(self.conn, "testproj", REL)["state"], "answer")
 
     def test_three_vanished_bees_raise_one_fault(self):
-        """Three lost Bee processes raise one fault without counting a failure."""
+        """Three lost Agent processes raise one fault without counting a failure."""
         for name in ("Bea", "Bia", "Bo"):
             self.agent(name, phase="bee", package="P1", status="failed", last_line="runner process vanished")
         hives.technical_start_faults(self.conn, "testproj")
@@ -86,7 +86,7 @@ class TechnicalEndTests(RoundCase):
         hives.repair_technical_ends(self.conn, "testproj")
         self.assertEqual(runtime.list_agents(self.conn, "testproj", "all")[0].get("interrupted"), "vanished")
     def test_uncounted_technical_signal_does_not_remove_other_failure(self):
-        """A Bee with an uncounted signal never reduces another Bee's count."""
+        """An Agent with an uncounted signal never reduces another Agent's count."""
         from haivequeen import bees
         self.agent("Bea", phase="bee", package="P1", status="failed", last_line="runner process vanished", **{"class": "medium"})
         bees.ensure_attempts(self.conn)
@@ -97,7 +97,7 @@ class TechnicalEndTests(RoundCase):
         self.assertEqual(bees.failure_count(self.conn, "testproj", REL, "P1", "medium"), 1)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM bee_attempt_signals").fetchone()[0], 0)
     def test_technical_end_precedes_owner_wait_report(self):
-        """A technical end does not park the Hive on an old owner-wait report."""
+        """A technical end does not park the Plan on an old owner-wait report."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running")
@@ -107,7 +107,7 @@ class TechnicalEndTests(RoundCase):
         self.round()
         self.assertEqual(len([a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen" and a["status"] == "running"]), 1)
     def test_restart_marks_unlaunched_starting_queen(self):
-        """A Queen lost during startup is interrupted on Beekeeper restart."""
+        """A Queen lost during startup is interrupted on Orchestrator restart."""
         self.agent("Ada", phase="queen", status="starting", pid=None)
         reattach.reattach(self.conn, "testproj", lambda pid: False)
         self.assertEqual(self.ag("Ada")["status"], "failed")
@@ -119,6 +119,6 @@ class TechnicalEndTests(RoundCase):
         bees.record_attempt(self.conn, "testproj", REL, "P1", "medium", "failed", "b", error="same error")
         self.assertEqual(bees.failure_count(self.conn, "testproj", REL, "P1", "medium"), 1)
     def test_prompt_uses_process_bee_name_for_attempt(self):
-        """Process Bee results can be matched to their agent after a crash."""
+        """Process Agent results can be matched to their agent after a crash."""
         from haivequeen import bees
-        self.assertIn('exact Bee name as the attempt name', bees.queen_instructions('medium', 3, 3, 300000))
+        self.assertIn('exact Agent name as the attempt name', bees.queen_instructions('medium', 3, 3, 300000))

@@ -149,11 +149,11 @@ class LiveWindowTest(unittest.TestCase):
 
     def test_bee_row_opens_the_bee(self):
         """After selecting a Bee row, Enter opens that Bee's window."""
-        self.write_live("ODP__bee", "White" + TAB + "12:01 bee works\n")
+        self.write_live("ODP__bee", "White" + TAB + "12:01 agent works\n")
         self.win.select(("bees", 1))   # row 0 is the Queen, her Bee hangs below
         self.win.open_live()
         self.root.update()
-        self.assertIn("12:01 bee works", self.shown(self.win.live[("ODP", "ODP__bee")]))
+        self.assertIn("12:01 agent works", self.shown(self.win.live[("ODP", "ODP__bee")]))
 
     def test_double_click_on_a_row_opens_its_window(self):
         """A double click inside the registered area of the first Hive row opens the live window."""

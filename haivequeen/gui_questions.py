@@ -13,13 +13,13 @@ REFRESH_MS = 5000
 
 # Describe one question as a list line.
 def line_text(q) -> str:
-    """One list line of a question: id, Apiary, Hive and item."""
+    """One list line of a question: id, Project, Plan and item."""
     return "#%s  %s | %s | %s" % (q["id"], q["project"], gui_data.hive_name(q["plan_path"] or ""), q["item"] or "")
 
 
 # Read the questions that wait for an answer.
 def open_questions(conn) -> list:
-    """The open questions of all Apiaries, oldest first."""
+    """The open questions of all Projects, oldest first."""
     return runtime.list_questions(conn, status="open")
 
 
@@ -31,17 +31,16 @@ def plan_packages(conn, project, plan_path) -> list:
 
 # Store the owner's answer and mark the rejected steps.
 def answer(conn, qid, text, rejected=(), apiary=False) -> None:
-    """Answer question `qid` as the owner and mark the packages in `rejected` as rejected.
+    """Answer an ordinary question and mark rejected packages; owner-check text is only a note.
 
-    Raises ValueError when the text is empty or says ok while steps are marked rejected; db.answer_question raises KeyError for a question that is already answered
-    (nothing is marked then)."""
+    Empty text raises ValueError; unknown or closed questions raise KeyError before packages change."""
     text = (text or "").strip()
     if not text:
         raise ValueError(tr("Write an answer first."))
-    if rejected and hives.owner_check_ok(text):
-        raise ValueError(tr("The answer says ok, but steps are marked as rejected."))
-    row = conn.execute("SELECT project, plan_path FROM questions WHERE id=?", (qid,)).fetchone()
+    row = conn.execute("SELECT project, plan_path, item FROM questions WHERE id=?", (qid,)).fetchone()
     db.answer_question(conn, qid, text, "owner", apiary=bool(apiary))
+    if row['item'] == 'owner-check' or str(row['item'] or '').startswith('owner-check-'):
+        return  # Free text is a note; package rejection requires an explicit decision.
     for package in rejected:
         bees.set_package_state(conn, row["project"], row["plan_path"], package, "rejected", "owner")
 
@@ -83,7 +82,7 @@ class QuestionsWindow:
         self.reply = tk.Text(main, height=7, wrap="word", font=(mono, 10))
         self.reply.pack(fill="x", pady=(2, 0))
         self.apiary_var = tk.BooleanVar(value=False)
-        self.apiary_box = tk.Checkbutton(main, text=tr("This answer applies to the whole Apiary"), variable=self.apiary_var, anchor="w", font=(mono, 10))
+        self.apiary_box = tk.Checkbutton(main, text=tr("This answer applies to the whole Project"), variable=self.apiary_var, anchor="w", font=(mono, 10))
         self.apiary_box.pack(fill="x", pady=(0, 6))
         self.steps = tk.LabelFrame(main, text=tr("Not accepted steps (marked rejected, the Queen reworks them)"), font=(mono, 10))
         self.steps.pack(fill="x", pady=(0, 6))

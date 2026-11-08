@@ -1,7 +1,7 @@
 """Tests for provider choice (Bee routing) with the quota reserve.
 
 A Bee of a Queen whose provider runs Bees as embedded subagents takes a free local provider first, else stays on the Queen's provider; only when both have no
-free slot it goes to another provider as for any other Bee. Every other Bee (bee mode process) is placed by normal provider choice like a Queen: class, capabilities, free
+free slot it goes to another provider as for any other Bee. Every other Bee (agent mode process) is placed by normal provider choice like a Queen: class, capabilities, free
 slot, best quota reserve from both usage windows; a local provider without limit comes first. A stored package assignment keeps only the class; the provider
 is chosen again at every start of a process Bee. An escalated package takes, among the providers it may use, the one with the best reserve."""
 import json

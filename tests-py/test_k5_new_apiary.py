@@ -1,4 +1,4 @@
-"""K5: an Apiary from before the integration switches keeps deploy on, a new one starts with it off, on every way to register it; step packages need a Bee or the owner."""
+"""K5: a Project from before the integration switches keeps deploy on, a new one starts with it off, on every way to register it; step packages need an Agent or the owner."""
 import argparse
 import io
 import json
@@ -36,12 +36,12 @@ class ApiaryCase(unittest.TestCase):
         return conn
 
     def deploy(self, conn, name):
-        """The deploy switch of the Apiary as the round and the gates read it."""
+        """The deploy switch of the Project as the round and the gates read it."""
         env = next(e for e in scheduler.load_projects(conn, {}) if e.name == name)
         return integration.switches(env.settings)["deploy"]
 
     def old_database(self, *names):
-        """A database as schema version 13 left it, with the Apiaries `names` on the project folder."""
+        """A database as schema version 13 left it, with the Projects `names` on the project folder."""
         path = self.base / "old.db"
         conn = db.connect(path)
         for name in names:
@@ -53,7 +53,7 @@ class ApiaryCase(unittest.TestCase):
 
 
 class ExistingApiaryTests(ApiaryCase):
-    """At the change existing Apiaries keep compile check, build and deploy."""
+    """At the change existing Projects keep compile check, build and deploy."""
 
     def test_migration_keeps_deploy_on_for_an_apiary_of_the_old_database(self):
         conn = db.connect(self.old_database("old"))
@@ -105,7 +105,7 @@ class ExistingApiaryTests(ApiaryCase):
 
 
 class NewApiaryTests(ApiaryCase):
-    """A new Apiary has compile check and build on and deploy off, however it was registered."""
+    """A new Project has compile check and build on and deploy off, however it was registered."""
 
     def test_fresh_database_marks_nothing(self):
         conn = self.open_db()
@@ -155,7 +155,7 @@ class NewApiaryTests(ApiaryCase):
 
 
 class SettingsWindowTests(ApiaryCase):
-    """The settings window registers a project added on its page and writes the switches of an Apiary without a file."""
+    """The settings window registers a project added on its page and writes the switches of a Project without a file."""
 
     def setUp(self):
         super().setUp()
@@ -195,7 +195,7 @@ class StepPackageCloseTests(IntegrationCase):
     """A step package is not closed by a word of the Queen alone."""
 
     def queen(self):
-        """Register the running Queen of the Hive."""
+        """Register the running Queen of the Plan."""
         runtime.upsert_agent(self.conn, "testproj", "Ada", {"status": "running", "phase": "queen", "plan_path": REL, "pid": 4242, "provider": "claude"})
         patcher = mock.patch.dict(os.environ, {"BZZ_AGENT": "Ada"})
         patcher.start()
@@ -213,7 +213,7 @@ class StepPackageCloseTests(IntegrationCase):
         return self.call(cli.cmd_package, package=package, state="done", reason="")
 
     def result(self, package):
-        """Call bzz bee result with the outcome succeeded."""
+        """Call bzz agent result with the outcome succeeded."""
         return self.call(cli.cmd_bee, action="result", package=package, cls="medium", attempt="a1", outcome="succeeded", open_requirements="[]", error="", blocked_by="", blocked_ref="",
                          provider="", name="", task="", steps="[]", paths="[]", rules="[]", cwd="", no_subagents=False)
 
@@ -234,7 +234,7 @@ class StepPackageCloseTests(IntegrationCase):
         integration.sync(env, REL, "claude")
         code, result = self.result(integration.BUILD)
         self.assertEqual(code, 1)
-        self.assertIn("no Bee was started", result["error"])
+        self.assertIn("no Agent was started", result["error"])
         self.assertEqual(integration.open_steps(env, REL), [integration.BUILD])
 
     def test_result_of_the_started_bee_closes_the_step(self):

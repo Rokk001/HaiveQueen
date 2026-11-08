@@ -1,4 +1,4 @@
-"""The integration steps of an Apiary: the switches decide which steps run, the capabilities decide who does them.
+"""The integration steps of a Project: the switches decide which steps run, the capabilities decide who does them.
 
 A switched-on Build or Deploy step the Queen's provider cannot do becomes a package for a provider that can (ids in plans.STEP_PACKAGES); the rows live
 beside the packages of the plan file and survive reading it again. With no such provider the owner is asked once. `bzz ready` waits for the Build package,
@@ -23,7 +23,7 @@ COMPILE_TIMEOUT = 3600   # seconds a compile check may run before it counts as f
 
 # The three switches of an Apiary.
 def switches(settings):
-    """{compileCheck, build, deploy} of the settings (scheduler.build_settings fills in the defaults, also for an Apiary from before the switches)."""
+    """{compileCheck, build, deploy} of the settings (scheduler.build_settings fills in the defaults, also for a Project from before the switches)."""
     return {"compileCheck": bool(settings.get("compileCheckEnabled", True)), "build": bool(settings.get("buildEnabled", True)),
             "deploy": bool(settings.get("deployEnabled", False))}
 
@@ -84,25 +84,25 @@ def open_steps(env, plan, capabilities=("Build", "Deploy")):
 
 # Who may close a step package.
 def done_refusal(conn, project, plan, package):
-    """Why the Queen may not set a step package done, or '': a Bee result closes it, by hand only after an answer of the owner to its question."""
+    """Why the Queen may not set a step package done, or '': an Agent result closes it, by hand only after an answer of the owner to its question."""
     from . import bees
     if package not in plans.STEP_PACKAGES.values() or bees.package_done(conn, project, plan, package):
         return ""
     if any(q.get("answered_by") != "auto" for q in runtime.list_questions(conn, project, status="answered", plan=plan, item=package)):
         return ""
-    return "integration step package %s is closed by the result of its Bee or after an answer of the owner; start a Bee for it" % package
+    return "integration step package %s is closed by the result of its Agent or after an answer of the owner; start an Agent for it" % package
 
 
 # Whether a Bee was started for a step package.
 def result_refusal(conn, project, plan, package):
-    """Why a succeeded result of a step package is refused, or '': it needs a started Bee."""
+    """Why a succeeded result of a step package is refused, or '': it needs a started Agent."""
     from . import bees
     if package not in plans.STEP_PACKAGES.values() or bees.package_done(conn, project, plan, package):
         return ""
     bees.ensure_attempts(conn)
     if conn.execute("SELECT 1 FROM bee_assignments WHERE project=? AND plan_path=? AND package=?", (project, plan, package)).fetchone():
         return ""
-    return "no Bee was started for integration step package %s; start one with bzz bee start" % package
+    return "no Agent was started for integration step package %s; start one with bzz agent start" % package
 
 
 # A new integration needs its steps again.
@@ -208,7 +208,7 @@ def start_text(env, plan, provider_name):
     text = "Then follow this order. " + " ".join("%d. %s" % (i + 1, step) for i, step in enumerate(order))
     text += " If only open owner questions remain, write a handoff and end your final report with WAITING_FOR_OWNER."
     if not on["compileCheck"]:
-        text += " The compile check is switched off for this Apiary: do not run it."
+        text += " The compile check is switched off for this Project: do not run it."
     text += " " + _step_sentence("Build", BUILD, states["Build"], "before bzz ready", "bzz ready is refused")
     deploy_held = "the end of the plan is held back" if states["Deploy"] == "owner" else "bzz integration release and the end of the plan are held back"   # the place is not held for an owner answer
     text += " " + _step_sentence("Deploy", DEPLOY, states["Deploy"], "after you integrated and before you release the integration place", deploy_held)
@@ -222,11 +222,11 @@ def start_text(env, plan, provider_name):
 def _step_sentence(capability, package, state, when, held):
     """What the Queen does for a step in the given state."""
     if state == "off":
-        return "The %s step is switched off for this Apiary: do not perform it." % capability
+        return "The %s step is switched off for this Project: do not perform it." % capability
     if state == "queen":
         return "The %s step is switched on and it is yours: do it yourself %s, according to the integration rules of the project." % (capability, when)
     if state == "package":
-        return ("The %s step is switched on but your provider lacks %s: it is package %s of this plan, for a provider that has %s. Start a Bee for it with bzz bee start %s; until it is done %s."
+        return ("The %s step is switched on but your provider lacks %s: it is package %s of this plan, for a provider that has %s. Start an Agent for it with bzz agent start %s; until it is done %s."
                 % (capability, capability, package, capability, when, held))
     return ("The %s step is switched on but no configured provider has %s: the owner has been asked (item %s); until a provider has it, the step is switched off or his answer lets you set package %s done, %s. "
             "Go on with everything else, then write a handoff and end your final report with WAITING_FOR_OWNER." % (capability, capability, package, package, held))
@@ -248,7 +248,7 @@ def configuration(env, plan):
         config["steps"] = sch.expand_template(str(configured), {**routine.base_values(env), "plan": plan})
         off = [name for name, enabled in (("compile check", on["compileCheck"]), ("build", on["build"]), ("deploy", on["deploy"])) if not enabled]
         if off:
-            config["steps"] += " The Apiary switches decide over this text: %s switched off, leave out." % ", ".join(off)
+            config["steps"] += " The Project switches decide over this text: %s switched off, leave out." % ", ".join(off)
     return config
 
 
@@ -258,5 +258,5 @@ def owner_topics_text(env):
     topics = [str(t).strip() for t in (env.settings.get("ownerTopics") or []) if str(t).strip()]
     if not topics:
         return ""
-    return ("Questions on these topics of this Apiary always go to the owner with bzz ask, even a technical question you could decide yourself; this wins over your own triage: "
+    return ("Questions on these topics of this Project always go to the owner with bzz ask, even a technical question you could decide yourself; this wins over your own triage: "
             + json.dumps(topics, ensure_ascii=False))

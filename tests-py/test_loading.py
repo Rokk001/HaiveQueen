@@ -1,4 +1,4 @@
-"""What Queen and Bee load: the complete project rules (checked-in instruction files, upstream ones only when set) plus their own parts."""
+"""What Queen and Agent load: the complete project rules (checked-in instruction files, upstream ones only when set) plus their own parts."""
 import subprocess
 import tempfile
 import unittest
@@ -136,7 +136,7 @@ class BeeLoadTest(RoundCase):
             started = bees.start_process(self.env(), REL, "P1", "Ada", "heavy", "do first", ["one"], ["source.py"], ["ONLY-THIS-RULE"], cwd=str(bee_wt))
         self.assertTrue(started)
         text = (self.env().run_dir("Ada") / "prompt.md").read_text(encoding="utf-8-sig")
-        self.assertIn("You are a Bee", text)
+        self.assertIn("You are an Agent", text)
         self.assertIn("do first", text)
         for part in ("RULE-AGENTS", "RULE-CLAUDE"):
             self.assertIn(part, text)

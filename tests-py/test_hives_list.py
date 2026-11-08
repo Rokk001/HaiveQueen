@@ -34,7 +34,7 @@ class ListTests(RoundCase):
     def test_a_plan_with_a_hive_is_marked(self):
         """Only a plan that had a Hive says so."""
         self.plan("READY", PKG)
-        write_plan(self.repo / OTHER, "DRAFT", [], "No hive")
+        write_plan(self.repo / OTHER, "DRAFT", [], "No plan")
         self.round()
         rows = {r["plan_path"]: r["has_hive"] for r in gui_hives.plan_rows(self.conn)}
         self.assertTrue(rows[REL])
@@ -161,7 +161,7 @@ class WindowTests(unittest.TestCase):
     def test_footer_has_a_hives_button(self):
         """The footer names the button and the Dashboard opens the list through open_hives."""
         self.assertTrue(callable(gui.Dashboard.open_hives))
-        self.assertIn('tr("hives"), self.open_hives', inspect.getsource(gui.Dashboard.footer))
+        self.assertIn('tr("plans"), self.open_hives', inspect.getsource(gui.Dashboard.footer))
 
     def test_open_hives_creates_the_window_once(self):
         """A second click brings the open window to the front."""

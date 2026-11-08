@@ -95,7 +95,7 @@ class FitTest(unittest.TestCase):
 
     # U1: the Queen row shows the crown of the Queens tile, Bee rows the bee icon.
     def test_queen_row_uses_the_crown_icon(self):
-        """In the Queens and Bees table the Queen row is drawn with the row_queen icon and every Bee row with the row_icon bee icon."""
+        """In the Queens and Bees table the Queen row is drawn with the row_queen icon and every Bee row with the row_icon agent icon."""
         win = self.open(1660, 950)
         drawn = []
         real = win.pic
@@ -117,7 +117,7 @@ class FitTest(unittest.TestCase):
         rows = self.rows_of(win, 285, 301, 10, 1035)
         cells = next(iter(rows.values()))
         sub = next(c for c in cells if c[2].startswith("| "))
-        self.assertTrue(sub[2].startswith("| 1 hives") and not sub[2].endswith("…"), sub[2])
+        self.assertTrue(sub[2].startswith("| 1 plans") and not sub[2].endswith("…"), sub[2])
         later = [c for c in cells if c[0] > sub[0]]
         self.assertTrue(all(sub[1] <= c[0] + 0.5 for c in later))
 
@@ -129,7 +129,7 @@ class FitTest(unittest.TestCase):
         cells = next(iter(rows.values()))
         subs = [c for c in cells if c[2].startswith("| ")]
         for sub in subs:
-            self.assertTrue(sub[2] in ("| 1 hives across 1 apiaries", "| 1 hives, 1 apiaries") or sub[2].endswith("…"), sub[2])
+            self.assertTrue(sub[2] in ("| 1 plans across 1 projects", "| 1 plans, 1 projects") or sub[2].endswith("…"), sub[2])
             self.assertTrue(all(sub[1] <= c[0] + 0.5 for c in cells if c[0] > sub[0]))
 
 

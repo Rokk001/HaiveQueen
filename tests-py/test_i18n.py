@@ -19,7 +19,7 @@ TRANSLATED_FILES = GUI_FILES + ("desktop.py", "overview.py", "buildjobs.py", "st
 LOG_CALLS = {"log": 0, "event": 0, "say": 0, "refuse": 2, "not_started": 2, "set_stalled": 2, "append_event": 2, "add_event": 3, "_transition": 4}   # calls that store a line: index of its text
 NOT_LOG_TEXT = {"Test milestone 1: this is a long line that should wrap in a narrow window so that the line wrapping becomes visible.",   # only with the fake agent of the tests
                 # the example cannot show the real line (a field holds a head, a word or a list); test_lines_built_from_a_variable and the round line test use real ones
-                "x1, build process RAM peak=1 MB, use per job=1 MB (median 1 MB)", "x1, no build process seen, nothing stored", "question 1 waits for x1", "round done: 1 Queen(s) startedx1", 'Hive state "x1"x1'}
+                "x1, build process RAM peak=1 MB, use per job=1 MB (median 1 MB)", "x1, no build process seen, nothing stored", "question 1 waits for x1", "round done: 1 Queen(s) startedx1", 'Plan state "x1"x1'}
 CONTROL = "[" + chr(0) + "-" + chr(8) + chr(11) + chr(12) + chr(14) + "-" + chr(31) + "]"
 NOT_TEXT = {"bzz", "HaiveQueen", "Rokk001/HaiveQueen", "OK", "CPU", "RAM", "Disk", "cli", "v%s  |  bzz  |  "}   # names, the same in every language
 
@@ -159,7 +159,7 @@ class LanguageChoiceTest(unittest.TestCase):
     def test_unknown_text_and_fields_pass_through(self):
         self.write('language = "German"\n')
         self.assertEqual(i18n.tr("not in the catalog"), "not in the catalog")
-        self.assertEqual(i18n.tr("Stop bee %s (%s)?", "Ada", "K1"), "Bee Ada (K1) stoppen?")
+        self.assertEqual(i18n.tr("Stop agent %s (%s)?", "Ada", "K1"), "Agent Ada (K1) stoppen?")
 
     def test_desktop_uses_the_machine_language_also_for_error_prefix_and_shortcut_texts(self):
         self.write('language = "German"\n')
@@ -178,7 +178,7 @@ class GermanTextsTest(unittest.TestCase):
     def test_hive_status_words(self):
         self.assertEqual(gui_data.status_text({"state": "queenless"}), "Ohne Queen")
         self.assertEqual(gui_data.status_text({"state": "answer", "pending_questions": [3]}), "Wartet auf Antwort (#3)")
-        self.assertEqual(gui_data.blocker_text("Hive limit 2 of something"), "Hive-Limit 2 erreicht")
+        self.assertEqual(gui_data.blocker_text("Plan limit 2 of something"), "Plan-Limit 2 erreicht")
         self.assertEqual(gui_data.blocker_text("free RAM 1.00 GB is below the minimum 2.00 GB"), "Zu wenig freier RAM: 1,00 GB")
         self.assertEqual(gui_data.blocker_text("STOP"), "HaiveQueen gestoppt")
         self.assertEqual(gui_data.blocker_text("waiting for provider codex: quota used up"), "Wartet auf Anbieter codex: Kontingent aufgebraucht")
@@ -196,7 +196,7 @@ class GermanTextsTest(unittest.TestCase):
     def test_overlay_lines(self):
         snap = {"overlays": {"queens": {"rows": []}, "apiaries": {"rows": [{"name": "A", "tin": 1, "tout": 2}]}}}
         self.assertEqual(gui_overlays.lines(snap, "queens"), [("QUEENS (jetzt)", "gold"), ("keine", "dim")])
-        self.assertEqual(gui_overlays.lines(snap, "apiaries")[1][0], "Apiary | ein / aus heute")
+        self.assertEqual(gui_overlays.lines(snap, "apiaries")[1][0], "Projekt | ein / aus heute")
 
     def test_benchmark_comparison(self):
         self.assertEqual(startctx.comparison(None, None), "noch kein Benchmark")
@@ -250,11 +250,11 @@ class GermanTextsTest(unittest.TestCase):
             self.assertEqual(i18n.log_text(line), german)
 
     def test_round_line_translates_each_reason_behind_the_head(self):
-        line = ('round done: 1 Queen(s) started; A-PLAN not started: Hive limit 2 reached; B-PLAN not started: waiting for provider codex: quota used up'
-                '; C-PLAN not started: free RAM 1.50 GB is below the minimum 2.00 GB; D-PLAN not started: Hive state "resting"')
-        self.assertEqual(i18n.log_text(line), 'Runde fertig: 1 Queen(s) gestartet; A-PLAN nicht gestartet: Hive-Limit 2 erreicht; B-PLAN nicht gestartet: Wartet auf Anbieter codex: Kontingent aufgebraucht'
-                                              '; C-PLAN nicht gestartet: freier RAM 1,50 GB liegt unter dem Mindestwert 2,00 GB; D-PLAN nicht gestartet: Hive-Zustand resting')
-        self.assertEqual(i18n.log_text('Hive state "answer" (questions 3, 4)'), "Hive-Zustand answer (Fragen 3, 4)")
+        line = ('round done: 1 Queen(s) started; A-PLAN not started: Plan limit 2 reached; B-PLAN not started: waiting for provider codex: quota used up'
+                '; C-PLAN not started: free RAM 1.50 GB is below the minimum 2.00 GB; D-PLAN not started: Plan state "resting"')
+        self.assertEqual(i18n.log_text(line), 'Runde fertig: 1 Queen(s) gestartet; A-PLAN nicht gestartet: Plan-Limit 2 erreicht; B-PLAN nicht gestartet: Wartet auf Anbieter codex: Kontingent aufgebraucht'
+                                              '; C-PLAN nicht gestartet: freier RAM 1,50 GB liegt unter dem Mindestwert 2,00 GB; D-PLAN nicht gestartet: Plan-Zustand resting')
+        self.assertEqual(i18n.log_text('Plan state "answer" (questions 3, 4)'), "Plan-Zustand answer (Fragen 3, 4)")
 
     def test_round_line_keeps_a_reason_with_a_semicolon_together(self):
         line = "round done: 0 Queen(s) started; A-PLAN not started: worktree for branch a could not be prepared (git: one; two); B-PLAN not started: quota used up"
@@ -368,7 +368,7 @@ class LogicIndependentOfLanguageTest(RoundCase):
                 dash.draw_overlay()
         changed = {english for english, german in i18n.GERMAN.items() if english != german and "%" not in english and len(english) > 2}
         self.assertEqual(sorted(set(drawn) & changed), [])
-        self.assertIn("AKTIVE HIVES", drawn)
+        self.assertIn("AKTIVE PLÄNE", drawn)
         self.assertIn("MODELL-LIMITS", drawn)
         self.assertIn("KI-AGENTEN-ORCHESTRATOR", drawn)
 
@@ -395,7 +395,7 @@ class LogicIndependentOfLanguageTest(RoundCase):
                     self.assertTrue(any(c[0] <= left * picture and c[1] <= top * picture and c[2] >= right * picture and c[3] >= bottom * picture for c in covers), (factor, left, covers))
 
     def test_other_windows_show_german_only_and_no_text_is_cut(self):
-        """Hives, questions and settings window built for real in German: no changed catalog text stays English, and no label or button is narrower than its text."""
+        """Plans, questions and settings window built for real in German: no changed catalog text stays English, and no label or button is narrower than its text."""
         import tkinter as tk
         try:
             root = tk.Tk()

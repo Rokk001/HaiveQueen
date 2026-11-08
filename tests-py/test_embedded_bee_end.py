@@ -1,5 +1,5 @@
-"""End of embedded subagent Bees (E-1 to E-5): a Bee counts as ended when its Queen ended and her processes are absent; the running Queen reports
-her own Bee with a result file; nothing is edited by hand. Fixture data only, no real process is touched."""
+"""End of embedded subagent Agents (E-1 to E-5): an Agent counts as ended when its Queen ended and her processes are absent; the running Queen reports
+her own Agent with a result file; nothing is edited by hand. Fixture data only, no real process is touched."""
 import json
 import os
 import sys
@@ -305,7 +305,7 @@ class OwnQueenResultTests(EndCase):
 class TextTests(EndCase):
     def test_the_queen_role_text_describes_the_rules(self):
         text = (Path(roles.__file__).resolve().parent.parent / "roles" / "queen.md").read_text(encoding="utf-8")
-        for phrase in ("--ended-evidence", "its Queen has ended", "your own subagent Bee", "closes its row", "bzz bee result --outcome succeeded"):
+        for phrase in ("--ended-evidence", "its Queen has ended", "your own subagent Agent", "closes its row", "bzz agent result --outcome succeeded"):
             self.assertTrue(phrase in text, phrase)
 
     def test_the_open_bees_text_describes_the_rules(self):

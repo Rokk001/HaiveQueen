@@ -1,4 +1,4 @@
-"""The fixed Queen and Bee instructions live in role files of the repository; every start reads them again."""
+"""The fixed Queen and Agent instructions live in role files of the repository; every start reads them again."""
 import shutil
 import tempfile
 import unittest
@@ -25,7 +25,7 @@ class RoleFileTests(unittest.TestCase):
     def test_queen_instructions_come_from_the_file_with_the_settings_values(self):
         text = bees.queen_instructions("heavy", 7, 5, 123456)
         self.assertIn("Your class is heavy.", text)
-        self.assertIn("at most 7 Bees at once", text)
+        self.assertIn("at most 7 Agents at once", text)
         self.assertIn("After 5 failed attempts escalate", text)
         self.assertIn("when it reaches 123456", text)
         self.assertNotIn("{{", text)
@@ -35,9 +35,9 @@ class RoleFileTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         for f in roles.ROLES_DIR.glob("*.md"):
             shutil.copy(f, tmp / f.name)
-        (tmp / "queen.md").write_text("Changed Queen for {{class}} with {{bee_limit}} Bees.\n", encoding="utf-8")
+        (tmp / "queen.md").write_text("Changed Queen for {{class}} with {{bee_limit}} Agents.\n", encoding="utf-8")
         with mock.patch.object(roles, "ROLES_DIR", tmp):
-            self.assertEqual(bees.queen_instructions("light", 2, 3, 4), "Changed Queen for light with 2 Bees.")
+            self.assertEqual(bees.queen_instructions("light", 2, 3, 4), "Changed Queen for light with 2 Agents.")
         self.assertIn("Your class is light.", bees.queen_instructions("light", 2, 3, 4))
 
     def test_bee_prompt_comes_from_the_file(self):
@@ -48,7 +48,7 @@ class RoleFileTests(unittest.TestCase):
 
 
 class RoleStartTests(RoundCase):
-    """Queen and Bee prompts start with the text of their role file."""
+    """Queen and Agent prompts start with the text of their role file."""
 
     def add_local_provider(self):
         from bzztest import provider
@@ -79,10 +79,10 @@ class RoleStartTests(RoundCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         for f in roles.ROLES_DIR.glob("*.md"):
             shutil.copy(f, tmp / f.name)
-        (tmp / "bee-start.md").write_text("You are a changed Bee.\n\nTASK\n", encoding="utf-8")
+        (tmp / "bee-start.md").write_text("You are a changed Agent.\n\nTASK\n", encoding="utf-8")
         with mock.patch("haivequeen.bees.valid_bee_worktree", return_value=True), mock.patch.object(roles, "ROLES_DIR", tmp):
             self.assertTrue(bees.start_process(self.env(), REL, "P1", "Ada", "heavy", "do first", ["one"], ["source.py"], ["work rule"], cwd=str(bee_wt)))
-        self.assertTrue(self.prompt("Ada").startswith("You are a changed Bee.\n\nTASK\n\n"))
+        self.assertTrue(self.prompt("Ada").startswith("You are a changed Agent.\n\nTASK\n\n"))
 
 
 class LanguageTests(RoundCase):

@@ -153,7 +153,7 @@ class RunnerAndHeaderTest(CodeRepoCase):
     def test_claude_header_without_build_flow_doc(self):
         """The Queen prompt identifies her role and absolute plan path."""
         text = self.start_agent("claude")
-        self.assertIn("Queen of this Hive", text)
+        self.assertIn("Queen of this Plan", text)
         self.assertIn(self.plan_name(), text)
 
     # Verify configured integration instructions reach the Queen.

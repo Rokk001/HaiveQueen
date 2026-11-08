@@ -100,7 +100,7 @@ class BeePolicyTests(unittest.TestCase):
     # Check prompt instructs dependencies and higher classes.
     def test_prompt_instructs_dependencies_and_higher_classes(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
-        for word in ('dependenc', 'every package goes to a bee', 'local', 'image', 'escalat', '3', 'handoff', 'returned cwd', 'without a tool call', 'in the foreground', 'never run a bee in the background', 'after the package, never after the bee'):
+        for word in ('dependenc', 'every package goes to an agent', 'local', 'image', 'escalat', '3', 'handoff', 'returned cwd', 'without a tool call', 'in the foreground', 'never run an agent in the background', 'after the package, never after the agent'):
             self.assertIn(word, prompt)
 
     # A repeated report of the same attempt does not increment its failure count.
@@ -139,7 +139,7 @@ class BeePolicyTests(unittest.TestCase):
     # Check queen prompt defines context handoff and waits for running bees.
     def test_queen_prompt_defines_context_handoff_and_waits_for_running_bees(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
-        for text in ('no new', 'running bees', 'handoff', 'finish', '300000'):
+        for text in ('no new', 'running agents', 'handoff', 'finish', '300000'):
             self.assertIn(text, prompt)
 
     # Check queen prompt requires completeness evidence before integrating.
@@ -216,7 +216,7 @@ class QueenIntegrationTests(RoundCase):
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, 'testproj', 'all') if a['phase'] == 'queen')
         prompt = (self.env().run_dir(queen['name']) / 'prompt.md').read_text(encoding='utf-8-sig').lower()
-        for text in ('escalat', 'dependencies', 'bees', 'open requirements: 0'):
+        for text in ('escalat', 'dependencies', 'agents', 'open requirements: 0'):
             self.assertIn(text, prompt)
 
     # Check actual queen starts in separate worktree.
@@ -882,7 +882,7 @@ class AttemptSignalTests(unittest.TestCase):
     # A replacement Queen retries a vanished Bee at the same class and provider.
     def test_prompt_retries_vanished_bee(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
-        for text in ('after a queen restart', 'bee process vanished', 'same class; bzz bee start chooses its provider again', 'interruption is never a failure'):
+        for text in ('after a queen restart', 'agent process vanished', 'same class; bzz agent start chooses its provider again', 'interruption is never a failure'):
             self.assertIn(text, prompt)
     # Missing signal data does not turn an unsolved outcome into a failure.
     def test_missing_signals_do_not_count(self):

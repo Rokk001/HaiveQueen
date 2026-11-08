@@ -103,6 +103,8 @@ class FullLoopTest(RoundCase):
         asked = runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item="owner-check")
         self.assertEqual(len(asked), 1, "the system should have filed the owner check\n%s" % self.log())
         db.answer_question(self.conn, asked[0]["id"], "ok", "owner")
+        # Simulate the explicit stored acceptance; free text alone stays open.
+        self.conn.execute("UPDATE questions SET status='answered',owner_check_result='accepted' WHERE id=?", (asked[0]['id'],))
         loop.run_loop(self.conn, self.machine, rounds=2, round_minutes=0.05, wait_seconds=0.3, round_kwargs=round_kwargs)
         self.assertEqual(runtime.list_plans(self.conn, "testproj")[0]["status"], "DONE")
         rows = [dict(r) for r in self.conn.execute("SELECT * FROM queue")]

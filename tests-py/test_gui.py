@@ -24,7 +24,7 @@ def iso(minutes_ago):
 
 # Test the snapshot of invented data.
 class SnapshotTest(unittest.TestCase):
-    """One Apiary with one Hive, a running Queen and two running Bees."""
+    """One Project with one Plan, a running Queen and two running Agents."""
 
     # Create a temp database with a project, a Hive, a Queen, Bees, packages, an event and a queue row.
     def setUp(self):
@@ -45,7 +45,7 @@ class SnapshotTest(unittest.TestCase):
             runtime.upsert_agent(self.conn, "ODP", "ODP__" + name, {"plan": plan, "phase": "bee", "provider": "claude", "model": "claude-sonnet-5-5",
                                                                     "effort": "medium", "status": status, "startedAt": iso(12), "person": name,
                                                                     "package": pkg, "tokensIn": tin, "tokensOut": 3000})
-        runtime.append_event(self.conn, "ODP", "accepted hive AI-LEVELS", kind="note", agent="Ava__queen", mirror="none")   # no log file: tests must not write outside their temp folders
+        runtime.append_event(self.conn, "ODP", "accepted plan AI-LEVELS", kind="note", agent="Ava__queen", mirror="none")   # no log file: tests must not write outside their temp folders
         self.conn.execute("INSERT INTO queue(project,branch,tip,status,updated_at) VALUES ('ODP','b1','abc','ready',?)", (iso(1),))
         self.conn.commit()
         no_loop = mock.patch("haivequeen.loop.loop_running", return_value=0)   # the state must not depend on a real orchestrator on this machine
@@ -61,14 +61,14 @@ class SnapshotTest(unittest.TestCase):
 
     # The tiles count what runs.
     def test_tiles(self):
-        """One Apiary, one Hive, one Queen, two busy Bees, capacity = the slots of all providers ."""
+        """One Project, one Plan, one Queen, two busy Agents, capacity = the slots of all providers ."""
         t = self.snap["tiles"]
         self.assertEqual((t["apiaries"], t["hives"], t["queens"], t["bees"]), (1, 1, 1, 2))
         self.assertEqual(t["bee_capacity"], 4)
 
     # The Hive row shows queen, bees, progress and runtime.
     def test_hive_row(self):
-        """The Hive has queen Ava, 2 Bees running of 2 open, 1 of 4 packages done (25%) and runs for 1:05:00."""
+        """The Plan has queen Ava, 2 Agents running of 2 open, 1 of 4 packages done (25%) and runs for 1:05:00."""
         h = self.snap["hives"][0]
         self.assertEqual((h["name"], h["apiary"], h["queen"]), ("AI-LEVELS", "ODP", "Ava"))
         self.assertEqual((h["bees_running"], h["bees_total"], h["progress"]), (2, 2, 25))
@@ -77,7 +77,7 @@ class SnapshotTest(unittest.TestCase):
 
     # Package progress comes from persisted done states; waiting Bees come from assignments.
     def test_bee_tables_drive_progress_and_waiting_bees(self):
-        """Done package states count as progress; a package with a Bee assignment but no process shows as a waiting Bee."""
+        """Done package states count as progress; a package with an Agent assignment but no process shows as a waiting Agent."""
         bees.ensure_attempts(self.conn)
         plan = "docs/plans/AI-LEVELS-PLAN.md"
         self.conn.execute("INSERT INTO bee_completed VALUES ('ODP',?,'P1')", (plan,))
@@ -95,7 +95,7 @@ class SnapshotTest(unittest.TestCase):
 
     # A plan whose status is PAUSED shows as paused in its Hive row, without a Queen and with one.
     def test_paused_plan_shows_in_the_hive_row(self):
-        """The Hive row of a PAUSED plan is flagged and says so; a plan that is not paused keeps its normal status."""
+        """The Plan row of a PAUSED plan is flagged and says so; a plan that is not paused keeps its normal status."""
         self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','PAUSED','2026-11-01T12:00:00')")
         self.conn.commit()
         snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
@@ -110,7 +110,7 @@ class SnapshotTest(unittest.TestCase):
 
     # Active Hives show running and waiting Hives only.
     def test_rejected_and_done_hives_are_not_active(self):
-        """A Hive of a REJECTED or DONE plan, also one set in the plan file and synced, is absent from the active list; a done Hive state too."""
+        """A Plan of a REJECTED or DONE plan, also one set in the plan file and synced, is absent from the active list; a done Plan state too."""
         plan = "docs/plans/AI-LEVELS-PLAN.md"
         def active():
             snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
@@ -127,7 +127,7 @@ class SnapshotTest(unittest.TestCase):
 
     # Only a running Queen starts Bees, so the assignments of a Hive without one are not waiting Bees.
     def test_assignments_of_a_hive_without_a_running_queen_are_not_waiting_bees(self):
-        """With the Queen ended, the stored Bee assignment of the Hive is not shown as a waiting Bee and does not count as a Bee of the Hive."""
+        """With the Queen ended, the stored Agent assignment of the Plan is not shown as a waiting Agent and does not count as an Agent of the Plan."""
         from haivequeen import bees
         bees.ensure_attempts(self.conn)
         self.conn.execute("INSERT INTO bee_assignments VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','P4','heavy','codex')")
@@ -139,7 +139,7 @@ class SnapshotTest(unittest.TestCase):
 
     # Context and tokens per Queen, Bee and Hive.
     def test_context_and_tokens(self):
-        """The Queen and the Bees carry their context, its limit and their tokens; the Hive carries the total of all its agents."""
+        """The Queen and the Agents carry their context, its limit and their tokens; the Plan carries the total of all its agents."""
         h = self.snap["hives"][0]
         self.assertEqual(h["queen_ctx_limit"], gui_data.CONTEXT_FALLBACK)
         self.assertEqual((h["hive_tin"], h["hive_tout"]), (260000, 9000))
@@ -163,12 +163,12 @@ class SnapshotTest(unittest.TestCase):
             self.assertIsNone(german.search(source), name)
         for state in ("answer", "owner_check", "waiting", "queenless", "integration_wait", "provider_wait", "handoff", "resting", "running", "done"):
             self.assertIsNone(german.search(gui_data.status_text({"state": state, "pending_questions": [1], "reset_at": "2026-11-02T10:00:00"})), state)
-        for reason in ("STOP", "PAUSED", "waiting for the integration place", "Hive limit 3 reached", "no provider with a free slot", "the Hive is already claimed"):
+        for reason in ("STOP", "PAUSED", "waiting for the integration place", "Plan limit 3 reached", "no provider with a free slot", "the Plan is already claimed"):
             self.assertIsNone(german.search(gui_data.blocker_text(reason)), reason)
 
     # The Queen heads the list and her Bees follow directly below her.
     def test_bees(self):
-        """The running Queen Ava comes first with her model and effort, then her two running Bees; the finished Bee is not listed."""
+        """The running Queen Ava comes first with her model and effort, then her two running Agents; the finished Agent is not listed."""
         rows = self.snap["bees"]
         self.assertEqual(rows[0]["kind"], "queen")
         self.assertEqual(rows[0]["name"], "Ava")
@@ -180,7 +180,7 @@ class SnapshotTest(unittest.TestCase):
 
     # Without a running Queen the Bees stay in the list, without a Queen row.
     def test_bees_without_a_running_queen_have_no_queen_row(self):
-        """With the Queen ended the two running Bees are still listed and no row is a Queen row."""
+        """With the Queen ended the two running Agents are still listed and no row is a Queen row."""
         self.conn.execute("UPDATE agents SET status='done' WHERE phase='queen'")
         self.conn.commit()
         snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
@@ -195,7 +195,7 @@ class SnapshotTest(unittest.TestCase):
 
     # Tokens of the Hive over seven days.
     def test_activity(self):
-        """The Apiary row comes first, then the Hive row; with one Apiary and one Hive each holds 100% and the tokens of the agents."""
+        """The Project row comes first, then the Plan row; with one Project and one Plan each holds 100% and the tokens of the agents."""
         apiary, hive = self.snap["activity"][0], self.snap["activity"][1]
         self.assertEqual((apiary["kind"], apiary["name"], apiary["pct"]), ("apiary", "ODP", 100))
         self.assertEqual((hive["kind"], hive["name"], hive["pct"]), ("hive", "AI-LEVELS", 100))
@@ -206,7 +206,7 @@ class SnapshotTest(unittest.TestCase):
         """The Queen's note is tagged as a QUEEN line with its time."""
         stamp, tag, text = self.snap["log"][-1]
         self.assertTrue(tag.startswith("QUEEN"))
-        self.assertIn("accepted hive", text)
+        self.assertIn("accepted plan", text)
 
     # The queue panel counts questions and queued rows.
     def test_queue(self):
@@ -216,7 +216,7 @@ class SnapshotTest(unittest.TestCase):
 
     # The window shows what the overview data holds.
     def test_matches_the_overview_data(self):
-        """Hive and Queen counts, queue and the status sections match overview.collect."""
+        """Plan and Queen counts, queue and the status sections match overview.collect."""
         from haivequeen import overview
         d = overview.collect(self.conn, None, NOW, CFG, {"cores": 8, "free_mb": 7000, "total_mb": 32768, "host": "gui", "compiler_count": None})
         self.assertEqual(self.snap["tiles"]["hives"], sum(n for _, n in d["hives"]))
@@ -251,7 +251,7 @@ class SnapshotTest(unittest.TestCase):
 
     # The Apiary filter narrows the Hives.
     def test_project_filter(self):
-        """An unknown Apiary shows no Hives."""
+        """An unknown Project shows no Plans."""
         self.assertEqual(gui_data.snapshot(self.conn, "none", now=NOW, cfg=CFG, sysinfo=SYS)["hives"], [])
 
     # Formatting helpers.
@@ -379,7 +379,7 @@ class WindowTest(unittest.TestCase):
 
     # The Queen menu of a Hive runs bzz requeen or bzz dequeen for exactly that Hive, and only after a confirmation.
     def test_queen_action_runs_the_bzz_command_after_confirmation(self):
-        """Declining starts nothing; confirming starts `requeen` or `dequeen` with `<apiary>:<plan path>` and a hidden console."""
+        """Declining starts nothing; confirming starts `requeen` or `dequeen` with `<project>:<plan path>` and a hidden console."""
         import tkinter as tk
         from haivequeen import gui
         try:

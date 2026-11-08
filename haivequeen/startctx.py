@@ -1,8 +1,8 @@
 """The start context of a CLI (U-7) and its benchmark (U-8).
 
-Start context = the context size of the first model turn of a Queen or Bee (everything the CLI sends at the start: its own system prompt and tools,
+Start context = the context size of the first model turn of a Queen or Agent (everything the CLI sends at the start: its own system prompt and tools,
 the role file, the project rules and the task). The runner stores it per start in `start_contexts`; the benchmark measures it on the click of the
-button of a provider in the settings, per registered Apiary once with the HaiveQueen profile and once with the user's own configuration, and stores
+button of a provider in the settings, per registered Project once with the HaiveQueen profile and once with the user's own configuration, and stores
 it in `start_benchmarks` (a new measurement replaces the old one). Benchmark runs create no agent row and no usage row."""
 import json
 import os
@@ -29,7 +29,7 @@ def approx_tokens(text) -> int:
 
 
 def record(conn, project, plan, agent, kind, provider, tokens, parts=None, started_at=None) -> None:
-    """Store the start context of one Queen, Bee or subagent Bee; `parts` = {"role": n, "rules": {file: n}, "task": n} (approximate)."""
+    """Store the start context of one Queen, Agent or subagent Agent; `parts` = {"role": n, "rules": {file: n}, "task": n} (approximate)."""
     conn.execute("INSERT INTO start_contexts(project,plan_path,agent,kind,provider,started_at,tokens,parts_json) VALUES (?,?,?,?,?,?,?,?)",
                  (project, plan or "", agent, kind, provider, started_at or db.now(), int(tokens), json.dumps(parts) if parts else None))
 
@@ -43,7 +43,7 @@ def approx_parts(role_text, rule_files, task_text) -> dict:
 # ---- the benchmark
 
 def store_benchmark(conn, provider, project, mode, tokens, when=None) -> None:
-    """Store one measured value; it replaces the older value of the same provider, Apiary and mode."""
+    """Store one measured value; it replaces the older value of the same provider, Project and mode."""
     conn.execute("INSERT INTO start_benchmarks(provider,project,mode,tokens,measured_at) VALUES (?,?,?,?,?) "
                  "ON CONFLICT(provider,project,mode) DO UPDATE SET tokens=excluded.tokens, measured_at=excluded.measured_at",
                  (provider, project, mode, int(tokens), when or db.now()))
@@ -63,7 +63,7 @@ def _tok(n) -> str:
 
 
 def pairs(conn) -> list:
-    """The complete measurements: one per provider and Apiary that has both values, as dicts (provider, project, hq, own, saving in percent as a float, measured_at = the newer
+    """The complete measurements: one per provider and Project that has both values, as dicts (provider, project, hq, own, saving in percent as a float, measured_at = the newer
     of the two times). A pair with only one value or an own value of 0 is no measurement."""
     got = {}
     for b in benchmarks(conn):
@@ -84,13 +84,13 @@ def comparison(hq, own) -> str:
 
 
 def benchmark_text(conn, provider, project) -> str:
-    """The benchmark comparison of one provider and Apiary, or 'no benchmark yet'."""
+    """The benchmark comparison of one provider and Project, or 'no benchmark yet'."""
     got = {r["mode"]: r["tokens"] for r in conn.execute("SELECT mode,tokens FROM start_benchmarks WHERE provider=? AND project=?", (provider, project))}
     return comparison(got.get("hq"), got.get("own"))
 
 
 def code_folder(conn, project) -> str:
-    """The code folder of a registered Apiary: its codeRepo, else its workspace; '' when it has neither."""
+    """The code folder of a registered Project: its codeRepo, else its workspace; '' when it has neither."""
     row = conn.execute("SELECT workspace FROM projects WHERE name=?", (project,)).fetchone()
     ws = row[0] if row and row[0] else ""
     if not ws:
@@ -102,11 +102,11 @@ def code_folder(conn, project) -> str:
 
 
 def benchmark(conn, cfg, provider, measure=None, progress=None) -> dict:
-    """Measure the start context of `provider` in every registered Apiary, once with the HaiveQueen profile and once without it.
+    """Measure the start context of `provider` in every registered Project, once with the HaiveQueen profile and once without it.
 
     Returns {"excluded": bool, "errors": [text], "results": [{"project", "mode", "tokens"}]}. An excluded provider (machine-wide excludedProviders) is not measured.
     A failed run is reported in `errors` and stores nothing (an older value of it stays); the other run of the pair is stored. `measure(prov, cwd, hq, task)` is
-    the measurement (default measure_cli; tests pass a fake). `progress(text)` is called before each run with its number, Apiary and profile."""
+    the measurement (default measure_cli; tests pass a fake). `progress(text)` is called before each run with its number, Project and profile."""
     out = {"excluded": False, "errors": [], "results": [], "completed": 0, "total": 0}
     if provider in [str(x) for x in cfg.get("excludedProviders") or []]:
         out["excluded"] = True
@@ -197,7 +197,7 @@ def remove_folder(path) -> None:
 def measure_cli(prov, cwd, hq, task) -> int:
     """Run the CLI of `prov` once in `cwd` with `task` and return the context size of its first model turn; raises with the reason when there is none.
 
-    hq=True runs it as a Bee is run (HaiveQueen profile folder and arguments), hq=False in the user's own configuration. The process tree is ended and waited
+    hq=True runs it as an Agent is run (HaiveQueen profile folder and arguments), hq=False in the user's own configuration. The process tree is ended and waited
     for before the temp folder is removed; a temp folder that cannot be removed never changes the result."""
     tmp = tempfile.mkdtemp(prefix="hq-bench-")
     try:

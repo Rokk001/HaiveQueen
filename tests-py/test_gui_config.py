@@ -245,7 +245,7 @@ class WindowTest(unittest.TestCase):
 
     # The Apiary page of a project file.
     def test_apiary_page_shows_edits_and_saves_its_settings(self):
-        """The General page of a project file offers every Apiary setting with its default under a readable label; a changed value is saved."""
+        """The General page of a project file offers every Project setting with its default under a readable label; a changed value is saved."""
         import tomllib
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.select(win.entries.index(("apiaries", 0)))
@@ -368,7 +368,7 @@ class WindowTest(unittest.TestCase):
 
     # The project.toml of an Apiary is edited on its page of the tab Apiaries.
     def test_project_file_is_listed_and_editable(self):
-        """The tab Apiaries lists ODP; saving a changed priority on its page writes its project.toml."""
+        """The tab Projects lists ODP; saving a changed priority on its page writes its project.toml."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.pick_tab("apiaries")
         self.assertEqual(win.nodes.get(0, "end"), ("ODP",))
@@ -379,9 +379,9 @@ class WindowTest(unittest.TestCase):
 
     # three tabs, no file selection.
     def test_window_has_three_tabs_and_no_file_selection(self):
-        """The window offers the tabs General, Providers and Apiaries (no Servers tab); no File choice and no file name is shown; each tab lists only its own pages."""
+        """The window offers the tabs General, Providers and Projects (no Servers tab); no File choice and no file name is shown; each tab lists only its own pages."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
-        self.assertEqual([b.cget("text") for b in win.tab_buttons.values()], ["General", "Providers", "Apiaries"])
+        self.assertEqual([b.cget("text") for b in win.tab_buttons.values()], ["General", "Providers", "Projects"])
         texts = [w.cget("text") for w in descendants(win.win) if w.winfo_class() in ("Label", "Button", "Menubutton", "Radiobutton")]
         self.assertFalse([text for text in texts if "File:" in text or "config.toml (" in text or "project.toml (" in text], texts)
         self.assertFalse(win.side.winfo_manager())   # the General tab has no list
@@ -390,12 +390,12 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(win.add_button.cget("text"), "Add provider")
         win.pick_tab("apiaries")
         self.assertEqual(win.nodes.get(0, "end"), ("ODP",))
-        self.assertEqual(win.add_button.cget("text"), "Add Apiary")
+        self.assertEqual(win.add_button.cget("text"), "Add Project")
         self.assertTrue(win.side.winfo_manager())
 
     # every setting of an Apiary on one page, each once.
     def test_apiary_page_holds_all_its_settings_once(self):
-        """The page of an Apiary shows its name and workspace from config.toml and all settings of its project.toml, including the four switches; no key twice."""
+        """The page of a Project shows its name and workspace from config.toml and all settings of its project.toml, including the four switches; no key twice."""
         with mock.patch("haivequeen.publish.github_repository", return_value="owner/name"):
             win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
             win.pick_tab("apiaries")
@@ -416,7 +416,7 @@ class WindowTest(unittest.TestCase):
 
     # Save rewrites no unchanged project.toml.
     def test_save_rewrites_no_unchanged_apiary_file(self):
-        """Saving after only looking at an Apiary page leaves its project.toml untouched and keeps the provider capabilities as they are."""
+        """Saving after only looking at a Project page leaves its project.toml untouched and keeps the provider capabilities as they are."""
         path = self.folder / "ws" / ".haivequeen" / "project.toml"
         before = path.read_text(encoding="utf-8")
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
@@ -444,7 +444,7 @@ class WindowTest(unittest.TestCase):
 
     # Add Apiary creates its project.toml in the background.
     def test_add_apiary_creates_its_project_file(self):
-        """Add Apiary adds a page; with a name and an existing workspace Save writes config.toml, registers the Apiary and creates its project.toml with the switches set on the page."""
+        """Add Project adds a page; with a name and an existing workspace Save writes config.toml, registers the Project and creates its project.toml with the switches set on the page."""
         new = self.folder / "fresh"
         new.mkdir()
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
@@ -473,7 +473,7 @@ class WindowTest(unittest.TestCase):
         return folder, text
 
     def new_apiary_in(self, win, folder):
-        """Add an Apiary on the tab Apiaries and type `folder` as its workspace (not yet entered)."""
+        """Add a Project on the tab Projects and type `folder` as its workspace (not yet entered)."""
         win.pick_tab("apiaries")
         win.add_entry()
         self.type_into_entry(win, "", str(folder))
@@ -483,7 +483,7 @@ class WindowTest(unittest.TestCase):
         return {path[1]: getter() for path, getter, _like in win.getters if path[0] == "file"}
 
     def test_entered_workspace_shows_its_project_file_at_once(self):
-        """Entering the workspace of a new Apiary shows the settings of the project.toml already there, without leaving the page."""
+        """Entering the workspace of a new Project shows the settings of the project.toml already there, without leaving the page."""
         folder, _text = self.existing_workspace()
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         self.new_apiary_in(win, folder)
@@ -528,7 +528,7 @@ class WindowTest(unittest.TestCase):
                          {"priority": 7, "planGlobs": ["docs/*.md"], "deployEnabled": False, "buildEnabled": False})
 
     def test_entered_workspace_without_edits_leaves_the_file_untouched(self):
-        """Entering the workspace and saving without a change writes no project.toml and no backup; the Apiary is registered."""
+        """Entering the workspace and saving without a change writes no project.toml and no backup; the Project is registered."""
         folder, text = self.existing_workspace()
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         self.new_apiary_in(win, folder)
@@ -553,7 +553,7 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.shown(win)["priority"], "8")
 
     def test_add_apiary_without_workspace_writes_no_project_file(self):
-        """A new Apiary whose workspace does not exist cannot keep changed settings: nothing is written and the reason is shown."""
+        """A new Project whose workspace does not exist cannot keep changed settings: nothing is written and the reason is shown."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.pick_tab("apiaries")
         win.add_entry()
@@ -829,7 +829,7 @@ class BenchmarkWindowTest(WindowTest):
             ask.assert_not_called()
             self.assertEqual(bw.win.title(), "Benchmark")
             heads = [bw.table.heading(c)["text"] for c in bw.table["columns"]]
-            self.assertEqual(heads, ["Apiary", "HaiveQueen profile", "Own profile", "Saving", "Date"])
+            self.assertEqual(heads, ["Project", "HaiveQueen profile", "Own profile", "Saving", "Date"])
             rows = [bw.table.item(i)["values"] for i in bw.table.get_children()]
             self.assertEqual([str(v) for v in rows[0]], ["ODP", "32k", "100k", "-68 %", "2026-10-01"])
             try:

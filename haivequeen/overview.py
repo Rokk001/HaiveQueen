@@ -361,7 +361,7 @@ def round_errors(conn, project, now) -> list:
 
 # Count the Hives that live per Apiary (the Hives themselves are listed in the Hive table of the dashboard).
 def hive_counts(conn, project):
-    """List of (Apiary, number of its Hives that are not done) for the Apiaries with at least one, in the project filter."""
+    """List of (Project, number of its Plans that are not done) for the Projects with at least one, in the project filter."""
     rows = conn.execute("SELECT project, COUNT(*) FROM hives WHERE state!='done'" + (" AND project=?" if project else "") + " GROUP BY project ORDER BY project",
                         (project,) if project else ()).fetchall()
     return [(r[0], r[1]) for r in rows]

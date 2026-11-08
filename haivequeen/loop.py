@@ -296,11 +296,11 @@ _abandoned_hive_locks = set()
 # Serialize Hive scheduling between the loop and owner commands.
 @contextmanager
 def hive_schedule_lock(timeout: float = 30.0):
-    """Serialize Hive scheduling and recover an owned lock after a failed release."""
+    """Serialize Plan scheduling and recover an owned lock after a failed release."""
     path = osplat.data_dir() / "hive-schedule.lock"
     deadline = time.monotonic() + timeout
     if not _hive_schedule_guard.acquire(timeout=max(0.0, timeout)):
-        raise TimeoutError("Hive scheduling is busy")
+        raise TimeoutError("Plan scheduling is busy")
     try:
         while True:
             if path in _abandoned_hive_locks:
@@ -315,7 +315,7 @@ def hive_schedule_lock(timeout: float = 30.0):
             if _take_pid_lock(path, own_ok=False) == 0:
                 break
             if time.monotonic() >= deadline:
-                raise TimeoutError("Hive scheduling is busy")
+                raise TimeoutError("Plan scheduling is busy")
             time.sleep(0.1)
         try:
             yield
@@ -411,7 +411,7 @@ def build_ram_wait(env, phase, free_gb):
 def _do_start(c, a, forced_pick=None) -> int:
     """Action start_agent: validate, write the prompt and the agent row, start the runner. Returns 1 when an agent was started.
 
-    `forced_pick` is the provider already selected by the Hive caller.
+    `forced_pick` is the provider already selected by the Plan caller.
     """
     env, st, pool, report, dry = c["env"], c["state"], c["pool"], c["report"], c["dry"]
     if forced_pick is None:
@@ -453,8 +453,8 @@ def _do_start(c, a, forced_pick=None) -> int:
     handoff = ("After each completed step, check whether %s exists. If it does, record the status (completed, open, next step, "
                "branch and worktree) in the plan state file under 'Handoff %s' and end." % (hf, nm))
     if phase == "queen":
-        handoff = ("After each completed step check %s. When it exists, do not start new Bees, "
-                   "wait for running Bees, finish your current step, record the handoff in the plan state and end." % hf)
+        handoff = ("After each completed step check %s. When it exists, do not start new Agents, "
+                   "wait for running Agents, finish your current step, record the handoff in the plan state and end." % hf)
     predecessors = [x for x in runtime.list_agents(env.conn, env.name, 'all') if x.get('phase') == 'queen' and x.get('plan_path') == plan and x.get('person')]
     loaded = ""
     if phase in ("bee", "queen"):   # what a Queen and a Bee load is defined in profile.py; the project rules are complete, never a selection
@@ -721,7 +721,7 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
         if res["kept"] or res["failed"]:
             env.log("restart: re-attached %d running agent(s), %d gone" % (len(res["kept"]), len(res["failed"])))
         env.log("loop started (roundMinutes=%s)" % minutes)
-        env.event("Beekeeper started (round every %s minutes)" % minutes)
+        env.event("Orchestrator started (round every %s minutes)" % minutes)
     done = 0
     try:   # at the start of HaiveQueen every server that a provider uses is tested
         from . import servers
@@ -810,7 +810,7 @@ def command_result(args, payload) -> int:
 
 # A refused start is a failure for the caller: exit 1, the reason in the events and in beekeeper.log.
 def refuse_start(args, conn, payload, reason) -> int:
-    """Print `payload` as a failed result (ok false, error = `reason`), record "start refused: <reason>" as event and as line of beekeeper.log, return 1.
+    """Print `payload` as a failed result (ok false, error = `reason`), record "start refused: <reason>" as event and as line of orchestrator.log, return 1.
 
     Callers that start the loop (the self-update, scripts) see the refusal at once instead of waiting for a round that never comes.
     """
@@ -944,7 +944,7 @@ def register(sub) -> None:
     p.set_defaults(fn=cmd_start)
     p = sub.add_parser("gui")
     p.add_argument("--detach", action="store_true", help="open the window as a process of its own and return (default: run it in this process)")
-    p.add_argument("--project", help="show one Apiary only")
+    p.add_argument("--project", help="show one Project only")
     p.set_defaults(fn=cmd_gui)
     p = sub.add_parser("stop")
     p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")

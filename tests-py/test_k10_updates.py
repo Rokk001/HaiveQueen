@@ -420,13 +420,13 @@ class DrainTests(RoundCase):
         return code, json.loads(out.getvalue())
 
     def reasons(self):
-        """The refusal lines in the events and in beekeeper.log."""
+        """The refusal lines in the events and in orchestrator.log."""
         events = [r["text"] for r in self.conn.execute("SELECT text FROM events WHERE kind='start-refused'")]
         log = osplat.runs_dir() / "beekeeper.log"
         return events, (log.read_text(encoding="utf-8") if log.exists() else "")
 
     def test_refused_start_while_updating_exits_with_1_and_names_the_reason(self):
-        """A refusal is no success: exit 1, and the reason is an event and a line of beekeeper.log (the worker must not wait 1800 s for a loop that never starts)."""
+        """A refusal is no success: exit 1, and the reason is an event and a line of orchestrator.log (the worker must not wait 1800 s for a loop that never starts)."""
         self.hold_lock(4242)
         with mock.patch("haivequeen.updates.draining", return_value=True), mock.patch("os.getppid", return_value=999):
             code, payload = self.refused()

@@ -1,4 +1,4 @@
-"""Editor for the TOML settings in the graphical window: config.toml of the machine and the project.toml of every Apiary.
+"""Editor for the TOML settings in the graphical window: config.toml of the machine and the project.toml of every Project.
 
 This file holds the data layer (read, split the allowed tools, write TOML, check, save with a backup); the window is `ConfigWindow` below.
 TOML Kit preserves comments and layout when an existing settings file is saved.
@@ -54,15 +54,15 @@ SETTING_LABELS = {
 }
 # One line of explanation per field of the Apiary page (owner decision 741 (3)).
 SETTING_HELP = {
-    "name": N_("The name of the Apiary in HaiveQueen; new worktree names start with it."),
+    "name": N_("The name of the Project in HaiveQueen; new worktree names start with it."),
     "repository": N_("The Git repository of the code; releases, version, branches and worktrees always use it."),
-    "plansFolder": N_("Only for plans kept outside the repository; this folder also holds the settings of the Apiary."),
-    "colour": N_("The colour of the Apiary in the main window."), "priority": N_("Apiaries with a higher number get free places first."),
-    "owner": N_("How the Queens and Bees call you in their texts."), "language": N_("The language of the texts HaiveQueen writes to you for this Apiary."),
+    "plansFolder": N_("Only for plans kept outside the repository; this folder also holds the settings of the Project."),
+    "colour": N_("The colour of the Project in the main window."), "priority": N_("Projects with a higher number get free places first."),
+    "owner": N_("How the Queens and Agents call you in their texts."), "language": N_("The language of the texts HaiveQueen writes to you for this Project."),
     "ownerTopics": N_("Questions about these topics are never answered automatically."), "ownerCheckText": N_("The question HaiveQueen asks you when a plan is integrated."),
     "compileCheckEnabled": N_("Check that the code compiles and the tests pass before integration."), "buildEnabled": N_("Build the product after integration."),
     "deployEnabled": N_("Deploy the built product after integration."), "integrationBranch": N_("The branch finished plans are merged into."),
-    "remoteName": N_("The Git remote HaiveQueen pushes to and fetches from."), "worktreeLocation": N_("The folder that holds the worktrees of the Bees; a relative path counts from the repository."),
+    "remoteName": N_("The Git remote HaiveQueen pushes to and fetches from."), "worktreeLocation": N_("The folder that holds the worktrees of the Agents; a relative path counts from the repository."),
     "deleteFinishedWorktrees": N_("Remove a worktree once its work is integrated and nothing is lost."),
     "deleteIntegratedBranches": N_("Remove plan branches once they are integrated and nothing is lost."),
     "publishReleases": N_("Publish a GitHub release of the repository at each integration."), "nextVersion": N_("The version of the next release, for example 2.1.0."),
@@ -77,9 +77,9 @@ SETTING_HELP = {
     "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
 }
 GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model")}
-GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of a Bee, HaiveQueen uses the next stronger model class.")}
-SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Apiary."), "allowedTools": N_("Commands agents of this Apiary may run without asking.")})
-OTHER_HELP = N_("A further setting of this Apiary, as written in its settings file.")   # the explanation of a setting the page has no own text for
+GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class.")}
+SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Project."), "allowedTools": N_("Commands agents of this Project may run without asking.")})
+OTHER_HELP = N_("A further setting of this Project, as written in its settings file.")   # the explanation of a setting the page has no own text for
 # Owner decision 741: the main part of the Apiary page, the collapsed section Advanced and the keys the page never shows as fields of their own.
 MAIN_KEYS = ("colour", "priority", "owner", "language", "escalateAfter") + tuple(key for key, _default in APIARY_DEFAULTS)
 ADVANCED_DEFAULTS = (("planGlobs", ["docs/plans/*.md"]), ("planExclude", []), ("ignoredBuildOutput", []), ("buildFlowDoc", ""), ("integratorInstructions", ""),
@@ -114,7 +114,7 @@ def same_dir(a, b) -> bool:
 
 # Owner decision 741 (1): the folders of an Apiary as the page shows them.
 def apiary_place(workspace, settings) -> tuple:
-    """(repository, plans folder) of an Apiary: the repository is codeRepo (or the old repo) of its project.toml, else the folder of the settings;
+    """(repository, plans folder) of a Project: the repository is codeRepo (or the old repo) of its project.toml, else the folder of the settings;
     the plans folder is the folder of the settings when it is not the repository, else empty (the plans are in the repository)."""
     code = str(settings.get("codeRepo") or settings.get("repo") or "")
     workspace = str(workspace or "")
@@ -124,13 +124,13 @@ def apiary_place(workspace, settings) -> tuple:
 
 
 def worktree_prefix(name) -> str:
-    """The name prefix of new worktrees derived from the Apiary name (owner decision 741 (2)): letters, digits, '.', '_' and '-', others become '-'."""
+    """The name prefix of new worktrees derived from the Project name (owner decision 741 (2)): letters, digits, '.', '_' and '-', others become '-'."""
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", str(name or "")).strip("-.") or "wt"
 
 
 # The values the Apiary page shows.
 def apiary_settings(shown, legacy_deploy=False):
-    """A copy of the settings of a project file with every setting of the Apiary page present; legacy_deploy: an Apiary from before the switches, whose deploy stays on without an entry."""
+    """A copy of the settings of a project file with every setting of the Project page present; legacy_deploy: a Project from before the switches, whose deploy stays on without an entry."""
     out = dict(shown)
     if legacy_deploy:
         out.setdefault("deployEnabled", True)
@@ -550,9 +550,9 @@ def parse_typed(text, like=None):
 
 # The window of the editor.
 class ConfigWindow(ProviderPages):
-    """A Toplevel with three tabs: General (the machine settings), Providers and Apiaries; the files config.toml and project.toml stay in the background."""
+    """A Toplevel with three tabs: General (the machine settings), Providers and Projects; the files config.toml and project.toml stay in the background."""
 
-    TABS = (("general", N_("General")), ("providers", N_("Providers")), ("apiaries", N_("Apiaries")))
+    TABS = (("general", N_("General")), ("providers", N_("Providers")), ("apiaries", N_("Projects")))
 
     # Build the window for the settings files of `conn`.
     def __init__(self, root, conn, config_dir, mono="Consolas", on_saved=None):
@@ -634,16 +634,16 @@ class ConfigWindow(ProviderPages):
 
     # Is the shown page a page of config.toml (General or a provider)?
     def machine(self) -> bool:
-        """True on the General tab and on a provider page; False on an Apiary page."""
+        """True on the General tab and on a provider page; False on a Project page."""
         return self.node[0] != "apiaries"
 
     def registered(self) -> dict:
-        """{name: (workspace, legacy_deploy)} of the Apiaries in the database."""
+        """{name: (workspace, legacy_deploy)} of the Projects in the database."""
         return {r[0]: (r[1], bool(r[2])) for r in self.conn.execute("SELECT name, workspace, legacy_deploy FROM projects")}
 
     # The Apiaries of the tab Apiaries.
     def load_apiaries(self):
-        """One record per Apiary: every entry of config.toml, then the Apiaries registered only in the database whose folder exists."""
+        """One record per Project: every entry of config.toml, then the Projects registered only in the database whose folder exists."""
         registered = self.registered()
         self.apiaries = [self.apiary_record(entry, registered) for entry in self.data.get("projects") or []]
         listed = {a["name"] for a in self.apiaries}
@@ -653,7 +653,7 @@ class ConfigWindow(ProviderPages):
         self.migrate_allowed_tools()
 
     def migrate_allowed_tools(self):
-        """Stage provider grants for branches unique to one existing Apiary."""
+        """Stage provider grants for branches unique to one existing Project."""
         for provider in self.data.get("providers") or []:
             rest, tools, position = split_args(provider.get("args"))
             keep = []
@@ -673,8 +673,8 @@ class ConfigWindow(ProviderPages):
                 provider["args"] = join_args(rest, keep, position)
 
     def apiary_record(self, entry, registered, name=None):
-        """The record of one Apiary: its entry in config.toml (None for an Apiary only in the database), its name, the workspace whose project.toml it uses
-        (the registered one wins over the one typed in config.toml), the settings of that file, a copy to see changes, and whether it is an Apiary from before the switches."""
+        """The record of one Project: its entry in config.toml (None for a Project only in the database), its name, the workspace whose project.toml it uses
+        (the registered one wins over the one typed in config.toml), the settings of that file, a copy to see changes, and whether it is a Project from before the switches."""
         name = name if entry is None else str(entry.get("name") or "")
         row = registered.get(name)
         workspace = str(row[0] if row and row[0] else (entry or {}).get("workspace") or "")
@@ -685,7 +685,7 @@ class ConfigWindow(ProviderPages):
 
     # Read the files again and show their parts.
     def reload(self):
-        """Drop unsaved changes: read config.toml and the project.toml of every Apiary and show the General tab."""
+        """Drop unsaved changes: read config.toml and the project.toml of every Project and show the General tab."""
         self.fresh, self.type_stash = [], []
         self.data = load_migrated(self.config_path)   # old endpoint entries in the new form; the file changes only when saved
         self.load_apiaries()
@@ -696,7 +696,7 @@ class ConfigWindow(ProviderPages):
 
     # List the parts of the settings.
     def fill_nodes(self):
-        """Rebuild the list of all pages (General, every provider, every Apiary) and show the pages of the current tab on the left."""
+        """Rebuild the list of all pages (General, every provider, every Project) and show the pages of the current tab on the left."""
         listed = self.data.get("projects") or []
         if [a["entry"] for a in self.apiaries if a["entry"] is not None] != listed:
             registered = self.registered()   # entries added to or removed from config.toml outside the buttons
@@ -724,7 +724,7 @@ class ConfigWindow(ProviderPages):
         if tab == "general":
             self.side.pack_forget()
         else:
-            self.add_button.config(text=tr({"providers": "Add provider"}.get(tab, "Add Apiary")))
+            self.add_button.config(text=tr({"providers": "Add provider"}.get(tab, "Add Project")))
             self.side.pack(side="left", fill="y", before=self.canvas)
 
     def refresh_list(self):
@@ -752,7 +752,7 @@ class ConfigWindow(ProviderPages):
 
     # Show one part.
     def select(self, row):
-        """Show page `row` of the list of all pages (0 is General, then the providers, then the Apiaries), switching to its tab."""
+        """Show page `row` of the list of all pages (0 is General, then the providers, then the Projects), switching to its tab."""
         self.node = self.entries[row]
         self.show_tab(self.node[0])
         self.nodes.selection_clear(0, "end")
@@ -775,7 +775,7 @@ class ConfigWindow(ProviderPages):
 
     # The dict a part edits.
     def target(self) -> dict:
-        """The dict of the shown part: the top level for General, the provider entry, or for an Apiary {"entry": its entry in config.toml, "file": its project.toml}."""
+        """The dict of the shown part: the top level for General, the provider entry, or for a Project {"entry": its entry in config.toml, "file": its project.toml}."""
         kind, i = self.node
         if kind == "general":
             return self.data
@@ -797,7 +797,7 @@ class ConfigWindow(ProviderPages):
 
     # Build the form of the shown part.
     def build_form(self):
-        """Fill the right side with the page of the shown part: General (one row per setting), a provider (the form of its access type) or an Apiary (its entry of
+        """Fill the right side with the page of the shown part: General (one row per setting), a provider (the form of its access type) or a Project (its entry of
         config.toml and all settings of its project.toml on one page)."""
         self.clear_form()
         self.show_hint()
@@ -833,7 +833,7 @@ class ConfigWindow(ProviderPages):
         self.initial_build = tuple(v.get() for v in self.build_vars) if self.build_vars else None
 
     def apiary_form(self):
-        """The page of one Apiary (owner decision 741): Name, Repository and Plans folder, the settings a normal user needs, each with a label and one line of
+        """The page of one Project (owner decision 741): Name, Repository and Plans folder, the settings a normal user needs, each with a label and one line of
         explanation, and the collapsed section Advanced with the other settings of its project.toml; every setting once."""
         apiary = self.apiaries[self.node[1]]
         entry = apiary["entry"]
@@ -872,7 +872,7 @@ class ConfigWindow(ProviderPages):
         self.initial_values = {path: getter() for path, getter, _like in self.getters}
 
     def advanced_section(self):
-        """The section Advanced below the main settings of an Apiary page, collapsed until the owner opens it; returns the frame its fields go into."""
+        """The section Advanced below the main settings of a Project page, collapsed until the owner opens it; returns the frame its fields go into."""
         tk = self.tk
         head = tk.Frame(self.form)
         head.pack(fill="x", pady=(10, 2), anchor="w")
@@ -897,15 +897,15 @@ class ConfigWindow(ProviderPages):
         return box
 
     def apply_place(self, apiary, repository, plans):
-        """Write the typed Repository and Plans folder of `apiary` into its settings: the folder of project.toml (the plans folder, else the repository) and
-        codeRepo (only with a separate plans folder). The folder of project.toml of a registered Apiary stays; returns a problem text or None."""
+        """Write the typed Repository and Plans folder of `project` into its settings: the folder of project.toml (the plans folder, else the repository) and
+        codeRepo (only with a separate plans folder). The folder of project.toml of a registered Project stays; returns a problem text or None."""
         repository, plans = str(repository).strip(), str(plans).strip()
         if plans and not repository:
             return tr("Repository: the folder of the Git repository is expected")
         home = plans or repository
         if apiary["name"] in self.registered():
             if not home or not same_dir(home, apiary["workspace"]):
-                return tr("The settings of this Apiary are kept in %s: enter that folder as plans folder or, when the plans are in the repository, as repository", apiary["workspace"])
+                return tr("The settings of this Project are kept in %s: enter that folder as plans folder or, when the plans are in the repository, as repository", apiary["workspace"])
         elif apiary["entry"] is not None:
             apiary["entry"]["workspace"] = home
         data = apiary["file"]
@@ -933,7 +933,7 @@ class ConfigWindow(ProviderPages):
         return holder, cell
 
     def text_of(self, path) -> str:
-        """The label of a setting: on an Apiary page its understandable label (the words of the key for a setting HaiveQueen has no label for), else the key."""
+        """The label of a setting: on a Project page its understandable label (the words of the key for a setting HaiveQueen has no label for), else the key."""
         name = ".".join(path[1:])
         if self.node[0] == "apiaries" and path[:1] in (("file",), ("entry",), ("place",)):
             return tr(SETTING_LABELS[name]) if name in SETTING_LABELS else readable(path[-1])
@@ -942,7 +942,7 @@ class ConfigWindow(ProviderPages):
         return str(path[-1])
 
     def explain(self, cell, path):
-        """The one line of explanation of a setting of an Apiary page below its field."""
+        """The one line of explanation of a setting of a Project page below its field."""
         name = ".".join(path[1:])
         if self.node[0] in ("apiaries", "general"):
             help_text = SETTING_HELP.get(name, OTHER_HELP) if self.node[0] == "apiaries" else GENERAL_HELP.get(path[-1], OTHER_HELP)
@@ -950,7 +950,7 @@ class ConfigWindow(ProviderPages):
                           wraplength=PATH_WIDTH * self.char_px).pack(anchor="w")
 
     def adopt_workspace(self, apiary) -> bool:
-        """For an Apiary not registered yet whose workspace in config.toml was changed: take the project.toml of that workspace (if any) as its settings
+        """For a Project not registered yet whose workspace in config.toml was changed: take the project.toml of that workspace (if any) as its settings
         and lay the unsaved edits of the page over them, so neither the edits nor the unchanged values of the file are lost. True when the record changed."""
         entry = apiary["entry"]
         if entry is None or apiary["name"] in self.registered():
@@ -977,7 +977,7 @@ class ConfigWindow(ProviderPages):
             self.build_form()
 
     def github_repository(self, shown):
-        """owner/name of the GitHub remote of the repository of the shown Apiary (its remoteName), or None; never that of a separate plans folder."""
+        """owner/name of the GitHub remote of the repository of the shown Project (its remoteName), or None; never that of a separate plans folder."""
         from . import publish
         from types import SimpleNamespace
         apiary = self.apiaries[self.node[1]]
@@ -1311,7 +1311,7 @@ class ConfigWindow(ProviderPages):
 
     # The Add button of the left list.
     def add_entry(self):
-        """Add a provider on the tab Providers, an Apiary on the tab Apiaries."""
+        """Add a provider on the tab Providers, a Project on the tab Projects."""
         if self.tab_var.get() == "providers":
             self.add_provider()
         elif self.tab_var.get() == "apiaries":
@@ -1319,7 +1319,7 @@ class ConfigWindow(ProviderPages):
 
     # Add an Apiary.
     def add_apiary(self):
-        """Append a new Apiary (name and workspace in config.toml; its project.toml is created at Save) and show it."""
+        """Append a new Project (name and workspace in config.toml; its project.toml is created at Save) and show it."""
         if self.collect():
             self.data.setdefault("projects", []).append({"name": "new-apiary", "workspace": ""})
             self.fill_nodes()
@@ -1327,12 +1327,12 @@ class ConfigWindow(ProviderPages):
 
     # Remove the shown provider or Apiary.
     def remove_node(self):
-        """Delete the shown provider or the entry of the shown Apiary in config.toml (not from the file until Save; the project.toml stays)."""
+        """Delete the shown provider or the entry of the shown Project in config.toml (not from the file until Save; the project.toml stays)."""
         kind, i = self.node
         if kind == "general" or i is None or (kind == "apiaries" and self.apiaries[i]["entry"] is None):
             return
         from . import gui_dialog
-        question = {"providers": "Remove this provider from the settings?"}.get(kind, "Remove this Apiary from the settings?")
+        question = {"providers": "Remove this provider from the settings?"}.get(kind, "Remove this Project from the settings?")
         if gui_dialog.ask(self.win, "HaiveQueen", tr(question), self.mono):
             if kind == "providers":
                 del self.data["providers"][i]
@@ -1343,7 +1343,7 @@ class ConfigWindow(ProviderPages):
             self.select(0)
 
     def apiary_writes(self) -> tuple:
-        """([(apiary, path of its project.toml)] to write at Save, [problems]): an Apiary whose settings changed or that has no project.toml yet, in an existing workspace."""
+        """([(project, path of its project.toml)] to write at Save, [problems]): a Project whose settings changed or that has no project.toml yet, in an existing workspace."""
         writes, problems = [], []
         registered = self.registered()
         for apiary in self.apiaries:
@@ -1364,7 +1364,7 @@ class ConfigWindow(ProviderPages):
 
     # Check and write the files.
     def save(self):
-        """Collect the shown part, check everything, write config.toml and the project.toml of every changed or new Apiary and tell the main window; a problem is shown and nothing is written."""
+        """Collect the shown part, check everything, write config.toml and the project.toml of every changed or new Project and tell the main window; a problem is shown and nothing is written."""
         if not self.collect():
             return
         from . import servers
@@ -1403,7 +1403,7 @@ class ConfigWindow(ProviderPages):
 
     # Open the settings folder.
     def open_folder(self):
-        """Open the folder of the shown settings in the file manager: that of the project.toml on an Apiary page, else that of config.toml."""
+        """Open the folder of the shown settings in the file manager: that of the project.toml on a Project page, else that of config.toml."""
         folder = self.config_path.parent
         if self.node[0] == "apiaries" and self.node[1] is not None and self.apiaries[self.node[1]]["path"] and self.apiaries[self.node[1]]["path"].parent.is_dir():
             folder = self.apiaries[self.node[1]]["path"].parent

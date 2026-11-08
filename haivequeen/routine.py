@@ -1,4 +1,4 @@
-"""Shared agent lifecycle and plan helpers used by the Hive scheduler."""
+"""Shared agent lifecycle and plan helpers used by the Plan scheduler."""
 import hashlib
 import json
 import os

@@ -22,7 +22,7 @@ LIVE_COLOURS = {"White": "text", "Green": "green", "Red": "red", "Cyan": "cyan",
 
 # Strip the plan suffix so a plan file name reads as a Hive name.
 def hive_name(plan_path) -> str:
-    """Short Hive name of a plan path: file name without the trailing -PLAN and extension."""
+    """Short Plan name of a plan path: file name without the trailing -PLAN and extension."""
     stem = Path(str(plan_path)).stem
     return stem[:-5] if stem.upper().endswith("-PLAN") else stem
 
@@ -107,10 +107,10 @@ def fmt_stamp(text) -> str:
 
 # Text of a recorded start blocker.
 def blocker_text(reason) -> str:
-    """Text of the reason why a Hive could not start its Queen, in the language of the GUI."""
+    """Text of the reason why a Plan could not start its Queen, in the language of the GUI."""
     reason = str(reason)
-    if reason.startswith("Hive limit "):
-        return tr("Hive limit %s reached", reason.split()[2])
+    if reason.startswith("Plan limit "):
+        return tr("Plan limit %s reached", reason.split()[2])
     if reason.startswith("free RAM "):
         return tr("Not enough free RAM: %s", i18n.decimal(reason.split(" is below")[0][9:]))
     if reason.startswith("no provider with a free slot"):
@@ -123,15 +123,15 @@ def blocker_text(reason) -> str:
     if reason.startswith("worktree for branch "):
         return tr("Plan worktree could not be prepared")
     return tr({"STOP": N_("HaiveQueen stopped"), "PAUSED": N_("HaiveQueen paused"),
-               "waiting for the integration place": N_("Waiting for integration"), "handing off, Bee processes are still running": N_("Handoff: Bees still running"),
+               "waiting for the integration place": N_("Waiting for integration"), "handing off, Agent processes are still running": N_("Handoff: Agents still running"),
                "retry after an interrupted Queen is not due yet": N_("Waiting after interrupted Queen"),
                "no branch or worktree named in the plan or its state file": N_("Plan branch or worktree missing"),
-               "the Hive is already claimed": N_("Start already reserved")}.get(reason, i18n.log_text(reason)))
+               "the Plan is already claimed": N_("Start already reserved")}.get(reason, i18n.log_text(reason)))
 
 
 # State text of a Hive without a running Queen.
 def status_text(hive) -> str:
-    """Words in the language of the GUI for the persisted Hive state, the actual start blocker and the pending questions."""
+    """Words in the language of the GUI for the persisted Plan state, the actual start blocker and the pending questions."""
     state = hive.get("state")
     questions = hive.get("pending_questions") or []
     suffix = " (#" + ", #".join(map(str, questions)) + ")" if questions else ""
@@ -152,7 +152,7 @@ def status_text(hive) -> str:
 
 # Read which packages have a Bee assigned and which a Bee has finished.
 def bee_tables(conn) -> tuple:
-    """(assigned, completed): {(project, plan, package): (class, provider)} of the Bee assignments and the set of (project, plan, package) that are done.
+    """(assigned, completed): {(project, plan, package): (class, provider)} of the Agent assignments and the set of (project, plan, package) that are done.
 
     A package is done only when its current package_progress state is done. Older databases without that table have no completed packages."""
     have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('bee_assignments','bee_completed','package_progress')")}
@@ -204,17 +204,17 @@ def agent_tokens(agent) -> tuple:
 
 # Find the subagent entry of a Queen that belongs to an embedded Bee.
 def match_sub(queen, name):
-    """The entry {desc, ctx, tin, tout} of the Queen's subCtx whose Task description names the Bee `name`, or None."""
+    """The entry {desc, ctx, tin, tout} of the Queen's subCtx whose Task description names the Agent `name`, or None."""
     return next((v for v in ((queen or {}).get("subCtx") or {}).values()
                  if re.search(r"\b%s\b" % re.escape(str(name)), str(v.get("desc") or ""), re.I)), None)
 
 
 # Describe one Hive for the active-hives table.
 def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None, rejected=None, waiting=None, embedded=None, plan_rejected=None) -> dict:
-    """Row of one Hive: name, apiary, queen with context and tokens, Bees busy/assigned, progress (finished packages of all packages), status and runtime.
+    """Row of one Plan: name, project, queen with context and tokens, Agents busy/assigned, progress (finished packages of all packages), status and runtime.
 
     `assigned` and `completed` come from bee_tables, `ctx_limit(agent)` gives an agent's context limit in tokens, `agents_all` (all rows, also archived)
-    gives the Hive's token total over its whole life, `implemented` maps (project, plan) to the packages reported implemented but not verified, `paused` is the set of (project, plan) whose plan status is PAUSED, `rejected` maps (project, plan) to the packages the owner did not accept (never counted as done)."""
+    gives the Plan's token total over its whole life, `implemented` maps (project, plan) to the packages reported implemented but not verified, `paused` is the set of (project, plan) whose plan status is PAUSED, `rejected` maps (project, plan) to the packages the owner did not accept (never counted as done)."""
     key = (hive["project"], hive["plan_path"])
     mine = [a for a in agents if (a.get("project"), a.get("plan_path")) == key]
     queen = hive.get("queen")
@@ -270,7 +270,7 @@ def step_fraction(step) -> float:
 
 # Read how many steps the newest Bee of each package got.
 def step_counts(conn) -> dict:
-    """{(project, plan, package): "0/m"} for the packages whose Bee was started with m numbered steps; empty when the table does not exist yet."""
+    """{(project, plan, package): "0/m"} for the packages whose Agent was started with m numbered steps; empty when the table does not exist yet."""
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bee_step_counts'").fetchone():
         return {}
     return {(r[0], r[1], r[2]): "0/%d" % r[3] for r in conn.execute("SELECT project,plan_path,package,steps FROM bee_step_counts") if r[3] > 0}
@@ -278,7 +278,7 @@ def step_counts(conn) -> dict:
 
 # Describe one running Bee as a row of the Bees table.
 def bee_row(agent, now, steps=None, ctx_limit=None, package_steps=None) -> dict:
-    """Row of one running Bee: kind "bee", person name, model label, hive, apiary, plan path, task (with its reported step like 2/5), context, tokens, status and runtime."""
+    """Row of one running Agent: kind "agent", person name, model label, plan, project, plan path, task (with its reported step like 2/5), context, tokens, status and runtime."""
     name = str(agent.get("person") or agent.get("name"))
     step = (package_steps or {}).get((agent.get("project"), agent.get("plan_path") or "", agent.get("package"))) or (steps or {}).get(name, "")
     tin, tout = agent_tokens(agent)
@@ -292,7 +292,7 @@ def bee_row(agent, now, steps=None, ctx_limit=None, package_steps=None) -> dict:
 
 # Describe the running Queen of a Hive for the Bees table, from the Hive's row.
 def queen_row(hive) -> dict:
-    """Row of the running Queen of the Hive row `hive` (kind "queen"): name, model with effort, context, tokens and runtime; the Hive table does not repeat them."""
+    """Row of the running Queen of the Plan row `plan` (kind "queen"): name, model with effort, context, tokens and runtime; the Plan table does not repeat them."""
     return {"kind": "queen", "name": hive["queen"], "agent": hive["queen_agent"], "project": hive["apiary"], "plan_path": hive["plan_path"],
             "model": hive["queen_model"] or "–", "hive": hive["name"], "apiary": hive["apiary"], "task": "Queen",
             "ctx": hive["queen_ctx"], "ctx_limit": hive["queen_ctx_limit"], "tin": hive["queen_tin"], "tout": hive["queen_tout"],
@@ -309,10 +309,10 @@ def embedded_rows(conn) -> list:
 
 # Collect the Bees of the active Hives: running Bee processes and packages that have a Bee assigned but no process yet.
 def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None, hive_rows=None, embedded=None, package_steps=None, startable=None, stopped=None) -> list:
-    """Rows for the Bees table. A package with a Bee assignment but no running process shows as 'waiting'; finished packages are left out.
+    """Rows for the Agents table. A package with an Agent assignment but no running process shows as 'waiting'; finished packages are left out.
 
-    `hive_keys` limits the waiting rows to the (project, plan) pairs whose Queen is running: only a running Queen starts Bees, so the assignments of any other Hive are not waiting Bees.
-    With `hive_rows` (the Hive rows) every Hive with a running Queen gets the Queen's row first and its Bees directly below it; Bees of other Hives follow."""
+    `hive_keys` limits the waiting rows to the (project, plan) pairs whose Queen is running: only a running Queen starts Agents, so the assignments of any other Plan are not waiting Agents.
+    With `hive_rows` (the Plan rows) every Plan with a running Queen gets the Queen's row first and its Agents directly below it; Agents of other Plans follow."""
     rows, seen = [], set()
     for agent in agents:
         if agent.get("phase") == "bee" and agent.get("status") in runtime.ACTIVE_STATUSES:
@@ -368,17 +368,17 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
 
 # Format one event row as a log line with a source tag.
 def log_line(event, who=None) -> tuple:
-    """(time, tag, text) of an event row: tag is QUEEN x, BEE x, APIARY x or SYSTEM depending on who wrote it.
+    """(time, tag, text) of an event row: tag is QUEEN x, AGENT x, PROJECT x or SYSTEM depending on who wrote it.
 
-    `who` maps an agent name to (phase, person) so the tag shows the Queen or Bee by the person's name."""
+    `who` maps an agent name to (phase, person) so the tag shows the Queen or Agent by the person's name."""
     when = db.parse_time(event["ts"])
     stamp = localtime.time(when) if when else "--:--"
     agent, project = event["agent"], event["project"]
     if agent:
         phase, person = (who or {}).get(agent, (str(agent).split("__")[-1], str(agent).split("__")[0]))
-        tag = ("QUEEN" if str(phase).startswith("queen") else "BEE") + " " + str(person)
+        tag = ("QUEEN" if str(phase).startswith("queen") else "AGENT") + " " + str(person)
     elif project and project != runstate.GLOBAL_PROJECT:
-        tag = "APIARY " + str(project)
+        tag = "PROJECT " + str(project)
     else:
         tag = "SYSTEM"
     text = str(event["text"] or event["kind"]).replace("\n", " ")
@@ -393,7 +393,7 @@ def free_text(event) -> bool:
 
 # Sum the tokens of every Apiary and Hive over the activity window.
 def activity_rows(agents_all, now) -> list:
-    """Token use of the last ACTIVITY_DAYS days: [{kind, name, apiary, pct, tin, tout, last}] with the Apiaries first, then the Hives, each busiest first.
+    """Token use of the last ACTIVITY_DAYS days: [{kind, name, project, pct, tin, tout, last}] with the Projects first, then the Plans, each busiest first.
 
     `pct` is the share of that row among the rows of its kind."""
     since = now - timedelta(days=ACTIVITY_DAYS)
@@ -440,7 +440,7 @@ def is_noise(event) -> bool:
 
 # What a log line needs for filtering.
 def log_meta(event, plan_of) -> dict:
-    """{project, agent, hive, noise} of an event: `hive` is the name of the Hive of the agent that wrote it ("" for events without an agent)."""
+    """{project, agent, plan, noise} of an event: `plan` is the name of the Plan of the agent that wrote it ("" for events without an agent)."""
     plan = plan_of.get(event["agent"]) if event["agent"] else ""
     return {"project": event["project"], "agent": event["agent"], "hive": hive_name(plan) if plan else "", "noise": is_noise(event)}
 
@@ -530,8 +530,8 @@ def info_sections(d) -> list:
     run = d["run"]
     state = {"RUNNING": "ok", "PAUSED": "warn"}[run["state"]]
     sub = {"RUNNING": "", "PAUSED": tr("no new agents")}[run["state"]]
-    out = [(tr("STATE"), [(tr(run["state"]) + ("  " + sub if sub else "") + tr("  Apiary: %s", d["project"] or tr("all")), state),
-                          (tr("Beekeeper %s", d["orch"]["status"]), "text")])]
+    out = [(tr("STATE"), [(tr(run["state"]) + ("  " + sub if sub else "") + tr("  Project: %s", d["project"] or tr("all")), state),
+                          (tr("Orchestrator %s", d["orch"]["status"]), "text")])]
     plans = "  ".join("%s %d" % (name, d["counts"].get(name, 0)) for name, _ in overview.PLAN_BADGES)
     if d["counts"].get("DRAFT"):
         plans += tr("  (draft: %s)", ", ".join(d["drafts"]))
@@ -598,9 +598,9 @@ def _version() -> str:
 
 # Collect everything the graphical dashboard shows in one call.
 def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
-    """Plain dict with the header tiles, the Hive and Bee tables, the log, activity, system, queue and status panels.
+    """Plain dict with the header tiles, the Plan and Agent tables, the log, activity, system, queue and status panels.
 
-    The numbers come from overview.collect(). `project` filters to one Apiary;
+    The numbers come from overview.collect(). `project` filters to one Project;
     `now`, `cfg` and `sysinfo` (the GUI form of the system values) replace the clock, the machine config and the live system reads (tests)."""
     now = now or datetime.now()
     cfg = cfg if cfg is not None else config.load_config()

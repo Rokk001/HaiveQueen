@@ -1,4 +1,4 @@
-"""The window 'Benchmark': progress of the start-context measurement of a provider and the table of the stored results per Apiary.
+"""The window 'Benchmark': progress of the start-context measurement of a provider and the table of the stored results per Project.
 
 Opened by the button 'Benchmark Start Context' of the provider page in the settings (gui_config). The measurement itself is startctx.benchmark.
 """
@@ -7,13 +7,14 @@ from datetime import datetime
 
 from . import db, startctx
 from .gui import COL
+from .i18n import tr
 
 POLL_MS = 300
 
 
 # The rows of the table.
 def table_rows(conn, provider) -> list:
-    """One tuple per Apiary with a complete stored measurement of `provider`: (Apiary, HaiveQueen profile, own profile, saving as '-68 %', date)."""
+    """One tuple per Project with a complete stored measurement of `provider`: (Project, HaiveQueen profile, own profile, saving as '-68 %', date)."""
     out = []
     for r in sorted(startctx.pairs(conn), key=lambda r: r["project"]):
         if r["provider"] == provider:
@@ -56,7 +57,7 @@ class BenchmarkWindow:
         table_frame = tk.Frame(inner, bg=COL["panel"])
         table_frame.pack(fill="both", expand=True, padx=14)
         self.table = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
-        for column, title, width in (("apiary", "Apiary", 160), ("hq", "HaiveQueen profile", 150), ("own", "Own profile", 120), ("saving", "Saving", 90), ("date", "Date", 110)):
+        for column, title, width in (("apiary", tr("Project"), 160), ("hq", "HaiveQueen profile", 150), ("own", "Own profile", 120), ("saving", "Saving", 90), ("date", "Date", 110)):
             self.table.heading(column, text=title)
             self.table.column(column, width=width, minwidth=width, stretch=False, anchor="w")
         bar = gui_dialog.scrollbar(table_frame, self.table.yview)
@@ -87,12 +88,12 @@ class BenchmarkWindow:
         if self.running:
             return
         count = 2 * self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
-        if gui_dialog.ask(self.win, "HaiveQueen", "Measure %s in every Apiary with both profiles? This starts the CLI %d times and uses login tokens." % (self.provider, count), self.mono):
+        if gui_dialog.ask(self.win, "HaiveQueen", "Measure %s in every Project with both profiles? This starts the CLI %d times and uses login tokens." % (self.provider, count), self.mono):
             self.run(self.cfg)
 
     # Measure.
     def run(self, cfg, done=None, wait=False):
-        """Measure the provider in every registered Apiary (in a thread, so the window stays usable; `wait` runs it here); the progress, the errors and the
+        """Measure the provider in every registered Project (in a thread, so the window stays usable; `wait` runs it here); the progress, the errors and the
         new results show in the window; `done()` is called at the end."""
         box = {}
         name = self.provider

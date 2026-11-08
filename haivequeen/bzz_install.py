@@ -1,7 +1,7 @@
 """Install the interactive inbox workflow into the user's CLI profiles."""
 from pathlib import Path
 
-PROMPT = """Handle open HaiveQueen plan questions across all registered Apiaries.
+PROMPT = """Handle open HaiveQueen plan questions across all registered Projects.
 Run `bzz questions --open` and inspect the JSON; report the open plan questions.
 Find registered project names and workspaces in the `projects` list of the machine
 config.toml (use `haivequeen.config.load_config()`), and for each question read
@@ -9,7 +9,7 @@ config.toml (use `haivequeen.config.load_config()`), and for each question read
 question's workspace cannot be found, report it and leave that question open.
 Investigate technical questions yourself. Questions about behaviour, content or
 design, and questions matching ownerTopics, must go to the user, one at a time.
-Number those owner questions "Question X of Y" in that Apiary's configured
+Number those owner questions "Question X of Y" in that Project's configured
 language. Never invent an owner answer.
 For each answer create a unique UTF-8 TOML file in the corresponding
 <workspace>/.haivequeen/inbox/ directory with one `[[answer]]` table containing

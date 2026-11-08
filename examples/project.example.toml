@@ -1,7 +1,7 @@
 # Project settings: <project>\.haivequeen\project.toml
 name = "example"
 colour = "cyan"
-compileCheckEnabled = true        # integration steps that run; an Apiary file without these keys keeps all three on
+compileCheckEnabled = true        # integration steps that run; an project file without these keys keeps all three on
 buildEnabled = true
 deployEnabled = false
 integrationBranch = "main"

@@ -33,7 +33,7 @@ TEXT = {
     "slots": (N_("Simultaneous agents"), N_("How many agents of this provider may work at the same time.")),
     "use": (N_("Priority"), N_("A preferred provider gets work first; a fallback provider only when the preferred ones are busy or not available.")),
     "capabilities": (N_("Capabilities"), N_("What this provider may be used for; a task only goes to a provider that has the capability it needs.")),
-    "beeMode": (N_("Bee mode"), N_("Subagent: the Queen runs her Bees inside her own process on the same provider; Process: every Bee is a separate agent and goes to the provider with the best reserve.")),
+    "beeMode": (N_("Agent mode"), N_("Subagent: the Queen runs her Agents inside her own process on the same provider; Process: every Agent is a separate agent and goes to the provider with the best reserve.")),
     "allowedTools": (N_("Commands allowed without asking"), N_("Commands agents may run without asking, one per line.")),
     "args": (N_("Arguments"), N_("The arguments HaiveQueen gives to the CLI, one per line; {model}, {effort} and the like are filled in at the start.")),
     "own": (N_("Own settings"), N_("Other settings of this provider exactly as they stand in config.toml; a new setting is written as typed.")),
@@ -276,7 +276,7 @@ class ProviderPages:
         self.bee_field(box, data)
 
     def bee_field(self, box, data):
-        """Bee mode in Use: Subagent or Process with one explanation. Subagent is greyed out where HaiveQueen has no embedded Bees (another CLI than
+        """Agent mode in Use: Subagent or Process with one explanation. Subagent is greyed out where HaiveQueen has no embedded Agents (another CLI than
         Claude Code, a Local LLM provider); such a provider shows Process."""
         from . import servers
         labels = {"subagent": tr("Subagent"), "process": tr("Process")}
@@ -351,7 +351,7 @@ class ProviderPages:
     # ------------------------------------------------------------ choices on the provider page
 
     def choose_cli(self, label):
-        """Set the shown provider to the chosen CLI (protocol, command, arguments, Bee mode); a CLI that is not offered for the access type (Custom CLI is
+        """Set the shown provider to the chosen CLI (protocol, command, arguments, Agent mode); a CLI that is not offered for the access type (Custom CLI is
         offered only for Subscription) changes nothing; Custom CLI keeps the values; a provider whose name the user did not edit takes the new proposal."""
         if not self.collect():
             return

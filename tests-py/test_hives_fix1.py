@@ -1,6 +1,6 @@
 """Tests of the live defects found after the first resume: a Queen never waits on an owner question for branch and worktree (A3, A13), every
-non-start of a Hive and every round is logged with its reason, migrated project files that still say `repo` name the code repo, and the
-overview shows nothing about a language model of the Beekeeper (D1, D18)."""
+non-start of a Plan and every round is logged with its reason, migrated project files that still say `repo` name the code repo, and the
+overview shows nothing about a language model of the Orchestrator (D1, D18)."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,7 +39,7 @@ class PlanBranchTests(RoundCase):
 
 
 class NoStartReasonTests(RoundCase):
-    """Every Hive that does not start gets a reason in the log, and no technical question goes to the owner."""
+    """Every Plan that does not start gets a reason in the log, and no technical question goes to the owner."""
 
     def test_unknown_branch_asks_nobody_and_logs_the_reason(self):
         """A plan with an automatic branch logs a worktree preparation failure."""
@@ -62,11 +62,11 @@ class NoStartReasonTests(RoundCase):
         self.assertIn("DUMMY-PLAN not started: worktree for branch feat/x could not be prepared", self.log())
 
     def test_hive_limit_is_logged(self):
-        """With the Hive limit reached, the waiting Hive says so."""
+        """With the Plan limit reached, the waiting Plan says so."""
         self.machine["hives"] = 0
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
-        self.assertIn("DUMMY-PLAN not started: Hive limit 0 reached", self.log())
+        self.assertIn("DUMMY-PLAN not started: Plan limit 0 reached", self.log())
 
     def test_low_ram_is_logged(self):
         """Too little free RAM is a logged reason, not a silent skip."""
@@ -114,7 +114,7 @@ class LegacyRepoKeyTests(unittest.TestCase):
 
 
 class ProcessStartTests(RoundCase):
-    """A Queen and a Bee both start as hidden processes of their own through launch_headless (A3, D3)."""
+    """A Queen and an Agent both start as hidden processes of their own through launch_headless (A3, D3)."""
 
     def start(self, phase):
         """Start one agent of this phase through the real start path with the headless launch recorded; return the names it was called with."""
@@ -137,12 +137,12 @@ class ProcessStartTests(RoundCase):
         self.assertEqual(self.start("queen"), ["Ada"])
 
     def test_process_bee_starts_headless(self):
-        """A Bee process is started as a hidden process."""
+        """An Agent process is started as a hidden process."""
         self.assertEqual(self.start("bee"), ["Ada"])
 
 
 class DeadBrainCodeTests(RoundCase):
-    """The Beekeeper calls no language model, so the brain and triage code of the old round is gone (D18, A10)."""
+    """The Orchestrator calls no language model, so the brain and triage code of the old round is gone (D18, A10)."""
 
     def test_old_round_code_is_gone(self):
         """No old per-project round, no triage start, no brain module."""
@@ -161,7 +161,7 @@ class DeadBrainCodeTests(RoundCase):
 
 
 class QueenStartTests(RoundCase):
-    """Queens start with a short female name; the Beekeeper is never called Queen (A2, A3, D1)."""
+    """Queens start with a short female name; the Orchestrator is never called Queen (A2, A3, D1)."""
 
     def test_runner_command_has_no_empty_argument(self):
         """An empty argument such as --package "" is left out; the command never holds one."""
@@ -187,10 +187,10 @@ class QueenStartTests(RoundCase):
         self.assertEqual(len(names), len(set(names)))
 
     def test_loop_start_names_the_beekeeper(self):
-        """The loop start line says Beekeeper, not Queen."""
+        """The loop start line says Orchestrator, not Queen."""
         loop.run_loop(self.conn, self.machine, rounds=1, sleep=lambda s: None, round_kwargs={"free_ram": lambda: 16.0, "settle": 0})
         text = (runtime.mirror_dir("testproj") / runtime.MIRRORS["events"]).read_text(encoding="utf-8")
-        self.assertIn("Beekeeper started (round every", text)
+        self.assertIn("Orchestrator started (round every", text)
         self.assertNotIn("Queen started", text)
 
 
@@ -214,7 +214,7 @@ class RunnerCrashTests(RoundCase):
 
 
 class StallQuestionTests(RoundCase):
-    """Owner questions of the removed stop rules (STALL-*) never block a Hive (E10)."""
+    """Owner questions of the removed stop rules (STALL-*) never block a Plan (E10)."""
 
     def finish(self, name, final="", status="done", project="testproj"):
         """Simulate a finished runner, including its process exit."""
@@ -228,7 +228,7 @@ class StallQuestionTests(RoundCase):
         return [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] in ("running", "starting")][0]
 
     def test_only_stall_question_does_not_make_the_hive_wait(self):
-        """A Queen that ends with WAITING_FOR_OWNER while only a STALL question is open leaves the Hive waiting, not in 'answer'."""
+        """A Queen that ends with WAITING_FOR_OWNER while only a STALL question is open leaves the Plan waiting, not in 'answer'."""
         from haivequeen import db
         first = self.start_queen()
         db.add_question(self.conn, "testproj", REL, "STALL-P1", "package stopped", "")
@@ -237,7 +237,7 @@ class StallQuestionTests(RoundCase):
         self.assertNotEqual(hives.get(self.conn, "testproj", REL)["state"], "answer")
 
     def test_stall_question_is_not_in_the_wait_list(self):
-        """With a real and a STALL question open, the Hive waits only for the real one."""
+        """With a real and a STALL question open, the Plan waits only for the real one."""
         import json
         from haivequeen import db
         first = self.start_queen()
@@ -249,10 +249,10 @@ class StallQuestionTests(RoundCase):
 
 
 class ApiaryWordTests(RoundCase):
-    """F11: CLI messages call a project an Apiary."""
+    """F11: CLI messages call a project a Project."""
 
     def test_unknown_apiary_message(self):
-        """A Hive whose Apiary is not configured is reported as an unknown Apiary."""
+        """A Plan whose Project is not configured is reported as an unknown Project."""
         import argparse
         import contextlib
         import io
@@ -261,7 +261,7 @@ class ApiaryWordTests(RoundCase):
         with mock.patch.object(cli, "_resolve_hive", return_value={"project": "ghost", "plan_path": "x"}), contextlib.redirect_stdout(io.StringIO()) as buf:
             code = cli.cmd_requeen(argparse.Namespace(hive="x", provider=None), self.conn)
         self.assertEqual(code, 1)
-        self.assertIn("Apiary", buf.getvalue())
+        self.assertIn("Project", buf.getvalue())
         self.assertNotIn("project not found", buf.getvalue())
 
 

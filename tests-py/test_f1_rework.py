@@ -49,9 +49,9 @@ class Texts(pf.FormCase):
         for language in ("English", "German"):
             with self.subTest(language=language), mock.patch("haivequeen.i18n.machine_language", return_value=language):
                 win = self.window()
-                label, help_ = ("Failed attempts before a stronger model", "After this many failed attempts of a Bee, HaiveQueen uses the next stronger model class.")
+                label, help_ = ("Failed attempts before a stronger model", "After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class.")
                 if language == "German":
-                    label, help_ = ("Fehlversuche bis zum stärkeren Modell", "Nach so vielen Fehlversuchen einer Bee nimmt HaiveQueen die nächste stärkere Modellklasse.")
+                    label, help_ = ("Fehlversuche bis zum stärkeren Modell", "Nach so vielen Fehlversuchen eines Agenten nimmt HaiveQueen die nächste stärkere Modellklasse.")
                 texts = base.label_texts(win.form)
                 self.assertIn(label, texts)
                 self.assertIn(help_, texts)
@@ -452,9 +452,9 @@ class ApiaryTexts(apiary_page.ApiaryPageCase):
         for language in ("English", "German"):
             with mock.patch("haivequeen.i18n.machine_language", return_value=language):
                 win = self.window("Plain")
-                label, help_ = ("Failed attempts before a stronger model (empty: General value)", "Overrides the General value for this Apiary.")
+                label, help_ = ("Failed attempts before a stronger model (empty: General value)", "Overrides the General value for this Project.")
                 if language == "German":
-                    label, help_ = ("Fehlversuche bis zum stärkeren Modell (leer: allgemeiner Wert)", "Überschreibt den allgemeinen Wert für diese Apiary.")
+                    label, help_ = ("Fehlversuche bis zum stärkeren Modell (leer: allgemeiner Wert)", "Überschreibt den allgemeinen Wert für dieses Projekt.")
                 texts = [w.cget("text") for w in apiary_page.descendants(win.form) if w.winfo_class() == "Label"]
                 self.assertIn(label, texts)
                 self.assertIn(help_, texts)

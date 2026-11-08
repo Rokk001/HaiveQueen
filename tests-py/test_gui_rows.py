@@ -103,7 +103,7 @@ class RowsTest(unittest.TestCase):
         with db.transaction(self.conn):
             db.add_event(self.conn, "ODP", "note", "Ava talks", agent="ODP__queen")
             db.add_event(self.conn, "ODP", "note", "Sophia works", agent="ODP__bee")
-            db.add_event(self.conn, "HaiveQueen", "note", "other apiary")
+            db.add_event(self.conn, "HaiveQueen", "note", "other project")
             db.add_event(self.conn, "ODP", "rounds", "round done: 0 Queen(s) started")
         self.win.refresh()
 
@@ -120,12 +120,12 @@ class RowsTest(unittest.TestCase):
         """A Hive row filters the log to its Hive, a Bee row to that Bee, Escape removes the filter."""
         self.log_events()
         self.win.select(("hives", 0))
-        self.assertEqual(sorted(line[2] for line in self.win.visible_log() if line[2] in ("Ava talks", "Sophia works", "other apiary")), ["Ava talks", "Sophia works"])
+        self.assertEqual(sorted(line[2] for line in self.win.visible_log() if line[2] in ("Ava talks", "Sophia works", "other project")), ["Ava talks", "Sophia works"])
         rows = self.win.snap["bees"]
         self.win.select(("bees", next(i for i, r in enumerate(rows) if r["name"] == "Sophia")))
         self.assertEqual([line[2] for line in self.win.visible_log()], ["Sophia works"])
         self.win.clear_log_filter()
-        self.assertIn("other apiary", [line[2] for line in self.win.visible_log()])
+        self.assertIn("other project", [line[2] for line in self.win.visible_log()])
 
     # The log can fill the right column.
     def test_big_log_replaces_limits_and_status(self):
@@ -180,7 +180,7 @@ class RowsTest(unittest.TestCase):
 
     # The footer only offers what has a purpose.
     def test_footer_has_six_buttons(self):
-        """The state button, the apiary filter, hives, questions, config and help are the only clickable parts of the footer."""
+        """The state button, the project filter, plans, questions, config and help are the only clickable parts of the footer."""
         footer = [h for h in self.win.hits if h[1] >= 860 * self.win.scale]
         self.assertEqual(len(footer), 6)
 
@@ -222,7 +222,7 @@ class RowsTest(unittest.TestCase):
 
     # The Queen menu offers a restart on every other provider and runs bzz requeen with it.
     def test_queen_menu_offers_a_restart_on_another_provider(self):
-        """With a second provider the menu lists "Restart Queen ... on codex" right after the plain restart; choosing it runs `requeen <hive> codex`."""
+        """With a second provider the menu lists "Restart Queen ... on codex" right after the plain restart; choosing it runs `requeen <plan> codex`."""
         with mock.patch.object(self.win, "queen_providers", return_value=["codex"]), mock.patch("haivequeen.gui_dialog.popup_menu") as popup:
             self.win.hive_menu()
         items = popup.call_args[0][1]

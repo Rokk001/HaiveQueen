@@ -7,14 +7,14 @@ from haivequeen import db, gui_data, hives, plans, runtime
 
 # German state text of the Hive as the dashboard shows it without a running Queen.
 def hive_text(conn):
-    """"Queen: <state>" of the Hive of the dummy plan: the state label, or "No active Queen" when it has none."""
+    """"Queen: <state>" of the Plan of the dummy plan: the state label, or "No active Queen" when it has none."""
     data = next(iter(hives.hive_data(conn, 'testproj', runtime.list_agents(conn, 'testproj', 'active'), REL)), None) or {"queen": None, "bees": [], **(hives.get(conn, 'testproj', REL) or {})}
     return "Queen: " + (gui_data.status_text(data) or "No active Queen")
 
 
 # Exercise completion evidence and preserve unresolved owner decisions.
 class HiveLifecycleRecoveryTests(RoundCase):
-    """Reconcile stale Hive rows without inventing completion evidence."""
+    """Reconcile stale Plan rows without inventing completion evidence."""
 
     # Seed a stale Hive and an integrated row whose ready link was lost.
     def integrated(self):
@@ -34,7 +34,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
 
     # DONE source status must retire its stale Hive without starting another Queen.
     def test_done_plan_retires_stale_hive_and_reservation(self):
-        """A completed plan cannot retain a running Hive or integration place."""
+        """A completed plan cannot retain a running Plan or integration place."""
         self.plan('DONE')
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.conn.execute("UPDATE hives SET state='running'")
@@ -58,6 +58,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
         runtime.queue_upsert(self.conn, 'testproj', 'feature/recovery', status='integrated')
         qid = db.add_question(self.conn, 'testproj', REL, 'owner-check', 'Check it', '')
         db.answer_question(self.conn, qid, 'ok', 'owner')
+        self.conn.execute("UPDATE questions SET status='answered',owner_check_result=? WHERE id=?", ("accepted", qid))
         automatic = db.add_question(self.conn, 'testproj', REL, 'queen-ended', 'Old automatic end', '')
         self.recover_round()
         self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding='utf-8')).status, 'DONE')
@@ -67,7 +68,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
 
     # An unanswered owner check must remain open even after integration.
     def test_missing_ready_link_preserves_pending_owner_check(self):
-        """Recovery parks the Hive at the existing owner question."""
+        """Recovery parks the Plan at the existing owner question."""
         ready = self.integrated()
         runtime.queue_upsert(self.conn, 'testproj', 'feature/recovery', status='integrated')
         qid = db.add_question(self.conn, 'testproj', REL, 'owner-check', 'Check it', '')
@@ -78,11 +79,12 @@ class HiveLifecycleRecoveryTests(RoundCase):
 
     # A rejection must invalidate the old integrated row across future rounds.
     def test_rejected_check_does_not_reclose_from_old_queue_evidence(self):
-        """Only a subsequent integration may close a reopened Hive."""
+        """Only a subsequent integration may close a reopened Plan."""
         ready = self.integrated()
         runtime.queue_upsert(self.conn, 'testproj', 'feature/recovery', status='integrated')
         qid = db.add_question(self.conn, 'testproj', REL, 'owner-check', 'Check it', '')
         db.answer_question(self.conn, qid, 'Still broken', 'owner')
+        self.conn.execute("UPDATE questions SET status='answered',owner_check_result=? WHERE id=?", ("rejected", qid))
         self.recover_round()
         self.recover_round()
         self.assertNotEqual(hives.get(self.conn, 'testproj', REL)['state'], 'done')
@@ -126,7 +128,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
 
     # Source completion must not retire a Hive whose agents still work.
     def test_done_plan_with_active_agent_is_retained(self):
-        """Both Queens and Bees keep their completed-plan Hive visible until exit."""
+        """Both Queens and Agents keep their completed-plan Plan visible until exit."""
         for phase in ('queen', 'bee'):
             with self.subTest(phase=phase):
                 self.plan('DONE')
@@ -162,7 +164,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
 
     # Completion maintenance must run while Queen starts are paused.
     def test_done_hive_reconciles_before_pause_gate(self):
-        """Paused scheduling still retires an idle completed Hive."""
+        """Paused scheduling still retires an idle completed Plan."""
         self.plan('DONE')
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.conn.execute("UPDATE hives SET state='running'")
@@ -178,6 +180,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
         runtime.queue_upsert(self.conn, 'testproj', 'feature/recovery', status='integrated')
         qid = db.add_question(self.conn, 'testproj', REL, 'owner-check-answered', 'Check it', '')
         db.answer_question(self.conn, qid, 'Still broken', 'owner')
+        self.conn.execute("UPDATE questions SET status='answered',owner_check_result=? WHERE id=?", ("rejected", qid))
         hive = hives.get(self.conn, 'testproj', REL)
         self.assertIsNone(hives.integrated_ready(self.conn, self.env(), hive))
 
@@ -188,6 +191,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
         runtime.queue_upsert(self.conn, 'testproj', 'feature/recovery', status='integrated')
         qid = db.add_question(self.conn, 'testproj', REL, 'owner-check-answered', 'Check it', '')
         db.answer_question(self.conn, qid, 'ist ok', 'owner')
+        self.conn.execute("UPDATE questions SET status='answered',owner_check_result=? WHERE id=?", ("accepted", qid))
         self.recover_round()
         self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'done')
 
@@ -205,12 +209,12 @@ class HiveLifecycleRecoveryTests(RoundCase):
 
     # Stop and pause gates must replace a prior Hive-limit blocker.
     def test_global_stop_states_replace_stale_hive_limit(self):
-        """Each global gate has its actual German label without changing Hive state."""
+        """Each global gate has its actual German label without changing Plan state."""
         self.plan('IN_PROGRESS')
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         for state, label in (('STOP', 'HaiveQueen stopped'), ('PAUSED', 'HaiveQueen paused')):
             with self.subTest(state=state):
-                runtime.kv_set(self.conn, 'testproj', 'hive-blocker:' + REL, 'Hive limit 2 reached')
+                runtime.kv_set(self.conn, 'testproj', 'hive-blocker:' + REL, 'Plan limit 2 reached')
                 with mock.patch('haivequeen.loop.stop_flag') as flag, \
                      mock.patch('haivequeen.runstate.starts_allowed', return_value=False), \
                      mock.patch('haivequeen.runstate.get_state', return_value={'state': state}):
@@ -233,7 +237,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
 
     # Global gate presentation must not override owner questions or active agents.
     def test_global_gate_preserves_owner_priority_and_active_agent(self):
-        """Question IDs remain visible and active Hive blockers are untouched."""
+        """Question IDs remain visible and active Plan blockers are untouched."""
         self.plan('IN_PROGRESS')
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         qid = db.add_question(self.conn, 'testproj', REL, 'design', 'Real decision', '')

@@ -1,4 +1,4 @@
-"""Fixed Queen and Bee instructions live in the roles/ folder of the repository, not in code.
+"""Fixed Queen and Agent instructions live in the roles/ folder of the repository, not in code.
 
 A role file is plain text. {{name}} marks a value that comes from the settings or the plan;
 every start reads the file again, so a changed file takes effect at the next start.

@@ -1,5 +1,5 @@
-"""Scheduling fix: every Bee holds a slot of its provider , a Bee goes to another provider when the Queen's is full,
-a new Queen of an existing Hive chooses her provider by the normal provider choice, and the texts describe it."""
+"""Scheduling fix: every Agent holds a slot of its provider , an Agent goes to another provider when the Queen's is full,
+a new Queen of an existing Plan chooses her provider by the normal provider choice, and the texts describe it."""
 import json
 import os
 import unittest
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class SlotAndProviderChoiceTests(RoundCase):
-    """Database-backed rounds and Bee starts."""
+    """Database-backed rounds and Agent starts."""
 
     def limits(self, **used):
         """Make the quota reserve of the providers known: name -> used percent, all with the same reset."""
@@ -299,13 +299,13 @@ class SlotTextTests(unittest.TestCase):
             self.assertNotIn('keinen eigenen Slot', text)
         self.assertNotIn('never silently change it', queen)
         self.assertNotIn('restart its package with the same class and provider', queen)
-        self.assertNotIn('Queen plus a Bee process', readme)
+        self.assertNotIn('Queen plus an Agent process', readme)
         self.assertNotIn('restart the Queen (on the same provider', readme)
 
     def test_texts_describe_slots_and_provider_choice(self):
         readme, queen, _ = self.texts()
-        self.assertIn('every Bee takes one slot', readme)
-        self.assertIn('every Bee takes one slot', queen)
+        self.assertIn('every Agent takes one slot', readme)
+        self.assertIn('every Agent takes one slot', queen)
         self.assertIn('another provider', queen)
         self.assertIn('chooses its provider by the normal provider choice', readme)
 

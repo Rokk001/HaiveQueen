@@ -20,7 +20,6 @@ class ProtocolCompatibilityTests(unittest.TestCase):
         self.assertEqual(desktop.result_text("start", result, "English"), "HQ has started.")
         self.assertEqual(desktop.result_text("start", result, "French"), "HQ has started.")
 
-    def test_owner_acceptance_in_both_languages(self):
-        for answer in ("yes", "good", "looks good", "ja", "passt"):
-            self.assertTrue(hives.owner_check_ok(answer), answer)
-        self.assertFalse(hives.owner_check_ok("no"))
+    def test_owner_acceptance_has_no_runtime_word_list(self):
+        self.assertFalse(hasattr(hives, 'owner_check_ok'))
+        self.assertFalse(hasattr(hives, 'OWNER_CHECK_OK'))

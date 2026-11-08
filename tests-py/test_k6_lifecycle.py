@@ -1,5 +1,5 @@
 """K6 plan life cycle: statuses and old names, start on a draft, created branch, question for an existing branch,
-visible header errors, faults without an Apiary, a stopped Bee stays stopped and the same-round notice of startable packages."""
+visible header errors, faults without a Project, a stopped Agent stays stopped and the same-round notice of startable packages."""
 import sqlite3
 import subprocess
 import sys
@@ -68,7 +68,7 @@ class StatusNameTests(RoundCase):
         self.assertEqual(self.status(), "RUNNING")
 
     def test_running_and_waiting(self):
-        """RUNNING <-> WAITING: no live agent and a waiting Hive make it WAITING; what for is shown; a live agent makes it RUNNING again."""
+        """RUNNING <-> WAITING: no live agent and a waiting Plan make it WAITING; what for is shown; a live agent makes it RUNNING again."""
         self.plan("RUNNING", [{"id": "P1", "title": "First"}])
         hives.create(self.conn, "testproj", REL, "claude", "FF0000")
         self.conn.execute("UPDATE hives SET state='answer', questions_json='[7]' WHERE project='testproj' AND plan_path=?", (REL,))
@@ -132,7 +132,7 @@ def git(repo, *args):
 
 
 class BranchTests(RoundCase):
-    """The derived branch and an existing branch without Hive history on a real repository with a remote."""
+    """The derived branch and an existing branch without Plan history on a real repository with a remote."""
 
     def setUp(self):
         super().setUp()
@@ -222,7 +222,7 @@ class HeaderErrorTests(RoundCase):
 
 
 class GlobalFaultTests(RoundCase):
-    """A fault without an Apiary is shown in the GUI status panel and as a desktop message, never as an inbox question."""
+    """A fault without a Project is shown in the GUI status panel and as a desktop message, never as an inbox question."""
 
     def test_loop_vanished_is_shown_not_asked(self):
         shown = []
@@ -248,7 +248,7 @@ class GlobalFaultTests(RoundCase):
 
     def test_apiary_fault_goes_into_its_own_inbox(self):
         self.add_project("Other")
-        qid = faults.file_fault(self.conn, "Other", "no_start", "Apiary Other: no starts")
+        qid = faults.file_fault(self.conn, "Other", "no_start", "Project Other: no starts")
         self.assertEqual(db.rows(self.conn, "SELECT project FROM questions WHERE id=?", (qid,))[0]["project"], "Other")
 
     def fake_overview(self):
@@ -257,7 +257,7 @@ class GlobalFaultTests(RoundCase):
 
 
 class StoppedPackageTests(RoundCase):
-    """"Stop Bee" leaves the package stopped until the owner releases it with "Resume package"."""
+    """"Stop Agent" leaves the package stopped until the owner releases it with "Resume package"."""
 
     def setUp(self):
         super().setUp()
@@ -314,7 +314,7 @@ class StoppedPackageTests(RoundCase):
         return f.read_text(encoding="utf-8") if f.is_file() else ""
 
     def test_stop_bee_on_an_embedded_bee_stays_pending_until_its_end_is_confirmed(self):
-        """X on an embedded (subagent) Bee stops its package and tells the Queen to end it, but the row stays open and keeps its Bee place
+        """X on an embedded (subagent) Agent stops its package and tells the Queen to end it, but the row stays open and keeps its Agent place
         until the Queen confirms its end; only her result for the package closes it with the outcome stopped."""
         from haivequeen import gui
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
@@ -338,7 +338,7 @@ class StoppedPackageTests(RoundCase):
         notice = self.stop_notice()
         self.assertIn("P1", notice)
         self.assertIn("Cia (P1)", notice)
-        self.assertIn("bzz bee result --outcome interrupted", notice)
+        self.assertIn("bzz agent result --outcome interrupted", notice)
         bees.resume_package(self.conn, "testproj", REL, "P1")   # resuming does not end the subagent either
         self.assertEqual(len(gui_data.embedded_rows(self.conn)), 1)
         self.assertFalse(self.start("P1"))   # no second Bee for the package while the first may still run
@@ -351,7 +351,7 @@ class StoppedPackageTests(RoundCase):
         self.assertEqual(self.stop_notice(), "")
 
     def test_a_pending_stop_survives_a_replacement_and_a_queen_restart(self):
-        """Neither a new Bee start for the package nor a Queen restart proves that the stopped subagent ended: its row stays open."""
+        """Neither a new Agent start for the package nor a Queen restart proves that the stopped subagent ended: its row stays open."""
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
         bees.record_embedded_start(self.conn, "testproj", REL, "P2", "Dia", "medium", "claude")
         bees.stop_package(self.conn, "testproj", REL, "P1")
@@ -366,14 +366,14 @@ class StoppedPackageTests(RoundCase):
         return f.read_text(encoding="utf-8") if f.is_file() else ""
 
     def restart_queen(self, new="Queen-B"):
-        """The old Queen ends without confirming her subagent Bees; a new Queen of the plan starts."""
+        """The old Queen ends without confirming her subagent Agents; a new Queen of the plan starts."""
         self.conn.execute("UPDATE agents SET status='done' WHERE project='testproj' AND name='Queen-A'")
         later = (datetime.now() + timedelta(seconds=5)).isoformat(timespec="seconds")
         self.agent(new, phase="queen", status="running", pid=__import__("os").getpid(), cwd=str(self.wt), started_at=later)
         bees.after_queen_start(self.conn, "testproj", REL)
 
     def test_a_queen_restart_keeps_every_unconfirmed_subagent_bee(self):
-        """a Queen ending proves no end of her native Bees: every open row keeps its place, running or stopping, and the new Queen is told."""
+        """a Queen ending proves no end of her native Agents: every open row keeps its place, running or stopping, and the new Queen is told."""
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
         bees.record_embedded_start(self.conn, "testproj", REL, "P2", "Dia", "medium", "claude", queen="Queen-A")
         bees.stop_package(self.conn, "testproj", REL, "P1")
@@ -385,10 +385,10 @@ class StoppedPackageTests(RoundCase):
         notice = self.queen_notice("Queen-B")
         self.assertIn("Dia (P2", notice)
         self.assertIn("Cia (P1", notice)
-        self.assertIn("bzz bee result --outcome succeeded", notice)
+        self.assertIn("bzz agent result --outcome succeeded", notice)
 
     def test_a_new_bee_start_is_refused_while_an_unconfirmed_bee_holds_the_package(self):
-        """No replacement for a subagent Bee whose end is not confirmed: the start is refused and the old row stays open."""
+        """No replacement for a subagent Agent whose end is not confirmed: the start is refused and the old row stays open."""
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
         self.assertFalse(self.start("P1"))
         self.assertIn("Cia", bees.LAST_REFUSAL)
@@ -457,7 +457,7 @@ class StoppedPackageTests(RoundCase):
         self.assertEqual(self.queen_notice("Queen-B"), "")
 
     def test_stop_bee_on_an_embedded_bee_stops_it_and_tells_its_queen(self):
-        """An embedded (subagent) Bee has no process of its own: X stops its package and tells the Queen to end the subagent."""
+        """An embedded (subagent) Agent has no process of its own: X stops its package and tells the Queen to end the subagent."""
         from haivequeen import gui
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
         queen = dict(runtime.list_agents(self.conn, "testproj", "active")[0])
@@ -491,7 +491,7 @@ class StoppedPackageTests(RoundCase):
 
 
 class StartableNoticeTests(RoundCase):
-    """In the same round the Queen is told which startable packages to start when Bee places are free; the dashboard shows them."""
+    """In the same round the Queen is told which startable packages to start when Agent places are free; the dashboard shows them."""
 
     def setUp(self):
         super().setUp()
@@ -529,7 +529,7 @@ class StartableNoticeTests(RoundCase):
         self.assertEqual(bees.notify_startable(env, REL, {"name": "Queen-A"}, 0), [])   # no free provider slot
 
     def test_a_queen_told_to_hand_off_gets_no_start_notice(self):
-        """A Queen whose HANDOFF file is written must start no new Bees: the old START-PACKAGES notice and the dashboard list are cleared in that round."""
+        """A Queen whose HANDOFF file is written must start no new Agents: the old START-PACKAGES notice and the dashboard list are cleared in that round."""
         self.round()
         self.assertIn("P1", self.notice())
         (self.env().run_dir("Queen-A") / "HANDOFF").write_text("context limit", encoding="utf-8")   # written by an earlier round

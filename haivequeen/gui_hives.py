@@ -1,6 +1,6 @@
-"""Window with the list of all plans of all registered Apiaries and their status, with start, pause, cancel and back to draft on a right click.
+"""Window with the list of all plans of all registered Projects and their status, with start, pause, cancel and back to draft on a right click.
 
-The list also shows plans that never had a Hive. The actions reuse the plan control of hives.py; each one asks first.
+The list also shows plans that never had a Plan. The actions reuse the plan control of plans.py; each one asks first.
 """
 import os
 
@@ -10,14 +10,14 @@ from .i18n import N_, tr
 
 REFRESH_MS = 5000
 LABELS = {"start": N_("Start"), "pause": N_("Pause"), "reject": N_("Cancel plan"), "draft": N_("Back to draft")}
-ASK = {"pause": N_("Pause %s? Running agents keep working, no new Queen or Bee starts."),
+ASK = {"pause": N_("Pause %s? Running agents keep working, no new Queen or Agent starts."),
        "reject": N_("Cancel %s? The plan never starts again by itself; starting it again makes it a draft. Nothing is deleted."),
        "start": N_("Start %s?"), "draft": N_("Put %s back to draft? Nothing is deleted.")}
 
 
 # Every plan of every Apiary.
 def plan_rows(conn) -> list:
-    """One row per plan file of every registered Apiary (and per plan the table knows): apiary, plan_path, name, status, has_hive, stopped, error, waiting_for.
+    """One row per plan file of every registered Project (and per plan the table knows): project, plan_path, name, status, has_hive, stopped, error, waiting_for.
 
     The status comes from the plans table when the plan is in it, else from the plan file. `error` names a broken plan header, an unknown status or class
     (the plan is then not silently a DRAFT or medium); `waiting_for` says what a WAITING plan waits for."""
@@ -60,7 +60,7 @@ def status_text(row) -> str:
 # The actions a plan offers.
 def actions(row) -> list:
     """(label, action) for a row: start for a draft, a paused or a cancelled plan; pause for a sent, prepared or running plan;
-    cancel for a draft or a stopped Hive; back to draft for a stopped or cancelled plan; nothing for DONE."""
+    cancel for a draft or a stopped Plan; back to draft for a stopped or cancelled plan; nothing for DONE."""
     status, stopped = row["status"], row.get("stopped")
     names = []
     if status in ("DRAFT", "PAUSED", "CANCELLED"):
@@ -89,7 +89,7 @@ def run_action(conn, row, action, confirm) -> bool:
 
 # The window.
 class HivesWindow:
-    """A table of all plans (Apiary, Hive, status, Hive yes/no); a right click opens the actions of the row."""
+    """A table of all plans (Project, Plan, status, Plan yes/no); a right click opens the actions of the row."""
 
     def __init__(self, root, conn, mono="Consolas", on_changed=None):
         """Open the window below `root`; `on_changed()` is called after every change."""
@@ -99,10 +99,10 @@ class HivesWindow:
         self.tk, self.conn, self.mono, self.on_changed, self.rows = tk, conn, mono, on_changed, []
         self.root = root
         self.win = tk.Toplevel(root)
-        self.win.title(tr("HaiveQueen Hives"))
+        self.win.title(tr("HaiveQueen Plans"))
         self.win.geometry("900x560")
         self.tree = ttk.Treeview(self.win, columns=("apiary", "hive", "status", "has"), show="headings", selectmode="browse")
-        for column, title, width in (("apiary", tr("Apiary"), 160), ("hive", tr("Hive"), 300), ("status", tr("Status"), 250), ("has", tr("Has Hive"), 80)):
+        for column, title, width in (("apiary", tr("Project"), 160), ("hive", tr("Plan"), 300), ("status", tr("Status"), 250), ("has", tr("Started"), 80)):
             self.tree.heading(column, text=title)
             self.tree.column(column, width=width, anchor="w")
         bar = gui_dialog.scrollbar(self.win, self.tree.yview)

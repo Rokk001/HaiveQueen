@@ -139,7 +139,7 @@ def claude_integration_permissions(project, plan, remote, branch, python, cli):
 
 
 def claude_hook_command(python, hook_script, policy_file):
-    """Command line of the own-Hive PreToolUse hook (forward slashes and double quotes work in Bash and cmd)."""
+    """Command line of the own-Plan PreToolUse hook (forward slashes and double quotes work in Bash and cmd)."""
     for value in (python, hook_script, policy_file):
         if any(c in str(value) for c in '"$`!\r\n'):
             raise ValueError("unsupported character in Claude hook path: %s" % value)
@@ -148,7 +148,7 @@ def claude_hook_command(python, hook_script, policy_file):
 
 
 def claude_hook_policy(project, plan, agent, remote, branch, python, cli, own_branch=None, name=None):
-    """Values the own-Hive hook (haivequeen/claude_hook.py) compares each Bash or PowerShell command with;
+    """Values the own-Plan hook (haivequeen/claude_hook.py) compares each Bash or PowerShell command with;
     own_branch is the Queen's plan branch known at the start (None: the hook looks it up again when it runs),
     name the Queen's agent name (None: no `agents update-fields`, no later branch lookup)."""
     return {"project": str(project), "plan": str(plan), "agent": agent, "name": str(name) if name else None,
@@ -157,7 +157,7 @@ def claude_hook_policy(project, plan, agent, remote, branch, python, cli, own_br
 
 
 def claude_merge_run_settings(settings, grants, hook_command=None):
-    """Add run grants and the own-Hive hook without changing provider settings, rules or hooks."""
+    """Add run grants and the own-Plan hook without changing provider settings, rules or hooks."""
     if not isinstance(settings, dict) or not isinstance(settings.get("permissions", {}), dict):
         raise ValueError("Claude settings and permissions must be objects")
     result = dict(settings)
@@ -290,7 +290,7 @@ def tracked(repo, name) -> bool:
 
 def project_rules(settings, repo, protocol=None, cwd=None) -> dict:
     """The complete project rules: the instruction files checked in to the project repository `repo` plus those of the upstream repository when the
-    Apiary's settings name one (`upstreamRepo`); without that setting there are none. Returns {"inline": [(label, text)], "byProvider": [label]}.
+    Project's settings name one (`upstreamRepo`); without that setting there are none. Returns {"inline": [(label, text)], "byProvider": [label]}.
     A file that the provider loads by itself from `cwd` (checked in there) is listed under byProvider and not copied again; files with the same text count once."""
     sources = [("", Path(repo))] if repo else []
     up = str((settings or {}).get(UPSTREAM_KEY) or "").strip()
@@ -338,7 +338,7 @@ def section(text, heading_part) -> str:
 
 def queen_load(conn, project, workspace, plan, predecessor=None) -> str:
     """What a Queen loads besides her role file and the project rules: the plan, the plan's state file, the handoff of her predecessor (if any), and the
-    decisions and the owner answers of her Apiary. Nothing else."""
+    decisions and the owner answers of her Project. Nothing else."""
     from . import plans
     base = Path(workspace)
     plan_file = base / plan
@@ -360,7 +360,7 @@ def queen_load(conn, project, workspace, plan, predecessor=None) -> str:
         parts.append("# Handoff of your predecessor %s\n\n%s" % (predecessor, handoff or "(none written)"))
     all_decisions = runtime.list_decisions(conn, project, active_only=False)
     decisions = [d for d in all_decisions if d["status"] == "active" and (not d["plan_path"] or d["plan_path"] == plan)]
-    parts.append("# Decisions of this plan and Apiary\n\n" + ("\n".join("- #%s%s: %s" % (d["id"], " (plan %s)" % d["plan_path"] if d.get("plan_path") else "", d["text"]) for d in decisions) or "(none)"))
+    parts.append("# Decisions of this plan and Project\n\n" + ("\n".join("- #%s%s: %s" % (d["id"], " (plan %s)" % d["plan_path"] if d.get("plan_path") else "", d["text"]) for d in decisions) or "(none)"))
     # Answered questions normally have a decision containing the question and answer.
     # Keep older orphan answers, without reviving answers whose decision was superseded.
     decision_texts = {d["text"] for d in all_decisions}

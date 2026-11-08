@@ -1,4 +1,4 @@
-"""The ready gate: what a Queen's `bzz ready` needs before a Hive branch is accepted.
+"""The ready gate: what a Queen's `bzz ready` needs before a Plan branch is accepted.
 
 1. The requirement list. The Queen answers the completeness question in the state file beside the plan, in a section `## Completeness`, one line per
    requirement: `- <id>: done | <evidence>` (evidence is a file, commit or test). Every requirement id of the plan (section Requirements of the
@@ -202,16 +202,16 @@ def gate(env, plan, queen):
 
 
 def start_check_agent(env, queen, request, sleep=time.sleep):
-    """Start the check agent through the agent runner like a Bee and wait for its answer; returns (verdict, text).
+    """Start the check agent through the agent runner like an Agent and wait for its answer; returns (verdict, text).
 
     The configured ready-check class runs on an eligible provider with a free slot and limit, and it
-    takes a slot like a Bee. No provider, no slot, a failed start, an agent that ends without verdict or a timeout (setting readyCheckTimeoutSec)
+    takes a slot like an Agent. No provider, no slot, a failed start, an agent that ends without verdict or a timeout (setting readyCheckTimeoutSec)
     give `unavailable`."""
     from . import agent_process, hives, loop, scheduler
     plan = request["plan"]
     hive = hives.get(env.conn, env.name, plan)
     if not hive:
-        return "unavailable", "no Hive of this plan"
+        return "unavailable", "no Plan of this plan"
     active = runtime.list_agents(env.conn, None, "active")
     running = [{**a, "status": "running"} for a in active if agent_process.counts(a)]
     free = scheduler.provider_free(env.providers, running, env.conn)

@@ -1,4 +1,4 @@
-"""Owner decisions 741 and 742: the simplified Apiary page (Repository, Plans folder, labels, Advanced) and fields only as wide as their values need."""
+"""Owner decisions 741 and 742: the simplified Project page (Repository, Plans folder, labels, Advanced) and fields only as wide as their values need."""
 import sys
 import tempfile
 import tkinter
@@ -67,7 +67,7 @@ def descendants(widget):
 
 
 class ApiaryPageCase(unittest.TestCase):
-    """A settings folder with two registered Apiaries: Plain (plans in docs/plans of its repository) and HaiveQueen (a separate plans folder)."""
+    """A settings folder with two registered Projects: Plain (plans in docs/plans of its repository) and HaiveQueen (a separate plans folder)."""
 
     def setUp(self):
         try:
@@ -108,7 +108,7 @@ class ApiaryPageCase(unittest.TestCase):
         db.upsert_project(self.conn, "HaiveQueen", str(self.plans), "magenta", 0)
 
     def window(self, apiary=None):
-        """The settings window, showing the page of the Apiary named `apiary` when given."""
+        """The settings window, showing the page of the Project named `project` when given."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.base)
         if apiary is not None:
             win.pick_tab("apiaries")
@@ -132,7 +132,7 @@ class ApiaryPageCase(unittest.TestCase):
 
 
 class PlaceTests(unittest.TestCase):
-    """Decision 741 (1), (2): the folders and the worktree prefix of an Apiary."""
+    """Decision 741 (1), (2): the folders and the worktree prefix of a Project."""
 
     def test_repository_and_plans_folder_from_the_settings(self):
         ws, code = str(Path("/a/plans").resolve()), str(Path("/a/code").resolve())
@@ -219,7 +219,7 @@ class ApiaryPageTests(ApiaryPageCase):
         self.assertNotIn("codeRepo", gui_config.load_raw(self.split_file))
 
     def new_apiary(self, win, name, repository, plans=""):
-        """Add an Apiary on the tab Apiaries and type its name and folders."""
+        """Add a Project on the tab Projects and type its name and folders."""
         win.pick_tab("apiaries")
         win.add_entry()
         self.set_entry(win, ("entry", "name"), name)
@@ -350,7 +350,7 @@ class FieldSizeTests(ApiaryPageCase):
             self.check_page(win, geometry)
             win.win.update()
             columns = {win.rows[path].winfo_rootx() for path in win.rows if path[0] in ("place", "entry") or (path[0] == "file" and len(path) == 2)}
-            self.assertEqual(len(columns), 1, "Apiary: labels and fields in one column each")
+            self.assertEqual(len(columns), 1, "Project: labels and fields in one column each")
 
     def test_short_and_path_fields(self):
         self.assertEqual(gui_config.field_width("integrationBranch", "main"), gui_config.SHORT_WIDTH)

@@ -8,7 +8,7 @@ pyproject.toml changed, starts the loop and checks the first round. A failure af
 The live folder is the folder of this package: no path of a machine is written into the tool.
 
 With a version (`self-update --worker --version X`, started by the update button) the same worker installs the release X instead: it
-fetches the tag vX from origin, fast-forwards to it and never pushes. While the worker holds its lock no Queen or Bee starts; its own
+fetches the tag vX from origin, fast-forwards to it and never pushes. While the worker holds its lock no Queen or Agent starts; its own
 restart carries the variable BZZ_UPDATE_RESTART, which `start` accepts while the lock is held.
 
 The checkout update without a version is the one-time transition: it is retired (refused with result "retired", no row, no
