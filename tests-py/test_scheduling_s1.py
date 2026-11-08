@@ -181,6 +181,34 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.assertFalse(self.queens())
         self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'codex_wait')
 
+    def third_images_provider(self):
+        """Add a third provider that offers images like codex, after codex in the list."""
+        self.machine['providers'].append(provider('gemini', 2, caps=('images',), limit='codex', proto='codex'))
+
+    # C-2: the Queen's provider is full and two providers offer the needed capability: the Bee goes to the one with the higher reserve, not the first free one.
+    def test_bee_with_capability_goes_to_higher_reserve_provider(self):
+        self.third_images_provider()
+        self.machine['providers'][0]['slots'] = 1
+        self.limits(claude=0, codex=90, gemini=10)
+        self.plan('IN_PROGRESS', [{'id': 'I1', 'title': 'Images', 'class': 'medium', 'capability': 'images'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('Ada', phase='queen', status='running', provider='claude', pid=42)
+        wt = self.base / 'bee-wt'
+        wt.mkdir()
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), mock.patch('haivequeen.loop._do_start', return_value=True):
+            bees.start_process(self.env(), REL, 'I1', 'Bea', 'medium', 'task', ['one'], [], [], cwd=str(wt))
+        row = self.conn.execute('SELECT provider FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', ('testproj', REL, 'I1')).fetchone()
+        self.assertEqual(row[0] if row else bees.LAST_REFUSAL, 'gemini')
+
+    # C-2 ready check: with the awaited provider full, the provider named for a waiting capability package is the one with the higher reserve.
+    def test_ready_check_names_higher_reserve_capable_provider(self):
+        self.third_images_provider()
+        self.limits(claude=0, codex=90, gemini=10)
+        self.plan('IN_PROGRESS', [{'id': 'I1', 'title': 'Images', 'capability': 'images'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        other = bees.other_provider_for_waiting(self.env(), REL, 'claude', {'claude': 0, 'codex': 2, 'gemini': 2})
+        self.assertEqual(other, 'gemini')
+
     # C-3: an explicit owner choice 'restart the Queen on provider X' binds the Hive to X until the owner changes it.
     def test_owner_restart_choice_binds_the_hive(self):
         self.limits(claude=10, codex=80)
