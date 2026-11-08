@@ -154,14 +154,13 @@ def status_text(hive) -> str:
 def bee_tables(conn) -> tuple:
     """(assigned, completed): {(project, plan, package): (class, provider)} of the Bee assignments and the set of (project, plan, package) that are done.
 
-    A package is done when a Bee finished it or its Queen reported it done (table package_progress), unless the owner rejected it. Both are empty when the tables do not exist yet (older database)."""
+    A package is done only when its current package_progress state is done. Older databases without that table have no completed packages."""
     have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('bee_assignments','bee_completed','package_progress')")}
     assigned = {(r[0], r[1], r[2]): (r[3], r[4]) for r in conn.execute("SELECT project,plan_path,package,class,provider FROM bee_assignments")} if "bee_assignments" in have else {}
-    completed = {(r[0], r[1], r[2]) for r in conn.execute("SELECT project,plan_path,package FROM bee_completed")} if "bee_completed" in have else set()
+    completed = set()
     if "package_progress" in have:
-        progress = {(r[0], r[1], r[2]): r[3] for r in conn.execute("SELECT project,plan_path,package,state FROM package_progress")}
-        completed = {item for item in completed if progress.get(item, "done") == "done"}
-        completed |= {item for item, state in progress.items() if state == "done"}
+        completed = {(r[0], r[1], r[2]) for r in conn.execute(
+            "SELECT project,plan_path,package FROM package_progress WHERE state='done'")}
     return assigned, completed
 
 
@@ -222,7 +221,6 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     live = bool(queen and queen.get("status") in runtime.ACTIVE_STATUSES)
     total_pkg = packages.get(key, 0)
     done = {p for (pr, pl, p) in (completed or ()) if (pr, pl) == key}
-    done |= {a.get("package") for a in mine if a.get("status") == "done" and a.get("phase") in ("work", "bee") and a.get("package")}
     rejected_pkgs = (rejected or {}).get(key, set())
     waiting_pkgs = (waiting or {}).get(key, [])
     done -= rejected_pkgs
