@@ -214,7 +214,7 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
         return "unavailable", "no Hive of this plan"
     active = runtime.list_agents(env.conn, None, "active")
     running = [{**a, "status": "running"} for a in active if agent_process.counts(a)]
-    free = scheduler.provider_free(env.providers, running)
+    free = scheduler.provider_free(env.providers, running, env.conn)
     limited = [p["name"] for p in env.providers if any(w["used_pct"] >= 100 for w in usage.limit_windows(env.conn, p))]
     cls = str(env.settings.get("readyCheckClass", "medium"))
     candidates = [p for p in env.providers if p["name"] not in env.settings.get("excludedProviders", []) and p["name"] not in limited]

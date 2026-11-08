@@ -228,13 +228,22 @@ def row_provider(row: dict) -> str:
     return str(row.get("provider") or row.get("type") or "")
 
 
-# Free slots per provider: subtract every running or starting agent process; never below 0.
-def provider_free(providers: list, rows: list) -> dict:
-    """Free slots per provider: subtract every running or starting agent process; never below 0."""
+def embedded_slots(conn) -> dict:
+    """Slots held by subagent Bees per provider: every embedded Bee whose end HaiveQueen has not closed yet (table embedded_bees, all Apiaries)."""
+    if conn is None or not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedded_bees'").fetchone():
+        return {}
+    return {str(r[0]): int(r[1]) for r in conn.execute("SELECT provider, COUNT(*) FROM embedded_bees WHERE ended_at IS NULL GROUP BY provider")}
+
+
+# Free slots per provider: subtract every running or starting agent process and every open subagent Bee; never below 0.
+def provider_free(providers: list, rows: list, conn=None) -> dict:
+    """Free slots per provider: subtract every running or starting agent process and, with `conn`, every subagent Bee that is still open
+    (C-1: a Bee inside its Queen holds a slot of her provider too); never below 0."""
     free = {}
+    embedded = embedded_slots(conn)
     for p in providers:
-        used = sum(1 for r in rows if r.get("status") in ACTIVE
-                   and row_provider(r) == p["name"])
+        used = embedded.get(p["name"], 0) + sum(1 for r in rows if r.get("status") in ACTIVE
+                                                and row_provider(r) == p["name"])
         free[p["name"]] = max(0, p["slots"] - used) if p.get("login", True) else 0
     return free
 

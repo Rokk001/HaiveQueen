@@ -289,12 +289,13 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
 def provider_lines(conn, cfg, agents) -> list:
     """Build the provider weekly quota and slot rows, marking the scheduler's next medium provider."""
     providers = offline.apply_state([p for p in sch.get_providers(cfg or {}) if p["enabled"]], conn)   # a disabled provider appears nowhere
-    free = sch.provider_free(providers, agents)
+    free = sch.provider_free(providers, agents, conn)
+    embedded = sch.embedded_slots(conn)
     next_provider = sch.select_provider(providers, "medium", [], free, conn=conn)
     rows = []
     for provider in providers:
         source = provider["limit"]
-        used_slots = sum(1 for agent in agents if agent.get("status") in sch.ACTIVE
+        used_slots = embedded.get(provider["name"], 0) + sum(1 for agent in agents if agent.get("status") in sch.ACTIVE
                          and sch.row_provider(agent) == provider["name"])
         used, hours, reset_at, stale_hours, five_file = None, None, None, None, None
         if source in ("claude", "codex"):

@@ -185,6 +185,22 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(len(active), 1)
         self.assertEqual(active[0]["provider"], "a")
 
+    def test_existing_hive_selects_available_provider_for_new_queen(self):
+        from haivequeen import hives
+        from bzztest import REL
+        self.plan("READY", [{"id": "P1", "title": "First"}])
+        hives.create(self.conn, "testproj", REL, "claude", "123456")
+        self.machine["providers"][0]["slots"] = 0
+        self.round()
+        queens = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen"]
+        self.assertEqual([a["provider"] for a in queens], ["codex"])
+
+    def test_readme_describes_embedded_bee_slot(self):
+        from pathlib import Path
+        text = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("embedded, small context, no extra slot", text)
+        self.assertIn("every Bee takes one slot", text)
+
     # A finished context handoff starts a new Queen on the same provider.
     def test_context_handoff_restarts_same_hive_and_provider(self):
         """A finished context handoff starts a new Queen on the same provider."""
@@ -705,14 +721,30 @@ class HiveRoundTests(RoundCase):
         active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] in ("running", "starting")]
         self.assertEqual({a["plan_path"] for a in active}, {REL, second})
 
-    # Three in-session Bees do not use process slots in addition to their Queen.
-    def test_embedded_subagents_do_not_take_provider_slots(self):
-        """Three in-session Bees do not use process slots in addition to their Queen."""
+    # Each in-session Bee takes a provider slot in addition to its Queen.
+    def test_embedded_subagents_take_provider_slots(self):
+        """Three in-session Bees and their Queen take four slots."""
         from bzztest import provider
         providers = scheduler.get_providers({"providers": [provider("claude", 4)]})
-        rows = [{"status": "running", "phase": "queen", "provider": "claude", "pid": 11,
-                 "embedded_bees": ["Bee1", "Bee2", "Bee3"]}]
-        self.assertEqual(scheduler.provider_free(providers, rows)["claude"], 3)
+        from haivequeen import bees, overview
+        from bzztest import REL
+        rows = [{"status": "running", "phase": "queen", "provider": "claude", "pid": 11}]
+        for n in range(3):
+            bees.record_embedded_start(self.conn, "testproj", REL, "P%d" % n, "Bee%d" % n, "medium", "claude")
+        self.assertEqual(scheduler.provider_free(providers, rows, self.conn)["claude"], 0)
+        line = overview.provider_lines(self.conn, {"providers": [provider("claude", 4)]}, rows)[0]
+        self.assertEqual((line["used_slots"], line["slots"]), (4, 0))
+        self.assertIsNone(scheduler.select_provider(providers, "medium", [], scheduler.provider_free(providers, rows, self.conn), conn=self.conn))
+
+    def test_unconfirmed_embedded_bee_keeps_slot(self):
+        from haivequeen import bees
+        from bzztest import provider, REL
+        providers = scheduler.get_providers({"providers": [provider("claude", 1)]})
+        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Bee1", "medium", "claude")
+        self.conn.execute("UPDATE embedded_bees SET outcome=? WHERE name=?", (bees.STOPPING, "Bee1"))
+        self.assertEqual(scheduler.provider_free(providers, [], self.conn)["claude"], 0)
+        self.conn.execute("UPDATE embedded_bees SET ended_at='2026-01-01' WHERE name='Bee1'")
+        self.assertEqual(scheduler.provider_free(providers, [], self.conn)["claude"], 1)
 
     # A full five-hour window rests the Hive even if the weekly window has room.
     def test_five_hour_limit_also_rests_queen(self):
@@ -1012,8 +1044,8 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(planlib.parse_plan_text(text).owner_check, "none")
         self.assertFalse(hives.owner_check_wanted(env, REL))
 
-    # A waiting Hive is not woken by the slot its own Queen has just given up.
-    def test_waiting_hive_needs_a_slot_for_the_queen_and_a_bee_process(self):
+    # A waiting Hive needs one slot for its Queen.
+    def test_waiting_hive_needs_one_queen_slot(self):
         from haivequeen import hives
         from bzztest import REL
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
@@ -1023,15 +1055,9 @@ class HiveRoundTests(RoundCase):
         hive = hives.get(self.conn, "testproj", REL)
         provider["beeMode"], provider["slots"] = "process", 1
         available, detail = hives.provider_wait_check(self.conn, env, hive, provider, 1, REL)
-        self.assertFalse(available)
-        self.assertIn("needs 2 slots", detail)
-        hives.provider_wait_check(self.conn, env, hive, provider, 1, REL)   # asked once only
-        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item="provider-slots")), 1)
-        provider["slots"] = 3
-        self.assertFalse(hives.provider_wait_check(self.conn, env, hive, provider, 1, REL)[0])   # only one slot free: the Queen would take it again
-        self.assertTrue(hives.provider_wait_check(self.conn, env, hive, provider, 2, REL)[0])
-        provider["beeMode"] = "subagent"   # embedded Bees need no slot of their own
-        self.assertTrue(hives.provider_wait_check(self.conn, env, hive, provider, 1, REL)[0])
+        self.assertTrue(available)
+        self.assertFalse(runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item="provider-slots"))
+        self.assertFalse(hives.provider_wait_check(self.conn, env, hive, provider, 0, REL)[0])
 
     # An owner check that was already answered ok after the integration is not asked again.
     def test_accepted_owner_check_is_not_asked_again(self):

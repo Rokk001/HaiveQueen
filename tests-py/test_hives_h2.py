@@ -22,6 +22,14 @@ class BeePolicyTests(unittest.TestCase):
         self.free['local'] = 0
         self.assertEqual(bees.select_route(self.providers, self.free, 'cloud', 'medium', [], [], False), ('cloud', 'medium'))
 
+    def test_bee_falls_back_to_another_coding_provider_when_queen_full(self):
+        from bzztest import provider
+        providers = [provider('claude', 1), provider('codex', 2)]
+        from haivequeen import scheduler
+        providers = scheduler.get_providers({'providers': providers})
+        self.assertEqual(bees.select_route(providers, {'claude': 0, 'codex': 2}, 'claude', 'medium', [], [], False), ('codex', 'medium'))
+        self.assertIsNone(bees.select_route(providers, {'claude': 0, 'codex': 0}, 'claude', 'medium', [], [], False))
+
     # Check image waits if codex busy.
     def test_image_waits_if_codex_busy(self):
         self.free['images'] = 0
@@ -171,9 +179,12 @@ class BeePolicyTests(unittest.TestCase):
             self.assertIn(text, prompt)
 
     # Check no codex for regular work before escalation.
-    def test_no_codex_for_regular_work_before_escalation(self):
+    # C-2: with the Queen's provider and the local one full, regular work goes to another provider with a free slot, and waits when none has one.
+    def test_regular_work_moves_to_another_provider_when_queen_and_local_full(self):
         self.free['cloud'] = 0
         self.free['local'] = 0
+        self.assertEqual(bees.select_route(self.providers, self.free, 'cloud', 'medium', [], [], False), ('images', 'medium'))
+        self.free['images'] = 0
         self.assertIsNone(bees.select_route(self.providers, self.free, 'cloud', 'medium', [], [], False))
 
     # Check codex fallback under codex queen.
@@ -377,11 +388,11 @@ class QueenIntegrationTests(RoundCase):
         self.assertFalse(before[4])
         self.assertTrue(after[4])
 
-    # The scheduling round keeps a Hive waiting while Codex is occupied, then resumes it.
+    # The scheduling round keeps a Hive waiting while Codex is occupied and only Codex offers the package's capability, then resumes it.
     def test_round_resumes_codex_wait_only_after_slot_is_free(self):
         from haivequeen import hives
         from bzztest import REL
-        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'capability': 'images'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         bees.wait_for_provider(self.conn, 'testproj', REL, 'codex')
         self.agent('bee-a', phase='bee', provider='codex', type='codex', status='running', pid=41)
@@ -394,10 +405,11 @@ class QueenIntegrationTests(RoundCase):
         self.assertTrue(any(a['phase'] == 'queen' and a['status'] == 'running' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
 
     # A native subagent consumes no additional provider process slot and can start while paused.
-    def test_native_bee_needs_no_slot_and_continues_during_pause(self):
+    # C-1: a native Bee takes a slot of the Queen's provider; it still starts during a pause.
+    def test_native_bee_takes_a_slot_and_continues_during_pause(self):
         from haivequeen import hives, runstate
         from bzztest import REL
-        self.machine['providers'][0]['slots'] = 1
+        self.machine['providers'][0]['slots'] = 2
         self.plan('READY', [{'id': 'P1', 'title': 'First'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
@@ -497,6 +509,23 @@ class QueenIntegrationTests(RoundCase):
         self.assertEqual((row['name'], row['class'], row['ended_at']), ('Ada', 'medium', None))
         bees.report_attempt(self.env(), REL, 'P1', 'medium', 'succeeded', 'Ada')
         self.assertIsNotNone(self.conn.execute('SELECT ended_at FROM embedded_bees').fetchone()['ended_at'])
+
+    def test_full_queen_provider_moves_assigned_bee_to_process_provider(self):
+        from unittest import mock
+        from haivequeen import hives
+        from bzztest import REL
+        self.machine['providers'][0]['slots'] = 1
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        bees.ensure_attempts(self.conn)
+        self.conn.execute('INSERT INTO bee_assignments(project,plan_path,package,class,provider) VALUES(?,?,?,?,?)', ('testproj', REL, 'P1', 'medium', 'claude'))
+        wt = self.base / 'bee-wt'
+        wt.mkdir()
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), mock.patch('haivequeen.loop._do_start', return_value=True):
+            result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [], cwd=str(wt))
+        self.assertEqual((result['kind'], result['provider']), ('process', 'codex'))
+        self.assertEqual(self.conn.execute('SELECT provider FROM bee_assignments WHERE package=?', ('P1',)).fetchone()[0], 'codex')
 
     def test_raise_to_queen_class_is_logged(self):
         from haivequeen import hives
@@ -625,7 +654,8 @@ class QueenIntegrationTests(RoundCase):
         self.assertIn('class heavy was requested', bees.LAST_REFUSAL)
 
     # A limited Bee provider remains assigned even when another provider is free.
-    def test_interrupted_bee_does_not_switch_provider(self):
+    # C-2: the stored provider of an interrupted Bee at its limit does not keep the Bee waiting: it moves to the provider it starts on.
+    def test_interrupted_bee_moves_from_limited_assigned_provider(self):
         from unittest import mock
         from haivequeen import hives, usage
         from bzztest import REL
@@ -640,10 +670,9 @@ class QueenIntegrationTests(RoundCase):
         bee_wt.mkdir()
         limited = lambda conn, provider: [{'used_pct': 100}] if provider['name'] == 'local' else []
         with mock.patch.object(usage, 'limit_windows', side_effect=limited), mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
-            self.assertFalse(bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(bee_wt)))
-        with mock.patch.object(usage, 'limit_windows', return_value=[]), mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
-            self.assertTrue(bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(bee_wt)))
-        self.assertEqual(runtime.get_agent(self.conn, 'testproj', 'Ada')['provider'], 'local')
+            result = bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(bee_wt))
+        self.assertEqual((result['kind'], result['provider']), ('subagent', 'claude'))
+        self.assertEqual(self.conn.execute('SELECT provider FROM bee_assignments WHERE package=?', ('P1',)).fetchone()[0], 'claude')
 
     # A stored provider that is no longer allowed for the package is replaced instead of blocking the Bee.
     def test_stale_codex_assignment_is_routed_again(self):
@@ -852,7 +881,7 @@ class AttemptSignalTests(unittest.TestCase):
     # A replacement Queen retries a vanished Bee at the same class and provider.
     def test_prompt_retries_vanished_bee(self):
         prompt = bees.queen_instructions('medium', 3, 3, 300000).lower()
-        for text in ('after a queen restart', 'bee process vanished', 'same class and provider', 'interruption is never a failure'):
+        for text in ('after a queen restart', 'bee process vanished', 'same class; bzz bee start chooses its provider again', 'interruption is never a failure'):
             self.assertIn(text, prompt)
     # Missing signal data does not turn an unsolved outcome into a failure.
     def test_missing_signals_do_not_count(self):

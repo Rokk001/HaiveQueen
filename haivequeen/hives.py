@@ -270,24 +270,18 @@ def waiting_for(conn, project, plan):
 def provider_wait_check(conn, env, hive, provider, free, plan):
     """Return (available, detail) for a Hive that waits for `provider`: whether a Queen can start now and, if not, what is missing.
 
-    A Queen needs a slot of her own, and a Bee that runs as a separate process of the same provider needs one more: the slot the waiting Queen has just
-    given up is no reason to wake her. When the provider can never offer that many slots, the owner is asked once (item provider-slots)."""
+    C-1: a Queen needs one free slot for herself; her Bees take their slots when they start, on her provider or another one (C-2), so no
+    second slot is needed and no owner question about slots is asked. The provider the Hive waited for does not bind the next Queen (C-3)."""
     from . import usage
     full = [w for w in usage.limit_windows(conn, provider) if w['used_pct'] >= 100]
     if full:
         if any(w.get('unknown') for w in full):
             return False, 'usage unknown, no recent reading (%s)' % (usage.claude_refresh_error(conn, provider=provider) or 'check failed')
         return False, 'quota used up'
-    needed = 1 + (1 if provider['name'] == hive['provider'] and provider.get('beeMode') == 'process' and not (provider.get('endpoint') or provider.get('server')) else 0)
-    if provider['slots'] < needed:
-        if not runtime.list_questions(conn, env.name, status='open', plan=plan, item='provider-slots'):
-            db.add_question(conn, env.name, plan, 'provider-slots',
-                            tr('Provider %s has %d slot(s), but its Queen plus a Bee that runs as a separate process needs %d, so no Bee of this Hive can ever start. '
-                               'Raise the slots of %s, or set beeMode = "subagent" for it so its Bees need no slot of their own.', provider['name'], provider['slots'], needed, provider['name'], language=roles.language(env.settings)),
-                            tr('Raise slots to %d, or set beeMode to subagent if the provider can run subagents.', needed, language=roles.language(env.settings)))
-        return False, 'needs %d slots (Queen and Bee process) but has %d' % (needed, provider['slots'])
-    if free < needed:
-        return False, 'no free slot (needs %d, %d free)' % (needed, free)
+    if provider['slots'] < 1:
+        return False, 'the provider has no slots'
+    if free < 1:
+        return False, 'no free slot'
     return True, ''
 
 
@@ -647,9 +641,10 @@ def start_again(conn, project, plan):
         raise ValueError('the plan is neither paused nor cancelled')
 
 
-# Request a replacement Queen, preserving the provider unless explicitly changed.
+# Request a replacement Queen, on the owner's chosen provider or by the normal provider choice.
 def requeen(conn, project, plan, provider=None, stop=None, providers=None, queen_class="medium", excluded=()):
-    """Request a replacement Queen, preserving the provider unless explicitly changed."""
+    """Request a replacement Queen. With `provider` the owner binds the Hive to it until the owner chooses again (C-3); without one
+    the binding ends and the new Queen chooses her provider by the normal provider choice."""
     if get(conn, project, plan) is None:
         raise ValueError('unknown Hive')
     if provider and (provider in excluded or providers is not None and not any(p['name'] == provider and 'Queen' in p.get('capabilities', []) and p.get('classes', {}).get(queen_class, {}).get('model') for p in providers)):
@@ -738,6 +733,39 @@ def hive_data(conn, project, agents, plan=None):
 
 
 # Run one machine-wide scheduling round for Hives without a language model.
+def reserve_bee_slots(conn, envs, pool, process_running) -> dict:
+    """C-2: keep free slots for the startable packages of every running Queen before any new Queen is placed in this round.
+
+    Each running Queen (without HANDOFF file, plan cut) gets as many slots as she has startable packages and free Bee places; they are taken from
+    `pool.free`, from her own provider first, then from the other providers in list order. Returns {(project, plan): reserved slots}."""
+    from . import bees
+    from . import scheduler as sch
+    reserved = {}
+    for env in envs:
+        active = [a for a in runtime.list_agents(conn, env.name, 'active') if a.get('phase') == 'queen' and process_running(a)]
+        for plan in runtime.list_plans(conn, env.name):
+            queen = next((a for a in reversed(active) if a.get('plan_path') == plan['path']), None)
+            hive = get(conn, env.name, plan['path'])
+            if not queen or not hive or plan['status'] in plan_mod.CUT_STATUSES or plan['status'] not in plan_mod.QUEEN_STATUSES:
+                continue
+            if (env.run_dir(queen['name']) / 'HANDOFF').exists():
+                continue
+            try:
+                wanted = len(bees.startable_not_started(env, plan['path'])[:bees.free_bee_places(env, plan['path'], sum(pool.free.values()))])
+            except Exception as exc:
+                env.log('Bee slots not reserved: %s' % exc)
+                continue
+            order = [sch.row_provider(queen)] + [name for name in pool.free if name != sch.row_provider(queen)]
+            taken = 0
+            for name in order:
+                while taken < wanted and pool.free.get(name, 0) > 0:
+                    pool.free[name] -= 1
+                    taken += 1
+            if taken:
+                reserved[(env.name, plan['path'])] = taken
+    return reserved
+
+
 def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None, settle=3.0, plan_files=None):
     """Run one machine-wide scheduling round for Hives without a language model."""
     from datetime import datetime, timedelta
@@ -803,7 +831,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
         return agent_process.counts(row, is_alive)
 
     processes = [{**a, 'status': 'running'} for a in all_active if process_running(a)]
-    free = sch.provider_free(envs[0].providers if envs else [], processes)
+    free = sch.provider_free(envs[0].providers if envs else [], processes, conn)
     pool = loop.Pool(free, 0)
     limit = int(machine.get('hives', 2))
     queen_count = sum(1 for a in processes if a.get('phase') == 'queen')
@@ -818,6 +846,8 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
         skipped[env.name].append('%s not started: %s' % (Path(path).stem, reason))
         if not dry_run:
             runtime.kv_set(conn, env.name, 'hive-blocker:' + path, reason)
+
+    reserved = reserve_bee_slots(conn, projects, pool, process_running)   # C-2: a waiting Bee of a running Queen gets a free slot before a new Queen
 
     for existing_pass in (True, False):
         for env in projects:
@@ -859,8 +889,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                         context_limit(conn, env.name, plan['path'])
                     if hive and not dry_run and plan['status'] not in plan_mod.CUT_STATUSES:
                         from . import bees
-                        provider = sch.get_provider(env.providers, hive['provider'])
-                        slots = sum(pool.free.values()) if provider and provider.get('beeMode') == 'process' else int(env.settings.get('beesPerQueen', 3))
+                        slots = sum(pool.free.values()) + reserved.get((env.name, plan['path']), 0)   # C-1: every Bee, a subagent Bee too, takes a slot of some provider
                         try:   # H-47: in this round, tell the Queen which startable packages to start while Bee places are free
                             bees.notify_startable(env, plan['path'], running[-1], slots, is_alive)
                         except Exception as exc:
@@ -926,7 +955,8 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     provider = sch.get_provider(env.providers, wait[0]) if wait else None
                     name = provider['name'] if provider else wait[0] if wait else '?'
                     can, detail = provider_wait_check(conn, env, hive, provider, pool.free.get(name, 0), plan['path']) if provider else (False, 'provider unknown')
-                    if not (can and bees.provider_available(conn, env.name, plan['path'], name, pool.free.get(name, 0), False)):
+                    other = None if can else bees.other_provider_for_waiting(env, plan['path'], name, pool.free, excluded)   # C-2, C-3: another provider with a free slot that can take a waiting package wakes the Hive too
+                    if not ((can or other) and bees.provider_available(conn, env.name, plan['path'], name, pool.free.get(name, 0), not can, other)):
                         not_started(env, plan['path'], 'waiting for provider %s: %s' % (name, detail or 'not available'))
                         continue
                     hive = get(conn, env.name, plan['path'])
@@ -952,9 +982,10 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     history = [a for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('phase') == 'queen']
                     if history and interrupt.kind_of(history[-1]) == interrupt.VANISHED and history[-1].get('class'):
                         cls = history[-1]['class']
-                    requested = hive.get('requested_provider') or hive['provider']
-                    providers = [p for p in providers if p['name'] == requested]
-                    pick = sch.select_provider(providers, cls, ['Queen'], pool.free, prefer=requested, conn=conn)
+                    requested = hive.get('requested_provider')   # C-3: only an explicit owner choice binds the Hive; else the normal provider choice decides, as for a new Hive
+                    if requested:
+                        providers = [p for p in providers if p['name'] == requested]
+                    pick = sch.select_provider(providers, cls, ['Queen'], pool.free, prefer=requested or '', conn=conn)
                 else:
                     pick = sch.select_provider(providers, cls, ['Queen'], pool.free, conn=conn)
                 if not pick:
@@ -1041,7 +1072,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     env.update_agent(name, {'color': hive['colour']})
                     queen = runtime.get_agent(conn, env.name, name)
                     conn.execute("UPDATE hive_integration SET owner_pid=? WHERE project=? AND plan_path=? AND acquired=1", (queen.get('pid'), env.name, path))
-                    conn.execute("UPDATE hives SET state='running',provider=?,requested_provider=NULL,reset_at=NULL,claimed_at=NULL WHERE project=? AND plan_path=?", (pick['name'], env.name, path))
+                    conn.execute("UPDATE hives SET state='running',provider=?,reset_at=NULL,claimed_at=NULL WHERE project=? AND plan_path=?", (pick['name'], env.name, path))   # an owner's provider choice stays until the owner changes it
                     queen_count += 1
                     started += 1
             result['projects'][env.name]['started'] += started
