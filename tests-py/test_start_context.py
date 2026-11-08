@@ -48,6 +48,7 @@ class Base(unittest.TestCase):
             self.conn.execute("UPDATE hives SET state='running' WHERE project=? AND plan_path=?", (proj, plan))
             for pid in ("P1", "P2", "P3"):
                 self.conn.execute("INSERT INTO packages(project,plan_path,id,title) VALUES (?,?,?,?)", (proj, plan, pid, pid))
+        bees.set_package_state(self.conn, "ODP", PLAN, "P2", "done")
         self.conn.commit()
         self.add("ODP", "ODP__queen", PLAN, "queen", "Ava", "running", 30, 1000, 100, provider="claude")
         self.add("ODP", "ODP__sophia", PLAN, "bee", "Sophia", "running", 20, 600, 60, package="P1", provider="claude", cache=(400, 100))
