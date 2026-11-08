@@ -851,8 +851,8 @@ class Dashboard:
         rows, sc = s["limits"], self.scale
         lx, mx, rx = x0 + 14, x0 + 158, x0 + 265
         rw = x1 - 30 - rx
-        row_h = (y1 - y0 - 56) / 3
-        room = 3
+        row_h = max((y1 - y0 - 56) / 3, self.lh(18) + self.lh(12) + 4)
+        room = max(1, min(3, int((y1 - y0 - 56) / row_h)))
         off = self.offset("limits", len(rows), room)
         self.area("limits", x0, y0, x1, y1)
         self.scrollbar("limits", x1 - 16, y0 + 50, y1 - 8, len(rows), room)
@@ -888,8 +888,8 @@ class Dashboard:
             if sl["total"] > 16:
                 count = "%d/%d" % (sl["used"], sl["total"])
                 cw = self.tw(count, 14) + 12
-                self.rect(rx, top, rx + cw, top + CELL * 2 / math.sqrt(3), fill="bg", outline="dim" if blocked or sl["used"] >= sl["total"] else "gold")
-                self.text(rx + cw / 2, cy, count, 14, "dim" if blocked or sl["used"] >= sl["total"] else "text", "center")
+                self.hexagon(rx + CELL / 2, cy, CELL / math.sqrt(3), sl["used"] > 0, blocked)
+                self.text(rx + CELL + 8, cy, count, 14, "dim" if blocked else "text", "w")
             else:
                 size = min(CELL, (rw - (self.tw(extra, 14) + 8 if extra else 0)) / sl["total"])
                 for i in range(sl["total"]):
@@ -904,14 +904,14 @@ class Dashboard:
             if wk["pct"] is not None:
                 self.bar(rx, by, width, 5, wk["pct"] / 100, LEVEL_FILL.get(wk["level"], "dim"))
             txt = wk["text"] + ((" · " + res["age"]) if res["age"] else "")
-            self.text(rx, by + 5 + self.lh(12) / 2, self.fit(txt, width, 12), 12, "text" if wk["pct"] is not None else "dim", "w")
+            self.text(rx, by + 5 + self.lh(10) / 2, self.fit(txt, width, 10), 10, "text" if wk["pct"] is not None else "dim", "w")
             if five:
                 import re
                 match = re.search(r"5h (\d+)", five)
                 if match:
                     pct = int(match.group(1))
                     self.bar(rx + width + 12, by, width, 5, pct / 100, LEVEL_FILL.get("ok" if pct < 60 else "warn" if pct <= 85 else "bad"))
-                self.text(rx + width + 12, by + 5 + self.lh(12) / 2, self.fit(five, width, 12), 12, "text", "w")
+                self.text(rx + width + 12, by + 5 + self.lh(10) / 2, self.fit(five, width, 10), 10, "text", "w")
         if not rows:
             self.text(x0 + 14, y0 + 66, tr("no limit data"), 14, "dim", "w")
 

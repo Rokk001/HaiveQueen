@@ -469,7 +469,8 @@ def limit_rows(d) -> list:
         if not p["has_limit"]:   # a provider without a limit never runs out and gets work first: the reserve shows the highest value
             reserve.update(text="+99 %", level="ok", hover=tr("No limit: this provider never runs out and gets work first."))
         elif p["used_pct"] is None:
-            reserve["text"] = (tr("Claude limit unknown") + ": " + p["error"]) if p.get("error") else tr("unknown")
+            reserve["text"] = tr("unknown")
+            reserve["hover"] = p.get("error") or ""
         else:
             if verified:
                 reserve["age"] = age_text(p)

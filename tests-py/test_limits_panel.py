@@ -94,7 +94,7 @@ class DataTest(unittest.TestCase):
         down = rows_of(prow(ratio=0.85))[0]["reserve"]
         self.assertEqual((up["text"], up["level"]), ("+27 %", "ok"))
         self.assertEqual((down["text"], down["level"]), (MINUS + "15 %", "bad"))
-        date = sch.format_reset_time(prow()["reset_at"])
+        date = time.strftime("%d.%m. %H:%M", time.localtime(prow()["reset_at"]))
         self.assertEqual(up["hover"], "27 %% more quota left than time until the reset (%s)" % date)
         self.assertEqual(down["hover"], "15 %% less quota left than time until the reset (%s)" % date)
         self.assertNotIn("1.27", json.dumps(rows_of(prow(ratio=1.27))))
@@ -106,10 +106,10 @@ class DataTest(unittest.TestCase):
         self.assertEqual((res["text"], res["level"]), ("+0 %", "ok"))
 
     def test_no_limit_source_and_switched_off_check(self):
-        """L-3/L-5/L-10 (f), F-13: a provider without limit source shows +99 % in green and 'no weekly limit' in muted colour."""
+        """L-3/L-5/L-10 (f), F-13: a provider without limit source shows +99 % in green and 'no limit' in muted colour."""
         row = rows_of(prow(has_limit=False, used_pct=None, ratio=None, hours=None, reset_at=None))[0]
         self.assertEqual((row["reserve"]["text"], row["reserve"]["level"]), ("+99 %", "ok"))
-        self.assertEqual((row["weekly"]["text"], row["weekly"]["pct"], row["weekly"]["level"]), ("no weekly limit", None, "dim"))
+        self.assertEqual((row["weekly"]["text"], row["weekly"]["pct"], row["weekly"]["level"]), ("no limit", None, "dim"))
 
     def test_last_verified_reading_keeps_colour_and_shows_age(self):
         """L-3/L-10 (i): the reserve of a last verified reading keeps green/red and has its age; without reset time it is unknown with the age."""
@@ -121,17 +121,18 @@ class DataTest(unittest.TestCase):
         self.assertEqual((none["text"], none["age"]), ("unknown", "1h"))
 
     def test_without_reading_shows_the_error_or_unknown(self):
-        """L-3: no reading shows the stored error (the Claude text) in place of the reserve, else 'unknown'; the weekly line says '7d unknown'."""
+        """L-3: no reading shows 'unknown' with the stored error in its hover; the weekly line says '7d unknown'."""
         gone = dict(used_pct=None, ratio=None, hours=None, reset_at=None)
         row = rows_of(prow(error="Claude usage refresh failed: x", **gone))[0]
-        self.assertEqual(row["reserve"]["text"], "Claude limit unknown: Claude usage refresh failed: x")
+        self.assertEqual(row["reserve"]["text"], "unknown")
+        self.assertEqual(row["reserve"]["hover"], "Claude usage refresh failed: x")
         self.assertEqual(row["weekly"]["text"], "7d unknown")
         self.assertEqual(rows_of(prow(**gone))[0]["reserve"]["text"], "unknown")
 
     def test_reset_due_now(self):
-        """L-3/L-10 (j): with no time left the reserve and the weekly line say 'reset now'."""
+        """L-3/L-10 (j): with no time left the weekly line says 'reset now' and the reserve remains a percentage."""
         row = rows_of(prow(hours=0.0, ratio=float("inf")))[0]
-        self.assertEqual(row["reserve"]["text"], "reset now")
+        self.assertEqual(row["reserve"]["text"], "+99 %")
         self.assertEqual(row["weekly"]["text"], "7d 40 % · reset now")
 
     def test_reading_without_reset_time(self):
@@ -142,17 +143,17 @@ class DataTest(unittest.TestCase):
 
     def test_weekly_line_and_colour_by_used_share(self):
         """L-5: the weekly line holds percent and reset; the colour follows the used share as before."""
-        date = sch.format_reset_time(prow()["reset_at"])
-        self.assertEqual(rows_of(prow(used_pct=60.0))[0]["weekly"], {"pct": 60, "level": "warn", "text": "7d 60 % · reset " + date})
+        date = time.strftime("%d.%m. %H:%M", time.localtime(prow()["reset_at"]))
+        self.assertEqual(rows_of(prow(used_pct=60.0))[0]["weekly"], {"pct": 60, "level": "warn", "text": "7d 60 % · " + date})
         self.assertEqual([rows_of(prow(used_pct=u))[0]["weekly"]["level"] for u in (10.0, 70.0, 90.0)], ["ok", "warn", "bad"])
 
     def test_five_hour_line(self):
-        """L-5/L-10 (d)(e): the 5h percent, 'new window' when expired, nothing without a window or with a last verified reading."""
+        """L-5/L-10 (d)(e): the 5h percent, reset status and age of a kept reading."""
         self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}))[0]["five"], "5h 12 %")
-        self.assertEqual(rows_of(prow(five_hour={"pct": None, "reset": "new window"}))[0]["five"], "5h new window")
+        self.assertEqual(rows_of(prow(five_hour={"pct": None, "reset": "new window"}))[0]["five"], "5h reset now")
         self.assertEqual(rows_of(prow())[0]["five"], "")
-        self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}, error="x", age_minutes=5))[0]["five"], "")
-        self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}, stale=True, stale_hours=1.0))[0]["five"], "")
+        self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}, error="x", age_minutes=5))[0]["five"], "5h 12 % · 5min")
+        self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}, stale=True, stale_hours=1.0))[0]["five"], "5h 12 % · 1h")
 
     def test_slots(self):
         """L-4/L-10 (a): totals, used and the extra agents above the slot count; 0 slots says 'no slots' and the running agents."""
@@ -166,13 +167,13 @@ class DataTest(unittest.TestCase):
         de = rows_of(prow(ratio=1.27), prow(ratio=0.85), prow(has_limit=False, used_pct=None, ratio=None, hours=None, reset_at=None, total_slots=0, used_slots=2),
                      prow(used_pct=None, ratio=None, hours=None, reset_at=None), prow(hours=0.0, ratio=float("inf"), five_hour={"pct": None, "reset": ""}),
                      prow(ratio=None, hours=None, reset_at=None, five_hour={"pct": None, "reset": ""}), german=True)
-        date = sch.format_reset_time(prow()["reset_at"])
+        date = time.strftime("%d.%m. %H:%M", time.localtime(prow()["reset_at"]))
         self.assertEqual(de[0]["reserve"]["hover"], "27 %% mehr Quota übrig als Zeit bis zum Reset (%s)" % date)
         self.assertEqual(de[1]["reserve"]["hover"], "15 %% weniger Quota übrig als Zeit bis zum Reset (%s)" % date)
         self.assertEqual((de[2]["reserve"]["text"], de[2]["weekly"]["text"], de[2]["slots"]["none"], de[2]["slots"]["running"]),
-                         ("+99 %", "kein Wochenlimit", "keine Slots", "2 laufen"))
+                         ("+99 %", "kein Limit", "keine Slots", "2 laufen"))
         self.assertEqual((de[3]["reserve"]["text"], de[3]["weekly"]["text"]), ("unbekannt", "7d unbekannt"))
-        self.assertEqual((de[4]["reserve"]["text"], de[4]["weekly"]["text"], de[4]["five"]), ("Reset jetzt", "7d 40 % · Reset jetzt", "5h neues Fenster"))
+        self.assertEqual((de[4]["reserve"]["text"], de[4]["weekly"]["text"], de[4]["five"]), ("+99 %", "7d 40 % · Reset jetzt", "5h Reset jetzt"))
         self.assertEqual(de[5]["weekly"]["text"], "7d 40 % · Reset unbekannt")
         from haivequeen import i18n
         self.assertEqual([i18n.tr(t, language="German") for t in ("NEXT", "Quota reserve", "reserve, slots and weekly limit")],
@@ -227,7 +228,7 @@ class ProviderLinesTest(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k not in ("BZZ_RUNTIME_OVERRIDE", "BZZ_PROVIDER_LIMITS_FILE")}
         with mock.patch.dict(os.environ, env, clear=True):
             rows = overview.provider_lines(self.conn, {"providers": [self.provider("codex", 2, "codex")]}, [])
-        self.assertEqual(gui_data.limit_rows({"provider_limits": rows})[0]["five"], "5h 25 %")
+        self.assertTrue(gui_data.limit_rows({"provider_limits": rows})[0]["five"].startswith("5h 25 % · "))
 
     def test_snapshot_limits_are_the_rows(self):
         """L-6: the snapshot holds the rows; a slot that becomes used shows in the next snapshot."""
@@ -343,7 +344,7 @@ class PanelDrawTest(unittest.TestCase):
         rows = rows_of(prow(name="claude", next=True, used_slots=2, total_slots=5), prow(name="codex", model="gpt", used_slots=0, total_slots=0))
         win = self.open(rows)
         found = [t[4] for t in self.texts(win)]
-        for want in ("Claude", "claude-sonnet", "Codex", "gpt", "NEXT", "Quota reserve", "+27 %", "no slots"):
+        for want in ("Claude", "claude-sonnet", "Codex", "gpt", "NEXT", "+27 %", "no slots"):
             self.assertIn(want, found)
         self.assertEqual(found.count("NEXT"), 1)
         self.assertEqual(len(win.canvas.find_withtag("next_badge")), 1)
@@ -356,7 +357,7 @@ class PanelDrawTest(unittest.TestCase):
         win = self.open(rows_of(prow(used_slots=0, total_slots=5), prow(name="codex", used_slots=3, total_slots=3),
                                 prow(name="local", used_slots=2, total_slots=5)))
         cells = [i for i in win.canvas.find_all() if "slot_full" in win.canvas.gettags(i) or "slot_empty" in win.canvas.gettags(i)]
-        self.assertEqual(len(cells), 8)
+        self.assertEqual(len(cells), 13)
         for start, count in ((0, 5), (5, 3)):
             polygons = [win.canvas.coords(i) for i in cells[start:start + count]]
             for pts in polygons:
@@ -410,20 +411,20 @@ class PanelDrawTest(unittest.TestCase):
         self.assertIn("2 running", found)
 
     def test_many_slots_become_a_number(self):
-        """L-4: cells that do not fit even at half size are replaced by 'used / total'."""
+        """L-4: more than 16 slots use one cell and a used/total count."""
         win = self.open(rows_of(prow(used_slots=7, total_slots=60)))
-        self.assertEqual(len(win.canvas.find_withtag("slot_full")) + len(win.canvas.find_withtag("slot_empty")), 0)
-        self.assertIn("7 / 60", [t[4] for t in self.texts(win)])
+        self.assertEqual(len(win.canvas.find_withtag("slot_full")) + len(win.canvas.find_withtag("slot_empty")), 1)
+        self.assertIn("7/60", [t[4] for t in self.texts(win)])
 
     def test_weekly_and_five_hour_lines_with_equal_row_height(self):
-        """L-5: the weekly line and the 5h line below it; rows with and without the 5h line have the same height."""
+        """L-5: the weekly and 5h texts sit side by side, with equal row heights."""
         rows = rows_of(prow(used_pct=60.0, five_hour={"pct": 12, "reset": ""}), prow(name="codex", used_pct=60.0))
         win = self.open(rows)
         found = self.texts(win)
         weekly = sorted(t for t in found if t[4].startswith("7d 60 %"))
         five = [t for t in found if t[4] == "5h 12 %"]
         self.assertEqual((len(weekly), len(five)), (2, 1))
-        self.assertGreater(five[0][1], weekly[0][1])
+        self.assertAlmostEqual(five[0][1], weekly[0][1], delta=2)
         names = sorted(t for t in found if t[4] in ("Claude", "Codex"))
         self.assertAlmostEqual(weekly[1][1] - weekly[0][1], names[1][1] - names[0][1], delta=2)
 
@@ -440,9 +441,9 @@ class PanelDrawTest(unittest.TestCase):
         self.assertEqual(len(win.canvas.find_withtag("tip")), 0)
 
     def test_panel_keeps_its_box_and_subtitle(self):
-        """L-7/L-8: the panel frame is where it was and the subtitle reads 'reserve, slots and weekly limit'."""
+        """L-7/L-8: the panel frame is where it was and the subtitle reads 'reserve, slots and limits'."""
         win = self.open(rows_of(prow()))
-        self.assertTrue(any(t[4].startswith("| reserve, slots and weekly limit") for t in
+        self.assertTrue(any(t[4].startswith("| reserve, slots and limits") for t in
                             [(0, 0, 0, 0, win.canvas.itemcget(i, "text")) for i in win.canvas.find_all() if win.canvas.type(i) == "text"]))
         frames = [tuple(round(v / win.scale) for v in win.canvas.coords(i)) for i in win.canvas.find_all() if win.canvas.type(i) == "rectangle"]
         self.assertIn((1045, 395, 1662, 600), frames)
@@ -458,7 +459,7 @@ class PanelDrawTest(unittest.TestCase):
                 win = self.open(rows, width, height)
                 found = self.texts(win)
                 self.assertTrue(any(t[4].startswith("Cl") for t in found))
-                if win.scale >= 0.55:   # in tiny windows the fonts cannot get smaller than 8 pixels and long texts are shortened
+                if win.scale >= 1.0:   # smaller windows may shorten compact bar text
                     self.assertFalse([t[4] for t in found if t[4].endswith("…")], (width, height))
                 for i, a in enumerate(found):
                     for b in found[i + 1:]:

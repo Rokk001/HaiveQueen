@@ -465,7 +465,7 @@ GERMAN = {
     "resets %s": "Rücksetzung %s", "new window": "neues Fenster", "no medium model": "kein Medium-Modell",
     "Agent slots of %s: %d of %d in use. A filled cell is a running agent, an empty cell a free slot.": "Agent-Slots von %s: %d von %d belegt. Eine volle Wabe ist ein laufender Agent, eine leere ein freier Slot.",
     "NEXT": "NEXT", "Quota reserve": "Quota-Reserve", "no limit": "kein Limit", "no weekly limit": "kein Wochenlimit", "no slots": "keine Slots", "%d running": "%d laufen",
-    "reset now": "Reset jetzt", "unknown": "unbekannt", "reset unknown": "Reset unbekannt", "reset %s": "Reset %s", "7d unknown": "7d unbekannt", "5h new window": "5h neues Fenster",
+    "reset now": "Reset jetzt", "unknown": "unbekannt", "reset unknown": "Reset unbekannt", "reset %s": "Reset %s", "7d unknown": "7d unbekannt", "5h new window": "5h neues Fenster", "5h reset now": "5h Reset jetzt",
     "%d %% more quota left than time until the reset (%s)": "%d %% mehr Quota übrig als Zeit bis zum Reset (%s)",
     "%d %% less quota left than time until the reset (%s)": "%d %% weniger Quota übrig als Zeit bis zum Reset (%s)",
     "%s  today %s  plans %s  total %s": "%s  heute %s  Pläne %s  gesamt %s",
