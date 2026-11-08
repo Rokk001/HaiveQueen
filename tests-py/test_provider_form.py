@@ -1,4 +1,4 @@
-"""One provider form with the access type Subscription / API key / Local LLM (HQ-PROVIDER-FORM F1, requirements F-1 to F-10)."""
+"""One provider form with the access type Subscription / API key / Local LLM."""
 import os
 import sys
 import time

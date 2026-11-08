@@ -1,4 +1,4 @@
-"""K10, H-42 and H-46(i): daily and manual update check, confirmed install of a release, drain of agents and restart."""
+"""K10: daily and manual update check, confirmed install of a release, drain of agents and restart."""
 import contextlib
 import io
 import json
@@ -173,7 +173,7 @@ class InstallTests(RoundCase):
     def test_worker_command_line_names_the_release(self):
         argv = selfupdate.worker_argv("2.0.2")
         self.assertEqual(argv[-3:], ["--worker", "--version", "2.0.2"])
-        self.assertEqual(selfupdate.worker_argv()[-1], "--worker")   # the one-time checkout update of H-46 (j)
+        self.assertEqual(selfupdate.worker_argv()[-1], "--worker")   # the one-time checkout update
 
     def fake_run(self, heads):
         calls = []
@@ -220,7 +220,7 @@ class InstallTests(RoundCase):
             selfupdate.run_update(self.conn, live=self.base, run=lambda a, c: (0, ""), version="2.0; rm")
 
     def test_legacy_self_update_still_merges_the_integration_branch_and_pushes(self):
-        """Before the first release (H-46 j) the checkout update lands the plan."""
+        """Before the first release the checkout update lands the plan."""
         calls, run = self.fake_run(["a" * 40, "b" * 40])
         with mock.patch.object(selfupdate, "wait_first_round", return_value=True), mock.patch.object(selfupdate, "lock_path", return_value=self.base / "lock"):
             selfupdate.run_update(self.conn, live=self.base, run=run, sleep=lambda s: None, alive=lambda p: False, loop_pid=lambda: None)
@@ -244,7 +244,7 @@ class InstallTests(RoundCase):
             return selfupdate.run_update(self.conn, live=self.base, run=run, sleep=lambda s: None, alive=lambda p: False, loop_pid=lambda: None)
 
     def test_legacy_self_update_is_retired_after_a_published_release(self):
-        """H-42: once HaiveQueen published a release for project HaiveQueen the checkout update neither merges nor pushes nor stops the loop."""
+        """Once HaiveQueen published a release for project HaiveQueen the checkout update neither merges nor pushes nor stops the loop."""
         from haivequeen import publish, runtime
         runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_KEY, "2.0.1")
         runtime.kv_set(self.conn, selfupdate.PROJECT, publish.LAST_REPO_KEY, "owner/tool")
@@ -303,7 +303,7 @@ class InstallTests(RoundCase):
         spawn.assert_called_once_with(version="2.0.2")
 
     def test_transition_command_still_spawns_the_worker_before_the_first_release(self):
-        """H-46 (j): before the first release the checkout update lands the plan one last time."""
+        """Before the first release the checkout update lands the plan one last time."""
         with mock.patch.object(selfupdate, "legacy_retired", return_value=""), \
                 mock.patch.object(selfupdate, "spawn_worker", return_value={"how": "detached"}) as spawn, mock.patch("builtins.print"):
             self.assertEqual(selfupdate.cmd_self_update(Namespace(worker=False, version=None), self.conn), 0)
@@ -355,7 +355,7 @@ class HeaderTests(RoundCase):
 
 
 class DrainTests(RoundCase):
-    """H-46(i): while the update waits for running agents no Queen or Bee starts."""
+    """While the update waits for running agents no Queen or Bee starts."""
 
     def setUp(self):
         super().setUp()
@@ -513,7 +513,7 @@ class TextTests(unittest.TestCase):
 
 
 class ReadmeTests(unittest.TestCase):
-    """H-44: the README describes installation and the update function for users."""
+    """The README describes installation and the update function for users."""
 
     def test_readme(self):
         text = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")

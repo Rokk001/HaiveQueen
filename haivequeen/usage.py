@@ -208,6 +208,14 @@ def retained_weekly(conn, project=GLOBAL_PROJECT, provider=None):
     return (window['pct'], window.get('at')) if window and window.get('pct') is not None else None
 
 
+# The five-hour part of the retained reading.
+def retained_five_hour(conn, project=GLOBAL_PROJECT, provider=None):
+    """(used percent, reset epoch or None) of the five-hour window of the retained reading, or None when there is none or its window has already reset."""
+    kept = retained_claude(conn, project, provider)
+    window = _claude_window(kept.get('fiveHour'), True, int(datetime.now(timezone.utc).timestamp())) if kept else None
+    return (window['pct'], window.get('at')) if window and window.get('pct') is not None else None
+
+
 CLAUDE_USAGE_TIMEOUT = 60   # seconds the claude -p /usage call may take (start-up alone needs far more than 20 s while many Claude processes run)
 USAGE_INTERVAL = 60              # seconds between usage checks of a model provider
 USAGE_UNREACHABLE_INTERVAL = 600   # seconds between usage checks of a provider whose last check failed (not reachable)
@@ -285,7 +293,9 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
                     or type(final.get('total_cost_usd')) not in (int, float) or final['total_cost_usd'] != 0):
                 raise ValueError('not metadata only')
             reports = [event.get('usage_report') for event in events if isinstance(event, dict) and event.get('type') == 'assistant' and isinstance(event.get('usage_report'), dict)]
-            limits = (reports[-1].get('rate_limits') or {}).get('limits') if reports else None
+            # the newest report that carries the limits: a later report of the same run can hold rate_limits null, which is not a missing quota
+            limits = next((r['rate_limits']['limits'] for r in reversed(reports)
+                           if isinstance(r.get('rate_limits'), dict) and isinstance(r['rate_limits'].get('limits'), list)), None)
             if isinstance(limits, list):
                 break
         if not isinstance(limits, list):

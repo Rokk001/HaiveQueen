@@ -32,7 +32,7 @@ def show_result(command, result):
         print(text, file=sys.stderr)
 
 
-# Show a message on the desktop without waiting for the user (faults of the program itself, H-46 g).
+# Show a message on the desktop without waiting for the user (faults of the program itself).
 def notify(text):
     """Open a non-blocking desktop message on Windows, print it elsewhere; with BZZ_NO_DESKTOP set (tests) nothing is shown."""
     import os

@@ -1,5 +1,5 @@
-"""K6 plan life cycle: statuses and old names (H-20), start on a draft (H-21), created branch (H-22), question for an existing branch (H-23),
-visible header errors (H-26), faults without an Apiary (H-30, H-46 g), a stopped Bee stays stopped (H-31) and the same-round notice of startable packages (H-47)."""
+"""K6 plan life cycle: statuses and old names, start on a draft, created branch, question for an existing branch,
+visible header errors, faults without an Apiary, a stopped Bee stays stopped and the same-round notice of startable packages."""
 import sqlite3
 import subprocess
 import sys
@@ -16,7 +16,7 @@ NEW = ("DRAFT", "SENT", "PREPARING", "QUEUED", "RUNNING", "WAITING", "REVIEW", "
 
 
 class StatusNameTests(RoundCase):
-    """H-20: the new names everywhere; old names are read as the new ones and written new at the next change."""
+    """The new names everywhere; old names are read as the new ones and written new at the next change."""
 
     def status(self):
         return self.conn.execute("SELECT status FROM plans WHERE project='testproj' AND path=?", (REL,)).fetchone()[0]
@@ -94,7 +94,7 @@ class StatusNameTests(RoundCase):
 
 
 class ReviewTests(RoundCase):
-    """H-20: REVIEW while the integrated plan waits for the owner check, DONE after it."""
+    """REVIEW while the integrated plan waits for the owner check, DONE after it."""
 
     def test_integrated_plan_waits_in_review(self):
         self.plan("RUNNING", [{"id": "P1", "title": "First"}])
@@ -109,7 +109,7 @@ class ReviewTests(RoundCase):
 
 
 class StartDraftTests(RoundCase):
-    """H-21: Start on a DRAFT sets SENT, so the plan is prepared like any sent plan."""
+    """Start on a DRAFT sets SENT, so the plan is prepared like any sent plan."""
 
     def test_start_on_a_draft_sets_sent_and_gets_a_queen_that_cuts_it(self):
         self.plan("DRAFT", [{"id": "P1", "title": "First"}])
@@ -132,7 +132,7 @@ def git(repo, *args):
 
 
 class BranchTests(RoundCase):
-    """H-22 and H-23 on a real repository with a remote."""
+    """The derived branch and an existing branch without Hive history on a real repository with a remote."""
 
     def setUp(self):
         super().setUp()
@@ -196,7 +196,7 @@ class BranchTests(RoundCase):
 
 
 class HeaderErrorTests(RoundCase):
-    """H-26: a broken header, an unknown status or an unknown class is a visible error, not a silent DRAFT or medium."""
+    """A broken header, an unknown status or an unknown class is a visible error, not a silent DRAFT or medium."""
 
     def write(self, text):
         path = self.repo / REL
@@ -222,7 +222,7 @@ class HeaderErrorTests(RoundCase):
 
 
 class GlobalFaultTests(RoundCase):
-    """H-30 and H-46(g): a fault without an Apiary is shown in the GUI status panel and as a desktop message, never as an inbox question."""
+    """A fault without an Apiary is shown in the GUI status panel and as a desktop message, never as an inbox question."""
 
     def test_loop_vanished_is_shown_not_asked(self):
         shown = []
@@ -257,7 +257,7 @@ class GlobalFaultTests(RoundCase):
 
 
 class StoppedPackageTests(RoundCase):
-    """H-31: "Stop Bee" leaves the package stopped until the owner releases it with "Resume package"."""
+    """"Stop Bee" leaves the package stopped until the owner releases it with "Resume package"."""
 
     def setUp(self):
         super().setUp()
@@ -491,7 +491,7 @@ class StoppedPackageTests(RoundCase):
 
 
 class StartableNoticeTests(RoundCase):
-    """H-47: in the same round the Queen is told which startable packages to start when Bee places are free; the dashboard shows them."""
+    """In the same round the Queen is told which startable packages to start when Bee places are free; the dashboard shows them."""
 
     def setUp(self):
         super().setUp()

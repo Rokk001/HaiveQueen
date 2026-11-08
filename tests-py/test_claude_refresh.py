@@ -319,3 +319,52 @@ class ClaudeRefreshTests(RoundCase):
             row = overview.provider_lines(self.conn, {'providers': providers}, [])[0]
             self.assertIsNone(row['used_pct'])
             self.assertFalse(row['stale'])
+
+
+class ClaudeReadingDisplayTests(ClaudeRefreshTests):
+    """Retained five-hour window and expired readings in the panel and in the reserve."""
+
+    def providers(self):
+        return [{'name': 'claude', 'protocol': 'claude', 'use': 'preferred', 'slots': 2, 'limit': 'claude', 'configuredSlots': 2,
+                 'classes': {'medium': {'model': 'm'}}}]
+
+    def store(self, hours_old):
+        saved = (datetime.now(timezone.utc) - timedelta(hours=hours_old)).isoformat()
+        reset = int((datetime.now(timezone.utc) + timedelta(hours=2)).timestamp())
+        runtime.kv_set(self.conn, '*', 'usage-claude:claude', json.dumps({
+            'saved': saved, 'refresh_error': 'Claude usage refresh failed: x',
+            'fiveHour': {'utilization': 0.4, 'resetsAt': reset},
+            'sevenDay': {'utilization': 0.5, 'resetsAt': reset + 3 * 24 * 3600}}))
+
+    def row(self):
+        env = {k: v for k, v in os.environ.items() if k != 'BZZ_RUNTIME_OVERRIDE'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            return overview.provider_lines(self.conn, {'providers': self.providers()}, [])[0]
+
+    def test_retained_five_hour_window_stays_in_panel(self):
+        self.store(2)
+        shown = gui_data.limit_rows({'provider_limits': [self.row()]})[0]
+        self.assertEqual(shown['five'][:5], '5h 40')
+        self.assertNotEqual(shown['reserve']['level'], 'bad')
+        self.assertFalse(shown['slots']['blocked'])
+
+    def test_expired_reading_shows_red_unknown_grey_slots_and_blocks_work(self):
+        from haivequeen import scheduler
+        self.store(usage.RETAIN_HOURS + 1)
+        row = self.row()
+        shown = gui_data.limit_rows({'provider_limits': [row]})[0]
+        self.assertEqual((shown['reserve']['text'], shown['reserve']['level']), ('unknown', 'bad'))
+        self.assertTrue(shown['slots']['blocked'])
+        self.assertEqual(shown['five'], '')
+        env = {k: v for k, v in os.environ.items() if k != 'BZZ_RUNTIME_OVERRIDE'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertTrue(scheduler.reserve_zero(self.providers()[0], self.conn))
+
+    def test_missing_quotas_root_cause_a_later_report_without_limits(self):
+        """claude -p /usage can emit a further usage_report whose rate_limits is null after the one with the limits; only the last report was read."""
+        self.seed()
+        full = self.response()
+        events = [json.loads(line) for line in full.stdout.splitlines()]
+        events.insert(1, {'type': 'assistant', 'usage_report': {'rate_limits': None}})
+        full.stdout = '\n'.join(json.dumps(e) for e in events)
+        self.assertTrue(self.refresh(run=mock.Mock(return_value=full)))

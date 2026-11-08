@@ -11,7 +11,7 @@ OLD = "2020-01-01T00:00:00"
 
 
 class QueenInstructionTests(unittest.TestCase):
-    """The Queen instructions tell her what to do when she is stuck and how the completeness count works (HQ-HIVES A6, A8)."""
+    """The Queen instructions tell her what to do when she is stuck and how the completeness count works."""
 
     def text(self):
         """The Queen instructions with the default limits."""

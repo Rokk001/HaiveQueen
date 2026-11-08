@@ -1,4 +1,4 @@
-"""Provider page (HQ-PROVIDER-SETUP S2, reworked by HQ-PROVIDER-FORM): the sections, models, use, advanced, explanations, name proposal, ready line."""
+"""Provider page: the sections, models, use, advanced, explanations, name proposal, ready line."""
 import json
 import os
 import sys

@@ -354,8 +354,8 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
         if provider["limit"] == "claude" and conn is not None:
             from . import usage
             if usage.claude_refresh_failed(conn, provider=provider):
-                kept = usage.retained_weekly(conn, provider=provider)   # the last verified weekly reading while it is recent; without one the quota counts as unavailable
-                if kept is None:
+                kept = usage.retained_weekly(conn, provider=provider)   # the last verified weekly reading while it is recent; without any kept reading the quota counts as unavailable
+                if kept is None and usage.retained_claude(conn, provider=provider) is None:
                     return {"FreePct": 0.0, "Hours": 168.0}
         u = ({"Pct": kept[0], "At": kept[1]} if kept else
              ({"Pct": w.get("pct"), "At": w.get("at")} if w else None) if provider["limit"] == "claude" and conn is not None and (w := usage.get_claude_usage(conn, provider=provider).get("seven_day"))
@@ -369,29 +369,31 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
     return {"FreePct": max(0.0, 100.0 - float(used)), "Hours": float(hours) if hours is not None else 168.0}
 
 
-def provider_reserve(provider: dict, conn=None, limits=None):
+def provider_reserve(provider: dict, conn=None, limits=None, now=None):
     """M-2 quota reserve of a provider from both usage windows: weekly quota x 5-hour quota (the 5-hour one counts at most 1.0).
 
     None for a provider without limit (+99 %); a used-up window gives 0 (no new work until it resets, capability packages included).
-    A passed reset counts as reset; an unknown reading counts as a full week free."""
+    A passed reset counts as reset; an unknown reading counts as a full week free. A kept reading of a failed Claude check counts with both windows.
+    `now` is the one clock reading a ranking shares, so equal usage gives exactly equal reserves."""
     from . import reserve
     source = str(provider.get("limit") or "") if not isinstance(provider.get("limit"), dict) else str((provider.get("limit") or {}).get("source", ""))
     p = {**provider, "limit": source}
     if without_limit(p):
         return None
     lim = provider_limit(p, conn, limits)
-    now = time.time()
-    weekly = reserve.window_quota(lim["FreePct"], reset_epoch=now + float(lim["Hours"]) * 3600.0)
-    five = _five_hour_window(p, conn, limits)
+    now = time.time() if now is None else now
+    weekly = reserve.window_quota(lim["FreePct"], reset_epoch=now + float(lim["Hours"]) * 3600.0, now=now)
+    five = _five_hour_window(p, conn, limits, now)
     if five is None:
         return reserve.reserve(weekly)
     q5 = reserve.window_quota(five["free_pct"], reset_epoch=five["reset_epoch"], now=now, window_hours=5.0)
     return reserve.reserve(weekly, q5)
 
 
-def _five_hour_window(provider: dict, conn=None, limits=None):
+def _five_hour_window(provider: dict, conn=None, limits=None, now=None):
     """The 5-hour usage window of a provider as {free_pct, reset_epoch}, or None when it is not known (M-2)."""
     name = provider["name"]
+    now = time.time() if now is None else now
     table = limits
     lf = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
     if table is None and lf and Path(lf).is_file():
@@ -403,11 +405,14 @@ def _five_hour_window(provider: dict, conn=None, limits=None):
         if w and w.get("usedPercent") is not None:
             hours = w.get("resetHours")
             return {"free_pct": max(0.0, 100.0 - float(w["usedPercent"])),
-                    "reset_epoch": time.time() + float(hours) * 3600 if hours is not None else None}
+                    "reset_epoch": now + float(hours) * 3600 if hours is not None else None}
         return None   # the test table is authoritative: without a windows entry there is no 5-hour window
     source = str(provider.get("limit") or "")
     if conn is not None and source in ("claude", "codex") and not os.environ.get("BZZ_RUNTIME_OVERRIDE"):
         from . import usage
+        if source == "claude" and usage.claude_refresh_failed(conn, provider=provider):
+            kept = usage.retained_five_hour(conn, provider=provider)   # the kept five-hour window of the last verified reading, while it is recent
+            return {"free_pct": max(0.0, 100.0 - float(kept[0])), "reset_epoch": kept[1]} if kept else None
         u = (usage.get_claude_usage(conn, provider=provider) if source == "claude" else usage.cached_codex_usage(conn, provider=provider)) or {}
         w = u.get("five_hour")
         if w and w.get("pct") is not None:
@@ -477,6 +482,7 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
     cname = CLASS_NAMES[class_index(cls)]
     needs = [canonical_capability(n) for n in (needs or []) if n]
     cand = []
+    now = time.time()
     for idx, p in enumerate(providers, 1):
         if p["slots"] <= 0 or int(free.get(p["name"], 0)) <= 0:
             continue
@@ -491,7 +497,7 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
             continue
         if "Coding" not in p["capabilities"] and not needs:
             continue
-        resv = provider_reserve(p, conn, limits)   # M-2: the quota reserve from both usage windows; None without limit (+99 %)
+        resv = provider_reserve(p, conn, limits, now)   # M-2: the quota reserve from both usage windows; None without limit (+99 %)
         if resv is not None and resv <= 0:
             continue   # a used-up window blocks every package until it resets (M-2), capability packages included
         cand.append((p, idx, resv))
@@ -506,9 +512,9 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
         other = [c for c in pool if c[0]["name"] != avoid]
         if other:
             pool = other
-    # the reserve is rounded for comparison only: two providers with the same usage must tie (local first), not differ by float noise of separate readings;
-    # among providers without a limit the list order decides as before (F-13) - local first applies between equal reserves of limited providers
-    return sorted(pool, key=lambda c: (not without_limit(c[0]), 0 if without_limit(c[0]) else -round(c[2], 6), (not servers.is_local(c[0])) and not without_limit(c[0]), c[1]))[0][0]
+    # the raw reserve decides (never a rounded one); the providers share one clock reading, so equal usage ties exactly: then a local provider
+    # comes first (also between providers without a limit, +99 %), then the order of the settings
+    return sorted(pool, key=lambda c: (not without_limit(c[0]), 0 if without_limit(c[0]) else -c[2], not servers.is_local(c[0]), c[1]))[0][0]
 
 
 def endpoint_args(provider: dict) -> list:

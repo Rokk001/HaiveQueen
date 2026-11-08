@@ -48,7 +48,7 @@ class IntegrationCase(RoundCase):
 
 
 class StepStateTests(IntegrationCase):
-    """H-17, H-46(d): the switches decide whether a step runs, the capabilities who does it."""
+    """The switches decide whether a step runs, the capabilities who does it."""
 
     def test_queen_with_the_capability_does_the_step_herself(self):
         env = self.hive()
@@ -58,7 +58,7 @@ class StepStateTests(IntegrationCase):
         self.assertEqual([p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)], ["P1"])
 
     def test_provider_no_longer_in_the_settings_has_no_ticks(self):
-        """H-46(d) without exceptions: a Queen whose provider is gone does no step herself; it goes to a provider with the tick."""
+        """Without exceptions: a Queen whose provider is gone does no step herself; it goes to a provider with the tick."""
         env = self.hive()
         self.assertEqual(integration.step_states(env, "removed"), {"Build": "package", "Deploy": "package"})
         self.use(provider("claude", "Coding", "Queen"))
@@ -137,7 +137,7 @@ class StepStateTests(IntegrationCase):
         self.assertNotIn(integration.BUILD, [p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)])
 
     def test_queen_of_an_existing_provider_does_only_the_steps_of_its_old_entries(self):
-        """H-46(d): an old `build` entry lets her Queen build; Deploy, never listed, is no exception and goes to the owner here."""
+        """An old `build` entry lets her Queen build; Deploy, never listed, is no exception and goes to the owner here."""
         old = {"name": "claude", "protocol": "claude", "slots": 2, "capabilities": ["blender", "build"], "classes": {"medium": {"model": "m"}}}
         self.use(old)
         env = self.hive()
@@ -146,7 +146,7 @@ class StepStateTests(IntegrationCase):
         self.assertEqual([p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)], ["P1", integration.DEPLOY])
 
     def test_queen_of_an_existing_provider_without_build_delegates_to_a_ticked_provider(self):
-        """H-46(d): an old entry without `build` gets no implicit Build or Deploy; both become packages routed to the provider with the ticks."""
+        """An old entry without `build` gets no implicit Build or Deploy; both become packages routed to the provider with the ticks."""
         old = {"name": "claude", "protocol": "claude", "slots": 2, "capabilities": ["images"], "classes": {"medium": {"model": "m"}}}
         legacy_builder = {"name": "oldbuild", "protocol": "claude", "slots": 2, "capabilities": ["build"], "classes": {"medium": {"model": "m"}}}
         self.use(old, legacy_builder, provider("deployer", "Deploy"))
@@ -208,7 +208,7 @@ class StepStateTests(IntegrationCase):
 
 
 class ReadyAndReleaseGateTests(IntegrationCase):
-    """H-17, H-46(d): bzz ready, integration acquire and release enforce the steps in code."""
+    """Bzz ready, integration acquire and release enforce the steps in code."""
 
     def queen(self, cwd=None):
         """Register the running Queen of the Hive, with her worktree when `cwd` is given."""
@@ -406,7 +406,7 @@ class ReadyAndReleaseGateTests(IntegrationCase):
 
 
 class VerifyBuildTests(IntegrationCase):
-    """H-46(c): with the build switch off, verify = "build" is closed like a code package."""
+    """With the build switch off, verify = "build" is closed like a code package."""
 
     def test_verify_build_counts_as_code_only_with_the_switch_off(self):
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "Work", "class": "medium"}])
@@ -423,7 +423,7 @@ class VerifyBuildTests(IntegrationCase):
 
 
 class StartTextTests(IntegrationCase):
-    """H-15, H-17, H-18: the Queen start text holds only the switched-on steps."""
+    """The Queen start text holds only the switched-on steps."""
 
     def text(self, name="claude"):
         return integration.start_text(self.env(), REL, name)
@@ -524,7 +524,7 @@ class StartTextTests(IntegrationCase):
 
 
 class OwnerCheckTextTests(IntegrationCase):
-    """H-16, H-46(a): the configured text is the question; the default follows the language; the Queen's report stays."""
+    """The configured text is the question; the default follows the language; the Queen's report stays."""
 
     def test_default_follows_the_language(self):
         env = SimpleNamespace(name="p", settings={"language": "German"})
@@ -546,7 +546,7 @@ class OwnerCheckTextTests(IntegrationCase):
 
 
 class MigrationTests(unittest.TestCase):
-    """H-17: at the change existing Apiaries and providers keep today's behaviour; new ones get the defaults."""
+    """At the change existing Apiaries and providers keep today's behaviour; new ones get the defaults."""
 
     @staticmethod
     def old(**extra):
@@ -572,7 +572,7 @@ class MigrationTests(unittest.TestCase):
         self.assertTrue(any("Deploy" in problem for problem in plans.check_plan(parsed, offered)))
 
     def test_existing_provider_has_no_implicit_integration_steps(self):
-        """H-46(d): no derived value lets the Queen of an old entry do a step she has no tick for."""
+        """No derived value lets the Queen of an old entry do a step she has no tick for."""
         self.assertNotIn("queenSteps", self.old())
         self.assertNotIn("Build", self.old()["capabilities"])
         self.assertNotIn("Deploy", self.old(capabilities=["build"])["capabilities"])
@@ -602,7 +602,7 @@ class MigrationTests(unittest.TestCase):
 
 
 class CommandRecognitionTests(unittest.TestCase):
-    """H-17, finding 40: the configured command is recognised in any shell."""
+    """The configured command is recognised in any shell."""
 
     WINDOWS = "C:\\Tools\\Python\\python.exe -W ignore -m unittest discover -s tests-py -p test*.py"
 
@@ -703,7 +703,7 @@ class CommandRecognitionTests(unittest.TestCase):
 
 
 class RemoteAndLocationTests(unittest.TestCase):
-    """H-18: remote, integration branch fallback and worktree location."""
+    """Remote, integration branch fallback and worktree location."""
 
     def env(self, **settings):
         return SimpleNamespace(name="p", code_repo=Path("/work/repo"), settings=settings, run_dir=lambda name: Path("/runs") / name)
@@ -732,7 +732,7 @@ class RemoteAndLocationTests(unittest.TestCase):
 
 
 class SettingsPageTests(unittest.TestCase):
-    """H-15 to H-19: the Apiary page shows every setting with its default and a translated label."""
+    """The Apiary page shows every setting with its default and a translated label."""
 
     def test_defaults_of_the_apiary_page(self):
         shown = gui_config.apiary_settings({})
@@ -759,7 +759,7 @@ class SettingsPageTests(unittest.TestCase):
 
 
 class BranchCleanupTests(RoundCase):
-    """H-19, H-46(k): the program deletes integrated plan and sub-branches, local and remote, only when that loses nothing."""
+    """The program deletes integrated plan and sub-branches, local and remote, only when that loses nothing."""
 
     def git(self, *args, cwd=None):
         result = subprocess.run(["git", "-C", str(cwd or self.clone), *args], capture_output=True, text=True, encoding="utf-8")
@@ -934,7 +934,7 @@ class BranchCleanupTests(RoundCase):
 
 
 class CleanupLogTests(unittest.TestCase):
-    """H-4: the result of the branch cleanup reads in German in the log of the window."""
+    """The result of the branch cleanup reads in German in the log of the window."""
 
     def test_branch_cleanup_line_is_german(self):
         from haivequeen import i18n
@@ -943,7 +943,7 @@ class CleanupLogTests(unittest.TestCase):
 
 
 class ProgramPushRuleTests(unittest.TestCase):
-    """H-46(k): the remote branch is deleted by the program with a lease, so a moved branch is never removed."""
+    """The remote branch is deleted by the program with a lease, so a moved branch is never removed."""
 
     def test_remote_deletion_uses_a_lease_on_the_checked_commit(self):
         with mock.patch.object(worktrees.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")) as run:

@@ -46,7 +46,7 @@ class QueenOrderTest(RoundCase):
     def test_ready_precedes_acquire_and_release_worktree(self):
         """The Queen runs the compile check and ready before acquiring the place."""
         self.conn.execute("UPDATE projects SET legacy_deploy=1")   # the release worktree step is in the text only with deploy on
-        for entry in self.machine["providers"]:   # and only for a Queen whose provider has the Deploy tick (H-46(d))
+        for entry in self.machine["providers"]:   # and only for a Queen whose provider has the Deploy tick
             entry.update(capabilitiesVersion=1, capabilities=["Coding", "Queen", "Build", "Deploy"])
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()

@@ -27,7 +27,7 @@ class FaultsTest(RoundCase):
         faults.check_round(self.env(), started, can_start, now=now or datetime(2026, 10, 29, 12, 0))
 
     def test_file_fault_files_an_open_question_with_the_fixed_plan(self):
-        """A fault of an Apiary becomes a question of plan HQ-FAULTS with the kind as item; a fault of the program itself is shown instead (H-46 g)."""
+        """A fault of an Apiary becomes a question of plan HQ-FAULTS with the kind as item; a fault of the program itself is shown instead."""
         qid = faults.file_fault(self.conn, "testproj", "no_start", "Apiary testproj: no starts")
         q = self.faults_of("no_start")[0]
         self.assertEqual((q["id"], q["project"], q["status"], q["plan_path"], q["item"]), (qid, "testproj", "fault_check", "HQ-FAULTS", "no_start"))
@@ -165,7 +165,7 @@ class FaultsTest(RoundCase):
     # Open reports retain coordinator-visible observations after an hour.
     def test_unresolved_faults_record_evidence_once(self):
         """Each unresolved kind stays open and records its observed recovery state."""
-        kinds = ("no_start", "runner_vanished", "agent_no_result")   # the faults of the program itself are no questions (H-46 g)
+        kinds = ("no_start", "runner_vanished", "agent_no_result")   # the faults of the program itself are no questions
         for kind in kinds:
             faults.file_fault(self.conn, "HaiveQueen", kind,
                               "Agent DUMMY-A-work of Apiary testproj: failed. Apiary testproj:")

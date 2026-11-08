@@ -1,4 +1,4 @@
-"""K10, H-43 and H-46(k): the Apiary switch "Publish release at integration", the version count-up and the release published by HaiveQueen itself."""
+"""K10: the Apiary switch "Publish release at integration", the version count-up and the release published by HaiveQueen itself."""
 import json
 import subprocess
 import unittest
@@ -252,7 +252,7 @@ class DurableQueueTests(PublishCase):
 
 
 class IntegrationPointTests(PublishCase):
-    """H-43: the release goes to the exact commit of each integration, read from a real Git history, even when the remote cannot be read and
+    """The release goes to the exact commit of each integration, read from a real Git history, even when the remote cannot be read and
     the integration branch has moved on meanwhile."""
 
     def setUp(self):

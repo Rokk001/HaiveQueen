@@ -365,7 +365,7 @@ class WindowTest(unittest.TestCase):
             win = gui.Dashboard(root, conn)
             root.update()
             link = sorted((h for h in win.hits if h[1] < 150 * win.scale < h[3] and h[0] > 450 * win.scale), key=lambda h: h[0])
-            self.assertEqual(len(link), 2)   # the repository link, then the update part of the header (H-42)
+            self.assertEqual(len(link), 2)   # the repository link, then the update part of the header
             with mock.patch("webbrowser.open") as opened:
                 link[0][4](None)
             opened.assert_called_once_with(gui.REPO_URL)

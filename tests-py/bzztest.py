@@ -21,7 +21,7 @@ REL = "docs/plans/dummy/DUMMY-PLAN.md"
 
 
 def provider(name, slots, use="preferred", caps=(), limit="", classes=("light", "medium", "heavy"), proto="claude", build=True):
-    """One provider entry as config.toml has it; the models are called <name>-<class>. It has the old build entry unless build=False, so its Queen may do the Build step (H-46(d))."""
+    """One provider entry as config.toml has it; the models are called <name>-<class>. It has the old build entry unless build=False, so its Queen may do the Build step."""
     p = {"name": name, "protocol": proto, "command": proto, "args": ["--model", "{model}"], "slots": slots, "use": use,
          "capabilities": list(dict.fromkeys(list(caps) + (["build"] if build else []))), "classes": {c: {"model": "%s-%s" % (name, c), "effort": "medium"} for c in classes}}
     if limit:
@@ -30,7 +30,7 @@ def provider(name, slots, use="preferred", caps=(), limit="", classes=("light", 
 
 
 def classic_providers():
-    """The two classic providers: claude (haiku/sonnet/opus, build) and codex (images, build), 2 slots each; their Queens may do Build because of the old build entry (H-46(d))."""
+    """The two classic providers: claude (haiku/sonnet/opus, build) and codex (images, build), 2 slots each; their Queens may do Build because of the old build entry."""
     return [
         {"name": "claude", "protocol": "claude", "command": "claude", "args": ["--model", "{model}"], "slots": 2, "use": "preferred",
          "capabilities": ["build"], "limit": {"source": "claude"},
@@ -103,7 +103,7 @@ class RoundCase(unittest.TestCase):
         self.machine.update(self.settings or {})
         load_config = config.load_config
         def machine_config():
-            """bzz commands called in the test read the same machine settings as its rounds, unless the test wrote a config.toml (their Queen's provider must exist, H-46(d))."""
+            """bzz commands called in the test read the same machine settings as its rounds, unless the test wrote a config.toml (their Queen's provider must exist)."""
             return load_config() if (config.config_dir() / "config.toml").exists() else config._merge(config.DEFAULT_CONFIG, self.machine)
         patcher = mock.patch("haivequeen.config.load_config", machine_config)
         patcher.start()

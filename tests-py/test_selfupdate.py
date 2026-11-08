@@ -39,7 +39,7 @@ class FakeGit:
         if argv[0] == "git":
             sub = [a for a in argv[3:]]   # after: git -C <live>
             name = sub[0]
-            if name == "describe":   # the retirement check (H-42): no release tag, so the one-time checkout update runs
+            if name == "describe":   # the retirement check: no release tag, so the one-time checkout update runs
                 return 128, "fatal: No names found, cannot describe anything."
             self.calls.append((name + (" " + sub[1] if name in ("merge", "reset", "push") else ""), str(cwd)))
             if self.fail.get(name):

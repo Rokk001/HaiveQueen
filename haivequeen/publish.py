@@ -1,4 +1,4 @@
-"""Release at integration (H-43, H-46 k): with the Apiary switch publishReleases on and a remote on GitHub, HaiveQueen itself (never an agent)
+"""Release at integration: with the Apiary switch publishReleases on and a remote on GitHub, HaiveQueen itself (never an agent)
 publishes every integration into the integration branch as a GitHub release.
 
 Repository: the GitHub repository, the base version (pyproject.toml), the tags and releases and the commit of a release are always those of the

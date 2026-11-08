@@ -1,4 +1,4 @@
-"""M-1 of HQ-LIMITS-ROUTING-FIX: failing tests for provider choice (Bee routing) with the M-2 quota reserve.
+"""Tests for provider choice (Bee routing) with the M-2 quota reserve.
 
 A Bee of a Queen whose provider runs Bees as embedded subagents takes a free local provider first, else stays on the Queen's provider; only when both have no
 free slot it goes to another provider as in C-2. Every other Bee (bee mode process) is placed by normal provider choice like a Queen: class, capabilities, free

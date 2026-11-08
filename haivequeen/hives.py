@@ -903,11 +903,11 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     if hive and not dry_run and plan['status'] not in plan_mod.CUT_STATUSES:
                         from . import bees
                         slots = sum(pool.free.values()) + reserved.get((env.name, plan['path']), 0)   # C-1: every Bee, a subagent Bee too, takes a slot of some provider
-                        try:   # H-47: in this round, tell the Queen which startable packages to start while Bee places are free
+                        try:   # In this round, tell the Queen which startable packages to start while Bee places are free
                             bees.notify_startable(env, plan['path'], running[-1], slots, is_alive)
                         except Exception as exc:
                             env.log('startable packages not reported: %s' % exc)
-                        try:   # H-31: a Queen that started later learns of stopped packages and pending stops too
+                        try:   # A Queen that started later learns of stopped packages and pending stops too
                             bees.write_stop_notice(conn, env.name, plan['path'])
                         except Exception as exc:
                             env.log('stopped packages not reported: %s' % exc)

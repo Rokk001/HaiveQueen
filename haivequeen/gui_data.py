@@ -342,14 +342,14 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
         rows.append({"kind": "bee", "name": "–", "agent": None, "project": project, "plan_path": plan, "model": "–", "hive": hive_name(plan),
                      "apiary": project, "task": package, "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": "waiting", "runtime": "–"})
         seen.add((project, plan, package))
-    for (project, plan), names in sorted((startable or {}).items()):   # H-47: startable packages the running Queen has not started yet
+    for (project, plan), names in sorted((startable or {}).items()):   # Startable packages the running Queen has not started yet
         for package in names:
             if (project, plan, package) in seen or (hive_keys is not None and (project, plan) not in hive_keys):
                 continue
             rows.append({"kind": "bee", "name": "–", "agent": None, "project": project, "plan_path": plan, "model": "–", "hive": hive_name(plan),
                          "apiary": project, "task": package, "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": "startable, not started", "runtime": "–"})
             seen.add((project, plan, package))
-    for (project, plan, package) in sorted(stopped or ()):   # H-31: a package the owner stopped stays here until the owner resumes it
+    for (project, plan, package) in sorted(stopped or ()):   # A package the owner stopped stays here until the owner resumes it
         if (project, plan, package) in seen or (project, plan, package) in (completed or ()):
             continue
         rows.append({"kind": "bee", "name": "–", "agent": None, "project": project, "plan_path": plan, "model": "–", "hive": hive_name(plan),
@@ -466,11 +466,15 @@ def limit_rows(d) -> list:
         reset_date = datetime.fromtimestamp(p["reset_at"]) if p.get("reset_at") else None
         reset = reset_date.strftime("%H:%M" if reset_date.date() == datetime.now().date() else "%d.%m. %H:%M") if reset_date else ""
         reserve = {"text": "", "level": "dim", "hover": "", "age": ""}
+        blocked_slots = False
         if not p["has_limit"]:   # a provider without a limit never runs out and gets work first: the reserve shows the highest value
             reserve.update(text="+99 %", level="ok", hover=tr("No limit: this provider never runs out and gets work first."))
         elif p["used_pct"] is None:
             reserve["text"] = tr("unknown")
             reserve["hover"] = p.get("error") or ""
+            if p.get("error"):   # the newest check failed and no verified reading is young enough: red "unknown", no new work (reserve 0), grey slot cells
+                reserve["level"] = "bad"
+                blocked_slots = True
         else:
             if verified:
                 reserve["age"] = age_text(p)
@@ -486,6 +490,7 @@ def limit_rows(d) -> list:
         used = int(p["used_slots"] or 0)
         slots = {"total": total, "used": used, "extra": max(0, used - total), "none": tr("no slots") if not total else "",
                  "running": tr("%d running", used) if not total and used else ""}
+        slots["blocked"] = blocked_slots or reserve["text"] == "0 %"
         if p.get("offline"):   # an offline provider shows "offline" in red instead of its free slots
             slots["offline"] = tr("offline")
             slots["hover"] = tr("Offline since %s. HaiveQueen checks again and uses this provider as soon as it answers.", p["offline"])
@@ -541,7 +546,7 @@ def info_sections(d) -> list:
     else:
         qs = [(tr("none open"), "dim")]
     out.append((tr("QUESTIONS"), qs))
-    if d.get("global_faults"):   # faults that belong to no Apiary (H-46 g): shown here, never as an inbox question
+    if d.get("global_faults"):   # faults that belong to no Apiary: shown here, never as an inbox question
         out.append((tr("FAULTS"), [((localtime.time(db.parse_time(f["at"])) if db.parse_time(f["at"]) else "--:--") + " " + i18n.log_text(f["text"]), "bad")
                                    for f in d["global_faults"]]))
     if d["round_errors"]:

@@ -1,4 +1,4 @@
-"""M-2 of HQ-LIMITS-ROUTING-FIX: the quota reserve from both usage windows, as a pure formula.
+"""The quota reserve from both usage windows, as a pure formula.
 
 Per window quota = free percent / percent of the window's time left until its reset (1.0 = the quota lasts exactly until the reset).
 Reserve = weekly quota x 5-hour quota, where the 5-hour quota counts at most 1.0 (a full 5-hour window never raises the reserve).

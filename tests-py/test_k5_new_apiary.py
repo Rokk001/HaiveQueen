@@ -53,7 +53,7 @@ class ApiaryCase(unittest.TestCase):
 
 
 class ExistingApiaryTests(ApiaryCase):
-    """H-17: at the change existing Apiaries keep compile check, build and deploy."""
+    """At the change existing Apiaries keep compile check, build and deploy."""
 
     def test_migration_keeps_deploy_on_for_an_apiary_of_the_old_database(self):
         conn = db.connect(self.old_database("old"))
@@ -105,7 +105,7 @@ class ExistingApiaryTests(ApiaryCase):
 
 
 class NewApiaryTests(ApiaryCase):
-    """H-17: a new Apiary has compile check and build on and deploy off, however it was registered."""
+    """A new Apiary has compile check and build on and deploy off, however it was registered."""
 
     def test_fresh_database_marks_nothing(self):
         conn = self.open_db()
@@ -192,7 +192,7 @@ class SettingsWindowTests(ApiaryCase):
 
 
 class StepPackageCloseTests(IntegrationCase):
-    """H-46(d): a step package is not closed by a word of the Queen alone."""
+    """A step package is not closed by a word of the Queen alone."""
 
     def queen(self):
         """Register the running Queen of the Hive."""

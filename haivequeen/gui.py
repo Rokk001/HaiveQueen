@@ -196,7 +196,7 @@ class Dashboard:
         root.bind("<Key>", self.on_key)
         self.canvas.bind("<Destroy>", self.on_destroy)
         self.tick_job = None
-        self.update_state, self.update_thread = {}, None   # H-42: the last update check and a running check (thread)
+        self.update_state, self.update_thread = {}, None   # The last update check and a running check (thread)
         self.tick()
 
     # Cancel the pending redraw and refresh when the window closes.
@@ -227,7 +227,7 @@ class Dashboard:
         self.watch_update()
         self.draw()
 
-    # The update function of the header (H-42).
+    # The update function of the header.
     def watch_update(self, manual=False):
         """Read the last update check, start the daily check (or with `manual` Check now) in a thread, and restart the window after a finished install."""
         import threading
@@ -884,7 +884,7 @@ class Dashboard:
                     self.tip_boxes.append((self.px(rx), self.px(top), self.px(rx + rw), self.px(top + row_h), sl["hover"]))
                 continue
             extra = "+%d" % sl["extra"] if sl["extra"] else ""
-            blocked = res["text"] == "0 %"
+            blocked = bool(sl.get("blocked")) or res["text"] == "0 %"
             if sl["total"] > 16:
                 count = "%d/%d" % (sl["used"], sl["total"])
                 cw = self.tw(count, 14) + 12

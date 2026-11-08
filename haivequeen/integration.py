@@ -40,7 +40,7 @@ def step_states(env, provider_name):
     for capability, enabled in (("Build", on["build"]), ("Deploy", on["deploy"])):
         if not enabled:
             states[capability] = "off"
-        elif own is not None and bees.capable_providers([own], [capability]):   # only the ticks decide; a provider no longer in the settings has none (H-46(d))
+        elif own is not None and bees.capable_providers([own], [capability]):   # only the ticks decide; a provider no longer in the settings has none
             states[capability] = "queen"
         else:
             states[capability] = "package" if bees.capable_providers(offered, [capability]) else "owner"

@@ -243,7 +243,7 @@ class WindowTest(unittest.TestCase):
             win.refresh_login()
             self.assertEqual(win.login_status.cget("text"), "Login present")
 
-    # H-15 to H-19: the Apiary page of a project file.
+    # The Apiary page of a project file.
     def test_apiary_page_shows_edits_and_saves_its_settings(self):
         """The General page of a project file offers every Apiary setting with its default under a readable label; a changed value is saved."""
         import tomllib
@@ -252,7 +252,7 @@ class WindowTest(unittest.TestCase):
         keys = {path[1]: like for path, _getter, like in win.getters if path[0] == "file"}
         for key, default in gui_config.APIARY_DEFAULTS:
             if key in gui_config.RELEASE_KEYS:
-                self.assertNotIn(key, keys)   # H-43: the release settings are offered only for a remote on GitHub, this Apiary has none
+                self.assertNotIn(key, keys)   # The release settings are offered only for a remote on GitHub, this Apiary has none
                 continue
             self.assertEqual(keys[key], default, key)
         texts = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
@@ -674,7 +674,7 @@ class WindowTest(unittest.TestCase):
             self.assertIn("Parallel builds", win.status.cget("text"))
             self.assertEqual((self.folder / "config.toml").read_text(encoding="utf-8"), before)
 
-    # H-10, H-17: looking at a provider is no selection; changing its ticks is.
+    # Looking at a provider is no selection; changing its ticks is.
     def legacy_page(self, **entry):
         """The window on a provider entry from before the ticks."""
         path = self.folder / "config.toml"
@@ -687,7 +687,7 @@ class WindowTest(unittest.TestCase):
 
     def test_showing_and_saving_an_old_provider_changes_nothing_of_its_selection(self):
         win, path = self.legacy_page(capabilities=["build"], use="capability-only")
-        self.assertFalse(any("as before" in str(w.cget("text")) for w in descendants(win.form) if w.winfo_class() == "Label"))   # H-46(d): no promise of implicit steps
+        self.assertFalse(any("as before" in str(w.cget("text")) for w in descendants(win.form) if w.winfo_class() == "Label"))   # No promise of implicit steps
         win.save()
         saved = gui_config.load_raw(path)["providers"][0]
         self.assertEqual(saved["capabilities"], ["build"])

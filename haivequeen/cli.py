@@ -261,7 +261,7 @@ def cmd_integration(args, conn):
         if env:
             from haivequeen import publish
             try:
-                publish.after_integration(conn, env, args.plan)   # H-43/H-46(k): HaiveQueen publishes the release itself; a failure is retried by the loop
+                publish.after_integration(conn, env, args.plan)   # HaiveQueen publishes the release itself; a failure is retried by the loop
             except Exception as exc:
                 db.add_event(conn, args.project, "release", "release step failed: %s" % exc)
         hives.release_integration(conn, args.project, args.plan)

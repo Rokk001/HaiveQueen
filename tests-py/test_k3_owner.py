@@ -43,7 +43,7 @@ class CutSnapshotTests(__import__('test_plan_submit').SubmittedPlanTests):
 
 
 class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
-    """H-9: a cut record belongs to one plan generation and title; a reused path or another plan never inherits it, edits keep it, and an older plan is recovered only when no agent can have changed its header."""
+    """A cut record belongs to one plan generation and title; a reused path or another plan never inherits it, edits keep it, and an older plan is recovered only when no agent can have changed its header."""
     OWNER = [{'id': 'P1', 'title': 'First', 'verify': 'owner', 'requirements': ['R-1']}]
     CODE = [{'id': 'P1', 'title': 'First', 'verify': 'code', 'requirements': ['R-1']}]
 
@@ -102,7 +102,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         self.assertEqual(self.stored(), [['R-1', 'code']])
 
     def test_owner_reject_and_restart_start_a_new_generation(self):
-        """Cancelling a stopped plan drops its cut; starting the redrafted plan sends it (H-21) and its Queen's checked cut is the new record."""
+        """Cancelling a stopped plan drops its cut; starting the redrafted plan sends it and its Queen's checked cut is the new record."""
         from haivequeen import hives
         self.queen_of('SUBMITTED', self.CODE)
         self.assertEqual(self.check()[0], 0)
@@ -156,7 +156,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         return readygate.gate(self.env(), REL, {'cwd': ''})
 
     def test_gate_keeps_owner_exemption_through_later_requirements(self):
-        """H-9 with H-27: the cut owner requirement stays exempt after edits; a requirement added later, even to the owner package, needs evidence."""
+        """The cut owner requirement stays exempt after edits; a requirement added later, even to the owner package, needs evidence."""
         accepted, message, _ = self.gate_after_edit(self.OWNER, [('requirements = ["R-1"]', 'requirements = ["R-1", "R-2"]')],
                                                     '- R-1: owner check, reworded\n- R-2: added later\n')
         self.assertFalse(accepted)

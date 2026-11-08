@@ -335,7 +335,7 @@ def provider_lines(conn, cfg, agents) -> list:
         saved = _parse_time(kept.get("saved")) if kept else None
         age_minutes = max(0, int((datetime.now(timezone.utc) - saved.astimezone(timezone.utc)).total_seconds() // 60)) if saved else None
         error = usage.claude_refresh_error(conn, provider=provider) if source == "claude" else ""
-        five = window_usage(kept or usage._claude_snapshot(conn, provider=provider), datetime.now(timezone.utc)).get("FiveHour") if source == "claude" else None
+        five = window_usage(kept or ({} if error else usage._claude_snapshot(conn, provider=provider)), datetime.now(timezone.utc)).get("FiveHour") if source == "claude" else None   # an expired reading shows no 5-hour window
         if source == "codex" and not five_file and not os.environ.get("BZZ_PROVIDER_LIMITS_FILE"):   # the 5-hour window of a Codex provider
             five = window_usage(_kv(conn, usage.CODEX_USAGE_KEY + ":" + provider["name"]) or _kv(conn, usage.CODEX_USAGE_KEY), datetime.now(timezone.utc)).get("FiveHour")
         five = five_file or five

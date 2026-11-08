@@ -1,4 +1,4 @@
-"""M-2 of HQ-LIMITS-ROUTING-FIX: failing tests for the quota reserve from both usage windows (the pure formula in haivequeen/reserve.py).
+"""Tests for the quota reserve from both usage windows (the pure formula in haivequeen/reserve.py).
 
 Per window quota = free percent / percent of the window's time left until its reset (1.0 = the quota lasts exactly until the reset).
 Reserve = weekly quota x 5-hour quota, where the 5-hour quota counts at most 1.0. Shown as (reserve - 1) in whole percent, at most +99 %;

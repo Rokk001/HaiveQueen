@@ -1,4 +1,4 @@
-"""Own LLM servers (HQ-PROVIDER-SETUP S1): server entries, handing a server to each built-in CLI, connection test, ready check, local rules and migration."""
+"""Own LLM servers: server entries, handing a server to each built-in CLI, connection test, ready check, local rules and migration."""
 import copy
 import json
 import os

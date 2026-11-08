@@ -1,4 +1,4 @@
-"""Build settings of plan HQ-BUILDJOBS (package B1): core selection, parallel value, minimum free RAM, measurement of the build processes, median, icons."""
+"""Build settings: core selection, parallel value, minimum free RAM, measurement of the build processes, median, icons."""
 import argparse
 import contextlib
 import hashlib

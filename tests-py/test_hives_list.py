@@ -81,7 +81,7 @@ class ActionTests(RoundCase):
         self.assertEqual(self.status(), "SENT")
 
     def test_start_draft_ready_stopped_before_and_rejected_draft(self):
-        """Start: a stopped plan gets its earlier status, a cancelled plan DRAFT, a draft SENT (H-21)."""
+        """Start: a stopped plan gets its earlier status, a cancelled plan DRAFT, a draft SENT."""
         self.plan("IN_PROGRESS", PKG)
         hives.pause_plan(self.conn, "testproj", REL)
         gui_hives.run_action(self.conn, self.row(), "start", yes)

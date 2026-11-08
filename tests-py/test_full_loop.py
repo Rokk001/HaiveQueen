@@ -63,7 +63,7 @@ class FullLoopTest(RoundCase):
         os.environ.update({"FAKE_TOOLS": str(loop.TOOLS_DIR), "FAKE_LOG": str(self.log_file), "FAKE_PLAN": REL})
         cfg = self.base / "cfg"
         cfg.mkdir(exist_ok=True)
-        toml = ("[[providers]]\nname = 'claude'\ncommand = '%s'\nargs = []\ncapabilities = ['build']\n"   # its Queen does the Build step only with the build entry (H-46(d))
+        toml = ("[[providers]]\nname = 'claude'\ncommand = '%s'\nargs = []\ncapabilities = ['build']\n"   # its Queen does the Build step only with the build entry
                 "[providers.classes.medium]\nmodel = 'claude-sonnet-5-5'\neffort = 'medium'\n" % str(cmd).replace(chr(92), "/"))
         (cfg / "config.toml").write_text(toml, encoding="utf-8")   # the agent runner reads the providers from this file
         prov = provider("claude", 3)

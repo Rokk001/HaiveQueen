@@ -1,4 +1,4 @@
-"""H-2 to H-5: GUI and desktop texts follow the machine language, agent instructions and protocol words stay English, dates follow the system."""
+"""GUI and desktop texts follow the machine language, agent instructions and protocol words stay English, dates follow the system."""
 import ast
 import json
 import os

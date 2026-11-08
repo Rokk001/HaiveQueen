@@ -7,13 +7,13 @@ pyproject.toml changed, starts the loop and checks the first round. A failure af
 (rollback) and filed as an open question of project HaiveQueen. Every run is one row of the table self_updates.
 The live folder is the folder of this package: no path of a machine is written into the tool.
 
-With a version (`self-update --worker --version X`, started by the update button, H-42) the same worker installs the release X instead: it
-fetches the tag vX from origin, fast-forwards to it and never pushes. While the worker holds its lock no Queen or Bee starts (H-46 i); its own
+With a version (`self-update --worker --version X`, started by the update button) the same worker installs the release X instead: it
+fetches the tag vX from origin, fast-forwards to it and never pushes. While the worker holds its lock no Queen or Bee starts; its own
 restart carries the variable BZZ_UPDATE_RESTART, which `start` accepts while the lock is held.
 
-The checkout update without a version is the one-time transition of H-46 (j): it is retired (refused with result "retired", no row, no
+The checkout update without a version is the one-time transition: it is retired (refused with result "retired", no row, no
 merge, no push) as soon as the release path has started, i.e. HaiveQueen published a release for project HaiveQueen or the live folder
-is at a release tag vX.Y.Z. From then on the common release update (`bzz update`, the update button) is the only way (H-42).
+is at a release tag vX.Y.Z. From then on the common release update (`bzz update`, the update button) is the only way.
 """
 import json
 import os
@@ -56,7 +56,7 @@ def integration_branch(conn) -> str:
 
 
 def legacy_retired(conn, live=None, run=None) -> str:
-    """Why the checkout update (no version) is retired, or "" while the one-time transition of H-46 (j) is still open.
+    """Why the checkout update (no version) is retired, or "" while the one-time transition is still open.
 
     Retired once a release was published for project HaiveQueen to the repository of its code (kv release-last with release-last-repository;
     a release recorded without its repository went to the workspace remote and does not count) or the live folder's HEAD has a release tag
@@ -78,7 +78,7 @@ def legacy_retired(conn, live=None, run=None) -> str:
     return ""
 
 
-RETIRED_NOTE = "the checkout self-update was a one-time transition (H-46 j) and is retired: %s; use `bzz update` or the update button"
+RETIRED_NOTE = "the checkout self-update was a one-time transition and is retired: %s; use `bzz update` or the update button"
 
 
 # ---- starting the detached worker ----

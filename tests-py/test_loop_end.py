@@ -18,7 +18,7 @@ class LoopEndTest(RoundCase):
 
     # Return the loop faults in this test database.
     def questions(self):
-        """Return the shown loop faults in this test database; a vanished loop belongs to no Apiary, so it is never an inbox question (H-46 g)."""
+        """Return the shown loop faults in this test database; a vanished loop belongs to no Apiary, so it is never an inbox question."""
         self.assertEqual(runtime.list_questions(self.conn, "HaiveQueen", None, faults.FAULT_PLAN, "loop_vanished"), [])
         return [f for f in faults.global_faults(self.conn) if f["kind"] == "loop_vanished"]
 

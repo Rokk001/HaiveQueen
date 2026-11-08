@@ -1,4 +1,4 @@
-"""Owner check after integration: a Hive whose plan has points only the owner can check stays open in the state 'owner_check' (HQ-DISPLAY K4)."""
+"""Owner check after integration: a Hive whose plan has points only the owner can check stays open in the state 'owner_check'."""
 from bzztest import REL, RoundCase
 from haivequeen import bees, db, hives, plans, runtime
 

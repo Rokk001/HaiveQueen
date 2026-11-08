@@ -1,4 +1,4 @@
-"""H-25 release proof and H-53 fresh failure counting after an owner answer."""
+"""Release proof and fresh failure counting after an owner answer."""
 from unittest import mock
 
 from bzztest import REL, RoundCase

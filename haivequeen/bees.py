@@ -1,6 +1,7 @@
 """Bee routing, package attempts and scoped Queen instructions."""
 import json
 import re
+import time
 
 from . import buildjobs, db, roles, runtime, scheduler, servers
 from . import plans as plan_mod
@@ -523,7 +524,7 @@ def resume_package(conn, project, plan, package):
     write_stop_notice(conn, project, plan)
 
 
-# Packages a running Queen could start now but has not started (H-47): their dependencies are done and Bee places are free.
+# Packages a running Queen could start now but has not started: their dependencies are done and Bee places are free.
 NOTICE_FILE = 'START-PACKAGES'
 STARTABLE_KEY = 'hive-startable:'
 
@@ -683,13 +684,13 @@ def by_reserve(candidates, providers, conn=None) -> list:
     """`candidates` in the order of the normal provider choice: providers without a limit first (list order among them, F-13), then the best quota reserve from both usage windows (M-2), equal reserves go to a local provider first, then the order of the settings."""
     from . import scheduler
     order = [p['name'] for p in providers]
+    now = time.time()   # one clock reading for all candidates, so equal usage gives exactly equal reserves
 
     def key(p):
-        resv = scheduler.provider_reserve(p, conn)   # M-2: the quota reserve from both usage windows; None without limit (+99 %)
+        resv = scheduler.provider_reserve(p, conn, now=now)   # M-2: the quota reserve from both usage windows; None without limit (+99 %)
         unlimited = resv is None
-        # the reserve is rounded for comparison only: two providers with the same usage must tie (local first), not differ by float noise of separate readings;
-        # among providers without a limit the list order decides as before (F-13) - local first applies between equal reserves of limited providers
-        return (not unlimited, 0 if unlimited else -round(resv, 6), (not servers.is_local(p)) and not unlimited, order.index(p['name']) if p['name'] in order else len(order))
+        # the raw reserve decides (never a rounded one); equal reserves, also two providers without a limit (+99 %), go to a local provider first, then the settings order
+        return (not unlimited, 0 if unlimited else -resv, not servers.is_local(p), order.index(p['name']) if p['name'] in order else len(order))
     return sorted(candidates, key=key)
 
 
@@ -778,7 +779,7 @@ def refuse(env, package, reason):
 
 # The reason no Bee may start while an update waits for running agents.
 def drain_refusal(draining=None):
-    """H-46(i): while the update worker waits for running agents no Bee starts, an embedded one included; the reason, else None."""
+    """While the update worker waits for running agents no Bee starts, an embedded one included; the reason, else None."""
     from . import updates
     if (draining or updates.draining)():
         return 'an update of HaiveQueen waits for the running agents to end; no Bee starts until it has restarted'
@@ -951,7 +952,7 @@ def state_branch(env, plan):
     return ''
 
 
-# The branch HaiveQueen creates for a plan that names none (H-22).
+# The branch HaiveQueen creates for a plan that names none.
 def derived_branch(plan):
     """The plan file name in lower case without -PLAN and .md (docs/plans/Feature-X-PLAN.md gives feature-x)."""
     from pathlib import Path
@@ -959,7 +960,7 @@ def derived_branch(plan):
 
 
 def branch_is_derived(env, plan):
-    """True when the plan's branch is only the derived name of H-22: the plan, its state file and the owner name none."""
+    """True when the plan's branch is only the derived name: the plan, its state file and the owner name none."""
     resolved = plan_worktree(env, plan)
     if not resolved or resolved[0] != derived_branch(plan):
         return False
@@ -978,7 +979,7 @@ def plan_worktree(env, plan):
     from pathlib import Path
     conn = getattr(env, 'conn', None)
     chosen = runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan) if conn is not None else None
-    if chosen:   # the owner chose a new branch instead of an existing one (H-23)
+    if chosen:   # the owner chose a new branch instead of an existing one
         return chosen, Path(__import__('haivequeen.routine', fromlist=['new_worktree']).new_worktree(env, scheduler.to_slug(chosen)))
     text = (env.workspace / plan).read_text(encoding='utf-8-sig')
     text = re.sub(r'\*\*([^*\n]+)\*\*', r'\1', text)
@@ -1035,7 +1036,7 @@ def foreign_plan_branch(env, plan):
     return False
 
 
-# The plan's branch exists but the plan has no Hive history (H-23): the owner decides whether the Hive takes it over or creates a new one.
+# The plan's branch exists but the plan has no Hive history: the owner decides whether the Hive takes it over or creates a new one.
 TAKEOVER_KEY, NEW_BRANCH_KEY, BRANCH_ITEM = 'branch-takeover:', 'plan-branch:', 'branch-takeover'
 TAKE_OVER_WORDS = ('take over', 'takeover', 'existing', 'use it', 'übernehmen', 'uebernehmen', 'bestehend')
 NEW_WORDS = ('new', 'create', 'neu', 'neuen', 'anlegen')

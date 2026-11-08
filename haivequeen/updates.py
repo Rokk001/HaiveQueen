@@ -1,8 +1,8 @@
-"""Update function for every user (H-42): HaiveQueen asks GitHub for a newer release once per interval (config.toml `update.checkHours`,
+"""Update function for every user: HaiveQueen asks GitHub for a newer release once per interval (config.toml `update.checkHours`,
 default 24 h, 0 switches the daily check off) and when the owner presses "Check now"; the GUI then shows "New version available" with an update button.
 
 On confirmation the detached self-update worker installs the release: it stops the loop, waits until no agent of any Apiary runs (no Queen or Bee
-starts meanwhile, H-46 i), fast-forwards the install folder to the release tag, installs the package again when pyproject.toml changed and starts
+starts meanwhile), fast-forwards the install folder to the release tag, installs the package again when pyproject.toml changed and starts
 HaiveQueen again. The result of the last check is kept in update-check.json of the data folder, so a restart neither forgets an offer nor asks early.
 The installed version is the release tag of the install folder (pyproject.toml without one).
 """
@@ -239,7 +239,7 @@ def header_line(state, checking=False) -> tuple:
 
 
 def draining(alive=None) -> bool:
-    """True while a living self-update worker holds its lock: it waits for running agents, so no Queen or Bee may start (H-46 i)."""
+    """True while a living self-update worker holds its lock: it waits for running agents, so no Queen or Bee may start."""
     from . import selfupdate
     alive = alive or osplat.process_alive
     try:

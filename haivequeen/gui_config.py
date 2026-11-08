@@ -34,7 +34,7 @@ BUILD_FIELDS = (
 APIARY_DEFAULTS = (("ownerTopics", []), ("ownerCheckText", ""), ("compileCheckEnabled", True), ("buildEnabled", True), ("deployEnabled", False),
                    ("integrationBranch", "main"), ("remoteName", "origin"), ("worktreeLocation", ""), ("deleteFinishedWorktrees", True), ("deleteIntegratedBranches", False),
                    ("publishReleases", False), ("nextVersion", ""))
-RELEASE_KEYS = ("publishReleases", "nextVersion")   # offered only for an Apiary whose remote is on GitHub (H-43)
+RELEASE_KEYS = ("publishReleases", "nextVersion")   # offered only for an Apiary whose remote is on GitHub
 SETTING_LABELS = {
     "ownerTopics": N_("Topics that always go to the owner (one per line)"), "ownerCheckText": N_("Owner-check question (empty: default text)"),
     "compileCheckEnabled": N_("Run the compile check"), "buildEnabled": N_("Run the build"), "deployEnabled": N_("Run the deploy"),
@@ -141,7 +141,7 @@ def apiary_settings(shown, legacy_deploy=False):
 
 # Hide the release settings of an Apiary whose remote is not on GitHub.
 def release_fields(shown, repository):
-    """`shown` without publishReleases and nextVersion when `repository` (owner/name of the GitHub remote) is None (H-43: only for a remote on GitHub)."""
+    """`shown` without publishReleases and nextVersion when `repository` (owner/name of the GitHub remote) is None (only for a remote on GitHub)."""
     if not repository:
         for key in RELEASE_KEYS:
             shown.pop(key, None)

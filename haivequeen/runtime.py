@@ -237,7 +237,7 @@ def _generation(conn, project, plan):
 def cut_assignments(conn, project, plan, plan_text):
     """The requirement/verify pairs of the accepted cut of this plan generation, or None when there is no trustworthy record
     (an older plan, a reused path, or another plan title at this path). Edits of the plan text and later requirements keep the
-    record: requirements added after the cut have no pair and so need evidence (H-27)."""
+    record: requirements added after the cut have no pair and so need evidence."""
     record = _cut_record(kv_get(conn, project, CUT_KEY + plan))
     if record is None or record["generation"] != _generation(conn, project, plan) or record["title"] != plan_identity(plan_text):
         return None

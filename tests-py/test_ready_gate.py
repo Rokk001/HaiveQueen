@@ -350,7 +350,7 @@ class GateTests(RoundCase):
             self.conn.commit()
 
     def test_check_agent_gets_the_requirements_of_every_plan_version(self):
-        """H-27 end to end: a requirement only an earlier committed version had is required at bzz ready (it blocks until listed); the check agent is handed the current version only."""
+        """End to end: a requirement only an earlier committed version had is required at bzz ready (it blocks until listed); the check agent is handed the current version only."""
         def git(*args):
             subprocess.run(["git", "-C", str(self.repo)] + list(args), check=True, capture_output=True)
         git("init", "-q")
