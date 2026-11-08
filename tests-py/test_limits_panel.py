@@ -157,7 +157,7 @@ class DataTest(unittest.TestCase):
 
     def test_slots(self):
         """L-4/L-10 (a): totals, used and the extra agents above the slot count; 0 slots says 'no slots' and the running agents."""
-        self.assertEqual(rows_of(prow(used_slots=4, total_slots=3))[0]["slots"], {"total": 3, "used": 4, "extra": 1, "none": "", "running": ""})
+        self.assertEqual(rows_of(prow(used_slots=4, total_slots=3))[0]["slots"], {"total": 3, "used": 4, "extra": 1, "none": "", "running": "", "blocked": False})
         zero = rows_of(prow(used_slots=2, total_slots=0))[0]["slots"]
         self.assertEqual((zero["none"], zero["running"]), ("no slots", "2 running"))
         self.assertEqual(rows_of(prow(used_slots=0, total_slots=0))[0]["slots"]["running"], "")
