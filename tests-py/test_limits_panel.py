@@ -313,6 +313,31 @@ class PanelDrawTest(unittest.TestCase):
                     out.append((l, t, r, b, win.canvas.itemcget(item, "text")))
         return out
 
+    def test_r2_compact_rows_and_parallel_bars(self):
+        rows = rows_of(prow(five_hour={"pct": 42, "reset": ""}), prow(name="codex"), prow(name="local"))
+        win = self.open(rows, 1660, 947)
+        found = self.texts(win)
+        self.assertTrue(all(name in [t[4] for t in found] for name in ("Claude", "Codex", "Local")))
+        self.assertNotIn("limits", win.bars)
+        self.assertNotIn("Quota reserve", [t[4] for t in found])
+        week = next(t for t in found if t[4].startswith("7d "))
+        five = next(t for t in found if t[4].startswith("5h "))
+        self.assertAlmostEqual(week[1], five[1], delta=2)
+        self.assertGreater(five[0], week[0])
+        win = self.open(rows + rows_of(prow(name="four")), 1660, 947)
+        self.assertIn("limits", win.bars)
+
+    def test_r2_slot_boundaries_and_zero_reserve(self):
+        win = self.open(rows_of(prow(total_slots=16, used_slots=3)))
+        self.assertEqual(len(win.canvas.find_withtag("slot_full")) + len(win.canvas.find_withtag("slot_empty")), 16)
+        win = self.open(rows_of(prow(total_slots=30, used_slots=12)))
+        self.assertIn("12/30", [t[4] for t in self.texts(win)])
+        win = self.open(rows_of(prow(total_slots=3, used_slots=1, ratio=0)))
+        cells = win.canvas.find_withtag("slot_full") + win.canvas.find_withtag("slot_empty")
+        self.assertEqual(len(cells), 3)
+        self.assertTrue(all(win.canvas.itemcget(i, "outline") != self.gui.GOLD for i in cells))
+        self.assertIn("0 %", [t[4] for t in self.texts(win)])
+
     def test_row_content_cells_and_badge(self):
         """L-2/L-4: name, model, one NEXT badge, filled and empty cells, no percent of slots and no old next text."""
         rows = rows_of(prow(name="claude", next=True, used_slots=2, total_slots=5), prow(name="codex", model="gpt", used_slots=0, total_slots=0))
