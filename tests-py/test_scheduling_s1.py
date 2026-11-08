@@ -208,6 +208,58 @@ class SlotAndProviderChoiceTests(RoundCase):
         other = bees.other_provider_for_waiting(self.env(), REL, 'claude', {'claude': 0, 'codex': 2, 'gemini': 2})
         self.assertEqual(other, 'gemini')
 
+    def other_ready_plan(self):
+        """A second plan that wants a new Queen in the round; returns its path."""
+        other = 'docs/plans/other/OTHER-PLAN.md'
+        self.plan('READY', [{'id': 'Q1', 'title': 'Other'}], rel=other)
+        return other
+
+    def running_queen(self, packages):
+        """The test plan in progress with `packages` and its running claude Queen Ada."""
+        self.plan('IN_PROGRESS', packages)
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('Ada', phase='queen', status='running', provider='claude', pid=42)
+
+    # C-2 ready check: a package whose Bee waits for a provider keeps its slot reserved before a new Queen, and the Queen is told to start it again.
+    def test_bee_waiting_for_provider_keeps_its_slot_before_new_queen(self):
+        self.machine['providers'][0]['slots'] = 2
+        self.machine['providers'][1]['slots'] = 0
+        self.running_queen([{'id': 'P1', 'title': 'First'}])
+        bees.set_package_state(self.conn, 'testproj', REL, 'P1', 'waiting', 'Ada', 'provider')
+        other = self.other_ready_plan()
+        self.round(alive=lambda pid: True)
+        self.assertFalse([a for a in self.queens() if a['plan_path'] == other])
+        self.assertIn('P1', (self.env().run_dir('Ada') / bees.NOTICE_FILE).read_text(encoding='utf-8'))
+
+    # A package that waits for an answer, a build or the owner reserves no slot: the new Queen starts.
+    def test_package_waiting_for_an_answer_reserves_no_slot(self):
+        self.machine['providers'][0]['slots'] = 2
+        self.machine['providers'][1]['slots'] = 0
+        self.running_queen([{'id': 'P1', 'title': 'First'}])
+        bees.set_package_state(self.conn, 'testproj', REL, 'P1', 'waiting', 'Ada', 'question:1')
+        other = self.other_ready_plan()
+        self.round(alive=lambda pid: True)
+        self.assertEqual([a['provider'] for a in self.queens() if a['plan_path'] == other], ['claude'])
+
+    # C-2: a capability package reserves the slot of the provider that offers the capability, not the Queen's own: the new Queen takes the other slot.
+    def test_reservation_takes_the_capable_provider_slot(self):
+        self.machine['providers'][0]['slots'] = 2
+        self.machine['providers'][1]['slots'] = 1
+        self.running_queen([{'id': 'I1', 'title': 'Images', 'capability': 'images'}])
+        other = self.other_ready_plan()
+        self.round(alive=lambda pid: True)
+        self.assertEqual([a['provider'] for a in self.queens() if a['plan_path'] == other], ['claude'])
+        self.assertIn('I1', (self.env().run_dir('Ada') / bees.NOTICE_FILE).read_text(encoding='utf-8'))
+
+    # C-2: a package of a class only another provider offers reserves that provider's slot: the new Queen takes the Queen provider's slot.
+    def test_reservation_takes_a_slot_of_a_provider_with_the_class(self):
+        self.machine['providers'] = [provider('claude', 2, classes=('light', 'medium')), provider('codex', 1, proto='codex')]
+        self.running_queen([{'id': 'P1', 'title': 'Heavy', 'class': 'heavy'}])
+        other = self.other_ready_plan()
+        self.round(alive=lambda pid: True)
+        self.assertEqual([a['provider'] for a in self.queens() if a['plan_path'] == other], ['claude'])
+        self.assertIn('P1', (self.env().run_dir('Ada') / bees.NOTICE_FILE).read_text(encoding='utf-8'))
+
     # C-3: an explicit owner choice 'restart the Queen on provider X' binds the Hive to X until the owner changes it.
     def test_owner_restart_choice_binds_the_hive(self):
         self.limits(claude=10, codex=80)
