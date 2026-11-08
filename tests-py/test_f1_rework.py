@@ -180,7 +180,7 @@ class PanelNoLimit(unittest.TestCase):
         row = self.row()
         self.assertEqual((row["reserve"]["text"], row["reserve"]["level"]), ("+99 %", "ok"))
         self.assertEqual(row["reserve"]["hover"], "No limit: this provider never runs out and gets work first.")
-        self.assertEqual(row["weekly"]["text"], "no weekly limit")
+        self.assertEqual(row["weekly"]["text"], "no limit")
         self.assertEqual(self.row("German")["reserve"]["hover"], "Kein Limit: dieser Provider geht nie aus und bekommt zuerst Arbeit.")
 
 

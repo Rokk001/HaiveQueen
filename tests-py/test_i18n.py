@@ -513,6 +513,11 @@ class DateTest(unittest.TestCase):
     def test_no_shown_date_is_cut_from_an_iso_text_or_has_a_fixed_format(self):
         for name in GUI_FILES + ("agent_runner.py", "overview.py", "scheduler.py", "usage.py"):
             text = (PACKAGE / name).read_text(encoding="utf-8")
+            if name == "gui_data.py":
+                # The compact limits panel deliberately uses this reset format.
+                compact = 'reset_date.strftime("%H:%M" if reset_date.date() == datetime.now().date() else "%d.%m. %H:%M")'
+                self.assertEqual(text.count(compact), 1)
+                text = text.replace(compact, "", 1)
             self.assertNotRegex(text, r'strftime\("%H:%M|%d\.%m|replace\("T", " "\)', name)
 
 

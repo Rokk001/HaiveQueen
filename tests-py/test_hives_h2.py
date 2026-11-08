@@ -653,13 +653,13 @@ class QueenIntegrationTests(RoundCase):
         self.assertFalse(bees.start_process(self.env(), REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], []))
         self.assertIn('class heavy was requested', bees.LAST_REFUSAL)
 
-    # A limited Bee provider remains assigned even when another provider is free.
     # C-2: the stored provider of an interrupted Bee at its limit does not keep the Bee waiting: it moves to the provider it starts on.
     def test_interrupted_bee_moves_from_limited_assigned_provider(self):
         from unittest import mock
-        from haivequeen import hives, usage
+        from haivequeen import hives
         from bzztest import REL
         self.add_local_provider()
+        self.machine['providers'][-1].pop('endpoint')  # M-7: a Codex subscription has a derived limit source
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'heavy'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
@@ -668,8 +668,9 @@ class QueenIntegrationTests(RoundCase):
         env = self.env()
         bee_wt = self.base / 'bee-wt'
         bee_wt.mkdir()
-        limited = lambda conn, provider: [{'used_pct': 100}] if provider['name'] == 'local' else []
-        with mock.patch.object(usage, 'limit_windows', side_effect=limited), mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
+        limits = self.base / 'limits.json'
+        limits.write_text('{"local": {"usedPercent": 100, "resetHours": 24}, "claude": {"usedPercent": 0, "resetHours": 24}}', encoding='utf-8')
+        with mock.patch.dict('os.environ', {'BZZ_PROVIDER_LIMITS_FILE': str(limits)}), mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
             result = bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(bee_wt))
         self.assertEqual((result['kind'], result['provider']), ('subagent', 'claude'))
         self.assertEqual(self.conn.execute('SELECT provider FROM bee_assignments WHERE package=?', ('P1',)).fetchone()[0], 'claude')
