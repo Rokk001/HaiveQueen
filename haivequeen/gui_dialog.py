@@ -102,8 +102,9 @@ def ask_path(parent, title, initial, mono):
 
 
 # A drop-down list in the dashboard look.
-def option_menu(parent, var, values, mono, command=None):
-    """A menu button that shows the value of the StringVar `var` with an arrow and lets the user pick one of `values`; `command(value)` runs after a pick."""
+def option_menu(parent, var, values, mono, command=None, disabled=()):
+    """A menu button that shows the value of the StringVar `var` with an arrow and lets the user pick one of `values`; `command(value)` runs after a pick.
+    The values in `disabled` are shown greyed out and cannot be picked."""
     import tkinter as tk
     button = tk.Menubutton(parent, font=(mono, 10), anchor="w", relief="flat", indicatoron=False, padx=8, pady=3,
                            highlightthickness=1, highlightbackground=COL["selectedge"], highlightcolor=COL["gold"])
@@ -116,7 +117,7 @@ def option_menu(parent, var, values, mono, command=None):
         if command:
             command(value)
     for value in values:
-        menu.add_command(label=value, command=lambda v=value: pick(v))
+        menu.add_command(label=value, command=lambda v=value: pick(v), state="disabled" if value in disabled else "normal")
     show = lambda *_: button.configure(text="%s  ▾" % var.get())
     var.trace_add("write", show)
     show()

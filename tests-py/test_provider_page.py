@@ -155,14 +155,14 @@ class FiveSections(PageCase):
         self.assertIsNone(win.login_status)
         self.assertEqual(win.target()["address"], "http://192.168.1.20:1234")
 
-    def test_switch_access_keeps_ticks_and_usage_check(self):
-        """P-14, P-19 (g): switching an existing provider keeps capabilities and usage check."""
+    def test_switch_access_keeps_ticks_and_derives_limit_source(self):
+        """P-14, P-19 (g): switching an existing provider keeps capabilities; the limit source follows the new access type (M-7)."""
         win = self.window()
         self.provider(win, "claude")
         before = win.collect() and (list(win.target().get("capabilities") or ["-"]), dict(win.target()["limit"]))
         win.choose_access("Local LLM")
         self.assertEqual(win.target()["access"], "llm")
-        self.assertEqual(win.target()["limit"], {"source": "claude"})
+        self.assertEqual(win.target()["limit"], {"source": "none"})
         self.assertEqual(win.target().get("capabilities") or ["-"], before[0] if before[0] != ["-"] else ["Coding", "Queen"])
         win.choose_access("Subscription")
         self.assertNotIn("access", win.target())
@@ -477,7 +477,7 @@ class BeeModeAndLimitSource(PageCase):
         (self.folder / "config.toml").write_text(R3_CONFIG, encoding="utf-8")
 
     def bee_menu(self, win):
-        return win.nametowidget(win.bee_button["menu"])
+        return win.bee_button.nametowidget(win.bee_button["menu"])
 
     def bee_labels(self, win):
         menu = self.bee_menu(win)

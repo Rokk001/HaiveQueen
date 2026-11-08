@@ -418,18 +418,18 @@ class LocalRules(Base):
         order = [p["name"] for p in bees.route_candidates(ps, "remote", "", False)]
         self.assertEqual(order[0], "loc")
 
-    def test_usage_check_off_for_a_new_server_provider_and_switching_keeps_ticks_and_check(self):
+    def test_limit_source_is_derived_from_the_access_type_and_switching_keeps_ticks(self):
         e = self.entry("n", "claude", capabilities=["Coding", "Queen"], capabilitiesVersion=1)
         servers.set_access(e, "llm", new=True)
         self.assertEqual(e["limit"], {"source": "none"})
         self.assertEqual(e["capabilities"], ["Coding", "Queen"])
-        # P-19 (g): an existing provider keeps its usage check when the source changes
-        old = self.entry("o", "claude", limit={"source": "claude"})
+        # M-7: the limit source follows the access type; the check interval of the table stays
+        old = self.entry("o", "claude", limit={"source": "claude", "interval": 120})
         servers.set_access(old, "llm")
-        self.assertEqual(old["limit"], {"source": "claude"})
+        self.assertEqual(old["limit"], {"source": "none", "interval": 120})
         servers.set_access(old, "subscription")
         self.assertNotIn("access", old)
-        self.assertEqual(old["limit"], {"source": "claude"})
+        self.assertEqual(old["limit"], {"source": "claude", "interval": 120})
 
     def test_switching_the_source_keeps_the_ticks_of_an_entry_from_before_the_ticks(self):
         e = self.entry("o", "claude")   # no capabilitiesVersion: ticks derived (Coding, Queen)

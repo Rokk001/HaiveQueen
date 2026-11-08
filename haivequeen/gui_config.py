@@ -1367,6 +1367,9 @@ class ConfigWindow(ProviderPages):
         """Collect the shown part, check everything, write config.toml and the project.toml of every changed or new Apiary and tell the main window; a problem is shown and nothing is written."""
         if not self.collect():
             return
+        from . import servers
+        for entry in self.data.get("providers") or []:
+            servers.settle(entry)   # M-6: a provider that cannot run embedded Bees is saved as process
         for apiary in self.apiaries:
             self.adopt_workspace(apiary)   # a workspace typed just before Save: its project.toml is the base, never replaced by the edits alone
         writes, problems = self.apiary_writes()

@@ -32,7 +32,7 @@ class CapabilityTests(unittest.TestCase):
         self.assertEqual(old["capabilities"], ["Coding"])
 
     def test_disabled_limit_keeps_default_rank(self):
-        p = sch.get_providers({"providers": [self.provider(limit={"source": "none"})]})[0]
+        p = sch.get_providers({"providers": [self.provider(protocol="opencode", limit={"source": "none"})]})[0]   # no limit source (M-7)
         self.assertEqual(sch.provider_limit(p, limits={"p": {"usedPercent": 100}}), {"FreePct": 100.0, "Hours": 168.0})
 
 
