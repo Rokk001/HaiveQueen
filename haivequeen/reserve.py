@@ -49,4 +49,4 @@ def display(reserve_value):
     if value <= 0.0:
         return "0 %"
     pct = max(-99, min(99, int(round((value - 1.0) * 100))))
-    return ("+%d %%" if pct >= 0 else "%d %%") % pct
+    return ("+%d %%" if pct >= 0 else "−%d %%") % (pct if pct >= 0 else -pct)   # the minus sign of the owner UI (U+2212), not the hyphen of %d

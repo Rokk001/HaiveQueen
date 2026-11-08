@@ -2,7 +2,7 @@
 import json
 import re
 
-from . import buildjobs, db, roles, runtime, scheduler
+from . import buildjobs, db, roles, runtime, scheduler, servers
 from . import plans as plan_mod
 from .i18n import tr
 
@@ -47,6 +47,11 @@ def select_route(providers, free, hive_provider, package_class, capability, excl
         matching = [p for p in candidates if (p.get('classes', {}).get(cls) or {}).get('model')]
         if not matching:
             continue
+        if escalated:   # M-1: an escalated package takes, among the providers it may use, the one with the best reserve (M-2), not list order
+            others = [{**p, 'slots': p.get('slots', 1), 'use': p.get('use', 'preferred'), 'limit': p.get('limit', ''), 'protocol': p.get('protocol', ''),
+                       'capabilities': scheduler.provider_capabilities(p)} for p in providers if p['name'] not in limited]
+            pick = scheduler.select_provider(others, cls, capability, free, conn=conn)
+            return (pick['name'], cls) if pick else None
         for p in matching:   # with a needed capability every capable provider is a candidate: only the Queen's own one and a local one are taken directly
             if capability and p['name'] != hive_provider and not (p.get('endpoint') or p.get('server')):
                 continue
@@ -653,10 +658,10 @@ def other_provider_for_waiting(env, plan, waited, free, excluded=()):
     """Name of a provider other than `waited` that is usable now (enabled, online, not excluded, no limit used up, a free slot) and offers the
     capabilities of at least one unfinished package whose dependencies are done; None when only the awaited provider can help.
     The next Queen needs one slot to start; her Bee takes a slot only when it starts."""
-    from . import routine, usage
+    from . import routine
     ensure_attempts(env.conn)
     usable = [p for p in env.providers if p['name'] not in excluded and not p.get('unavailable') and p.get('slots', 1) > 0
-              and free.get(p['name'], 0) > 0 and not any(w['used_pct'] >= 100 for w in usage.limit_windows(env.conn, p))]
+              and free.get(p['name'], 0) > 0 and not scheduler.reserve_zero(p, env.conn)]   # M-2: a used-up window (reserve 0) blocks the provider
     others = [p for p in usable if p['name'] != waited]
     if not others:
         return None
@@ -675,17 +680,16 @@ def other_provider_for_waiting(env, plan, waited, free, excluded=()):
 
 
 def by_reserve(candidates, providers, conn=None) -> list:
-    """`candidates` in the order of the normal provider choice: providers without a limit first, then the higher quota reserve
-    ((100 - used percent) / hours to the reset), then the order of the settings."""
+    """`candidates` in the order of the normal provider choice: providers without a limit first (list order among them, F-13), then the best quota reserve from both usage windows (M-2), equal reserves go to a local provider first, then the order of the settings."""
     from . import scheduler
     order = [p['name'] for p in providers]
 
     def key(p):
-        limit = p.get('limit')
-        full = {**p, 'limit': str(limit.get('source', '')) if isinstance(limit, dict) else str(limit or '')}   # the settings form {source: ...} or the scheduler's string
-        lim = scheduler.provider_limit(full, conn)
-        free_limit = scheduler.without_limit(full)
-        return (not free_limit, 0 if free_limit else -lim['FreePct'] / max(0.1, lim['Hours']), order.index(p['name']) if p['name'] in order else len(order))
+        resv = scheduler.provider_reserve(p, conn)   # M-2: the quota reserve from both usage windows; None without limit (+99 %)
+        unlimited = resv is None
+        # the reserve is rounded for comparison only: two providers with the same usage must tie (local first), not differ by float noise of separate readings;
+        # among providers without a limit the list order decides as before (F-13) - local first applies between equal reserves of limited providers
+        return (not unlimited, 0 if unlimited else -round(resv, 6), (not servers.is_local(p)) and not unlimited, order.index(p['name']) if p['name'] in order else len(order))
     return sorted(candidates, key=key)
 
 
@@ -789,7 +793,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
     global LAST_REFUSAL
     LAST_REFUSAL = ''
     from pathlib import Path
-    from . import hives, loop, routine, usage
+    from . import hives, loop, routine
     with loop.hive_schedule_lock():
         check_dependencies(env, plan, package)
         draining = drain_refusal()
@@ -880,17 +884,12 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not (queen_provider.get('endpoint') or queen_provider.get('server')) and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
         free = scheduler.provider_free(env.providers, running, env.conn)   # C-1: a subagent Bee needs a free slot of the Queen's provider like a Bee process
         route_free = dict(free)
-        limited = [p['name'] for p in env.providers if any(w['used_pct'] >= 100 for w in usage.limit_windows(env.conn, p))]
+        limited = [p['name'] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # M-2: a used-up window (reserve 0) blocks the provider
         ensure_attempts(env.conn)
-        assigned = env.conn.execute('SELECT class,provider FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
-        usable = [p for p in env.providers if not p.get('unavailable') and p.get('slots', 1) > 0]
-        if assigned and assigned[0] == current and assigned[1] not in {p['name'] for p in route_candidates(usable, hive['provider'], need, current != base_class or use_other_provider)}:
-            assigned = None   # the stored provider is no longer allowed for this package, or is offline, disabled or has no slots: route it again
-        provider = scheduler.get_provider(env.providers, assigned[1]) if assigned and assigned[0] == current else None
-        if provider and provider['name'] not in excluded and provider['name'] not in limited and route_free.get(provider['name'], 0) > 0:
-            route = (provider['name'], current)
-        else:   # C-2: a stored assignment whose provider is full, limited or gone does not keep the Bee waiting; it moves to the provider the Bee starts on
+        if embedded:   # M-1: a subagent Bee takes a free local provider first, else stays on the Queen's provider, else another one as in C-2; an escalated package takes the best reserve among them
             route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, current != base_class or use_other_provider, limited, conn=env.conn)
+        else:   # M-1: a process Bee is placed by the normal provider choice like a Queen; the stored assignment keeps only the class (above), the provider is chosen again here
+            route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, True, limited, conn=env.conn)
         if not route:
             return refuse(env, package, 'no provider with a free slot offers class %s' % current)
         provider, selected_class = route

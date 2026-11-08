@@ -369,6 +369,58 @@ def provider_limit(provider: dict, conn=None, limits=None) -> dict:
     return {"FreePct": max(0.0, 100.0 - float(used)), "Hours": float(hours) if hours is not None else 168.0}
 
 
+def provider_reserve(provider: dict, conn=None, limits=None):
+    """M-2 quota reserve of a provider from both usage windows: weekly quota x 5-hour quota (the 5-hour one counts at most 1.0).
+
+    None for a provider without limit (+99 %); a used-up window gives 0 (no new work until it resets, capability packages included).
+    A passed reset counts as reset; an unknown reading counts as a full week free."""
+    from . import reserve
+    source = str(provider.get("limit") or "") if not isinstance(provider.get("limit"), dict) else str((provider.get("limit") or {}).get("source", ""))
+    p = {**provider, "limit": source}
+    if without_limit(p):
+        return None
+    lim = provider_limit(p, conn, limits)
+    now = time.time()
+    weekly = reserve.window_quota(lim["FreePct"], reset_epoch=now + float(lim["Hours"]) * 3600.0)
+    five = _five_hour_window(p, conn, limits)
+    if five is None:
+        return reserve.reserve(weekly)
+    q5 = reserve.window_quota(five["free_pct"], reset_epoch=five["reset_epoch"], now=now, window_hours=5.0)
+    return reserve.reserve(weekly, q5)
+
+
+def _five_hour_window(provider: dict, conn=None, limits=None):
+    """The 5-hour usage window of a provider as {free_pct, reset_epoch}, or None when it is not known (M-2)."""
+    name = provider["name"]
+    table = limits
+    lf = os.environ.get("BZZ_PROVIDER_LIMITS_FILE")
+    if table is None and lf and Path(lf).is_file():
+        table = json.loads(Path(lf).read_text(encoding="utf-8-sig"))
+    if table is not None:
+        entry = table.get(name) or {}
+        wins = entry.get("windows") or []
+        w = wins[0] if wins else None
+        if w and w.get("usedPercent") is not None:
+            hours = w.get("resetHours")
+            return {"free_pct": max(0.0, 100.0 - float(w["usedPercent"])),
+                    "reset_epoch": time.time() + float(hours) * 3600 if hours is not None else None}
+        return None   # the test table is authoritative: without a windows entry there is no 5-hour window
+    source = str(provider.get("limit") or "")
+    if conn is not None and source in ("claude", "codex") and not os.environ.get("BZZ_RUNTIME_OVERRIDE"):
+        from . import usage
+        u = (usage.get_claude_usage(conn, provider=provider) if source == "claude" else usage.cached_codex_usage(conn, provider=provider)) or {}
+        w = u.get("five_hour")
+        if w and w.get("pct") is not None:
+            return {"free_pct": max(0.0, 100.0 - float(w["pct"])), "reset_epoch": w.get("at")}
+    return None
+
+
+def reserve_zero(provider: dict, conn=None):
+    """M-2: True when a usage window of the provider is used up (quota reserve 0): no new work until it resets."""
+    resv = provider_reserve(provider, conn)
+    return resv is not None and resv <= 0
+
+
 # ---- capabilities and selection ----
 
 CAPABILITY_ALIASES = {"images": "Image generation", "blender": "3D modelling", "build": "Build"}
@@ -416,10 +468,10 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
     """Return the provider that gets a task of this class, or None.
 
     Candidates have slots above 0 and a free slot, the class in their entry, all needed capabilities (a package that needs one goes
-    only to providers that have it and the weekly limit does not matter then); `capability-only` providers only get packages that need
-    a capability. Without a need, providers at their weekly limit drop out. `preferred` and `capability-only` come first, `fallback`
+    only to providers that have it); `capability-only` providers only get packages that need
+    a capability. A provider with a used-up usage window (quota reserve 0, M-2) drops out for every package. `preferred` and `capability-only` come first, `fallback`
     only when none of them has a free slot. A provider without a limit (limit source none, every Local LLM) always comes first (list order among them);
-    then the highest (100 - used percent) / hours to reset wins, then list order. `prefer` keeps a
+    then the best quota reserve from both usage windows (M-2) wins; equal reserves go to a local provider first, then list order. `prefer` keeps a
     follow-up with an earlier provider when it is a candidate, `avoid` (verify) prefers another provider, `protocol` limits to claude or codex.
     """
     cname = CLASS_NAMES[class_index(cls)]
@@ -439,10 +491,10 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
             continue
         if "Coding" not in p["capabilities"] and not needs:
             continue
-        lim = provider_limit(p, conn, limits)
-        if not needs and lim["FreePct"] <= 0:
-            continue
-        cand.append((p, idx, lim["FreePct"] / max(0.1, lim["Hours"])))
+        resv = provider_reserve(p, conn, limits)   # M-2: the quota reserve from both usage windows; None without limit (+99 %)
+        if resv is not None and resv <= 0:
+            continue   # a used-up window blocks every package until it resets (M-2), capability packages included
+        cand.append((p, idx, resv))
     if not cand:
         return None
     pool = [c for c in cand if c[0]["use"] != "fallback"] or cand
@@ -454,7 +506,9 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
         other = [c for c in pool if c[0]["name"] != avoid]
         if other:
             pool = other
-    return sorted(pool, key=lambda c: (not without_limit(c[0]), 0 if without_limit(c[0]) else -c[2], c[1]))[0][0]
+    # the reserve is rounded for comparison only: two providers with the same usage must tie (local first), not differ by float noise of separate readings;
+    # among providers without a limit the list order decides as before (F-13) - local first applies between equal reserves of limited providers
+    return sorted(pool, key=lambda c: (not without_limit(c[0]), 0 if without_limit(c[0]) else -round(c[2], 6), (not servers.is_local(c[0])) and not without_limit(c[0]), c[1]))[0][0]
 
 
 def endpoint_args(provider: dict) -> list:

@@ -762,7 +762,7 @@ def reserve_bee_slots(conn, envs, pool, process_running) -> dict:
                 wanted = bees.startable_not_started(env, plan['path'])[:bees.free_bee_places(env, plan['path'], sum(pool.free.values()))]
                 hive_provider = hive.get('provider') or sch.row_provider(queen)
                 excluded = list(env.settings.get('excludedProviders') or [])
-                limited = [p['name'] for p in env.providers if any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, p))]
+                limited = [p['name'] for p in env.providers if sch.reserve_zero(p, conn)]   # M-2: a used-up window (reserve 0) blocks the provider
                 from . import routine
                 wanted.sort(key=lambda package: not routine.package_needs_for(env, plan['path'], package))   # packages bound to capable providers choose first
                 taken = 0
@@ -989,7 +989,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     not_started(env, path, 'free RAM %.2f GB is below the minimum %.2f GB' % (free_ram(), loop._min_ram(env)))
                     continue
                 providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and 'Queen' in p.get('capabilities', [])
-                             and not any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, p))]
+                             and not sch.reserve_zero(p, conn)]   # M-2: a used-up window (reserve 0) blocks the provider
                 cls = str(env.settings.get('queenClass', 'medium'))
                 if hive:
                     history = [a for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('phase') == 'queen']
@@ -1093,7 +1093,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
     if not dry_run:
         for env in projects:
             providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and 'Queen' in p.get('capabilities', [])
-                         and not any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, p))]
+                         and not sch.reserve_zero(p, conn)]   # M-2: a used-up window (reserve 0) blocks the provider
             eligible = any(p['status'] in plan_mod.QUEEN_STATUSES and ((get(conn, env.name, p['path']) or {}).get('state') in (None, 'waiting', 'requeen')) for p in runtime.list_plans(conn, env.name))
             can_start = eligible and queen_count < limit and bool(sch.select_provider(providers, str(env.settings.get('queenClass', 'medium')), ['Queen'], pool.free, conn=conn))
             env.log('round done: %d Queen(s) started%s' % (result['projects'][env.name]['started'], ''.join('; ' + text for text in skipped[env.name])))

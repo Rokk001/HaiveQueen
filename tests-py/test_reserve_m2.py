@@ -85,7 +85,7 @@ class Display(unittest.TestCase):
     def test_examples(self):
         self.assertEqual(rsv.display(1.6), "+60 %")
         self.assertEqual(rsv.display(1.0), "+0 %")
-        self.assertEqual(rsv.display(0.5), "-50 %")
+        self.assertEqual(rsv.display(0.5), "−50 %")
 
     def test_at_most_plus_ninety_nine(self):
         # a provider without limit counts +99 % as today; no reserve shows more
@@ -94,7 +94,7 @@ class Display(unittest.TestCase):
 
     def test_never_below_minus_ninety_nine(self):
         # a tiny positive reserve must not show -100 % (that is the used-up case, shown "0 %")
-        self.assertEqual(rsv.display(0.004), "-99 %")
+        self.assertEqual(rsv.display(0.004), "−99 %")
 
 
 if __name__ == "__main__":
