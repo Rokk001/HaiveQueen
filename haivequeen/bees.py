@@ -524,10 +524,14 @@ STARTABLE_KEY = 'hive-startable:'
 
 
 def startable_not_started(env, plan, alive=None):
-    """Ids of the packages of the plan that are not finished, waiting, stopped or worked by a live or embedded Bee and whose dependencies are done."""
+    """Ids of the packages of the plan that are not finished, waiting, stopped or worked by a live or embedded Bee and whose dependencies are done.
+
+    C-2: a package whose Bee only waits for a provider (waiting, reason provider) counts as startable: its Bee starts again as soon as an
+    eligible provider has a free slot, so the round reserves that slot for it and tells the Queen to start it."""
     from . import agent_process
     ensure_attempts(env.conn)
-    states = {r[0]: r[1] for r in env.conn.execute('SELECT package,state FROM package_progress WHERE project=? AND plan_path=?', (env.name, plan))}
+    states = {r[0]: ('' if r[1] == 'waiting' and r[2] == 'provider' else r[1])
+              for r in env.conn.execute('SELECT package,state,reason FROM package_progress WHERE project=? AND plan_path=?', (env.name, plan))}
     worked = {a.get('package') for a in runtime.list_agents(env.conn, env.name, 'active')
               if a.get('plan_path') == plan and a.get('phase') == 'bee' and agent_process.counts(a, alive)}
     worked |= {r[0] for r in env.conn.execute('SELECT package FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', (env.name, plan))}
@@ -543,6 +547,32 @@ def startable_not_started(env, plan, alive=None):
         if all(dep in ids and (package_done(env.conn, env.name, plan, dep) or states.get(dep) in ('done', 'implemented')) for dep in p['depends']):
             found.append(p['id'])
     return found
+
+
+def reservation_route(env, plan, package, hive_provider, free, excluded=(), limited=()):
+    """C-2: the provider whose slot a Bee of `package` would take now, by the rule of bzz bee start (class, capabilities, the Queen's own or a
+    local provider directly, else the normal provider choice); None when no eligible provider has a free slot. Failure escalation is not
+    foreseen: the plan class, or the stored class of an escalated package, decides."""
+    from . import routine
+    row = next((p for p in env.packages(plan) if p['id'] == package), None)
+    if not row:
+        return None
+    need = routine.package_needs_for(env, plan, package)
+    providers = [p for p in env.providers if p['name'] not in excluded]
+    allowed = capable_providers(providers, need) if need else [p for p in providers if (p.get('endpoint') or p.get('server')) or p['name'] == hive_provider]
+    cls = row['cls']
+    stored = env.conn.execute('SELECT class FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+    if stored and scheduler.class_index(stored[0]) > scheduler.class_index(cls):
+        cls = stored[0]
+    has_class = lambda group: next((c for c in scheduler.CLASS_NAMES[scheduler.class_index(cls):] if any((p.get('classes', {}).get(c) or {}).get('model') for p in group)), None)
+    base = has_class(allowed)
+    other = False
+    if base is None and not need:
+        base, other = has_class(providers), True
+    if base is None:
+        return None
+    route = select_route(env.providers, free, hive_provider, base, need, excluded, other or scheduler.class_index(base) != scheduler.class_index(row['cls']), limited, conn=env.conn)
+    return route[0] if route else None
 
 
 def free_bee_places(env, plan, free_slots, alive=None):

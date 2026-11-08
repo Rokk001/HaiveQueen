@@ -744,8 +744,9 @@ def reserve_bee_slots(conn, envs, pool, process_running) -> dict:
     """C-2: keep free slots for the startable packages of every running Queen before any new Queen is placed in this round.
 
     Each running Queen (without HANDOFF file, plan cut) gets as many slots as she has startable packages and free Bee places; they are taken from
-    `pool.free`, from her own provider first, then from the other providers in list order. Returns {(project, plan): reserved slots}."""
-    from . import bees
+    `pool.free`. Each package (a package whose Bee waits for a provider too) takes the slot of the provider its Bee would start on by its class
+    and capabilities (bees.reservation_route); a package no eligible free provider can take reserves nothing. Returns {(project, plan): reserved slots}."""
+    from . import bees, usage
     from . import scheduler as sch
     reserved = {}
     for env in envs:
@@ -758,16 +759,21 @@ def reserve_bee_slots(conn, envs, pool, process_running) -> dict:
             if (env.run_dir(queen['name']) / 'HANDOFF').exists():
                 continue
             try:
-                wanted = len(bees.startable_not_started(env, plan['path'])[:bees.free_bee_places(env, plan['path'], sum(pool.free.values()))])
+                wanted = bees.startable_not_started(env, plan['path'])[:bees.free_bee_places(env, plan['path'], sum(pool.free.values()))]
+                hive_provider = hive.get('provider') or sch.row_provider(queen)
+                excluded = list(env.settings.get('excludedProviders') or [])
+                limited = [p['name'] for p in env.providers if any(w['used_pct'] >= 100 for w in usage.limit_windows(conn, p))]
+                from . import routine
+                wanted.sort(key=lambda package: not routine.package_needs_for(env, plan['path'], package))   # packages bound to capable providers choose first
+                taken = 0
+                for package in wanted:   # each package takes the slot of the provider its Bee would start on: class and capabilities decide
+                    name = bees.reservation_route(env, plan['path'], package, hive_provider, pool.free, excluded, limited)
+                    if name and pool.free.get(name, 0) > 0:
+                        pool.free[name] -= 1
+                        taken += 1
             except Exception as exc:
                 env.log('Bee slots not reserved: %s' % exc)
                 continue
-            order = [sch.row_provider(queen)] + [name for name in pool.free if name != sch.row_provider(queen)]
-            taken = 0
-            for name in order:
-                while taken < wanted and pool.free.get(name, 0) > 0:
-                    pool.free[name] -= 1
-                    taken += 1
             if taken:
                 reserved[(env.name, plan['path'])] = taken
     return reserved
