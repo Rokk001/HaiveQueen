@@ -72,6 +72,14 @@ class ProcessDirectoryTests(unittest.TestCase):
         entered = threading.Event()
         release = threading.Event()
         overlap = threading.Event()
+        attempted = threading.Event()
+        from haivequeen import loop
+        take_lock = loop._take_pid_lock
+        def observed_take(*args, **kwargs):
+            result = take_lock(*args, **kwargs)
+            if result != 0:
+                attempted.set()
+            return result
         # Hold the first cleanup until the second has attempted to start.
         def run_cleanup(*args):
             """Hold the first cleanup until the second has attempted to start."""
@@ -79,22 +87,24 @@ class ProcessDirectoryTests(unittest.TestCase):
                 overlap.set()
             else:
                 entered.set()
-                release.wait(5)
+                release.wait()
             return {}
         with tempfile.TemporaryDirectory() as folder, \
              mock.patch('haivequeen.platform.data_dir', return_value=Path(folder)), \
+             mock.patch.object(loop, '_take_pid_lock', side_effect=observed_take), \
              mock.patch.object(worktrees, '_prune_with_checker', side_effect=run_cleanup):
             first = threading.Thread(target=worktrees.prune, args=(None,))
             second = threading.Thread(target=worktrees.prune, args=(None,))
             first.start()
-            self.assertTrue(entered.wait(5))
+            self.assertTrue(entered.wait(30))
             second.start()
             try:
-                self.assertFalse(overlap.wait(0.5))
+                self.assertTrue(attempted.wait(30))
+                self.assertFalse(overlap.is_set())
             finally:
                 release.set()
-                first.join(5)
-                second.join(5)
+                first.join(30)
+                second.join(30)
             self.assertFalse(first.is_alive() or second.is_alive())
 
     # A process using a directory prevents its cleanup.

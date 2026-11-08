@@ -169,7 +169,13 @@ class QueenReportRoundTest(RoundCase):
         db.add_question(self.conn, 'testproj', REL, 'P1', 'Which?', '')
         self.finish(queen['name'], final='first sentence')
         runtime.upsert_agent(self.conn, 'testproj', queen['name'], {'pid': None})
-        (self.env().run_dir(queen['name']) / 'report.md').write_text('WAITING_FOR_OWNER')
+        report = self.env().run_dir(queen['name']) / 'report.md'
+        report.write_text('WAITING_FOR_OWNER')
+        # Set the report strictly inside the recorded run, independent of filesystem timing.
+        import os
+        os.utime(report, (1735689600, 1735689600))
+        runtime.upsert_agent(self.conn, 'testproj', queen['name'], {
+            'started_at': '2024-01-01T00:00:00+00:00', 'ended_at': '2026-01-01T00:00:00+00:00'})
         self.round()
         self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'answer')
 
