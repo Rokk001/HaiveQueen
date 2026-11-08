@@ -47,7 +47,9 @@ def select_route(providers, free, hive_provider, package_class, capability, excl
         matching = [p for p in candidates if (p.get('classes', {}).get(cls) or {}).get('model')]
         if not matching:
             continue
-        for p in matching:
+        for p in matching:   # with a needed capability every capable provider is a candidate: only the Queen's own one and a local one are taken directly
+            if capability and p['name'] != hive_provider and not (p.get('endpoint') or p.get('server')):
+                continue
             if free.get(p['name'], 0) > 0 and p['name'] not in limited:
                 return p['name'], cls
         others = [{**p, 'slots': p.get('slots', 1), 'use': p.get('use', 'preferred'), 'limit': p.get('limit', ''), 'protocol': p.get('protocol', ''),
@@ -638,8 +640,23 @@ def other_provider_for_waiting(env, plan, waited, free, excluded=()):
             continue
         capable = capable_providers(others, routine.package_needs_for(env, plan, p['id']) or [])
         if capable:
-            return capable[0]['name']
+            return by_reserve(capable, env.providers, env.conn)[0]['name']
     return None
+
+
+def by_reserve(candidates, providers, conn=None) -> list:
+    """`candidates` in the order of the normal provider choice: providers without a limit first, then the higher quota reserve
+    ((100 - used percent) / hours to the reset), then the order of the settings."""
+    from . import scheduler
+    order = [p['name'] for p in providers]
+
+    def key(p):
+        limit = p.get('limit')
+        full = {**p, 'limit': str(limit.get('source', '')) if isinstance(limit, dict) else str(limit or '')}   # the settings form {source: ...} or the scheduler's string
+        lim = scheduler.provider_limit(full, conn)
+        free_limit = scheduler.without_limit(full)
+        return (not free_limit, 0 if free_limit else -lim['FreePct'] / max(0.1, lim['Hours']), order.index(p['name']) if p['name'] in order else len(order))
+    return sorted(candidates, key=key)
 
 
 # Wake a waiting Hive only when its provider has a slot and no limit, or when another provider can take a waiting package.
