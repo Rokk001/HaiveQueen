@@ -184,7 +184,7 @@ def retained_claude(conn, project=GLOBAL_PROJECT, provider=None):
         return None
     if saved.tzinfo is None:
         saved = saved.astimezone()
-    if (datetime.now(timezone.utc) - saved).total_seconds() > RETAIN_HOURS * 3600:
+    if (datetime.now(timezone.utc) - saved).total_seconds() >= RETAIN_HOURS * 3600:
         return None
     return {k: v for k, v in snap.items() if k != 'refresh_error'}
 
@@ -270,19 +270,24 @@ def refresh_claude_usage(conn, providers, run=None, force=False, min_interval=No
                   'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'timeout': CLAUDE_USAGE_TIMEOUT, 'env': child_env}
         if osplat.is_windows():
             kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-        result = (run or subprocess.run)(argv, **kwargs)
-        if result.returncode != 0:
-            # Only the exit code is kept: the CLI's own output may hold secrets and must not reach the status.
-            raise ValueError('CLI failed (exit %s)' % result.returncode)
-        events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-        results = [event for event in events if isinstance(event, dict) and event.get('type') == 'result']
-        final = results[-1] if results else {}
-        if (final.get('subtype') != 'success' or final.get('is_error') is not False
-                or type(final.get('num_turns')) is not int or final['num_turns'] != 0
-                or type(final.get('total_cost_usd')) not in (int, float) or final['total_cost_usd'] != 0):
-            raise ValueError('not metadata only')
-        reports = [event.get('usage_report') for event in events if isinstance(event, dict) and event.get('type') == 'assistant' and isinstance(event.get('usage_report'), dict)]
-        limits = (reports[-1].get('rate_limits') or {}).get('limits') if reports else None
+        # The CLI can return a successful metadata report with null limits transiently.
+        # Retry once, retaining the usual verification and failure behavior for both calls.
+        for attempt in range(2):
+            result = (run or subprocess.run)(argv, **kwargs)
+            if result.returncode != 0:
+                # CLI output may hold secrets and must not reach the status.
+                raise ValueError('CLI failed (exit %s)' % result.returncode)
+            events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+            results = [event for event in events if isinstance(event, dict) and event.get('type') == 'result']
+            final = results[-1] if results else {}
+            if (final.get('subtype') != 'success' or final.get('is_error') is not False
+                    or type(final.get('num_turns')) is not int or final['num_turns'] != 0
+                    or type(final.get('total_cost_usd')) not in (int, float) or final['total_cost_usd'] != 0):
+                raise ValueError('not metadata only')
+            reports = [event.get('usage_report') for event in events if isinstance(event, dict) and event.get('type') == 'assistant' and isinstance(event.get('usage_report'), dict)]
+            limits = (reports[-1].get('rate_limits') or {}).get('limits') if reports else None
+            if isinstance(limits, list):
+                break
         if not isinstance(limits, list):
             raise ValueError('missing quotas')
         value = {'saved': checked_at, 'checked_at': checked_at, 'source': 'claude-cli:/usage', 'fiveHour': None, 'sevenDay': None}
