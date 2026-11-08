@@ -616,10 +616,40 @@ def wait_for_provider(conn, project, plan, provider, is_codex=None, reset_at=Non
         conn.execute('DELETE FROM hive_integration WHERE project=? AND plan_path=?', (project, plan))
 
 
-# Wake a waiting Hive only when its provider has a slot and no limit.
-def provider_available(conn, project, plan, provider, free, limited):
-    """Wake the Hive when its waiting provider is usable."""
-    if free <= 0 or limited:
+# A provider other than the awaited one that can take a waiting package now (C-2, C-3).
+def other_provider_for_waiting(env, plan, waited, free, excluded=()):
+    """Name of a provider other than `waited` that is usable now (enabled, online, not excluded, no limit used up, a free slot) and offers the
+    capabilities of at least one unfinished package whose dependencies are done, while the next Queen still finds a slot of her own (on any
+    Queen provider, or a second free slot of that provider); None when only the awaited provider can help."""
+    from . import routine, usage
+    ensure_attempts(env.conn)
+    usable = [p for p in env.providers if p['name'] not in excluded and not p.get('unavailable') and p.get('slots', 1) > 0
+              and free.get(p['name'], 0) > 0 and not any(w['used_pct'] >= 100 for w in usage.limit_windows(env.conn, p))]
+    queen_seats = [p['name'] for p in usable if 'Queen' in p.get('capabilities', [])]
+
+    def room(name):
+        return any(q != name for q in queen_seats) or (name in queen_seats and free.get(name, 0) >= 2)
+    others = [p for p in usable if p['name'] != waited and room(p['name'])]
+    if not others:
+        return None
+    states = {r[0]: r[1] for r in env.conn.execute('SELECT package,state FROM package_progress WHERE project=? AND plan_path=?', (env.name, plan))}
+    packages = env.packages(plan)
+    ids = {p['id'] for p in packages}
+    for p in packages:
+        if states.get(p['id']) in ('done', 'implemented') or package_done(env.conn, env.name, plan, p['id']):
+            continue
+        if not all(dep in ids and package_done(env.conn, env.name, plan, dep) for dep in p['depends']):
+            continue
+        capable = capable_providers(others, routine.package_needs_for(env, plan, p['id']) or [])
+        if capable:
+            return capable[0]['name']
+    return None
+
+
+# Wake a waiting Hive only when its provider has a slot and no limit, or when another provider can take a waiting package.
+def provider_available(conn, project, plan, provider, free, limited, other=None):
+    """Wake the Hive when its waiting provider is usable or, with `other`, when another provider can take a waiting package (C-2, C-3)."""
+    if (free <= 0 or limited) and not other:
         return False
     row = conn.execute('SELECT provider FROM bee_provider_wait WHERE project=? AND plan_path=?', (project, plan)).fetchone()
     if not row or row[0] != provider:

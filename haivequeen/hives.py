@@ -954,7 +954,8 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     provider = sch.get_provider(env.providers, wait[0]) if wait else None
                     name = provider['name'] if provider else wait[0] if wait else '?'
                     can, detail = provider_wait_check(conn, env, hive, provider, pool.free.get(name, 0), plan['path']) if provider else (False, 'provider unknown')
-                    if not (can and bees.provider_available(conn, env.name, plan['path'], name, pool.free.get(name, 0), False)):
+                    other = None if can else bees.other_provider_for_waiting(env, plan['path'], name, pool.free, excluded)   # C-2, C-3: another provider with a free slot that can take a waiting package wakes the Hive too
+                    if not ((can or other) and bees.provider_available(conn, env.name, plan['path'], name, pool.free.get(name, 0), not can, other)):
                         not_started(env, plan['path'], 'waiting for provider %s: %s' % (name, detail or 'not available'))
                         continue
                     hive = get(conn, env.name, plan['path'])

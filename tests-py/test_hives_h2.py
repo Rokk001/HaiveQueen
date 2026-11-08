@@ -388,11 +388,11 @@ class QueenIntegrationTests(RoundCase):
         self.assertFalse(before[4])
         self.assertTrue(after[4])
 
-    # The scheduling round keeps a Hive waiting while Codex is occupied, then resumes it.
+    # The scheduling round keeps a Hive waiting while Codex is occupied and only Codex offers the package's capability, then resumes it.
     def test_round_resumes_codex_wait_only_after_slot_is_free(self):
         from haivequeen import hives
         from bzztest import REL
-        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'capability': 'images'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         bees.wait_for_provider(self.conn, 'testproj', REL, 'codex')
         self.agent('bee-a', phase='bee', provider='codex', type='codex', status='running', pid=41)

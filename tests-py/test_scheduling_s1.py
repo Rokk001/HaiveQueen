@@ -143,6 +143,44 @@ class SlotAndProviderChoiceTests(RoundCase):
         self.round()
         self.assertEqual([a['provider'] for a in self.queens()], ['codex'])
 
+    # C-2, C-3: a Hive waiting for a full provider wakes when another provider can take its waiting package and seat the next Queen.
+    def test_provider_wait_wakes_on_another_free_provider(self):
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('Ada', phase='queen', status='done', provider='claude', pid=None, ended_at='2026-01-01T00:00:00')
+        self.agent('bee-a', phase='bee', provider='claude', status='running', pid=41)
+        self.agent('bee-b', phase='bee', provider='claude', status='running', pid=42)
+        bees.set_package_state(self.conn, 'testproj', REL, 'P1', 'waiting', 'Ada', 'provider')
+        bees.wait_for_provider(self.conn, 'testproj', REL, 'claude')
+        self.round(alive=lambda pid: pid in (41, 42))
+        self.assertEqual([a['provider'] for a in self.queens()], ['codex'])
+        self.assertFalse(self.conn.execute('SELECT 1 FROM bee_provider_wait WHERE project=? AND plan_path=?', ('testproj', REL)).fetchone())
+
+    # The wake needs room for the next Queen and her Bee: one free slot elsewhere is not enough, so the Hive keeps waiting.
+    def test_provider_wait_stays_without_room_for_queen_and_bee(self):
+        self.machine['providers'][1]['slots'] = 1
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('Ada', phase='queen', status='done', provider='claude', pid=None, ended_at='2026-01-01T00:00:00')
+        self.agent('bee-a', phase='bee', provider='claude', status='running', pid=41)
+        self.agent('bee-b', phase='bee', provider='claude', status='running', pid=42)
+        bees.wait_for_provider(self.conn, 'testproj', REL, 'claude')
+        self.round(alive=lambda pid: pid in (41, 42))
+        self.assertFalse(self.queens())
+        self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'provider_wait')
+
+    # A package that needs a capability only the awaited provider has keeps the Hive waiting although another provider is free.
+    def test_provider_wait_stays_for_a_capability_only_it_has(self):
+        self.plan('IN_PROGRESS', [{'id': 'I1', 'title': 'Images', 'capability': 'images'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('Ada', phase='queen', status='done', provider='claude', pid=None, ended_at='2026-01-01T00:00:00')
+        self.agent('bee-a', phase='bee', provider='codex', type='codex', status='running', pid=41)
+        self.agent('bee-b', phase='bee', provider='codex', type='codex', status='running', pid=42)
+        bees.wait_for_provider(self.conn, 'testproj', REL, 'codex')
+        self.round(alive=lambda pid: pid in (41, 42))
+        self.assertFalse(self.queens())
+        self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'codex_wait')
+
     # C-3: an explicit owner choice 'restart the Queen on provider X' binds the Hive to X until the owner changes it.
     def test_owner_restart_choice_binds_the_hive(self):
         self.limits(claude=10, codex=80)
