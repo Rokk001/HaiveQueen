@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from haivequeen import db, gui_data, hives, runstate, runtime  # noqa: E402
+from haivequeen import bees, db, gui_data, hives, runstate, runtime  # noqa: E402
 
 NOW = datetime(2026, 11, 1, 12, 0, 0)
 SYS = {"cores": 8, "cpu": 38, "ram_used_gb": 25.2, "ram_total_gb": 32.0, "ram_pct": 80, "disk_used_tb": 1.2, "disk_total_tb": 2.7, "disk_pct": 45}
@@ -37,6 +37,7 @@ class SnapshotTest(unittest.TestCase):
         self.conn.execute("UPDATE hives SET state='running' WHERE project='ODP'")
         for pid in ("P1", "P2", "P3", "P4"):
             self.conn.execute("INSERT INTO packages(project,plan_path,id,title) VALUES ('ODP',?,?,?)", (plan, pid, pid))
+        bees.set_package_state(self.conn, "ODP", plan, "P3", "done")
         self.conn.commit()
         runtime.upsert_agent(self.conn, "ODP", "ODP__queen", {"plan": plan, "phase": "queen", "provider": "claude", "model": "claude-sonnet-5-5",
                                                               "effort": "medium", "status": "running", "startedAt": iso(65), "person": "Ava"})
@@ -74,14 +75,15 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual((h["done"], h["total"]), (1, 4))
         self.assertEqual((h["status"], h["kind"], h["runtime"]), ("Running", "ok", "1:05:00"))
 
-    # Bees of a Queen live in their own tables; progress and busy Bees come from there.
+    # Package progress comes from persisted done states; waiting Bees come from assignments.
     def test_bee_tables_drive_progress_and_waiting_bees(self):
-        """Packages finished by a Bee count as progress; a package with a Bee assignment but no process shows as a waiting Bee."""
-        from haivequeen import bees
+        """Done package states count as progress; a package with a Bee assignment but no process shows as a waiting Bee."""
         bees.ensure_attempts(self.conn)
         plan = "docs/plans/AI-LEVELS-PLAN.md"
         self.conn.execute("INSERT INTO bee_completed VALUES ('ODP',?,'P1')", (plan,))
         self.conn.execute("INSERT INTO bee_completed VALUES ('ODP',?,'P2')", (plan,))
+        bees.set_package_state(self.conn, "ODP", plan, "P1", "done")
+        bees.set_package_state(self.conn, "ODP", plan, "P2", "done")
         self.conn.execute("INSERT INTO bee_assignments VALUES ('ODP',?,'P4','heavy','codex')", (plan,))
         self.conn.commit()
         snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
