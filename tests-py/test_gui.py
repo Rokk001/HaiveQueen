@@ -61,10 +61,10 @@ class SnapshotTest(unittest.TestCase):
 
     # The tiles count what runs.
     def test_tiles(self):
-        """One Project, one Plan, one Queen, two busy Agents, capacity = the slots of all providers ."""
+        """One Project, one Plan, one Queen, two Agents: the busy tile counts all three against the General setting Agent slots."""
         t = self.snap["tiles"]
-        self.assertEqual((t["apiaries"], t["hives"], t["queens"], t["bees"]), (1, 1, 1, 2))
-        self.assertEqual(t["bee_capacity"], 4)
+        self.assertEqual((t["apiaries"], t["hives"], t["queens"], t["bees"]), (1, 1, 1, 3))
+        self.assertEqual(t["bee_capacity"], CFG["slots"])
 
     # The Hive row shows queen, bees, progress and runtime.
     def test_hive_row(self):

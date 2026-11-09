@@ -17,8 +17,8 @@ def apply_style(root, mono):
     rules = {
         "Toplevel": {"background": bg}, "Frame": {"background": bg}, "Canvas": {"background": bg},
         "Label": {"background": bg, "foreground": text}, "Labelframe": {"background": bg, "foreground": gold},
-        "Button": {"background": select, "foreground": gold, "activeBackground": selectedge, "activeForeground": gold, "disabledForeground": dim,
-                   "relief": "flat", "borderWidth": 0, "padX": 12, "padY": 3, "highlightThickness": 0},
+        "Button": {"background": select, "foreground": gold, "activeBackground": COL["button_hover"], "activeForeground": gold, "disabledForeground": dim,
+                   "relief": "raised", "borderWidth": 2, "padX": 12, "padY": 3, "highlightThickness": 0, "cursor": "hand2"},
         "Checkbutton": {"background": bg, "foreground": text, "activeBackground": bg, "activeForeground": gold, "selectColor": track, "highlightThickness": 0},
         "Menubutton": {"background": track, "foreground": text, "activeBackground": select, "activeForeground": gold, "relief": "flat", "highlightThickness": 0},
         "Menu": {"background": panel, "foreground": text, "activeBackground": select, "activeForeground": gold, "relief": "flat"},
@@ -30,6 +30,7 @@ def apply_style(root, mono):
     for widget, options in rules.items():
         for name, value in options.items():
             root.option_add("*%s.%s" % (widget, name), value, 60)
+    bind_button_states(root)
     root.option_add("*Font", "{%s} 10" % mono, 60)
     from tkinter import ttk
     style = ttk.Style(root)
@@ -52,6 +53,45 @@ def apply_style(root, mono):
     style.map("Treeview", background=[("selected", select)], foreground=[("selected", gold)])
     style.configure("Treeview.Heading", background=bg, foreground=gold, font=(mono, 10, "bold"), relief="flat", borderwidth=0)
     style.map("Treeview.Heading", background=[("active", select)], foreground=[("active", gold)])
+
+
+# The look of a button while the pointer is over it or it is pressed.
+BUTTON_LOOK = {"hover": ("button_hover", None), "down": ("button_down", "sunken")}   # state: (colour name of COL, relief; None keeps the relief of the button)
+
+
+def button_look(button, state):
+    """Give a tk.Button the look of `state` ("normal", "hover" or "down"): hover and pressed have their own background (pressed also a sunken relief), so a click
+    is visible; "normal" restores what the button had before. A disabled button, or one that is already gone, is left alone."""
+    try:
+        if str(button.cget("state")) == "disabled":
+            return
+        if not hasattr(button, "hq_normal"):
+            button.hq_normal = (button.cget("background"), button.cget("relief"))
+        background, relief = button.hq_normal
+        if state in BUTTON_LOOK:
+            name, sunk = BUTTON_LOOK[state]
+            background, relief = COL[name], sunk or relief
+        button.configure(background=background, relief=relief)
+    except Exception:   # the click closed the window of the button
+        pass
+
+
+def bind_button_states(root):
+    """Make every tk.Button of the application show hover and pressed (once per application); the usual behaviour of the button stays."""
+    if getattr(root, "hq_buttons_bound", False):
+        return
+    root.hq_buttons_bound = True
+    for sequence, state in (("<Enter>", "hover"), ("<Leave>", "normal"), ("<ButtonPress-1>", "down")):
+        root.bind_class("Button", sequence, lambda event, st=state: button_look(event.widget, st), add="+")
+
+    def released(event):
+        """After the click the button shows hover while the pointer is still over it, else its normal look."""
+        try:
+            inside = 0 <= event.x < event.widget.winfo_width() and 0 <= event.y < event.widget.winfo_height()
+        except Exception:
+            inside = False
+        button_look(event.widget, "hover" if inside else "normal")
+    root.bind_class("Button", "<ButtonRelease-1>", released, add="+")
 
 
 # A scroll bar in the dashboard colours.

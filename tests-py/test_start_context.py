@@ -111,12 +111,12 @@ class OverlayTest(Base):
         self.assertEqual(zed["per_package"], None)
 
     def test_queens_and_busy_bees(self):
-        """Queens: the online Queens; Busy Agents: the running Agents; each with the tokens of its run as in the table."""
+        """Queens: the online Queens; Busy Agents: the running Agents (the tile counts the Queens on top); each with the tokens of its run as in the table."""
         s = self.snap()
         self.assertEqual([(r["name"], r["tin"], r["tout"]) for r in s["overlays"]["queens"]["rows"]], [("Ava", 1000, 100), ("Eva", 2000, 200)])
         self.assertEqual([(r["name"], r["tin"], r["tout"]) for r in s["overlays"]["bees"]["rows"]], [("Sophia", 600, 60)])
         self.assertEqual(len(s["overlays"]["queens"]["rows"]), s["tiles"]["queens"])
-        self.assertEqual(len(s["overlays"]["bees"]["rows"]), s["tiles"]["bees"])
+        self.assertEqual(len(s["overlays"]["bees"]["rows"]) + s["tiles"]["queens"], s["tiles"]["bees"])   # the busy tile counts the Queens and the Agents
 
     def test_tile_without_units_shows_none(self):
         """A tile without units has no rows (the window draws "none")."""

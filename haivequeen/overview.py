@@ -345,6 +345,7 @@ def provider_lines(conn, cfg, agents) -> list:
                      "has_limit": source in ("claude", "codex"),
                      "used_slots": used_slots, "slots": free.get(provider["name"], 0), "total_slots": provider["configuredSlots"],
                      "offline": offline.since_text(provider["offline"]) if provider["offline"] else "",
+                     "not_ready": "" if provider.get("login", True) else str(provider.get("notReady") or ""),   # the reason a switched-on provider cannot take work (login missing, model not listed, server not answering)
                      "model": ((provider.get("classes") or {}).get("medium") or {}).get("model"),
                      "next": provider is next_provider})
     return rows

@@ -620,6 +620,8 @@ GERMAN = {
     "Commands agents of this Project may run without asking.": "Befehle, die Agenten dieses Projekts ohne Nachfrage ausführen dürfen.",
     "Interface language": "Sprache der Oberfläche",
     "Agent slots": "Agentenplätze",
+    "A further HaiveQueen setting, as written in config.toml.": "Eine weitere HaiveQueen-Einstellung, wie sie in config.toml steht.", "Plans": "Pläne",
+    "not ready: %s": "nicht bereit: %s", "This provider is not ready: %s. It gets no work until this is fixed.": "Dieser Anbieter ist nicht bereit: %s. Er bekommt keine Arbeit, bis das behoben ist.",
     "Round length (minutes)": "Rundenlänge (Minuten)",
     "Failed attempts before a stronger model": "Fehlversuche bis zum stärkeren Modell",
     "No limit: this provider never runs out and gets work first.": "Kein Limit: dieser Provider geht nie aus und bekommt zuerst Arbeit.",

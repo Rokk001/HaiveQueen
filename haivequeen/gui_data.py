@@ -494,6 +494,10 @@ def limit_rows(d) -> list:
         if p.get("offline"):   # an offline provider shows "offline" in red instead of its free slots
             slots["offline"] = tr("offline")
             slots["hover"] = tr("Offline since %s. HaiveQueen checks again and uses this provider as soon as it answers.", p["offline"])
+        elif p.get("not_ready"):   # a provider that is not ready shows like an offline one: the word, its reason in one short line and no free slot cells
+            slots["offline"] = tr("offline")
+            slots["reason"] = tr("not ready: %s", p["not_ready"])
+            slots["hover"] = tr("This provider is not ready: %s. It gets no work until this is fixed.", p["not_ready"])
         if not p["has_limit"]:
             weekly = {"pct": None, "level": "dim", "text": tr("no limit")}
         elif p["used_pct"] is None:
@@ -645,7 +649,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
                     bee_mod.startable_map(conn), stopped)
     workers = [b for b in bees if b["kind"] == "bee"]
     apiaries = sorted({h["apiary"] for h in hive_rows})
-    slots = sum(int(p["total_slots"] or 0) for p in d["provider_limits"])
+    slots = int(cfg.get("slots", config.DEFAULT_CONFIG["slots"]) or 0)   # the General setting Agent slots: the busy tile counts every running agent (Queens, process Agents, subagent Agents) against it
     today = [m["Today"] for m in d["usage"] if m.get("Today")]
     who = {a["name"]: (a.get("phase") or "", a.get("person") or a["name"]) for a in agents_all}
     plan_of = {a["name"]: a.get("plan_path") for a in agents_all}
@@ -663,8 +667,8 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     overlays, start_tile = gui_overlays.build(conn, d["usage"], agents_all, shown, bees, apiaries, day, [str(p.get("name")) for p in cfg.get("providers") or [] if p.get("name")])
     return {"now": now, "project": project, "run_state": d["run"]["state"], "orchestrator": orchestrator, "version": _version(),
-            "tiles": {"apiaries": len(apiaries), "hives": sum(1 for h in hive_rows if h["live"] and not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done), "queens": len(queens), "bees": sum(1 for b in workers if b["status"] == "running"),
-                      "bee_capacity": max(len(workers), slots), "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today), "start_ctx": start_tile},
+            "tiles": {"apiaries": len(apiaries), "hives": sum(1 for h in hive_rows if h["live"] and not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done), "queens": len(queens), "bees": len(queens) + sum(1 for b in workers if b["status"] in ("running", "stopping")),
+                      "bee_capacity": slots, "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today), "start_ctx": start_tile},
             "overlays": overlays,
             "hives": [h for h in hive_rows if not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done], "bees": bees, "apiaries": apiaries,
             "projects": [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")],

@@ -4,7 +4,7 @@ The list also shows plans that never had a Plan. The actions reuse the plan cont
 """
 import os
 
-from . import config, db, gui_data, hives, loop, runtime
+from . import config, db, gui_async, gui_data, hives, loop, runtime
 from . import plans as plan_mod
 from .i18n import N_, tr
 
@@ -114,15 +114,35 @@ class HivesWindow:
         self.win.after(REFRESH_MS, self.tick)
 
     def tick(self):
-        """Refresh now and again after REFRESH_MS while the window exists."""
+        """Reload in the background now and again after REFRESH_MS while the window exists."""
         if self.win.winfo_exists():
-            self.refresh()
+            self.refresh_async()
             self.win.after(REFRESH_MS, self.tick)
+
+    def refresh_async(self):
+        """Read the plans in a thread of their own and show them when they are there; a read that is still running is not started twice."""
+        if getattr(self, "loading", False):
+            return
+        self.loading = True
+
+        def done(rows):
+            """Show the rows."""
+            self.loading = False
+            self.show(rows)
+
+        def failed(_exc):
+            """Try again at the next round."""
+            self.loading = False
+        gui_async.run_async(self.win, lambda: gui_async.with_connection(self.conn, plan_rows), done, failed)
 
     def refresh(self):
         """Reload all rows and keep the selection."""
+        self.show(plan_rows(self.conn))
+
+    def show(self, rows):
+        """Show `rows` and keep the selection."""
         picked = self.tree.selection()
-        self.rows = plan_rows(self.conn)
+        self.rows = rows
         self.tree.delete(*self.tree.get_children())
         for n, row in enumerate(self.rows):
             self.tree.insert("", "end", iid=str(n), values=(row["apiary"], row["name"], status_text(row), tr("yes") if row["has_hive"] else tr("no")))
