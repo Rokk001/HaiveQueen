@@ -59,6 +59,47 @@ def _within(path, parent):
         return False
 
 
+# Tell whether a worktree lies where HaiveQueen creates its own worktrees.
+def _unqueued_eligible(env, path):
+    """True when the switch is on and the folder lies directly in the worktree location and starts with the worktree name prefix + '-'."""
+    import os
+    if not env.settings.get('deleteFinishedWorktrees', True):
+        return False
+    location = os.path.expanduser(str(env.settings.get('worktreeLocation') or ''))
+    parent = os.path.join(str(env.code_repo), location) if location else os.path.dirname(str(env.code_repo).rstrip('\/'))
+    norm = lambda item: os.path.normcase(os.path.abspath(item))
+    prefix = str(env.settings.get('worktreePrefix') or 'wt') + '-'
+    return norm(os.path.dirname(os.path.normpath(path))) == norm(parent) and         os.path.basename(os.path.normpath(path)).lower().startswith(prefix.lower())
+
+
+# Find out whether a plan that is not finished used or owns a worktree.
+def _plan_use(env, path):
+    """True when an agent, an Agent assignment or the plan itself names the worktree for a plan that is not DONE or CANCELLED."""
+    from . import bees
+    conn = getattr(env, 'conn', None)
+    if conn is None:
+        return False
+    plans = runtime.list_plans(conn, env.name)
+    finished = {plan['path'] for plan in plans if plan['status'] in ('DONE', 'CANCELLED')}
+    for agent in runtime.list_agents(conn, env.name, 'all'):
+        if agent.get('plan_path') and agent['plan_path'] not in finished and agent.get('cwd') and _within(agent['cwd'], path):
+            return True
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bee_worktrees'").fetchone():
+        for plan_path, cwd in conn.execute('SELECT plan_path, cwd FROM bee_worktrees WHERE project=?', (env.name,)).fetchall():
+            if plan_path not in finished and _within(cwd, path):
+                return True
+    for plan in plans:
+        if plan['path'] in finished:
+            continue
+        try:
+            named = bees.plan_worktree(env, plan['path'])
+        except (OSError, ValueError):
+            continue
+        if named and named[1] and _within(named[1], path) and _within(path, named[1]):
+            return True
+    return False
+
+
 # Require completed branch evidence alongside repository and active-agent protections.
 def _candidate_reason(env, record, first, queue, integration_ref=None):
     """Verify current branch completion and keep worktrees with any safety blocker."""
@@ -74,19 +115,26 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
         return 'branch has an open queue row'
     completed = max((row for row in queue if record.get('branch') and row.get('branch') == record['branch']),
                     key=lambda row: row['id'], default=None)
-    if not completed or completed.get('status') != 'integrated':
-        return 'branch has no current integrated queue row'
-    tip = completed.get('tip') or ''
-    if not re.fullmatch(r'[0-9a-fA-F]{7,64}', tip):
-        return 'integrated queue tip is invalid'
-    # The branch is read from Git only now: worktrees without integrated queue evidence were rejected above without a Git call.
-    branch = _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
-    if branch.returncode or not branch.stdout.strip() or branch.stdout.strip() != record.get('branch'):
-        return 'current branch does not match the worktree inventory'
-    resolved = _git(env.code_repo, 'rev-parse', '--verify', tip + '^{commit}')
-    head = _git(path, 'rev-parse', '--verify', 'HEAD')
-    if resolved.returncode or head.returncode or resolved.stdout.strip() != head.stdout.strip():
-        return 'HEAD does not match the integrated queue tip'
+    unqueued = not completed or completed.get('status') != 'integrated'
+    if unqueued:
+        # Without an integrated queue row the contents decide (below): only a prefixed worktree in the worktree location, with the switch on.
+        if not _unqueued_eligible(env, path):
+            return 'branch has no current integrated queue row'
+        head = _git(path, 'rev-parse', '--verify', 'HEAD')
+        if head.returncode:
+            return 'HEAD cannot be read'
+    else:
+        tip = completed.get('tip') or ''
+        if not re.fullmatch(r'[0-9a-fA-F]{7,64}', tip):
+            return 'integrated queue tip is invalid'
+        # The branch is read from Git only now: worktrees without integrated queue evidence were rejected above without a Git call.
+        branch = _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+        if branch.returncode or not branch.stdout.strip() or branch.stdout.strip() != record.get('branch'):
+            return 'current branch does not match the worktree inventory'
+        resolved = _git(env.code_repo, 'rev-parse', '--verify', tip + '^{commit}')
+        head = _git(path, 'rev-parse', '--verify', 'HEAD')
+        if resolved.returncode or head.returncode or resolved.stdout.strip() != head.stdout.strip():
+            return 'HEAD does not match the integrated queue tip'
     agents = runtime.list_agents(env.conn, None, 'active')
     for agent in agents:
         if agent.get('status') in ('running', 'starting') and agent.get('cwd') and _within(agent['cwd'], path):
@@ -101,6 +149,8 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
                                         'WHERE w.project=? AND w.plan_path=?', (agent.get('project'), agent.get('plan_path')))
                 if any(_within(row[0], path) for row in rows):
                     return 'used by assigned Agent'
+    if unqueued and _plan_use(env, path):
+        return 'used by a plan that is not finished'
     status = _git(path, 'status', '--porcelain', '--untracked-files=all')
     if status.returncode:
         return 'git status failed'
@@ -237,11 +287,16 @@ def _prune_candidates(env, records, queue, process_busy, dry, integration_ref=No
     return result
 
 # Tell from the queue alone whether a worktree could ever be removed.
-def _may_be_removable(record, queue):
-    """True when the newest queue row of the worktree's branch is 'integrated' and no row of it is open (ready, in_run, blocked)."""
+def _may_be_removable(record, queue, env=None):
+    """True when the newest queue row of the worktree's branch is 'integrated' and no row of it is open (ready, in_run, blocked);
+    with `env`, also a worktree of the worktree location with the name prefix and no open row (the contents decide later)."""
     branch = record.get('branch')
     rows = [row for row in queue if branch and row.get('branch') == branch]
-    if not rows or any(row.get('status') in ('ready', 'in_run', 'blocked') for row in rows):
+    if any(row.get('status') in ('ready', 'in_run', 'blocked') for row in rows):
+        return False
+    if env is not None and _unqueued_eligible(env, record['worktree']):
+        return True
+    if not rows:
         return False
     return max(rows, key=lambda row: row['id']).get('status') == 'integrated'
 
@@ -254,7 +309,7 @@ def _prune_with_checker(env, process_busy, dry):
     remote_name = str(env.settings.get('remoteName') or 'origin')
     records = list_worktrees(env.code_repo)
     queue = db.queue_rows(env.conn, env.name)
-    if not any(_may_be_removable(record, queue) for record in records[1:]):
+    if not any(_may_be_removable(record, queue, env) for record in records[1:]):
         # No worktree belongs to a finished, integrated branch, so nothing can be removed: skip the network (fetch, ls-remote);
         # the usual checks still run and only report why each worktree stays.
         return _prune_candidates(env, records, queue, process_busy, dry)
