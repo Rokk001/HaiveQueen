@@ -3,6 +3,7 @@ and the live window (Enter / double click, one window per agent, hint without a 
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -130,7 +131,12 @@ class LiveWindowTest(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
 
     def shown(self, view):
-        """The text currently shown in a live window."""
+        """The text currently shown in a live window (after its background read)."""
+        for _ in range(1000):
+            self.root.update()
+            if not getattr(view, "loading", False) and view.shown is not None:
+                break
+            time.sleep(0.01)
         return view.box.get("1.0", "end")
 
     def test_hive_row_opens_the_queen_and_focuses_on_second_open(self):

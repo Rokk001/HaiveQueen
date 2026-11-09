@@ -216,6 +216,101 @@ class ReactionTest(Base):
                 time.sleep(0.02)
         settings.win.destroy()
 
+    def pump(self, root, condition, rounds=300):
+        """Run the event loop until `condition()` holds."""
+        for _ in range(rounds):
+            root.update()
+            if condition():
+                return True
+            time.sleep(0.02)
+        return condition()
+
+    def test_dashboard_actions_do_not_read_on_the_ui_thread(self):
+        """Pause, filter, plan control, stop and the Queen menu return within REACT while every read takes a long time (they refresh and look up in the background)."""
+        root, win = self.window()
+        gate = threading.Event()
+        real_snapshot = gui_data.snapshot
+        real_rows = db.rows
+        ui = threading.get_ident()
+        on_ui = []
+
+        def slow_snapshot(*args, **kwargs):
+            on_ui.append(threading.get_ident() == ui)
+            gate.wait(5)
+            return real_snapshot(*args, **kwargs)
+
+        def slow_rows(*args, **kwargs):
+            on_ui.append(threading.get_ident() == ui)
+            gate.wait(5)
+            return real_rows(*args, **kwargs)
+        win.confirm = lambda text: True
+        win.complain = win.inform = lambda *a, **k: None
+        bee = next(b for b in win.snap["bees"] if b["kind"] != "queen" and b.get("agent"))
+        win.table = "bees"
+        win.sel["bees"] = win.snap["bees"].index(bee)
+        with mock.patch.object(gui_data, "snapshot", slow_snapshot), mock.patch.object(db, "rows", slow_rows),                 mock.patch("haivequeen.runstate.get_state", side_effect=AssertionError("read on the UI thread")),                 mock.patch("haivequeen.runstate.pause"), mock.patch("haivequeen.runstate.resume"), mock.patch("haivequeen.gui.osplat.kill_process_tree"),                 mock.patch("haivequeen.bees.stop_package"), mock.patch("haivequeen.gui_dialog.popup_menu"):
+            for call in (win.toggle_pause, win.next_project, win.stop_bee, lambda: win.plan_control(win.snap["hives"][0], "pause"), lambda: win.on_key(mock.Mock(keysym="m"))):
+                self.assertLess(self.timed(call), REACT, call)
+            self.assertTrue(all(not flag for flag in on_ui), "a data read ran on the UI thread")
+            gate.set()
+            self.assertTrue(self.pump(root, lambda: not win.loading))
+
+    def test_an_action_during_a_running_refresh_is_read_after_it(self):
+        root, win = self.window()
+        gate = threading.Event()
+        calls = []
+        real = gui_data.snapshot
+
+        def snapshot(*args, **kwargs):
+            calls.append(1)
+            gate.wait(5)
+            return real(*args, **kwargs)
+        with mock.patch.object(gui_data, "snapshot", snapshot):
+            win.tick()
+            win.refresh_soon()
+            gate.set()
+            self.assertTrue(self.pump(root, lambda: len(calls) == 2 and not win.loading))
+
+    def test_questions_answer_and_selection_do_not_read_on_the_ui_thread(self):
+        from haivequeen import gui_questions
+        db.add_question(self.conn, "ODP", PLAN, "owner-check", "ok?", "yes")
+        root, win = self.window()
+        answered = []
+        with quiet_toplevel():
+            questions = gui_questions.QuestionsWindow(root, self.conn, on_answered=lambda: answered.append(1))
+        self.assertTrue(self.pump(root, lambda: bool(questions.questions)))
+        gate = threading.Event()
+
+        def slow(*args, **kwargs):
+            gate.wait(5)
+            return []
+        questions.reply.insert("1.0", "fine")
+        with mock.patch.object(gui_questions, "open_questions", slow), mock.patch.object(gui_questions, "plan_packages", slow):
+            self.assertLess(self.timed(questions.show), REACT)   # the steps of the plan are read in the background
+            self.assertLess(self.timed(questions.send), REACT)   # the list is reloaded in the background
+            self.assertEqual(answered, [1])
+            gate.set()
+            self.assertTrue(self.pump(root, lambda: not getattr(questions, "loading", False)))
+        questions.win.destroy()
+
+    def test_hives_window_action_and_live_first_load_do_not_wait_for_a_read(self):
+        from haivequeen import gui_hives
+        root, win = self.window()
+        gate = threading.Event()
+
+        def slow(*args, **kwargs):
+            gate.wait(5)
+            return []
+        live_file = Path(self.tmp.name) / "live2.txt"
+        live_file.write_text("one\n", encoding="utf-8")
+        with quiet_toplevel(), mock.patch.object(gui_hives, "plan_rows", slow), mock.patch.object(gui_data, "live_lines", slow):
+            self.assertLess(self.timed(lambda: gui_hives.HivesWindow(root, self.conn, "Consolas").win.destroy()), REACT)
+            live = gui.LiveView(root, "live", live_file, "Consolas")
+            self.assertLess(self.timed(live.tick), REACT)
+            gate.set()
+            self.pump(root, lambda: not getattr(live, "loading", False))
+        live.win.destroy()
+
     def test_unchanged_snapshot_is_not_drawn_again(self):
         root, win = self.window()
         fixed = dict(win.snap)

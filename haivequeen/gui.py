@@ -198,10 +198,7 @@ class LiveView:
     # Reload now and again after LIVE_MS milliseconds.
     def tick(self):
         """Reload (the first time at once, later in the background) and schedule the next reload."""
-        if self.shown is None:
-            self.refresh()
-        else:
-            self.refresh_async()
+        self.refresh_async()
         self.job = self.win.after(LIVE_MS, self.tick)
 
 
@@ -240,6 +237,8 @@ class Dashboard:
         root.bind("<Key>", self.on_key)
         self.canvas.bind("<Destroy>", self.on_destroy)
         self.tick_job = None
+        self.lookups = 0   # background lookups of actions that are still running
+        self.refresh_wanted, self.last_update = False, None   # an action asked for a refresh during a read; the last self-update row read in the background, as (row,)
         self.loading, self.links, self.link_hover = False, [], None   # a snapshot is being read; the drawn links (pixel box, item, key, size, underlined anyway); the link under the pointer
         self.update_state, self.update_thread = {}, None   # The last update check and a running check (thread)
         self.tick()
@@ -285,19 +284,39 @@ class Dashboard:
         if self.loading:
             return
         self.loading = True
+        project = self.project
 
-        def work():
-            """Read the snapshot with a connection of the thread's own."""
-            return gui_async.with_connection(self.conn, lambda conn: gui_data.snapshot(conn, self.project))
+        def read(conn):
+            """The snapshot and the last self-update on one connection of the thread's own."""
+            snap = gui_data.snapshot(conn, project)
+            try:
+                last = db.last_self_update(conn)
+            except Exception:   # the update line must never break the dashboard
+                last = None
+            return snap, last
+        work = gui_async.with_connection(self.conn, read)
 
-        def done(snap):
+        def again():
+            """Read once more when an action asked for a refresh while this read was running."""
+            if self.refresh_wanted:
+                self.refresh_wanted = False
+                self.refresh_async()
+
+        def done(result):
             """Show the snapshot."""
+            snap, last = result
             self.loading = False
+            self.last_update = (last,)
+            if project != self.project:   # the Project filter changed while the snapshot was read
+                self.refresh_wanted = False
+                self.refresh_async()
+                return
             same = self.snap is not None and not self.error and self.same_content(snap, self.snap)
             self.snap, self.error = snap, ""
             self.watch_update()
             if not same:
                 self.draw()
+            again()
 
         def failed(exc):
             """Show the error of a failed read in the footer."""
@@ -305,7 +324,31 @@ class Dashboard:
             self.error = tr("error: %s", exc)
             self.watch_update()
             self.draw()
+            again()
         gui_async.run_async(self.root, work, done, failed)
+
+    # Refresh after an action without waiting for the read.
+    def refresh_soon(self):
+        """Read a new snapshot in the background (after the running read when there is one); the handler returns at once."""
+        if self.loading:
+            self.refresh_wanted = True
+        else:
+            self.refresh_async()
+
+    # Run a read in the background and continue in the window.
+    def lookup(self, read, then):
+        """Call `read(connection)` in a thread with a connection of its own and then `then(result)` in the event loop (a failed read gives `then(None)`)."""
+        def finished(result):
+            """Hand the result on."""
+            self.lookups -= 1
+            then(result)
+
+        def failed(_exc):
+            """Hand on that the read failed."""
+            self.lookups -= 1
+            then(None)
+        self.lookups += 1
+        gui_async.run_async(self.root, gui_async.with_connection(self.conn, read), finished, failed)
 
     # Compare two snapshots.
     @staticmethod
@@ -319,7 +362,8 @@ class Dashboard:
         import threading
         from . import updates
         try:
-            if updates.settle_install(db.last_self_update(self.conn)) == "ok":
+            last = self.last_update[0] if self.last_update is not None else db.last_self_update(self.conn)   # the background read of the last refresh, else (first call) a read
+            if updates.settle_install(last) == "ok":
                 self.restart_window()
                 return
             self.update_state = updates.load_state()
@@ -349,7 +393,7 @@ class Dashboard:
             updates.request_install(found["version"])
         except Exception as exc:
             self.inform(str(exc))
-        self.refresh()
+        self.refresh_soon()
 
     # Start the window again with the installed code.
     def restart_window(self):
@@ -1256,7 +1300,7 @@ class Dashboard:
             bees.resume_package(self.conn, row["project"], row["plan_path"], row.get("package") or row["task"])
         except Exception as exc:
             self.complain(tr("Could not resume the package: %s", exc))
-        self.refresh()
+        self.refresh_soon()
 
     # Open the live view of the selected row.
     def open_live(self):
@@ -1328,27 +1372,32 @@ class Dashboard:
     # Pause the run or resume it.
     def toggle_pause(self):
         """Pause a running run or resume a paused one after a confirmation (key P)."""
-        resume = runstate.get_state(self.conn)["state"] != "RUNNING"
+        resume = (self.snap or {}).get("run_state", "RUNNING") != "RUNNING"   # the state of the last snapshot: no read on the window's thread
         if self.confirm(tr("Resume HaiveQueen?") if resume else tr("Pause HaiveQueen? Running agents keep working, no new agent starts.")):
             (runstate.resume if resume else runstate.pause)(self.conn, "gui")
-            self.refresh()
+            self.refresh_soon()
 
     # Step through the Apiary filter.
     def next_project(self):
         """Show the next Project only; after the last one all Projects again."""
         cycle = [None] + list(self.snap["projects"]) if self.snap else [None]
         self.project = cycle[(cycle.index(self.project) + 1) % len(cycle)] if self.project in cycle else None
-        self.refresh()
+        self.refresh_soon()
 
     # Offer the Queen actions of the selected Hive.
     def hive_menu(self):
         """Open a menu at the pointer with Restart Queen, End Queen and Agents and Pause/Resume plan for the Plan of the selection (a Plan row or a Queen row; none for an Agent row)."""
-        from . import gui_dialog
         hive = self.selected_hive()
         if hive is None:
             return
+        self.lookup(lambda conn: self.queen_providers(hive, conn), lambda names: self.show_hive_menu(hive, names or []))
+
+    # The menu of a Hive once its providers are read.
+    def show_hive_menu(self, hive, providers):
+        """Open the Queen and plan menu of `hive` with the replacement providers `providers`."""
+        from . import gui_dialog
         items = [(tr("Restart Queen of %s", hive["name"]), lambda: self.queen_action(hive, "requeen"))]
-        items += [(tr("Restart Queen of %s on %s", hive["name"], name), lambda name=name: self.queen_action(hive, "requeen", name)) for name in self.queen_providers(hive)]
+        items += [(tr("Restart Queen of %s on %s", hive["name"], name), lambda name=name: self.queen_action(hive, "requeen", name)) for name in providers]
         items.append((tr("End Queen and Agents of %s", hive["name"]), lambda: self.queen_action(hive, "dequeen")))
         items.append(None)
         gui_dialog.popup_menu(self.root, items + [(label + " " + hive["name"], lambda action=action: self.plan_control(hive, action)) for label, action in self.control_items(hive)], self.mono)
@@ -1366,17 +1415,17 @@ class Dashboard:
         return [(tr("Start again"), "start"), (tr("Cancel plan"), "reject")]
 
     # The providers a replacement Queen of a Hive could run on instead of its own.
-    def queen_providers(self, hive) -> list:
+    def queen_providers(self, hive, conn=None) -> list:
         """Names of the configured providers other than the Plan's current one that offer the Queen class (not excluded, no local endpoint); empty when the settings cannot be read."""
         from . import config, hives
         from . import scheduler as sch
         try:
-            env = next(e for e in sch.load_projects(self.conn, config.load_config()) if e.name == hive["apiary"])
+            env = next(e for e in sch.load_projects(conn or self.conn, config.load_config()) if e.name == hive["apiary"])
         except (StopIteration, Exception):
             return []
         queen_class = env.settings.get("queenClass", "medium")
         excluded = env.settings.get("excludedProviders", [])
-        current = (hives.get(self.conn, hive["apiary"], hive["plan_path"]) or {}).get("provider")
+        current = (hives.get(conn or self.conn, hive["apiary"], hive["plan_path"]) or {}).get("provider")
         return [p["name"] for p in env.providers if p["name"] not in excluded and p["name"] != current and not p.get("unavailable") and not (p.get("endpoint") or p.get("server"))
                 and (p.get("classes", {}).get(queen_class) or {}).get("model")]
 
@@ -1394,7 +1443,7 @@ class Dashboard:
                 {"pause": hives.pause_plan, "stop": hives.stop_hive, "reject": hives.reject_plan, "start": hives.start_again}[action](self.conn, *key)
         except Exception as exc:
             self.complain(tr("Could not change the plan: %s", exc))
-        self.refresh()
+        self.refresh_soon()
 
     # Pause or resume the plan of a Hive (key Space).
     def toggle_hive_pause(self, hive=None):
@@ -1423,7 +1472,7 @@ class Dashboard:
         out, err = proc.communicate()
         if proc.returncode != 0:
             self.complain(tr("%s failed: %s", command, (err or out or "").strip()[:300] or tr("exit code %d", proc.returncode)))
-        self.refresh()
+        self.refresh_soon()
 
     # Stop the selected Bee.
     def stop_bee(self):
@@ -1448,18 +1497,23 @@ class Dashboard:
             if self.confirm(tr("Stop agent %s (%s)? The package stays stopped until you resume it.", bee["name"], bee["task"])):
                 from . import bees
                 bees.stop_package(self.conn, bee["project"], bee["plan_path"], bee.get("package") or bee["task"])
-                self.refresh()
+                self.refresh_soon()
             return
         if not bee["agent"]:
             self.inform(tr("This Agent has not started yet, so there is nothing to stop."))
             return
-        found = db.rows(self.conn, "SELECT pid, plan_path, package FROM agents WHERE project=? AND name=? AND archived=0", (bee["project"], bee["agent"]))
+        self.lookup(lambda conn: db.rows(conn, "SELECT pid, plan_path, package FROM agents WHERE project=? AND name=? AND archived=0", (bee["project"], bee["agent"])),
+                    lambda found: self.stop_process_agent(bee, found))
+
+    # Stop the process Agent once its row is read.
+    def stop_process_agent(self, bee, found):
+        """After a confirmation kill the process tree of the Agent of `bee` (`found`: its agents rows, None when the read failed)."""
         if found and found[0]["pid"] and self.confirm(tr("Stop agent %s (%s)? The package stays stopped until you resume it.", bee["name"], bee["task"])):
             from . import bees
             if found[0]["package"]:
                 bees.stop_package(self.conn, bee["project"], found[0]["plan_path"] or bee["plan_path"], found[0]["package"])
             osplat.kill_process_tree(found[0]["pid"])
-            self.refresh()
+            self.refresh_soon()
 
     # Switch the log between following and top-aligned.
     def toggle_autoscroll(self):

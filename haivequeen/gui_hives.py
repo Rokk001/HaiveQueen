@@ -110,7 +110,7 @@ class HivesWindow:
         bar.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree.bind("<Button-3>", self.on_context)
-        self.refresh()
+        self.refresh_async()   # the window opens at once, the plans follow
         self.win.after(REFRESH_MS, self.tick)
 
     def tick(self):
@@ -122,18 +122,27 @@ class HivesWindow:
     def refresh_async(self):
         """Read the plans in a thread of their own and show them when they are there; a read that is still running is not started twice."""
         if getattr(self, "loading", False):
+            self.refresh_wanted = True
             return
         self.loading = True
+
+        def again():
+            """Read once more when an action asked for a refresh during this read."""
+            if getattr(self, "refresh_wanted", False):
+                self.refresh_wanted = False
+                self.refresh_async()
 
         def done(rows):
             """Show the rows."""
             self.loading = False
             self.show(rows)
+            again()
 
         def failed(_exc):
             """Try again at the next round."""
             self.loading = False
-        gui_async.run_async(self.win, lambda: gui_async.with_connection(self.conn, plan_rows), done, failed)
+            again()
+        gui_async.run_async(self.win, gui_async.with_connection(self.conn, plan_rows), done, failed)
 
     def refresh(self):
         """Reload all rows and keep the selection."""
@@ -165,7 +174,7 @@ class HivesWindow:
             run_action(self.conn, row, action, self.confirm)
         except Exception as exc:
             gui_dialog.error(self.win, "HaiveQueen", tr("Could not change the plan: %s", exc), self.mono)
-        self.refresh()
+        self.refresh_async()
         if self.on_changed:
             self.on_changed()
 

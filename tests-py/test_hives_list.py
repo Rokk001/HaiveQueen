@@ -1,6 +1,7 @@
 """The Hives list: every plan of every Apiary with its status, and the right-click actions with their rules."""
 import inspect
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -151,6 +152,11 @@ class StyleTests(RoundCase):
         self.assertEqual(style.lookup("Treeview", "foreground", ("selected",)), col["gold"])
         window = gui_hives.HivesWindow(root, self.conn, "Consolas")
         self.addCleanup(window.win.destroy)
+        for _ in range(1000):   # the plans are read in the background: let that end before the database folder goes
+            root.update()
+            if not window.loading:
+                break
+            time.sleep(0.01)
         self.assertEqual(window.tree.winfo_class(), "Treeview")
         self.assertEqual(window.win.cget("bg"), col["bg"])
 
