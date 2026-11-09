@@ -48,6 +48,7 @@ class QueenOrderTest(RoundCase):
         self.conn.execute("UPDATE projects SET legacy_deploy=1")   # the release worktree step is in the text only with deploy on
         for entry in self.machine["providers"]:   # and only for a Queen whose provider has the Deploy tick
             entry.update(capabilitiesVersion=1, capabilities=["Coding", "Queen", "Build", "Deploy"])
+        self.machine["compileCheck"] = "npm test"   # without a compile check command the step is not in the text
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")
