@@ -34,6 +34,10 @@ def validate(conn, action, project=None, plan=None, **fields):
         questions = pending_questions(conn, project, plan)
         if status not in ("REVIEW", "PAUSED") or not any(is_check(q["item"]) for q in questions):
             raise ValueError("plan is not waiting for its owner check (status %s)" % status)
+        hive = conn.execute("SELECT state, ready_id FROM hives WHERE project=? AND plan_path=?", (project, plan)).fetchone()
+        latest = conn.execute("SELECT id, status FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (project, plan)).fetchone()
+        if not hive or hive["state"] != "owner_check" or not latest or latest["status"] != "integrated" or (hive["ready_id"] is not None and hive["ready_id"] != latest["id"]) or runtime.kv_get(conn, project, "hive-rejected-ready:" + plan) == str(latest["id"]):
+            raise ValueError("plan is not waiting for its integrated owner check")
         if action == "reject":
             if not str(fields.get("text") or "").strip():
                 raise ValueError("reject requires non-empty text")

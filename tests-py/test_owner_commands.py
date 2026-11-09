@@ -6,7 +6,7 @@ import os
 from unittest import mock
 
 from bzztest import REL, RoundCase
-from haivequeen import bees, cli, db, runtime, plans, inbox, servers, config
+from haivequeen import bees, cli, db, runtime, plans, inbox, servers, config, owner, hives
 
 
 class OwnerCommands(RoundCase):
@@ -22,6 +22,85 @@ class OwnerCommands(RoundCase):
                 except SystemExit as exc:
                     return exc.code, {}
             return code, json.loads(output.getvalue())
+
+    def waiting_for_owner(self):
+        self.conn.execute("INSERT INTO queue(project, branch, tip, plan_path, status, updated_at) VALUES (?,?,?,?,?,?)", ("testproj", "plan-branch", "abcdef012345", REL, "integrated", db.now()))
+        ready = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        self.conn.execute("INSERT OR REPLACE INTO hives(project, plan_path, provider, colour, state, ready_id) VALUES (?,?,?,?,?,?)", ("testproj", REL, "test", "blue", "owner_check", ready))
+
+    def test_early_owner_check_cannot_be_decided(self):
+        self.plan("REVIEW")
+        db.add_question(self.conn, "testproj", REL, "owner-check", "Early?", "")
+        common = ("--project", "testproj", "--plan", REL)
+        for action, extra in (("accept", ()), ("reject", ("--text", "fix"))):
+            self.assertNotEqual(self.invoke("plan", action, *common, *extra)[0], 0)
+
+    def test_recovered_integrated_owner_check_can_be_accepted(self):
+        self.plan("REVIEW")
+        self.waiting_for_owner()
+        self.conn.execute("UPDATE hives SET ready_id=NULL WHERE project=? AND plan_path=?", ("testproj", REL))
+        db.add_question(self.conn, "testproj", REL, "owner-check", "Check?", "")
+        self.assertEqual(self.invoke("plan", "accept", "--project", "testproj", "--plan", REL)[0], 0)
+
+    def test_rejected_integration_cannot_be_accepted_again(self):
+        self.plan("REVIEW")
+        self.waiting_for_owner()
+        ready = self.conn.execute("SELECT ready_id FROM hives WHERE project=? AND plan_path=?", ("testproj", REL)).fetchone()[0]
+        runtime.kv_set(self.conn, "testproj", "hive-rejected-ready:" + REL, str(ready))
+        db.add_question(self.conn, "testproj", REL, "owner-check", "Check?", "")
+        self.assertNotEqual(self.invoke("plan", "accept", "--project", "testproj", "--plan", REL)[0], 0)
+
+    def test_inbox_conflict_rolls_back_provider_and_plan(self):
+        path = config.config_dir() / "config.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        original = '[[providers]]\nname="account"\nprotocol="codex"\naccess="subscription"\nenabled=true\n'
+        path.write_text(original, encoding="utf-8")
+        self.plan("RUNNING")
+        folder = inbox.inbox_dir(self.repo)
+        folder.mkdir(parents=True)
+        (folder / "conflict.toml").write_text('[[provider]]\nprovider="account"\naction="disable"\n[[pause]]\nplan="%s"\n[[pause]]\nplan="%s"\n' % (REL, REL), encoding="utf-8")
+        self.assertEqual(inbox.process_inbox(self.env())["failed"], ["conflict.toml"])
+        self.assertEqual(runtime.list_plans(self.conn, "testproj")[0]["status"], "RUNNING")
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_inbox_provider_write_is_restored_when_later_action_fails(self):
+        path = config.config_dir() / "config.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        original = '[[providers]]\nname="account"\nprotocol="codex"\naccess="subscription"\nenabled=true\n'
+        path.write_text(original, encoding="utf-8")
+        self.plan("RUNNING", packages=[{"id": "P1", "class": "medium"}])
+        folder = inbox.inbox_dir(self.repo)
+        folder.mkdir(parents=True)
+        (folder / "conflict.toml").write_text('[[provider]]\nprovider="account"\naction="disable"\n[[unassign]]\nplan="%s"\npackage="P1"\n' % REL, encoding="utf-8")
+        apply = owner.apply
+        def fail_after_provider(conn, action, *args, **kwargs):
+            if action == "unassign":
+                raise ValueError("later failure")
+            return apply(conn, action, *args, **kwargs)
+        with mock.patch.object(owner, "apply", side_effect=fail_after_provider):
+            self.assertEqual(inbox.process_inbox(self.env())["failed"], ["conflict.toml"])
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_inbox_duplicate_accept_has_no_effect(self):
+        self.plan("REVIEW")
+        self.waiting_for_owner()
+        qid = db.add_question(self.conn, "testproj", REL, "owner-check", "Check?", "")
+        folder = inbox.inbox_dir(self.repo)
+        folder.mkdir(parents=True)
+        (folder / "duplicate.toml").write_text(('[[accept]]\nplan="%s"\n' % REL) * 2, encoding="utf-8")
+        self.assertEqual(inbox.process_inbox(self.env())["failed"], ["duplicate.toml"])
+        self.assertEqual(runtime.list_plans(self.conn, "testproj")[0]["status"], "REVIEW")
+        self.assertEqual(self.conn.execute("SELECT status FROM questions WHERE id=?", (qid,)).fetchone()[0], "open")
+        self.assertIn('REVIEW', (self.repo / REL).read_text(encoding="utf-8"))
+
+    def test_new_project_default_uses_current_terminology(self):
+        from haivequeen import gui_config
+        window = mock.Mock()
+        window.collect.return_value = True
+        window.data = {"projects": []}
+        window.entries = [("apiaries", 0)]
+        gui_config.ConfigWindow.add_apiary(window)
+        self.assertEqual(window.data["projects"][0]["name"], "new-project")
 
     def test_every_owner_command_refuses_agents(self):
         common = ("--project", "testproj", "--plan", REL)
@@ -51,6 +130,7 @@ class OwnerCommands(RoundCase):
 
     def test_accept_requires_owner_check_and_closes_all_checks(self):
         self.plan("REVIEW")
+        self.waiting_for_owner()
         common = ("--project", "testproj", "--plan", REL)
         self.assertNotEqual(self.invoke("plan", "accept", *common)[0], 0)
         ids = [db.add_question(self.conn, "testproj", REL, item, "Check?", "")
@@ -80,8 +160,27 @@ class OwnerCommands(RoundCase):
         self.assertEqual(runtime.get_agent(self.conn, "testproj", "running-package")["status"], "running")
         self.assertEqual(self.invoke(*args)[0], 0)
 
+    def test_unassign_running_package_selects_provider_on_next_start(self):
+        self.machine["providers"][0]["slots"] = 1
+        self.plan("IN_PROGRESS", packages=[{"id": "P1", "title": "First", "class": "medium"}])
+        hives.create(self.conn, "testproj", REL, "claude", "123456")
+        self.agent("queen", phase="queen", status="running", provider="claude", pid=42)
+        self.agent("worker", phase="bee", package="P1", status="running", provider="claude", pid=43)
+        bees.ensure_attempts(self.conn)
+        self.conn.execute("INSERT INTO bee_assignments VALUES (?,?,?,?,?)", ("testproj", REL, "P1", "medium", "claude"))
+        self.assertEqual(self.invoke("package", "unassign", "--project", "testproj", "--plan", REL, "--package", "P1")[0], 0)
+        self.assertEqual(runtime.get_agent(self.conn, "testproj", "worker")["status"], "running")
+        runtime.upsert_agent(self.conn, "testproj", "worker", {"status": "done"})
+        wt = self.base / "bee-wt"
+        wt.mkdir()
+        with mock.patch("haivequeen.bees.valid_bee_worktree", return_value=True), mock.patch("haivequeen.loop._do_start", return_value=True):
+            result = bees.start_process(self.env(), REL, "P1", "Ada", "medium", "task", ["one"], [], [], cwd=str(wt))
+        self.assertEqual((result["kind"], result["provider"]), ("process", "codex"))
+        self.assertEqual(self.conn.execute("SELECT provider FROM bee_assignments WHERE package='P1'").fetchone()[0], "codex")
+
     def test_reject_requires_text_and_preserves_pause(self):
         self.plan("REVIEW", packages=[{"id": "P1", "class": "medium"}])
+        self.waiting_for_owner()
         common = ("--project", "testproj", "--plan", REL)
         self.assertNotEqual(self.invoke("plan", "reject", *common, "--text", "finding")[0], 0)
         qid = db.add_question(self.conn, "testproj", REL, "owner-check", "Check?", "")
@@ -118,6 +217,7 @@ class OwnerCommands(RoundCase):
 
     def test_accept_refuses_open_integration_step(self):
         self.plan("REVIEW", packages=[{"id": plans.STEP_PACKAGES["Deploy"], "class": "medium"}])
+        self.waiting_for_owner()
         db.add_question(self.conn, "testproj", REL, "owner-check", "Check?", "")
         code, result = self.invoke("plan", "accept", "--project", "testproj", "--plan", REL)
         self.assertNotEqual(code, 0)
@@ -125,6 +225,7 @@ class OwnerCommands(RoundCase):
 
     def test_reject_ends_release_and_delivers_finding(self):
         self.plan("REVIEW")
+        self.waiting_for_owner()
         common = ("--project", "testproj", "--plan", REL)
         self.assertEqual(self.invoke("plan", "release", *common)[0], 0)
         db.add_question(self.conn, "testproj", REL, "owner-check", "Check?", "")
@@ -148,6 +249,7 @@ class OwnerCommands(RoundCase):
 
     def test_inbox_owner_actions(self):
         self.plan("REVIEW", packages=[{"id": "P1", "class": "medium"}])
+        self.waiting_for_owner()
         folder = inbox.inbox_dir(self.repo)
         folder.mkdir(parents=True)
         def send(action, extra=""):
@@ -161,6 +263,7 @@ class OwnerCommands(RoundCase):
         send("reject", 'text="fix it"\npackages=["P1"]\nby="coordinator"\n')
         self.assertIn("P1", bees.rejected_packages(self.conn, "testproj", REL))
         runtime.set_plan_status(self.conn, "testproj", REL, "REVIEW")
+        self.waiting_for_owner()
         db.add_question(self.conn, "testproj", REL, "owner-check", "Check again?", "")
         send("accept")
         self.assertEqual(runtime.list_plans(self.conn, "testproj")[0]["status"], "DONE")
@@ -173,6 +276,7 @@ class OwnerCommands(RoundCase):
                 self.assertEqual(self.invoke("plan", "pause", *common)[0], 0)
                 self.assertEqual(self.invoke("plan", "resume", *common)[0], 0)
                 self.assertEqual(runtime.list_plans(self.conn, "testproj")[0]["status"], status)
+        self.waiting_for_owner()
         db.add_question(self.conn, "testproj", REL, "owner-check", "Check?", "")
         self.invoke("plan", "pause", *common)
         self.assertEqual(self.invoke("plan", "accept", *common)[0], 0)

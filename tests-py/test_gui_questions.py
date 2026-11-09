@@ -105,8 +105,14 @@ class WindowTest(RoundCase):
         self.assertIn("answer", win.status.cget("text").lower())
         self.assertEqual(win.list.size(), 2)
 
+    def integrated_owner_check(self):
+        self.conn.execute("INSERT INTO queue(project, branch, tip, plan_path, status, updated_at) VALUES (?,?,?,?,?,?)", ('testproj', 'plan-branch', 'abcdef012345', REL, 'integrated', db.now()))
+        ready = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        self.conn.execute("INSERT INTO hives(project, plan_path, provider, colour, state, ready_id) VALUES (?,?,?,?,?,?)", ('testproj', REL, 'test', 'blue', 'owner_check', ready))
+
     def test_explicit_owner_buttons_and_required_rejection_text(self):
         runtime.set_plan_status(self.conn, 'testproj', REL, 'REVIEW')
+        self.integrated_owner_check()
         win = gui_questions.QuestionsWindow(self.root, self.conn)
         self.assertEqual(win.accept_button.cget('text'), 'Accept')
         self.assertEqual(win.reject_button.cget('text'), 'Not ok')
@@ -122,6 +128,7 @@ class WindowTest(RoundCase):
 
     def test_accept_button_completes_plan(self):
         runtime.set_plan_status(self.conn, 'testproj', REL, 'REVIEW')
+        self.integrated_owner_check()
         db.answer_question(self.conn, self.plain_q, 'Red', 'owner')
         win = gui_questions.QuestionsWindow(self.root, self.conn)
         win.accept_button.invoke()

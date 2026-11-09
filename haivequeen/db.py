@@ -203,14 +203,19 @@ def migrate(conn: sqlite3.Connection) -> None:
 @contextmanager
 def transaction(conn: sqlite3.Connection):
     """Run a block as one atomic write transaction (BEGIN IMMEDIATE, rollback on error)."""
-    conn.execute("BEGIN IMMEDIATE")
+    nested = conn.in_transaction
+    conn.execute("SAVEPOINT nested_transaction" if nested else "BEGIN IMMEDIATE")
     try:
         yield conn
     except BaseException:
-        conn.execute("ROLLBACK")
+        if nested:
+            conn.execute("ROLLBACK TO nested_transaction")
+            conn.execute("RELEASE nested_transaction")
+        else:
+            conn.execute("ROLLBACK")
         raise
     else:
-        conn.execute("COMMIT")
+        conn.execute("RELEASE nested_transaction" if nested else "COMMIT")
 
 
 def rows(conn, sql: str, args=()) -> list:

@@ -450,8 +450,8 @@ class WindowTest(unittest.TestCase):
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
         win.pick_tab("apiaries")
         win.add_entry()
-        self.assertEqual(win.nodes.get(0, "end"), ("ODP", "new-apiary"))
-        self.type_into_entry(win, "new-apiary", "Fresh")
+        self.assertEqual(win.nodes.get(0, "end"), ("ODP", "new-project"))
+        self.type_into_entry(win, "new-project", "Fresh")
         self.type_into_entry(win, "", str(new))
         self.assertTrue(win.collect())
         win.target()["file"]["buildEnabled"] = False
@@ -538,7 +538,7 @@ class WindowTest(unittest.TestCase):
         path = folder / ".haivequeen" / "project.toml"
         self.assertEqual(path.read_text(encoding="utf-8"), text)
         self.assertFalse(path.with_name("project.toml.bak").exists())
-        self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='new-apiary'").fetchone()[0], str(folder.resolve()))
+        self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='new-project'").fetchone()[0], str(folder.resolve()))
 
     def test_entering_the_same_workspace_again_rebuilds_nothing(self):
         """Entering an unchanged workspace keeps the page and its typed values as they are."""

@@ -1321,7 +1321,7 @@ class ConfigWindow(ProviderPages):
     def add_apiary(self):
         """Append a new Project (name and workspace in config.toml; its project.toml is created at Save) and show it."""
         if self.collect():
-            self.data.setdefault("projects", []).append({"name": "new-apiary", "workspace": ""})
+            self.data.setdefault("projects", []).append({"name": "new-project", "workspace": ""})
             self.fill_nodes()
             self.select(self.entries.index(("apiaries", len(self.data["projects"]) - 1)))
 
