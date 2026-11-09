@@ -11,14 +11,15 @@ import subprocess
 import time
 from datetime import datetime
 
-from . import db, localtime, plans, proctree, roles, routine, runtime, scheduler as sch
+from . import db, localtime, plans, platform as osplat, proctree, roles, routine, runtime, scheduler as sch
 from .i18n import tr
 
 BUILD = plans.STEP_PACKAGES["Build"]
 DEPLOY = plans.STEP_PACKAGES["Deploy"]
 COMPILE_MILESTONE = re.compile(r"^(\w+)\t\S+ Compile test\b")   # the live line of a compile check in milestones.txt (the dashboard shows it)
 COMPILE_KEY = "compile-check:"   # + Queen name: the stored result of `bzz compile-check` for that Queen run
-COMPILE_TIMEOUT = 3600   # seconds a compile check may run before it counts as failed
+POLL_SECONDS = 1.0   # how often a compile check looks at its process and at the lock of the machine
+COMPILE_AGENT_KEY = "compile-agent:"   # + name or worktree: the stored result of an Agent; it never counts for `bzz ready`
 
 
 # The three switches of an Apiary.
@@ -140,37 +141,123 @@ def compile_result(conn, project, queen_name):
     return data if isinstance(data, dict) else None
 
 
-# Run the compile check of the project for a Queen.
-def run_compile_check(env, queen, timeout=COMPILE_TIMEOUT):
-    """Run the setting compileCheck in the worktree of the Queen, store {ok, exit, commit, time, seconds, command} for her run, add the live line
-    to her milestones and return the result with the end of the output under "output"; the commit is the one the worktree stood on before the run."""
-    command = str(env.settings.get("compileCheck") or "").strip()
-    cwd = str(queen.get("cwd") or "")
-    commit = head_commit(cwd)
-    started = time.time()
-    try:
-        # The configured command line is the owner's own text, so the system shell runs it (named explicitly, no shell flag): cmd /s keeps a quoted program path intact.
-        line = 'cmd.exe /d /s /c "%s"' % command if os.name == "nt" else ["/bin/sh", "-c", command]
-        proc = subprocess.Popen(line, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
-        proctree.exempt_register(proc.pid)   # started by HaiveQueen, not by the agent: the cleanup of the agent's leftover processes leaves it alone
+# The lock that lets one compile check run at a time per machine.
+def _compile_lock_path():
+    """The lock file of the machine (in the machine data folder)."""
+    from . import config
+    return config.data_dir() / "compile-check.lock"
+
+
+# Wait for the machine-wide compile check lock.
+def _acquire_compile_lock(poll):
+    """Create the lock file with this process id once no other check holds it (a lock whose process is gone is taken over); returns the path."""
+    path = _compile_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    while True:
         try:
-            out_text, err_text = proc.communicate(timeout=timeout)
-            code, output = proc.returncode, (out_text or "") + (err_text or "")
+            handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                holder = int((path.read_text(encoding="utf-8") or "0").strip() or 0)
+            except (OSError, ValueError):
+                holder = None   # being written or unreadable: look again
+            if holder is not None and (not holder or not osplat.process_alive(holder)):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                continue
+            time.sleep(poll)
+            continue
+        with os.fdopen(handle, "w", encoding="utf-8") as lock:
+            lock.write(str(os.getpid()))
+        return path
+
+
+# Run the compile command and watch its progress.
+def _watch_compile(command, cwd, stall_seconds, max_seconds, poll):
+    """Run `command` in `cwd` until it ends; returns (exit code, output text). The check ends red (124) after max_seconds of running and red (125,
+    "stalled") when for stall_seconds neither a new output line appeared nor the CPU time of its process tree grew."""
+    import collections
+    import threading
+    lines = collections.deque(maxlen=400)
+    state = {"lines": 0}
+
+    def read(stream):
+        for line in iter(stream.readline, ""):
+            lines.append(line.rstrip("\r\n"))
+            state["lines"] += 1
+
+    # The configured command line is the owner's own text, so the system shell runs it (named explicitly, no shell flag): cmd /s keeps a quoted program path intact.
+    line = 'cmd.exe /d /s /c "%s"' % command if os.name == "nt" else ["/bin/sh", "-c", command]
+    proc = subprocess.Popen(line, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+    proctree.exempt_register(proc.pid)   # started by HaiveQueen, not by the agent: the cleanup of the agent's leftover processes leaves it alone
+    reader = threading.Thread(target=read, args=(proc.stdout,), daemon=True)
+    reader.start()
+    started = last_progress = time.monotonic()
+    seen_lines, seen_cpu, ended = 0, -1.0, None
+    try:
+        while proc.poll() is None:
+            now = time.monotonic()
+            cpu = proctree.tree_cpu_seconds(proc.pid)
+            if state["lines"] != seen_lines or abs(cpu - seen_cpu) > 0.001:
+                seen_lines, seen_cpu, last_progress = state["lines"], cpu, now
+            if now - started > max_seconds:
+                ended = (124, "the compile check ran longer than %g minutes (compileMaxMinutes)" % (max_seconds / 60.0))
+            elif now - last_progress > stall_seconds:
+                ended = (125, "stalled: the compile check made no output and used no CPU for %g minutes (compileStallMinutes)" % (stall_seconds / 60.0))
+            if ended:
+                osplat.kill_process_tree(proc.pid)
+                break
+            time.sleep(poll)
+        try:
+            proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.communicate()
-            raise
-        finally:
-            proctree.exempt_clear(proc.pid)
-    except subprocess.TimeoutExpired:
-        code, output = 124, "the compile check ran longer than %d seconds" % timeout
-    except OSError as exc:
-        code, output = 127, "the compile check could not start: %s" % exc
+            pass
+        reader.join(timeout=5)
+    finally:
+        proctree.exempt_clear(proc.pid)
+    text = "\n".join(lines)
+    if ended:
+        return ended[0], ended[1] + ("; last output lines:\n" + "\n".join(list(lines)[-20:]) if lines else "; no output at all")
+    return proc.returncode, text
+
+
+# Run the compile check of the project for a Queen or an Agent.
+def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True):
+    """Run the setting compileCheck in the worktree `cwd` (default: that of `queen`, the row of the caller), store {ok, exit, commit, time, seconds, command} under
+    `key` (default: the result of the Queen's run that `bzz ready` reads), add the live line to the milestones of the caller and return the result with the end of the
+    output under "output". Checks run one at a time per machine: waiting for another check counts for neither limit. The settings compileStallMinutes (10) and
+    compileMaxMinutes (120) end a check red; the commit is the one the worktree stood on before the run."""
+    poll = POLL_SECONDS if poll is None else poll
+    command = str(env.settings.get("compileCheck") or "").strip()
+    cwd = str(cwd or queen.get("cwd") or "")
+    commit = head_commit(cwd)
+    stall = float(env.settings.get("compileStallMinutes", 10)) * 60.0
+    longest = float(env.settings.get("compileMaxMinutes", 120)) * 60.0
+    lock = None
+    try:
+        lock = _acquire_compile_lock(poll)
+        started = time.time()   # after the wait for the lock
+        try:
+            code, output = _watch_compile(command, cwd, stall, longest, poll)
+        except OSError as exc:
+            code, output = 127, "the compile check could not start: %s" % exc
+    finally:
+        if lock:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
     result = {"ok": code == 0, "exit": code, "commit": commit, "time": db.now(), "seconds": round(time.time() - started, 1), "command": command}
-    runtime.kv_set(env.conn, env.name, COMPILE_KEY + queen["name"], json.dumps(result))
+    if code == 125:
+        result["stalled"] = True
+    runtime.kv_set(env.conn, env.name, key or COMPILE_KEY + queen["name"], json.dumps(result))
     last = next((" ".join(line.split()) for line in reversed(output.splitlines()) if line.strip()), "")
     live = "%s\t%s Compile test - Exit %s%s\n" % ("Green" if result["ok"] else "Red", localtime.time(datetime.now()), code, (": " + last[:140]) if last else "")
     try:
+        if not milestones:
+            raise OSError
         folder = env.run_dir(queen["name"])
         folder.mkdir(parents=True, exist_ok=True)
         with open(str(folder / "milestones.txt"), "ab") as handle:

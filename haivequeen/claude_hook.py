@@ -39,7 +39,7 @@ _add("package", (None,), {"--project": PROJECT, "--plan": PLAN, "--package": ANY
                           "--state": ("working", "waiting", "implemented", "done", "rejected")}, {"--reason": ANY})
 _add("plan", ("check",), {"--project": PROJECT, "--plan": PLAN})
 _add("integration", ("acquire", "release"), {"--project": PROJECT, "--plan": PLAN}, {"--owner-pid": INT})
-_add("compile-check", (None,), {"--project": PROJECT, "--plan": PLAN})
+_add("compile-check", (None,), {"--project": PROJECT, "--plan": PLAN}, {"--worktree": ANY})
 _add("ready", (None,), {"--project": PROJECT, "--branch": BRANCH, "--tip": NAME, "--plan": PLAN}, {"--note": ANY})
 _add("ask", (None,), {"--project": PROJECT, "--plan": PLAN, "--item": ANY, "--question": ANY}, {"--recommendation": ANY})
 _add("note", (None,), {"--project": PROJECT, "--text": ANY})

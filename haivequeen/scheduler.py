@@ -45,6 +45,8 @@ DEFAULT_SETTINGS = {
     "providerRecheckMinutes": 5,   # how often an offline provider (its agent ended with a 5xx or connection error) is checked again
     "retryWaitMinutes": [1, 2, 4, 8, 15],   # wait before the n-th retry of consecutive interrupted ends (API, connection); the last value repeats
     "rateLimitWaitMinutes": 15,   # wait after a rate limit when no reset time of the limited provider is known
+    "compileStallMinutes": 10,   # `bzz compile-check` ends a check red as stalled after this many minutes without output and without CPU use
+    "compileMaxMinutes": 120,   # `bzz compile-check` ends a check red after this many minutes of running (waiting for another check does not count)
     "contextLimitTokens": 300000,
     "integrationBranch": "main",
     "remoteName": "origin",
