@@ -1,6 +1,6 @@
 # Agent rules
 
-Project rules remain binding: the checked-in AGENTS.md and CLAUDE.md of the repository (and of the upstream repository when the project uses it), the same for every agent of every phase. The Queen receives the project work rules and, during integration, its integration rules. An Agent receives the complete project rules, never the whole plan.
+Project rules remain binding: the checked-in AGENTS.md and CLAUDE.md of the repository (and of the upstream repository when the project switched that on), the same for every agent of every phase. "Complete project rules" means all switched-on rule files: the Knowledge base section of the project page lists each file with its path and size in tokens and a switch; a switched-off file is given to no agent (a file a CLI loads itself from its folder, for example CLAUDE.md for Claude Code, stays switchable for the other CLIs and its line names the CLI that still loads it). The upstream rules come from the folder of the setting `upstreamRepo` (switch on) or, with the switch on, from the Git remote named upstream at its last fetch; the folder wins over the remote. The Queen receives the project work rules and, during integration, its integration rules. An Agent receives the complete project rules, never the whole plan.
 
 ## 1. Hard rules (tool)
 

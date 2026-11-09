@@ -244,7 +244,7 @@ class UseAndAdvanced(PageCase):
         win = self.window()
         self.provider(win, "claude")
         inside = {path for path, _g, _l in win.getters if win.in_frame(path, win.use_frame)}
-        self.assertEqual(inside, {("slots",), ("use",), ("capabilities",), ("beeMode",)})
+        self.assertEqual(inside, {("slots",), ("use",), ("capabilities",), ("beeMode",), ("contextLimit",)})
         texts = label_texts(win.use_frame)
         self.assertIn("Simultaneous agents", texts)
         self.assertIn("Priority", texts)
@@ -271,7 +271,8 @@ class UseAndAdvanced(PageCase):
             outside = [w for w in descendants(win.form) if not str(w).startswith(str(win.advanced_frame))]
             texts = [w.cget("text") for w in outside if w.winfo_class() in ("Label", "Labelframe", "Menubutton", "Button")]
             self.assertFalse(raw & set(texts), (name, raw & set(texts)))
-            values = [w.get() for w in outside if w.winfo_class() == "Entry" and w.get()]
+            limit = [w for w in win.rows[("contextLimit",)].winfo_children()]   # the limit may equal the window of a Local LLM
+            values = [w.get() for w in outside if w.winfo_class() == "Entry" and w.get() and w not in limit]
             self.assertEqual(len(values), len(set(values)), (name, values))
             if name != "wrapped":
                 self.assertNotIn("claude-local.cmd", values)

@@ -19,33 +19,11 @@ class SettingsCleanupTests(ApiaryPageCase):
         win.save()
         self.assertIn('roundMinutes = 17', path.read_text(encoding="utf-8"))
 
-    def test_apiary_offers_empty_overrides_and_distinct_tool_fields(self):
+    def test_apiary_page_has_no_overrides_or_tool_fields(self):
         win = self.window("Plain")
         values = self.shown(win)
-        self.assertEqual(values[("file", "escalateAfter")], "")
-        self.assertEqual(values[("file", "language")], "")
-        self.assertIn(("file", "claudeTools"), values)
-        self.assertIn(("file", "allowedTools"), values)
-        self.assertIn("General", win.text_of(("file", "escalateAfter")))
-        self.assertIn("General", win.text_of(("file", "language")))
-
-    def test_unique_branch_grant_moves_on_save_and_runtime_combines(self):
-        config = self.base / "config.toml"
-        config.write_text(config.read_text(encoding="utf-8").replace("Read,Edit", "Read,Bash(git push origin integration/one),Bash(git push origin other)"), encoding="utf-8")
-        project = self.plain / ".haivequeen" / "project.toml"
-        project.write_text(self.plain_text + 'integrationBranch = "integration/one"\n', encoding="utf-8")
-        win = self.window("Plain")
-        grant = "Bash(git push origin integration/one)"
-        self.assertIn(grant, self.shown(win)[("file", "allowedTools")])
-        win.save()
-        saved = tomllib.loads(project.read_text(encoding="utf-8"))
-        provider = tomllib.loads(config.read_text(encoding="utf-8"))["providers"][0]
-        self.assertIn(grant, saved["allowedTools"])
-        self.assertNotIn(grant, str(provider["args"]))
-        self.assertIn("Bash(git push origin other)", str(provider["args"]))
-        args = agent_runner.build_args(provider, {"effort": "medium"}, saved["allowedTools"])
-        self.assertIn(grant, str(args))
-        self.assertIn("Bash(git push origin other)", str(args))
+        for key in ("escalateAfter", "language", "claudeTools", "allowedTools"):
+            self.assertNotIn(("file", key), values)   # General and the providers decide these now
 
     def test_failed_project_write_keeps_provider_grant(self):
         config = self.base / "config.toml"
@@ -54,46 +32,27 @@ class SettingsCleanupTests(ApiaryPageCase):
         project = self.plain / ".haivequeen" / "project.toml"
         project.write_text(self.plain_text + 'integrationBranch = "integration/one"\n', encoding="utf-8")
         win = self.window("Plain")
+        next(x for x in win.apiaries if x["name"] == "Plain")["file"]["colour"] = "red"   # a changed project file is written
         with mock.patch("haivequeen.gui_config.save_project_file", side_effect=OSError("write failed")):
             with self.assertRaises(OSError):
                 win.save()
         self.assertIn(grant, config.read_text(encoding="utf-8"))
 
-    def test_shared_branch_grant_stays_at_provider(self):
+    def test_branch_grants_stay_at_the_provider_on_save(self):
         config = self.base / "config.toml"
-        config.write_text(config.read_text(encoding="utf-8").replace("Read,Edit", "Read,Bash(git push origin main)"), encoding="utf-8")
-        win = self.window("Plain")
-        self.assertNotIn("Bash(git push origin main)", self.shown(win)[("file", "allowedTools")])
-        win.save()
-        self.assertIn("Bash(git push origin main)", config.read_text(encoding="utf-8"))
-
-    def test_grant_naming_two_branches_stays_at_provider(self):
-        config = self.base / "config.toml"
-        grant = "Bash(git push origin integration/one main)"
-        config.write_text(config.read_text(encoding="utf-8").replace("Read,Edit", "Read," + grant), encoding="utf-8")
+        grants = "Bash(git push origin integration/one),Bash(git push origin main),Bash(git push origin integration/one main)"
+        config.write_text(config.read_text(encoding="utf-8").replace("Read,Edit", "Read," + grants), encoding="utf-8")
         project = self.plain / ".haivequeen" / "project.toml"
-        project.write_text(self.plain_text + 'integrationBranch = "integration/one"\n', encoding="utf-8")
+        project.write_text(self.plain_text + 'integrationBranch = "integration/one"' + chr(10), encoding="utf-8")
         win = self.window("Plain")
-        self.assertNotIn(grant, self.shown(win)[("file", "allowedTools")])
         win.save()
-        self.assertIn(grant, config.read_text(encoding="utf-8"))
+        self.assertIn(grants, config.read_text(encoding="utf-8"))
+        self.assertNotIn("allowedTools", tomllib.loads(project.read_text(encoding="utf-8")))
 
     def test_empty_overrides_inherit_general(self):
         settings = scheduler.build_settings({"language": "German", "escalateAfter": 7}, {"language": "", "escalateAfter": ""})
         self.assertEqual(settings["language"], "German")
         self.assertEqual(settings["escalateAfter"], 7)
-
-    def test_clearing_overrides_restores_inheritance(self):
-        project = self.plain / ".haivequeen" / "project.toml"
-        project.write_text(self.plain_text + 'language = "German"\nescalateAfter = 4\n', encoding="utf-8")
-        win = self.window("Plain")
-        for key in ("language", "escalateAfter"):
-            entry = self.entry_of(win, ("file", key))
-            entry.delete(0, "end")
-        win.save()
-        saved = tomllib.loads(project.read_text(encoding="utf-8"))
-        self.assertNotIn("language", saved)
-        self.assertNotIn("escalateAfter", saved)
 
     def test_general_advanced_is_collapsed_and_build_labels_fit(self):
         win = self.window()
@@ -141,9 +100,9 @@ class CompletenessTests(ApiaryPageCase):
                     self.assertFalse(win.advanced_box.winfo_ismapped())
                     for path, _, _ in win.getters:
                         in_advanced = str(win.rows[path]).startswith(str(win.advanced_box))
-                        expected_main = path[0] in ('entry', 'place') and path[-1] in ('name', 'repository', 'plansFolder') if apiary else path[-1] in gui_config.GENERAL_LABELS
-                        if apiary and path[0] == 'file':
-                            expected_main = path[-1] in gui_config.MAIN_KEYS
+                        if apiary and path in (('file', 'rulesOff'), ('file', 'upstreamRules')):
+                            continue   # the Knowledge base has its own lines (tests of P2)
+                        expected_main = path in (('entry', 'name'), ('place', 'repository'), ('file', 'integrationBranch'), ('file', 'compileCheck')) if apiary else path[-1] in gui_config.GENERAL_LABELS
                         self.assertEqual(not in_advanced, expected_main, path)
                         if expected_main:
                             label = win.text_of(path)
@@ -158,8 +117,11 @@ class CompletenessTests(ApiaryPageCase):
                                 self.assertIn(source_label, i18n.GERMAN)
                                 self.assertNotEqual(i18n.tr(help_text), help_text)
                     new_rows = [w for w in descendants(win.form) if w.winfo_class() == 'Label' and w.cget('text') == i18n.tr('new setting')]
-                    self.assertTrue(new_rows)
-                    self.assertTrue(all(str(w).startswith(str(win.advanced_box)) for w in new_rows))
+                    if apiary:
+                        self.assertFalse(new_rows)   # P-8: no free setting rows on a Project page
+                    else:
+                        self.assertTrue(new_rows)
+                        self.assertTrue(all(str(w).startswith(str(win.advanced_box)) for w in new_rows))
                     win.win.destroy()
 
     def test_config_project_and_alias_round_trip(self):

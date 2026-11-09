@@ -29,6 +29,7 @@ TEXT = {
     "light": (N_("Light"), N_("Model and effort for small tasks; leave the model empty and this provider does not offer this class.")),
     "medium": (N_("Medium"), N_("Model and effort for normal tasks; leave the model empty and this provider does not offer this class.")),
     "heavy": (N_("Heavy"), N_("Model and effort for the hardest tasks; leave the model empty and this provider does not offer this class.")),
+    "contextLimit": (N_("Context limit"), N_("The context size in tokens at which an agent of this provider is asked to hand off; a limit of a model entry wins.")),
     "benchmark": (N_("Benchmark"), N_("Measures how much context an agent of this provider can use; only for a saved provider that is ready.")),
     "slots": (N_("Simultaneous agents"), N_("How many agents of this provider may work at the same time.")),
     "use": (N_("Priority"), N_("A preferred provider gets work first; a fallback provider only when the preferred ones are busy or not available.")),
@@ -273,7 +274,17 @@ class ProviderPages:
         use = "preferred" if data.get("use") == "capability-only" else data.get("use", "preferred")
         self.field(box, box, ("use",), use, "use")
         self.field(box, box, ("capabilities",), scheduler.provider_capabilities(data), "capabilities")
+        self.field(box, box, ("contextLimit",), self.shown_context_limit(data), "contextLimit")
         self.bee_field(box, data)
+
+    def shown_context_limit(self, data) -> int:
+        """The Context limit a provider page shows: its own value, else the machine value (300000), capped by the window of a Local LLM."""
+        from . import servers
+        if data.get("contextLimit"):
+            return int(data["contextLimit"])
+        limit = int(self.data.get("contextLimitTokens") or 300000)
+        window = servers.window_of(servers.server_of(data) or {})
+        return min(limit, window) if window else limit
 
     def bee_field(self, box, data):
         """Agent mode in Use: Subagent or Process with one explanation. Subagent is greyed out where HaiveQueen has no embedded Agents (another CLI than

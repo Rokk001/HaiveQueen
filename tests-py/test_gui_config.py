@@ -254,6 +254,9 @@ class WindowTest(unittest.TestCase):
             if key in gui_config.RELEASE_KEYS:
                 self.assertNotIn(key, keys)   # The release settings are offered only for a remote on GitHub, this Apiary has none
                 continue
+            if key in ("ownerCheckText", "compileCheckEnabled", "remoteName"):
+                self.assertNotIn(key, keys)   # P-3: removed from the page, derived or replaced
+                continue
             self.assertEqual(keys[key], default, key)
         texts = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
         self.assertIn("Run the deploy", texts)
@@ -406,9 +409,9 @@ class WindowTest(unittest.TestCase):
         self.assertIn(("place", "repository"), paths)   # decision 741 (1): Repository and Plans folder replace workspace and codeRepo
         self.assertIn(("place", "plansFolder"), paths)
         self.assertNotIn(("entry", "workspace"), paths)
-        self.assertTrue({("file", "priority"), ("file", "planGlobs")} <= set(paths))
+        self.assertTrue({("file", "priority"), ("file", "plans")} <= set(paths))
         labels = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
-        for label in ("Run the compile check", "Run the build", "Run the deploy", "Publish release at integration"):
+        for label in ("Compile check command (empty: no compile check)", "Run the build", "Run the deploy", "Publish release at integration"):
             self.assertIn(label, labels)
         self.assertNotIn(("file", "name"), paths)   # the name of config.toml is the only one
         self.assertIsNone(win.build_vars)
@@ -493,7 +496,7 @@ class WindowTest(unittest.TestCase):
         win.workspace_entered()   # what both bindings call (hidden test windows get no focus events)
         self.assertEqual(win.node, node)
         shown = self.shown(win)
-        self.assertEqual((shown["priority"], shown["planGlobs"], shown["deployEnabled"]), ("7", ["docs/*.md"], False))
+        self.assertEqual((shown["priority"], shown["plans"], shown["deployEnabled"]), ("7", ["docs/*.md"], False))
 
     def test_entered_workspace_keeps_the_unsaved_edits(self):
         """A setting changed before the workspace is entered stays as typed; the other values of the existing project.toml stay as they are."""
@@ -506,7 +509,7 @@ class WindowTest(unittest.TestCase):
         self.type_into_entry(win, "", str(folder))
         win.workspace_entered()
         shown = self.shown(win)
-        self.assertEqual((shown["priority"], shown["planGlobs"], shown["deployEnabled"]), ("9", ["docs/*.md"], False))
+        self.assertEqual((shown["priority"], shown["plans"], shown["deployEnabled"]), ("9", ["docs/*.md"], False))
         win.save()
         self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         saved = (folder / ".haivequeen" / "project.toml").read_text(encoding="utf-8")

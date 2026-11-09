@@ -18,7 +18,7 @@ from .gui_provider import ProviderPages
 from .i18n import N_, decimal, tr
 
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
-CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "use": ("preferred", "fallback"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
+CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "queenClass": ("light", "medium", "heavy"), "use": ("preferred", "fallback"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
 CAPABILITIES = ("Coding", "Queen", "Build", "Deploy", "Image generation", "3D modelling", "Audio generation", "Video generation", "Vision", "Browser automation", "Web research", "GPU workloads", "Confidential data")
 CLASSES = ("light", "medium", "heavy")
 # The block "Build" of the General page: exactly these three fields, each with one sentence of explanation (key in the buildJobs table, label, explanation).
@@ -38,16 +38,17 @@ RELEASE_KEYS = ("publishReleases", "nextVersion")   # offered only for an Apiary
 SETTING_LABELS = {
     "ownerTopics": N_("Topics that always go to the owner (one per line)"), "ownerCheckText": N_("Owner-check question (empty: default text)"),
     "compileCheckEnabled": N_("Run the compile check"), "buildEnabled": N_("Run the build"), "deployEnabled": N_("Run the deploy"),
-    "integrationBranch": N_("Integration branch"), "remoteName": N_("Remote name"), "worktreeLocation": N_("Worktree location (empty: beside the repository)"),
+    "integrationBranch": N_("Integration branch"), "remoteName": N_("Remote"), "worktreeLocation": N_("Worktree location (empty: beside the repository)"),
     "deleteFinishedWorktrees": N_("Delete finished worktrees automatically"), "deleteIntegratedBranches": N_("Delete integrated branches (local and remote)"),
     "publishReleases": N_("Publish release at integration"), "nextVersion": N_("Next version (empty: count the last digit up)"),
     # Owner decision 741 (3): every field of the Apiary page has an understandable label; the internal key names stay in project.toml only.
-    "name": N_("Name"), "repository": N_("Repository"), "plansFolder": N_("Plans folder (empty: docs/plans of the repository)"),
+    "name": N_("Name"), "repository": N_("Repository"), "plansFolder": N_("Plans folder (empty: the repository)"), "plans": N_("Plan files (patterns, one per line)"),
+    "upstreamRules": N_("Use the rules of the upstream repository"),
     "colour": N_("Colour"), "priority": N_("Priority"), "owner": N_("Owner name"), "language": N_("Language of owner texts (empty: General language)"), "escalateAfter": N_("Failed attempts before a stronger model (empty: General value)"), "allowedTools": N_("Commands allowed without asking"),
     "planGlobs": N_("Plan files (patterns, one per line)"), "planExclude": N_("Files that are not plans (patterns, one per line)"),
     "ignoredBuildOutput": N_("Build output to ignore (one per line)"), "buildFlowDoc": N_("Build instructions document"),
     "integratorInstructions": N_("Extra instructions for the integration"), "buildProcessNames": N_("Build program names (one per line)"),
-    "compileCheck": N_("Compile check command"), "claudeTools": N_("Tools available to Claude agents"), "protectedWorktrees": N_("Protected worktrees (one per line)"),
+    "compileCheck": N_("Compile check command (empty: no compile check)"), "claudeTools": N_("Tools available to Claude agents"), "protectedWorktrees": N_("Protected worktrees (one per line)"),
     "onEvent": N_("Command after each event"), "onEvent.command": N_("Command"), "onEvent.workDir": N_("Working folder"), "onEvent.timeoutSeconds": N_("Time limit (seconds)"),
     "views": N_("Generated overviews"), "views.queue": N_("Queue overview file"), "views.questions": N_("Open questions file"), "views.decisions": N_("Decisions file"),
     "prompts": N_("Own prompt texts"), "prompts.integrator": N_("Instructions of the integrating Queen"),
@@ -56,28 +57,33 @@ SETTING_LABELS = {
 SETTING_HELP = {
     "name": N_("The name of the Project in HaiveQueen; new worktree names start with it."),
     "repository": N_("The Git repository of the code; releases, version, branches and worktrees always use it."),
-    "plansFolder": N_("Only for plans kept outside the repository; this folder also holds the settings of the Project."),
+    "plansFolder": N_("The folder that holds the plans and the settings of the Project; empty: the repository."),
+    "plans": N_("Where the plans are found, relative to the plans folder; a line starting with ! excludes files."),
     "colour": N_("The colour of the Project in the main window."), "priority": N_("Projects with a higher number get free places first."),
     "owner": N_("How the Queens and Agents call you in their texts."), "language": N_("The language of the texts HaiveQueen writes to you for this Project."),
     "ownerTopics": N_("Questions about these topics are never answered automatically."), "ownerCheckText": N_("The question HaiveQueen asks you when a plan is integrated."),
     "compileCheckEnabled": N_("Check that the code compiles and the tests pass before integration."), "buildEnabled": N_("Build the product after integration."),
-    "deployEnabled": N_("Deploy the built product after integration."), "integrationBranch": N_("The branch finished plans are merged into."),
-    "remoteName": N_("The Git remote HaiveQueen pushes to and fetches from."), "worktreeLocation": N_("The folder that holds the worktrees of the Agents; a relative path counts from the repository."),
+    "deployEnabled": N_("Deploy the built product after integration."), "integrationBranch": N_("The branch finished plans are merged into; empty: the default branch of the remote, else main."),
+    "remoteName": N_("The Git remote HaiveQueen pushes to and fetches from; choose it because the repository has several and none is named origin."), "worktreeLocation": N_("The folder that holds the worktrees of the Agents; a relative path counts from the repository."),
     "deleteFinishedWorktrees": N_("Remove a worktree once its work is integrated and nothing is lost."),
     "deleteIntegratedBranches": N_("Remove plan branches once they are integrated and nothing is lost."),
     "publishReleases": N_("Publish a GitHub release of the repository at each integration."), "nextVersion": N_("The version of the next release, for example 2.1.0."),
     "planGlobs": N_("Where the plans are found, relative to the folder with the settings."), "planExclude": N_("Files matching a plan pattern that are not plans."),
     "ignoredBuildOutput": N_("Files the build writes that do not count as changes."), "buildFlowDoc": N_("A document that describes how the product is built."),
     "integratorInstructions": N_("Text added to the instructions of the integrating Queen."), "buildProcessNames": N_("Running programs that show a build is still busy."),
-    "compileCheck": N_("The command that compiles the code and runs the tests."), "claudeTools": N_("The tools available to a Claude agent, separated by commas."),
+    "compileCheck": N_("The command that compiles the code and runs the tests before integration; empty: no compile check."), "claudeTools": N_("The tools available to a Claude agent, separated by commas."),
     "protectedWorktrees": N_("Worktrees that are never removed automatically."),
     "onEvent.command": N_("A program started after each event, for example to sync files."), "onEvent.workDir": N_("The folder the command runs in."),
-    "onEvent.timeoutSeconds": N_("The command is stopped after this many seconds."), "views.queue": N_("A Markdown file that shows the queue."),
+    "onEvent.timeoutSeconds": N_("The command is stopped after this many seconds."),
+    "upstreamRules": N_("Reads AGENTS.md and CLAUDE.md of the Git remote named upstream (last fetch) or of the upstream folder."), "views.queue": N_("A Markdown file that shows the queue."),
     "views.questions": N_("A Markdown file that shows the open questions."), "views.decisions": N_("A Markdown file that shows the decisions."),
     "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
 }
-GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model")}
-GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class.")}
+GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model"),
+                  "owner": N_("Owner name"), "queenClass": N_("Queen class"), "beesPerQueen": N_("Agents per Queen")}
+GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class."),
+                "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("The model class of the Queens (light, medium or heavy)."),
+                "beesPerQueen": N_("How many Agents a Queen may have running at the same time.")}
 SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Project."), "allowedTools": N_("Commands agents of this Project may run without asking.")})
 OTHER_HELP = N_("A further setting of this Project, as written in its settings file.")   # the explanation of a setting the page has no own text for
 # Owner decision 741: the main part of the Apiary page, the collapsed section Advanced and the keys the page never shows as fields of their own.
@@ -665,27 +671,6 @@ class ConfigWindow(ProviderPages):
         for name in sorted(registered):
             if name not in listed and registered[name][0] and Path(registered[name][0]).is_dir():
                 self.apiaries.append(self.apiary_record(None, registered, name))
-        self.migrate_allowed_tools()
-
-    def migrate_allowed_tools(self):
-        """Stage provider grants for branches unique to one existing Project."""
-        for provider in self.data.get("providers") or []:
-            rest, tools, position = split_args(provider.get("args"))
-            keep = []
-            for tool in tools:
-                matches = [a for a in self.apiaries
-                           if re.search(r"(?<![\w./-])" + re.escape(str(a["file"].get("integrationBranch") or "main")) + r"(?![\w./-])", tool)]
-                if len(matches) != 1 or not matches[0]["exists"]:
-                    keep.append(tool)
-                    continue
-                target = matches[0]["file"].setdefault("allowedTools", [])
-                if not isinstance(target, list):
-                    keep.append(tool)
-                    continue
-                if tool not in target:
-                    target.append(tool)
-            if keep != tools:
-                provider["args"] = join_args(rest, keep, position)
 
     def apiary_record(self, entry, registered, name=None):
         """The record of one Project: its entry in config.toml (None for a Project only in the database), its name, the workspace whose project.toml it uses
@@ -809,6 +794,7 @@ class ConfigWindow(ProviderPages):
         self.login_status = self.login_button = self.benchmark_button = self.benchmark_status = None   # benchmark_status stays None: no text on the page
         self.ready_label = self.test_button = self.result_label = None
         self.sections, self.notes, self.note_sources, self.frame_of = [], {}, {}, {}
+        self.rule_vars, self.rule_lines, self.upstream_var, self.upstream_check, self.upstream_note = {}, {}, None, None, None   # the knowledge base of a Project page
 
     # Build the form of the shown part.
     def build_form(self):
@@ -839,7 +825,10 @@ class ConfigWindow(ProviderPages):
         shown.setdefault("slots", 2)
         shown.setdefault("roundMinutes", 5)
         shown.setdefault("escalateAfter", 3)
-        main = {k: shown.pop(k) for k in ("language", "slots", "roundMinutes", "escalateAfter") if k in shown}
+        shown.setdefault("owner", "")
+        shown.setdefault("queenClass", "medium")
+        shown.setdefault("beesPerQueen", 3)
+        main = {k: shown.pop(k) for k in ("language", "slots", "owner", "queenClass", "beesPerQueen", "roundMinutes", "escalateAfter") if k in shown}
         self.fields(self.form, main, ())
         box = self.advanced_section()
         self.fields(box, shown, ())
@@ -847,44 +836,119 @@ class ConfigWindow(ProviderPages):
         self.initial_values = {path: getter() for path, getter, _like in self.getters}
         self.initial_build = tuple(v.get() for v in self.build_vars) if self.build_vars else None
 
+    def place_row(self, parent, key, value):
+        """The row of Repository or Plans folder (an editor of ("place", key)); typing a folder shows the settings found there."""
+        holder, cell = self.field_row(parent, ("place", key))
+        var = self.tk.StringVar(value=value)
+        entry_widget = self.tk.Entry(holder, textvariable=var, width=PATH_WIDTH, font=(self.mono, 10))
+        entry_widget.pack(side="left")
+        entry_widget.bind("<FocusOut>", self.workspace_entered, add="+")   # the settings of an existing project.toml appear when the folder is entered
+        entry_widget.bind("<Return>", self.workspace_entered, add="+")
+        self.explain(cell, ("place", key))
+        self.getters.append((("place", key), var.get, value))
+
+    def group_box(self, parent, title):
+        """A framed group of fields inside the page; returns the frame."""
+        row = self.tk.Frame(parent)
+        row.pack(fill="x", pady=2, anchor="w")
+        box = self.tk.LabelFrame(row, text=tr(title), padx=6, pady=4)
+        box.pack(anchor="w")
+        return box
+
     def apiary_form(self):
-        """The page of one Project (owner decision 741): Name, Repository and Plans folder, the settings a normal user needs, each with a label and one line of
-        explanation, and the collapsed section Advanced with the other settings of its project.toml; every setting once."""
+        """The page of one Project (P-8): the main part Repository, Name, Integration branch and Compile check command; the Knowledge base; and the collapsed
+        section Advanced with the fields of P-2. Each field has a label and one line of explanation; no other field, no free setting row."""
+        from . import projsettings
         apiary = self.apiaries[self.node[1]]
         entry = apiary["entry"]
+        data = apiary["file"]
         if entry is not None:
             self.adopt_workspace(apiary)
-            self.fields(self.form, {"name": str(entry.get("name") or "")}, ("entry",))
+        repository, plans = apiary_place(apiary["workspace"], data)
+        self.place_row(self.form, "repository", repository)
+        if entry is not None:
+            self.fields(self.form, {"name": str(entry.get("name") or projsettings.default_name(repository))}, ("entry",))
         else:
             holder, cell = self.field_row(self.form, ("entry", "name"))
             self.tk.Label(holder, text=apiary["name"], anchor="w", font=(self.mono, 10)).pack(side="left")
             self.explain(cell, ("entry", "name"))
-        repository, plans = apiary_place(apiary["workspace"], apiary["file"])
-        for key, value in (("repository", repository), ("plansFolder", plans)):
-            holder, cell = self.field_row(self.form, ("place", key))
-            var = self.tk.StringVar(value=value)
-            entry_widget = self.tk.Entry(holder, textvariable=var, width=PATH_WIDTH, font=(self.mono, 10))
-            entry_widget.pack(side="left")
-            entry_widget.bind("<FocusOut>", self.workspace_entered, add="+")   # the settings of an existing project.toml appear when the folder is entered
-            entry_widget.bind("<Return>", self.workspace_entered, add="+")
-            self.explain(cell, ("place", key))
-            self.getters.append((("place", key), var.get, value))
-        shown = {k: v for k, v in apiary["file"].items() if k not in HIDDEN_KEYS}   # the name is that of config.toml, the folders are Repository and Plans folder (no setting twice)
-        shown.setdefault("language", "")
-        shown.setdefault("escalateAfter", "")
-        shown = release_fields(apiary_settings(shown, apiary["legacy"]), self.github_repository(shown))
-        main = {key: shown.pop(key) for key in MAIN_KEYS if key in shown}
-        for key, default in ADVANCED_DEFAULTS:
-            shown.setdefault(key, list(default) if isinstance(default, list) else default)
-        advanced = {key: shown.pop(key) for key, _default in ADVANCED_DEFAULTS}
-        advanced.update(shown)
-        self.fields(self.form, main, ("file",))
+        known = bool(repository) and Path(repository).is_dir()
+        remote, needed = projsettings.derive_remote(repository, data.get("remoteName")) if known else ("origin", False)
+        branch = data.get("integrationBranch") or (projsettings.default_branch(repository, remote or "origin") if known else "main")
+        self.fields(self.form, {"integrationBranch": str(branch), "compileCheck": str(data.get("compileCheck") or "")}, ("file",))
+        self.knowledge_section(data, repository if known else "")
+        full = apiary_settings(dict(data), apiary["legacy"])
         box = self.advanced_section()
-        if entry is not None:
-            self.fields(box, {k: v for k, v in entry.items() if k not in ("name", "workspace")}, ("entry",))   # other values of its entry in config.toml
-        self.fields(box, advanced, ("file",))
-        self.add_row(box, ("file",))
+        group = self.group_box(box, N_("Plans"))
+        self.place_row(group, "plansFolder", plans)
+        self.fields(group, {"plans": projsettings.globs_to_plans(*projsettings.plans_to_globs(data))}, ("file",), add=False)
+        remotes = projsettings.remotes_of(repository) if known else []
+        explicit = str(data.get("remoteName") or "").strip()
+        if needed or (explicit and explicit != projsettings.rule_remote(remotes)):
+            self.fields(box, {"remoteName": explicit}, ("file",), add=False)
+        release = {}
+        if self.github_repository({"remoteName": remote or "origin"}):
+            release = {key: full[key] for key in RELEASE_KEYS}
+        event = data.get("onEvent") if isinstance(data.get("onEvent"), dict) else {}
+        advanced = {"worktreeLocation": full["worktreeLocation"], "buildEnabled": full["buildEnabled"], "deployEnabled": full["deployEnabled"],
+                    "deleteFinishedWorktrees": full["deleteFinishedWorktrees"], "deleteIntegratedBranches": full["deleteIntegratedBranches"], **release,
+                    "onEvent": {"command": event.get("command", []), "workDir": event.get("workDir", ""), "timeoutSeconds": event.get("timeoutSeconds", 180)},
+                    "colour": data.get("colour", ""), "priority": data.get("priority", 0), "buildProcessNames": data.get("buildProcessNames", []),
+                    "ownerTopics": full["ownerTopics"], "buildFlowDoc": data.get("buildFlowDoc", ""), "integratorInstructions": data.get("integratorInstructions", "")}
+        self.fields(box, advanced, ("file",), add=False)
         self.initial_values = {path: getter() for path, getter, _like in self.getters}
+
+    def knowledge_section(self, data, repository):
+        """The section Knowledge base (P-9): one line per rule file every agent of the Project gets, with its path, its size in tokens and a switch, the switch
+        for the rules of the upstream repository and a note that HaiveQueen's own role texts are always added."""
+        from . import profile
+        tk = self.tk
+        box = tk.LabelFrame(self.form, text=tr("Knowledge base"), padx=6, pady=4)
+        box.pack(fill="x", pady=(10, 2), anchor="w")
+        width = PATH_WIDTH * self.char_px
+        tk.Label(box, text=tr("The rule files every agent of this Project gets. A switched-off file is given to no agent."), anchor="w", justify="left",
+                 fg=self.col["dim"], font=(self.mono, 9), wraplength=width).pack(anchor="w")
+        entries = profile.rule_entries(data, repository) if repository else []
+        for item in entries:
+            row = tk.Frame(box)
+            row.pack(fill="x", anchor="w", pady=1)
+            var = tk.BooleanVar(value=item["on"])
+            tk.Checkbutton(row, variable=var).pack(side="left", anchor="n")
+            text = tr("%s, %d tokens", item["path"], item["tokens"])
+            clis = profile.cli_clis(item["name"]) if not item["upstream"] else []
+            if clis:
+                text += " - " + tr("still loaded by %s itself", " / ".join(clis))
+            line = tk.Label(row, text=text, anchor="w", justify="left", font=(self.mono, 9), wraplength=width)
+            line.pack(side="left", anchor="n")
+            self.rule_vars[item["label"]] = var
+            self.rule_lines[item["label"]] = line
+        if not entries:
+            tk.Label(box, text=tr("No AGENTS.md or CLAUDE.md is checked in to the repository."), anchor="w", font=(self.mono, 9)).pack(anchor="w")
+        extra = [str(x) for x in data.get("rulesOff") or [] if str(x) not in self.rule_vars]   # switched-off files that are not listed now stay as they are
+
+        def off() -> list:
+            """The labels of the switched-off files."""
+            return [label for label, var in self.rule_vars.items() if not var.get()] + extra
+        self.getters.append((("file", "rulesOff"), off, off()))
+        self.rows[("file", "rulesOff")] = box
+        state = profile.upstream_state(data, repository)
+        self.upstream_var = tk.BooleanVar(value=state["on"])
+        self.upstream_check = tk.Checkbutton(box, text=tr(SETTING_LABELS["upstreamRules"]), variable=self.upstream_var, anchor="w", command=self.upstream_clicked,
+                                             state="normal" if state["usable"] else "disabled")
+        self.upstream_check.pack(anchor="w", pady=(6, 1))
+        self.getters.append((("file", "upstreamRules"), self.upstream_var.get, state["on"]))
+        self.rows[("file", "upstreamRules")] = box
+        tk.Label(box, text=tr(SETTING_HELP["upstreamRules"]), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9), wraplength=width).pack(anchor="w")
+        flagged = not state["usable"] or bool(state["note"])
+        self.upstream_note = tk.Label(box, text=tr(state["note"]) if state["note"] else "", anchor="w", justify="left", fg=self.col["red"] if flagged else self.col["dim"],
+                                      font=(self.mono, 9), wraplength=width)
+        self.upstream_note.pack(anchor="w")
+        tk.Label(box, text=tr("HaiveQueen's own role texts are always added."), anchor="w", fg=self.col["dim"], font=(self.mono, 9)).pack(anchor="w", pady=(4, 0))
+
+    def upstream_clicked(self):
+        """The upstream switch was clicked: keep the typed values and show the page again so the upstream files appear or go."""
+        if self.collect():
+            self.build_form()
 
     def advanced_section(self):
         """The section Advanced below the main settings of a Project page, collapsed until the owner opens it; returns the frame its fields go into."""
@@ -1115,7 +1179,7 @@ class ConfigWindow(ProviderPages):
         self.win.after(2000, check)
 
     # Rows for the keys of a dict.
-    def fields(self, parent, data, path):
+    def fields(self, parent, data, path, add=True):
         """Add one labelled editor per key of `data` below `parent`; `path` names the nesting for the collected values."""
         tk = self.tk
         for key, value in data.items():
@@ -1124,8 +1188,9 @@ class ConfigWindow(ProviderPages):
                 row.pack(fill="x", pady=2, anchor="w")
                 box = tk.LabelFrame(row, text=self.text_of(path + (key,)), padx=6, pady=4)
                 box.pack(anchor="w")   # as wide as its fields need (owner decision 742)
-                self.fields(box, value, path + (key,))
-                self.add_row(box, path + (key,))
+                self.fields(box, value, path + (key,), add)
+                if add:
+                    self.add_row(box, path + (key,))
                 continue
             holder, cell = self.field_row(parent, path + (key,))
             self.getters.append((path + (key,), self.editor(holder, key, value), value))
@@ -1240,7 +1305,13 @@ class ConfigWindow(ProviderPages):
             target = data
             for step in path[:-1]:
                 target = target.setdefault(step, {})
-            if self.node[0] == "apiaries" and path in (("file", "language"), ("file", "escalateAfter")) and not str(raw).strip():
+            if self.node[0] == "apiaries" and path == ("file", "rulesOff") and not raw:
+                target.pop("rulesOff", None)
+            elif self.node[0] == "apiaries" and path == ("file", "plans"):
+                target["plans"] = [line for line in raw if str(line).strip()]
+                target.pop("planGlobs", None)
+                target.pop("planExclude", None)
+            elif self.node[0] == "apiaries" and path in (("file", "language"), ("file", "escalateAfter")) and not str(raw).strip():
                 target.pop(path[-1], None)
             elif self.node[0] == "apiaries" and path == ("file", "escalateAfter"):
                 try:

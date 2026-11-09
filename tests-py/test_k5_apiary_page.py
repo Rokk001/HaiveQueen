@@ -181,7 +181,7 @@ class ApiaryPageTests(ApiaryPageCase):
         shown = self.shown(win)
         self.assertEqual(shown[("place", "repository")], str(self.code))
         self.assertEqual(shown[("place", "plansFolder")], str(self.plans))
-        self.assertEqual(shown[("file", "planGlobs")], ["plans/*-PLAN.md"])
+        self.assertEqual(shown[("file", "plans")], ["plans/*-PLAN.md", "!plans/*-STATE.md"])
         self.assertEqual(shown[("file", "compileCheck")], "python.exe -W ignore -m unittest discover -s tests-py -p test*.py")
         keys = [path[-1] for path in shown]
         self.assertEqual(len(keys), len(set(keys)), keys)   # (4): no setting twice
@@ -261,41 +261,43 @@ class ApiaryPageTests(ApiaryPageCase):
         labels = [w.cget("text") for w in descendants(win.form) if w.winfo_class() in ("Label", "Labelframe")]
         self.assertFalse([text for text in labels if text in INTERNAL], labels)
         for path, _getter, _like in win.getters:
+            if path == ("file", "rulesOff"):
+                continue   # the lines of the Knowledge base carry their own texts
             name = ".".join(path[1:])
             self.assertIn(name, gui_config.SETTING_LABELS, path)
             self.assertIn(name, gui_config.SETTING_HELP, path)
-        for label in ("Repository", "Plans folder (empty: docs/plans of the repository)", "Worktree location (empty: beside the repository)"):
+        for label in ("Repository", "Plans folder (empty: the repository)", "Worktree location (empty: beside the repository)"):
             self.assertIn(label, labels)
 
-    def test_a_setting_without_own_label_gets_a_readable_one_in_advanced(self):
+    def test_a_setting_without_a_field_is_not_shown(self):
         path = self.plain / ".haivequeen" / "project.toml"
-        path.write_text(self.plain_text + 'planSuffixRegex = "-?PLAN$"\n\n[minClass]\nverify = "medium"\n', encoding="utf-8")
+        path.write_text(self.plain_text + 'planSuffixRegex = "-?PLAN$"' + chr(10) * 2 + '[minClass]' + chr(10) + 'verify = "medium"' + chr(10), encoding="utf-8")
         win = self.window("Plain")
         win.advanced_button.invoke()
         labels = [w.cget("text") for w in descendants(win.form) if w.winfo_class() in ("Label", "Labelframe")]
-        self.assertIn("Plan suffix regex", labels)
-        self.assertIn("Min class", labels)
-        self.assertNotIn("planSuffixRegex", labels)
-        self.assertNotIn("minClass", labels)
-        self.assertIn(gui_config.OTHER_HELP, labels)
-        self.assertTrue(str(win.rows[("file", "planSuffixRegex")]).startswith(str(win.advanced_box)))
+        self.assertNotIn("Plan suffix regex", labels)
+        self.assertNotIn("Min class", labels)
+        self.assertNotIn(gui_config.OTHER_HELP, labels)
+        self.assertNotIn(("file", "planSuffixRegex"), self.shown(win))
         self.assertEqual(gui_config.readable("paneCloseDelaySeconds"), "Pane close delay seconds")
         self.assertEqual(gui_config.readable("APIKey"), "API key")
 
     def test_advanced_settings_are_collapsed_until_opened(self):
         win = self.window("HaiveQueen")
         win.win.update()
-        paths = {path[1] for path, _g, _l in win.getters}
-        advanced = {key for key, _default in gui_config.ADVANCED_DEFAULTS}
-        self.assertTrue(advanced <= paths)
-        self.assertFalse([key for key in advanced if win.rows[("file", key)].winfo_ismapped()])
-        self.assertTrue(win.rows[("file", "worktreeLocation")].winfo_ismapped())
+        paths = {path for path, _g, _l in win.getters}
+        advanced = {path for path in paths if path[0] == "file" and path[1] in ("plans", "worktreeLocation", "buildEnabled", "deployEnabled", "colour", "priority",
+                                                                               "buildProcessNames", "ownerTopics", "buildFlowDoc", "integratorInstructions")}
+        self.assertEqual(len(advanced), 10)
+        self.assertFalse([path for path in advanced if win.rows[path].winfo_ismapped()])
+        self.assertTrue(win.rows[("file", "compileCheck")].winfo_ismapped())
+        self.assertTrue(win.rows[("file", "integrationBranch")].winfo_ismapped())
         win.advanced_button.invoke()
         win.win.update()
-        self.assertTrue(all(win.rows[("file", key)].winfo_ismapped() for key in advanced))
+        self.assertTrue(all(win.rows[path].winfo_ismapped() for path in advanced))
         win.select(win.entries.index(("apiaries", 0)))   # the section stays open on the next page
         win.win.update()
-        self.assertTrue(win.rows[("file", "planGlobs")].winfo_ismapped())
+        self.assertTrue(win.rows[("file", "plans")].winfo_ismapped())
 
     def test_github_remote_is_read_from_the_repository(self):
         with mock.patch("haivequeen.publish.github_repository", return_value=None) as remote:
@@ -349,7 +351,7 @@ class FieldSizeTests(ApiaryPageCase):
             win.build_form()
             self.check_page(win, geometry)
             win.win.update()
-            columns = {win.rows[path].winfo_rootx() for path in win.rows if path[0] in ("place", "entry") or (path[0] == "file" and len(path) == 2)}
+            columns = {win.rows[path].winfo_rootx() for path in win.rows if path in (("place", "repository"), ("entry", "name")) or (path[0] == "file" and len(path) == 2 and path[1] not in ("plans", "rulesOff", "upstreamRules"))}
             self.assertEqual(len(columns), 1, "Project: labels and fields in one column each")
 
     def test_short_and_path_fields(self):

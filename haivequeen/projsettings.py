@@ -20,7 +20,7 @@ KEPT_KEYS = (
     "name", "codeRepo", "integrationBranch", "compileCheck",
     "plans", "worktreeLocation", "buildEnabled", "deployEnabled", "deleteFinishedWorktrees", "deleteIntegratedBranches",
     "publishReleases", "nextVersion", "onEvent", "colour", "priority", "buildProcessNames", "ownerTopics", "buildFlowDoc", "integratorInstructions",
-    "worktreePrefix", "upstreamRepo",
+    "worktreePrefix", "upstreamRepo", "upstreamRules", "rulesOff",
     "prompts", "readyCheckClass", "readyCheckTimeoutSec", "agentStallSeconds", "rateLimitWaitMinutes", "retryWaitMinutes", "clockJumpSeconds",
 )
 GENERAL_NOTE = "the General value applies"

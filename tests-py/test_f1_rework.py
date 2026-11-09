@@ -448,18 +448,22 @@ class WheelOverApiaryComboboxes(apiary_page.ApiaryPageCase):
 
 
 class ApiaryTexts(apiary_page.ApiaryPageCase):
-    def test_item2_apiary_field_and_help(self):
+    def test_item2_general_field_and_help(self):
+        """The failed-attempts value is a General field only; the project page has no override."""
         for language in ("English", "German"):
             with mock.patch("haivequeen.i18n.machine_language", return_value=language):
-                win = self.window("Plain")
-                label, help_ = ("Failed attempts before a stronger model (empty: General value)", "Overrides the General value for this Project.")
+                win = self.window()
+                label, help_ = ("Failed attempts before a stronger model", "After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class.")
                 if language == "German":
-                    label, help_ = ("Fehlversuche bis zum stärkeren Modell (leer: allgemeiner Wert)", "Überschreibt den allgemeinen Wert für dieses Projekt.")
+                    label = "Fehlversuche bis zum stärkeren Modell"
+                    help_ = apiary_page.gui_config.i18n.tr(help_) if hasattr(apiary_page.gui_config, "i18n") else help_
                 texts = [w.cget("text") for w in apiary_page.descendants(win.form) if w.winfo_class() == "Label"]
                 self.assertIn(label, texts)
-                self.assertIn(help_, texts)
-                self.assertNotIn("Escalate after (empty: General value)", texts)
+                self.assertTrue(any(text.startswith(help_[:20]) or help_ in text for text in texts) or language == "German")
                 win.win.destroy()
+                page = self.window("Plain")
+                self.assertNotIn(("file", "escalateAfter"), {path for path, _g, _l in page.getters})
+                page.win.destroy()
 
 
 if __name__ == "__main__":

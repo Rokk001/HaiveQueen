@@ -288,28 +288,119 @@ def tracked(repo, name) -> bool:
     return r.returncode == 0 and (Path(repo) / name).is_file()
 
 
-def project_rules(settings, repo, protocol=None, cwd=None) -> dict:
-    """The complete project rules: the instruction files checked in to the project repository `repo` plus those of the upstream repository when the
-    Project's settings name one (`upstreamRepo`); without that setting there are none. Returns {"inline": [(label, text)], "byProvider": [label]}.
-    A file that the provider loads by itself from `cwd` (checked in there) is listed under byProvider and not copied again; files with the same text count once."""
-    sources = [("", Path(repo))] if repo else []
-    up = str((settings or {}).get(UPSTREAM_KEY) or "").strip()
-    if up:
-        sources.append(("upstream ", Path(up)))
-    inline, by_provider, seen = [], [], set()
-    for prefix, root in sources:
+CLI_NAMES = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}   # display names of the CLIs that load an instruction file themselves
+OFF_KEY = "rulesOff"   # setting of the Project: labels of the rule files that are switched off
+SWITCH_KEY = "upstreamRules"   # setting of the Project: use the rules of the upstream repository (default: on only with an upstreamRepo folder)
+NOT_FETCHED = "not fetched yet"
+
+
+def _git_out(repo, *args):
+    """Output of a git command in `repo`, or None when it fails."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.decode("utf-8-sig", "replace") if r.returncode == 0 else None
+
+
+def upstream_ref(repo) -> str:
+    """The last fetched default branch of the Git remote named upstream (as refs/remotes/upstream/<branch>), or '' when there is none."""
+    head = (_git_out(repo, "symbolic-ref", "refs/remotes/upstream/HEAD") or "").strip()
+    if head and _git_out(repo, "rev-parse", "--verify", "-q", head) is not None:
+        return head
+    names = [r.strip() for r in (_git_out(repo, "for-each-ref", "--format=%(refname)", "refs/remotes/upstream/") or "").splitlines() if r.strip()]
+    names = [r for r in names if not r.endswith("/HEAD")]
+    for preferred in ("main", "master"):
+        if "refs/remotes/upstream/" + preferred in names:
+            return "refs/remotes/upstream/" + preferred
+    return names[0] if names else ""
+
+
+def upstream_state(settings, repo) -> dict:
+    """The upstream rules of a Project: {"source": "folder"|"remote"|"" , "usable", "on", "fetched", "note"}.
+    The source is the folder of the setting upstreamRepo when it is set (it wins), else the Git remote named upstream. The switch (setting upstreamRules) is
+    on by default only with a folder; without a folder and without that remote it is not usable and never on. A remote that was never fetched gives no files."""
+    from . import projsettings
+    settings = settings or {}
+    folder = str(settings.get(UPSTREAM_KEY) or "").strip()
+    if folder:
+        source = "folder"
+    elif repo and "upstream" in projsettings.remotes_of(repo):
+        source = "remote"
+    else:
+        source = ""
+    if not source:
+        return {"source": "", "usable": False, "on": False, "fetched": False,
+                "note": "There is no Git remote named upstream and no upstream folder, so there are no upstream rules to use."}
+    on = bool(settings[SWITCH_KEY]) if SWITCH_KEY in settings else source == "folder"
+    fetched = True if source == "folder" else bool(upstream_ref(repo))
+    return {"source": source, "usable": True, "on": on, "fetched": fetched, "note": NOT_FETCHED if on and not fetched else ""}
+
+
+def tokens_of(text) -> int:
+    """The size of a text in tokens, estimated as one token per four characters (at least 1 for a text)."""
+    return max(1, (len(text) + 3) // 4) if text else 0
+
+
+def cli_clis(name) -> list:
+    """The display names of the CLIs that load the rule file `name` themselves from their folder (they cannot be kept from it), or []."""
+    return [CLI_NAMES[p] for p, files in OWN_FILES.items() if name in files and p in CLI_NAMES]
+
+
+def cli_note(name) -> str:
+    """The sentence naming the CLIs that load the rule file `name` themselves, or ''."""
+    clis = cli_clis(name)
+    return "still loaded by %s itself" % " / ".join(clis) if clis else ""
+
+
+def rule_entries(settings, repo) -> list:
+    """Every rule file the Project's agents get: [{"label", "name", "upstream", "path", "text", "tokens", "on", "note"}]. The files are AGENTS.md and CLAUDE.md
+    checked in to the repository, and those of the upstream repository when its switch is on; "on" is False for a file listed in the setting rulesOff.
+    Files with the same text count once; a file that is empty or not checked in is not listed."""
+    settings = settings or {}
+    off = {str(x) for x in settings.get(OFF_KEY) or []}
+    entries, seen = [], set()
+
+    def add(prefix, name, path, text):
+        text = (text or "").strip()
+        label = prefix + name
+        if not text or text in seen:
+            return
+        seen.add(text)
+        note = cli_note(name) if not prefix else ""
+        entries.append({"label": label, "name": name, "upstream": bool(prefix), "path": str(path), "text": text, "tokens": tokens_of(text),
+                        "on": label not in off, "note": note})
+    if repo:
         for name in RULE_FILES:
-            if not tracked(root, name):
-                continue
-            text = (root / name).read_text(encoding="utf-8-sig").strip()
-            label = prefix + name
-            if not text or text in seen:
-                continue
-            seen.add(text)
-            if not prefix and cwd and name in OWN_FILES.get(str(protocol or ""), ()) and tracked(cwd, name):
-                by_provider.append(label)
+            if tracked(repo, name):
+                add("", name, Path(repo) / name, (Path(repo) / name).read_text(encoding="utf-8-sig"))
+    state = upstream_state(settings, repo)
+    if state["usable"] and state["on"] and state["fetched"]:
+        for name in RULE_FILES:
+            if state["source"] == "folder":
+                root = Path(str(settings.get(UPSTREAM_KEY)).strip())
+                if tracked(root, name):
+                    add("upstream ", name, root / name, (root / name).read_text(encoding="utf-8-sig"))
             else:
-                inline.append((label, text))
+                ref = upstream_ref(repo)
+                text = _git_out(repo, "show", "%s:%s" % (ref, name))
+                add("upstream ", name, "%s:%s" % (ref.replace("refs/remotes/", ""), name), text)
+    return entries
+
+
+def project_rules(settings, repo, protocol=None, cwd=None) -> dict:
+    """The complete project rules: all switched-on rule files (see rule_entries): the instruction files checked in to the project repository `repo` plus the
+    upstream ones when that switch is on. Returns {"inline": [(label, text)], "byProvider": [label]}.
+    A file that the provider loads by itself from `cwd` (checked in there) is listed under byProvider and not copied again; a switched-off file is in neither."""
+    inline, by_provider = [], []
+    for entry in rule_entries(settings, repo):
+        if not entry["on"]:
+            continue
+        if not entry["upstream"] and cwd and entry["name"] in OWN_FILES.get(str(protocol or ""), ()) and tracked(cwd, entry["name"]):
+            by_provider.append(entry["label"])
+        else:
+            inline.append((entry["label"], entry["text"]))
     return {"inline": inline, "byProvider": by_provider}
 
 
