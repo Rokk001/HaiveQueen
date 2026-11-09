@@ -1,8 +1,35 @@
 """Background loading for the windows: data is read in a thread of its own and shown by the window's event loop when it is ready,
 so a slow read never delays a click, a key press, a move or a resize (every window lives in the same event loop)."""
+import gc
 import threading
 
 from . import db
+
+# The garbage collector may run in any thread. A Tk image or variable that is only freed by it (never released by its window) would then call into Tcl from
+# a worker thread, which waits for the event loop of the main thread and holds the thread, and the lock files it holds, for good. So no collection runs
+# while a worker is reading; the main thread collects afterwards.
+_gc_lock = threading.Lock()
+_workers = 0
+_gc_was_on = False
+
+
+def _workers_start():
+    """A worker starts: stop the collector if it is the first one."""
+    global _workers, _gc_was_on
+    with _gc_lock:
+        if _workers == 0:
+            _gc_was_on = gc.isenabled()
+            gc.disable()
+        _workers += 1
+
+
+def _workers_stop():
+    """A worker has finished: start the collector again when it was the last one (and was on before)."""
+    global _workers
+    with _gc_lock:
+        _workers -= 1
+        if _workers == 0 and _gc_was_on:
+            gc.enable()
 
 
 # The file of a connection.
@@ -33,6 +60,8 @@ def run_async(widget, work, done, failed=None, poll_ms=25):
             box["value"] = work()
         except BaseException as exc:   # a failed read is shown by the window, never lost
             box["error"] = exc
+        finally:
+            _workers_stop()
         box["done"] = True
 
     def poll():
@@ -51,7 +80,12 @@ def run_async(widget, work, done, failed=None, poll_ms=25):
         else:
             done(box["value"])
 
-    threading.Thread(target=target, daemon=True).start()
+    _workers_start()
+    try:
+        threading.Thread(target=target, daemon=True).start()
+    except BaseException:
+        _workers_stop()
+        raise
     widget.after(poll_ms, poll)
 
 

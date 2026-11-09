@@ -125,9 +125,10 @@ class QuestionsWindow:
             self.apply(fresh)
             again()
 
-        def failed(_exc):
-            """Try again at the next round."""
+        def failed(exc):
+            """Show the error; try again at the next round."""
             self.loading = False
+            self.status.config(text=tr("Reading the questions failed: %s", exc))
             again()
         gui_async.run_async(self.win, gui_async.with_connection(self.conn, open_questions), done, failed)
 
@@ -198,9 +199,10 @@ class QuestionsWindow:
             if now is None or now["id"] != q["id"]:
                 return
             self.show_packages(packages or [])
-        def failed(_exc):
-            """No steps are shown."""
+        def failed(exc):
+            """No steps are shown; the error is."""
             self.package_reads -= 1
+            self.status.config(text=tr("Reading the steps failed: %s", exc))
         self.package_reads += 1
         gui_async.run_async(self.win, gui_async.with_connection(self.conn, lambda conn: plan_packages(conn, project, plan)), done, failed)
 
