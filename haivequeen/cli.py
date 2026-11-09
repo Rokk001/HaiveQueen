@@ -100,23 +100,47 @@ def cmd_ready(args, conn) -> int:
     return 0
 
 
-# Run the compile check of the project for the Queen of a Hive.
+# Whether a path is the worktree of an Agent of the plan.
+def _agent_worktree(conn, project, plan, path) -> bool:
+    """True when `path` is the worktree of a process Agent row or a recorded Agent worktree of this plan."""
+    def norm(value):
+        return os.path.normcase(os.path.realpath(str(value))) if value else ""
+    wanted = norm(path)
+    if not wanted:
+        return False
+    known = [a.get("cwd") for a in runtime.list_agents(conn, project, scope="all") if a.get("phase") == "bee" and a.get("plan_path") == plan]
+    from haivequeen import bees
+    bees.ensure_attempts(conn)
+    known += [r[0] for r in conn.execute("SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=?", (project, plan)).fetchall()]
+    return any(norm(k) == wanted for k in known)
+
+
+# Run the compile check of the project for a Queen or an Agent.
 def cmd_compile_check(args, conn) -> int:
-    """Run the configured compile check in the worktree of the calling Queen and store the result for her run and current commit (bzz ready reads it); exit 0 only when it is green."""
+    """Run the configured compile check in the worktree of the caller (a Queen or a process Agent) or, with --worktree, in the worktree of an Agent of the plan, and wait for its end.
+    Only the result of the Queen in her own worktree is stored for `bzz ready`; the result of an Agent is stored for that Agent. Exit 0 only when it is green."""
     from haivequeen import hives, integration, scheduler as sch
     agent = os.environ.get("BZZ_AGENT")
     row = runtime.get_agent(conn, args.project, agent) if agent else None
-    if not row or row.get("phase") != "queen" or not _plan_matches(conn, args.project, row.get("plan_path"), args.plan) or hives.get(conn, args.project, row.get("plan_path")) is None:
-        return fail("compile-check refused: not this Plan's Queen")
+    if not row or row.get("phase") not in ("queen", "bee") or not _plan_matches(conn, args.project, row.get("plan_path"), args.plan) or hives.get(conn, args.project, row.get("plan_path")) is None:
+        return fail("compile-check refused: not this Plan's Queen or Agent")
     env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
     if env is None:
         return fail("compile-check refused: unknown project")
+    worktree = getattr(args, "worktree", None)
+    if worktree:
+        if not _agent_worktree(conn, args.project, row.get("plan_path"), worktree):
+            return fail("compile-check refused: %s is not the worktree of an Agent of this Plan (foreign worktree)" % worktree)
+        cwd, key = str(worktree), integration.COMPILE_AGENT_KEY + os.path.normcase(os.path.realpath(str(worktree)))
+    else:
+        cwd = row.get("cwd")
+        key = None if row.get("phase") == "queen" else integration.COMPILE_AGENT_KEY + str(row.get("name"))
     if not integration.switches(env.settings)["compileCheck"] or not str(env.settings.get("compileCheck") or "").strip():
-        out({"ok": True, "skipped": "no compile check is configured or it is switched off for this Project"})
+        out({"ok": True, "skipped": "no compile check is configured or it is switched off for this Project; run your tests directly"})
         return 0
-    if not integration.head_commit(row.get("cwd")):
-        return fail("compile-check refused: the commit of the Queen's worktree cannot be read")
-    result = integration.run_compile_check(env, row)
+    if not integration.head_commit(cwd):
+        return fail("compile-check refused: the commit of the worktree cannot be read")
+    result = integration.run_compile_check(env, row, cwd=cwd, key=key, milestones=not worktree)
     out(result)
     return 0 if result["ok"] else 1
 
@@ -594,6 +618,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("compile-check")
     p.add_argument("--project", required=True)
     p.add_argument("--plan", required=True)
+    p.add_argument("--worktree", default=None)
     p.set_defaults(fn=cmd_compile_check)
 
     p = sub.add_parser("ask")
