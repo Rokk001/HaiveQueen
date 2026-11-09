@@ -454,22 +454,39 @@ def count_processes(names) -> int:
 
 # ---------------------------------------------------------------- RAM of a process tree (build measurement)
 
+_WIN_MEMORY_LOCK = threading.Lock()
+_WIN_MEMORY_API = None
+
+
+def _win_memory_api() -> tuple:
+    """Windows: returns (kernel32, Counters class) and sets the process memory function types exactly once.
+
+    Same reason as for the process snapshot: a class created per call made concurrent callers overwrite each other's argtypes."""
+    global _WIN_MEMORY_API
+    with _WIN_MEMORY_LOCK:
+        if _WIN_MEMORY_API is None:
+            from ctypes import wintypes
+
+            class Counters(ctypes.Structure):
+                """PROCESS_MEMORY_COUNTERS of psapi.h."""
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+
+            kernel = ctypes.windll.kernel32
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel.K32GetProcessMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.POINTER(Counters), wintypes.DWORD]
+            _WIN_MEMORY_API = (kernel, Counters)
+        return _WIN_MEMORY_API
+
+
 def _win_working_set_mb(pid: int) -> float:
     """Windows: the working set (RAM in use) of one process in MB; 0 when the process is gone or not accessible."""
-    from ctypes import wintypes
-
-    class Counters(ctypes.Structure):
-        """PROCESS_MEMORY_COUNTERS of psapi.h."""
-        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD), ("PeakWorkingSetSize", ctypes.c_size_t),
-                    ("WorkingSetSize", ctypes.c_size_t), ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                    ("QuotaPagedPoolUsage", ctypes.c_size_t), ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t), ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
-
-    kernel = ctypes.windll.kernel32
-    kernel.OpenProcess.restype = ctypes.c_void_p
-    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-    kernel.K32GetProcessMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.POINTER(Counters), wintypes.DWORD]
+    kernel, Counters = _win_memory_api()
     handle = kernel.OpenProcess(0x1000, False, int(pid))   # PROCESS_QUERY_LIMITED_INFORMATION
     if not handle:
         return 0.0

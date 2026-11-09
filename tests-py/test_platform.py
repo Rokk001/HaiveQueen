@@ -297,6 +297,28 @@ class TestWinSnapshotThreads(unittest.TestCase):
             thread.join()
         self.assertEqual(errors, [])
 
+    def test_working_set_from_many_threads_at_once(self):
+        """Several threads read the working set of this process at the same time; none may fail with a ctypes type error."""
+        import os
+        import threading
+        errors = []
+        start = threading.Barrier(8)
+
+        def worker():
+            start.wait()
+            try:
+                for _ in range(40):
+                    self.assertGreater(osplat._win_working_set_mb(os.getpid()), 0.0)
+            except Exception as exc:   # noqa: BLE001 - every failure is collected and reported
+                errors.append(repr(exc))
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()
