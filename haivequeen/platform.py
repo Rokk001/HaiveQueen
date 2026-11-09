@@ -11,6 +11,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from datetime import datetime
@@ -356,25 +357,44 @@ def _win_process_list() -> list:
     return [(pid, name) for pid, _parent, name in _win_snapshot()]
 
 
+_WIN_SNAPSHOT_LOCK = threading.Lock()
+_WIN_SNAPSHOT_API = None
+
+
+def _win_snapshot_api() -> tuple:
+    """Windows: returns (kernel32, ProcessEntry class) and sets the Toolhelp function types exactly once.
+
+    The structure class and the argtypes of the shared kernel32 functions must be the same for every caller: a class created
+    per call made concurrent callers (process cleanup and the build monitor) overwrite each other's argtypes, so ctypes rejected
+    a pointer to the other thread's ProcessEntry class."""
+    global _WIN_SNAPSHOT_API
+    with _WIN_SNAPSHOT_LOCK:
+        if _WIN_SNAPSHOT_API is None:
+            from ctypes import wintypes
+
+            class ProcessEntry(ctypes.Structure):
+                """PROCESSENTRY32W of tlhelp32.h."""
+                _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                            ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD),
+                            ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                            ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                            ("szExeFile", ctypes.c_wchar * 260)]
+
+            kernel = ctypes.windll.kernel32
+            kernel.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+            kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+            kernel.Process32FirstW.argtypes = kernel.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ProcessEntry)]
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            _WIN_SNAPSHOT_API = (kernel, ProcessEntry)
+        return _WIN_SNAPSHOT_API
+
+
 def _win_snapshot() -> list:
     """Windows: all (pid, parent pid, image name) triples from a Toolhelp snapshot.
 
     The Windows API is called directly: a helper program such as `tasklist` opens a console window each time when the caller
     (the graphical dashboard, a detached process) has no console of its own. Raises OSError when the snapshot cannot be taken."""
-    from ctypes import wintypes
-
-    class ProcessEntry(ctypes.Structure):
-        """PROCESSENTRY32W of tlhelp32.h."""
-        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
-                    ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
-                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
-                    ("szExeFile", ctypes.c_wchar * 260)]
-
-    kernel = ctypes.windll.kernel32
-    kernel.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
-    kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-    kernel.Process32FirstW.argtypes = kernel.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ProcessEntry)]
-    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel, ProcessEntry = _win_snapshot_api()
     snapshot = kernel.CreateToolhelp32Snapshot(0x2, 0)   # TH32CS_SNAPPROCESS
     if not snapshot or snapshot == ctypes.c_void_p(-1).value:
         raise OSError("process snapshot failed")

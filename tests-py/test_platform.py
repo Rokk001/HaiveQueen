@@ -274,5 +274,29 @@ class TestHiddenConsole(unittest.TestCase):
         self.assertIs(subprocess.Popen.__init__, before)
 
 
+@unittest.skipUnless(sys.platform == "win32", "needs the Windows Toolhelp API")
+class TestWinSnapshotThreads(unittest.TestCase):
+    def test_snapshot_from_many_threads_at_once(self):
+        """Several threads take a process snapshot at the same time; none may fail with a ctypes argument type error."""
+        import threading
+        errors = []
+        start = threading.Barrier(8)
+
+        def worker():
+            start.wait()
+            try:
+                for _ in range(40):
+                    self.assertTrue(osplat._win_snapshot())
+            except Exception as exc:   # noqa: BLE001 - every failure is collected and reported
+                errors.append(repr(exc))
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()
