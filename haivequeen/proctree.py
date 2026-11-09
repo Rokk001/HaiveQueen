@@ -105,6 +105,12 @@ def descendants(root, table=None) -> dict:
     return found
 
 
+def tree_cpu_seconds(root) -> float:
+    """The CPU time used so far by `root` and all processes below it, in seconds."""
+    pids = [int(root)] + list(descendants(root))
+    return sum(osplat.process_cpu_seconds(pid) for pid in pids)
+
+
 def _terminate(pid) -> None:
     """End one process at once."""
     try:

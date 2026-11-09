@@ -237,6 +237,44 @@ def process_start_time(pid):
 
 
 # Collect a process and everything it started, children before parents.
+def _win_cpu_seconds(pid: int) -> float:
+    """Windows: kernel plus user CPU time of one process in seconds; 0 when the process is gone or not accessible."""
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, int(pid))   # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return 0.0
+    try:
+        created, exited, kern, user = (wintypes.FILETIME() for _ in range(4))
+        if not kernel.GetProcessTimes(handle, *(ctypes.byref(t) for t in (created, exited, kern, user))):
+            return 0.0
+        return sum((t.dwHighDateTime << 32 | t.dwLowDateTime) for t in (kern, user)) / 1e7
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _linux_cpu_seconds(pid: int, proc: str = "/proc") -> float:
+    """Linux: user plus system CPU time of one process in seconds; 0 when the process is gone."""
+    try:
+        with open("%s/%s/stat" % (proc, pid), encoding="ascii", errors="replace") as stat:
+            fields = stat.read().rsplit(")", 1)[1].split()
+        return (int(fields[11]) + int(fields[12])) / float(os.sysconf("SC_CLK_TCK"))
+    except (OSError, ValueError, IndexError, AttributeError):
+        return 0.0
+
+
+def process_cpu_seconds(pid) -> float:
+    """CPU time used so far by one process in seconds (0 when it is gone or not readable)."""
+    try:
+        return _win_cpu_seconds(int(pid)) if is_windows() else _linux_cpu_seconds(int(pid))
+    except (OSError, ValueError, AttributeError):
+        return 0.0
+
+
 def _win_tree(pid: int) -> list:
     """Return `pid` and all its descendants from the process snapshot, deepest first.
 
