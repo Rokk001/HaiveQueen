@@ -625,6 +625,8 @@ GERMAN = {
     "Commands agents of this Project may run without asking.": "Befehle, die Agenten dieses Projekts ohne Nachfrage ausführen dürfen.",
     "Interface language": "Sprache der Oberfläche",
     "Agent slots": "Agentenplätze",
+    "Reading the questions failed: %s": "Die Fragen konnten nicht gelesen werden: %s",
+    "Reading the steps failed: %s": "Die Schritte konnten nicht gelesen werden: %s",
     "A further HaiveQueen setting, as written in config.toml.": "Eine weitere HaiveQueen-Einstellung, wie sie in config.toml steht.", "Plans": "Pläne",
     "not ready: %s": "nicht bereit: %s", "This provider is not ready: %s. It gets no work until this is fixed.": "Dieser Anbieter ist nicht bereit: %s. Er bekommt keine Arbeit, bis das behoben ist.",
     "Round length (minutes)": "Rundenlänge (Minuten)",
