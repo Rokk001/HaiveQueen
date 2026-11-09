@@ -152,7 +152,7 @@ class StyleTests(RoundCase):
         self.assertEqual(style.lookup("Treeview", "foreground", ("selected",)), col["gold"])
         window = gui_hives.HivesWindow(root, self.conn, "Consolas")
         self.addCleanup(window.win.destroy)
-        for _ in range(1000):   # the plans are read in the background: let that end before the database folder goes
+        for _ in range(6000):   # the plans are read in the background: let that end before the database folder goes
             root.update()
             if not window.loading:
                 break

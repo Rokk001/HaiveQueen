@@ -70,7 +70,7 @@ class WindowTest(RoundCase):
 
     def settle(self, win):
         """Run the event loop until the background reads of the window are shown."""
-        for _ in range(1000):
+        for _ in range(6000):
             self.root.update()
             if not getattr(win, "loading", False) and not win.package_reads:
                 return

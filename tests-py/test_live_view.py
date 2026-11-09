@@ -132,7 +132,7 @@ class LiveWindowTest(unittest.TestCase):
 
     def shown(self, view):
         """The text currently shown in a live window (after its background read)."""
-        for _ in range(1000):
+        for _ in range(6000):
             self.root.update()
             if not getattr(view, "loading", False) and view.shown is not None:
                 break

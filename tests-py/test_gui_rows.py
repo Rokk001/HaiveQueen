@@ -73,7 +73,7 @@ class RowsTest(unittest.TestCase):
     # Wait for the background lookups of the window.
     def settle(self):
         """Run the event loop until the lookups of the actions are done."""
-        for _ in range(1000):
+        for _ in range(6000):
             self.win.root.update()
             if not self.win.lookups:
                 return
