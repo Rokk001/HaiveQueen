@@ -622,6 +622,39 @@ def startable_map(conn):
     return found
 
 
+# Why a provider is no wait target.
+def never_available(provider):
+    """'' when the provider can become free again; else why not: disabled, or 0 configured slots (an offline provider keeps its configured slots)."""
+    if not provider.get('enabled', True) or provider.get('unavailable') == 'disabled':
+        return 'it is disabled'
+    if int(provider.get('configuredSlots', provider.get('slots', 0)) or 0) < 1:
+        return 'it has 0 configured slots'
+    return ''
+
+
+def wait_refusal(env, plan, provider) -> str:
+    """The refusal text of `bzz agent wait` for a disabled provider or one with 0 configured slots, else ''. When an open package needs a capability that
+    only such providers offer, the text names the capability and those providers and tells the Queen to file one owner question instead of waiting."""
+    from . import routine
+    why = never_available(provider)
+    if not why:
+        return ''
+    text = 'provider %s cannot be waited for: %s' % (provider['name'], why)
+    excluded = env.settings.get('excludedProviders', [])
+    ensure_attempts(env.conn)
+    states = {r[0]: r[1] for r in env.conn.execute('SELECT package,state FROM package_progress WHERE project=? AND plan_path=?', (env.name, plan))}
+    for p in env.packages(plan):
+        if states.get(p['id']) in ('done', 'implemented') or package_done(env.conn, env.name, plan, p['id']):
+            continue
+        need = routine.package_needs_for(env, plan, p['id'])
+        capable = [c for c in capable_providers(env.providers, need) if c['name'] not in excluded] if need else []
+        if capable and all(never_available(c) for c in capable):
+            return ('%s; package %s needs %s, which only %s offer(s) and no provider that can become free has it: do not wait, file one owner question '
+                    'with bzz ask naming the capability and these providers, write a handoff and end with WAITING_FOR_OWNER; the plan waits for the answer'
+                    % (text, p['id'], ', '.join(need), ', '.join(c['name'] for c in capable)))
+    return text
+
+
 # Packages of a plan that can still start although one provider is missing.
 def runnable_packages(env, plan, provider) -> list:
     """Ids of the packages that are not finished or waiting, whose dependencies are done and that do not need a capability only the missing provider has (a capability another provider offers too does not count): the Queen must work them before the Plan waits."""

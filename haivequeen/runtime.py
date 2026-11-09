@@ -494,6 +494,29 @@ def set_package(conn, project, plan, pid, phase=None, locked=None, reason=None) 
     return [p for p in list_packages(conn, project, plan) if p["id"] == pid][0]
 
 
+ENDED_WAIT_STATUSES = ("DONE", "CANCELLED", "PAUSED")   # a plan in one of these has no provider wait row
+
+
+def drop_provider_wait(conn, project, plan=None) -> int:
+    """Delete the provider wait row of `plan` (of every plan of the Project whose status is DONE, CANCELLED or PAUSED, or that no longer exists, when
+    `plan` is None) and wake a Hive that waited for it ('waiting'), so a resumed plan waits again only when its next Queen asks for it; returns the number of rows deleted."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bee_provider_wait'").fetchone():
+        return 0
+    if plan is None:
+        marks = ",".join("?" * len(ENDED_WAIT_STATUSES))
+        rows = conn.execute("SELECT w.plan_path FROM bee_provider_wait w LEFT JOIN plans p ON p.project=w.project AND p.path=w.plan_path "
+                            "WHERE w.project=? AND (p.path IS NULL OR p.status IN (%s))" % marks, (project, *ENDED_WAIT_STATUSES)).fetchall()
+        paths = [r[0] for r in rows]
+    else:
+        paths = [plan]
+    count = 0
+    with db.transaction(conn):
+        for path in paths:
+            count += conn.execute("DELETE FROM bee_provider_wait WHERE project=? AND plan_path=?", (project, path)).rowcount
+            conn.execute("UPDATE hives SET state='waiting',reset_at=NULL WHERE project=? AND plan_path=? AND state IN ('codex_wait','provider_wait')", (project, path))
+    return count
+
+
 @filetxn.coordinated
 def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
     """Set a plan status in the table and in the plan file (front matter 'status =' line or the v1 'Status:' line 2); an old status name is taken as its new name."""
@@ -525,6 +548,8 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
     with db.transaction(conn):
         conn.execute("UPDATE plans SET status=?, updated_at=? WHERE project=? AND path=?",
                      (status, db.now(), project, plan))
+    if status in ENDED_WAIT_STATUSES:
+        drop_provider_wait(conn, project, plan)
     return {"plan": plan, "status": status}
 
 
