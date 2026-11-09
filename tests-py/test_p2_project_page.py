@@ -406,10 +406,10 @@ class GeneralAndProviderTest(WindowCase):
 
     def test_general_fields_are_saved_as_typed(self):
         win = self.window()
-        self.set_entry(win, ("owner",), "Mario")
+        self.set_entry(win, ("owner",), "Alex")
         self.set_entry(win, ("beesPerQueen",), "5")
         self.assertTrue(win.collect())
-        self.assertEqual((win.data["owner"], win.data["beesPerQueen"]), ("Mario", 5))
+        self.assertEqual((win.data["owner"], win.data["beesPerQueen"]), ("Alex", 5))
         self.assertNotIn("queenClass", win.data)   # unchanged default stays unwritten
 
     def test_provider_shows_context_limit_in_use(self):

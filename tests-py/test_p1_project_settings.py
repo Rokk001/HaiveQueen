@@ -118,8 +118,8 @@ class DerivedValuesTest(Dirs):
         project = {"language": "de", "escalateAfter": 9, "roundMinutes": 1, "owner": "Someone", "queenClass": "heavy", "beesPerQueen": 9,
                    "contextLimitTokens": 1, "capabilityRules": [{"x": 1}], "preferredProvider": "p", "ownerCheckText": "own", "allowedTools": ["Bash(x)"],
                    "ignoredBuildOutput": ["out/"], "protectedWorktrees": ["w"], "compileCheckEnabled": False, "claudeTools": "Read"}
-        merged = scheduler.build_settings({"owner": "Mario", "queenClass": "light", "beesPerQueen": 2, "roundMinutes": 7, "escalateAfter": 4}, project)
-        for key, value in {"owner": "Mario", "queenClass": "light", "beesPerQueen": 2, "roundMinutes": 7, "escalateAfter": 4, "contextLimitTokens": 300000}.items():
+        merged = scheduler.build_settings({"owner": "Alex", "queenClass": "light", "beesPerQueen": 2, "roundMinutes": 7, "escalateAfter": 4}, project)
+        for key, value in {"owner": "Alex", "queenClass": "light", "beesPerQueen": 2, "roundMinutes": 7, "escalateAfter": 4, "contextLimitTokens": 300000}.items():
             self.assertEqual(merged[key], value, key)
         for key in ("capabilityRules", "preferredProvider", "ownerCheckText", "allowedTools", "ignoredBuildOutput", "protectedWorktrees", "compileCheckEnabled", "claudeTools", "language"):
             self.assertNotIn(key, merged)
@@ -160,7 +160,7 @@ class PlanTagTest(Dirs):
 
     def test_tag_from_file_name(self):
         for plan, tag in {"plans/HQ-PROJECT-SETTINGS-PLAN.md": "HQ-PROJECT-SETTINGS", "plans/foo-plan.md": "FOO", "plans/FOOPLAN.md": "FOO", "plans/Bar.md": "BAR",
-                          "docs/x/PLAN.md": "X", "docs/INGAME-QS-8.md": "INGAME-QS-8"}.items():
+                          "docs/x/PLAN.md": "X", "docs/FEATURE-QS-8.md": "FEATURE-QS-8"}.items():
             self.assertEqual(routine.plan_tag(self.env, plan), tag, plan)
 
     def test_collision_puts_the_folder_in_front_for_the_later_plan(self):
@@ -179,33 +179,33 @@ class PlanTagTest(Dirs):
         self.assertEqual(routine.plan_tag(self.env, "new/OLD-PLAN.md"), "NEW")   # also a Hive: keeps the tag it has today (its folder)
 
     def test_standalone_plan_with_hive_keeps_its_worktree_name_after_migration(self):
-        ws = self.workspace("odp", 'name="ODP"\nplanGlobs=["docs/**/INGAME-QS-[0-9].md"]\nplanStandaloneRegex="^(INGAME-QS-\\\\d+)\\\\.md$"\n')
+        ws = self.workspace("example", 'name="Example"\nplanGlobs=["docs/**/FEATURE-QS-[0-9].md"]\nplanStandaloneRegex="^(FEATURE-QS-\\\\d+)\\\\.md$"\n')
         self.conn.execute("INSERT INTO projects(name,workspace) VALUES ('P',?)", (str(ws),))
-        self.conn.execute("INSERT INTO hives(project,plan_path,provider,colour) VALUES ('P','docs/ingame/INGAME-QS-8.md','p','c')")
+        self.conn.execute("INSERT INTO hives(project,plan_path,provider,colour) VALUES ('P','docs/feature/FEATURE-QS-8.md','p','c')")
         projsettings.migrate_all([ws], conn=self.conn)
-        self.assertEqual(routine.package_slug(self.env, "docs/ingame/INGAME-QS-8.md", "P1"), "ingame-qs-8-p1")
+        self.assertEqual(routine.package_slug(self.env, "docs/feature/FEATURE-QS-8.md", "P1"), "feature-qs-8-p1")
 
 
-LIVE_ODP = '''# ODP workspace settings
-name = "ODP"
+LIVE_EXAMPLE = '''# Example workspace settings
+name = "Example"
 colour = "cyan"
 priority = 1
 repo = "{repo}"
 integrationBranch = "integration/all"
 ignoredBuildOutput = ["out/", "build/"]
 protectedWorktrees = ["build/current-worktree"]
-worktreePrefix = "ODP"
-planGlobs = ["docs/**/*-PLAN.md", "docs/**/INGAME-QS-[0-9].md"]
+worktreePrefix = "Example"
+planGlobs = ["docs/**/*-PLAN.md", "docs/**/FEATURE-QS-[0-9].md"]
 planExclude = ["docs/orchestrator/**"]
-planStandaloneRegex = "^(INGAME-QS-\\\\d+)\\\\.md$"
+planStandaloneRegex = "^(FEATURE-QS-\\\\d+)\\\\.md$"
 planSuffixRegex = "-?PLAN$"
 compileCheck = "powershell -NoProfile -File scripts/compile.ps1"
 buildFlowDoc = "docs/BUILD-FLOW.md"
 integratorInstructions = ".claude/agents/integrator.md"
 integrationStateFile = "INTEGRATION-STATE.md"
 buildProcessNames = ["cl.exe"]
-owner = "Mario"
-openMarker = "Open for Mario"
+owner = "Alex"
+openMarker = "Open for Alex"
 integratorSlots = 1
 roundMinutes = 5
 escalateAfter = 3
@@ -221,13 +221,13 @@ verify = "medium"
 maxPackages = 3
 
 [terminalProfile]
-name = "ODP"
+name = "Example"
 
 [views]
 queue = "q.md"
 
 [ruleSources]
-global = "C:/Users/me/.claude/CLAUDE.md"
+global = "C:/Users/example/.claude/CLAUDE.md"
 
 [phaseRules.work]
 global = ["## 1. Think"]
@@ -248,7 +248,7 @@ planExclude = ["plans/*-STATE.md"]
 compileCheck = "python -m unittest"
 compileCheckEnabled = false
 buildProcessNames = []
-owner = "Mario"
+owner = "Alex"
 claudeTools = "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop,Agent"
 buildEnabled = false
 deployEnabled = false
@@ -279,8 +279,8 @@ address = "http://localhost:1234/v1"
 contextWindow = 32000
 
 [[projects]]
-name = "ODP"
-workspace = "{odp}"
+name = "Example"
+workspace = "{example}"
 
 [[projects]]
 name = "HaiveQueen"
@@ -293,32 +293,32 @@ class MigrationTest(Dirs):
 
     def setUp(self):
         super().setUp()
-        self.odp_repo = make_repo(self.root, "odp-code", ["origin"])
+        self.example_repo = make_repo(self.root, "example-code", ["origin"])
         self.hq_repo = make_repo(self.root, "hq-code", ["origin"])
-        self.odp = self.workspace("odp", LIVE_ODP.format(repo=str(self.odp_repo).replace("\\", "\\\\")))
+        self.example = self.workspace("example", LIVE_EXAMPLE.format(repo=str(self.example_repo).replace("\\", "\\\\")))
         self.hq = self.workspace("hq", LIVE_HQ.format(repo=str(self.hq_repo).replace("\\", "\\\\")))
-        self.write_config(CONFIG.format(odp=str(self.odp).replace("\\", "\\\\"), hq=str(self.hq).replace("\\", "\\\\")))
+        self.write_config(CONFIG.format(example=str(self.example).replace("\\", "\\\\"), hq=str(self.hq).replace("\\", "\\\\")))
 
     def md(self, ws):
         return (Path(ws) / ".haivequeen" / "removed-settings.md").read_text(encoding="utf-8")
 
     def test_files_are_migrated_with_bak_and_removed_list(self):
-        old_odp = (self.odp / ".haivequeen" / "project.toml").read_text(encoding="utf-8")
+        old_example = (self.example / ".haivequeen" / "project.toml").read_text(encoding="utf-8")
         done = projsettings.migrate_all()
         self.assertEqual(len(done), 2)
-        self.assertEqual((self.odp / ".haivequeen" / "project.toml.bak").read_text(encoding="utf-8"), old_odp)
-        new = self.project_toml(self.odp)
+        self.assertEqual((self.example / ".haivequeen" / "project.toml.bak").read_text(encoding="utf-8"), old_example)
+        new = self.project_toml(self.example)
         self.assertEqual(set(new), {"name", "colour", "priority", "codeRepo", "integrationBranch", "worktreePrefix", "plans", "compileCheck", "buildFlowDoc",
                                     "integratorInstructions", "buildProcessNames", "onEvent"})
-        self.assertEqual(new["codeRepo"], str(self.odp_repo))
-        self.assertEqual(new["plans"], ["docs/**/*-PLAN.md", "docs/**/INGAME-QS-[0-9].md", "!docs/orchestrator/**"])
+        self.assertEqual(new["codeRepo"], str(self.example_repo))
+        self.assertEqual(new["plans"], ["docs/**/*-PLAN.md", "docs/**/FEATURE-QS-[0-9].md", "!docs/orchestrator/**"])
         self.assertEqual(new["onEvent"]["timeoutSeconds"], 180)
-        text = self.md(self.odp)
+        text = self.md(self.example)
         for key in ("owner", "language" if False else "roundMinutes", "escalateAfter", "ignoredBuildOutput", "protectedWorktrees", "claudeTools", "allowedTools", "views", "integrationStateFile",
                     "minClass", "bundle", "openMarker", "integratorSlots", "paneCloseDelaySeconds", "terminalProfile", "ruleSources", "phaseRules", "planStandaloneRegex",
                     "planSuffixRegex", "somethingNew", "planGlobs", "planExclude", "repo"):
             self.assertIn("`%s`" % key, text, key)
-        self.assertIn("'Mario'", text)
+        self.assertIn("'Alex'", text)
         self.assertIn("not used", text)
         self.assertIn("Bash(make test)", text)
 
@@ -337,7 +337,7 @@ class MigrationTest(Dirs):
     def test_values_move_to_general_and_providers(self):
         projsettings.migrate_all()
         cfg = tomllib.loads((self.cfgdir / "config.toml").read_text(encoding="utf-8"))
-        self.assertEqual(cfg["owner"], "Mario")
+        self.assertEqual(cfg["owner"], "Alex")
         self.assertEqual(cfg["queenClass"], "heavy")   # config.toml value stays
         self.assertNotIn("claudeTools", cfg)
         self.assertNotIn("contextLimitTokens", cfg)
@@ -350,25 +350,25 @@ class MigrationTest(Dirs):
         self.assertTrue((self.cfgdir / "config.toml.bak").is_file())
 
     def test_owner_in_general_is_never_overwritten(self):
-        self.write_config('owner = "Chief"\n[[projects]]\nname = "ODP"\nworkspace = "%s"\n' % str(self.odp).replace("\\", "\\\\"))
+        self.write_config('owner = "Chief"\n[[projects]]\nname = "Example"\nworkspace = "%s"\n' % str(self.example).replace("\\", "\\\\"))
         projsettings.migrate_all()
         self.assertEqual(tomllib.loads((self.cfgdir / "config.toml").read_text(encoding="utf-8"))["owner"], "Chief")
 
     def test_first_project_in_config_order_gives_owner_and_queen_class(self):
         (self.hq / ".haivequeen" / "project.toml").write_text('name="H"\nowner="Second"\nqueenClass="light"\nbeesPerQueen=5\n', encoding="utf-8")
-        (self.odp / ".haivequeen" / "project.toml").write_text('name="O"\nowner="First"\nbeesPerQueen=4\n', encoding="utf-8")
-        self.write_config('[[projects]]\nname="O"\nworkspace="%s"\n[[projects]]\nname="H"\nworkspace="%s"\n' % (str(self.odp).replace("\\", "\\\\"), str(self.hq).replace("\\", "\\\\")))
+        (self.example / ".haivequeen" / "project.toml").write_text('name="O"\nowner="First"\nbeesPerQueen=4\n', encoding="utf-8")
+        self.write_config('[[projects]]\nname="O"\nworkspace="%s"\n[[projects]]\nname="H"\nworkspace="%s"\n' % (str(self.example).replace("\\", "\\\\"), str(self.hq).replace("\\", "\\\\")))
         projsettings.migrate_all()
         cfg = tomllib.loads((self.cfgdir / "config.toml").read_text(encoding="utf-8"))
         self.assertEqual((cfg["owner"], cfg["beesPerQueen"], cfg["queenClass"]), ("First", 4, "light"))
 
     def test_migrated_file_is_not_changed_again(self):
         projsettings.migrate_all()
-        before = (self.odp / ".haivequeen" / "project.toml").read_bytes(), (self.cfgdir / "config.toml").read_bytes(), self.md(self.odp)
-        bak = (self.odp / ".haivequeen" / "project.toml.bak").read_bytes()
+        before = (self.example / ".haivequeen" / "project.toml").read_bytes(), (self.cfgdir / "config.toml").read_bytes(), self.md(self.example)
+        bak = (self.example / ".haivequeen" / "project.toml.bak").read_bytes()
         self.assertEqual(projsettings.migrate_all(), [])
-        self.assertEqual(before, ((self.odp / ".haivequeen" / "project.toml").read_bytes(), (self.cfgdir / "config.toml").read_bytes(), self.md(self.odp)))
-        self.assertEqual(bak, (self.odp / ".haivequeen" / "project.toml.bak").read_bytes())
+        self.assertEqual(before, ((self.example / ".haivequeen" / "project.toml").read_bytes(), (self.cfgdir / "config.toml").read_bytes(), self.md(self.example)))
+        self.assertEqual(bak, (self.example / ".haivequeen" / "project.toml.bak").read_bytes())
 
     def test_older_bak_is_replaced_and_removed_list_is_extended(self):
         (self.hq / ".haivequeen" / "project.toml.bak").write_text("old backup", encoding="utf-8")
@@ -389,20 +389,20 @@ class MigrationTest(Dirs):
     def test_migrated_copies_work_as_before(self):
         projsettings.migrate_all()
         cfg = config.load_config()
-        for ws, repo, branch in ((self.odp, self.odp_repo, "integration/all"), (self.hq, self.hq_repo, "main")):
+        for ws, repo, branch in ((self.example, self.example_repo, "integration/all"), (self.hq, self.hq_repo, "main")):
             pcfg = config.load_project(ws)
             settings = scheduler.build_settings(cfg, pcfg, workspace=ws)
             self.assertEqual(settings["integrationBranch"], branch)
             self.assertEqual(settings["remoteName"], "origin")
-            self.assertEqual(settings["owner"], "Mario")
+            self.assertEqual(settings["owner"], "Alex")
             self.assertIn("onEvent", settings)
             self.assertIn("buildProcessNames", settings)
             grants = json.dumps(profile.claude_integration_permissions("P", "x", settings["remoteName"], settings["integrationBranch"], "python", "cli.py"))
             self.assertIn("git push origin HEAD:" + branch, grants)
             self.assertEqual(str(pcfg["codeRepo"]), str(repo))
-        odp = config.load_project(self.odp)
-        self.assertEqual(odp["planGlobs"], ["docs/**/*-PLAN.md", "docs/**/INGAME-QS-[0-9].md"])
-        self.assertEqual(odp["planExclude"], ["docs/orchestrator/**"])
+        example = config.load_project(self.example)
+        self.assertEqual(example["planGlobs"], ["docs/**/*-PLAN.md", "docs/**/FEATURE-QS-[0-9].md"])
+        self.assertEqual(example["planExclude"], ["docs/orchestrator/**"])
         self.assertEqual(scheduler.build_settings(cfg, config.load_project(self.hq), workspace=self.hq)["compileCheck"], "")
         claude = scheduler.get_providers(cfg)[0]
         self.assertIn("Agent", agent_runner.claude_tools(claude).split(","))
@@ -446,11 +446,11 @@ class RulesTest(Dirs):
         self.assertNotIn("from upstream", without)
         self.assertIn("from upstream", with_up)
 
-    def test_ready_check_rules_file_of_odp_has_no_personal_section(self):
-        odp = (Path(__file__).parent / "test_p1_project_settings.py").read_text(encoding="utf-8")
+    def test_ready_check_rules_file_of_example_has_no_personal_section(self):
+        example = (Path(__file__).parent / "test_p1_project_settings.py").read_text(encoding="utf-8")
         self.assertNotIn("def markdown_block", Path(agent_runner.__file__).read_text(encoding="utf-8"))
         self.assertIn("ruleSources", projsettings.REMOVED_NOTES)
-        self.assertTrue(odp)
+        self.assertTrue(example)
 
 
 def python_child_script(pid_file, seconds):
