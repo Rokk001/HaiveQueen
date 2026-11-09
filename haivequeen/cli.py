@@ -340,6 +340,8 @@ def cmd_requeen(args, conn):
 # Check the plan the calling Queen has cut into packages.
 def cmd_plan(args, conn):
     """Check the header of the Queen's own plan (packages, unique ids, titles, dependencies without cycle, capabilities some provider offers, every requirement the Queen wrote in the state file belongs to a package). On success a SENT or PREPARING plan becomes QUEUED and the packages are read into the database; otherwise the problems are reported and nothing changes."""
+    if args.action != "check":
+        return cmd_owner(args, conn)
     from haivequeen import plans as plan_mod, scheduler
     agent = os.environ.get("BZZ_AGENT")
     queen = runtime.get_agent(conn, args.project, agent) if agent else None
@@ -375,6 +377,10 @@ def _build_switched_off(conn, project):
 
 def cmd_package(args, conn):
     """Store the state (working, waiting, implemented, done, rejected) of a package of the Queen's own plan; shown as progress in the window."""
+    if getattr(args, "action", None) == "unassign":
+        return cmd_owner(args, conn)
+    if not args.state:
+        return fail("package requires --state or the unassign action")
     from haivequeen import bees
     agent = os.environ.get("BZZ_AGENT")
     queen = runtime.get_agent(conn, args.project, agent) if agent else None
@@ -483,6 +489,24 @@ def cmd_bee(args, conn):
 
 
 # Build the argument parser with all commands.
+def cmd_owner(args, conn):
+    """Owner-only entry point for explicit control actions."""
+    from haivequeen import owner
+    if "BZZ_AGENT" in os.environ:
+        return fail("this command is only available to the owner; agents cannot use it")
+    fields = vars(args).copy()
+    action = fields.pop("action")
+    project, plan = fields.pop("project", None), fields.pop("plan", None)
+    if args.command == "provider":
+        fields["provider_action"] = action
+        action = "provider"
+    try:
+        out(owner.apply(conn, action, project, plan, **fields))
+        return 0
+    except (ValueError, KeyError, runtime.CmdError) as exc:
+        return fail(str(exc))
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all commands."""
     ap = argparse.ArgumentParser(prog="bzz")
@@ -509,18 +533,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-subagents", action="store_true")
     p.set_defaults(fn=cmd_bee)
 
-    p = sub.add_parser("package")
+    p = sub.add_parser("package", help="record package progress; owner: unassign its stored provider")
+    p.add_argument("action", nargs="?", choices=["unassign"])
     for field in ("project", "plan", "package"):
         p.add_argument("--" + field, required=True)
-    p.add_argument("--state", required=True, choices=["working", "waiting", "implemented", "done", "rejected"])
+    p.add_argument("--state", choices=["working", "waiting", "implemented", "done", "rejected"])
     p.add_argument("--reason", default="")
     p.set_defaults(fn=cmd_package)
 
-    p = sub.add_parser("plan")
-    p.add_argument("action", choices=["check"])
+    p = sub.add_parser("plan", help="check a plan; owner: accept, reject, pause, resume or release")
+    p.add_argument("action", choices=["check", "accept", "reject", "pause", "resume", "release"])
     for field in ("project", "plan"):
         p.add_argument("--" + field, required=True)
     p.set_defaults(fn=cmd_plan)
+    p.add_argument("--text", default="")
+    p.add_argument("--package", dest="packages", action="append", default=[])
+    p.add_argument("--commit", default="")
+
+    p = sub.add_parser("provider", help="owner: enable, disable or test a provider connection")
+    p.add_argument("action", choices=["enable", "disable", "test"])
+    p.add_argument("--provider", required=True)
+    p.set_defaults(fn=cmd_owner)
 
     p = sub.add_parser("integration")
     p.add_argument("action", choices=["acquire", "release"])

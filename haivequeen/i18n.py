@@ -197,6 +197,7 @@ _WORKTREE_REASONS = (
 
 
 _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
+    (r"^Owner action: (.*)$", r"Aktion des Owners: \1"),
     # ---- worktree cleanup, before the general patterns: its JSON holds free text
     (r"^Worktree cleanup failed: (.*)$", lambda m: "Worktree-Bereinigung fehlgeschlagen: " + _worktree_reason(m.group(1))),
     (r"^Worktree cleanup: (.*)$", _worktree_cleanup),
@@ -656,6 +657,9 @@ GERMAN = {
     "A Markdown file that shows the queue.": "Eine Markdown-Datei, die die Warteschlange zeigt.",
     "A Markdown file that shows the open questions.": "Eine Markdown-Datei, die die offenen Fragen zeigt.",
     "A Markdown file that shows the decisions.": "Eine Markdown-Datei, die die Entscheidungen zeigt.",
+    "Accept": "Abnehmen",
+    "Not ok": "Nicht ok",
+    "reject requires non-empty text": "Für die Ablehnung ist ein Text erforderlich",
     "Advanced": "Erweitert",
     "Repository: the folder of the Git repository is expected": "Repository: der Ordner des Git-Repositorys wird erwartet",
     "The settings of this Project are kept in %s: enter that folder as plans folder or, when the plans are in the repository, as repository": "Die Einstellungen dieses Projekts liegen in %s: diesen Ordner als Plan-Ordner eintragen oder, wenn die Pläne im Repository liegen, als Repository",

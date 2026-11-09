@@ -60,7 +60,7 @@ Also: the manager is not a model (the Orchestrator is a plain program loop that 
 3. **Work.** The Queen coordinates and never works a package herself: every package goes to an Agent of its class, respecting dependencies and the Agent limit. Subagent Agents run in the foreground, independent ones in parallel from one message, so the Queen never polls an Agent. She answers technical questions, merges the Agent branches and, when every requirement is done, integrates (git, compile check, build). A package that needs a capability (for example `Image generation`) goes to a provider that offers it; local providers are used when available.
 4. **Completeness.** Before integration the Queen answers the completeness question with evidence for every requirement and lists every requirement id once in the state file as `- <id>: done | <evidence>`; `bzz ready` is refused for missing, open or partial ids and a fresh check agent must pass the branch. Partial items count as open. Requirements covered exclusively by packages marked `verify = "owner"` are listed separately as owner checks.
 5. **Integration.** She merges the current integration branch into her branch, runs the project check, registers her branch and performs the project's integration steps. Only one integration per project runs at a time; a waiting Plan hands off and resumes when its turn comes.
-6. **Acceptance and done.** After integration and a switched-on deploy HaiveQueen itself files an owner check question (`owner-check`, text from the setting `ownerCheckText`, by default "Check the integrated result" in the language setting): you check the result and answer `ok`, or say what is not right and the next Queen fixes exactly that. The plan status moves to DONE only after your `ok`; a plan whose header says `owner_check = "none"` skips the question and is done after integration.
+6. **Acceptance and done.** After integration and a switched-on deploy HaiveQueen itself files an owner check question (`owner-check`, text from the setting `ownerCheckText`, by default "Check the integrated result" in the language setting). Choose Accept in the questions window or run `bzz plan accept`; choose Not ok with a finding or run `bzz plan reject --text "..."` for rework by the next Queen. Free text alone is a note and leaves the check open. Acceptance sets DONE; a plan whose header says `owner_check = "none"` skips the question and is done after integration.
 
 Agent names can be edited in `bee_names.txt` in the HaiveQueen configuration directory. Changes take effect when the next agent starts.
 
@@ -304,6 +304,32 @@ Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the
 ## Command line
 
 `bzz agent` is the standard package-agent command; `bzz bee` remains a compatibility alias. Existing settings and machine-readable field names keep their spelling. Free-text answers to owner-check questions are notes and leave the check open.
+
+The following commands are for the owner. Every one refuses calls with `BZZ_AGENT` set. Plan commands require `--project p --plan f`:
+
+| Command | Effect |
+| --- | --- |
+| `bzz plan accept --project p --plan f [--text "note"]` | Accept an integrated plan waiting for its owner check; close all owner checks and set DONE. Other open questions and integration steps block acceptance; queen-ended and stall questions are closed automatically. |
+| `bzz plan reject --project p --plan f --text "finding" [--package P1 --package P2]` | Reopen a plan waiting for its owner check and pass the required finding to the next Queen. Selected packages become rejected. Accept and reject also work while paused; rejection preserves the pause until resume. |
+| `bzz plan pause --project p --plan f` | Pause one plan in SENT through REVIEW, preserving its prior status and running agents. DRAFT, DONE, PAUSED and CANCELLED are refused. |
+| `bzz plan resume --project p --plan f` | Restore the prior status of a PAUSED plan. Other statuses are refused. |
+| `bzz plan release --project p --plan f [--commit C]` | Release the branch without a check agent, for the specified commit or any commit when omitted. Refused for DONE/CANCELLED. Replaces older releases, including legacy inbox decisions; rejection ends the release. |
+| `bzz provider enable --provider N` / `bzz provider disable --provider N` | Save the same Enabled setting as the provider page. |
+| `bzz provider test --provider N` | Run and store the provider page's Local LLM connection test; other access types have nothing to test. |
+| `bzz package unassign --project p --plan f --package P` | Clear the stored provider for the next start, even while the agent runs. Keep the escalated class and failure counts. No assignment is a successful no-op. |
+
+The questions window keeps its answer field for notes beside Accept and Not ok. Not ok requires a finding and supports selecting individual packages for rework. Inbox files support the same actions as `[[accept]]`, `[[reject]]`, `[[pause]]`, `[[resume]]`, `[[release]]`, `[[provider]]` and `[[unassign]]`. Fields match the commands: `project`, `plan`, `text`, `commit`, `provider`, `package` as applicable; rejection uses a `packages` list. `[[provider]]` uses `action = "enable"`, `"disable"` or `"test"`. Optional `by` is `"owner"` (default) or `"coordinator"`; commands record owner. The project must match the inbox project. For example:
+
+```toml
+[[reject]]
+project = "example"
+plan = "docs/plans/example.md"
+text = "The export omits the selected date."
+packages = ["P2"]
+by = "owner"
+```
+
+Existing `[[decision]]` entries with `item = "owner-release"` continue to work.
 
 | Command | Who | What it does |
 |---|---|---|

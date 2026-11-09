@@ -1,6 +1,6 @@
 """Owner check after integration: a Plan whose plan has points only the owner can check stays open in the state 'owner_check'."""
 from bzztest import REL, RoundCase
-from haivequeen import bees, db, hives, plans, runtime
+from haivequeen import bees, db, hives, plans, runtime, owner
 
 OTHER = "docs/plans/other/OTHER-PLAN.md"
 
@@ -80,6 +80,23 @@ class OwnerCheckTests(RoundCase):
         self.plan("READY", [{"id": "P1", "title": "Other"}], rel=OTHER, title="Other plan")
         self.round()
         self.assertTrue([a for a in runtime.list_agents(self.conn, "testproj", "all") if a["plan_path"] == OTHER and a["phase"] == "queen"])
+
+    def test_explicit_rejection_restarts_queen_with_owner_finding(self):
+        self.integrated_hive_with_question()
+        owner.apply(self.conn, "reject", "testproj", REL, text="Fix the courtyard lighting")
+        self.round()
+        self.assertEqual(len(self.queens()), 2)
+        queen = self.queens()[-1]
+        prompt = self.env().run_dir(queen['name']) / 'prompt.md'
+        self.assertIn("Fix the courtyard lighting", prompt.read_text(encoding='utf-8'))
+        self.assertNotEqual(self.status(), "DONE")
+
+    def test_explicit_acceptance_survives_round(self):
+        self.integrated_hive_with_question()
+        owner.apply(self.conn, "accept", "testproj", REL)
+        self.round()
+        self.assertEqual(self.status(), "DONE")
+        self.assertEqual(len(self.queens()), 1)
 
     def test_queen_is_told_to_ask_for_the_play_test(self):
         """The Queen instructions say how to ask for the owner check after integration and deploy."""

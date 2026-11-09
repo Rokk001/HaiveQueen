@@ -603,6 +603,8 @@ def add_decision(conn, project, source, text, plan=None, item=None) -> int:
     if source not in ("owner", "coordinator", "auto"):
         raise CmdError("source must be owner, coordinator or auto")
     with db.transaction(conn):
+        if item == "owner-release" and plan:
+            conn.execute("UPDATE decisions SET status='superseded' WHERE project=? AND plan_path=? AND item='owner-release'", (project, plan))
         return conn.execute(
             "INSERT INTO decisions (project, ts, source, text, plan_path, item) VALUES (?,?,?,?,?,?)",
             (project, db.now(), source, text, plan, item)).lastrowid

@@ -5,7 +5,7 @@ question the window also lists the steps (packages) of the plan: the ones ticked
 """
 import re
 
-from . import bees, db, gui_data, hives, runtime
+from . import bees, db, gui_data, hives, runtime, owner
 from .i18n import tr
 
 REFRESH_MS = 5000
@@ -51,7 +51,7 @@ def error_text(exc) -> str:
     text = str(exc).strip("'\"")
     found = re.fullmatch(r"(?:question (\S+) is already answered)|(?:unknown question (\S+))", text)
     if not found:
-        return text
+        return tr(text)
     return tr("question %s is already answered", found.group(1)) if found.group(1) else tr("unknown question %s", found.group(2))
 
 
@@ -90,6 +90,8 @@ class QuestionsWindow:
         buttons.pack(fill="x")
         self.status = tk.Label(buttons, anchor="w", fg=COL["red"], font=(mono, 10))
         self.status.pack(side="left", fill="x", expand=True)
+        self.accept_button = tk.Button(buttons, text=tr("Accept"), command=lambda: self.decide("accept"), font=(mono, 10))
+        self.reject_button = tk.Button(buttons, text=tr("Not ok"), command=lambda: self.decide("reject"), font=(mono, 10))
         for label, action in ((tr("Use recommendation"), self.use_recommendation), (tr("Answer"), self.send), (tr("Close"), self.win.destroy)):
             tk.Button(buttons, text=label, command=action, font=(mono, 10)).pack(side="right", padx=3)
         self.win.bind("<Control-Return>", lambda _e: self.send())
@@ -131,6 +133,10 @@ class QuestionsWindow:
         tk = self.tk
         q = self.current()
         self.status.config(text="")
+        for button in (self.accept_button, self.reject_button):
+            button.pack_forget()
+            if q and owner.is_check(q["item"]):
+                button.pack(side="right", padx=3)
         for child in self.steps.winfo_children():
             child.destroy()
         self.checks = {}
@@ -161,6 +167,25 @@ class QuestionsWindow:
         if q is not None:
             self.reply.delete("1.0", "end")
             self.reply.insert("1.0", q["recommendation"] or "")
+
+    def decide(self, action):
+        """Explicitly accept or reject an owner check; rejection requires a finding."""
+        q = self.current()
+        if not q or not owner.is_check(q["item"]):
+            return
+        try:
+            owner.apply(self.conn, action, q["project"], q["plan_path"],
+                        text=self.reply.get("1.0", "end").strip(),
+                        packages=[p for p, var in self.checks.items() if var.get()])
+        except (ValueError, KeyError, runtime.CmdError) as exc:
+            self.status.config(text=error_text(exc))
+            return
+        self.reply.delete("1.0", "end")
+        self.apiary_var.set(False)
+        self.questions = []
+        self.refresh()
+        if self.on_answered:
+            self.on_answered()
 
     # Store the answer.
     def send(self):

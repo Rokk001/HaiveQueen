@@ -11,6 +11,10 @@ from . import db, runtime
 SUPERSEDED = ("superseded", "ueberholt", "überholt")   # the reason of a withdraw whose tip need not be in the target; English protocol word, German input still read
 
 WHO = ("owner", "coordinator")
+OWNER_KEYS = {
+    "accept": {"text"}, "reject": {"text", "packages"}, "pause": set(), "resume": set(),
+    "release": {"commit"}, "provider": {"action", "provider"}, "unassign": {"package"},
+}
 ANSWER_KEYS = {"question_id", "text", "by"}
 DECISION_KEYS = {"text", "source", "plan", "item"}
 QUEUE_KEYS = {"branch", "tip", "action", "reason"}
@@ -124,8 +128,8 @@ def parse_file(path: Path, project: str, conn, repo=None, ref: str = "origin/mai
     except tomllib.TOMLDecodeError as exc:
         raise InboxError("TOML parse error: %s" % exc)
     for key in data:
-        if key not in ("answer", "decision", "queue"):
-            raise InboxError("unknown top-level entry '%s' (only [[answer]], [[decision]] and [[queue]] are allowed)" % key)
+        if key not in ("answer", "decision", "queue") and key not in OWNER_KEYS:
+            raise InboxError("unknown top-level entry '%s'" % key)
     answers, decisions, orders, seen = [], [], [], set()
     a_lines, d_lines = _header_lines(raw, "answer"), _header_lines(raw, "decision")
     for i, entry in enumerate(data.get("answer", [])):
@@ -166,8 +170,31 @@ def parse_file(path: Path, project: str, conn, repo=None, ref: str = "origin/mai
         if not isinstance(entry, dict):
             raise InboxError("%s: queue order must be a table" % where)
         orders.append(_queue_order(entry, where, project, conn, repo, ref))
+    from . import owner
+    for action, keys in OWNER_KEYS.items():
+        entries = data.get(action, [])
+        if not isinstance(entries, list):
+            raise InboxError("[[%s]] must be an array of tables" % action)
+        for entry in entries:
+            where = "[[%s]]" % action
+            if not isinstance(entry, dict) or set(entry) - (keys | {"project", "plan", "by"}):
+                raise InboxError(where + ": unknown fields or invalid table")
+            fields = dict(entry)
+            target = fields.pop("project", project)
+            if target != project:
+                raise InboxError(where + ": project must match the inbox project")
+            plan = fields.pop("plan", None)
+            if action != "provider" and (not isinstance(plan, str) or not plan.strip()):
+                raise InboxError(where + ": plan is required")
+            for key in keys - {"packages"}:
+                if key in fields and not isinstance(fields[key], str):
+                    raise InboxError(where + ": " + key + " must be text")
+            if action == "provider":
+                fields["provider_action"] = fields.pop("action", None)
+            owner.validate(conn, action, target, plan, **fields)
+            orders.append({"owner_action": action, "project": target, "plan": plan, "fields": fields})
     if not answers and not decisions and not orders:
-        raise InboxError("the file has no [[answer]], no [[decision]] and no [[queue]]")
+        raise InboxError("the file has no answer, decision, queue order or owner action")
     return answers, decisions, orders
 
 
@@ -202,6 +229,10 @@ def process_inbox(env) -> dict:
             for d in decisions:
                 runtime.add_decision(env.conn, env.name, d["source"], d["text"], d["plan"], d["item"])
             for o in orders:
+                if "owner_action" in o:
+                    from . import owner
+                    owner.apply(env.conn, o["owner_action"], o["project"], o["plan"], **o["fields"])
+                    continue
                 apply_queue_order(env.conn, env.name, o)
                 env.log("inbox queue order %s: branch %s, rows %s (%s)" % (o["action"], o["branch"], o["ids"], o["reason"]))
         except (InboxError, KeyError, ValueError, runtime.CmdError) as exc:

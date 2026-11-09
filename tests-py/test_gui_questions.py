@@ -105,6 +105,29 @@ class WindowTest(RoundCase):
         self.assertIn("answer", win.status.cget("text").lower())
         self.assertEqual(win.list.size(), 2)
 
+    def test_explicit_owner_buttons_and_required_rejection_text(self):
+        runtime.set_plan_status(self.conn, 'testproj', REL, 'REVIEW')
+        win = gui_questions.QuestionsWindow(self.root, self.conn)
+        self.assertEqual(win.accept_button.cget('text'), 'Accept')
+        self.assertEqual(win.reject_button.cget('text'), 'Not ok')
+        self.assertTrue(win.accept_button.winfo_manager())
+        win.reject_button.invoke()
+        self.assertIn('text', win.status.cget('text').lower())
+        self.assertEqual(win.list.size(), 2)
+        win.reply.insert('1.0', 'Fix the second package')
+        win.checks['P2'].set(True)
+        win.reject_button.invoke()
+        self.assertEqual(bees.rejected_packages(self.conn, 'testproj', REL), ['P2'])
+        self.assertEqual(db.owner_check_result(self.conn, self.owner_q), 'rejected')
+
+    def test_accept_button_completes_plan(self):
+        runtime.set_plan_status(self.conn, 'testproj', REL, 'REVIEW')
+        db.answer_question(self.conn, self.plain_q, 'Red', 'owner')
+        win = gui_questions.QuestionsWindow(self.root, self.conn)
+        win.accept_button.invoke()
+        self.assertEqual(win.list.size(), 0)
+        self.assertEqual(runtime.list_plans(self.conn, 'testproj')[0]['status'], 'DONE')
+
     # The checkbox sits below the answer field, off by default, and is read when answering.
     def test_apiary_checkbox(self):
         """The checkbox is off, packed right after the answer field, resets after an answer and stores the Project decision when set."""
