@@ -393,7 +393,7 @@ class AccessType(FormCase):
         win.target()["apiKey"] = "k"
         self.assertEqual(self.resolved(win, "x")["notReady"], "")
         win.choose_access("Local LLM")
-        win.refresh_state()
+        win.refresh_state(wait=True)
         self.assertIn("Not ready:", win.ready_label.cget("text"))
 
 

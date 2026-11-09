@@ -20,7 +20,7 @@ def apply_style(root, mono):
         "Button": {"background": select, "foreground": gold, "activeBackground": COL["button_hover"], "activeForeground": gold, "disabledForeground": dim,
                    "relief": "raised", "borderWidth": 2, "padX": 12, "padY": 3, "highlightThickness": 0, "cursor": "hand2"},
         "Checkbutton": {"background": bg, "foreground": text, "activeBackground": bg, "activeForeground": gold, "selectColor": track, "highlightThickness": 0},
-        "Menubutton": {"background": track, "foreground": text, "activeBackground": select, "activeForeground": gold, "relief": "flat", "highlightThickness": 0},
+        "Menubutton": {"background": track, "foreground": text, "activeBackground": select, "activeForeground": gold, "relief": "flat", "highlightThickness": 0, "cursor": "hand2"},
         "Menu": {"background": panel, "foreground": text, "activeBackground": select, "activeForeground": gold, "relief": "flat"},
         "Entry": field, "Text": field,
         "Listbox": {"background": panel, "foreground": text, "selectBackground": select, "selectForeground": gold, "relief": "flat",
@@ -59,8 +59,11 @@ def apply_style(root, mono):
 BUTTON_LOOK = {"hover": ("button_hover", None), "down": ("button_down", "sunken")}   # state: (colour name of COL, relief; None keeps the relief of the button)
 
 
+BUTTON_CLASSES = ("Button", "Menubutton")   # widget classes with the hover and pressed look: push buttons and the buttons of every drop-down menu (tk.OptionMenu, option_menu)
+
+
 def button_look(button, state):
-    """Give a tk.Button the look of `state` ("normal", "hover" or "down"): hover and pressed have their own background (pressed also a sunken relief), so a click
+    """Give a tk.Button or tk.Menubutton the look of `state` ("normal", "hover" or "down"): hover and pressed have their own background (pressed also a sunken relief), so a click
     is visible; "normal" restores what the button had before. A disabled button, or one that is already gone, is left alone."""
     try:
         if str(button.cget("state")) == "disabled":
@@ -81,8 +84,9 @@ def bind_button_states(root):
     if getattr(root, "hq_buttons_bound", False):
         return
     root.hq_buttons_bound = True
-    for sequence, state in (("<Enter>", "hover"), ("<Leave>", "normal"), ("<ButtonPress-1>", "down")):
-        root.bind_class("Button", sequence, lambda event, st=state: button_look(event.widget, st), add="+")
+    for kind in BUTTON_CLASSES:
+        for sequence, state in (("<Enter>", "hover"), ("<Leave>", "normal"), ("<ButtonPress-1>", "down")):
+            root.bind_class(kind, sequence, lambda event, st=state: button_look(event.widget, st), add="+")
 
     def released(event):
         """After the click the button shows hover while the pointer is still over it, else its normal look."""
@@ -91,7 +95,8 @@ def bind_button_states(root):
         except Exception:
             inside = False
         button_look(event.widget, "hover" if inside else "normal")
-    root.bind_class("Button", "<ButtonRelease-1>", released, add="+")
+    for kind in BUTTON_CLASSES:
+        root.bind_class(kind, "<ButtonRelease-1>", released, add="+")
 
 
 # A scroll bar in the dashboard colours.
@@ -150,6 +155,7 @@ def option_menu(parent, var, values, mono, command=None, disabled=()):
                            highlightthickness=1, highlightbackground=COL["selectedge"], highlightcolor=COL["gold"])
     menu = tk.Menu(button, tearoff=0)
     button["menu"] = menu
+    menu.bind("<Unmap>", lambda _e: button_look(button, "normal"), add="+")   # the pressed look ends when the list closes
 
     def pick(value):
         """Set the variable and tell the caller."""

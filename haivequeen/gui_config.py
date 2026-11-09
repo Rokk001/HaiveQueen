@@ -578,8 +578,9 @@ class ConfigWindow(ProviderPages):
     TABS = (("general", N_("General")), ("providers", N_("Providers")), ("apiaries", N_("Projects")))
 
     # Build the window for the settings files of `conn`.
-    def __init__(self, root, conn, config_dir, mono="Consolas", on_saved=None):
-        """Open the editor on `root`; `config_dir` holds config.toml, `mono` is the font family, `on_saved` is called after a successful save."""
+    def __init__(self, root, conn, config_dir, mono="Consolas", on_saved=None, wait=False):
+        """Open the editor on `root`; `config_dir` holds config.toml, `mono` is the font family, `on_saved` is called after a successful save. The files and the
+        database are read in a thread: the window opens at once and shows the pages when the read ends (`wait` pumps the event loop until then, for tests)."""
         import tkinter as tk
         self.tk, self.root, self.conn, self.mono, self.on_saved = tk, root, conn, mono, on_saved
         from . import gui_dialog   # imported here: gui_dialog imports gui, which imports this module only on demand
@@ -588,6 +589,7 @@ class ConfigWindow(ProviderPages):
         self.data, self.node, self.getters, self.entries, self.visible, self.position, self.rows = {}, ("general", None), [], [], [], None, {}
         self.apiaries, self.initial_values, self.initial_build = [], {}, None
         self.build_vars, self.fresh = None, []   # fresh: the providers added in this window and not saved yet
+        self.registered_cache, self.loading, self.generation = {}, False, 0   # registered(): the Projects of the database as of the last read, never read on the UI thread
         self.type_stash = []   # [(provider entry, values of the access types not shown)]: kept while the window is open
         self.ready_label = self.test_button = self.result_label = None
         self.advanced_open = False   # the section Advanced of the Apiary page starts collapsed and stays as the owner left it while the window is open
@@ -644,7 +646,7 @@ class ConfigWindow(ProviderPages):
         self.bottom_note = tk.Label(foot, text=self.hint, fg=COL["dim"], justify="left", anchor="w")
         self.bottom_note.pack(fill="x", pady=(6, 0))   # its own row below the buttons over the full width, wraps to as many lines as needed
         self.bottom_note.bind("<Configure>", lambda e: self.bottom_note.configure(wraplength=max(120, e.width)))
-        self.reload()
+        self.reload(wait=wait)
 
     def wheel(self, event):
         """The mouse wheel scrolls the page (also over a combobox, which never changes its value by the wheel)."""
@@ -661,20 +663,27 @@ class ConfigWindow(ProviderPages):
         return self.node[0] != "apiaries"
 
     def registered(self) -> dict:
-        """{name: (workspace, legacy_deploy)} of the Projects in the database."""
-        return {r[0]: (r[1], bool(r[2])) for r in self.conn.execute("SELECT name, workspace, legacy_deploy FROM projects")}
+        """{name: (workspace, legacy_deploy)} of the Projects in the database as of the last read (no database access here: it runs on the UI thread)."""
+        return self.registered_cache
+
+    @staticmethod
+    def read_registered(conn) -> dict:
+        """The Projects in the database; slow, so only in a thread (see `reload`)."""
+        return {r[0]: (r[1], bool(r[2])) for r in conn.execute("SELECT name, workspace, legacy_deploy FROM projects")}
 
     # The Apiaries of the tab Apiaries.
-    def load_apiaries(self):
-        """One record per Project: every entry of config.toml, then the Projects registered only in the database whose folder exists."""
-        registered = self.registered()
-        self.apiaries = [self.apiary_record(entry, registered) for entry in self.data.get("projects") or []]
-        listed = {a["name"] for a in self.apiaries}
+    @staticmethod
+    def build_apiaries(data, registered) -> list:
+        """One record per Project: every entry of config.toml, then the Projects registered only in the database whose folder exists (reads the project.toml files)."""
+        apiaries = [ConfigWindow.apiary_record(entry, registered) for entry in data.get("projects") or []]
+        listed = {a["name"] for a in apiaries}
         for name in sorted(registered):
             if name not in listed and registered[name][0] and Path(registered[name][0]).is_dir():
-                self.apiaries.append(self.apiary_record(None, registered, name))
+                apiaries.append(ConfigWindow.apiary_record(None, registered, name))
+        return apiaries
 
-    def apiary_record(self, entry, registered, name=None):
+    @staticmethod
+    def apiary_record(entry, registered, name=None):
         """The record of one Project: its entry in config.toml (None for a Project only in the database), its name, the workspace whose project.toml it uses
         (the registered one wins over the one typed in config.toml), the settings of that file, a copy to see changes, and whether it is a Project from before the switches."""
         name = name if entry is None else str(entry.get("name") or "")
@@ -686,15 +695,51 @@ class ConfigWindow(ProviderPages):
                 "legacy": bool(row and row[1]), "exists": bool(path and path.is_file())}
 
     # Read the files again and show their parts.
-    def reload(self):
-        """Drop unsaved changes: read config.toml and the project.toml of every Project and show the General tab."""
+    def reload(self, wait=False):
+        """Drop unsaved changes: read config.toml, the database and the project.toml of every Project in a thread (the window stays usable) and show the General tab
+        when the read ends. `wait` pumps the event loop until then."""
+        from . import gui_async
         self.fresh, self.type_stash = [], []
-        self.data = load_migrated(self.config_path)   # old endpoint entries in the new form; the file changes only when saved
-        self.load_apiaries()
-        self.status.config(text="")
-        self.node = ("general", None)
-        self.fill_nodes()
-        self.select(0)
+        self.generation += 1
+        generation, path = self.generation, self.config_path
+        self.loading = True
+        self.status.config(text=tr("loading…"), fg=self.col["dim"])
+
+        read_registered, build_apiaries = self.read_registered, self.build_apiaries   # static: the thread must not hold the window (widgets are freed in the main thread only)
+
+        def read(conn):
+            """In the thread: config.toml (old endpoint entries in the new form; the file changes only when saved), the Projects and their project.toml files."""
+            data = load_migrated(path)
+            registered = read_registered(conn)
+            return data, registered, build_apiaries(data, registered)
+
+        def done(result):
+            """In the event loop: show what was read (a newer reload makes this one obsolete)."""
+            if generation != self.generation:
+                return
+            self.loading = False
+            self.data, self.registered_cache, self.apiaries = result
+            self.status.config(text="")
+            self.node = ("general", None)
+            self.fill_nodes()
+            self.select(0)
+
+        def failed(exc):
+            """In the event loop: say why the pages are empty."""
+            if generation == self.generation:
+                self.loading = False
+                self.status.config(text=str(exc)[:300], fg=self.col["red"])
+        gui_async.run_async(self.win, gui_async.with_connection(self.conn, read), done, failed)
+        if wait:
+            self.wait_loaded()
+
+    def wait_loaded(self, seconds=30):
+        """Run the event loop until the read of `reload` has ended."""
+        import time
+        end = time.monotonic() + seconds
+        while self.loading and time.monotonic() < end:
+            self.win.update()
+            time.sleep(0.005)
 
     # List the parts of the settings.
     def fill_nodes(self):
@@ -1454,6 +1499,9 @@ class ConfigWindow(ProviderPages):
     @filetxn.coordinated
     def save(self):
         """Collect the shown part, check everything, write config.toml and the project.toml of every changed or new Project and tell the main window; a problem is shown and nothing is written."""
+        if self.loading:
+            self.status.config(text=tr("loading…"), fg=self.col["dim"])
+            return
         if not self.collect():
             return
         from . import servers
@@ -1472,7 +1520,10 @@ class ConfigWindow(ProviderPages):
             return
         from . import init
         old_data = load_migrated(self.config_path)
-        init.register_listed(self.conn, self.data.get("projects"))   # an Apiary added on this tab is an Apiary from now on
+        added = init.register_listed(self.conn, self.data.get("projects"))   # an Apiary added on this tab is an Apiary from now on
+        for entry in self.data.get("projects") or []:
+            if entry.get("name") in added:
+                self.registered_cache[entry["name"]] = (str(Path(str(entry["workspace"]).strip()).resolve()), False)   # registered() follows without a new read
         for apiary, path in writes:
             save_project_file(self.conn, path, apiary["file"])
             apiary.update(path=path, workspace=str(path.parent.parent), saved=json.dumps(apiary["file"], sort_keys=True), exists=True)

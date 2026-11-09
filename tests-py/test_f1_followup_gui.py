@@ -206,7 +206,7 @@ class ReactionTest(Base):
         base = Path(self.tmp.name)
         (base / "config.toml").write_text("slots = 2\n", encoding="utf-8")
         with quiet_toplevel():
-            settings = gui_config.ConfigWindow(root, self.conn, base)
+            settings = gui_config.ConfigWindow(root, self.conn, base, wait=True)
         with mock.patch.object(gui_data, "snapshot", snapshot):
             win.tick()
             self.assertLess(self.timed(lambda: settings.pick_tab("providers")), REACT)
@@ -509,6 +509,123 @@ class NotReadyProviderTest(Base):
         texts = [canvas.itemcget(i, "text") for i in canvas.find_all() if canvas.type(i) == "text"]
         self.assertIn("offline", texts)
         self.assertIn("not ready: the login is missing", texts)
+
+
+class SettingsLoadTest(Base):
+    """F-2: the settings window reads its files and the database in a thread; a gated read of 2 s never holds a click, and the pages appear when the read ends."""
+
+    def open(self, root):
+        from haivequeen import gui_config
+        base = Path(self.tmp.name)
+        (base / "config.toml").write_text('slots = 2\n[[providers]]\nname = "claude"\n', encoding="utf-8")
+        with quiet_toplevel():
+            win = gui_config.ConfigWindow(root, self.conn, base, wait=True)
+        self.addCleanup(win.win.destroy)
+        return win
+
+    def pump(self, root, condition, rounds=300):
+        for _ in range(rounds):
+            root.update()
+            if condition():
+                return True
+            time.sleep(0.02)
+        return condition()
+
+    def check_gated(self, patched):
+        root, _dash = self.window()
+        win = self.open(root)
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        with patched(gate):
+            start = time.monotonic()
+            win.reload()
+            self.assertLess(time.monotonic() - start, REACT)
+            self.assertTrue(win.loading)
+            start = time.monotonic()
+            win.registered()
+            root.update()
+            self.assertLess(time.monotonic() - start, REACT)
+            gate.set()
+            self.assertTrue(self.pump(root, lambda: not win.loading))
+        self.assertEqual(win.data.get("slots"), 2)
+        self.assertIn("ODP", win.registered())
+        self.assertEqual(win.status.cget("text"), "")
+
+    def test_reload_with_a_slow_file_read_returns_at_once_and_shows_the_data_after(self):
+        from haivequeen import gui_config
+        real = gui_config.load_migrated
+
+        def patched(gate):
+            def slow(path):
+                gate.wait(5)
+                return real(path)
+            return mock.patch.object(gui_config, "load_migrated", slow)
+        self.check_gated(patched)
+
+    def test_reload_with_a_slow_database_read_returns_at_once_and_shows_the_data_after(self):
+        from haivequeen import gui_config
+        real = gui_config.ConfigWindow.read_registered
+
+        def patched(gate):
+            def slow(conn):
+                gate.wait(5)
+                return real(conn)
+            return mock.patch.object(gui_config.ConfigWindow, "read_registered", staticmethod(slow))
+        self.check_gated(patched)
+
+    def test_registered_does_not_touch_the_database(self):
+        root, _dash = self.window()
+        win = self.open(root)
+        win.conn = mock.Mock(side_effect=AssertionError("database read on the UI thread"))
+        self.assertIn("ODP", win.registered())
+
+
+class MenubuttonTest(unittest.TestCase):
+    """F-3: the buttons of drop-down menus (tk.OptionMenu, option_menu) show hover and pressed like every other button."""
+
+    def setUp(self):
+        import tkinter as tk
+        try:
+            self.root = tk.Tk()
+            self.root.attributes("-alpha", 0.0)
+        except tk.TclError:
+            self.skipTest("no display")
+        self.addCleanup(self.root.destroy)
+        gui_dialog.apply_style(self.root, "Consolas")
+        self.tk = tk
+
+    def check(self, button):
+        button.pack()
+        self.root.update()
+        normal = (button.cget("background"), button.cget("relief"))
+        button.event_generate("<Enter>")
+        self.root.update()
+        hover = (button.cget("background"), button.cget("relief"))
+        self.assertEqual(hover[0], gui.COL["button_hover"])
+        # a real press would open the menu (a modal grab): the binding of the class is checked, the look is applied by its function
+        self.assertIn("<lambda>", self.root.bind_class("Menubutton", "<ButtonPress-1>"))
+        gui_dialog.button_look(button, "down")
+        down = (button.cget("background"), button.cget("relief"))
+        self.assertEqual(down, (gui.COL["button_down"], "sunken"))
+        self.assertNotEqual(normal[0], hover[0])
+        button.event_generate("<Leave>")
+        self.root.update()
+        self.assertEqual((button.cget("background"), button.cget("relief")), normal)
+
+    def test_tk_option_menu(self):
+        var = self.tk.StringVar(value="a")
+        self.check(self.tk.OptionMenu(self.root, var, "a", "b"))
+
+    def test_dashboard_option_menu(self):
+        var = self.tk.StringVar(value="a")
+        self.check(gui_dialog.option_menu(self.root, var, ["a", "b"], "Consolas"))
+
+    def test_pressed_look_ends_when_the_list_closes(self):
+        var = self.tk.StringVar(value="a")
+        button = gui_dialog.option_menu(self.root, var, ["a", "b"], "Consolas")
+        button.pack()
+        self.root.update()
+        self.assertIn("<lambda>", button.nametowidget(str(button["menu"])).bind("<Unmap>"))
 
 
 if __name__ == "__main__":

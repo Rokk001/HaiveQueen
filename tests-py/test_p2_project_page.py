@@ -1,4 +1,5 @@
 """P2 of the slim project settings: the project page (P-8), the knowledge base (P-9) and the General and provider fields (P-11)."""
+import gc
 import subprocess
 import sys
 import tempfile
@@ -208,6 +209,7 @@ class WindowCase(unittest.TestCase):
             self.root.attributes("-alpha", 0.0)
         except tkinter.TclError as exc:
             self.skipTest("no display: %s" % exc)
+        self.addCleanup(gc.collect)   # Tk objects are freed in the main thread, never by the collector in a reading thread
         self.addCleanup(self.root.destroy)
 
         class Quiet(tkinter.Toplevel):
@@ -234,7 +236,7 @@ class WindowCase(unittest.TestCase):
 
     def window(self, page=None):
         """The settings window, showing the Project page when `page` is "project"."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.base)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.base, wait=True)
         if page == "project":
             win.pick_tab("apiaries")
             win.select(win.entries.index(("apiaries", 0)))
