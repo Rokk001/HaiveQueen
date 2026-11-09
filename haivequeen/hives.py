@@ -303,7 +303,7 @@ def file_owner_check(conn, env, plan):
         except OSError:
             final = ''
     language = roles.language(env.settings)
-    text = str(env.settings.get('ownerCheckText') or tr('Check the integrated result', language=language))
+    text = tr('Check the integrated result', language=language)   # the default text; the decision is taken by buttons
     if final:
         text += tr('\n\nReport of the Queen:\n', language=language) + final
     qid = db.add_question(conn, env.name, plan, 'owner-check', text, '')

@@ -136,25 +136,6 @@ class HelperTest(unittest.TestCase):
         self.assertIn("model_providers.loc.base_url=http://x/v1", got)
         self.assertEqual(ar.endpoint_args({"name": "n", "endpoint": None}), [])
 
-    def test_phase_rules(self):
-        """Phase rule sections are copied verbatim; a missing section raises; without phaseRules AGENTS.md is used."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp)
-            (ws / "RULES.md").write_text("# Top\n\n## Build\nuse jobs\n```\n## not a heading\n```\nmore\n\n## Style\nspaces\n", encoding="utf-8")
-            out = ws / "rules.md"
-            pcfg = {"phaseRules": {"work": {"main": ["## Build", "## Style"]}, "verify": {"main": ["## Nope"]}}, "ruleSources": {"main": "RULES.md"}}
-            self.assertEqual(ar.write_phase_rules(pcfg, str(ws), "work", out), 2)
-            text = out.read_text(encoding="utf-8")
-            self.assertIn("## Build\nuse jobs\n```\n## not a heading\n```\nmore", text)
-            self.assertIn("## Style\nspaces", text)
-            with self.assertRaises(ValueError):
-                ar.write_phase_rules(pcfg, str(ws), "verify", out)
-            with self.assertRaises(ValueError):
-                ar.write_phase_rules(pcfg, str(ws), "release", out)
-            (ws / "AGENTS.md").write_text("# Agents\nrule 1\n", encoding="utf-8")
-            self.assertEqual(ar.write_phase_rules({}, str(ws), "work", out), 1)
-            self.assertIn("rule 1", out.read_text(encoding="utf-8"))
-
     def test_codex_tokens(self):
         """Live tokens come from the last token_count line of the session log."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -408,37 +389,34 @@ class ClaudeRunTest(RunnerBase):
         self.assertEqual(argv[argv.index("--tools") + 1],
                          "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop")
 
-    # Verify machine settings apply when the project has no tool setting.
-    def test_machine_claude_tools_reach_cli(self):
-        """Machine tool settings override the default when absent from the project."""
+    # The tools of a Claude agent are a setting of its provider.
+    def test_provider_claude_tools_reach_cli(self):
+        """The setting Tools available to Claude agents of the provider is what the Claude CLI gets."""
         cfg = self.base / "cfg" / "config.toml"
-        cfg.write_text("claudeTools = 'Read,Glob'\n" + cfg.read_text(encoding="utf-8").replace(
-            "args = ['--model'", "args = ['--tools', '{claudeTools}', '--model'", 1), encoding="utf-8")
-        self.prepare("TOOLS-MACHINE")
-        self.run_runner("TOOLS-MACHINE", "claude", claude_stream())
+        cfg.write_text(cfg.read_text(encoding="utf-8").replace(
+            "args = ['--model'", "claudeTools = 'Read,Glob'\nargs = ['--tools', '{claudeTools}', '--model'", 1), encoding="utf-8")
+        self.prepare("TOOLS-PROVIDER")
+        self.run_runner("TOOLS-PROVIDER", "claude", claude_stream())
         argv = self.record()["argv"]
         self.assertEqual(argv[argv.index("--tools") + 1], "Read,Glob")
 
-    # Verify an empty tool argument fails without starting Claude.
-    def test_empty_claude_tools_fail_without_cli_start(self):
-        """An empty expanded tools argument fails before the Claude CLI is started."""
+    # A project value of the tools does not apply any more.
+    def test_project_claude_tools_do_not_apply(self):
+        """A claudeTools entry of a project file is ignored: the provider setting (here the built-in default) decides."""
         cfg = self.base / "cfg" / "config.toml"
         cfg.write_text(cfg.read_text(encoding="utf-8").replace(
             "args = ['--model'", "args = ['--tools', '{claudeTools}', '--model'", 1), encoding="utf-8")
         (self.ws / ".haivequeen").mkdir()
-        (self.ws / ".haivequeen" / "project.toml").write_text("claudeTools = ''\n", encoding="utf-8")
-        self.prepare("TOOLS-EMPTY")
-        r = self.run_runner("TOOLS-EMPTY", "claude", claude_stream())
-        self.assertEqual(r.returncode, 0, r.stderr)
-        row = self.row("TOOLS-EMPTY")
-        self.assertEqual(row["status"], "failed")
-        self.assertEqual(row["last_line"], "runner error: claudeTools missing")
-        self.assertEqual(row["exit_code"], 99)
-        self.assertTrue(row["ended_at"])
-        self.assertFalse((self.base / "record.json").exists())
+        (self.ws / ".haivequeen" / "project.toml").write_text("claudeTools = 'Read'\n", encoding="utf-8")
+        self.prepare("TOOLS-PROJECT")
+        self.run_runner("TOOLS-PROJECT", "claude", claude_stream())
+        argv = self.record()["argv"]
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop")
 
     def test_claude_done(self):
         """Tokens, context, milestones, final report, usage windows and the report prompt of a finished Claude agent."""
+        subprocess.run(["git", "-C", str(self.ws), "init", "-q"], check=True)   # the project rules are the checked-in files of the repository
+        subprocess.run(["git", "-C", str(self.ws), "add", "AGENTS.md"], check=True)
         self.prepare("A-1")
         r = self.run_runner("A-1", "claude", claude_stream())
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -487,22 +465,6 @@ class ClaudeRunTest(RunnerBase):
         self.prepare("A-4")
         self.run_runner("A-4", "claude", claude_stream(), phase="verify")
         self.assertEqual(self.row("A-4")["task"], "Verify package P1, completeness check")
-
-    def write_phase_rules_project(self):
-        """A project.toml whose phaseRules list work and verify only (as the real project did when the Claude triage agents died)."""
-        (self.ws / ".haivequeen").mkdir(exist_ok=True)
-        (self.ws / ".haivequeen" / "project.toml").write_text(
-            "[ruleSources]\nmain = 'AGENTS.md'\n[phaseRules.work]\nmain = ['# Agents']\n[phaseRules.verify]\nmain = ['# Agents']\n", encoding="utf-8")
-
-    def test_rule_error_fails_the_agent_at_once(self):
-        """A phase without rules ends the agent as failed with the reason in the row, not as a runner that vanishes unseen."""
-        self.write_phase_rules_project()
-        self.prepare("T-2")
-        r = self.run_runner("T-2", "claude", claude_stream(), phase="release")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        row = self.row("T-2")
-        self.assertEqual(row["status"], "failed")
-        self.assertIn("no phaseRules for phase 'release'", row["last_line"])
 
     def test_codex_empty_closing_message_keeps_the_last_answer(self):
         """A Codex run that ends with an empty agent message leaves final.txt with the last non-empty message (it was empty before)."""

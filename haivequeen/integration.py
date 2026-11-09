@@ -11,7 +11,7 @@ import subprocess
 import time
 from datetime import datetime
 
-from . import db, localtime, plans, roles, routine, runtime, scheduler as sch
+from . import db, localtime, plans, proctree, roles, routine, runtime, scheduler as sch
 from .i18n import tr
 
 BUILD = plans.STEP_PACKAGES["Build"]
@@ -24,7 +24,7 @@ COMPILE_TIMEOUT = 3600   # seconds a compile check may run before it counts as f
 # The three switches of an Apiary.
 def switches(settings):
     """{compileCheck, build, deploy} of the settings (scheduler.build_settings fills in the defaults, also for a Project from before the switches)."""
-    return {"compileCheck": bool(settings.get("compileCheckEnabled", True)), "build": bool(settings.get("buildEnabled", True)),
+    return {"compileCheck": bool(str(settings.get("compileCheck") or "").strip()), "build": bool(settings.get("buildEnabled", True)),
             "deploy": bool(settings.get("deployEnabled", False))}
 
 
@@ -151,8 +151,17 @@ def run_compile_check(env, queen, timeout=COMPILE_TIMEOUT):
     try:
         # The configured command line is the owner's own text, so the system shell runs it (named explicitly, no shell flag): cmd /s keeps a quoted program path intact.
         line = 'cmd.exe /d /s /c "%s"' % command if os.name == "nt" else ["/bin/sh", "-c", command]
-        done = subprocess.run(line, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
-        code, output = done.returncode, (done.stdout or "") + (done.stderr or "")
+        proc = subprocess.Popen(line, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+        proctree.exempt_register(proc.pid)   # started by HaiveQueen, not by the agent: the cleanup of the agent's leftover processes leaves it alone
+        try:
+            out_text, err_text = proc.communicate(timeout=timeout)
+            code, output = proc.returncode, (out_text or "") + (err_text or "")
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
+        finally:
+            proctree.exempt_clear(proc.pid)
     except subprocess.TimeoutExpired:
         code, output = 124, "the compile check ran longer than %d seconds" % timeout
     except OSError as exc:
@@ -243,12 +252,6 @@ def configuration(env, plan):
         config["compileCheck"] = s["compileCheck"]
     if on["build"] or on["deploy"]:
         config.update({key: s[key] for key in ("integratorInstructions", "buildFlowDoc") if s.get(key)})
-    configured = (s.get("prompts") or {}).get("integrator")
-    if configured:
-        config["steps"] = sch.expand_template(str(configured), {**routine.base_values(env), "plan": plan})
-        off = [name for name, enabled in (("compile check", on["compileCheck"]), ("build", on["build"]), ("deploy", on["deploy"])) if not enabled]
-        if off:
-            config["steps"] += " The Project switches decide over this text: %s switched off, leave out." % ", ".join(off)
     return config
 
 

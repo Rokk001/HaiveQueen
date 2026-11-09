@@ -753,17 +753,6 @@ class QueenIntegrationTests(RoundCase):
             self.assertFalse(bees.start_process(self.env(), REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [], cwd=str(self.wt)))
         self.assertIsNone(runtime.get_agent(self.conn, 'testproj', 'Ada'))
 
-    # The configured integration prompt receives this Hive's plan path.
-    def test_queen_integration_prompt_resolves_own_plan(self):
-        from bzztest import REL
-        self.machine['prompts'] = {'integrator': 'Integrate only {plan} in {project} on {integrationBranch}.'}
-        self.plan('READY', [{'id': 'P1', 'title': 'First'}])
-        self.round()
-        queen = next(a for a in runtime.list_agents(self.conn, 'testproj', 'all') if a['phase'] == 'queen')
-        prompt = (self.env().run_dir(queen['name']) / 'prompt.md').read_text(encoding='utf-8-sig')
-        self.assertIn('Integrate only %s in testproj on main.' % REL, prompt)
-        self.assertNotIn('{plan}', prompt)
-
     # A replacement Queen receives a name different from her predecessor after a long rest.
     def test_replacement_queen_does_not_reuse_predecessor_name_after_long_rest(self):
         from haivequeen import hives

@@ -275,6 +275,12 @@ def cmd_integration(args, conn):
     from haivequeen import buildjobs, scheduler
     from haivequeen import platform as osplat
     env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
+    from haivequeen import projsettings
+    reason = projsettings.remote_wait_reason(env.settings) if env else ""
+    if reason:   # the Git remote of the project is not chosen: wait like for an occupied place, the dashboard shows this reason
+        if row:
+            conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
+        return fail("waiting for integration: " + reason)
     free_mb = float(osplat.free_ram_mb())
     switches = integration.switches(env.settings) if env else {}
     builds = bool(switches.get("build") or switches.get("deploy"))   # with both switched off the integration builds nothing, so it needs no RAM and no job count

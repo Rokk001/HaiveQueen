@@ -96,7 +96,7 @@ def write_views(conn, project, workspace=None) -> dict:
     if not workspace:
         return {}
     ws = Path(workspace)
-    views = config.load_project(ws)["views"]
+    views = config.load_project(ws).get("views") or {}   # generated overviews are dropped from the project settings; an old file may still name them
     changed = {}
     for kind in VIEW_KINDS:
         rel = views.get(kind) or ""

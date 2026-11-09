@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import buildjobs, config, db, interrupt, localtime, offline, overview, profile, roles, runtime, scheduler, servers, startctx
+from . import buildjobs, config, db, interrupt, localtime, offline, overview, proctree, profile, roles, runtime, scheduler, servers, startctx
 from . import platform as osplat
 from .i18n import tr
 
@@ -96,7 +96,7 @@ def get_providers(cfg):
         fmt = profile.check_protocol(name, proto, p.get("outputFormat"))
         if p.get("server"):
             raise ValueError("provider %s: server %s does not exist" % (name, p["server"]))
-        out.append({"name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto),
+        out.append({"name": name, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto), "claudeTools": str(p.get("claudeTools") or ""), "contextLimit": int(p.get("contextLimit") or 0),
                     "args": [str(x) for x in (p.get("args") or [])], "classes": p.get("classes") or {},
                     "endpoint": p.get("endpoint") or None, "server": servers.server_of(p), "access": servers.access_of(p),
                     "apiKey": str(p.get("apiKey") or "") if servers.access_of(p) == "api" else "", **profile.custom_fields(p)})
@@ -416,62 +416,22 @@ def set_stalled(a, value, text):
 
 # ---------------------------------------------------------------- rule file of a phase
 
-def markdown_block(lines, prefix):
-    """Return the text of the first markdown block whose heading line starts with `prefix`; headings inside code fences are ignored."""
-    level = len(re.match(r"^(#+)", prefix).group(1)) if re.match(r"^(#+)", prefix) else 1
-    start, fence = -1, False
-    for i, ln in enumerate(lines):
-        if re.match(r"^\s*```", ln):
-            fence = not fence
-            continue
-        if not fence and ln.startswith(prefix):
-            start = i
-            break
-    if start < 0:
-        return ""
-    end, fence = len(lines), False
-    for j in range(start + 1, len(lines)):
-        if re.match(r"^\s*```", lines[j]):
-            fence = not fence
-            continue
-        m = re.match(r"^(#+) ", lines[j])
-        if not fence and m and len(m.group(1)) <= level:
-            end = j
-            break
-    return "\n".join(lines[start:end]).rstrip()
+def write_phase_rules(pcfg, workspace, phase, out_file, protocol="claude", cwd=None):
+    """Write the rule file of an agent phase and return the number of rule files written.
 
-
-def write_phase_rules(pcfg, workspace, phase, out_file):
-    """Write the rule file of one agent phase and return the number of sections written.
-
-    project.toml may name `ruleSources` (name -> file, relative to the workspace) and `phaseRules` (phase -> name -> list of heading
-    prefixes); the listed sections are copied verbatim, and a listed section that does not exist raises an error, so a renamed
-    heading never silently drops a rule. Without `phaseRules` the whole AGENTS.md of the workspace is the rule file.
+    Every agent of every phase gets the same rules: the checked-in project rules of the repository (and the upstream ones when the project uses them),
+    never a rule file from outside the repository and never the personal rule files of the user. HaiveQueen adds its own role texts elsewhere.
     """
     ws = Path(workspace) if workspace else Path(".")
-    rules = pcfg.get("phaseRules")
-    parts, n = [], 0
-    if rules:
-        sel = rules.get(phase)
-        if sel is None and phase == "queen":
-            sel = rules.get("work")
-        if sel is None:
-            raise ValueError("no phaseRules for phase '%s' in project.toml" % phase)
-        sources = pcfg.get("ruleSources") or {}
-        for src, prefixes in sel.items():
-            path = ws / str(sources.get(src, src))
-            lines = path.read_text(encoding="utf-8-sig").splitlines()
-            for pre in prefixes:
-                block = markdown_block(lines, str(pre))
-                if not block:
-                    raise ValueError("rule section '%s' not found in %s" % (pre, path))
-                parts.append(block)
-                n += 1
-    elif (ws / "AGENTS.md").is_file():
-        parts.append((ws / "AGENTS.md").read_text(encoding="utf-8-sig").rstrip())
-        n = 1
-    Path(out_file).write_text("# Rules for this agent phase (%s)\n\n%s\n" % (phase, "\n\n".join(parts)), encoding="utf-8")
-    return n
+    rules = profile.project_rules(pcfg, pcfg.get("codeRepo") or ws, protocol, cwd)
+    text = profile.rules_text(rules)
+    Path(out_file).write_text(text or "# Rules for this agent phase (%s)\n\nThe repository has no checked-in rule file.\n" % phase, encoding="utf-8")
+    return len(rules["inline"])
+
+
+def claude_tools(prov) -> str:
+    """The tools a Claude agent of this provider may use: the setting of the provider, else the built-in default."""
+    return str(prov.get("claudeTools") or "").strip() or config.DEFAULT_CLAUDE_TOOLS
 
 
 # ---------------------------------------------------------------- the run
@@ -1013,12 +973,10 @@ def run_agent(a, out=None):
     model, effort = class_model(prov, cls)
     model = a.model or model or (prev or {}).get("model") or ""
     effort = a.effort or effort or (prev or {}).get("effort") or ""
-    queue_name = pcfg.get("integrationStateFile")
-    queue_re = re.escape(Path(str(queue_name)).stem) if queue_name else None
-    run = AgentRun(conn, a.project, a.name, a.provider, protocol, a.cwd, run_dir, a.plan, a.package, a.phase, out, queue_re)
+    run = AgentRun(conn, a.project, a.name, a.provider, protocol, a.cwd, run_dir, a.plan, a.package, a.phase, out, None)
     run.compile_check = configured_compile_check(cfg, pcfg)
     run.format = prov["format"]
-    run.context_limit = scheduler.context_limit({"contextLimitTokens": CONTEXT_LIMIT, **scheduler.build_settings(cfg, pcfg)}, [{**prov, "name": a.provider}], a.provider, cls)
+    run.context_limit = scheduler.context_limit({"contextLimitTokens": CONTEXT_LIMIT, **scheduler.build_settings(cfg, pcfg, workspace=workspace or None)}, [{**prov, "name": a.provider}], a.provider, cls)
     run.model = model_label(model)
     plan_short = re.sub(r"-?PLAN$", "", Path(a.plan).stem) if a.plan else ""
     task = task_text(conn, a.project, a.plan, a.package, a.phase, plan_short) or task_line(a.prompt_file)
@@ -1054,12 +1012,12 @@ def run_agent(a, out=None):
         if protocol == "claude":
             if a.phase in ("bee", "queen"):   # complete project rules (checked-in instruction files, upstream ones when set), no selection
                 rules_file.write_text(profile.rules_text(profile.project_rules(pcfg, pcfg.get("codeRepo") or workspace or a.cwd, protocol, a.cwd)), encoding="utf-8")
-            else:
-                write_phase_rules(pcfg, workspace, a.phase, rules_file)
+            else:   # every other phase gets the same rules, never a file from outside the repository
+                write_phase_rules(pcfg, pcfg.get("codeRepo") or workspace or a.cwd, a.phase, rules_file, protocol, a.cwd)
         if a.phase in ("bee", "queen"):
             run.start_parts = approx_start_parts(a, pcfg, cfg, workspace, protocol, prompt)
         vars_ = {"model": model, "effort": effort, "repo": pcfg.get("codeRepo") or workspace or a.cwd, "workspace": workspace or a.cwd, "tools": str(TOOL_ROOT), "cwd": a.cwd,
-                 "claudeTools": pcfg.get("claudeTools", cfg.get("claudeTools", "")), "rules": str(rules_file)}
+                 "claudeTools": claude_tools(prov) if protocol == "claude" else "", "rules": str(rules_file)}
         if protocol == "claude" and not str(vars_["claudeTools"] or "").strip():
             raise ValueError("claudeTools missing")
         if not profile.prepare(prov):
@@ -1069,9 +1027,9 @@ def run_agent(a, out=None):
                                 tr("Provider %s (protocol %s) cannot be kept to the HaiveQueen profile, so it would read private files. This package is stopped. Which provider may run it?", a.provider, protocol, language=language),
                                 tr("Give the package to a provider that can be kept to the profile.", language=language))
             raise ValueError("provider %s cannot be kept to the HaiveQueen profile" % a.provider)
-        arg_list = build_args(prov, vars_, pcfg.get("allowedTools") if protocol == "claude" else None)
+        arg_list = build_args(prov, vars_)
         if protocol == "claude" and a.phase == "queen" and a.plan:
-            settings = scheduler.build_settings(cfg, pcfg)
+            settings = scheduler.build_settings(cfg, pcfg, workspace=workspace or None)
             grants = profile.claude_integration_permissions(a.project, a.plan, settings.get("remoteName") or "origin",
                                                              settings.get("integrationBranch") or "main", osplat.python_executable(),
                                                              TOOL_ROOT / "haivequeen" / "cli.py")
@@ -1155,6 +1113,8 @@ def run_agent(a, out=None):
             sampler.start()
 
     code = 0
+    proctree.exempt_register()   # a Bee started by `bzz bee start` is an agent of its own: the cleanup of its starter never touches it
+    tracker = proctree.Tracker(os.getpid(), run_dir).start()   # every process this agent starts is known, also after its parent ended
     clock_jumps = []   # filled when the wall clock jumps by more than interrupt.JUMP_SECONDS during the run (laptop sleep)
     jump_limit = float(scheduler.build_settings(cfg, pcfg).get("clockJumpSeconds", interrupt.JUMP_SECONDS))
     threading.Thread(target=clock_watch, daemon=True, args=(clock_jumps,), kwargs={"limit": jump_limit}).start()
@@ -1210,6 +1170,12 @@ def run_agent(a, out=None):
         code = 99
         run.last = "runner error: " + str(exc)
         run.say(run.last, "Red")
+    try:
+        left = tracker.finish()   # normal end, error or stop: no process of this agent stays behind
+        if left:
+            run.event("%s ended: %d leftover process(es) of the agent ended" % (a.name, len(left)), "build")
+    except Exception:
+        pass
     if bj_jobs > 0 and sampler:
         stop.set()
         sampler.join(timeout=5)

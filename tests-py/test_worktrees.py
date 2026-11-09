@@ -170,8 +170,7 @@ class CleanupTests(unittest.TestCase):
         (self.linked / 'new').unlink()
         (self.linked / 'ignored').mkdir()
         (self.linked / 'ignored' / 'data').write_text('data', encoding='utf-8')
-        self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
-        self.assertTrue((self.linked / 'ignored' / 'data').exists())
+        self.assertIn(str(self.linked), worktrees.prune(self.env, dry=True)['removed'])   # a file the .gitignore leaves out is build output
 
     # Locks and configured protected paths prevent removal.
     def test_locked_and_protected_worktrees_are_kept(self):
@@ -179,8 +178,6 @@ class CleanupTests(unittest.TestCase):
         self.git(self.repo, 'worktree', 'lock', str(self.linked))
         self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
         self.git(self.repo, 'worktree', 'unlock', str(self.linked))
-        self.env.settings['protectedWorktrees'] = [str(self.linked)]
-        self.assertNotIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
     # Dry runs list candidates without removing them.
     def test_dry_run_keeps_the_folder(self):
@@ -437,8 +434,8 @@ class CleanupTests(unittest.TestCase):
         """Projects protect all ignored files unless they opt into build output."""
         from haivequeen import scheduler
         settings = scheduler.build_settings({}, {})
-        self.assertEqual(settings['ignoredBuildOutput'], [])
-        self.assertEqual(settings['protectedWorktrees'], [])
+        self.assertNotIn('ignoredBuildOutput', settings)   # the .gitignore of the repository decides what is build output
+        self.assertNotIn('protectedWorktrees', settings)   # the cleanup removes only worktrees of branches it integrated
 
     # A configured cache directory also covers nested Python cache files.
     def test_nested_python_cache_matches_allowed_output(self):
@@ -590,14 +587,13 @@ class CleanupTests(unittest.TestCase):
         result = worktrees._prune_with_checker(self.env, lambda path: False, False)
         self.assertIn(str(self.linked), result['removed'])
 
-    # Ignored files remain protected when no build-output setting allows them.
-    def test_verified_ignored_data_is_kept_by_default(self):
-        """Ignored files remain protected when no build-output setting allows them."""
+    # Files the repository's .gitignore leaves out are build output and never keep a worktree.
+    def test_verified_ignored_data_is_build_output(self):
+        """Files the repository's .gitignore leaves out are build output; an untracked file that is not ignored still keeps the worktree."""
         (self.linked / 'ignored').mkdir()
-        (self.linked / 'ignored' / 'data').write_text('important', encoding='utf-8')
-        result = worktrees._prune_with_checker(self.env, lambda path: False, False)
-        self.assertNotIn(str(self.linked), result['removed'])
-        self.assertTrue((self.linked / 'ignored' / 'data').exists())
+        (self.linked / 'ignored' / 'data').write_text('output', encoding='utf-8')
+        result = worktrees._prune_with_checker(self.env, lambda path: False, True)
+        self.assertIn(str(self.linked), result['removed'])
 
     # Tracked changes and Git locks independently prevent cleanup.
     def test_verified_dirty_and_locked_candidates_are_kept(self):
@@ -618,9 +614,6 @@ class CleanupTests(unittest.TestCase):
     # Configured release worktrees and the workspace cannot be removed.
     def test_verified_protected_worktree_and_workspace_are_kept(self):
         """Configured release worktrees and the workspace cannot be removed."""
-        self.env.settings['protectedWorktrees'] = [str(self.linked)]
-        self.assertNotIn(str(self.linked), worktrees._prune_with_checker(self.env, lambda path: False, False)['removed'])
-        self.env.settings['protectedWorktrees'] = []
         self.env.workspace = self.linked
         self.assertNotIn(str(self.linked), worktrees._prune_with_checker(self.env, lambda path: False, False)['removed'])
 

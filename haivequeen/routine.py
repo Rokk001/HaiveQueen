@@ -161,6 +161,11 @@ def repair_stale_agents(env, now: datetime = None, alive=None) -> None:
                 fields.update({"previousPid": a["pid"], "pid": None})
             env.update_agent(a["name"], fields)
             env.log("TECHNICAL NOTE: %s: %s, marked failed" % (a["name"], why))
+            try:
+                from . import proctree
+                proctree.sweep(env.run_dir("").parent)   # its runner is gone: end what the agent left running
+            except Exception:
+                pass
 
 
 # ---- final answers of verify agents ----
@@ -408,34 +413,70 @@ def plan_root(pattern: str) -> str:
     return "/".join(parts)
 
 
-def plan_tag(env, plan: str) -> str:
-    """Short plan name for agent names: the plan's folder in upper case; a stand-alone plan file (directly in a plan root, or matching
-    planStandaloneRegex) uses its own file stem without the plan suffix."""
+def legacy_tag(plan: str, globs, standalone_rx: str = "", suffix_rx: str = "") -> str:
+    """The plan tag of a plan as HaiveQueen named it before the tag came from the file name: the plan's folder in upper case; a stand-alone plan file
+    (directly in a plan root, or matching the old planStandaloneRegex) used its own file stem without the plan suffix."""
     p = str(plan).replace("\\", "/")
     parent = p.rsplit("/", 1)[0] if "/" in p else ""
     stem = p.rsplit("/", 1)[-1]
-    rx = env.settings.get("planStandaloneRegex") or ""
-    if rx:
-        m = re.search(rx, stem)
+    if standalone_rx:
+        m = re.search(standalone_rx, stem)
         if m:
             return m.group(1) if m.groups() else m.group(0)
-    roots = {plan_root(g) for g in env.plan_globs}
+    roots = {plan_root(g) for g in globs or ["docs/plans/*.md"]}
     if not parent or parent in roots:
-        return re.sub(env.settings.get("planSuffixRegex") or "-?PLAN$", "", os.path.splitext(stem)[0]).upper()
+        return re.sub(suffix_rx or "-?PLAN$", "", os.path.splitext(stem)[0]).upper()
     return parent.rsplit("/", 1)[-1].upper()
 
 
+def file_tag(plan: str) -> str:
+    """The plan tag from the plan file name: without the extension and without a trailing PLAN or -PLAN (any case), in upper case; a file that has
+    nothing else (PLAN.md) gives the name of its folder."""
+    p = str(plan).replace("\\", "/")
+    parent = p.rsplit("/", 1)[0] if "/" in p else ""
+    tag = re.sub(r"(?i)-?PLAN$", "", os.path.splitext(p.rsplit("/", 1)[-1])[0]).strip("-_ ").upper()
+    return tag or (parent.rsplit("/", 1)[-1].upper() if parent else "PLAN")
 
 
+TAG_KEY = "plantag:"   # kv key + plan path: the tag a plan with a Hive keeps for good
 
 
+def plan_tag(env, plan: str) -> str:
+    """Short plan name for sub-branches and worktrees (the part before the package id).
+
+    A plan that already has a Hive keeps the tag it has (stored once, never renamed, a later collision cannot change it). Any other plan gets the tag
+    of its file name (file_tag); when a plan with a Hive already holds that tag, the folder of the plan goes in front, and further parent folders
+    while it still collides."""
+    conn = getattr(env, "conn", None)
+    key = TAG_KEY + str(plan)
+    taken = set()
+    if conn is not None:
+        try:
+            stored = runtime.kv_get(conn, env.name, key)
+            if stored:
+                return stored
+            rows = [r[0] for r in conn.execute("SELECT plan_path FROM hives WHERE project=?", (env.name,))]
+            globs = getattr(env, "plan_globs", None)
+            for other in rows:
+                taken.add(runtime.kv_get(conn, env.name, TAG_KEY + other) or legacy_tag(other, globs, env.settings.get("planStandaloneRegex") or "", env.settings.get("planSuffixRegex") or ""))
+            if str(plan) in rows:
+                tag = legacy_tag(plan, globs, env.settings.get("planStandaloneRegex") or "", env.settings.get("planSuffixRegex") or "")
+                runtime.kv_set(conn, env.name, key, tag)
+                return tag
+        except Exception:
+            pass
+    tag = file_tag(plan)
+    parents = [x for x in str(plan).replace("\\", "/").split("/")[:-1] if x]
+    while tag.lower() in {t.lower() for t in taken} and parents:
+        tag = parents.pop().upper() + "-" + tag
+    return tag
 
 
 def base_values(env) -> dict:
     """Placeholder values every prompt template gets."""
     s = env.settings
     return {"owner": s.get("owner", "Owner"), "integrationBranch": s.get("integrationBranch") or "main", "remoteName": s.get("remoteName") or "origin",
-            "compileCheck": s.get("compileCheck", "") if s.get("compileCheckEnabled", True) else "no compile check (switched off)",
+            "compileCheck": s.get("compileCheck") or "no compile check (the compile check command is empty)",
             "queueFile": "the integration queue", "queueName": "integration queue", "integratorInstructions": s.get("integratorInstructions", ""),
             "buildFlowDoc": s.get("buildFlowDoc", ""), "buildRules": buildjobs.rule_text(s.get("buildJobs")), "project": env.name, "runsDir": str(env.run_dir("")).replace("\\", "/")}
 

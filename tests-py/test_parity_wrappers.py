@@ -125,59 +125,5 @@ class WrapperParityTest(unittest.TestCase):
         self.assertNotEqual(code, 0)
 
 
-class PhaseRulesParityTest(unittest.TestCase):
-    """Phase rule files for all four phases: verbatim sections, less text for verify, the expected sections per phase."""
-
-    SRC = ("# Rules\n\n## Coding style\nspaces only\n\n## Process rules\nplan first\n\n"
-           "## Hard rules (tool)\nno secrets\n\n## Hard rules (project)\nno live data\n\n## Extra\nmore\n")
-
-    def setUp(self):
-        """Create a workspace with one rule source and a project config that selects sections per phase."""
-        self.tmp = tempfile.TemporaryDirectory()
-        self.ws = Path(self.tmp.name)
-        (self.ws / "RULES.md").write_text(self.SRC, encoding="utf-8")
-        both = ["## Process rules", "## Hard rules (tool)", "## Hard rules (project)"]
-        self.pcfg = {"ruleSources": {"main": "RULES.md"},
-                     "phaseRules": {"work": {"main": ["## Coding style"] + both + ["## Extra"]},
-                                    "verify": {"main": both}, "release": {"main": both}, "integrate": {"main": both}}}
-
-    def tearDown(self):
-        """Remove the temp folder."""
-        self.tmp.cleanup()
-
-    def write(self, phase):
-        """Write the rule file of a phase; return (section count, text)."""
-        out = self.ws / ("rules-%s.md" % phase)
-        n = ar.write_phase_rules(self.pcfg, str(self.ws), phase, out)
-        return n, out.read_text(encoding="utf-8")
-
-    def test_every_phase_verbatim(self):
-        """Every phase writes a rule file whose sections are verbatim parts of the source."""
-        lines = self.SRC.splitlines()
-        for phase, selection in self.pcfg["phaseRules"].items():
-            n, text = self.write(phase)
-            self.assertEqual(n, len(selection["main"]), phase)
-            for pre in selection["main"]:
-                block = ar.markdown_block(lines, pre)
-                self.assertTrue(block, pre)
-                self.assertIn(block, self.SRC)
-                self.assertIn(block, text)
-
-    def test_verify_smaller_than_work(self):
-        """The verify rules are shorter than the work rules and leave out the coding-style section."""
-        _, work = self.write("work")
-        _, verify = self.write("verify")
-        self.assertLess(len(verify), len(work))
-        self.assertNotIn("Coding style", verify)
-        self.assertIn("Coding style", work)
-
-    def test_verify_keeps_process_and_hard_rules(self):
-        """The verify rules keep the process rules and both hard-rule sections."""
-        _, verify = self.write("verify")
-        self.assertIn("Process rules", verify)
-        self.assertIn("Hard rules (tool)", verify)
-        self.assertIn("Hard rules (project)", verify)
-
-
 if __name__ == "__main__":
     unittest.main()

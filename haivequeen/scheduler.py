@@ -51,7 +51,6 @@ DEFAULT_SETTINGS = {
     "worktreeLocation": "",
     "ownerTopics": [],
     "compileCheck": "",
-    "compileCheckEnabled": True,
     "buildEnabled": True,
     "deployEnabled": False,  # an Apiary from before the switches keeps it on: build_settings(legacy_deploy)
     "deleteFinishedWorktrees": True,
@@ -61,12 +60,7 @@ DEFAULT_SETTINGS = {
     "buildFlowDoc": "",
     "integratorInstructions": "",
     "worktreePrefix": "wt",
-    "ignoredBuildOutput": [],
-    "protectedWorktrees": [],
-    "planStandaloneRegex": "",
-    "planSuffixRegex": "-?PLAN$",
     "buildProcessNames": [],
-    "capabilityRules": [],
 }
 MACHINE_ONLY = ("hives", "excludedProviders", "providers", "providerRecheckMinutes", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
 
@@ -89,14 +83,16 @@ def deep_merge(base: dict, over: dict) -> dict:
 
 
 # Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project.
-def build_settings(machine: dict, project_cfg: dict, legacy_deploy: bool = False) -> dict:
+def build_settings(machine: dict, project_cfg: dict, legacy_deploy: bool = False, workspace=None) -> dict:
     """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project. With legacy_deploy (a Project from before the switches) the default of deployEnabled is on."""
     defaults = {**DEFAULT_SETTINGS, "deployEnabled": True} if legacy_deploy else DEFAULT_SETTINGS
     merged = deep_merge(defaults, {k: v for k, v in machine.items() if k not in ("projects",)})
-    over = {k: v for k, v in project_cfg.items() if k not in MACHINE_ONLY and not (k in ("language", "escalateAfter") and v == "")}
+    from . import projsettings
+    over = {k: v for k, v in project_cfg.items() if k not in MACHINE_ONLY and k not in projsettings.DROPPED_FROM_PROJECT}   # General and the providers decide the dropped ones
     merged = deep_merge(merged, over)
     for key in ("progressVerifies", "planStallHours", "minClass", "bundle", "openMarker", "triage", "brain", "integratorSlots"):
         merged.pop(key, None)
+    projsettings.apply_derived(merged, project_cfg, workspace)   # remote and integration branch from the repository
     if "minFreeRamGB" not in merged:
         merged["minFreeRamGB"] = float(machine.get("ramReserveMb", 2048)) / 1024.0
     return merged
@@ -192,7 +188,7 @@ def get_providers(settings: dict) -> list:
             "classes": p.get("classes") or {},
             "limit": servers.limit_source(p),   # derived from the CLI and the access type, a stored source is not used
             "usageInterval": float(limit.get("interval", 60)) if isinstance(limit, dict) else 60,
-            "endpoint": p.get("endpoint"), "server": server, "access": access, "apiKey": str(p.get("apiKey") or "") if access == "api" else "", "nameEdited": bool(p.get("nameEdited", True)), **profile.custom_fields(p),
+            "endpoint": p.get("endpoint"), "server": server, "access": access, "apiKey": str(p.get("apiKey") or "") if access == "api" else "", "nameEdited": bool(p.get("nameEdited", True)), "claudeTools": str(p.get("claudeTools") or ""), "contextLimit": int(p.get("contextLimit") or 0), **profile.custom_fields(p),
         })
         out[-1]["local"] = servers.is_local(out[-1])
         # Ready: with account login the login in the HaiveQueen profile, with an own server the last connection test and the models; not ready = not available
@@ -218,7 +214,7 @@ def context_limit(settings: dict, providers: list, provider, cls) -> int:
     under [providers.classes], else the global contextLimitTokens (project.toml over config.toml), else 300000."""
     found = get_provider(providers, provider) or {}
     entry = (found.get("classes") or {}).get(cls) or {}
-    limit = int(entry.get("contextLimitTokens") or settings.get("contextLimitTokens") or 300000)
+    limit = int(entry.get("contextLimitTokens") or found.get("contextLimit") or settings.get("contextLimitTokens") or 300000)
     window = servers.window_of(found.get("server") or {})
     return min(limit, window) if window else limit   # an own server: hand off before the window of the server is full
 
@@ -662,7 +658,7 @@ def load_projects(conn, machine: dict) -> list:
         if not ws or not Path(ws).is_dir():
             continue
         pcfg = config.load_project(ws)
-        settings = build_settings(machine, pcfg, bool(row["legacy_deploy"]))
+        settings = build_settings(machine, pcfg, bool(row["legacy_deploy"]), ws)
         envs.append(ProjectEnv(conn, row["name"], ws, settings, pcfg.get("colour") or row["colour"] or "white",
                                int(pcfg.get("priority", row["priority"] or 0)), pcfg.get("planGlobs"), pcfg.get("planExclude")))
     return envs

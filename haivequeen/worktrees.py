@@ -65,9 +65,6 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
     from pathlib import Path
     path = record['worktree']
     protected = [env.code_repo, env.workspace]
-    for item in env.settings.get('protectedWorktrees', []):
-        item = Path(item)
-        protected.extend([item] if item.is_absolute() else [env.code_repo / item, env.workspace / item])
     if first or any(_within(path, item) or _within(item, path) for item in protected):
         return 'protected worktree'
     if record.get('locked') or record.get('prunable'):
@@ -109,9 +106,7 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
         return 'git status failed'
     if status.stdout:
         return 'uncommitted or untracked changes'
-    ignored = _ignored_blocker(path, env.settings.get('ignoredBuildOutput', []))
-    if ignored:
-        return 'ignored file: ' + ignored
+    # Files the repository's .gitignore leaves out are build output: git status above already leaves them out, so they never keep a worktree.
     ref = integration_ref or str(env.settings.get('remoteName') or 'origin') + '/' + str(env.settings.get('integrationBranch') or 'main')
     ancestor = _git(env.code_repo, 'merge-base', '--is-ancestor', head.stdout.strip(), ref)
     if ancestor.returncode:

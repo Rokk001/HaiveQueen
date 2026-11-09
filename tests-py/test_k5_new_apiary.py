@@ -59,7 +59,7 @@ class ExistingApiaryTests(ApiaryCase):
         conn = db.connect(self.old_database("old"))
         self.addCleanup(conn.close)
         env = next(e for e in scheduler.load_projects(conn, {}) if e.name == "old")
-        self.assertEqual(integration.switches(env.settings), {"compileCheck": True, "build": True, "deploy": True})
+        self.assertEqual(integration.switches(env.settings), {"compileCheck": False, "build": True, "deploy": True})
 
     def test_apiary_registered_after_the_migration_is_new(self):
         conn = db.connect(self.old_database("old"))
@@ -117,7 +117,7 @@ class NewApiaryTests(ApiaryCase):
         init.register_project(conn, self.workspace)
         self.assertFalse((self.workspace / ".haivequeen" / "project.toml").exists())
         env = next(iter(scheduler.load_projects(conn, {})))
-        self.assertEqual(integration.switches(env.settings), {"compileCheck": True, "build": True, "deploy": False})
+        self.assertEqual(integration.switches(env.settings), {"compileCheck": False, "build": True, "deploy": False})
 
     def test_project_of_the_settings_page_is_registered_as_new(self):
         conn = self.open_db()

@@ -640,6 +640,13 @@ def close_obsolete_questions(conn):
 def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_kwargs) -> int:
     """The loop body (see run_loop)."""
     close_obsolete_questions(conn)
+    try:
+        from . import projsettings, proctree
+        if projsettings.migrate_all(conn=conn):   # every known project.toml moves to the slim set once; the old files stay as .bak
+            machine = config.load_config()
+        proctree.sweep(osplat.runs_dir())   # processes left by agents that ended while HaiveQueen was not running
+    except Exception as exc:
+        runtime.append_event(conn, "HaiveQueen", "project settings migration or cleanup of leftover processes failed: %s" % exc, mirror="rounds", error=True)
     envs = sch.load_projects(conn, machine)
     minutes = round_minutes if round_minutes else float(machine.get("roundMinutes", 5))
     state = {"since": datetime.now(), "next_at": None, "busy": False, "projects": [e.name for e in envs]}

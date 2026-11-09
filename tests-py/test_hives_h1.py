@@ -62,12 +62,12 @@ class HiveRoundTests(RoundCase):
         settings = scheduler.build_settings({"hives": 2}, {"hives": 8})
         self.assertEqual(settings["hives"], 2)
 
-    # A project may set its Queen class and number of Bees.
-    def test_queen_settings_may_be_overridden_by_project(self):
-        """A project may set its Queen class and number of Agents."""
-        settings = scheduler.build_settings({"queenClass": "medium", "beesPerQueen": 3}, {"queenClass": "heavy", "beesPerQueen": 1})
-        self.assertEqual(settings["queenClass"], "heavy")
-        self.assertEqual(settings["beesPerQueen"], 1)
+    # The Queen class and the number of Agents are General settings.
+    def test_queen_settings_come_from_general(self):
+        """General decides the Queen class and the number of Agents per Queen; a project value is ignored."""
+        settings = scheduler.build_settings({"queenClass": "light", "beesPerQueen": 2}, {"queenClass": "heavy", "beesPerQueen": 1})
+        self.assertEqual(settings["queenClass"], "light")
+        self.assertEqual(settings["beesPerQueen"], 2)
 
     # The removed stop and agent controls are absent from defaults.
     def test_old_stop_settings_removed(self):
@@ -1069,17 +1069,6 @@ class HiveRoundTests(RoundCase):
         self.conn.execute("UPDATE questions SET status='answered',owner_check_result=? WHERE id=?", ("accepted", qid))
         self.assertTrue(hives.owner_accepted(self.conn, "testproj", REL, "2000-01-01T00:00:00"))
         self.assertFalse(hives.owner_accepted(self.conn, "testproj", REL, "2999-01-01T00:00:00"))
-
-    # Queen startup works with existing project work-phase rule selections.
-    def test_queen_runner_gets_existing_work_phase_rules(self):
-        """Queen startup works with existing project work-phase rule selections."""
-        from haivequeen import agent_runner
-        source = self.base / "rules.md"
-        source.write_text("# Work\nDo work.\n# Integrate\nDo integration.\n", encoding="utf-8")
-        config = {"ruleSources": {"project": "rules.md"}, "phaseRules": {"work": {"project": ["# Work"]}}}
-        output = self.base / "out.md"
-        agent_runner.write_phase_rules(config, self.base, "queen", output)
-        self.assertIn("Do work.", output.read_text(encoding="utf-8"))
 
     # The launched Queen is asked to work the plan rather than one old phase.
     def test_real_queen_prompt_does_not_end_after_one_package(self):

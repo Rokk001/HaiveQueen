@@ -9,7 +9,6 @@ APP = "HaiveQueen"
 
 DEFAULT_CONFIG = {
     "providers": [],
-    "claudeTools": "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop",
     "slots": 2,
     "weeklyLimitSources": [],
     "buildJobs": 0,
@@ -20,13 +19,14 @@ DEFAULT_CONFIG = {
     "update": {"checkHours": 24, "repository": ""},
 }
 
+DEFAULT_CLAUDE_TOOLS = "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop"   # tools of a Claude agent when its provider sets none
+
 DEFAULT_PROJECT = {
     "name": "",
     "colour": "white",
     "priority": 0,
     "planGlobs": ["docs/plans/*.md"],
     "planExclude": [],
-    "views": {"queue": "", "questions": "", "decisions": ""},
 }
 
 
@@ -79,6 +79,9 @@ def load_project(workspace) -> dict:
     data = _merge(DEFAULT_PROJECT, _load_toml(ws / ".haivequeen" / "project.toml"))
     if data.get("repo") and not data.get("codeRepo"):   # project files written by the v1 migration name the code repo `repo`
         data["codeRepo"] = data["repo"]
+    from . import projsettings
+    if data.get("plans"):   # the field `plans` (a line starting with ! excludes) wins over the old keys
+        data["planGlobs"], data["planExclude"] = projsettings.plans_to_globs(data)
     if not data["name"]:
         data["name"] = ws.name
     return data

@@ -66,7 +66,8 @@ class StepStateTests(IntegrationCase):
         self.assertEqual(integration.step_states(env, "removed"), {"Build": "owner", "Deploy": "owner"})
 
     def test_step_package_title_follows_the_language(self):
-        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), deployEnabled=False, language="German")
+        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), deployEnabled=False)
+        self.machine["language"] = "German"   # the language is a General setting
         env = self.hive()
         integration.sync(env, REL, "claude")
         self.assertEqual(next(p for p in env.packages(REL) if p["id"] == integration.BUILD)["content"], "Integrationsschritt: Build")
@@ -326,7 +327,7 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         self.assertIn("not this Plan's Queen", result["error"])
 
     def test_compile_check_does_nothing_when_switched_off(self):
-        self.use(self.providers[0], compileCheck="npm test", compileCheckEnabled=False)
+        self.use(self.providers[0], compileCheck="")
         self.hive()
         self.queen(self.worktree())
         code, result = self.call(cli.cmd_compile_check)
@@ -339,13 +340,13 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         self.assertEqual((args.fn, args.project, args.plan), (cli.cmd_compile_check, "p", "x.md"))
 
     def test_ready_needs_no_compile_check_when_switched_off(self):
-        self.use(self.providers[0], compileCheck="npm test", compileCheckEnabled=False)
+        self.use(self.providers[0], compileCheck="")
         self.hive()
         self.queen()
         self.assertEqual(self.ready()[0], 0)
 
     def test_acquire_reports_the_steps_and_skips_the_ram_wait_without_build_and_deploy(self):
-        self.use(self.providers[0], buildEnabled=False, deployEnabled=False, compileCheckEnabled=False)
+        self.use(self.providers[0], buildEnabled=False, deployEnabled=False, compileCheck="")
         self.hive()
         self.queen()
         with mock.patch("haivequeen.buildjobs.waiting_for_ram", return_value="too little RAM"), mock.patch("haivequeen.platform.free_ram_mb", return_value=100.0):
@@ -440,7 +441,7 @@ class StartTextTests(IntegrationCase):
         self.assertIn("Deploy step is switched off", self.text())
 
     def test_steps_are_numbered_without_gap(self):
-        self.use(self.providers[0], deployEnabled=False, compileCheckEnabled=False)
+        self.use(self.providers[0], deployEnabled=False, compileCheck="")
         self.hive()
         text = self.text()
         self.assertIn("1. Register your own branch", text)
@@ -448,8 +449,8 @@ class StartTextTests(IntegrationCase):
         self.assertNotIn("4. ", text)
         self.assertIn("compile check is switched off", text)
 
-    def test_compile_check_step_with_switch_on(self):
-        self.use(self.providers[0])
+    def test_compile_check_step_with_a_command(self):
+        self.use(self.providers[0], compileCheck="npm test")
         self.hive()
         text = self.text()
         self.assertIn("Run the compile check with bzz compile-check --project testproj --plan %s" % REL, text)
@@ -490,7 +491,7 @@ class StartTextTests(IntegrationCase):
         self.assertIn("even a technical question", text)
 
     def test_configuration_holds_remote_branch_location_and_only_active_steps(self):
-        self.use(self.providers[0], remoteName="upstream", integrationBranch="", worktreeLocation="D:/trees", compileCheck="npm test", compileCheckEnabled=False,
+        self.use(self.providers[0], remoteName="upstream", integrationBranch="", worktreeLocation="D:/trees", compileCheck="",
                  buildEnabled=False, deployEnabled=False, buildFlowDoc="docs/build.md", integratorInstructions="ship it")
         self.hive()
         config = self.config()
@@ -499,28 +500,6 @@ class StartTextTests(IntegrationCase):
         self.assertEqual(config["worktreeLocation"], "D:/trees")
         for key in ("compileCheck", "buildFlowDoc", "integratorInstructions"):
             self.assertNotIn(key, config)
-
-    def test_configured_integrator_prompt_does_not_expand_a_switched_off_check(self):
-        self.use(self.providers[0], compileCheck="npm test", compileCheckEnabled=False)
-        with (self.repo / ".haivequeen" / "project.toml").open("a", encoding="utf-8") as stream:
-            stream.write('[prompts]\nintegrator = "merge {remoteName}/{integrationBranch}, run {compileCheck}"\n')
-        self.hive()
-        steps = self.config()["steps"]
-        self.assertIn("merge origin/main", steps)
-        self.assertNotIn("npm test", steps)
-        self.assertIn("switches decide", steps)
-
-    def test_queen_start_uses_the_text(self):
-        self.use(self.providers[0], deployEnabled=False, ownerTopics=["pricing"], remoteName="upstream")
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "Work", "class": "medium"}])
-        prompts = []
-        with mock.patch("haivequeen.bees.plan_worktree", return_value=None), mock.patch("haivequeen.bees.valid_queen_worktree", return_value=True), \
-                mock.patch("haivequeen.loop._do_start", side_effect=lambda ctx, action, forced_pick=None: prompts.append(action["prompt"]) or 1):
-            self.round()
-        self.assertTrue(prompts)
-        self.assertNotIn("release worktree", prompts[0])
-        self.assertIn("pricing", prompts[0])
-        self.assertIn('"remoteName": "upstream"', prompts[0])
 
 
 class OwnerCheckTextTests(IntegrationCase):
@@ -532,8 +511,7 @@ class OwnerCheckTextTests(IntegrationCase):
             hives.file_owner_check(None, env, "plan.md")
         self.assertEqual(add.call_args.args[4], "Das integrierte Ergebnis prüfen")
 
-    def test_report_of_the_queen_stays_below_the_configured_text(self):
-        self.use(self.providers[0], ownerCheckText="Review the result")
+    def test_report_of_the_queen_stays_below_the_default_text(self):
         env = self.hive()
         runtime.upsert_agent(self.conn, "testproj", "Ada", {"status": "done", "phase": "queen", "plan_path": REL})
         folder = env.run_dir("Ada")
@@ -541,7 +519,7 @@ class OwnerCheckTextTests(IntegrationCase):
         (folder / "final.txt").write_text("All merged", encoding="utf-8")
         qid = hives.file_owner_check(self.conn, env, REL)
         text = next(q for q in runtime.list_questions(self.conn, "testproj") if q["id"] == qid)["question"]
-        self.assertTrue(text.startswith("Review the result"))
+        self.assertTrue(text.startswith("Check the integrated result"))
         self.assertIn("All merged", text)
 
 
@@ -587,17 +565,17 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(ticked["capabilities"], ["Coding", "Queen"])
 
     def test_existing_apiary_without_keys_keeps_all_steps(self):
-        self.assertEqual(integration.switches(scheduler.build_settings({}, {}, legacy_deploy=True)), {"compileCheck": True, "build": True, "deploy": True})
+        self.assertEqual(integration.switches(scheduler.build_settings({}, {}, legacy_deploy=True)), {"compileCheck": False, "build": True, "deploy": True})   # no command, no compile check
 
     def test_new_apiary_file_has_the_new_defaults(self):
         from haivequeen import init
         with tempfile.TemporaryDirectory() as folder:
             init.init_project(folder)
             data = tomllib.loads((Path(folder) / ".haivequeen" / "project.toml").read_text(encoding="utf-8"))
-        self.assertEqual(integration.switches(scheduler.build_settings({}, data)), {"compileCheck": True, "build": True, "deploy": False})
+        self.assertEqual(integration.switches(scheduler.build_settings({}, data)), {"compileCheck": False, "build": True, "deploy": False})   # the example has no compile check command
         self.assertTrue(data["deleteFinishedWorktrees"])
         self.assertFalse(data["deleteIntegratedBranches"])
-        self.assertEqual(data["remoteName"], "origin")
+        self.assertNotIn("remoteName", data)
         self.assertEqual(data["ownerTopics"], [])
 
 

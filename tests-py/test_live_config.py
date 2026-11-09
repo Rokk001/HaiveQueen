@@ -33,7 +33,7 @@ class LiveConfigTest(RoundCase):
     # Preserve normal project identity while changing supported overrides.
     def write_project(self, queen='medium', extra=''):
         """Write a project override with one plan glob and optional extra keys."""
-        self.project_file.write_text("name = 'testproj'\nplanGlobs = ['docs/plans/**/*.md']\nqueenClass = '%s'\n%s" % (queen, extra), encoding='utf-8')
+        self.project_file.write_text("name = 'testproj'\nplanGlobs = ['docs/plans/**/*.md']\nbuildFlowDoc = '%s'\n%s" % (queen, extra), encoding='utf-8')
 
     # Drive the real loop using deterministic idle polls and inert boundaries.
     def drive(self, change, max_polls=4, round_minutes=0):
@@ -101,7 +101,7 @@ class LiveConfigTest(RoundCase):
         self.drive(lambda poll: self.write_project('heavy', 'slots = 999\n') if poll == 1 else None)
         self.assertEqual(len(self.rounds_seen), 2)
         self.assertEqual(self.polls, 1)
-        self.assertEqual(self.rounds_seen[1][1]['testproj']['queenClass'], 'heavy')
+        self.assertEqual(self.rounds_seen[1][1]['testproj']['buildFlowDoc'], 'heavy')
         self.assertEqual(self.rounds_seen[1][1]['testproj']['slots'], 1)
 
     # Configuration-based round intervals update after an accepted reload.
@@ -148,7 +148,7 @@ class LiveConfigTest(RoundCase):
                 self.assertEqual(len(self.rounds_seen), 2)
                 self.assertEqual(self.polls, 3)
                 self.assertEqual(self.rounds_seen[1][0]['providers'][0]['slots'], 4)
-                self.assertEqual(self.rounds_seen[1][1]['testproj']['queenClass'], 'heavy')
+                self.assertEqual(self.rounds_seen[1][1]['testproj']['buildFlowDoc'], 'heavy')
                 messages = [e['text'] for e in runtime.list_events(self.conn, 'testproj')[earlier:]]
                 errors = [s for s in messages if 'toml' in s.lower() and 'reload' in s.lower() and any(word in s.lower() for word in ('error', 'failed', 'invalid'))]
                 self.assertEqual(len(errors), 1, messages)
@@ -179,7 +179,7 @@ class LiveConfigTest(RoundCase):
         self.drive(lambda poll: self.write_project('heavy') if poll == 1 else None)
         self.assertEqual(len(self.rounds_seen), 2)
         self.assertEqual(self.rounds_seen[1][0]['slots'], 7)
-        self.assertEqual(self.rounds_seen[1][1]['testproj']['queenClass'], 'heavy')
+        self.assertEqual(self.rounds_seen[1][1]['testproj']['buildFlowDoc'], 'heavy')
 
     # Touching a file without changing values is not a scheduling event.
     def test_same_values_do_not_force_an_extra_round(self):

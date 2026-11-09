@@ -35,10 +35,10 @@ class GlobalLimitTests(unittest.TestCase):
         from haivequeen import scheduler
         self.assertEqual(scheduler.build_settings({"contextLimitTokens": 123000}, {})["contextLimitTokens"], 123000)
 
-    def test_project_value_still_wins(self):
-        """project.toml over config.toml over the default."""
+    def test_project_value_does_not_apply(self):
+        """The context limit is a setting of each provider: a project value is ignored, config.toml over the default."""
         from haivequeen import scheduler
-        self.assertEqual(scheduler.build_settings({"contextLimitTokens": 123000}, {"contextLimitTokens": 99000})["contextLimitTokens"], 99000)
+        self.assertEqual(scheduler.build_settings({"contextLimitTokens": 123000}, {"contextLimitTokens": 99000})["contextLimitTokens"], 123000)
         self.assertEqual(scheduler.build_settings({}, {})["contextLimitTokens"], 300000)
 
 

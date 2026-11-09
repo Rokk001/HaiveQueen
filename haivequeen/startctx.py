@@ -221,7 +221,7 @@ def _measure(prov, cwd, hq, task, tmp) -> int:
         rules = Path(tmp) / "rules.md"
         rules.write_text("", encoding="utf-8")
         vars_ = {"model": model, "effort": effort, "repo": cwd, "workspace": cwd, "tools": str(ar.TOOL_ROOT), "cwd": cwd,
-                 "claudeTools": cfg.get("claudeTools", ""), "rules": str(rules)}
+                 "claudeTools": ar.claude_tools(prov), "rules": str(rules)}
         args = ar.build_args(prov, vars_)
         if prov["protocol"] == "claude":
             if "--setting-sources" in args:

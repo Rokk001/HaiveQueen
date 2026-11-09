@@ -236,24 +236,5 @@ class IsolationLiveDataTest(unittest.TestCase):
         self.assertEqual(counted, ["config.toml", "logs/c.log", "other/z.txt"])
 
 
-class PhaseRulesExceptionTest(unittest.TestCase):
-    """The rule file of the integrate phase carries the exception section of a workspace AGENTS.md."""
-
-    def test_integrate_rules_contain_the_exception_section(self):
-        """phaseRules for integrate copy the exception section of AGENTS.md; the work phase does not get it."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp) / "ws"
-            ws.mkdir()
-            (ws / "AGENTS.md").write_text("## 1. Hard rules\nnever push\n\n## Integrate phase (exception, integrator only)\nmay push v2\n", encoding="utf-8")
-            pcfg = {"ruleSources": {"main": "AGENTS.md"},
-                    "phaseRules": {"work": {"main": ["## 1. Hard rules"]},
-                                   "integrate": {"main": ["## 1. Hard rules", "## Integrate phase (exception"]}}}
-            out = Path(tmp) / "rules.md"
-            self.assertEqual(ar.write_phase_rules(pcfg, str(ws), "integrate", out), 2)
-            self.assertIn("may push v2", out.read_text(encoding="utf-8"))
-            ar.write_phase_rules(pcfg, str(ws), "work", out)
-            self.assertNotIn("may push v2", out.read_text(encoding="utf-8"))
-
-
 if __name__ == "__main__":
     unittest.main()

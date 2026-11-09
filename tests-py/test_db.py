@@ -122,10 +122,9 @@ class ConfigTest(unittest.TestCase):
             ws = Path(tmp) / "myproj"
             (ws / ".haivequeen").mkdir(parents=True)
             self.assertEqual(config.load_project(ws)["name"], "myproj")
-            (ws / ".haivequeen" / "project.toml").write_text('colour = "red"\n[views]\nqueue = "q.md"\n',
-                                                               encoding="utf-8")
+            (ws / ".haivequeen" / "project.toml").write_text('colour = "red"\n', encoding="utf-8")
             pr = config.load_project(ws)
-            self.assertEqual((pr["colour"], pr["views"]["queue"], pr["views"]["questions"]), ("red", "q.md", ""))
+            self.assertEqual((pr["colour"], pr["planGlobs"], pr.get("views")), ("red", ["docs/plans/*.md"], None))
 
 
 class OpenNewDatabaseTest(unittest.TestCase):

@@ -1,27 +1,21 @@
 # Project settings: <project>\.haivequeen\project.toml
+# Main part: the repository, the name, the integration branch and the compile check.
 name = "example"
+integrationBranch = "main"        # empty or missing: the default branch of the repository's remote, else main
+compileCheck = ""                 # the command that compiles and tests; empty = no compile check
+
+# Advanced
+plans = ["docs/plans/*.md"]       # plan file patterns, one per entry; an entry starting with ! excludes, e.g. "!docs/plans/archive/**"
 colour = "cyan"
-compileCheckEnabled = true        # integration steps that run; an project file without these keys keeps all three on
+priority = 0                      # higher gets a free slot first
 buildEnabled = true
 deployEnabled = false
-integrationBranch = "main"
-remoteName = "origin"
 worktreeLocation = ""             # folder of new worktrees (relative: from the repository); empty = beside the repository
 deleteFinishedWorktrees = true    # remove worktrees whose commits are integrated
-publishReleases = false     # HaiveQueen publishes a GitHub release at each integration (only for a remote on GitHub)
-nextVersion = ""             # the next version for a bigger step, e.g. "2.1.0"; empty: the last digit counts up
 deleteIntegratedBranches = false  # delete the plan branch and its sub-branches, local and remote, after the plan is integrated
-ownerTopics = []                  # topics whose questions always go to the owner, e.g. ["pricing", "public wording"]
-ownerCheckText = ""               # the owner-check question after integration; empty = "Check the integrated result" in the language setting
-priority = 0                      # higher gets a free slot first
-claudeTools = "Read,Write,Edit,Bash,PowerShell,Grep,Glob,Monitor,TaskStop"
-planGlobs = ["docs/plans/*.md"]
-planExclude = []                  # globs (same syntax as planGlobs) removed from the matches, e.g. ["docs/plans/archive/**", "docs/plans/*-STATE.md"]
+publishReleases = false           # HaiveQueen publishes a GitHub release at each integration (only for a remote on GitHub)
+nextVersion = ""                  # the next version for a bigger step, e.g. "2.1.0"; empty: the last digit counts up
 buildProcessNames = ["cl.exe"]    # compiler processes counted in the "active cores" display; empty = no display
-ignoredBuildOutput = []           # ignored build output that may be removed with an integrated worktree
-protectedWorktrees = []           # additional worktree paths that must never be removed
-
-[views]                           # generated read-only Markdown views; empty = none
-queue = ""
-questions = ""
-decisions = ""
+ownerTopics = []                  # topics whose questions always go to the owner, e.g. ["pricing", "public wording"]
+buildFlowDoc = ""                 # a document that describes how the product is built
+integratorInstructions = ""       # extra instructions for the integrating Queen

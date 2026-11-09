@@ -1,6 +1,6 @@
 # Agent rules
 
-Project rules remain binding. The Queen receives the project work rules and, during integration, its integration rules. An Agent receives the complete project rules, never the whole plan.
+Project rules remain binding: the checked-in AGENTS.md and CLAUDE.md of the repository (and of the upstream repository when the project uses it), the same for every agent of every phase. The Queen receives the project work rules and, during integration, its integration rules. An Agent receives the complete project rules, never the whole plan.
 
 ## 1. Hard rules (tool)
 

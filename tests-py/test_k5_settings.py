@@ -4,17 +4,17 @@ from unittest.mock import patch
 from haivequeen import hives
 
 class OwnerCheckSettingsTests(unittest.TestCase):
-    def test_configured_text_is_question(self):
-        env = SimpleNamespace(name='p', settings={'ownerCheckText': 'Review the result', 'language': 'English'})
+    def test_default_text_is_question(self):
+        env = SimpleNamespace(name='p', settings={'ownerCheckText': 'ignored', 'language': 'English'})
         with patch.object(hives.runtime, 'list_agents', return_value=[]), patch.object(hives.db, 'add_question', return_value=7) as add, patch.object(hives, 'wait_for_owner_check'):
             hives.file_owner_check(None, env, 'plan.md')
-        self.assertEqual(add.call_args.args[4], 'Review the result')
+        self.assertEqual(add.call_args.args[4], 'Check the integrated result')
 
 class IntegrationSwitchDefaultsTests(unittest.TestCase):
     def test_existing_apiary_keeps_integration_steps(self):
         from haivequeen import scheduler
         settings = scheduler.build_settings({}, {}, legacy_deploy=True)
-        self.assertTrue(settings['compileCheckEnabled'])
+        self.assertNotIn('compileCheckEnabled', settings)   # the switch is gone: an empty compile check command means no compile check
         self.assertTrue(settings['buildEnabled'])
         self.assertTrue(settings['deployEnabled'])
         self.assertTrue(settings['deleteFinishedWorktrees'])
@@ -26,7 +26,7 @@ class IntegrationSwitchDefaultsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             init.init_project(folder)
             settings = scheduler.build_settings({}, config.load_project(folder))
-        self.assertTrue(settings['compileCheckEnabled'])
+        self.assertNotIn('compileCheckEnabled', settings)   # the switch is gone: an empty compile check command means no compile check
         self.assertTrue(settings['buildEnabled'])
         self.assertFalse(settings['deployEnabled'])
 
