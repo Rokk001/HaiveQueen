@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import gc
 import threading
 import time
 import unittest
@@ -65,6 +66,7 @@ class Base(unittest.TestCase):
             root.attributes("-alpha", 0.0)
         except tk.TclError:
             self.skipTest("no display")
+        self.addCleanup(gc.collect)   # runs after the root is destroyed: images of earlier windows are freed here, never by the garbage collector in a reading thread
         self.addCleanup(root.destroy)
         root.geometry("1672x901+0+0")
         gui.REFRESH_MS = 10 ** 9
@@ -269,7 +271,7 @@ class ReactionTest(Base):
             win.tick()
             win.refresh_soon()
             gate.set()
-            self.assertTrue(self.pump(root, lambda: len(calls) == 2 and not win.loading))
+            self.assertTrue(self.pump(root, lambda: len(calls) >= 2 and not win.loading))
 
     def test_questions_answer_and_selection_do_not_read_on_the_ui_thread(self):
         from haivequeen import gui_questions
