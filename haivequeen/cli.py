@@ -425,6 +425,9 @@ def cmd_bee(args, conn):
         provider = scheduler.get_provider(env.providers, args.provider)
         if not provider or provider['name'] in env.settings.get('excludedProviders', []):
             return fail("provider is unavailable or excluded")
+        refused = bees.wait_refusal(env, plan, provider)
+        if refused:
+            return fail(refused)
         runnable = bees.runnable_packages(env, plan, provider)
         if runnable:   # one package without the provider never stops the whole Hive
             return fail("not yet: package %s can still start without %s; work it first and wait only when nothing else can start" % (", ".join(runnable), provider['name']))
