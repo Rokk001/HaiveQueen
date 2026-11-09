@@ -1,4 +1,5 @@
 """Explicit owner actions shared by the CLI, questions window and inbox."""
+from . import filetxn
 import re
 from types import SimpleNamespace
 
@@ -82,6 +83,7 @@ def provider_settings(name):
     return path, data, provider
 
 
+@filetxn.coordinated
 def apply(conn, action, project=None, plan=None, **fields):
     """Perform one checked owner action and return its public result."""
     validate(conn, action, project, plan, **fields)

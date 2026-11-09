@@ -1,4 +1,5 @@
 """Runtime queries and writes (used by the loop, the CLI and the agents): agents, events, kv, handled, nofollow, builds, usage, plans, queue."""
+from . import filetxn
 import json
 import os
 import platform
@@ -407,6 +408,7 @@ def _workspace(conn, project, override=None) -> Path:
     return Path(row[0])
 
 
+@filetxn.coordinated
 def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
     """Read the plan files of a project into plans/packages and return the plans and the startable packages (rule 11)."""
     ws = _workspace(conn, project, workspace)
@@ -452,6 +454,7 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
     return {"plans": list_plans(conn, project), "startable": startable}
 
 
+@filetxn.coordinated
 def list_plans(conn, project=None) -> list:
     """List plans, optionally for one project."""
     if project:
@@ -491,6 +494,7 @@ def set_package(conn, project, plan, pid, phase=None, locked=None, reason=None) 
     return [p for p in list_packages(conn, project, plan) if p["id"] == pid][0]
 
 
+@filetxn.coordinated
 def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
     """Set a plan status in the table and in the plan file (front matter 'status =' line or the v1 'Status:' line 2); an old status name is taken as its new name."""
     status = status.strip().upper()
@@ -500,7 +504,7 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
     path = _workspace(conn, project, workspace) / plan
     if not path.is_file():
         raise CmdError(f"plan file not found: {plan}")
-    text = path.read_text(encoding="utf-8")
+    text = filetxn.read(path).decode("utf-8").replace("\r\n", "\n")
     nl = "\r\n" if "\r\n" in text else "\n"
     lines = text.split(nl)
     changed = False
@@ -517,7 +521,7 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
         changed = True
     if not changed:
         raise CmdError(f"no status line found in {plan}")
-    path.write_text(nl.join(lines), encoding="utf-8", newline="")
+    filetxn.write(path, nl.join(lines).encode("utf-8"))
     with db.transaction(conn):
         conn.execute("UPDATE plans SET status=?, updated_at=? WHERE project=? AND path=?",
                      (status, db.now(), project, plan))

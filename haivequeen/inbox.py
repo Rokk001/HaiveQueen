@@ -6,7 +6,7 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 
-from . import db, runtime
+from . import db, runtime, filetxn
 
 SUPERSEDED = ("superseded", "ueberholt", "überholt")   # the reason of a withdraw whose tip need not be in the target; English protocol word, German input still read
 
@@ -208,11 +208,13 @@ def _move(path: Path, folder: Path, name: str) -> Path:
     return target
 
 
+@filetxn.coordinated
 def process_inbox(env) -> dict:
     """Take over every *.toml file in the inbox of the project, oldest first; return {done: [names], failed: [names]}.
 
     Queue orders are checked first and carried out after the answers and decisions. Answers and decisions are stored through db.answer_question and runtime.add_decision, the same functions as `bzz answer` and
-    `bzz decisions add`. A file is taken over completely or not at all (checked first); it then moves to done/<YYYYMMDD-HHMMSS>-<name>.toml.
+    `bzz decisions add`. A file is taken over completely or not at all (checked first); its consumed bytes are archived in done/<YYYYMMDD-HHMMSS>-<name>.toml.
+    File writes are staged until commit; a durable journal finishes committed writes and acknowledgement after interruption.
     An invalid file moves to failed/ with <name>.error.txt next to it and a warning event. Other file endings (.tmp) are ignored.
     """
     result = {"done": [], "failed": []}
@@ -222,53 +224,34 @@ def process_inbox(env) -> dict:
     files = sorted((p for p in folder.iterdir() if p.is_file() and p.suffix == ".toml"), key=lambda p: (p.stat().st_mtime, p.name))
     for path in files:
         try:
-            answers, decisions, orders = parse_file(path, env.name, env.conn, env.settings.get("codeRepo") or env.settings.get("repo") or env.workspace,
-                                                    integration_ref(env.settings))
-            # Database actions share one transaction. Plan statuses and provider
-            # operations also write files, so retain their bytes for rollback.
-            from . import config, owner, servers
-            files_to_restore = set()
-            for order in orders:
-                if order.get("owner_action") in ("accept", "reject", "pause", "resume"):
-                    files_to_restore.add(runtime._workspace(env.conn, env.name, None) / order["plan"])
-                if order.get("owner_action") == "provider":
-                    settings = config.config_dir() / "config.toml"
-                    files_to_restore.update((settings, settings.with_name(settings.name + ".bak"), servers.tests_file()))
-            snapshots = {p: p.read_bytes() if p.exists() else None for p in files_to_restore}
-            touched = set()
-            try:
+            if env.conn.in_transaction:
+                raise RuntimeError("inbox processing requires its own database transaction")
+            contents = path.read_bytes()
+            from . import owner
+            with filetxn.staging() as batch:
                 with db.transaction(env.conn):
+                    answers, decisions, orders = parse_file(path, env.name, env.conn, env.settings.get("codeRepo") or env.settings.get("repo") or env.workspace,
+                                                            integration_ref(env.settings))
                     for a in answers:
                         db.answer_question(env.conn, a["qid"], a["text"], a["by"])
                     for d in decisions:
                         runtime.add_decision(env.conn, env.name, d["source"], d["text"], d["plan"], d["item"])
                     for o in orders:
                         if "owner_action" in o:
-                            if o["owner_action"] in ("accept", "reject", "pause", "resume"):
-                                touched.add(runtime._workspace(env.conn, env.name, None) / o["plan"])
-                            elif o["owner_action"] == "provider":
-                                touched.update((settings, settings.with_name(settings.name + ".bak"), servers.tests_file()))
                             owner.apply(env.conn, o["owner_action"], o["project"], o["plan"], **o["fields"])
                         else:
                             apply_queue_order(env.conn, env.name, o)
-            except BaseException:
-                for file in touched:
-                    contents = snapshots[file]
-                    if contents is None:
-                        file.unlink(missing_ok=True)
-                    else:
-                        file.write_bytes(contents)
-                raise
-            for o in orders:
-                if "owner_action" not in o:
-                    env.log("inbox queue order %s: branch %s, rows %s (%s)" % (o["action"], o["branch"], o["ids"], o["reason"]))
+                    prepared = batch.prepare(env.conn, path, contents)
+            filetxn.finish(prepared)
         except (InboxError, KeyError, ValueError, OSError, runtime.CmdError) as exc:
             failed = _move(path, folder / "failed", path.name)
             failed.with_name(failed.stem + ".error.txt").write_text("%s\n" % exc, encoding="utf-8")
             env.event("warning inbox file %s rejected: %s" % (path.name, exc), error=True)
             result["failed"].append(path.name)
             continue
-        _move(path, folder / "done", datetime.now().strftime("%Y%m%d-%H%M%S-") + path.name)
+        for o in orders:
+            if "owner_action" not in o:
+                env.log("inbox queue order %s: branch %s, rows %s (%s)" % (o["action"], o["branch"], o["ids"], o["reason"]))
         env.log("inbox file %s taken over: %d answer(s), %d decision(s), %d queue order(s)" % (path.name, len(answers), len(decisions), len(orders)))
         result["done"].append(path.name)
     return result

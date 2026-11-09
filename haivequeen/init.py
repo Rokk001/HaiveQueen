@@ -4,7 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from . import config, db
+from . import config, db, filetxn
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 CLAUDE_LINE = "Read AGENTS.md in this folder first; it holds the rules for all agents.\n"
@@ -98,6 +98,7 @@ def register_listed(conn, entries) -> list:
     return added
 
 
+@filetxn.coordinated
 def register_project(conn, folder) -> dict:
     """Add the project to config.toml (registered projects) and to the projects table; safe to repeat."""
     ws = Path(folder).resolve()
@@ -111,6 +112,6 @@ def register_project(conn, folder) -> dict:
         old = cfg_file.read_text(encoding="utf-8") if cfg_file.is_file() else ""
         sep = "" if not old or old.endswith("\n") else "\n"
         block = f"\n[[projects]]\nname = {json.dumps(name)}\nworkspace = {json.dumps(str(ws))}\n"
-        cfg_file.write_text(old + sep + block, encoding="utf-8", newline="\n")
+        filetxn.write(cfg_file, (old + sep + block).encode("utf-8"))
     db.upsert_project(conn, name, str(ws), proj["colour"], proj["priority"])
     return {"ok": True, "project": name, "workspace": str(ws), "config": "kept" if listed else "added", "messages": messages}

@@ -563,6 +563,7 @@ GERMAN = {
     "Start context: no benchmark yet": "Startkontext: noch kein Benchmark",
     "Measure the start context of provider %s in every registered Project, twice: once with the HaiveQueen profile and once with your own configuration? This starts the CLI %d times and uses a few tokens of your login.": "Den Startkontext von Anbieter %s in jeder registrierten Projekt zweimal messen: einmal mit dem HaiveQueen-Profil und einmal mit deiner eigenen Konfiguration? Das startet die CLI %d-mal und verbraucht einige Tokens deines Logins.",
     "measuring …": "misst …", "Provider %s is excluded (excludedProviders): nothing was measured.": "Anbieter %s ist ausgeschlossen (excludedProviders): es wurde nichts gemessen.",
+    "Settings changed since loading; reopen settings before saving.": "Die Einstellungen wurden seit dem Laden geändert; öffne sie vor dem Speichern erneut.",
     "new setting": "neue Einstellung", "Remove this provider from the settings?": "Diesen Anbieter aus den Einstellungen entfernen?", "Remove this Project from the settings?": "Dieses Projekt aus den Einstellungen entfernen?", "Saved.": "Gespeichert.",
     # ---- owner questions the program files
     "Provider %s (protocol %s) cannot be kept to the HaiveQueen profile, so it would read private files. This package is stopped. Which provider may run it?": "Anbieter %s (Protokoll %s) lässt sich nicht auf das HaiveQueen-Profil beschränken und würde private Dateien lesen. Dieses Paket ist gestoppt. Welcher Anbieter darf es ausführen?",

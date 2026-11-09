@@ -20,7 +20,7 @@ if REPO not in sys.path:   # haivequeen of this checkout, not an installed copy,
 os.environ["BZZ_NO_DESKTOP"] = "1"   # desktop messages of the program (faults without an Apiary) are never shown during tests
 
 REAL_FOLDERS = [Path(os.environ[_v]) / "HaiveQueen" for _v in ("LOCALAPPDATA", "APPDATA") if os.environ.get(_v)]
-LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-update.lock", "hive-schedule.lock", "start.lock", "start.pending", "gui.pid", "worktree-cleanup.lock", "server-tests.json", "update-check.json")  # written by a running loop (STOP: set by a self-update; server-tests.json: its periodic test of the own LLM servers) or an open graphical dashboard (gui.pid, update-check.json: its update check), not by tests; the audit guard still finds a test that writes them
+LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-update.lock", "hive-schedule.lock", "start.lock", "start.pending", "gui.pid", "worktree-cleanup.lock", "server-tests.json", "update-check.json", "inbox-writes.lock", "inbox-transactions")  # written by a running loop (STOP: set by a self-update; server-tests.json: its periodic test of the own LLM servers) or an open graphical dashboard (gui.pid, update-check.json: its update check), not by tests; the audit guard still finds a test that writes them
 
 
 def own_profile_setting(rel: Path) -> bool:
@@ -149,12 +149,20 @@ ORIGINAL = {_var: os.environ.get(_var) for _var in REDIRECTED}  # real values fo
 for _var, _path in REDIRECTED.items():
     _path.mkdir(parents=True, exist_ok=True)
     os.environ[_var] = str(_path)
+# Even read-only settings/plan calls now coordinate with inbox recovery. Give
+# those calls their coordination inode explicitly; it contains no settings or
+# runtime data. Only this exact, unchanged fixture is excluded below. The real
+# folder audit still records every write, including writes to a lock file.
+COORDINATION_FIXTURE = REDIRECTED["APPDATA"] / "HaiveQueen" / "inbox-writes.lock"
+COORDINATION_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+COORDINATION_FIXTURE.write_bytes(b"0")
 sys.addaudithook(_audit)   # after the redirection: from here on nothing of this session may write into the real folders
 
 
 def leaked():
     """Return the files below the redirected folders: what a test wrote without its own BZZ_* folders."""
-    return sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file())
+    return sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file()
+                  and not (p == COORDINATION_FIXTURE and p.read_bytes() == b"0"))
 
 
 def real_folder_changes(bases=None, before=None) -> list:

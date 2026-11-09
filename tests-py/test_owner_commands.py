@@ -81,6 +81,26 @@ class OwnerCommands(RoundCase):
             self.assertEqual(inbox.process_inbox(self.env())["failed"], ["conflict.toml"])
         self.assertEqual(path.read_text(encoding="utf-8"), original)
 
+    def test_inbox_failure_preserves_concurrent_provider_edit(self):
+        path = config.config_dir() / "config.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        original = '[[providers]]\nname="account"\nprotocol="codex"\naccess="subscription"\nenabled=true\n'
+        path.write_text(original, encoding="utf-8")
+        self.plan("RUNNING", packages=[{"id": "P1", "class": "medium"}])
+        folder = inbox.inbox_dir(self.repo)
+        folder.mkdir(parents=True)
+        (folder / "conflict.toml").write_text('[[provider]]\nprovider="account"\naction="disable"\n[[unassign]]\nplan="%s"\npackage="P1"\n' % REL, encoding="utf-8")
+        apply = owner.apply
+        concurrent = original + '# concurrent edit\n'
+        def fail_after_edit(conn, action, *args, **kwargs):
+            if action == "unassign":
+                path.write_text(concurrent, encoding="utf-8")
+                raise ValueError("later failure")
+            return apply(conn, action, *args, **kwargs)
+        with mock.patch.object(owner, "apply", side_effect=fail_after_edit):
+            inbox.process_inbox(self.env())
+        self.assertEqual(path.read_text(encoding="utf-8"), concurrent)
+
     def test_inbox_duplicate_accept_has_no_effect(self):
         self.plan("REVIEW")
         self.waiting_for_owner()

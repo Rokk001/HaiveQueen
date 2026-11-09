@@ -3,11 +3,11 @@
 This file holds the data layer (read, split the allowed tools, write TOML, check, save with a backup); the window is `ConfigWindow` below.
 TOML Kit preserves comments and layout when an existing settings file is saved.
 """
+from . import filetxn
 import json
 import math
 import os
 import re
-import shutil
 import tomllib
 from collections import Counter
 from pathlib import Path
@@ -198,20 +198,24 @@ def apply_build(data, cores_text, parallel_text, ram_text, cores=None):
 
 
 # Read a TOML file into a dict.
+@filetxn.coordinated
 def load_raw(path) -> dict:
     """The parsed content of the TOML file `path`; a missing file gives an empty dict."""
-    path = Path(path)
-    if not path.is_file():
-        return {}
-    with open(path, "rb") as handle:
-        return tomllib.load(handle)
+    contents = filetxn.read(path)
+    data = LoadedSettings(tomllib.loads(contents.decode("utf-8")) if contents is not None else {})
+    data.source = (str(Path(path).resolve()), contents)
+    return data
 
 
 # Read config.toml in the new form (old endpoint entries migrated); the file itself is not changed.
+@filetxn.coordinated
 def load_migrated(path) -> dict:
     """The parsed content of the TOML file `path` in the new form (old endpoint and [[servers]] entries taken over into the providers); the file stays as it is until the owner saves."""
     from . import servers
-    return servers.migrate(load_raw(path))
+    raw = load_raw(path)
+    data = LoadedSettings(servers.migrate(raw))
+    data.source = raw.source
+    return data
 
 
 # Cut a comma separated tool list into its entries.
@@ -374,16 +378,24 @@ def keep_legacy_entry(data, old):
             data.pop(key, None)
 
 
+class LoadedSettings(dict):
+    """Settings with an optimistic revision, including edits made outside the app."""
+
+
 # Write a settings file and keep the old one.
+@filetxn.coordinated
 def save_file(path, data):
     """Update a TOML document, preserving its formatting and comments where values remain."""
     path = Path(path)
     document = tomlkit.document()
     original = ""
-    if path.is_file():
-        original = path.read_text(encoding="utf-8")
+    contents = filetxn.read(path)
+    source = getattr(data, "source", None)
+    if source and source != (str(path.resolve()), contents):
+        raise ValueError("settings changed since loading; reload before saving")
+    if contents is not None:
+        original = contents.decode("utf-8").replace("\r\n", "\n")
         document = tomlkit.parse(original)
-        shutil.copy2(path, path.with_name(path.name + ".bak"))
     _update_document(document, data)
     result = tomlkit.dumps(document)
     remaining = Counter(_comments(result))
@@ -394,12 +406,15 @@ def save_file(path, data):
             result += "\n" + comment + "\n"
     if tomllib.loads(result) != data:
         raise ValueError("settings could not be written without changing their values")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".tmp")
-    temp.write_text(result, encoding="utf-8", newline="\n")
-    os.replace(temp, path)
+    if contents is not None:
+        filetxn.write(path.with_name(path.name + ".bak"), contents)
+    encoded = result.encode("utf-8")
+    filetxn.write(path, encoded)
+    if source:
+        data.source = (str(path.resolve()), encoded)
 
 
+@filetxn.coordinated
 def save_project_file(conn, path, data):
     """Save a project and capture the release boundary while integration writes are locked."""
     from . import config, db, publish
@@ -1363,6 +1378,7 @@ class ConfigWindow(ProviderPages):
         return writes, problems
 
     # Check and write the files.
+    @filetxn.coordinated
     def save(self):
         """Collect the shown part, check everything, write config.toml and the project.toml of every changed or new Project and tell the main window; a problem is shown and nothing is written."""
         if not self.collect():
@@ -1376,6 +1392,10 @@ class ConfigWindow(ProviderPages):
         problems = check(self.data, True) + problems
         if problems:
             self.status.config(text="; ".join(problems)[:300], fg=self.col["red"])
+            return
+        source = getattr(self.data, "source", None)
+        if source and source != (str(Path(self.config_path).resolve()), filetxn.read(self.config_path)):
+            self.status.config(text=tr("Settings changed since loading; reopen settings before saving."), fg=self.col["red"])
             return
         from . import init
         old_data = load_migrated(self.config_path)

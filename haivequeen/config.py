@@ -3,6 +3,7 @@ import tomllib
 from pathlib import Path
 
 from haivequeen import platform as osplat
+from . import filetxn
 
 APP = "HaiveQueen"
 
@@ -57,20 +58,21 @@ def _merge(defaults: dict, loaded: dict) -> dict:
     return out
 
 
+@filetxn.coordinated
 def _load_toml(path: Path) -> dict:
     """Read a TOML file; a missing file gives an empty dict."""
-    if not path.is_file():
-        return {}
-    with open(path, "rb") as handle:
-        return tomllib.load(handle)
+    contents = filetxn.read(path)
+    return tomllib.loads(contents.decode("utf-8")) if contents is not None else {}
 
 
+@filetxn.coordinated
 def load_config() -> dict:
     """Load config.toml from the settings folder, filling in defaults."""
     from . import servers
     return servers.migrate(_merge(DEFAULT_CONFIG, _load_toml(config_dir() / "config.toml")))   # old endpoint entries are read in the new form; the file stays as it is until the owner saves
 
 
+@filetxn.coordinated
 def load_project(workspace) -> dict:
     """Load <workspace>/.haivequeen/project.toml, filling in defaults (name falls back to the folder name)."""
     ws = Path(workspace)

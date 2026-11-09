@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import platform as osplat
+from . import filetxn
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
 SCHEMA_VERSION = 16
@@ -68,6 +69,7 @@ def parse_time(text, default=None):
     return when
 
 
+@filetxn.coordinated
 def connect(path) -> sqlite3.Connection:
     """Open the database (creating folder and schema if needed) with WAL and busy_timeout set; refuses a path on a network drive; safe when many processes open a new database at once."""
     p = Path(path)
@@ -203,19 +205,31 @@ def migrate(conn: sqlite3.Connection) -> None:
 @contextmanager
 def transaction(conn: sqlite3.Connection):
     """Run a block as one atomic write transaction (BEGIN IMMEDIATE, rollback on error)."""
-    nested = conn.in_transaction
-    conn.execute("SAVEPOINT nested_transaction" if nested else "BEGIN IMMEDIATE")
-    try:
-        yield conn
-    except BaseException:
-        if nested:
-            conn.execute("ROLLBACK TO nested_transaction")
-            conn.execute("RELEASE nested_transaction")
+    with filetxn.locked():
+        nested = conn.in_transaction
+        conn.execute("SAVEPOINT nested_transaction" if nested else "BEGIN IMMEDIATE")
+        try:
+            yield conn
+        except BaseException:
+            if nested:
+                conn.execute("ROLLBACK TO nested_transaction")
+                conn.execute("RELEASE nested_transaction")
+            else:
+                conn.execute("ROLLBACK")
+            raise
         else:
-            conn.execute("ROLLBACK")
-        raise
-    else:
-        conn.execute("RELEASE nested_transaction" if nested else "COMMIT")
+            try:
+                conn.execute("RELEASE nested_transaction" if nested else "COMMIT")
+            except BaseException:
+                # A failed COMMIT may leave the transaction open. It must not
+                # commit later after recovery discarded its uncommitted journal.
+                if conn.in_transaction:
+                    if nested:
+                        conn.execute("ROLLBACK TO nested_transaction")
+                        conn.execute("RELEASE nested_transaction")
+                    else:
+                        conn.execute("ROLLBACK")
+                raise
 
 
 def rows(conn, sql: str, args=()) -> list:

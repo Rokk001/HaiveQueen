@@ -5,6 +5,7 @@ optional context window in tokens. A provider names its server in the field `ser
 server itself, only through the environment and arguments of the agent it starts (never in the user's own profile and with no wrapper script).
 The values each CLI takes come from its official documentation (sources: docs/PROFILE.md, section "Own LLM server").
 """
+from . import filetxn
 import copy
 import hashlib
 import json
@@ -168,6 +169,7 @@ def _is_codex(entry) -> bool:
     return cli_presets.key_for(entry) == "codex"
 
 
+@filetxn.coordinated
 def migrate(cfg) -> dict:
     """The settings dict in the new form: old endpoint entries and [[servers]] entries are taken over into the providers (see `fold_servers`).
     The dict that is passed in is not changed; the same dict is returned when nothing is to be migrated."""
@@ -245,6 +247,7 @@ def fold_servers(cfg) -> dict:
     return out
 
 
+@filetxn.coordinated
 def _carry_test(old_name, p, entry=None) -> None:
     """Keep the last test result of a server entry for a provider of another name (the result is stored per name), so its last test and model list are not lost."""
     name = str(p.get("name") or "")
@@ -378,20 +381,19 @@ def in_thread(func):
     return run
 
 
+@filetxn.coordinated
 def _read_tests() -> dict:
     try:
-        data = json.loads(tests_file().read_text(encoding="utf-8"))
+        data = json.loads(filetxn.read(tests_file()) or b"{}")
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
+@filetxn.coordinated
 def _write_tests(data) -> None:
     path = tests_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".tmp")
-    temp.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
-    os.replace(temp, path)
+    filetxn.write(path, (json.dumps(data, indent=1, ensure_ascii=False) + "\n").encode("utf-8"))
 
 
 def fingerprint(server) -> str:
@@ -405,6 +407,7 @@ def kept(server):
     return result if isinstance(result, dict) and result.get("fingerprint") == fingerprint(server) else None
 
 
+@filetxn.coordinated
 def forget(name) -> None:
     """Clear the kept result of a server."""
     results = _read_tests()
@@ -473,10 +476,15 @@ def run_test(server, timeout=TIMEOUT_S, now=None) -> dict:
             else:
                 lines.append(tr("%s: not usable, the server does not offer %s", label, path))
         result["lines"] = lines
-    results = _read_tests()
-    results[server["name"]] = result
-    _write_tests(results)
+    _keep_result(server["name"], result)
     return result
+
+
+@filetxn.coordinated
+def _keep_result(name, result):
+    results = _read_tests()
+    results[name] = result
+    _write_tests(results)
 
 
 def summary(server) -> str:
@@ -572,6 +580,7 @@ def refresh_readiness(providers, has_login=None) -> None:
             p["login"], p["notReady"] = ok, why
 
 
+@filetxn.coordinated
 def rename_result(old, new) -> None:
     """Move the kept test result of a Local LLM to its new provider name."""
     results = _read_tests()

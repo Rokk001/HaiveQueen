@@ -1,4 +1,5 @@
 """Plan files: TOML front matter, plan discovery, rule 11 (which packages may start) and the v1 legacy reader."""
+from . import filetxn
 import glob
 import os
 import re
@@ -141,12 +142,14 @@ def parse_plan_text(text, path=""):
     return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings, errors=errors, owner_check=owner_check)
 
 
+@filetxn.coordinated
 def load_plan(path):
     """Read one plan file (UTF-8) and parse it."""
     with open(path, encoding="utf-8") as f:
         return parse_plan_text(f.read(), path)
 
 
+@filetxn.coordinated
 def discover_plans(root, globs=None, excludes=None):
     """Load all plans below root matching the glob list (default docs/plans/*.md), sorted by path.
 
@@ -372,6 +375,7 @@ def legacy_packages(lines):
     return rows
 
 
+@filetxn.coordinated
 def read_legacy_plan(path):
     """Read a v1 plan (Status in line 2, package table) into a Plan; used only by import-legacy."""
     with open(path, encoding="utf-8-sig") as f:
