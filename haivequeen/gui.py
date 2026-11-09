@@ -12,17 +12,18 @@ import textwrap
 from datetime import datetime
 from pathlib import Path
 
-from . import config, db, gui_data, i18n, runstate
+from . import config, db, gui_async, gui_data, i18n, runstate
 from . import platform as osplat
 from .i18n import tr
 
 DESIGN_W, DESIGN_H = 1672, 912   # layout coordinates (the mockup without its title bar, a little taller for the status panel); everything scales with the window
 REFRESH_MS = 2000
+RESIZE_MS = 120   # a resize or move is drawn this long after the last size event
 LIVE_MS = 2000   # reload interval of a live view
 ASSETS = Path(__file__).resolve().parent.parent / "assets" / "gui"
 COL = {"bg": "#000608", "panel": "#010608", "gold": "#f6b800", "edge": "#d8a400", "text": "#e9ecee", "dim": "#98a2a8",
        "cyan": "#00e2ff", "green": "#24fb42", "blue": "#7aa7ff", "amber": "#f0a020", "red": "#ff5a5f", "yellow": "#f9ce3a",
-       "select": "#4b3802", "selectedge": "#8a6a10", "track": "#15222c", "seg": "#f9ce3a"}
+       "select": "#4b3802", "selectedge": "#8a6a10", "button_hover": "#6b5006", "button_down": "#a67c00", "track": "#15222c", "seg": "#f9ce3a"}
 LEVEL_COL = {"ok": "green", "warn": "yellow", "bad": "red", "dim": "dim", "text": "text"}
 STATUS_COL = {"ok": "green", "idle": "blue", "wait": "amber"}
 CELL, GOLD = 18, "#f6b800"   # slot cell width at normal size and the gold of the logo
@@ -137,8 +138,29 @@ class LiveView:
 
     # Reload the file and show it.
     def refresh(self):
-        """Show the current lines (or a hint when there are none) and follow the end when the view was at the end."""
-        lines = gui_data.live_lines(self.path)
+        """Read the live file and show it."""
+        self.show(gui_data.live_lines(self.path))
+
+    # Read the file in a thread of its own.
+    def refresh_async(self):
+        """Read the live file in the background and show it when it is read (a big file never holds up the window); a read that is still running is not started twice."""
+        if getattr(self, "loading", False):
+            return
+        self.loading = True
+
+        def done(lines):
+            """Show the lines."""
+            self.loading = False
+            self.show(lines)
+
+        def failed(_exc):
+            """Try again at the next reload."""
+            self.loading = False
+        gui_async.run_async(self.win, lambda: gui_data.live_lines(self.path), done, failed)
+
+    # Show lines.
+    def show(self, lines):
+        """Show `lines` (or a hint when there are none) and follow the end when the view was at the end."""
         if lines == self.shown:
             return
         self.follow = self.shown is None or self.box.yview()[1] >= 0.999   # the first load always shows the end
@@ -156,8 +178,11 @@ class LiveView:
 
     # Reload now and again after LIVE_MS milliseconds.
     def tick(self):
-        """Reload and schedule the next reload."""
-        self.refresh()
+        """Reload (the first time at once, later in the background) and schedule the next reload."""
+        if self.shown is None:
+            self.refresh()
+        else:
+            self.refresh_async()
         self.job = self.win.after(LIVE_MS, self.tick)
 
 
@@ -196,6 +221,7 @@ class Dashboard:
         root.bind("<Key>", self.on_key)
         self.canvas.bind("<Destroy>", self.on_destroy)
         self.tick_job = None
+        self.loading, self.links, self.link_hover = False, [], None   # a snapshot is being read; the drawn links (pixel box, item, key, size, underlined anyway); the link under the pointer
         self.update_state, self.update_thread = {}, None   # The last update check and a running check (thread)
         self.tick()
 
@@ -212,10 +238,16 @@ class Dashboard:
 
     # Redraw once the window size stopped changing.
     def on_resize(self, _event):
-        """Wait until the size settles, then redraw (scaling the pictures is slow)."""
+        """Wait until the size settles, then redraw (scaling the pictures is slow); the event itself only restarts the timer, so moving and resizing follow the mouse."""
         if self.resize_job:
             self.root.after_cancel(self.resize_job)
-        self.resize_job = self.root.after(80, self.draw)
+        self.resize_job = self.root.after(RESIZE_MS, self.draw_after_resize)
+
+    # The size stopped changing.
+    def draw_after_resize(self):
+        """Redraw at the new size."""
+        self.resize_job = None
+        self.draw()
 
     # Read a fresh snapshot and draw it.
     def refresh(self):
@@ -226,6 +258,41 @@ class Dashboard:
             self.error = tr("error: %s", exc)
         self.watch_update()
         self.draw()
+
+    # Read a fresh snapshot in a thread of its own.
+    def refresh_async(self):
+        """Read a new snapshot in a background thread and draw it when it is ready (the window keeps handling clicks and keys meanwhile); a read that is still
+        running is not started twice, and an unchanged snapshot is not drawn again."""
+        if self.loading:
+            return
+        self.loading = True
+
+        def work():
+            """Read the snapshot with a connection of the thread's own."""
+            return gui_async.with_connection(self.conn, lambda conn: gui_data.snapshot(conn, self.project))
+
+        def done(snap):
+            """Show the snapshot."""
+            self.loading = False
+            same = self.snap is not None and not self.error and self.same_content(snap, self.snap)
+            self.snap, self.error = snap, ""
+            self.watch_update()
+            if not same:
+                self.draw()
+
+        def failed(exc):
+            """Show the error of a failed read in the footer."""
+            self.loading = False
+            self.error = tr("error: %s", exc)
+            self.watch_update()
+            self.draw()
+        gui_async.run_async(self.root, work, done, failed)
+
+    # Compare two snapshots.
+    @staticmethod
+    def same_content(a, b) -> bool:
+        """True when both snapshots hold the same data apart from their time stamp."""
+        return {k: v for k, v in a.items() if k != "now"} == {k: v for k, v in b.items() if k != "now"}
 
     # The update function of the header.
     def watch_update(self, manual=False):
@@ -278,8 +345,11 @@ class Dashboard:
 
     # Refresh and schedule the next round.
     def tick(self):
-        """Refresh now and again after REFRESH_MS milliseconds."""
-        self.refresh()
+        """Refresh and again after REFRESH_MS milliseconds: the first snapshot is read before the window is shown, every later one in the background."""
+        if self.snap is None:
+            self.refresh()
+        else:
+            self.refresh_async()
         self.tick_job = self.root.after(REFRESH_MS, self.tick)
 
     # ---- drawing helpers ----
@@ -364,6 +434,30 @@ class Dashboard:
         for i in range(max(1, round(width / step))):
             self.rect(x + i * step + 1, y, x + (i + 1) * step - 1, y + h, fill=fill)
 
+    # Remember a drawn link.
+    def link(self, x0, y0, x1, y1, item, key, size, always=False):
+        """Register the design rectangle as a link: the pointer over it becomes a hand and, unless the text is underlined anyway (`always`), the text of `item` is underlined."""
+        self.links.append((self.px(x0), self.px(y0), self.px(x1), self.px(y1), item, key, size, always))
+
+    # Underline or release a link text.
+    def underline_link(self, item, size, on):
+        """Draw the text of `item` underlined (`on`) or plain."""
+        self.canvas.itemconfigure(item, font=(self.mono, -max(8, round(self.px(size))), "underline" if on else "normal"))
+
+    # Show the link under the pointer.
+    def hover_link(self, x, y):
+        """Hand cursor and hover underline for the link at the pixel (x, y); both go when the pointer leaves it."""
+        over = next((entry for entry in self.links if entry[0] <= x <= entry[2] and entry[1] <= y <= entry[3]), None)
+        key = over[5] if over else None
+        if key != self.link_hover:
+            for _x0, _y0, _x1, _y1, item, name, size, always in self.links:
+                if name == self.link_hover and not always:
+                    self.underline_link(item, size, False)
+            self.link_hover = key
+            if over and not over[7]:
+                self.underline_link(over[4], over[6], True)
+            self.canvas.configure(cursor="hand2" if over else "")
+
     # Remember a clickable area.
     def hit(self, x0, y0, x1, y1, action, arg=None):
         """Register the design rectangle as clickable; a click calls `action(arg)`."""
@@ -438,7 +532,7 @@ class Dashboard:
         self.scale = max(0.3, min(c.winfo_width() / DESIGN_W, c.winfo_height() / DESIGN_H))
         self.fraction = best_fraction(self.scale)
         c.delete("all")
-        self.hits, self.bars, self.areas, self.tip_boxes, self.tip_text = [], {}, [], [], None
+        self.hits, self.bars, self.areas, self.tip_boxes, self.tip_text, self.links = [], {}, [], [], None, []
         if self.snap is None:
             self.text(20, 20, self.error or tr("loading…"), 18, "dim")
             return
@@ -474,6 +568,7 @@ class Dashboard:
         left = self.canvas.bbox(first)[2] / self.scale   # the link starts where the first part ends (design units)
         link = self.text(left, 143, "Rokk001/HaiveQueen", 17, "cyan", "w", underline=True)
         self.hit(left - 4, 130, self.canvas.bbox(link)[2] / self.scale + 4, 156, lambda _a: self.open_repo())
+        self.link(left - 4, 130, self.canvas.bbox(link)[2] / self.scale + 4, 156, link, "repo", 17, True)
         from . import updates
         text, level, action = updates.header_line(self.update_state, self.update_thread is not None and self.update_thread.is_alive())
         x = self.canvas.bbox(link)[2] / self.scale + 10
@@ -483,6 +578,7 @@ class Dashboard:
         item = self.text(x, 143, text, 17, {"warn": "amber", "bad": "red"}.get(level, "dim"), "w", underline=action is not None)
         if action:
             self.hit(x - 4, 130, self.canvas.bbox(item)[2] / self.scale + 4, 156, lambda _a: self.install_update() if action == "install" else self.check_update())
+            self.link(x - 4, 130, self.canvas.bbox(item)[2] / self.scale + 4, 156, item, "update", 17, True)
 
     # Draw the six tiles.
     def tiles(self, s):
@@ -514,6 +610,7 @@ class Dashboard:
     # The mouse moved over the canvas.
     def hover(self, event):
         """Open the overlay of the tile under the pointer (the state now, no period switch) and close it when the pointer leaves the tiles."""
+        self.hover_link(event.x, event.y)
         key = next((k for k, x0, y0, x1, y1 in self.tile_boxes if self.px(x0) <= event.x <= self.px(x1) and self.px(y0) <= event.y <= self.px(y1)), None)
         if key != self.overlay_key:
             self.overlay_key = key
@@ -537,6 +634,7 @@ class Dashboard:
         """Close the open overlay and the tooltip."""
         self.tip_text = None
         self.canvas.delete("tip")
+        self.hover_link(-1, -1)
         if self.overlay_key:
             self.overlay_key = None
             self.canvas.delete("overlay")
@@ -880,6 +978,8 @@ class Dashboard:
                 item = self.text(rx, cy, label, 14, "red" if sl.get("offline") else "dim", "w")
                 if sl["running"]:
                     self.text(self.canvas.bbox(item)[2] / sc + 10, cy, sl["running"], 14, "text", "w")
+                if sl.get("reason"):   # a provider that is not ready: its reason in one short line under the word offline, where the bars would be
+                    self.text(rx, top + CELL * 2 / math.sqrt(3) + 2 + self.lh(10) / 2, self.fit(sl["reason"], rw, 10), 10, "dim", "w")
                 if sl.get("offline"):
                     self.tip_boxes.append((self.px(rx), self.px(top), self.px(rx + rw), self.px(top + row_h), sl["hover"]))
                 continue
@@ -962,13 +1062,15 @@ class Dashboard:
         right = self.canvas.bbox(label)[2] / self.scale
         self.text(right + 8, 886, "▾", 17, "dim", "w")
         self.hit(160, 866, right + 34, 908, lambda _a: self.state_menu())
+        self.link(160, 866, right + 34, 908, label, "state", 17, True)
         x = right + 50
         self.text(x - 22, 886, "|", 17, "dim", "w")
         for name, action in ((tr("projects") if not self.project else tr("project:%s", self.project), self.next_project),
                              (tr("plans"), self.open_hives), (tr("questions"), self.open_questions), (tr("config"), self.open_config), (tr("help"), self.help)):
             w = 13 * len(name)
-            self.text(x, 886, name, 17, "text", "w")
+            item = self.text(x, 886, name, 17, "cyan", "w", underline=name == self.link_hover)   # link colour; underlined while the pointer is over it
             self.hit(x - 8, 866, x + w + 8, 908, lambda _a, f=action: f())
+            self.link(x - 8, 866, x + w + 8, 908, item, name, 17)
             x += w + 14
             self.text(x, 886, "|", 17, "dim", "w")
             x += 22

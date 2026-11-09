@@ -5,7 +5,7 @@ question the window also lists the steps (packages) of the plan: the ones ticked
 """
 import re
 
-from . import bees, db, gui_data, hives, runtime, owner
+from . import bees, db, gui_async, gui_data, hives, runtime, owner
 from .i18n import tr
 
 REFRESH_MS = 5000
@@ -100,10 +100,27 @@ class QuestionsWindow:
 
     # Reload the list every few seconds.
     def tick(self):
-        """Refresh the list now and again after REFRESH_MS while the window exists."""
+        """Reload the list in the background now and again after REFRESH_MS while the window exists."""
         if self.win.winfo_exists():
-            self.refresh()
+            self.refresh_async()
             self.win.after(REFRESH_MS, self.tick)
+
+    # Reload the open questions without holding up the window.
+    def refresh_async(self):
+        """Read the open questions in a thread of their own and show them when they are there; a read that is still running is not started twice."""
+        if getattr(self, "loading", False):
+            return
+        self.loading = True
+
+        def done(fresh):
+            """Show the questions."""
+            self.loading = False
+            self.apply(fresh)
+
+        def failed(_exc):
+            """Try again at the next round."""
+            self.loading = False
+        gui_async.run_async(self.win, lambda: gui_async.with_connection(self.conn, open_questions), done, failed)
 
     # The question that is selected.
     def current(self):
@@ -114,8 +131,12 @@ class QuestionsWindow:
     # Reload the open questions and keep the selection.
     def refresh(self):
         """Reload the open questions; the selected one stays selected, and the form is rebuilt only when the list changed."""
+        self.apply(open_questions(self.conn))
+
+    # Show a list of open questions.
+    def apply(self, fresh):
+        """Show the open questions `fresh`: the selected one stays selected, and the form is rebuilt only when the list changed."""
         old = self.current()
-        fresh = open_questions(self.conn)
         if [q["id"] for q in fresh] == [q["id"] for q in self.questions] and self.questions:
             return
         self.questions = fresh

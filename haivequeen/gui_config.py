@@ -86,6 +86,8 @@ GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "sl
                 "beesPerQueen": N_("How many Agents a Queen may have running at the same time.")}
 SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Project."), "allowedTools": N_("Commands agents of this Project may run without asking.")})
 OTHER_HELP = N_("A further setting of this Project, as written in its settings file.")   # the explanation of a setting the page has no own text for
+GENERAL_OTHER_HELP = N_("A further HaiveQueen setting, as written in config.toml.")   # the same on the General page: these keys belong to HaiveQueen, not to a Project
+ADVANCED_LABELS = {"hives": N_("Plans")}   # labels of keys in General -> Advanced (the key in config.toml stays the same)
 # Owner decision 741: the main part of the Apiary page, the collapsed section Advanced and the keys the page never shows as fields of their own.
 MAIN_KEYS = ("colour", "priority", "owner", "language", "escalateAfter") + tuple(key for key, _default in APIARY_DEFAULTS)
 ADVANCED_DEFAULTS = (("planGlobs", ["docs/plans/*.md"]), ("planExclude", []), ("ignoredBuildOutput", []), ("buildFlowDoc", ""), ("integratorInstructions", ""),
@@ -1017,14 +1019,14 @@ class ConfigWindow(ProviderPages):
         if self.node[0] == "apiaries" and path[:1] in (("file",), ("entry",), ("place",)):
             return tr(SETTING_LABELS[name]) if name in SETTING_LABELS else readable(path[-1])
         if self.node[0] == "general":
-            return tr(GENERAL_LABELS.get(path[-1], readable(path[-1])))
+            return tr(GENERAL_LABELS.get(path[-1]) or ADVANCED_LABELS.get(path[-1]) or readable(path[-1]))
         return str(path[-1])
 
     def explain(self, cell, path):
         """The one line of explanation of a setting of a Project page below its field."""
         name = ".".join(path[1:])
         if self.node[0] in ("apiaries", "general"):
-            help_text = SETTING_HELP.get(name, OTHER_HELP) if self.node[0] == "apiaries" else GENERAL_HELP.get(path[-1], OTHER_HELP)
+            help_text = SETTING_HELP.get(name, OTHER_HELP) if self.node[0] == "apiaries" else GENERAL_HELP.get(path[-1], GENERAL_OTHER_HELP)
             self.tk.Label(cell, text=tr(help_text), anchor="w", justify="left", fg=self.col["dim"], font=(self.mono, 9),
                           wraplength=PATH_WIDTH * self.char_px).pack(anchor="w")
 
