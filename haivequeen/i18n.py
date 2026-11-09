@@ -154,6 +154,8 @@ _LIVE_LABEL = r"(Commit(?:: .*?)?|Push|Compile test|Check \S+|changed: .*?|ready
 
 # Why a worktree cleanup kept a worktree or could not remove it: the start of the English text and its German form.
 _WORKTREE_REASONS = (
+    ("HEAD cannot be read", "HEAD nicht lesbar"),
+    ("used by a plan that is not finished", "von einem nicht beendeten Plan benutzt"),
     ("protected worktree", "geschützter Worktree"),
     ("locked or missing", "gesperrt oder fehlt"),
     ("branch has an open queue row", "Branch hat eine offene Zeile in der Warteschlange"),
