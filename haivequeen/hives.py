@@ -230,6 +230,7 @@ WAIT_STATES = ('answer', 'resting', 'codex_wait', 'provider_wait', 'integration_
 # RUNNING <-> WAITING: a plan without a live Queen or Bee whose Hive waits is WAITING; a live Queen or Bee makes it RUNNING again.
 def update_waiting(conn, env, alive=None):
     """Move RUNNING plans whose Plan waits and that have no live agent to WAITING, and QUEUED or WAITING plans with a live agent to RUNNING."""
+    runtime.drop_provider_wait(conn, env.name)   # the wait row of an ended or paused plan goes away, also an old stale one
     agents = runtime.list_agents(conn, env.name, 'active')
     for plan in runtime.list_plans(conn, env.name):
         if plan['status'] not in ('QUEUED', 'RUNNING', 'WAITING'):
@@ -263,6 +264,8 @@ def provider_wait_check(conn, env, hive, provider, free, plan):
     a Queen needs one free slot for herself; her Agents take their slots when they start, on her provider or another one, so no
     second slot is needed and no owner question about slots is asked. The provider the Plan waited for does not bind the next Queen."""
     from . import usage
+    if provider.get('login') is False:   # enabled but not ready: login missing, model not listed, own server not answering
+        return False, 'not ready: %s' % (provider.get('notReady') or 'unknown reason')
     full = [w for w in usage.limit_windows(conn, provider) if w['used_pct'] >= 100]
     if full:
         if any(w.get('unknown') for w in full):
