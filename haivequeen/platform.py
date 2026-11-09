@@ -236,6 +236,26 @@ def process_start_time(pid):
         return None
 
 
+# Return the command line of a running process.
+def process_command_line(pid):
+    """Command line of the process as one text ("" when it has none); None when it cannot be read (no such process, no access, no tool)."""
+    try:
+        pid = int(pid)
+        if pid <= 0:
+            return None
+        if is_linux():
+            with open('/proc/%d/cmdline' % pid, 'rb') as handle:
+                return handle.read().replace(bytes([0]), b' ').decode('utf-8', 'replace').strip()
+        if is_windows():
+            script = "(Get-CimInstance Win32_Process -Filter 'ProcessId=%d').CommandLine" % pid
+            res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], stdin=subprocess.DEVNULL, capture_output=True,
+                                 text=True, encoding="utf-8", errors="replace", timeout=30, creationflags=0x08000000)   # CREATE_NO_WINDOW
+            return res.stdout.strip() if res.returncode == 0 else None
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        return None
+    return None
+
+
 # Collect a process and everything it started, children before parents.
 def _win_tree(pid: int) -> list:
     """Return `pid` and all its descendants from the process snapshot, deepest first.

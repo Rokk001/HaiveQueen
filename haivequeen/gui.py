@@ -4,6 +4,7 @@ It shows the state read by haivequeen/overview.py through haivequeen/gui_data.py
 The logo and icons are cut out of the mockup (assets/gui, made by scripts/make_gui_assets.py). The controls are pause/resume, stop/start, project filter and the live view of an agent (Enter or double click on a row).
 `bzz gui` opens the window, `bzz start` starts the orchestrator without a terminal window and opens it.
 """
+import json
 import math
 import os
 import subprocess
@@ -63,6 +64,24 @@ def launch_detached() -> dict:
         exe = str(windowless)
     proc = subprocess.Popen([exe, "-m", "haivequeen", "gui"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **flags)
     return {"ok": True, "gui": proc.pid, "already": False}
+
+
+# Tell why `bzz start` did not start HaiveQueen.
+def start_refusal(code, out, err) -> str:
+    """The reason a `bzz start` call that ended with exit code `code` gave: the error of its last JSON line, else the last line it wrote; "" when it went through."""
+    if not code:
+        return ""
+    for line in reversed((out or "").splitlines()):
+        if line.startswith("{"):
+            try:
+                reason = json.loads(line).get("error")
+            except ValueError:
+                break
+            if reason:
+                return str(reason)
+            break
+    lines = [ln.strip() for ln in ((err or "") + "\n" + (out or "")).splitlines() if ln.strip()]
+    return lines[-1] if lines else tr("The start did not go through.")
 
 
 # Find the zoom/subsample pair (tk can only scale pictures by whole-number ratios) closest to a scale factor.
@@ -1475,9 +1494,18 @@ class Dashboard:
 
     # Start the orchestrator loop.
     def start(self):
-        """Run `bzz start` in the background (the orchestrator starts without a terminal window, this window stays the dashboard)."""
-        subprocess.Popen([osplat.python_executable(), "-m", "haivequeen", "start"], stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **NO_WINDOW)
+        """Run `bzz start` in the background (the orchestrator starts without a terminal window, this window stays the dashboard); a refused start shows its reason in a message."""
+        def work():
+            """Run the command and keep its exit code and output (the window keeps handling clicks meanwhile)."""
+            res = subprocess.run([osplat.python_executable(), "-m", "haivequeen", "start"], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", timeout=200, **NO_WINDOW)
+            return start_refusal(res.returncode, res.stdout, res.stderr)
+
+        def show(reason):
+            """Tell the owner why nothing started."""
+            if reason:
+                self.inform(tr(reason))
+        gui_async.run_async(self.root, work, show, lambda exc: self.inform(tr("The start did not finish: %s", exc)))
 
     # Request a graceful stop.
     def stop(self):

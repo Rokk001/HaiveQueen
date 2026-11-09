@@ -376,6 +376,8 @@ def self_update_line(su) -> list:
     if result == "rollback":
         text += tr(" (back to %s)", (su.get("old_commit") or "-")[:7])
     col = {"ok": "green", "rollback": "yellow"}.get(result, "red")
+    if "stopped by the owner" in (su.get("note") or ""):   # the owner ended the wait (F-11): neither a failure nor a plain success
+        return [(tr("self-update "), "gray"), (tr("stopped by the owner"), "yellow"), (text, "gray")]
     return [(tr("self-update "), "gray"), (tr(result), col), (text, "gray")]
 
 

@@ -34,6 +34,21 @@ CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 TASK_NAME = "HaiveQueenSelfUpdate"
 RESTART_VAR = "BZZ_UPDATE_RESTART"   # set for the restart of the worker (see loop.cmd_start)
 STARTING_GRACE = 120   # seconds an agent row without a process id counts as starting (as routine.repair_stale_agents)
+ROUND_TIMEOUT = 1800.0   # seconds the worker waits for the first finished round of the restarted loop
+ROUND_GRACE = 60.0   # seconds after that limit before a start ends a worker that is still there
+OWNER_STOP = "stopped by the owner"   # in the note of a self-update that the owner ended with `bzz stop` or the Stop button
+
+
+class OwnerStop(Exception):
+    """The owner stopped HaiveQueen (`bzz stop`, Stop button) while the worker was waiting."""
+
+
+def owner_stopped() -> bool:
+    """True when the STOP flag exists and was not written by a self-update (the owner's `bzz stop` overwrites the text of the worker's flag)."""
+    try:
+        return "(self-update" not in loop.stop_flag().read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
 
 
 # ---- places ----
@@ -46,6 +61,11 @@ def live_folder() -> Path:
 def lock_path() -> Path:
     """Path of the self-update lock file (the process id of the running worker) in the machine data folder."""
     return osplat.data_dir() / "self-update.lock"
+
+
+def round_path() -> Path:
+    """Path of the marker (start time, seconds since 1970) that the worker keeps while it waits for the first round of the restarted loop."""
+    return osplat.data_dir() / "self-update.round"
 
 
 def integration_branch(conn) -> str:
@@ -143,10 +163,13 @@ def busy_agents(conn, alive=None, now=None) -> list:
     return busy
 
 
-def wait_until_quiet(conn, sleep, poll: float, alive=None, loop_pid=None) -> None:
-    """Wait without a time limit until no loop process and no agent of any project runs; nothing is ended."""
+def wait_until_quiet(conn, sleep, poll: float, alive=None, loop_pid=None, stopped=None) -> None:
+    """Wait without a time limit until no loop process and no agent of any project runs; nothing is ended. Raises OwnerStop when the owner stops HaiveQueen meanwhile."""
     loop_pid = loop_pid or loop.loop_running
+    stopped = stopped or owner_stopped
     while loop_pid() or busy_agents(conn, alive):
+        if stopped():
+            raise OwnerStop()
         sleep(poll)
 
 
@@ -157,9 +180,12 @@ def start_row(conn, old_commit: str) -> int:
 
 
 def end_row(conn, row_id: int, new_commit: str, result: str, note: str) -> None:
-    """Write end time, new commit, result (ok, rollback or failed) and note into the row and log one event."""
+    """Write end time, new commit, result (ok, rollback or failed) and note into the row and log one event.
+
+    The result "skipped" (stopped by the owner before anything changed) is stored as "failed" with the note "skipped, stopped by the owner": the table allows only the three results."""
     with db.transaction(conn):
-        conn.execute("UPDATE self_updates SET ended=?, new_commit=?, result=?, note=? WHERE id=?", (db.now(), new_commit, result, note, row_id))
+        conn.execute("UPDATE self_updates SET ended=?, new_commit=?, result=?, note=? WHERE id=?",
+                     (db.now(), new_commit, "failed" if result == "skipped" else result, note, row_id))
         db.add_event(conn, runstate.GLOBAL_PROJECT, "self-update", "self-update %s: %s" % (result, note), data={"result": result, "id": row_id})
 
 
@@ -175,12 +201,15 @@ def first_round_problems(conn, since_event: int) -> list:
     return problems
 
 
-def wait_first_round(conn, started_after: str, sleep, poll: float, timeout: float, loop_pid=None) -> bool:
-    """True once the new loop runs and has finished a round after `started_after`; False when `timeout` seconds pass first."""
+def wait_first_round(conn, started_after: str, sleep, poll: float, timeout: float, loop_pid=None, stopped=None) -> bool:
+    """True once the new loop runs and has finished a round after `started_after`; False when `timeout` seconds pass first. Raises OwnerStop when the owner stops HaiveQueen meanwhile."""
     loop_pid = loop_pid or loop.loop_running
+    stopped = stopped or owner_stopped
     start = time.monotonic()
     after = db.parse_time(started_after)
     while time.monotonic() - start <= timeout:
+        if stopped():
+            raise OwnerStop()
         state = loop.read_state(conn)
         since = db.parse_time((state or {}).get("since"))
         if loop_pid() and state and state.get("status") == "idle" and since and after and since >= after:
@@ -236,9 +265,75 @@ def rollback(conn, live, old: str, new: str, why: str, run, restart) -> tuple:
     return "rollback", note
 
 
+# ---- stale lock ----
+
+def is_update_worker(command_line: str) -> bool:
+    """True when the command line is that of the HaiveQueen update worker (`-m haivequeen self-update --worker`)."""
+    low = (command_line or "").lower()
+    return "haivequeen" in low and "self-update" in low and "--worker" in low
+
+
+def clear_stale_lock(conn, alive=None, cmdline=None, now=None, kill=None, head=None) -> str:
+    """Delete the self-update lock when its process does not run, is not the update worker, or is a worker past its limit for the first round.
+
+    Returns why the lock was cleared ("" when there is no lock or a living worker inside its limit holds it, or the process cannot be examined).
+    A worker past its limit is ended. An update that is already in place stays (no rollback); the open row of the update history is closed with
+    "ended at start: stale lock". One log line (event and beekeeper.log) is written. Injectable parts serve the tests."""
+    try:
+        pid = int(lock_path().read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return ""   # no lock, or one that is just being written
+    alive = alive or osplat.process_alive
+    if pid <= 0:
+        why = "the lock names no process"
+    elif not alive(pid):
+        why = "process %d does not run" % pid
+    else:
+        line = (cmdline or osplat.process_command_line)(pid)
+        if line is None:
+            return ""   # cannot be told apart from a worker: the lock stays
+        if not is_update_worker(line):
+            why = "process %d is not the update worker" % pid
+        else:
+            try:
+                began = float(round_path().read_text(encoding="ascii").strip())
+            except (OSError, ValueError):
+                return ""   # still waiting for running agents: it has no limit
+            if (now if now is not None else time.time()) - began <= ROUND_TIMEOUT + ROUND_GRACE:
+                return ""
+            why = "the update worker (process %d) is past its limit for the first round" % pid
+            (kill or osplat.kill_process_tree)(pid)
+    for path in (round_path(), lock_path()):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    text = "stale update lock cleared at start: " + why
+    try:
+        row = conn.execute("SELECT id, old_commit FROM self_updates WHERE ended IS NULL ORDER BY id DESC LIMIT 1").fetchone()
+        if row:
+            current = (head or (lambda: run_command(["git", "-C", str(live_folder()), "rev-parse", "HEAD"], live_folder())[1].strip()))()
+            kept = bool(current) and current != (row["old_commit"] or "")
+            note = "ended at start: stale lock (%s)" % why
+            end_row(conn, row["id"], current if kept else (row["old_commit"] or ""), "ok" if kept else "skipped", note + ("; update kept" if kept else ""))
+        else:
+            with db.transaction(conn):
+                db.add_event(conn, runstate.GLOBAL_PROJECT, "self-update", text)
+    except Exception:   # the log must not keep HaiveQueen from starting
+        pass
+    try:
+        log = osplat.runs_dir() / "beekeeper.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a", encoding="utf-8") as out:
+            out.write("%s %s\n" % (db.now(), text))
+    except OSError:
+        pass
+    return why
+
+
 # ---- the update ----
 
-def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, poll: float = 5.0, round_timeout: float = 1800.0,
+def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, poll: float = 5.0, round_timeout: float = ROUND_TIMEOUT,
                loop_pid=None, version=None) -> dict:
     """Do one self-update of the live folder and return {"result", "note", "old", "new"} (also written to self_updates).
 
@@ -264,7 +359,12 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
         stop = loop.stop_flag()
         stop.parent.mkdir(parents=True, exist_ok=True)
         stop.write_text("stop requested %s (self-update%s)\n" % (db.now(), " to %s" % version if version else ""), encoding="utf-8")
-        wait_until_quiet(conn, sleep, poll, alive, loop_pid)
+        try:
+            wait_until_quiet(conn, sleep, poll, alive, loop_pid)
+        except OwnerStop:   # nothing was changed yet: the update is not applied; the owner's STOP flag stays for the next start to remove
+            note = "skipped, " + OWNER_STOP
+            end_row(conn, row_id, old, "skipped", note)
+            return {"result": "skipped", "note": note, "old": old, "new": old}
 
         def restart():
             """Start the loop through the live code; (True, '') when `start` answered with exit 0 (or refused only because a start is pending)."""
@@ -290,6 +390,7 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
         new = run(["git", "-C", str(live), "rev-parse", "HEAD"], live)[1].strip()
         failure = ""
         pane_problems = ""
+        owner_ended = False
         if new != old:
             code, out = run(["git", "-C", str(live), "push", "origin", "main"], live) if version is None else (0, "")   # a release install never pushes
             if code != 0:
@@ -304,11 +405,17 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
             ok, out = restart()
             if not ok:
                 failure = "start: " + out
-            elif not wait_first_round(conn, began, sleep, poll, round_timeout, loop_pid):
-                failure = "no finished first round within %d s" % round_timeout
             else:
-                found = first_round_problems(conn, since_event)
-                pane_problems = "; ".join(found)   # the loop runs: pane problems are reported, never rolled back
+                try:
+                    round_path().write_text(str(time.time()), encoding="ascii")   # a start finds a worker that stays past its limit
+                    finished = wait_first_round(conn, began, sleep, poll, round_timeout, loop_pid)
+                except OwnerStop:   # the update is in place and stays (no rollback)
+                    finished, owner_ended = True, True
+                if not finished:
+                    failure = "no finished first round within %d s" % round_timeout
+                elif not owner_ended:
+                    found = first_round_problems(conn, since_event)
+                    pane_problems = "; ".join(found)   # the loop runs: pane problems are reported, never rolled back
         if failure and new != old:
             result, note = rollback(conn, live, old, new, failure, run, restart)
         elif failure:
@@ -317,6 +424,8 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
             result, note = "ok", ("updated to %s" % new[:12] if new != old else "already current at %s" % new[:12])
             if version is not None:
                 note = "version %s: %s" % (version, note)
+            if owner_ended:
+                note += "; " + OWNER_STOP + " during the wait"
             if pane_problems:
                 note += "; kept despite first round problems: " + pane_problems
                 try:
@@ -326,10 +435,11 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
         end_row(conn, row_id, new, result, note)
         return {"result": result, "note": note, "old": old, "new": new}
     finally:
-        try:
-            lock_path().unlink()
-        except OSError:
-            pass
+        for path in (round_path(), lock_path()):
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 # ---- command line ----
@@ -338,8 +448,8 @@ def cmd_self_update(args, conn) -> int:
     """`self-update`: spawn the detached worker and return at once; `--worker` runs the update in this process."""
     if args.worker:
         res = run_update(conn, version=getattr(args, "version", None))
-        print(json.dumps({"ok": res["result"] in ("ok", "rollback"), **res}))
-        return 0 if res["result"] in ("ok", "rollback") else 1
+        print(json.dumps({"ok": res["result"] in ("ok", "rollback", "skipped"), **res}))
+        return 0 if res["result"] in ("ok", "rollback", "skipped") else 1
     version = getattr(args, "version", None)
     if not version:
         why = legacy_retired(conn)

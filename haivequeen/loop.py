@@ -883,6 +883,12 @@ def cmd_start(args, conn) -> int:
     machine = config.load_config()
     from . import updates
     by_worker = updates.started_by_update_worker()   # the worker's own restart; a worker of an older version sets no BZZ_UPDATE_RESTART
+    if not by_worker and not os.environ.get("BZZ_UPDATE_RESTART"):
+        try:
+            from . import selfupdate
+            selfupdate.clear_stale_lock(conn)   # a lock of a process that is gone, another program or a worker past its limit must not refuse every start
+        except Exception:   # the check must not keep HaiveQueen from starting
+            pass
     if updates.draining() and not os.environ.get("BZZ_UPDATE_RESTART") and not by_worker:   # The update waits for running agents, nothing starts meanwhile
         return refuse_start(args, conn, {"updating": True}, "An update is waiting for running agents; HaiveQueen starts again after it.")
     pid = loop_running()

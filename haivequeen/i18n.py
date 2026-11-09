@@ -479,6 +479,9 @@ GERMAN = {
     "STATE": "ZUSTAND", "USAGE": "NUTZUNG", "PLANS": "PLÄNE", "QUESTIONS": "FRAGEN", "ROUND ERRORS": "RUNDENFEHLER", "FAULTS": "FEHLER", "SELF-UPDATE": "SELBST-UPDATE",
     "%s %d / %d integrated (%d%%)": "%s %d / %d integriert (%d%%)", "open: %d  %s": "offen: %d  %s", "none open": "keine offen",
     "idle since %s": "untätig seit %s", "idle": "untätig", "self-update ": "Selbst-Update ", "ok": "ok", "rollback": "Rollback", " (back to %s)": " (zurück auf %s)",
+    "stopped by the owner": "vom Besitzer gestoppt", "The start did not finish: %s": "Der Start wurde nicht abgeschlossen: %s", "The start did not go through.": "Der Start ist nicht gelungen.",
+    "An update is waiting for running agents; HaiveQueen starts again after it.": "Ein Update wartet auf laufende Agenten; HaiveQueen startet danach wieder.",
+    "Waiting for the previous stop to finish.": "Der vorherige Stopp ist noch nicht abgeschlossen.", "The orchestrator is just starting.": "Der Orchestrator startet gerade.",
     "Build jobs %s of %d cores (running)": "Build-Jobs %s von %d Kernen (läuft)", "Build jobs %d of %d cores (next build)": "Build-Jobs %d von %d Kernen (nächster Build)",
     " | per job %s": " | pro Job %s", "not measured yet": "noch nicht gemessen", " | active: %d cores": " | aktiv: %d Kerne",
     # ---- overlays
