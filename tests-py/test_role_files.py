@@ -42,7 +42,7 @@ class RoleFileTests(unittest.TestCase):
 
     def test_bee_prompt_comes_from_the_file(self):
         text = bees.bee_prompt("Ada", "P1", "do it", ["a", "b"], ["x.py", "y.py"], ["r1", "r2"])
-        self.assertTrue(text.startswith("Work only package P1: do it\nSteps:\n1. a\n2. b\nPaths: x.py, y.py\nUse your own worktree"))
+        self.assertTrue(text.startswith("Work only package P1: do it\nSteps:\n1. a\n2. b\nPaths: x.py, y.py\nUse the worktree"))
         self.assertNotIn("r1", text)
         self.assertIn("bzz note: Ada P1: step n/2 <short text>.", text)
 
@@ -69,6 +69,7 @@ class RoleStartTests(RoundCase):
         self.assertIn("Keep token use economical.", text)
 
     def test_bee_starts_with_its_role_file_and_a_change_applies_at_once(self):
+        self.mock_agent_worktrees()
         self.add_local_provider()
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "First", "class": "heavy"}])
         hives.create(self.conn, "testproj", REL, "claude", "123456")
@@ -80,7 +81,7 @@ class RoleStartTests(RoundCase):
         for f in roles.ROLES_DIR.glob("*.md"):
             shutil.copy(f, tmp / f.name)
         (tmp / "bee-start.md").write_text("You are a changed Agent.\n\nTASK\n", encoding="utf-8")
-        with mock.patch("haivequeen.bees.valid_bee_worktree", return_value=True), mock.patch.object(roles, "ROLES_DIR", tmp):
+        with mock.patch("haivequeen.bees.valid_bee_worktree", return_value=True), mock.patch("haivequeen.bees.prepare_agent_worktree", return_value=(str(bee_wt), "plan-p1")), mock.patch.object(roles, "ROLES_DIR", tmp):
             self.assertTrue(bees.start_process(self.env(), REL, "P1", "Ada", "heavy", "do first", ["one"], ["source.py"], ["work rule"], cwd=str(bee_wt)))
         self.assertTrue(self.prompt("Ada").startswith("You are a changed Agent.\n\nTASK\n\n"))
 

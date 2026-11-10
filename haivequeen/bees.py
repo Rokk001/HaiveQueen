@@ -74,6 +74,7 @@ def ensure_attempts(conn):
     conn.execute('CREATE TABLE IF NOT EXISTS bee_retry_answers (question_id INTEGER PRIMARY KEY, project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, signal_rowid INTEGER NOT NULL, previous_counts TEXT NOT NULL)')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_assignments (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, provider TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_worktrees (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, cwd TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
+    conn.execute('CREATE TABLE IF NOT EXISTS bee_worktree_branches (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, branch TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_completed (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     conn.execute('CREATE TABLE IF NOT EXISTS package_progress (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, state TEXT NOT NULL, agent TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     if 'reason' not in [r[1] for r in conn.execute('PRAGMA table_info(package_progress)')]:
@@ -124,9 +125,18 @@ def close_embedded(conn, project, plan, package=None, outcome='done', keep_stopp
         where += ' AND package=?'
         args.append(package)
     confirmed = 0
-    if not keep_stopping:
-        confirmed = conn.execute("UPDATE embedded_bees SET ended_at=?, outcome='stopped'" + where + ' AND outcome=?', [db.now()] + args + [STOPPING]).rowcount
-    conn.execute('UPDATE embedded_bees SET ended_at=?, outcome=?' + where + ' AND outcome!=?', [db.now(), outcome] + args + [STOPPING])
+    cur = conn.execute('SELECT rowid AS rid,* FROM embedded_bees' + where, args)
+    names = [c[0] for c in cur.description]
+    for values in cur.fetchall():
+        row = dict(zip(names, values))
+        stopping = row['outcome'] == STOPPING
+        if stopping and keep_stopping:
+            continue
+        confirmed += int(stopping)
+        end = 'stopped' if stopping else outcome
+        if enforce_agent_end(conn, project, row):
+            end = 'failed'
+        conn.execute('UPDATE embedded_bees SET ended_at=?, outcome=? WHERE rowid=?', (db.now(), end, row['rid']))
     return confirmed
 
 
@@ -217,6 +227,8 @@ def close_ended_embedded(conn, project=None, alive=None) -> int:
         if not queen_has_ended(conn, row, alive):
             continue
         outcome = 'stopped' if row.get('outcome') == STOPPING else 'interrupted'
+        if enforce_agent_end(conn, row['project'], row):
+            outcome = 'failed'
         conn.execute('UPDATE embedded_bees SET ended_at=?, outcome=? WHERE rowid=? AND ended_at IS NULL', (db.now(), outcome, row['rid']))
         closed.append(row)
         plans.add((row['project'], row['plan_path']))
@@ -297,7 +309,7 @@ def stopping_embedded(conn, project, plan=None, package=None):
 
 
 # Count a failed attempt, ignoring technical interruptions.
-def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', verify='code'):
+def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', verify='code', force_failure=False):
     """Record an attempt once. A failed attempt counts only when the same error came again or, for a package closed by code, the same requirement stayed open. A package in state implemented never counts; for a package closed by build or owner open requirements alone never count."""
     ensure_attempts(conn)
     if outcome == 'succeeded':
@@ -307,6 +319,13 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
         return
     with db.transaction(conn):
         if attempt and conn.execute('INSERT OR IGNORE INTO bee_attempt_reports(project,plan_path,package,attempt) VALUES(?,?,?,?)', (project, plan, package, attempt)).rowcount == 0:
+            if force_failure:
+                prior = conn.execute('SELECT counted FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND attempt=?', (project, plan, package, attempt)).fetchone()
+                if prior and not prior[0]:
+                    conn.execute('UPDATE bee_attempt_signals SET counted=1,error=? WHERE project=? AND plan_path=? AND package=? AND attempt=?', (error, project, plan, package, attempt))
+                    conn.execute('INSERT INTO bee_attempts VALUES(?,?,?,?,1) ON CONFLICT(project,plan_path,package,class) DO UPDATE SET failures=failures+1', (project, plan, package, cls))
+                    conn.execute('DELETE FROM bee_completed WHERE project=? AND plan_path=? AND package=?', (project, plan, package))
+                    set_package_state(conn, project, plan, package, 'working', attempt)
             return
         if attempt:
             epoch = retry_epoch(conn, project, plan, package)
@@ -314,7 +333,7 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
             state = conn.execute('SELECT state FROM package_progress WHERE project=? AND plan_path=? AND package=?', (project, plan, package)).fetchone()
             same_requirement = verify == 'code' and previous and set(open_requirements or []) & set(json.loads(previous[0]))
             same_error = previous and error and error == previous[1]
-            counted = bool(outcome == 'failed' and not (state and state[0] == 'implemented') and (same_requirement or same_error))
+            counted = bool(outcome == 'failed' and (force_failure or (not (state and state[0] == 'implemented') and (same_requirement or same_error))))
             conn.execute('INSERT INTO bee_attempt_signals VALUES(?,?,?,?,?,?,?,?)', (project, plan, package, cls, attempt, json.dumps(open_requirements or []), error, int(counted)))
         if attempt and counted:
             conn.execute('INSERT INTO bee_attempts(project,plan_path,package,class,failures) VALUES(?,?,?,?,1) ON CONFLICT(project,plan_path,package,class) DO UPDATE SET failures=failures+1', (project, plan, package, cls))
@@ -750,8 +769,11 @@ def escalation_providers(env, plan, package):
 
 
 # Record an attempt and file one owner question when the top class is exhausted.
-def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked=''):
+def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked='', force_failure=False):
     """Record an outcome and ask once after the highest class fails repeatedly. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
+    attempt, foreign = package_branch_violation(env, plan, package, attempt)
+    if foreign:
+        outcome, error, blocked, force_failure = 'failed', 'foreign branch commit: ' + foreign, '', True
     had_open = bool(unconfirmed_embedded(env.conn, env.name, plan, package))
     if close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome):   # the embedded Bee of this package has reported
         runtime.append_event(env.conn, env.name, 'The stopped subagent Agent of package %s has ended; its Agent place is free' % package, kind='note', mirror='none')
@@ -761,7 +783,7 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
         set_package_state(env.conn, env.name, plan, package, 'waiting', 'queen', blocked)
         return
     row = next((p for p in env.packages(plan) if p['id'] == package), None)
-    record_attempt(env.conn, env.name, plan, package, cls, outcome, attempt, open_requirements, error, row['verify'] if row else 'code')
+    record_attempt(env.conn, env.name, plan, package, cls, outcome, attempt, open_requirements, error, row['verify'] if row else 'code', force_failure)
     if outcome == 'succeeded':
         env.conn.execute('DELETE FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package))
     threshold = int(env.settings.get('escalateAfter', 3))
@@ -771,6 +793,121 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
         text = tr(FAILURE_QUESTION, language=language)
         if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=package)):
             db.add_question(env.conn, env.name, plan, package, text, tr('Review the failed attempts and choose the next approach.', language=language))
+
+
+def prepare_agent_worktree(env, plan, package):
+    """Reuse a package checkout or create its branch from the current plan tip."""
+    import subprocess
+    from pathlib import Path
+    from . import routine
+    ensure_attempts(env.conn)
+    entries = worktree_entries(env)
+    resolved = plan_worktree(env, plan)
+    if entries is None or not resolved:
+        env.log('Agent worktree cannot be prepared: missing plan header or Git worktree list')
+        return None
+    saved = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+    if saved:
+        found = next(((d, b) for d, b in entries if same_folder(d, saved[0])), None)
+        if found and found[1]:
+            known = env.conn.execute('SELECT branch FROM bee_worktree_branches WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+            if known and known[0] != found[1]:
+                env.log('folder %s holds branch %s; package %s expects branch %s' % (saved[0], found[1], package, known[0]))
+                return None
+            env.conn.execute('INSERT OR IGNORE INTO bee_worktree_branches VALUES (?,?,?,?)', (env.name, plan, package, found[1]))
+            return str(Path(found[0])), found[1]
+        env.log('Agent worktree %s is unavailable or has no branch' % saved[0])
+        return None
+    for previous in reversed(runtime.list_agents(env.conn, env.name, 'all')):
+        if (previous.get('plan_path') == plan and previous.get('package') == package and previous.get('phase') == 'bee'
+                and previous.get('cwd') and valid_bee_worktree(env, previous['cwd'], None)):
+            found = next(((d, b) for d, b in entries if previous.get('cwd') and same_folder(d, previous['cwd']) and b), None)
+            if found:
+                env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, found[0]))
+                env.conn.execute('INSERT OR IGNORE INTO bee_worktree_branches VALUES (?,?,?,?)', (env.name, plan, package, found[1]))
+                return str(Path(found[0])), found[1]
+    branch = resolved[0] + '-' + package.lower()
+    folder = Path(routine.new_worktree(env, routine.plan_tag(env, plan).lower() + '-' + package.lower()))
+    here = next(((d, b) for d, b in entries if same_folder(d, folder)), None)
+    if here and here[1] != branch:
+        env.log('folder %s holds branch %s; package %s expects branch %s' % (folder, here[1] or '(none)', package, branch))
+        return None
+    elsewhere = next(((d, b) for d, b in entries if b == branch), None)
+    if elsewhere:
+        folder = Path(elsewhere[0])
+    elif not here:
+        if folder.exists():
+            env.log('folder %s holds branch (none); package %s expects branch %s' % (folder, package, branch))
+            return None
+        git = ['git', '-C', str(env.code_repo)]
+        exists = subprocess.run(git + ['show-ref', '--verify', '--quiet', 'refs/heads/' + branch], capture_output=True).returncode == 0
+        args = ['worktree', 'add', str(folder), branch] if exists else ['worktree', 'add', '-b', branch, str(folder), resolved[0]]
+        result = subprocess.run(git + args, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        if result.returncode:
+            env.log('Agent worktree cannot be prepared: ' + result.stderr.strip())
+            return None
+    env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(folder)))
+    env.conn.execute('INSERT OR IGNORE INTO bee_worktree_branches VALUES (?,?,?,?)', (env.name, plan, package, branch))
+    return str(folder), branch
+
+
+def record_agent_branch_start(env, name, cwd, branch):
+    from . import branchguard
+    import uuid
+    folder = env.run_dir(name) / ('git-guard-' + uuid.uuid4().hex)
+    overrides = branchguard.prepare(folder, cwd, branch)
+    runtime.kv_delete(env.conn, env.name, 'agent-violation:' + name)
+    runtime.kv_delete(env.conn, env.name, 'agent-violation-reported:' + name)
+    runtime.kv_set(env.conn, env.name, 'agent-branch:' + name, json.dumps({'cwd': cwd, 'branch': branch, 'guard': str(folder), 'environment': overrides}))
+    return overrides
+
+
+def agent_branch_violation(env, name):
+    return branch_violation(env.conn, env.name, name)
+
+
+def package_branch_violation(env, plan, package, attempt):
+    """An embedded Agent's evidence follows its identity even if the Queen uses a result alias."""
+    for row in unconfirmed_embedded(env.conn, env.name, plan, package):
+        foreign = branch_violation(env.conn, env.name, row['name'])
+        if foreign:
+            return row['name'], foreign
+    return attempt, branch_violation(env.conn, env.name, attempt) if attempt else ''
+
+
+def branch_violation(conn, project, name):
+    from . import branchguard
+    saved = runtime.kv_get(conn, project, 'agent-violation:' + name)
+    if saved:
+        return saved
+    raw = runtime.kv_get(conn, project, 'agent-branch:' + name)
+    if not raw:
+        return ''
+    data = json.loads(raw)
+    if data.get('guard'):
+        return branchguard.violation(data['guard'])
+    return ''
+
+
+def enforce_agent_end(conn, project, row):
+    """Check every terminal path, including missing runners and embedded Queen exits."""
+    name = row['name']
+    foreign = branch_violation(conn, project, name)
+    if not foreign:
+        return ''
+    runtime.kv_set(conn, project, 'agent-violation:' + name, foreign)
+    text = 'Foreign branch commit: %s; this package attempt failed.' % foreign
+    raw = runtime.kv_get(conn, project, 'agent-branch:' + name)
+    data = json.loads(raw) if raw else {}
+    if data.get('guard'):
+        from pathlib import Path
+        (Path(data['guard']).parent / 'branch-violation.txt').write_text(text + '\n', encoding='utf-8')
+    record_attempt(conn, project, row['plan_path'], row['package'], row.get('class') or 'medium',
+                   'failed', name, error=text, force_failure=True)
+    if not runtime.kv_get(conn, project, 'agent-violation-reported:' + name):
+        runtime.append_event(conn, project, text, kind='note', agent=name, mirror='none', data={'foreign_branch': foreign})
+        runtime.kv_set(conn, project, 'agent-violation-reported:' + name, foreign)
+    return foreign
 
 
 # Verify the Bee has a distinct worktree in the same repository.
@@ -929,17 +1066,13 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         provider, selected_class = route
         env.conn.execute('INSERT INTO bee_assignments(project,plan_path,package,class,provider) VALUES(?,?,?,?,?) ON CONFLICT(project,plan_path,package) DO UPDATE SET class=excluded.class,provider=excluded.provider', (env.name, plan, package, selected_class, provider))
         pick = scheduler.get_provider(env.providers, provider)
-        saved = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
-        if saved:
-            cwd = saved[0]
-        else:
-            for previous in reversed(runtime.list_agents(env.conn, env.name, 'all')):
-                previous_cwd = previous.get('cwd')
-                if (previous.get('plan_path') == plan and previous.get('package') == package and
-                        previous.get('phase') == 'bee' and previous_cwd and
-                        valid_bee_worktree(env, previous_cwd, queen.get('cwd'))):
-                    cwd = previous_cwd
-                    break
+        pair = prepare_agent_worktree(env, plan, package)
+        if not pair:
+            return refuse(env, package, 'the package worktree could not be prepared; see the round log')
+        cwd, branch = pair
+        if not valid_bee_worktree(env, cwd, queen.get('cwd')):
+            return refuse(env, package, 'the package worktree is not a separate checkout of this repository')
+        git_environment = record_agent_branch_start(env, name, cwd, branch)
         if provider == hive['provider'] and embedded:
             if cwd:
                 if Path(cwd).exists() and not valid_bee_worktree(env, cwd, queen.get('cwd')):
@@ -951,7 +1084,8 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             record_step_count(env.conn, env.name, plan, package, len(steps))
             # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
             prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')))
-            return {'kind': 'subagent', 'provider': provider, 'class': selected_class, 'cwd': cwd, 'prompt': prompt}
+            prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
+            return {'kind': 'subagent', 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
         if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
             return refuse(env, package, 'an Agent process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
         path = Path(cwd or '')
@@ -961,11 +1095,12 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'RUNNING'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
         ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
         action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs'))), 'class': selected_class}
+        action['prompt'] += '\n\nAssigned worktree: %s; assigned branch: %s.' % (cwd, branch)
         if not loop._do_start(ctx, action, forced_pick=pick):
             return refuse(env, package, 'the agent runner could not start the Agent process')
         env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
         record_step_count(env.conn, env.name, plan, package, len(steps))
-        return {'kind': 'process', 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute())}
+        return {'kind': 'process', 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute()), 'branch': branch}
 
 
 # Read the branch from the 'Plan: X; branch Y; baseline Z' line of the plan's state file next to it.

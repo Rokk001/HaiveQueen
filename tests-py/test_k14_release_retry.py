@@ -38,6 +38,7 @@ class ReleaseRetryTests(RoundCase):
             self.assertEqual(bees.release_refusal(self.conn, 'testproj', REL, 'P1', {}, str(report)), '')
 
     def test_answer_retries_at_highest_class_and_preserves_history(self):
+        self.mock_agent_worktrees()
         env = self.env()
         for n in range(4):
             bees.report_attempt(env, REL, 'P1', 'heavy', 'failed', 'old%d' % n, ['R'])

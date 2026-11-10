@@ -189,11 +189,12 @@ class SubagentRulesTest(RoundCase):
     # Run bzz bee start.
     def start(self, no_subagents=False):
         """Return the parsed answer of bzz agent start for package P1."""
+        self.mock_agent_worktrees()
         args = cli.build_parser().parse_args(['bee', 'start', '--project', 'testproj', '--plan', REL, '--package', 'P1', '--class', 'medium', '--name', 'Ada',
                                               '--task', 'build the thing', '--steps', '["read", "write", "test"]', '--cwd', str(self.wt)] + (['--no-subagents'] if no_subagents else []))
         output = io.StringIO()
         with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), mock.patch.object(cli.config, 'load_config', return_value=self.machine), \
-                mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), contextlib.redirect_stdout(output):
+                mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), mock.patch('haivequeen.bees.prepare_agent_worktree', return_value=(str(self.wt), 'plan-p1')), contextlib.redirect_stdout(output):
             self.assertEqual(cli.cmd_bee(args, self.conn), 0, output.getvalue())
         return json.loads(output.getvalue().strip().splitlines()[-1])
 

@@ -315,6 +315,11 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     (r"^worktree for branch (.+?) could not be prepared \((.*)\)$", r"Worktree für Branch \1 konnte nicht vorbereitet werden (\2)"),
     (r"^the plan header names no branch and worktree$", "der Plankopf nennt keinen Branch und keinen Worktree"),
     # ---- why a Bee did not start
+    (r"^Agent worktree cannot be prepared: (.*)$", r"Agent-Worktree kann nicht vorbereitet werden: \1"),
+    (r"^Agent worktree (.*) is unavailable or has no branch$", r"Agent-Worktree \1 ist nicht verfügbar oder hat keinen Branch"),
+    (r"^folder (.*) holds branch (.*); package (.*) expects branch (.*)$", r"Ordner \1 enthält Branch \2; Paket \3 erwartet Branch \4"),
+    (r"^the package worktree could not be prepared; see the round log$", "der Paket-Worktree konnte nicht vorbereitet werden; siehe Rundenprotokoll"),
+    (r"^the package worktree is not a separate checkout of this repository$", "der Paket-Worktree ist kein separater Checkout dieses Repositorys"),
     (r"^Agent start refused for package (\S+): (.*)$", lambda m: "Agent-Start für Paket %s abgelehnt: %s" % (m.group(1), _german_line(m.group(2)))),
     (r"^dependency (\S+) of package (\S+) not in plan$", r"Abhängigkeit \1 von Paket \2 ist nicht im Plan"),
     (r"^dependency (\S+) of package (\S+) not done$", r"Abhängigkeit \1 von Paket \2 ist nicht fertig"),

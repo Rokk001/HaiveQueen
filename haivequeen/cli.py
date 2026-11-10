@@ -31,7 +31,9 @@ def cmd_done(args, conn) -> int:
         row = db.finish_agent(conn, args.agent, text)
     except KeyError as exc:
         return fail(str(exc))
-    out({"ok": True, "agent": args.agent, "project": row["project"]})
+    from haivequeen import bees
+    violation = bees.branch_violation(conn, row['project'], row['name']) if row['phase'] == 'bee' else ''
+    out({"ok": True, "agent": args.agent, "project": row["project"], **({"foreign_branch": violation} if violation else {})})
     return 0
 
 
@@ -491,6 +493,11 @@ def cmd_bee(args, conn):
                 blocked = "question:" + args.blocked_ref
         elif args.outcome == "failed" and not requirements and not args.error:
             return fail("a failed attempt needs evidence: --open-requirements or --error; if the Agent only waits for an answer, a build or the owner use --blocked-by")
+        args.attempt, violation = bees.package_branch_violation(env, plan, args.package, args.attempt)
+        if violation:
+            args.outcome = 'failed'
+            args.error = 'foreign branch commit: ' + violation
+            blocked = ''
         if args.outcome == "succeeded":
             from haivequeen import integration
             refused = integration.result_refusal(conn, args.project, plan, args.package)
@@ -499,13 +506,13 @@ def cmd_bee(args, conn):
         refused = bees.release_refusal(conn, args.project, plan, args.package, queen, getattr(args, "ended_evidence", "") or "", args.outcome)
         if refused:   # only trustworthy evidence ends a subagent Bee of an earlier Queen
             return fail(refused)
-        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked)
+        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked, force_failure=bool(violation))
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
-        out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls})
+        out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls, **({"foreign_branch": violation, "outcome": "failed"} if violation else {})})
         return 0
-    if not args.name or not args.task or not args.cwd:
-        return fail("start requires an Agent name, task and worktree")
+    if not args.name or not args.task:
+        return fail("start requires an Agent name and task")
     try:
         steps = json.loads(args.steps)
         paths = json.loads(args.paths)
@@ -551,7 +558,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="bzz")
     sub = ap.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("agent", aliases=["bee"], help="start an agent or report its package result (bee is a compatibility alias)")
+    p = sub.add_parser("agent", aliases=["bee"], help="start an agent or report its package result (bee is a compatibility alias)", description="Start creates or reuses the package worktree and <plan branch>-<package id> branch; the answer gives cwd and branch. Agents must not create or commit on another branch.")
     p.add_argument("action", choices=["start", "result", "wait"])
     for field in ("project", "plan", "package", "class"):
         p.add_argument("--" + field, required=True, dest="cls" if field == "class" else field)
@@ -561,7 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--steps", default="[]")
     p.add_argument("--paths", default="[]")
     p.add_argument("--rules", default="[]")
-    p.add_argument("--cwd", default="")
+    p.add_argument("--cwd", default="", help="legacy option; package worktree is chosen by HaiveQueen")
     p.add_argument("--outcome", choices=["failed", "interrupted", "succeeded"])
     p.add_argument("--attempt", default="")
     p.add_argument("--open-requirements", default="[]")

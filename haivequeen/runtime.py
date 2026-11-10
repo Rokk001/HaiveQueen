@@ -109,7 +109,14 @@ def upsert_agent(conn, project, name, fields, create=True) -> dict:
             sets = [f"{c}=?" for c in cols] + ["extra_json=?"]
             conn.execute(f"UPDATE agents SET {','.join(sets)} WHERE id=?",
                          list(cols.values()) + [json.dumps(merged) if merged else None, aid])
-        return _agent_out(conn.execute("SELECT * FROM agents WHERE id=?", (aid,)).fetchone())
+        result = _agent_out(conn.execute("SELECT * FROM agents WHERE id=?", (aid,)).fetchone())
+        if result.get('phase') == 'bee' and cols.get('status') and cols['status'] not in ACTIVE_STATUSES:
+            from . import bees
+            foreign = bees.enforce_agent_end(conn, project, result)
+            if foreign:
+                result['last_line'] = 'Foreign branch commit: %s; this package attempt failed.' % foreign
+                conn.execute('UPDATE agents SET last_line=? WHERE id=?', (result['last_line'], aid))
+        return result
 
 
 def archive_agents(conn, project, hours=12.0, match=None) -> int:
