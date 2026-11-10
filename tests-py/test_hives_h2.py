@@ -1,3 +1,4 @@
+import json
 import unittest
 from haivequeen import bees
 
@@ -797,7 +798,7 @@ class QueenWorktreeTests(unittest.TestCase):
             git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'initial')
             git('remote', 'add', 'origin', str(repo))
             git('fetch', 'origin', 'main')
-            (repo / 'plan.md').write_text('# Plan\n- Feature branch: plan-example, created from origin/main.\n', encoding='utf-8')
+            (repo / 'plan.md').write_text('+++\nstatus = "QUEUED"\nbranch = "plan-example"\nworktree = %s\n+++\n# Plan\n' % json.dumps(str(root / 'wt-plan-example')), encoding='utf-8')
             env = SimpleNamespace(workspace=repo, code_repo=repo, settings={'integrationBranch': 'main', 'worktreePrefix': 'wt'}, log=lambda text: None)
             worktree = bees.prepare_queen_worktree(env, 'plan.md')
             self.assertNotEqual(Path(worktree).resolve(), repo.resolve())

@@ -893,7 +893,7 @@ class HiveRoundTests(RoundCase):
         from unittest.mock import patch
         from haivequeen import cli, hives, loop
         from bzztest import REL
-        self.plan("READY", [{"id": "P1", "title": "First"}])
+        self.plan("READY", [{"id": "P1", "title": "First"}], branch="dummy", worktree=str(self.wt))
         self.round()
         original = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"]
         self.assertEqual(len(original), 1)
