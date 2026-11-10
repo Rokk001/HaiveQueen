@@ -68,6 +68,25 @@ def cmd_ready(args, conn) -> int:
             env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
             if env is None:
                 return fail("ready refused: unknown project")
+            bare = hives.nothing_to_integrate(conn, env, plan, row)[0] if hives.integrated_ready(conn, env, hives.get(conn, args.project, plan)) is None else False
+            if bare:   # nothing left to integrate: no queue row, no compile check, no Build or Deploy step; only the requirement list and the fresh check
+                accepted, message, waiting = readygate.gate(env, plan, row)
+                if not accepted and not waiting:
+                    hives.set_completion(conn, args.project, plan, "")
+                    return fail("ready refused: " + message)
+                hives.set_completion(conn, args.project, plan, "pending" if waiting else "passed", agent)
+                if waiting:
+                    out({"ok": False, "error": message, "waiting": True})
+                    return 1
+                from haivequeen import bees
+                from haivequeen import plans as plan_mod
+                for (package,) in conn.execute("SELECT id FROM packages WHERE project=? AND plan_path=?", (args.project, plan)).fetchall():
+                    if package not in plan_mod.STEP_PACKAGES.values():
+                        bees.set_package_state(conn, args.project, plan, package, 'done', agent)
+                hives.withdraw_integrated(conn, hives.nothing_to_integrate(conn, env, plan, row)[1])
+                out({"ok": True, "nothing_to_integrate": True})
+                return 0
+            hives.set_completion(conn, args.project, plan, "")
             from haivequeen import integration
             integration.sync(env, plan, hives.get(conn, args.project, plan)["provider"])
             held = integration.open_steps(env, plan, ("Build",))
