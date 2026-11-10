@@ -5,6 +5,8 @@ beside the packages of the plan file and survive reading it again. With no such 
 `bzz integration release` and the closing of the plan wait for the Deploy package.
 """
 import json
+import errno
+from contextlib import contextmanager
 import os
 import re
 import subprocess
@@ -148,30 +150,79 @@ def _compile_lock_path():
     return config.data_dir() / "compile-check.lock"
 
 
+@contextmanager
+def _compile_lock_guard(path, poll):
+    """Serialize publication and recovery; the OS releases this guard when a process dies."""
+    guard = os.open(str(path) + ".guard", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if os.name == "nt":
+            import msvcrt
+            def lock():
+                os.lseek(guard, 0, os.SEEK_SET)
+                msvcrt.locking(guard, msvcrt.LK_NBLCK, 1)
+            def unlock():
+                os.lseek(guard, 0, os.SEEK_SET)
+                msvcrt.locking(guard, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            def lock():
+                fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            def unlock():
+                fcntl.flock(guard, fcntl.LOCK_UN)
+        while True:
+            try:
+                lock()
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise
+                time.sleep(poll)
+        try:
+            yield
+        finally:
+            unlock()
+    finally:
+        os.close(guard)
+
+
 # Wait for the machine-wide compile check lock.
 def _acquire_compile_lock(poll):
-    """Create the lock file with this process id once no other check holds it (a lock whose process is gone is taken over); returns the path."""
+    """Publish a PID or recover a dead owner's lock, without exposing partial writes to contenders."""
     path = _compile_lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     while True:
-        try:
-            handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        with _compile_lock_guard(path, poll):
             try:
-                holder = int(path.read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
-                holder = None   # being written or unreadable: look again
-            if holder is not None and holder > 0 and not osplat.process_alive(holder):
+                handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
                 try:
-                    path.unlink()
+                    contents = path.read_text(encoding="utf-8")
+                    if contents.startswith("pid:"):
+                        holder = int(contents[4:-1]) if contents.endswith("\n") else None
+                    else:
+                        holder = int(contents.strip())
+                except ValueError:
+                    holder = None
                 except OSError:
-                    pass
-                continue
-            time.sleep(poll)
-            continue
-        with os.fdopen(handle, "w", encoding="utf-8") as lock:
-            lock.write(str(os.getpid()))
-        return path
+                    holder = 0  # A transient read error is not evidence of an abandoned lock.
+                if holder is None or (holder > 0 and not osplat.process_alive(holder)):
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+                    continue
+            else:
+                try:
+                    with os.fdopen(handle, "w", encoding="utf-8") as lock:
+                        lock.write("pid:%s\n" % os.getpid())
+                except BaseException:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+                    raise
+                return path
+        time.sleep(poll)
 
 
 # Run the compile command and watch its progress.
@@ -245,10 +296,11 @@ def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True
             code, output = 127, "the compile check could not start: %s" % exc
     finally:
         if lock:
-            try:
-                lock.unlink()
-            except OSError:
-                pass
+            with _compile_lock_guard(lock, poll):
+                try:
+                    lock.unlink()
+                except OSError:
+                    pass
     result = {"ok": code == 0, "exit": code, "commit": commit, "time": db.now(), "seconds": round(time.time() - started, 1), "command": command}
     if code == 125:
         result["stalled"] = True

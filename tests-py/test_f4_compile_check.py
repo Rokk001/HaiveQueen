@@ -176,7 +176,8 @@ class ProgressWatchTests(CompileCheckCase):
             acquired.set()
             if release:
                 release.wait(5)
-            lock.unlink()
+            with integration._compile_lock_guard(lock, 0.01):
+                lock.unlink()
 
         first = threading.Thread(target=check, args=(first_acquired, release_first), name="first-check")
         second = threading.Thread(target=check, args=(second_acquired,), name="second-check")
@@ -191,6 +192,95 @@ class ProgressWatchTests(CompileCheckCase):
                 self.assertFalse(second_acquired.wait(0.2), "checks ran together")
             finally:
                 write_pid.set()
+                release_first.set()
+                first.join(5)
+                if second.ident is not None:
+                    second.join(5)
+        self.assertTrue(second_acquired.is_set())
+
+    def test_abandoned_empty_lock_is_recovered(self):
+        path = integration._compile_lock_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        acquired = threading.Event()
+
+        def take_lock():
+            lock = integration._acquire_compile_lock(0.01)
+            acquired.set()
+            lock.unlink()
+
+        thread = threading.Thread(target=take_lock, daemon=True)
+        thread.start()
+        self.assertTrue(acquired.wait(2), "abandoned empty lock was never recovered")
+        thread.join(2)
+
+    def test_abandoned_partial_pid_is_recovered_even_if_prefix_is_live(self):
+        path = integration._compile_lock_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("pid:%s" % os.getpid(), encoding="utf-8")
+        acquired = threading.Event()
+
+        def take_lock():
+            lock = integration._acquire_compile_lock(0.01)
+            acquired.set()
+            lock.unlink()
+
+        thread = threading.Thread(target=take_lock, daemon=True)
+        thread.start()
+        self.assertTrue(acquired.wait(2), "abandoned partial PID was never recovered")
+        thread.join(2)
+
+    def test_partial_pid_is_not_mistaken_for_dead_holder(self):
+        partial = threading.Event()
+        finish_write = threading.Event()
+        first_acquired = threading.Event()
+        release_first = threading.Event()
+        second_acquired = threading.Event()
+        real_fdopen = os.fdopen
+
+        class SplitWriter:
+            def __init__(self, handle):
+                self.handle = handle
+            def __enter__(self):
+                self.handle.__enter__()
+                return self
+            def __exit__(self, *args):
+                return self.handle.__exit__(*args)
+            def write(self, value):
+                split = 5 if value.startswith("pid:") else 1
+                self.handle.write(value[:split])
+                self.handle.flush()
+                partial.set()
+                if not finish_write.wait(5):
+                    raise TimeoutError("PID write was not released")
+                return self.handle.write(value[split:])
+
+        def split_fdopen(*args, **kwargs):
+            handle = real_fdopen(*args, **kwargs)
+            return SplitWriter(handle) if threading.current_thread().name == "partial-writer" else handle
+
+        def take_lock(acquired, release=None):
+            lock = integration._acquire_compile_lock(0.01)
+            acquired.set()
+            if release:
+                release.wait(5)
+            with integration._compile_lock_guard(lock, 0.01):
+                lock.unlink()
+
+        first = threading.Thread(target=take_lock, args=(first_acquired, release_first), name="partial-writer", daemon=True)
+        second = threading.Thread(target=take_lock, args=(second_acquired,), daemon=True)
+        with mock.patch.object(integration.os, "fdopen", side_effect=split_fdopen), \
+             mock.patch.object(integration.osplat, "process_alive", side_effect=lambda pid: pid == os.getpid()):
+            try:
+                first.start()
+                self.assertTrue(partial.wait(5))
+                second.start()
+                self.assertFalse(second_acquired.wait(0.2), "partial PID was treated as a dead owner")
+                finish_write.set()
+                self.assertTrue(first_acquired.wait(5))
+                self.assertFalse(second_acquired.wait(0.2), "checks ran together")
+            finally:
+                finish_write.set()
                 release_first.set()
                 first.join(5)
                 if second.ident is not None:
