@@ -175,6 +175,23 @@ class PackageWorktrees(GitCase):
         self.git('reflog', 'expire', '--expire=now', '--all')
         self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '')
 
+    def test_fast_forward_is_not_a_new_commit_but_merge_commit_is(self):
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        self.git('branch', 'foreign', cwd=pair[0])
+        self.git('checkout', '-b', 'ahead', cwd=pair[0])
+        self.commit('existing commit', cwd=pair[0])
+        self.git('checkout', pair[1], cwd=pair[0])
+        bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        self.git('checkout', 'foreign', cwd=pair[0])
+        self.git('merge', '--ff-only', 'ahead', cwd=pair[0])
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '')
+        self.git('checkout', pair[1], cwd=pair[0])
+        self.commit('allowed divergent commit', cwd=pair[0])
+        self.git('checkout', 'foreign', cwd=pair[0])
+        self.git('-c', 'user.name=T', '-c', 'user.email=t@example.invalid',
+                 'merge', '--no-ff', '-m', 'new merge commit', pair[1], cwd=pair[0])
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), 'foreign')
+
     def test_assigned_branch_commits_preserve_existing_hooks(self):
         import os
         import subprocess

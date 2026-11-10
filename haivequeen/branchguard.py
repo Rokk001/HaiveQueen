@@ -78,7 +78,9 @@ def audit(policy):
                 branch = '(detached HEAD)'
         elif message.startswith('Branch: renamed refs/heads/'):
             branch = message.rsplit(' to refs/heads/', 1)[-1]
-        elif message.startswith(('commit:', 'commit (', 'cherry-pick:', 'merge ', 'rebase (pick)', 'rebase (reword)', 'rebase (squash)', 'rebase (fixup)')):
+        elif (message.startswith(('commit:', 'commit (', 'cherry-pick:', 'rebase (pick)',
+                                  'rebase (reword)', 'rebase (squash)', 'rebase (fixup)'))
+              or (message.startswith('merge ') and ': Merge made by ' in message)):
             if branch != policy['branch']:
                 return branch
     return ''
