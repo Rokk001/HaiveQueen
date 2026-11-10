@@ -111,10 +111,10 @@ def upsert_agent(conn, project, name, fields, create=True) -> dict:
                          list(cols.values()) + [json.dumps(merged) if merged else None, aid])
         result = _agent_out(conn.execute("SELECT * FROM agents WHERE id=?", (aid,)).fetchone())
         if result.get('phase') == 'bee' and cols.get('status') and cols['status'] not in ACTIVE_STATUSES:
-            from . import bees
+            from . import bees, branchguard
             foreign = bees.enforce_agent_end(conn, project, result)
             if foreign:
-                result['last_line'] = 'Foreign branch commit: %s; this package attempt failed.' % foreign
+                result['last_line'] = branchguard.failure_text(foreign)
                 conn.execute('UPDATE agents SET last_line=? WHERE id=?', (result['last_line'], aid))
         return result
 

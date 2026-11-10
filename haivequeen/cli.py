@@ -31,9 +31,9 @@ def cmd_done(args, conn) -> int:
         row = db.finish_agent(conn, args.agent, text)
     except KeyError as exc:
         return fail(str(exc))
-    from haivequeen import bees
+    from haivequeen import bees, branchguard
     violation = bees.branch_violation(conn, row['project'], row['name']) if row['phase'] == 'bee' else ''
-    out({"ok": True, "agent": args.agent, "project": row["project"], **({"foreign_branch": violation} if violation else {})})
+    out({"ok": True, "agent": args.agent, "project": row["project"], **branchguard.failure_fields(violation)})
     return 0
 
 
@@ -495,8 +495,9 @@ def cmd_bee(args, conn):
             return fail("a failed attempt needs evidence: --open-requirements or --error; if the Agent only waits for an answer, a build or the owner use --blocked-by")
         args.attempt, violation = bees.package_branch_violation(env, plan, args.package, args.attempt)
         if violation:
+            from . import branchguard
             args.outcome = 'failed'
-            args.error = 'foreign branch commit: ' + violation
+            args.error = branchguard.failure_text(violation)
             blocked = ''
         if args.outcome == "succeeded":
             from haivequeen import integration
@@ -509,7 +510,7 @@ def cmd_bee(args, conn):
         bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked, force_failure=bool(violation))
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
-        out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls, **({"foreign_branch": violation, "outcome": "failed"} if violation else {})})
+        out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls, **({**branchguard.failure_fields(violation), "outcome": "failed"} if violation else {})})
         return 0
     if not args.name or not args.task:
         return fail("start requires an Agent name and task")

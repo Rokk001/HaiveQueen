@@ -10,6 +10,27 @@ import sys
 import uuid
 
 
+# NUL cannot occur in a Git branch name. Keep unavailable evidence distinct
+# from an identified foreign branch while retaining the existing string API.
+AUDIT_ERROR = '\0audit:'
+
+
+class AuditUnavailable(Exception):
+    """The worktree's audit evidence cannot establish a successful check."""
+
+
+def failure_fields(evidence):
+    if evidence.startswith(AUDIT_ERROR):
+        return {'branch_audit_error': evidence[len(AUDIT_ERROR):]}
+    return {'foreign_branch': evidence} if evidence else {}
+
+
+def failure_text(evidence):
+    if evidence.startswith(AUDIT_ERROR):
+        return 'Branch audit unavailable: %s; this package attempt failed.' % evidence[len(AUDIT_ERROR):]
+    return 'Foreign branch commit: %s; this package attempt failed.' % evidence
+
+
 def prepare(folder, cwd, branch):
     """Create an attempt's hooks and return its process environment overrides."""
     folder = Path(folder).resolve()
@@ -38,16 +59,24 @@ def prepare(folder, cwd, branch):
 
 def violation(folder):
     """Return hook evidence or audit new commits in this attempt's worktree."""
-    path = Path(folder) / 'violation.json'
-    if path.exists():
-        return json.loads(path.read_text(encoding='utf-8'))['branch']
-    policy_path = Path(folder) / 'policy.json'
-    if not policy_path.exists():
-        return ''
-    policy = json.loads(policy_path.read_text(encoding='utf-8'))
-    foreign = audit(policy)
+    try:
+        path = Path(folder) / 'violation.json'
+        if path.exists():
+            return json.loads(path.read_text(encoding='utf-8'))['branch']
+        policy_path = Path(folder) / 'policy.json'
+        if not policy_path.exists():
+            raise AuditUnavailable('attempt policy is missing')
+        policy = json.loads(policy_path.read_text(encoding='utf-8'))
+        foreign = audit(policy)
+    except (AuditUnavailable, OSError, ValueError, KeyError, TypeError) as exc:
+        foreign = AUDIT_ERROR + str(exc)
     if foreign:
-        record_violation(folder, foreign)
+        try:
+            record_violation(folder, foreign)
+        except OSError:
+            # A removed/unwritable guard directory must not prevent the end
+            # path from recording the failure in the runtime database.
+            pass
     return foreign
 
 
@@ -62,11 +91,11 @@ def audit(policy):
         return ''
     path = Path(policy['head_log'])
     if not path.exists():
-        return ''
+        raise AuditUnavailable('assigned worktree HEAD reflog is missing')
     content = path.read_bytes()
     offset = policy['log_offset']
     if hashlib.sha256(content[:offset]).hexdigest() != policy['log_prefix']:
-        return ''  # Expired/rewritten history cannot safely be attributed.
+        raise AuditUnavailable('assigned worktree HEAD reflog was expired or rewritten')
     branch = policy['branch']
     for line in content[offset:].decode('utf-8', errors='replace').splitlines():
         _, separator, message = line.partition('\t')

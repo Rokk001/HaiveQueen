@@ -285,10 +285,10 @@ def finish_agent(conn, agent_id: int, result_text: str) -> dict:
         if row is None:
             raise KeyError(f"unknown agent {agent_id}")
         if row['phase'] == 'bee':
-            from . import bees
+            from . import bees, branchguard
             foreign = bees.enforce_agent_end(conn, row['project'], dict(row))
             if foreign:
-                result_text += '\nForeign branch commit: %s; this package attempt failed.' % foreign
+                result_text += '\n' + branchguard.failure_text(foreign)
         last = (result_text.strip().splitlines() or [""])[-1][:300]
         conn.execute(
             "UPDATE agents SET status='done', ended_at=?, exit_code=COALESCE(exit_code,0), last_line=? WHERE id=?",

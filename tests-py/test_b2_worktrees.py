@@ -166,14 +166,117 @@ class PackageWorktrees(GitCase):
         self.commit('renamed branch', cwd=pair[0])
         self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), 'renamed')
 
-    def test_reflog_expiration_before_audit_is_a_known_detection_limit(self):
+    def test_reflog_expiration_before_audit_fails_without_inventing_a_branch(self):
+        from haivequeen import branchguard
         pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
         bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
         self.git('checkout', '-b', 'foreign', cwd=pair[0])
         self.commit('no environment', cwd=pair[0])
         self.git('checkout', pair[1], cwd=pair[0])
         self.git('reflog', 'expire', '--expire=now', '--all')
+        evidence = bees.agent_branch_violation(self.env_b2, 'Ada')
+        self.assertIn('expired or rewritten', branchguard.failure_fields(evidence)['branch_audit_error'])
+        self.assertNotIn('foreign_branch', branchguard.failure_fields(evidence))
+        for _ in range(2):
+            bees.report_attempt(self.env_b2, REL, 'P1', 'medium', 'succeeded', 'Ada')
+        self.assertFalse(bees.package_done(self.conn, self.env_b2.name, REL, 'P1'))
+        self.assertEqual(bees.failure_count(self.conn, self.env_b2.name, REL, 'P1', 'medium'), 1)
+
+    def test_missing_reflog_is_reported_by_done_without_a_foreign_branch(self):
+        import contextlib
+        import io
+        import json
+        from unittest import mock
+        from haivequeen import cli, runtime
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        self.agent('Ada', phase='bee', status='running', package='P1', cwd=pair[0], **{'class': 'medium'})
+        agent = runtime.get_agent(self.conn, self.env_b2.name, 'Ada')
+        bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        log = Path(self.git('rev-parse', '--path-format=absolute', '--git-path', 'logs/HEAD', cwd=pair[0]))
+        baseline = log.read_bytes()
+        log.unlink()
+        report = self.base / 'result.txt'
+        report.write_text('finished', encoding='utf-8')
+        args = cli.build_parser().parse_args(['done', '--agent', str(agent['id']), '--result', str(report)])
+        output = io.StringIO()
+        with mock.patch('haivequeen.scheduler.load_projects', return_value=[self.env_b2]), contextlib.redirect_stdout(output):
+            self.assertEqual(cli.cmd_done(args, self.conn), 0)
+        result = json.loads(output.getvalue())
+        self.assertIn('HEAD reflog is missing', result['branch_audit_error'])
+        self.assertNotIn('foreign_branch', result)
+        self.assertIn('Branch audit unavailable', runtime.get_agent(self.conn, self.env_b2.name, 'Ada')['last_line'])
+        self.assertEqual(bees.failure_count(self.conn, self.env_b2.name, REL, 'P1', 'medium'), 1)
+        log.write_bytes(baseline)
+        # Restoring the log cannot turn a previously failed audit into success.
+        self.assertIn('missing', bees.agent_branch_violation(self.env_b2, 'Ada'))
+
+    def test_missing_guard_and_invalid_policy_fail_runner_end(self):
+        import json
+        import shutil
+        from haivequeen import runtime
+        for missing in (False, True):
+            with self.subTest(missing_guard=missing):
+                name = 'Missing' if missing else 'Invalid'
+                pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+                self.agent(name, phase='bee', status='running', package='P1', cwd=pair[0], **{'class': 'medium'})
+                bees.record_agent_branch_start(self.env_b2, name, *pair)
+                data = json.loads(runtime.kv_get(self.conn, self.env_b2.name, 'agent-branch:' + name))
+                if missing:
+                    shutil.rmtree(data['guard'])
+                else:
+                    (Path(data['guard']) / 'policy.json').write_text('{invalid', encoding='utf-8')
+                ended = runtime.upsert_agent(self.conn, self.env_b2.name, name, {'status': 'done'})
+                self.assertIn('Branch audit unavailable', ended['last_line'])
+                self.assertNotIn('Foreign branch commit', ended['last_line'])
+        self.assertEqual(bees.failure_count(self.conn, self.env_b2.name, REL, 'P1', 'medium'), 2)
+
+    def test_shared_history_cannot_identify_a_cleared_environment_writer(self):
+        import os
+        import subprocess
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        other = self.base / 'concurrent-package'
+        self.git('worktree', 'add', '-b', 'foreign', str(other))
+        bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        bees.record_agent_branch_start(self.env_b2, 'Other', str(other), 'foreign')
+        clean = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_', 'BZZ_'))}
+        subprocess.run(['git', '-C', str(other), '-c', 'user.name=T', '-c', 'user.email=t@example.invalid',
+                        'commit', '--allow-empty', '-m', 'unidentified writer'], env=clean,
+                       capture_output=True, text=True, check=True, timeout=30)
+        # The same bytes result whether Ada entered Other's worktree or Other
+        # committed legitimately. Blaming Ada from shared branch history is unsafe.
+        self.assertNotEqual(self.git('rev-parse', 'foreign'), self.git('rev-parse', pair[1]))
         self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '')
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Other'), '')
+
+    def test_embedded_result_alias_cannot_hide_an_unavailable_audit(self):
+        import contextlib
+        import io
+        import json
+        from unittest import mock
+        from haivequeen import cli, hives, runtime
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        bees.record_embedded_start(self.conn, self.env_b2.name, REL, 'P1', 'Ada', 'medium', 'claude', queen='queen')
+        log = Path(self.git('rev-parse', '--path-format=absolute', '--git-path', 'logs/HEAD', cwd=pair[0]))
+        log.unlink()
+        report = self.base / 'embedded-result.txt'
+        report.write_text('finished', encoding='utf-8')
+        args = cli.build_parser().parse_args(['agent', 'result', '--project', 'testproj', '--plan', REL,
+                '--package', 'P1', '--class', 'medium', '--attempt', 'result-alias', '--outcome', 'succeeded',
+                '--ended-evidence', str(report)])
+        output = io.StringIO()
+        with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), mock.patch.object(cli.config, 'load_config', return_value=self.machine), contextlib.redirect_stdout(output):
+            self.assertEqual(cli.cmd_bee(args, self.conn), 0, output.getvalue())
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['outcome'], 'failed')
+        self.assertIn('missing', result['branch_audit_error'])
+        self.assertNotIn('foreign_branch', result)
+        self.assertFalse(bees.package_done(self.conn, self.env_b2.name, REL, 'P1'))
+        self.assertEqual(bees.failure_count(self.conn, self.env_b2.name, REL, 'P1', 'medium'), 1)
+        events = runtime.list_events(self.conn, self.env_b2.name)
+        self.assertTrue(any('Branch audit unavailable' in str(event) for event in events))
 
     def test_fast_forward_is_not_a_new_commit_but_merge_commit_is(self):
         pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')

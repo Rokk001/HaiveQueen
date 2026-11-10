@@ -773,7 +773,8 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
     """Record an outcome and ask once after the highest class fails repeatedly. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
     attempt, foreign = package_branch_violation(env, plan, package, attempt)
     if foreign:
-        outcome, error, blocked, force_failure = 'failed', 'foreign branch commit: ' + foreign, '', True
+        from . import branchguard
+        outcome, error, blocked, force_failure = 'failed', branchguard.failure_text(foreign), '', True
     had_open = bool(unconfirmed_embedded(env.conn, env.name, plan, package))
     if close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome):   # the embedded Bee of this package has reported
         runtime.append_event(env.conn, env.name, 'The stopped subagent Agent of package %s has ended; its Agent place is free' % package, kind='note', mirror='none')
@@ -891,21 +892,25 @@ def branch_violation(conn, project, name):
 
 def enforce_agent_end(conn, project, row):
     """Check every terminal path, including missing runners and embedded Queen exits."""
+    from . import branchguard
     name = row['name']
     foreign = branch_violation(conn, project, name)
     if not foreign:
         return ''
     runtime.kv_set(conn, project, 'agent-violation:' + name, foreign)
-    text = 'Foreign branch commit: %s; this package attempt failed.' % foreign
+    text = branchguard.failure_text(foreign)
     raw = runtime.kv_get(conn, project, 'agent-branch:' + name)
     data = json.loads(raw) if raw else {}
     if data.get('guard'):
         from pathlib import Path
-        (Path(data['guard']).parent / 'branch-violation.txt').write_text(text + '\n', encoding='utf-8')
+        try:
+            (Path(data['guard']).parent / 'branch-violation.txt').write_text(text + '\n', encoding='utf-8')
+        except OSError:
+            pass  # Runtime evidence below survives a removed run directory.
     record_attempt(conn, project, row['plan_path'], row['package'], row.get('class') or 'medium',
                    'failed', name, error=text, force_failure=True)
     if not runtime.kv_get(conn, project, 'agent-violation-reported:' + name):
-        runtime.append_event(conn, project, text, kind='note', agent=name, mirror='none', data={'foreign_branch': foreign})
+        runtime.append_event(conn, project, text, kind='note', agent=name, mirror='none', data=branchguard.failure_fields(foreign))
         runtime.kv_set(conn, project, 'agent-violation-reported:' + name, foreign)
     return foreign
 
