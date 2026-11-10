@@ -61,7 +61,7 @@ Agents must remain in place while any new boundary is introduced.
 The process path in `agent_runner.py` launches the provider with
 `subprocess.Popen`, an assigned working directory and environment. It does
 not assign a separate operating-system identity or mediate filesystem writes.
-The native subagent path in `bees.start_process` returns a prompt and Git environment
+The native subagent start path returns a prompt and Git environment
 to the Queen; it does not launch a separately restricted process. Consequently
 neither path provides a boundary on which unconditional attribution can rely.
 Adding a watcher, another environment marker or a wrapper at these call sites
