@@ -112,8 +112,67 @@ class PackageWorktrees(GitCase):
     def test_other_agents_commits_are_not_attributed(self):
         pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
         bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        other = self.base / 'other-agent'
+        self.git('worktree', 'add', '-b', 'foreign', str(other))
+        self.commit('another process', cwd=other)
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '')
+
+    def test_environment_free_commit_is_reported_after_switch_back(self):
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
         self.git('checkout', '-b', 'foreign', cwd=pair[0])
-        self.commit('another process', cwd=pair[0])
+        self.commit('without guard environment', cwd=pair[0])
+        self.git('checkout', pair[1], cwd=pair[0])
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), 'foreign')
+        self.git('reflog', 'expire', '--expire=now', '--all')
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), 'foreign')
+
+    def test_hooks_path_override_is_reported_at_end(self):
+        from unittest import mock
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        environment = bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        self.agent('Ada', phase='bee', status='running', package='P1', cwd=pair[0], **{'class': 'medium'})
+        self.git('checkout', '-b', 'foreign', cwd=pair[0])
+        with mock.patch.dict('os.environ', environment):
+            self.git('-c', 'core.hooksPath=' + str(self.base / 'no-hooks'), '-c', 'user.name=T',
+                     '-c', 'user.email=t@example.invalid', 'commit', '--allow-empty', '--no-verify', '-m', 'bypass', cwd=pair[0])
+        self.git('checkout', pair[1], cwd=pair[0])
+        from haivequeen import runtime
+        ended = runtime.upsert_agent(self.conn, self.env_b2.name, 'Ada', {'status': 'done'})
+        self.assertIn('foreign', ended['last_line'])
+        self.assertEqual(bees.failure_count(self.conn, self.env_b2.name, REL, 'P1', 'medium'), 1)
+
+    def test_environment_free_detached_commit_is_reported(self):
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        self.git('checkout', '--detach', cwd=pair[0])
+        self.commit('unguarded detached', cwd=pair[0])
+        self.git('checkout', pair[1], cwd=pair[0])
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '(detached HEAD)')
+
+    def test_old_foreign_commits_and_allowed_unguarded_commits_are_ignored(self):
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        self.git('checkout', '-b', 'foreign', cwd=pair[0])
+        self.commit('before attempt', cwd=pair[0])
+        self.git('checkout', pair[1], cwd=pair[0])
+        bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        self.commit('assigned branch without guard', cwd=pair[0])
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '')
+
+    def test_environment_free_commit_after_branch_rename_is_reported(self):
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        self.git('branch', '-m', 'renamed', cwd=pair[0])
+        self.commit('renamed branch', cwd=pair[0])
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), 'renamed')
+
+    def test_reflog_expiration_before_audit_is_a_known_detection_limit(self):
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        self.git('checkout', '-b', 'foreign', cwd=pair[0])
+        self.commit('no environment', cwd=pair[0])
+        self.git('checkout', pair[1], cwd=pair[0])
+        self.git('reflog', 'expire', '--expire=now', '--all')
         self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '')
 
     def test_assigned_branch_commits_preserve_existing_hooks(self):
@@ -240,7 +299,7 @@ class PackageWorktrees(GitCase):
         agent = runtime.get_agent(self.conn, self.env_b2.name, 'Ada')
         bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
         self.git('checkout', '-b', 'foreign', cwd=pair[0])
-        self.guarded_commit(pair[0])
+        self.commit('without environment', cwd=pair[0])
         report = self.base / 'result.txt'
         report.write_text('done', encoding='utf-8')
         args = cli.build_parser().parse_args(['done', '--agent', str(agent['id']), '--result', str(report)])

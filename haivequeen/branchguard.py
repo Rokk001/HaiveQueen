@@ -1,7 +1,9 @@
-"""Git hooks inherited only by one Agent's commands, never repository configuration."""
+"""Process hooks and an end audit of the Agent's exclusively assigned worktree."""
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -14,7 +16,12 @@ def prepare(folder, cwd, branch):
     folder.mkdir(parents=True, exist_ok=True)
     original = subprocess.run(['git', '-C', str(cwd), 'rev-parse', '--path-format=absolute', '--git-path', 'hooks'],
                               capture_output=True, text=True, check=True).stdout.strip()
-    (folder / 'policy.json').write_text(json.dumps({'branch': branch, 'original': original}), encoding='utf-8')
+    head_log = subprocess.run(['git', '-C', str(cwd), 'rev-parse', '--path-format=absolute', '--git-path', 'logs/HEAD'],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    path = Path(head_log)
+    baseline = path.read_bytes() if path.exists() else b''
+    (folder / 'policy.json').write_text(json.dumps({'branch': branch, 'original': original,
+        'head_log': str(path), 'log_offset': len(baseline), 'log_prefix': hashlib.sha256(baseline).hexdigest()}), encoding='utf-8')
     command = ' '.join(shlex.quote(str(x).replace('\\', '/')) for x in (sys.executable, '-I', Path(__file__).resolve()))
     # Preserve the repository's other hooks too. No shared Git config or hook is modified.
     hooks = {p.name for p in Path(original).iterdir() if p.is_file() and not p.name.endswith('.sample')} if Path(original).is_dir() else set()
@@ -30,9 +37,58 @@ def prepare(folder, cwd, branch):
 
 
 def violation(folder):
-    """The durable, attempt-specific evidence survives reflog expiration and checkout changes."""
+    """Return hook evidence or audit new commits in this attempt's worktree."""
     path = Path(folder) / 'violation.json'
-    return json.loads(path.read_text(encoding='utf-8'))['branch'] if path.exists() else ''
+    if path.exists():
+        return json.loads(path.read_text(encoding='utf-8'))['branch']
+    policy_path = Path(folder) / 'policy.json'
+    if not policy_path.exists():
+        return ''
+    policy = json.loads(policy_path.read_text(encoding='utf-8'))
+    foreign = audit(policy)
+    if foreign:
+        record_violation(folder, foreign)
+    return foreign
+
+
+def audit(policy):
+    """Audit only HEAD's worktree-local log; shared branch logs mix other Agents.
+
+    This fallback survives environment/hook overrides, but needs intact reflogs
+    and exclusive use of the assigned worktree. It cannot identify commands in
+    another worktree after their Agent environment has been discarded.
+    """
+    if 'head_log' not in policy:  # Attempts started before the audit was added.
+        return ''
+    path = Path(policy['head_log'])
+    if not path.exists():
+        return ''
+    content = path.read_bytes()
+    offset = policy['log_offset']
+    if hashlib.sha256(content[:offset]).hexdigest() != policy['log_prefix']:
+        return ''  # Expired/rewritten history cannot safely be attributed.
+    branch = policy['branch']
+    for line in content[offset:].decode('utf-8', errors='replace').splitlines():
+        _, separator, message = line.partition('\t')
+        if not separator:
+            continue
+        if message.startswith('checkout: moving from '):
+            branch = message.rsplit(' to ', 1)[-1]
+            if branch == 'HEAD' or re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', branch):
+                branch = '(detached HEAD)'
+        elif message.startswith('Branch: renamed refs/heads/'):
+            branch = message.rsplit(' to refs/heads/', 1)[-1]
+        elif message.startswith(('commit:', 'commit (', 'cherry-pick:', 'merge ', 'rebase (pick)', 'rebase (reword)', 'rebase (squash)', 'rebase (fixup)')):
+            if branch != policy['branch']:
+                return branch
+    return ''
+
+
+def record_violation(folder, branch):
+    """Persist detected evidence independently of subsequent reflog changes."""
+    temporary = Path(folder) / ('violation-' + uuid.uuid4().hex + '.tmp')
+    temporary.write_text(json.dumps({'branch': branch}), encoding='utf-8')
+    os.replace(temporary, Path(folder) / 'violation.json')
 
 
 def main():
@@ -62,9 +118,7 @@ def main():
                 if reachable.returncode == 0 and not reachable.stdout.strip():
                     foreign = branch
     if foreign:
-        temporary = Path(folder) / ('violation-' + uuid.uuid4().hex + '.tmp')
-        temporary.write_text(json.dumps({'branch': foreign}), encoding='utf-8')
-        os.replace(temporary, Path(folder) / 'violation.json')
+        record_violation(folder, foreign)
         print('Agent commit refused on foreign branch: ' + foreign, file=sys.stderr)
         return 1
     original = Path(policy['original']) / hook
