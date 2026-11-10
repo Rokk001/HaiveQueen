@@ -209,14 +209,12 @@ class ReactionTest(Base):
             settings = gui_config.ConfigWindow(root, self.conn, base, wait=True)
         with mock.patch.object(gui_data, "snapshot", snapshot):
             win.tick()
-            self.assertLess(self.timed(lambda: settings.pick_tab("providers")), REACT)
-            gate.set()
-            for _ in range(100):
-                root.update()
-                if not win.loading:
-                    break
-                time.sleep(0.02)
-        settings.win.destroy()
+            try:
+                self.assertLess(self.timed(lambda: settings.pick_tab("providers")), REACT)
+            finally:
+                gate.set()
+                self.assertTrue(self.pump(root, lambda: not win.loading))
+                settings.win.destroy()
 
     def pump(self, root, condition, rounds=300):
         """Run the event loop until `condition()` holds."""

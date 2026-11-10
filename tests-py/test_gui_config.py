@@ -136,6 +136,18 @@ def descendants(widget):
 class WindowTest(unittest.TestCase):
     """The editor window reads, edits and saves the files (fully transparent windows)."""
 
+    def test_empty_tabs_allow_repeated_clicks_switching_and_save(self):
+        (self.folder / "config.toml").write_text("slots = 2\n", encoding="utf-8")
+        with mock.patch.object(gui_config.ConfigWindow, "read_registered", return_value={}):
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
+        for tab in ("providers", "providers", "apiaries", "apiaries", "general"):
+            win.pick_tab(tab)
+            self.assertEqual(win.node, (tab, None))
+            self.assertTrue(win.collect())
+        win.pick_tab("providers")
+        win.save()
+        self.assertEqual(gui_config.load_raw(self.folder / "config.toml"), {"slots": 2})
+
     def setUp(self):
         """A temp config folder, a database with one project that has a project.toml, a transparent Tk root."""
         import tkinter as tk

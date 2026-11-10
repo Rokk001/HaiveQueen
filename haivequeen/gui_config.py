@@ -1317,6 +1317,8 @@ class ConfigWindow(ProviderPages):
     # Read the typed values back into the data.
     def collect(self) -> bool:
         """Write every editor value of the shown part into `self.data`; show the first wrong value in the status line and return False."""
+        if self.node[0] != "general" and self.node[1] is None:
+            return True   # an empty tab has no entry or editor values to collect
         data = self.target()
         values = {}
         current = {}
