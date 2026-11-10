@@ -158,10 +158,10 @@ def _acquire_compile_lock(poll):
             handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             try:
-                holder = int((path.read_text(encoding="utf-8") or "0").strip() or 0)
+                holder = int(path.read_text(encoding="utf-8").strip())
             except (OSError, ValueError):
                 holder = None   # being written or unreadable: look again
-            if holder is not None and (not holder or not osplat.process_alive(holder)):
+            if holder is not None and holder > 0 and not osplat.process_alive(holder):
                 try:
                     path.unlink()
                 except OSError:

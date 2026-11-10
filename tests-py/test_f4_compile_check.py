@@ -152,6 +152,51 @@ class WhoMayCheckTests(CompileCheckCase):
 class ProgressWatchTests(CompileCheckCase):
     LIMITS = {"compileStallMinutes": 0.05, "compileMaxMinutes": 5}   # 3 seconds without progress
 
+    def test_simultaneous_checks_wait_for_a_new_empty_lock(self):
+        created = threading.Event()
+        write_pid = threading.Event()
+        first_acquired = threading.Event()
+        release_first = threading.Event()
+        second_acquired = threading.Event()
+        real_fdopen = os.fdopen
+
+        def delayed_fdopen(*args, **kwargs):
+            if threading.current_thread().name == "first-check":
+                # Model platforms where a newly created, still-open file can be
+                # read and unlinked before its creator writes the PID.
+                os.close(args[0])
+                created.set()
+                if not write_pid.wait(5):
+                    raise TimeoutError("first check was not released")
+                args = (os.open(str(integration._compile_lock_path()), os.O_WRONLY | os.O_CREAT), *args[1:])
+            return real_fdopen(*args, **kwargs)
+
+        def check(acquired, release=None):
+            lock = integration._acquire_compile_lock(0.01)
+            acquired.set()
+            if release:
+                release.wait(5)
+            lock.unlink()
+
+        first = threading.Thread(target=check, args=(first_acquired, release_first), name="first-check")
+        second = threading.Thread(target=check, args=(second_acquired,), name="second-check")
+        with mock.patch.object(integration.os, "fdopen", side_effect=delayed_fdopen):
+            try:
+                first.start()
+                self.assertTrue(created.wait(5))
+                second.start()
+                self.assertFalse(second_acquired.wait(0.2), "second check took an empty new lock")
+                write_pid.set()
+                self.assertTrue(first_acquired.wait(5))
+                self.assertFalse(second_acquired.wait(0.2), "checks ran together")
+            finally:
+                write_pid.set()
+                release_first.set()
+                first.join(5)
+                if second.ident is not None:
+                    second.join(5)
+        self.assertTrue(second_acquired.is_set())
+
     def run_check(self, script, **limits):
         self.machine.update({**self.LIMITS, **limits})
         self.setup_plan(script)
