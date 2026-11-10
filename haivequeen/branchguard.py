@@ -69,7 +69,7 @@ def main():
         return 1
     original = Path(policy['original']) / hook
     if original.is_file() and os.access(original, os.X_OK):
-        return subprocess.run(['sh', str(original), *args], input=payload).returncode
+        return subprocess.run(['sh', '-c', 'exec "$0" "$@"', str(original), *args], input=payload).returncode
     return 0
 
 

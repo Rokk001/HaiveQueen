@@ -215,6 +215,20 @@ class PackageWorktrees(GitCase):
         self.assertTrue(Path(result['cwd']).is_dir())
         self.assertNotIn('ada', result['branch'].lower())
 
+    def test_process_guard_uses_the_runners_final_name(self):
+        from haivequeen import hives, runtime
+        hives.create(self.conn, self.env_b2.name, REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        self.agent('Ada', phase='bee', status='done', package='P1', cwd=pair[0])
+        result = bees.start_process(self.env_b2, REL, 'P1', 'Ada', 'medium', 'work', ['work'], [], [], no_subagents=True)
+        self.assertEqual(result['name'], 'Ada-2')
+        self.assertEqual(runtime.get_agent(self.conn, self.env_b2.name, result['name'])['status'], 'running')
+        self.git('checkout', '-b', 'foreign', cwd=pair[0])
+        self.guarded_commit(pair[0], name=result['name'])
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, result['name']), 'foreign')
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '')
+
     def test_done_reports_and_counts_foreign_commit(self):
         import contextlib
         import io

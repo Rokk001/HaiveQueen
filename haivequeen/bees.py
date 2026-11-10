@@ -1072,6 +1072,14 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         cwd, branch = pair
         if not valid_bee_worktree(env, cwd, queen.get('cwd')):
             return refuse(env, package, 'the package worktree is not a separate checkout of this repository')
+        # The runner otherwise adds a suffix after the guard was stored. Choose
+        # the final attempt identity first, for process and embedded Agents alike.
+        existing_names = {a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')}
+        existing_names.update(r[0] for r in env.conn.execute('SELECT name FROM embedded_bees WHERE project=?', (env.name,)))
+        requested, suffix = name, 1
+        while name in existing_names:
+            suffix += 1
+            name = '%s-%d' % (requested, suffix)
         git_environment = record_agent_branch_start(env, name, cwd, branch)
         if provider == hive['provider'] and embedded:
             if cwd:
@@ -1085,7 +1093,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
             prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')))
             prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
-            return {'kind': 'subagent', 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
+            return {'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
         if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
             return refuse(env, package, 'an Agent process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
         path = Path(cwd or '')
@@ -1100,7 +1108,7 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             return refuse(env, package, 'the agent runner could not start the Agent process')
         env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
         record_step_count(env.conn, env.name, plan, package, len(steps))
-        return {'kind': 'process', 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute()), 'branch': branch}
+        return {'kind': 'process', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute()), 'branch': branch}
 
 
 # Read the branch from the 'Plan: X; branch Y; baseline Z' line of the plan's state file next to it.
