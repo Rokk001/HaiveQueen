@@ -42,6 +42,7 @@ class BeeDependencies(RoundCase):
 
     # Every routing result is gated before side effects and the refusal is logged.
     def test_refusal_and_completion_for_queen_and_subagent(self):
+        self.mock_agent_worktrees()
         self.agent('existing', phase='bee', status='running', pid=55)
         for extra in (('--no-subagents',), ()):
             code, output = self.start('P2', extra)
