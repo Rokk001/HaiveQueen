@@ -1229,8 +1229,21 @@ def foreign_plan_branch(env, plan):
         return False
     if env.conn.execute("SELECT 1 FROM queue WHERE project=? AND branch=? AND status IN ('ready','blocked','in_run') LIMIT 1", (env.name, branch)).fetchone():
         return True
-    if any(a.get('plan_path') == plan for a in runtime.list_agents(env.conn, env.name, 'all')):
+    history = [a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('plan_path') == plan]
+    text = (env.workspace / plan).read_text(encoding='utf-8-sig')
+    record = runtime._cut_record(runtime.kv_get(env.conn, env.name, runtime.CUT_KEY + plan))
+    cut = (record if record and record.get('source') == 'check' and record.get('at')
+           and runtime.cut_assignments(env.conn, env.name, plan, text) is not None else None)
+    if any(not cut or not a.get('started_at') or a['started_at'] > cut['at'] for a in history):
         return False
+    if cut:
+        import json
+        try:
+            created = json.loads(runtime.kv_get(env.conn, env.name, 'cut-created:' + plan) or 'null')
+        except (TypeError, ValueError):
+            created = None
+        if isinstance(created, dict) and created.get('branch') == branch and created.get('created_branch') is True:
+            return False
     remote_name = str(env.settings.get('remoteName') or 'origin')
     for ref in ('refs/heads/' + branch, 'refs/remotes/' + remote_name + '/' + branch):
         result = subprocess.run(['git', '-C', str(env.code_repo), 'show-ref', '--verify', '--quiet', ref], capture_output=True)
@@ -1350,6 +1363,7 @@ def prepare_queen_worktree(env, plan):
     if target.exists():
         return str(target) if any(same_folder(d, target) and b == branch for d, b in worktree_entries(env) or []) else None
     exists = subprocess.run(git + ['show-ref', '--verify', '--quiet', 'refs/heads/' + branch], capture_output=True).returncode == 0
+    remote = False
     if exists:
         args = ['worktree', 'add', str(target), branch]
     else:
@@ -1363,7 +1377,7 @@ def prepare_queen_worktree(env, plan):
         return None
     if plan_mod.load_plan(str(env.workspace / plan)).status in plan_mod.CUT_STATUSES and getattr(env, 'conn', None) is not None:
         import json
-        runtime.kv_set(env.conn, env.name, 'cut-created:' + plan, json.dumps({'branch': branch, 'folder': str(target), 'created_branch': not exists}))
+        runtime.kv_set(env.conn, env.name, 'cut-created:' + plan, json.dumps({'branch': branch, 'folder': str(target), 'created_branch': not exists and not remote}))
     return str(target)
 
 

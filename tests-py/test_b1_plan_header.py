@@ -117,6 +117,30 @@ class HeaderIsTheOnlySourceTests(GitCase):
         self.assertTrue(bees.foreign_plan_branch(self.hq_env(), REL))
 
 
+    def test_cut_history_does_not_hide_existing_header_branch_in_round(self):
+        from haivequeen import loop
+        self.sent()
+        self.agent("cut-queen", phase="queen", status="done")
+        self.git("branch", "fix/x")
+        self.plan("QUEUED", [{"id": "P1", "title": "First"}], branch="fix/x", worktree=str(self.base / "wt-x"))
+        parsed = self.header()
+        runtime.save_cut_assignments(self.conn, "testproj", REL, parsed.packages, (self.repo / REL).read_text(encoding="utf-8"))
+        hives.create(self.conn, "testproj", REL, "claude", "123456")
+        loop.run_round(self.conn, self.machine, self.envs(), free_ram=lambda: 16.0, settle=0)
+        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item=bees.BRANCH_ITEM)), 1)
+        self.assertFalse(any(a["name"] != "cut-queen" and a["phase"] == "queen" for a in runtime.list_agents(self.conn, "testproj", "all")))
+
+    def test_branch_created_by_cut_is_not_foreign(self):
+        self.sent()
+        branch, folder = bees.cut_default(self.hq_env(), REL)
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        self.agent("cut-queen", phase="queen", status="done")
+        self.plan("QUEUED", [{"id": "P1", "title": "First"}], branch=branch, worktree=str(folder))
+        parsed = self.header()
+        runtime.save_cut_assignments(self.conn, "testproj", REL, parsed.packages, (self.repo / REL).read_text(encoding="utf-8"))
+        self.assertFalse(bees.foreign_plan_branch(self.hq_env(), REL))
+
+
 class ConflictTests(GitCase):
     """B-4: a folder with another branch, or the branch checked out elsewhere, blocks the start with one line and changes nothing."""
 
