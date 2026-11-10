@@ -252,6 +252,7 @@ class PackageWorktrees(GitCase):
         import contextlib
         import io
         import json
+        import runpy
         from unittest import mock
         from haivequeen import cli, hives, runtime
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
@@ -267,8 +268,10 @@ class PackageWorktrees(GitCase):
                 '--package', 'P1', '--class', 'medium', '--attempt', 'result-alias', '--outcome', 'succeeded',
                 '--ended-evidence', str(report)])
         output = io.StringIO()
+        # The owner also invokes cli.py as a file, with no package context.
+        script = runpy.run_path(str(Path(cli.__file__).resolve()))
         with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), mock.patch.object(cli.config, 'load_config', return_value=self.machine), contextlib.redirect_stdout(output):
-            self.assertEqual(cli.cmd_bee(args, self.conn), 0, output.getvalue())
+            self.assertEqual(script['cmd_bee'](args, self.conn), 0, output.getvalue())
         result = json.loads(output.getvalue())
         self.assertEqual(result['outcome'], 'failed')
         self.assertIn('missing', result['branch_audit_error'])

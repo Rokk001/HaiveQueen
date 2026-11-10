@@ -495,7 +495,7 @@ def cmd_bee(args, conn):
             return fail("a failed attempt needs evidence: --open-requirements or --error; if the Agent only waits for an answer, a build or the owner use --blocked-by")
         args.attempt, violation = bees.package_branch_violation(env, plan, args.package, args.attempt)
         if violation:
-            from . import branchguard
+            from haivequeen import branchguard
             args.outcome = 'failed'
             args.error = branchguard.failure_text(violation)
             blocked = ''
