@@ -194,10 +194,12 @@ def selfupdate_db_path():
 
 
 def install_finished(state, last_row):
-    """'ok' or 'failed' once the self-update row of a started install has ended; None while it runs or when no install was started."""
+    """'ok', 'failed' or 'stopped' (skipped, stopped by the owner) once the self-update row of a started install has ended; None while it runs or when no install was started."""
     started = (state or {}).get("installing")
     if not started or not last_row or int(last_row.get("id") or 0) <= int(started.get("after_row") or 0) or not last_row.get("ended"):
         return None
+    if "skipped, stopped by the owner" in (last_row.get("note") or ""):
+        return "stopped"   # the owner stopped HaiveQueen before anything changed: not a failure, the release stays offered
     return "ok" if last_row.get("result") == "ok" else "failed"
 
 
@@ -209,6 +211,8 @@ def settle_install(last_row) -> str:
         started = state.pop("installing")
         if done == "failed":
             state["failed"] = started.get("version")
+        elif done == "stopped":
+            state.pop("failed", None)   # the offer stays as it was before the install was started
         else:
             state.pop("failed", None)
             state["available"] = None

@@ -1,4 +1,5 @@
 """Owner decisions 741 and 742: the simplified Project page (Repository, Plans folder, labels, Advanced) and fields only as wide as their values need."""
+import gc
 import sys
 import tempfile
 import tkinter
@@ -75,6 +76,7 @@ class ApiaryPageCase(unittest.TestCase):
             self.root.attributes("-alpha", 0.0)
         except tkinter.TclError as exc:
             self.skipTest("no display: %s" % exc)
+        self.addCleanup(gc.collect)   # Tk objects are freed in the main thread, never by the collector in a reading thread
         self.addCleanup(self.root.destroy)
 
         class Quiet(tkinter.Toplevel):
@@ -109,7 +111,7 @@ class ApiaryPageCase(unittest.TestCase):
 
     def window(self, apiary=None):
         """The settings window, showing the page of the Project named `project` when given."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.base)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.base, wait=True)
         if apiary is not None:
             win.pick_tab("apiaries")
             index = [a["name"] for a in win.apiaries].index(apiary)

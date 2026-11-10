@@ -1,5 +1,6 @@
 """Tests of U-6 to U-8: the token overlays of the five tiles, the Start Context tile and its overlay, the capture of the start context in the runner
 (Queen, process Agent, subagent Agent) and the benchmark of the start context per provider and Project."""
+import gc
 import os
 import sys
 import tempfile
@@ -461,13 +462,14 @@ class ButtonTest(unittest.TestCase):
     def tearDown(self):
         """Close the window."""
         self.root.destroy()
+        gc.collect()   # Tk objects are freed in the main thread, never by the collector in a reading thread
         self.conn.close()
         self.tmp.cleanup()
 
     def test_settings_opens_window_and_start_runs_benchmark(self):
         from haivequeen import gui_config
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             win.select(1)
             result = {"excluded": False, "errors": ["ODP, own profile: not logged in"], "results": [], "completed": 2, "total": 2}
             with mock.patch("haivequeen.gui_dialog.ask", return_value=True) as ask, mock.patch("haivequeen.startctx.benchmark", return_value=result) as bench:
@@ -486,7 +488,7 @@ class ButtonTest(unittest.TestCase):
         startctx.store_benchmark(self.conn, "claude", long_name, "hq", 18000)
         startctx.store_benchmark(self.conn, "claude", long_name, "own", 61000)
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             win.select(1)
             win.benchmark_click()
             bench = win.benchmark_win
@@ -510,6 +512,7 @@ class TileDrawTest(unittest.TestCase):
             root.attributes("-alpha", 0.0)
         except tk.TclError:
             self.skipTest("no display")
+        self.addCleanup(gc.collect)   # Tk objects are freed in the main thread, never by the collector in a reading thread
         self.addCleanup(root.destroy)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -546,7 +549,7 @@ class ProgressButtonTest(ButtonTest):
             release.wait(20)
             return {"excluded": False, "errors": [], "results": []}
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             win.select(1)
             with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", side_effect=fake):
                 win.benchmark_click()
@@ -577,6 +580,7 @@ class HoverTest(unittest.TestCase):
             root.attributes("-alpha", 0.0)
         except tk.TclError:
             self.skipTest("no display")
+        self.addCleanup(gc.collect)   # Tk objects are freed in the main thread, never by the collector in a reading thread
         self.addCleanup(root.destroy)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

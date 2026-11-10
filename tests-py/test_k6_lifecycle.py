@@ -304,6 +304,8 @@ class StoppedPackageTests(RoundCase):
         bee = {"kind": "bee", "agent": "Bea", "project": "testproj", "plan_path": REL, "name": "Bea", "task": "P1"}
         cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "stop_bee"))
         app = mock.Mock(conn=self.conn, confirm=lambda text: True, selected=lambda table: bee)
+        app.lookup = lambda read, then: then(read(self.conn))   # the agents-row read runs in a thread in the window; here it runs at once
+        app.stop_process_agent = lambda b, found: cls.stop_process_agent(app, b, found)
         with mock.patch("haivequeen.platform.kill_process_tree") as kill:
             cls.stop_bee(app)
         kill.assert_called_once_with(999999)

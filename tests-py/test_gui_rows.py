@@ -3,6 +3,7 @@ X on a Queen or a waiting Bee, the log clear and the footer buttons."""
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -68,6 +69,15 @@ class RowsTest(unittest.TestCase):
     def key(self, keysym):
         """Send the key `keysym` to the window's key handler."""
         self.win.on_key(mock.Mock(keysym=keysym))
+
+    # Wait for the background lookups of the window.
+    def settle(self):
+        """Run the event loop until the lookups of the actions are done."""
+        for _ in range(6000):
+            self.win.root.update()
+            if not self.win.lookups:
+                return
+            time.sleep(0.01)
 
     # The Queen heads her Bees.
     def test_queen_row_leads_and_her_bees_follow(self):
@@ -211,13 +221,16 @@ class RowsTest(unittest.TestCase):
         """The menu lists restart, end, a separator and pause for the Hive; on a Bee row nothing opens."""
         with mock.patch("haivequeen.gui_dialog.popup_menu") as popup:
             self.win.hive_menu()
+            self.settle()
             self.key("Tab")
             self.win.hive_menu()
+            self.settle()
             self.assertEqual(popup.call_count, 2)
             items = popup.call_args[0][1]
             self.assertEqual([i if i is None else i[0].split(" ")[0] for i in items], ["Restart", "End", None, "Pause", "Stop"])
             self.key("Down")
             self.win.hive_menu()
+            self.settle()
             self.assertEqual(popup.call_count, 2)
 
     # The Queen menu offers a restart on every other provider and runs bzz requeen with it.
@@ -225,6 +238,7 @@ class RowsTest(unittest.TestCase):
         """With a second provider the menu lists "Restart Queen ... on codex" right after the plain restart; choosing it runs `requeen <plan> codex`."""
         with mock.patch.object(self.win, "queen_providers", return_value=["codex"]), mock.patch("haivequeen.gui_dialog.popup_menu") as popup:
             self.win.hive_menu()
+            self.settle()
         items = popup.call_args[0][1]
         self.assertEqual([i[0] for i in items[:2]], ["Restart Queen of AI-LEVELS", "Restart Queen of AI-LEVELS on codex"])
         with mock.patch.object(self.win, "confirm", return_value=True), mock.patch("haivequeen.gui.subprocess.Popen") as popen, mock.patch.object(self.win, "watch_command"):

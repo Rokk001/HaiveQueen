@@ -68,7 +68,7 @@ class Texts(pf.FormCase):
         self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertEqual(str(win.bottom_note.cget("fg")), self.col_green())
         self.assertEqual(win.status.cget("text"), "")
-        win.reload()
+        win.reload(wait=True)
         self.assertIn("Changes apply", win.bottom_note.cget("text"))
 
     def col_green(self):
@@ -84,7 +84,7 @@ class Texts(pf.FormCase):
         win.choose_access("Local LLM")
         win.target()["address"] = stub.address
         win.reshow()
-        win.refresh_state()
+        win.refresh_state(wait=True)
         self.assertIn("has not been tested", win.ready_label.cget("text"))
         win.test_button.invoke()
         for _ in range(200):

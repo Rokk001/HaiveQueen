@@ -451,33 +451,53 @@ class ProviderPages:
 
     # ------------------------------------------------------------ ready line and benchmark button
 
-    def provider_state(self) -> tuple:
-        """(ready, what is missing) of the shown provider as the loop evaluates it now (login or last connection test, models)."""
-        from . import scheduler
-        try:
-            resolved = scheduler.get_providers({**self.data, "providers": [self.target()]})[0]
-        except (ValueError, TypeError, KeyError, AttributeError) as exc:
-            return False, str(exc)
-        return bool(resolved["login"]), resolved["notReady"]
-
-    def saved_provider(self) -> bool:
-        """True when the shown provider is in config.toml exactly as it stands on the page."""
-        from . import gui_config
-        entry = self.target()
-        try:
-            saved = gui_config.load_migrated(self.config_path)
-        except Exception:
-            return False
-        return any(p == entry for p in saved.get("providers") or [])
-
-    def refresh_state(self):
-        """Show "Not ready: ..." when the provider is not ready, and enable Benchmark Start Context only for a saved, ready provider."""
+    def refresh_state(self, wait=False):
+        """Show "Not ready: ..." when the provider is not ready, and enable Benchmark Start Context only for a saved, ready provider. The login and the config file
+        are read in a thread and shown when the read ends; `wait` pumps the event loop until then."""
         if getattr(self, "ready_label", None) is None or self.node[0] != "providers" or self.node[1] is None:
             return
-        ready, why = self.provider_state()
-        self.ready_label.config(text="" if ready else tr("Not ready: %s", why))
-        if self.benchmark_button is not None:
-            self.benchmark_button.config(state="normal" if ready and self.saved_provider() else "disabled")
+        from . import gui_async
+        shown = self.node
+        try:
+            entry = self.target()
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            entry, problem = None, str(exc)
+        else:
+            problem = ""
+        data = {**self.data, "providers": [entry]}
+        path, benchmark = self.config_path, self.benchmark_button is not None
+
+        def work():
+            """In the thread: (ready, what is missing, saved in config.toml as shown)."""
+            if entry is None:
+                return False, problem, False
+            ready, why = provider_state(data)
+            return ready, why, bool(benchmark and ready and saved_provider(path, entry))
+
+        def done(result):
+            """In the event loop: show the state, unless another page is shown meanwhile."""
+            self.state_reads -= 1
+            ready, why, saved = result
+            if self.node != shown or getattr(self, "ready_label", None) is None:
+                return
+            try:
+                self.ready_label.config(text="" if ready else tr("Not ready: %s", why))
+                if self.benchmark_button is not None:
+                    self.benchmark_button.config(state="normal" if ready and saved else "disabled")
+            except self.tk.TclError:
+                pass
+
+        def failed(_exc):
+            """The read failed: the next page change asks again."""
+            self.state_reads -= 1
+        self.state_reads = getattr(self, "state_reads", 0) + 1
+        gui_async.run_async(self.win, work, done, failed)
+        if wait:
+            import time
+            end = time.monotonic() + 30
+            while self.state_reads > 0 and time.monotonic() < end:
+                self.win.update()
+                time.sleep(0.005)
 
     # ------------------------------------------------------------ the test of a Local LLM
 
@@ -524,6 +544,26 @@ class ProviderPages:
             except self.tk.TclError:
                 pass
         self.win.after(100, poll)
+
+
+def provider_state(data) -> tuple:
+    """(ready, what is missing) of the only provider of `data` as the loop evaluates it now (login or last connection test, models); reads files, so not on the UI thread."""
+    from . import scheduler
+    try:
+        resolved = scheduler.get_providers(data)[0]
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        return False, str(exc)
+    return bool(resolved["login"]), resolved["notReady"]
+
+
+def saved_provider(config_path, entry) -> bool:
+    """True when `entry` is in config.toml exactly as given; reads the file, so not on the UI thread."""
+    from . import gui_config
+    try:
+        saved = gui_config.load_migrated(config_path)
+    except Exception:
+        return False
+    return any(p == entry for p in saved.get("providers") or [])
 
 
 def cli_presets_protocols() -> tuple:

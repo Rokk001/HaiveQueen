@@ -154,6 +154,8 @@ _LIVE_LABEL = r"(Commit(?:: .*?)?|Push|Compile test|Check \S+|changed: .*?|ready
 
 # Why a worktree cleanup kept a worktree or could not remove it: the start of the English text and its German form.
 _WORKTREE_REASONS = (
+    ("HEAD cannot be read", "HEAD nicht lesbar"),
+    ("used by a plan that is not finished", "von einem nicht beendeten Plan benutzt"),
     ("protected worktree", "geschützter Worktree"),
     ("locked or missing", "gesperrt oder fehlt"),
     ("branch has an open queue row", "Branch hat eine offene Zeile in der Warteschlange"),
@@ -479,6 +481,9 @@ GERMAN = {
     "STATE": "ZUSTAND", "USAGE": "NUTZUNG", "PLANS": "PLÄNE", "QUESTIONS": "FRAGEN", "ROUND ERRORS": "RUNDENFEHLER", "FAULTS": "FEHLER", "SELF-UPDATE": "SELBST-UPDATE",
     "%s %d / %d integrated (%d%%)": "%s %d / %d integriert (%d%%)", "open: %d  %s": "offen: %d  %s", "none open": "keine offen",
     "idle since %s": "untätig seit %s", "idle": "untätig", "self-update ": "Selbst-Update ", "ok": "ok", "rollback": "Rollback", " (back to %s)": " (zurück auf %s)",
+    "stopped by the owner": "vom Besitzer gestoppt", "The start did not finish: %s": "Der Start wurde nicht abgeschlossen: %s", "The start did not go through.": "Der Start ist nicht gelungen.",
+    "An update is waiting for running agents; HaiveQueen starts again after it.": "Ein Update wartet auf laufende Agenten; HaiveQueen startet danach wieder.",
+    "Waiting for the previous stop to finish.": "Der vorherige Stopp ist noch nicht abgeschlossen.", "The orchestrator is just starting.": "Der Orchestrator startet gerade.",
     "Build jobs %s of %d cores (running)": "Build-Jobs %s von %d Kernen (läuft)", "Build jobs %d of %d cores (next build)": "Build-Jobs %d von %d Kernen (nächster Build)",
     " | per job %s": " | pro Job %s", "not measured yet": "noch nicht gemessen", " | active: %d cores": " | aktiv: %d Kerne",
     # ---- overlays
@@ -620,6 +625,8 @@ GERMAN = {
     "Commands agents of this Project may run without asking.": "Befehle, die Agenten dieses Projekts ohne Nachfrage ausführen dürfen.",
     "Interface language": "Sprache der Oberfläche",
     "Agent slots": "Agentenplätze",
+    "Reading the questions failed: %s": "Die Fragen konnten nicht gelesen werden: %s",
+    "Reading the steps failed: %s": "Die Schritte konnten nicht gelesen werden: %s",
     "A further HaiveQueen setting, as written in config.toml.": "Eine weitere HaiveQueen-Einstellung, wie sie in config.toml steht.", "Plans": "Pläne",
     "not ready: %s": "nicht bereit: %s", "This provider is not ready: %s. It gets no work until this is fixed.": "Dieser Anbieter ist nicht bereit: %s. Er bekommt keine Arbeit, bis das behoben ist.",
     "Round length (minutes)": "Rundenlänge (Minuten)",

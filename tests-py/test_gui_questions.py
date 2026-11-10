@@ -1,4 +1,5 @@
 """Tests of the questions window: answering as the owner, rejected steps, and the window itself (fully transparent windows)."""
+import time
 import unittest
 from unittest import mock
 
@@ -67,6 +68,14 @@ class WindowTest(RoundCase):
         self.owner_q = db.add_question(self.conn, 'testproj', REL, 'owner-check', 'Please check the menu.', 'Check it.')
         self.plain_q = db.add_question(self.conn, 'testproj', REL, 'colour', 'Which colour?', 'Red.')
 
+    def settle(self, win):
+        """Run the event loop until the background reads of the window are shown."""
+        for _ in range(6000):
+            self.root.update()
+            if not getattr(win, "loading", False) and not win.package_reads:
+                return
+            time.sleep(0.01)
+
     def tearDown(self):
         """Close the window root."""
         self.root.destroy()
@@ -77,22 +86,27 @@ class WindowTest(RoundCase):
         """Both questions are listed; the plain one has no step boxes; ticking P2 on the owner check marks it rejected; answered questions leave the list."""
         done = []
         win = gui_questions.QuestionsWindow(self.root, self.conn, on_answered=lambda: done.append(1))
+        self.settle(win)
         self.assertEqual(win.list.size(), 2)
         win.list.selection_clear(0, "end")
         win.list.selection_set(1)
         win.show()
+        self.settle(win)
         self.assertEqual(win.checks, {})
         win.use_recommendation()
         self.assertEqual(win.reply.get("1.0", "end").strip(), 'Red.')
         win.send()
+        self.settle(win)
         self.assertEqual(win.list.size(), 1)
         win.list.selection_clear(0, "end")
         win.list.selection_set(0)
         win.show()
+        self.settle(win)
         self.assertEqual(sorted(win.checks), ['P1', 'P2'])
         win.checks['P2'].set(True)
         win.reply.insert("1.0", 'The menu is still wrong.')
         win.send()
+        self.settle(win)
         self.assertEqual(win.list.size(), 1)
         self.assertEqual(bees.rejected_packages(self.conn, 'testproj', REL), [])
         self.assertEqual(done, [1, 1])
@@ -101,7 +115,9 @@ class WindowTest(RoundCase):
     def test_empty_answer_shows_a_message(self):
         """Pressing Answer without text leaves the question open and fills the status line."""
         win = gui_questions.QuestionsWindow(self.root, self.conn)
+        self.settle(win)
         win.send()
+        self.settle(win)
         self.assertIn("answer", win.status.cget("text").lower())
         self.assertEqual(win.list.size(), 2)
 
@@ -114,15 +130,18 @@ class WindowTest(RoundCase):
         runtime.set_plan_status(self.conn, 'testproj', REL, 'REVIEW')
         self.integrated_owner_check()
         win = gui_questions.QuestionsWindow(self.root, self.conn)
+        self.settle(win)
         self.assertEqual(win.accept_button.cget('text'), 'Accept')
         self.assertEqual(win.reject_button.cget('text'), 'Not ok')
         self.assertTrue(win.accept_button.winfo_manager())
         win.reject_button.invoke()
+        self.settle(win)
         self.assertIn('text', win.status.cget('text').lower())
         self.assertEqual(win.list.size(), 2)
         win.reply.insert('1.0', 'Fix the second package')
         win.checks['P2'].set(True)
         win.reject_button.invoke()
+        self.settle(win)
         self.assertEqual(bees.rejected_packages(self.conn, 'testproj', REL), ['P2'])
         self.assertEqual(db.owner_check_result(self.conn, self.owner_q), 'rejected')
 
@@ -131,7 +150,9 @@ class WindowTest(RoundCase):
         self.integrated_owner_check()
         db.answer_question(self.conn, self.plain_q, 'Red', 'owner')
         win = gui_questions.QuestionsWindow(self.root, self.conn)
+        self.settle(win)
         win.accept_button.invoke()
+        self.settle(win)
         self.assertEqual(win.list.size(), 0)
         self.assertEqual(runtime.list_plans(self.conn, 'testproj')[0]['status'], 'DONE')
 
@@ -139,6 +160,7 @@ class WindowTest(RoundCase):
     def test_apiary_checkbox(self):
         """The checkbox is off, packed right after the answer field, resets after an answer and stores the Project decision when set."""
         win = gui_questions.QuestionsWindow(self.root, self.conn)
+        self.settle(win)
         self.assertFalse(win.apiary_var.get())
         self.assertIn('whole Project', win.apiary_box.cget('text'))
         slaves = win.reply.master.pack_slaves()
@@ -146,9 +168,11 @@ class WindowTest(RoundCase):
         win.list.selection_clear(0, "end")
         win.list.selection_set(1)
         win.show()
+        self.settle(win)
         win.apiary_var.set(True)
         win.reply.insert("1.0", 'Blue.')
         win.send()
+        self.settle(win)
         self.assertFalse(win.apiary_var.get())
         self.assertEqual([d['plan_path'] for d in runtime.list_decisions(self.conn, 'testproj', item='colour')], [None])
 

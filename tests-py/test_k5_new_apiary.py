@@ -1,4 +1,5 @@
 """K5: a Project from before the integration switches keeps deploy on, a new one starts with it off, on every way to register it; step packages need an Agent or the owner."""
+import gc
 import argparse
 import io
 import json
@@ -149,8 +150,9 @@ class NewApiaryTests(ApiaryCase):
         except tkinter.TclError as exc:
             self.skipTest("no display: %s" % exc)
         root.withdraw()
+        self.addCleanup(gc.collect)   # Tk objects are freed in the main thread, never by the collector in a reading thread
         self.addCleanup(root.destroy)
-        win = gui_config.ConfigWindow(root, conn, self.base)
+        win = gui_config.ConfigWindow(root, conn, self.base, wait=True)
         self.assertEqual([a["path"] for a in win.apiaries], [self.workspace / ".haivequeen" / "project.toml"])
 
 
@@ -164,12 +166,13 @@ class SettingsWindowTests(ApiaryCase):
         except tkinter.TclError as exc:
             self.skipTest("no display: %s" % exc)
         self.root.withdraw()
+        self.addCleanup(gc.collect)   # Tk objects are freed in the main thread, never by the collector in a reading thread
         self.addCleanup(self.root.destroy)
         (self.base / "config.toml").write_text('slots = 2\n', encoding="utf-8")
 
     def test_save_of_the_machine_file_registers_the_project(self):
         conn = self.open_db()
-        win = gui_config.ConfigWindow(self.root, conn, self.base)
+        win = gui_config.ConfigWindow(self.root, conn, self.base, wait=True)
         win.collect()
         win.data.setdefault("projects", []).append({"name": "paged", "workspace": str(self.workspace)})
         win.fill_nodes()
@@ -180,7 +183,7 @@ class SettingsWindowTests(ApiaryCase):
     def test_deploy_can_be_switched_on_for_an_apiary_without_a_file(self):
         conn = self.open_db()
         db.upsert_project(conn, "bare", str(self.workspace), "white", 0)
-        win = gui_config.ConfigWindow(self.root, conn, self.base)
+        win = gui_config.ConfigWindow(self.root, conn, self.base, wait=True)
         win.select(win.entries.index(("apiaries", 0)))
         self.assertIs({path[-1]: like for path, _getter, like in win.getters}["deployEnabled"], False)
         win.collect()

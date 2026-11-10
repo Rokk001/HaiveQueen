@@ -1,4 +1,5 @@
 """Provider page: the sections, models, use, advanced, explanations, name proposal, ready line."""
+import gc
 import json
 import os
 import sys
@@ -90,11 +91,12 @@ class PageCase(unittest.TestCase):
 
     def tearDown(self):
         self.root.destroy()
+        gc.collect()   # Tk objects are freed in the main thread, never by the collector in a reading thread
         self.conn.close()
         self.tmp.cleanup()
 
     def window(self):
-        return gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        return gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
 
     def provider(self, win, name):
         win.select(1 + [p["name"] for p in win.data["providers"]].index(name))
@@ -355,7 +357,12 @@ class NameAndAdd(PageCase):
 
 class ReadyLine(PageCase):
     def ready(self, win):
+        win.refresh_state(wait=True)   # the state is read in a thread
         return win.ready_label.cget("text")
+
+    def bench(self, win):
+        win.refresh_state(wait=True)
+        return str(win.benchmark_button.cget("state"))
 
     def test_missing_login_failed_test_and_missing_model(self):
         """One line Not ready: ..."""
@@ -384,11 +391,11 @@ class ReadyLine(PageCase):
             win = self.window()
             self.provider(win, "claude")
             win.target()["classes"]["light"]["model"] = "not-in-the-docs"
-            win.refresh_state()
+            win.refresh_state(wait=True)
             self.assertEqual(self.ready(win), "")
             (self.folder / "data").mkdir(parents=True, exist_ok=True)
             (self.folder / "data" / "cli-models.json").write_text(json.dumps({"claude": ["opus"]}), encoding="utf-8")
-            win.refresh_state()
+            win.refresh_state(wait=True)
             self.assertIn("not-in-the-docs", self.ready(win))
 
     def test_benchmark_button_needs_saved_and_ready(self):
@@ -396,18 +403,18 @@ class ReadyLine(PageCase):
         win = self.window()
         self.keep_test()
         self.provider(win, "codex")
-        self.assertEqual(str(win.benchmark_button.cget("state")), "normal")
+        self.assertEqual(self.bench(win), "normal")
         win.model_vars["light"].set("other")
         win.collect()
-        win.refresh_state()
-        self.assertEqual(str(win.benchmark_button.cget("state")), "disabled")   # changed, not saved
+        win.refresh_state(wait=True)
+        self.assertEqual(self.bench(win), "disabled")   # changed, not saved
         win.save()
-        self.assertEqual(str(win.benchmark_button.cget("state")), "normal")
+        self.assertEqual(self.bench(win), "normal")
         self.provider(win, "claude")
-        self.assertEqual(str(win.benchmark_button.cget("state")), "disabled")   # no login
+        self.assertEqual(self.bench(win), "disabled")   # no login
         win.add_provider()
         win.choose_access("Local LLM")
-        self.assertEqual(str(win.benchmark_button.cget("state")), "disabled")   # not saved yet
+        self.assertEqual(self.bench(win), "disabled")   # not saved yet
 
 
 R3_CONFIG = '''slots = 8

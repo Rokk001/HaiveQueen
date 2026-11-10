@@ -1,4 +1,5 @@
 """Tests of the settings editor: TOML writing, the allowed tools list, checks, saving with a backup, and the window."""
+import gc
 import sys
 import tempfile
 import threading
@@ -166,6 +167,7 @@ class WindowTest(unittest.TestCase):
     def tearDown(self):
         """Close the windows and remove the temp folder."""
         self.root.destroy()
+        gc.collect()   # Tk objects are freed in the main thread, never by the collector in a reading thread
         self.conn.close()
         self.tmp.cleanup()
 
@@ -187,7 +189,7 @@ class WindowTest(unittest.TestCase):
         data = self.folder / "data"
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(data)}):
             os.environ.pop(profile.NO_CHECK_ENV, None)
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             win.select(1)   # provider claude
             self.assertEqual(win.login_status.cget("text"), "Login missing")
             with mock.patch("haivequeen.gui_dialog.ask", return_value=False) as ask, mock.patch("haivequeen.profile.login_run") as run:
@@ -210,7 +212,7 @@ class WindowTest(unittest.TestCase):
         from haivequeen import bzz_install
         for language in ("English", "German"):
             with self.subTest(language=language), mock.patch("haivequeen.i18n.machine_language", return_value=language):
-                win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+                win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
                 button = next(w for w in descendants(win.form)
                               if w.winfo_class() == "Button" and w.cget("text") == i18n.tr("Install /bzz"))
                 result = {"Claude Code": "installed", "Codex CLI": "skipped: literal /bzz is not supported"}
@@ -229,7 +231,7 @@ class WindowTest(unittest.TestCase):
         data = self.folder / "data"
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(data)}):
             os.environ.pop(profile.NO_CHECK_ENV, None)
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             win.data["providers"].append({"name": "mycli", "protocol": "mycli"})
             win.fill_nodes()
             win.select(3)
@@ -247,7 +249,7 @@ class WindowTest(unittest.TestCase):
     def test_apiary_page_shows_edits_and_saves_its_settings(self):
         """The General page of a project file offers every Project setting with its default under a readable label; a changed value is saved."""
         import tomllib
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.select(win.entries.index(("apiaries", 0)))
         keys = {path[1]: like for path, _getter, like in win.getters if path[0] == "file"}
         for key, default in gui_config.APIARY_DEFAULTS:
@@ -273,7 +275,7 @@ class WindowTest(unittest.TestCase):
     # The provider page offers the CLI choice.
     def test_provider_page_offers_the_cli_choice(self):
         """The page shows the CLI of the provider; choosing another CLI sets all its values, Custom CLI keeps them and offers the output format."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.select(1)   # provider claude
         self.assertEqual(win.cli_var.get(), "Claude Code")
         win.choose_cli("OpenCode")
@@ -291,7 +293,7 @@ class WindowTest(unittest.TestCase):
     # Every provider offers the Bee mode with the value that applies when the file has no entry.
     def test_provider_offers_the_bee_mode_with_its_default(self):
         """A claude provider shows subagent and a codex provider shows process; a subagent set for codex is shown and saved as process."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.select(1)   # provider claude
         self.assertEqual({path: getter() for path, getter, _like in win.getters}[("beeMode",)], "subagent")
         win.select(2)   # provider codex
@@ -305,7 +307,7 @@ class WindowTest(unittest.TestCase):
     # The language of the free text to the owner.
     def test_general_offers_the_language_and_saves_it(self):
         """General offers English and German (English without an entry); the picked language is written to the file."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.select(0)
         getters = {path: getter for path, getter, _like in win.getters}
         self.assertEqual(getters[("language",)](), "English")
@@ -324,7 +326,7 @@ class WindowTest(unittest.TestCase):
         data["providers"][0]["args"] = args
         data["providers"][0]["extraList"] = ["first", "", " last "]
         gui_config.save_file(path, data)
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.select(1)
         win.save()
         saved = gui_config.load_raw(path)["providers"][0]
@@ -341,7 +343,7 @@ class WindowTest(unittest.TestCase):
     def test_edit_allowed_tools_and_save(self):
         """Changing the allowed tools and the slots of a provider writes both; everything else in the file stays."""
         saved = []
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, on_saved=lambda: saved.append(1))
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, on_saved=lambda: saved.append(1), wait=True)
         win.select(1)   # provider claude
         getters = {path: getter for path, getter, _like in win.getters}
         self.assertEqual(len(getters[("allowedTools",)]()), 3)
@@ -363,7 +365,7 @@ class WindowTest(unittest.TestCase):
     # A wrong value is shown and nothing is written.
     def test_wrong_number_is_refused(self):
         """Text in a number field is reported in the status line and the file stays as it was."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         self.type_into_entry(win, "8", "many")
         win.save()
         self.assertIn("slots", win.status.cget("text"))
@@ -372,7 +374,7 @@ class WindowTest(unittest.TestCase):
     # The project.toml of an Apiary is edited on its page of the tab Apiaries.
     def test_project_file_is_listed_and_editable(self):
         """The tab Projects lists ODP; saving a changed priority on its page writes its project.toml."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.pick_tab("apiaries")
         self.assertEqual(win.nodes.get(0, "end"), ("ODP",))
         self.type_into_entry(win, "2", "5")
@@ -383,7 +385,7 @@ class WindowTest(unittest.TestCase):
     # three tabs, no file selection.
     def test_window_has_three_tabs_and_no_file_selection(self):
         """The window offers the tabs General, Providers and Projects (no Servers tab); no File choice and no file name is shown; each tab lists only its own pages."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         self.assertEqual([b.cget("text") for b in win.tab_buttons.values()], ["General", "Providers", "Projects"])
         texts = [w.cget("text") for w in descendants(win.win) if w.winfo_class() in ("Label", "Button", "Menubutton", "Radiobutton")]
         self.assertFalse([text for text in texts if "File:" in text or "config.toml (" in text or "project.toml (" in text], texts)
@@ -400,7 +402,7 @@ class WindowTest(unittest.TestCase):
     def test_apiary_page_holds_all_its_settings_once(self):
         """The page of a Project shows its name and workspace from config.toml and all settings of its project.toml, including the four switches; no key twice."""
         with mock.patch("haivequeen.publish.github_repository", return_value="owner/name"):
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             win.pick_tab("apiaries")
         paths = [path for path, _getter, _like in win.getters]
         keys = [path[-1] for path in paths]
@@ -422,7 +424,7 @@ class WindowTest(unittest.TestCase):
         """Saving after only looking at a Project page leaves its project.toml untouched and keeps the provider capabilities as they are."""
         path = self.folder / "ws" / ".haivequeen" / "project.toml"
         before = path.read_text(encoding="utf-8")
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.select(1)
         win.select(2)
         win.pick_tab("apiaries")
@@ -436,7 +438,7 @@ class WindowTest(unittest.TestCase):
     # the capabilities stay on the provider pages.
     def test_capabilities_are_on_the_provider_pages_only(self):
         """A provider page offers the capability ticks; a changed tick is saved for that provider."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.select(1)   # provider claude
         self.assertIn(("capabilities",), [p for p, _g, _l in win.getters])
         boxes = {w.cget("text"): w for w in descendants(win.form) if w.winfo_class() == "Checkbutton"}
@@ -450,7 +452,7 @@ class WindowTest(unittest.TestCase):
         """Add Project adds a page; with a name and an existing workspace Save writes config.toml, registers the Project and creates its project.toml with the switches set on the page."""
         new = self.folder / "fresh"
         new.mkdir()
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.pick_tab("apiaries")
         win.add_entry()
         self.assertEqual(win.nodes.get(0, "end"), ("ODP", "new-project"))
@@ -488,7 +490,7 @@ class WindowTest(unittest.TestCase):
     def test_entered_workspace_shows_its_project_file_at_once(self):
         """Entering the workspace of a new Project shows the settings of the project.toml already there, without leaving the page."""
         folder, _text = self.existing_workspace()
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         self.new_apiary_in(win, folder)
         node = win.node
         workspace = next(w for w in descendants(win.form) if w.winfo_class() == "Entry" and w.get() == str(folder))
@@ -501,7 +503,7 @@ class WindowTest(unittest.TestCase):
     def test_entered_workspace_keeps_the_unsaved_edits(self):
         """A setting changed before the workspace is entered stays as typed; the other values of the existing project.toml stay as they are."""
         folder, _text = self.existing_workspace()
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.pick_tab("apiaries")
         win.add_entry()
         win.target()["file"]["priority"] = 9
@@ -519,7 +521,7 @@ class WindowTest(unittest.TestCase):
     def test_save_right_after_typing_the_workspace_keeps_the_existing_file(self):
         """Save without entering the workspace first still lays the edits over the existing project.toml instead of replacing it."""
         folder, _text = self.existing_workspace()
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.pick_tab("apiaries")
         win.add_entry()
         win.target()["file"]["buildEnabled"] = False
@@ -533,7 +535,7 @@ class WindowTest(unittest.TestCase):
     def test_entered_workspace_without_edits_leaves_the_file_untouched(self):
         """Entering the workspace and saving without a change writes no project.toml and no backup; the Project is registered."""
         folder, text = self.existing_workspace()
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         self.new_apiary_in(win, folder)
         win.workspace_entered()
         win.save()
@@ -546,7 +548,7 @@ class WindowTest(unittest.TestCase):
     def test_entering_the_same_workspace_again_rebuilds_nothing(self):
         """Entering an unchanged workspace keeps the page and its typed values as they are."""
         folder, _text = self.existing_workspace()
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         self.new_apiary_in(win, folder)
         win.workspace_entered()
         self.type_into_entry(win, "7", "8")
@@ -557,7 +559,7 @@ class WindowTest(unittest.TestCase):
 
     def test_add_apiary_without_workspace_writes_no_project_file(self):
         """A new Project whose workspace does not exist cannot keep changed settings: nothing is written and the reason is shown."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.pick_tab("apiaries")
         win.add_entry()
         win.target()["file"]["deployEnabled"] = True
@@ -569,7 +571,7 @@ class WindowTest(unittest.TestCase):
     # Adding and removing a provider.
     def test_add_and_remove_provider(self):
         """A new provider appears in the list and in the saved file; removing it afterwards removes it again."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.add_provider()
         self.assertIn("claude-2", win.nodes.get(0, "end"))   # proposed from CLI and source, "claude" is taken
         self.type_into_entry(win, "claude-2", "extra")
@@ -587,7 +589,7 @@ class WindowTest(unittest.TestCase):
     def test_general_shows_one_block_build_with_three_fields(self):
         """The General page of config.toml has one block "Build" with exactly the three fields and one sentence each; nothing is named buildJobs."""
         with mock.patch.object(gui_config, "machine_cores", return_value=8):
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             texts = [w.cget("text") for w in descendants(win.form) if w.winfo_class() in ("Label", "Labelframe")]
             self.assertEqual(texts.count("Build"), 1)
             self.assertEqual([t for t, *_ in [(f[1],) for f in gui_config.BUILD_FIELDS]], ["CPU cores per build", "Parallel builds", "Minimum free RAM before a build"])
@@ -609,10 +611,10 @@ class WindowTest(unittest.TestCase):
         """Without a setting the block shows two thirds of the cores rounded up, parallel 1 and 2 GB; an old coreShare shows the count it gives today."""
         with mock.patch.object(gui_config, "machine_cores", return_value=8):
             (self.folder / "config.toml").write_text("slots = 2\n", encoding="utf-8")
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             self.assertEqual([v.get() for v in win.build_vars], ["6", "1", "2"])
             win.win.destroy()
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             win.data["buildJobs"] = {"coreShare": "1/2", "envVar": "BUILD_MP_JOBS"}
             win.build_form()
             self.assertEqual([v.get() for v in win.build_vars], ["4", "1", "2"])
@@ -622,7 +624,7 @@ class WindowTest(unittest.TestCase):
         with mock.patch.object(gui_config, "machine_cores", return_value=8):
             for old in ('buildJobs = { envVar = "BUILD_MP_JOBS", coreShare = "2/3", fixed = 3, reserveMB = 1024 }', 'buildJobs = 4'):
                 (self.folder / "config.toml").write_text("slots = 2\n" + old + "\n", encoding="utf-8")
-                win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+                win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
                 win.build_vars[0].set("5")
                 win.build_vars[1].set("2")
                 win.build_vars[2].set("3")
@@ -640,7 +642,7 @@ class WindowTest(unittest.TestCase):
         path = self.folder / "config.toml"
         with mock.patch.object(gui_config, "machine_cores", return_value=8), mock.patch.object(i18n, "machine_language", return_value="German"):
             path.write_text("slots = 2\n[buildJobs]\nminFreeRamGB = 2.5\n", encoding="utf-8")
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             self.assertEqual(win.build_vars[2].get(), "2,5")
             for typed, stored, shown in (("3,25", 3.25, "3,25"), ("4.5", 4.5, "4,5"), ("6,0", 6, "6")):
                 win.build_vars[2].set(typed)
@@ -660,7 +662,7 @@ class WindowTest(unittest.TestCase):
         path = self.folder / "config.toml"
         with mock.patch.object(gui_config, "machine_cores", return_value=8), mock.patch.object(i18n, "machine_language", return_value="English"):
             path.write_text("slots = 2\n[buildJobs]\nminFreeRamGB = 2.5\n", encoding="utf-8")
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             self.assertEqual(win.build_vars[2].get(), "2.5")
             win.build_vars[2].set("3,5")
             win.save()
@@ -670,7 +672,7 @@ class WindowTest(unittest.TestCase):
     def test_a_wrong_build_value_is_refused(self):
         """A parallel value of 0 stays on screen with its message and nothing is written."""
         with mock.patch.object(gui_config, "machine_cores", return_value=8):
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             win.build_vars[1].set("0")
             before = (self.folder / "config.toml").read_text(encoding="utf-8")
             win.save()
@@ -684,7 +686,7 @@ class WindowTest(unittest.TestCase):
         data = gui_config.load_raw(path)
         data["providers"] = [{"name": "old", "protocol": "claude", "command": "claude", "classes": {"medium": {"model": "m"}}, **entry}]
         gui_config.save_file(path, data)
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.select(1)
         return win, path
 
@@ -709,7 +711,7 @@ class WindowTest(unittest.TestCase):
     def test_build_notes_wrap_within_the_window(self):
         """The explanations of the Build block sit under their field and wrap to the available width, at the normal and at a small window size."""
         with mock.patch.object(gui_config, "machine_cores", return_value=8):
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             for geo in ("1130x800", "640x700"):
                 win.win.geometry(geo)
                 win.win.update()
@@ -723,7 +725,7 @@ class WindowTest(unittest.TestCase):
 
     def test_bottom_note_has_its_own_row_below_the_buttons(self):
         """The save note sits on its own row under the buttons over the full window width and shows every line of its text."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         widths = []
         for geo in ("1130x800", "760x700", "640x700"):
             win.win.geometry(geo)
@@ -746,7 +748,7 @@ class WindowTest(unittest.TestCase):
         """ramReserveMb is a machine-only setting of config.toml: no field on the General page, the stored value stays when saving."""
         path = self.folder / "config.toml"
         path.write_text(path.read_text(encoding="utf-8").replace("hives = 10", "hives = 10" + chr(10) + "ramReserveMb = 3072"), encoding="utf-8")
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         self.assertNotIn("ramReserveMb", [p[0] for p, _g, _l in win.getters])
         self.assertIn("ramReserveMb", win.data)
         win.save()
@@ -754,7 +756,7 @@ class WindowTest(unittest.TestCase):
 
     def test_project_file_has_no_build_block(self):
         """The build block belongs to the machine settings only."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.pick_tab("apiaries")
         self.assertIsNone(win.build_vars)
 
@@ -770,7 +772,7 @@ class BenchmarkWindowTest(WindowTest):
 
     def provider_page(self, size):
         """Open the settings at `size` on the first provider page and return the window."""
-        win = gui_config.ConfigWindow(self.root, self.conn, self.folder)
+        win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.win.geometry(size)
         win.select(1)
         self.root.update()

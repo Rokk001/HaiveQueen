@@ -66,7 +66,7 @@ class QuestionsWindow:
         self.win = tk.Toplevel(root)
         self.win.title(tr("HaiveQueen questions"))
         self.win.geometry("1040x680")
-        self.questions, self.checks = [], {}
+        self.questions, self.checks, self.package_reads = [], {}, 0   # package_reads: reads of the steps of a plan that are still running
         side = tk.Frame(self.win)
         side.pack(side="left", fill="y", padx=6, pady=6)
         self.list = tk.Listbox(side, width=44, exportselection=False, font=(mono, 10))
@@ -95,7 +95,7 @@ class QuestionsWindow:
         for label, action in ((tr("Use recommendation"), self.use_recommendation), (tr("Answer"), self.send), (tr("Close"), self.win.destroy)):
             tk.Button(buttons, text=label, command=action, font=(mono, 10)).pack(side="right", padx=3)
         self.win.bind("<Control-Return>", lambda _e: self.send())
-        self.refresh()
+        self.refresh_async()   # the window opens at once, the questions follow
         self.win.after(REFRESH_MS, self.tick)
 
     # Reload the list every few seconds.
@@ -109,18 +109,28 @@ class QuestionsWindow:
     def refresh_async(self):
         """Read the open questions in a thread of their own and show them when they are there; a read that is still running is not started twice."""
         if getattr(self, "loading", False):
+            self.refresh_wanted = True
             return
         self.loading = True
+
+        def again():
+            """Read once more when an answer asked for a refresh during this read."""
+            if getattr(self, "refresh_wanted", False):
+                self.refresh_wanted = False
+                self.refresh_async()
 
         def done(fresh):
             """Show the questions."""
             self.loading = False
             self.apply(fresh)
+            again()
 
-        def failed(_exc):
-            """Try again at the next round."""
+        def failed(exc):
+            """Show the error; try again at the next round."""
             self.loading = False
-        gui_async.run_async(self.win, lambda: gui_async.with_connection(self.conn, open_questions), done, failed)
+            self.status.config(text=tr("Reading the questions failed: %s", exc))
+            again()
+        gui_async.run_async(self.win, gui_async.with_connection(self.conn, open_questions), done, failed)
 
     # The question that is selected.
     def current(self):
@@ -171,7 +181,38 @@ class QuestionsWindow:
         self.meta.config(text="#%s  %s | %s | %s | %s" % (q["id"], q["project"], q["plan_path"], q["item"], gui_data.fmt_stamp(q["created_at"])))
         self.body.insert("1.0", tr("%s\n\nRecommendation:\n%s", q["question"], q["recommendation"] or "-"))
         self.body.config(state="disabled")
-        packages = plan_packages(self.conn, q["project"], q["plan_path"]) if str(q["item"] or "").startswith("owner-check") else []
+        if str(q["item"] or "").startswith("owner-check"):
+            self.steps.pack_forget()
+            self.show_packages_later(q)
+        else:
+            self.steps.pack_forget()
+
+    # Read the steps of an owner check question in the background.
+    def show_packages_later(self, q):
+        """Read the packages of the plan of `q` in a thread and list them when they are there (only if `q` is still the selected question)."""
+        project, plan = q["project"], q["plan_path"]
+
+        def done(packages):
+            """List the steps."""
+            self.package_reads -= 1
+            now = self.current()
+            if now is None or now["id"] != q["id"]:
+                return
+            self.show_packages(packages or [])
+        def failed(exc):
+            """No steps are shown; the error is."""
+            self.package_reads -= 1
+            self.status.config(text=tr("Reading the steps failed: %s", exc))
+        self.package_reads += 1
+        gui_async.run_async(self.win, gui_async.with_connection(self.conn, lambda conn: plan_packages(conn, project, plan)), done, failed)
+
+    # List the steps.
+    def show_packages(self, packages):
+        """Show a tick box for each package."""
+        tk = self.tk
+        for child in self.steps.winfo_children():
+            child.destroy()
+        self.checks = {}
         if packages:
             self.steps.pack(fill="x", pady=(0, 6))
             for n, package in enumerate(packages):
@@ -204,7 +245,7 @@ class QuestionsWindow:
         self.reply.delete("1.0", "end")
         self.apiary_var.set(False)
         self.questions = []
-        self.refresh()
+        self.refresh_async()
         if self.on_answered:
             self.on_answered()
 
@@ -222,6 +263,6 @@ class QuestionsWindow:
         self.reply.delete("1.0", "end")
         self.apiary_var.set(False)
         self.questions = []
-        self.refresh()
+        self.refresh_async()
         if self.on_answered:
             self.on_answered()
