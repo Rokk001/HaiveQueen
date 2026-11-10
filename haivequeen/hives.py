@@ -137,10 +137,19 @@ def integrated_ready(conn, env, hive):
     rejected = runtime.list_questions(conn, env.name, status='answered', plan=plan, item='owner-check-answered')
     if rejected and db.owner_check_result(conn, rejected[-1]['id']) == 'rejected' and str(rejected[-1].get('answered_at') or '') >= str(row['updated_at'] or ''):
         return None
-    if hive.get('ready_id'):
-        return dict(row) if row['id'] == hive['ready_id'] else None
     from . import bees
     named = bees.plan_worktree(env, plan)
+    if named and re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or ''):
+        try:   # a plan branch with commits beyond the integrated tip is not finished by this row
+            has = subprocess.run(['git', '-C', str(env.code_repo), 'rev-parse', '--verify', '--quiet', 'refs/heads/' + named[0]], capture_output=True, text=True, timeout=10)
+            if has.returncode == 0 and has.stdout.strip():
+                behind = subprocess.run(['git', '-C', str(env.code_repo), 'merge-base', '--is-ancestor', 'refs/heads/' + named[0], row['tip']], capture_output=True, text=True, timeout=10)
+                if behind.returncode == 1:
+                    return None
+        except (OSError, subprocess.SubprocessError):
+            return None
+    if hive.get('ready_id'):
+        return dict(row) if row['id'] == hive['ready_id'] else None
     if not named or row['branch'] != named[0] or not re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or ''):
         return None
     try:
@@ -202,6 +211,8 @@ def nothing_to_integrate(conn, env, plan, queen=None):
             head = None
         if head is not None and head.returncode == 0 and head.stdout.strip() and not contained(head.stdout.strip()):
             return False, None
+    if row is not None and not (re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or '') and exists(row['tip']) and contained(row['tip'])):
+        row = None   # only a row whose tip is contained in the integration branch is withdrawn as already integrated
     return True, (dict(row) if row is not None else None)
 
 

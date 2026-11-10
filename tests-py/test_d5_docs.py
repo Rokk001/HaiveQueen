@@ -9,6 +9,10 @@ class DocsNothingToIntegrate(unittest.TestCase):
         t = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("nothing left to integrate", t)
 
+    def test_docs(self):
+        t = (ROOT / "docs" / "AGENT-RULES.md").read_text(encoding="utf-8")
+        self.assertIn("nothing left to integrate", t)
+
     def test_help(self):
         out = subprocess.run([sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), "ready", "--help"],
                              capture_output=True, text=True).stdout
