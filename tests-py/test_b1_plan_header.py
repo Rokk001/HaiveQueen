@@ -181,6 +181,12 @@ class CutTests(GitCase):
         runtime.kv_set(self.conn, "testproj", bees.NEW_BRANCH_KEY + REL, "dummy-2")
         self.assertEqual(bees.cut_default(self.hq_env(), REL)[0], "dummy-2")
 
+    def test_pre_cut_takeover_uses_existing_checkout(self):
+        folder = self.base / "existing"
+        self.git("worktree", "add", "-b", "chosen", str(folder), "main")
+        runtime.kv_set(self.conn, "testproj", bees.TAKEOVER_KEY + REL, "chosen")
+        self.assertEqual(bees.cut_default(self.hq_env(), REL), ("chosen", folder))
+
     def test_cut_queen_starts_in_the_default_worktree(self):
         self.sent()
         folder = bees.prepare_queen_worktree(self.hq_env(), REL)
@@ -237,6 +243,18 @@ class CutTests(GitCase):
         bees.cleanup_cut_default(self.hq_env(), REL)
         self.assertFalse(Path(default[1]).exists())
         self.assertEqual(self.git("branch", "--list", default[0]), "")
+
+    def test_cleanup_accepts_commit_merged_into_remote_integration(self):
+        self.commit("remote advance")
+        self.git("fetch", "origin", "main")
+        self.sent()
+        branch, folder = bees.cut_default(self.hq_env(), REL)
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        self.git("reset", "--hard", "HEAD~1")
+        runtime.set_plan_header(self.conn, "testproj", REL, "other", str(self.base / "other"), workspace=self.repo)
+        bees.cleanup_cut_default(self.hq_env(), REL)
+        self.assertFalse(folder.exists())
+        self.assertEqual(self.git("branch", "--list", branch), "")
 
     def test_used_default_worktree_stays_and_is_named(self):
         self.sent()

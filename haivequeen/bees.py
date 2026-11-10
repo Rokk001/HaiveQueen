@@ -1146,7 +1146,13 @@ def cut_default(env, plan):
     from pathlib import Path
     from . import routine
     conn = getattr(env, 'conn', None)
-    branch = (runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan) if conn is not None else None) or derived_branch(plan)
+    chosen_new = runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan) if conn is not None else None
+    takeover = runtime.kv_get(conn, env.name, TAKEOVER_KEY + plan) if conn is not None else None
+    branch = chosen_new or takeover or derived_branch(plan)
+    if takeover and not chosen_new:
+        for folder, checked_out in worktree_entries(env) or []:
+            if checked_out == branch and not same_folder(folder, env.code_repo):
+                return branch, Path(folder)
     return branch, Path(routine.new_worktree(env, scheduler.to_slug(branch)))
 
 
@@ -1402,7 +1408,7 @@ def cleanup_cut_default(env, plan):
         unused = False
     if unused and remove_folder and registered and run('worktree', 'remove', folder).returncode:
         unused = False
-    if unused and remove_branch and branch_exists and run('branch', '-d', branch).returncode:
+    if unused and remove_branch and branch_exists and run('branch', '-D', branch).returncode:
         unused = False
     if unused:
         env.log('plan %s: unused cut resources cleaned up: worktree %s, branch %s' % (plan, folder, branch))
