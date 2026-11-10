@@ -56,6 +56,24 @@ commits, cross-worktree writes, surviving descendants, native subagents and
 concurrent legitimate commits without false attribution. Existing running
 Agents must remain in place while any new boundary is introduced.
 
+### Runner feasibility review
+
+The process path in `agent_runner.py` launches the provider with
+`subprocess.Popen`, an assigned working directory and environment. It does
+not assign a separate operating-system identity or mediate filesystem writes.
+The native subagent path in `bees.start_process` returns a prompt and Git environment
+to the Queen; it does not launch a separately restricted process. Consequently
+neither path provides a boundary on which unconditional attribution can rely.
+Adding a watcher, another environment marker or a wrapper at these call sites
+would retain the ambiguity demonstrated by the concurrent-worktree regression.
+
+Closing the requirement needs an enforced boundary for both paths, including
+provider-native tool execution, before collecting protected branch evidence.
+That requires a runner/provider integration design rather than an additional
+Git-history heuristic. Until then, retain the existing concurrent-worktree
+exclusion and report B-8 as partial; do not blame an Agent for another
+package's legitimate commits.
+
 The bounded change here does not mark B-8 complete: it closes silent success
 for observably unavailable audit evidence, preserves concurrency and existing
 worktrees, and reports the remaining attribution requirement for integration.
