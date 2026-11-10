@@ -786,6 +786,11 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
     if not dry_run:
         for env in envs:
             reconcile_completed(conn, env, alive=alive, plan_files=plan_files)
+            try:
+                from . import bees
+                bees.migrate_headers(env)   # B-6: a plan past the cut without the header fields gets them once
+            except Exception as exc:
+                env.log('header branch and worktree not migrated: %s' % exc)
         try:
             codex = [p for p in sch.active_providers(machine) if p.get("limit") == "codex"]
             for provider in codex:
@@ -1014,7 +1019,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 if not hive:
                     from . import bees
                     if bees.foreign_plan_branch(env, path) and not bees.resolve_existing_branch(env, path):
-                        not_started(env, path, 'its branch %s exists without run history: waiting for the owner to take it over or create a new one' % bees.plan_worktree(env, path)[0])
+                        not_started(env, path, 'its branch %s exists without run history: waiting for the owner to take it over or create a new one' % bees.target_worktree(env, path)[0])
                         continue
                     used = {r['colour'] for r in db.rows(conn, "SELECT colour FROM hives WHERE state != 'done'")}
                     colour = next((c for c in loop.AGENT_COLOURS if c not in used), None)
@@ -1046,11 +1051,19 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 prompt += '\nConfigured Agent providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint') or p.get('server')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', []) and not p.get('unavailable')], ensure_ascii=False)
                 prompt += ' Project integration configuration: ' + json.dumps(integration_steps.configuration(env, path), ensure_ascii=False)
                 if plan['status'] in plan_mod.CUT_STATUSES:   # a plan the owner sent as free text: the Queen cuts it into packages before any Bee starts
-                    prompt += '\n' + roles.role_text('queen-cut', {'project': env.name, 'plan': path})
+                    prompt += '\n' + roles.role_text('queen-cut', {'project': env.name, 'plan': path, 'branch': bees.cut_default(env, path)[0], 'worktree': bees.cut_default(env, path)[1]})
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
                 cwd = routine.pick_cwd(prior, str(env.code_repo), workspace=routine.other_workspace(env)) if prior else str(env.code_repo)
-                keep = bool(prior) and bees.valid_queen_worktree(env, cwd) and bees.branch_is_derived(env, path)   # a Hive with a worktree keeps it; the derived branch is only for a plan without one
-                if (bees.plan_worktree(env, path) and not keep) or not bees.valid_queen_worktree(env, cwd):
+                if plan['status'] not in plan_mod.CUT_STATUSES:
+                    bees.cleanup_cut_default(env, path)   # the next Queen after a cut whose header names another worktree: the unused default of the cut goes
+                clash = bees.worktree_conflict(env, path)
+                if clash:   # the header's folder holds another branch or its branch is checked out elsewhere: nothing is changed on disk
+                    conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
+                    not_started(env, path, clash)
+                    continue
+                named = bees.target_worktree(env, path)
+                keep = bool(prior) and bees.valid_queen_worktree(env, cwd) and bool(named) and routine.same_dir(cwd, str(named[1]))   # the Queen continues only in the worktree of the header
+                if (named and not keep) or not bees.valid_queen_worktree(env, cwd):
                     try:
                         cwd = bees.prepare_queen_worktree(env, path)
                     except (OSError, ValueError) as exc:
@@ -1058,8 +1071,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                         cwd = None
                     if not cwd:
                         conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
-                        named = bees.plan_worktree(env, path)
-                        not_started(env, path, 'worktree for branch %s could not be prepared (%s)' % named if named else 'no branch or worktree named in the plan or its state file')
+                        not_started(env, path, 'worktree for branch %s could not be prepared (%s)' % named if named else 'the plan header names no branch and worktree')
                         continue
                 action = {'name': name, 'type': pick['name'], 'phase': 'queen', 'plan': path, 'package': '', 'cwd': cwd, 'prompt': prompt, 'class': cls}
                 st = {'names': existing_names, 'busy': [], 'plan_status': {sch.norm_plan(path): plan['status']}, 'by_path': {sch.norm_plan(path): plan}}

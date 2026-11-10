@@ -19,7 +19,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
     # Seed a stale Hive and an integrated row whose ready link was lost.
     def integrated(self):
         """Create recoverable integration evidence and return its queue row."""
-        self.plan('IN_PROGRESS')
+        self.plan('IN_PROGRESS', branch='feature/recovery', worktree=str(self.base / 'wt-recovery'))
         with (self.repo / REL).open('a', encoding='utf-8') as stream:
             stream.write('\nFeature-Branch: `feature/recovery`\n')
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')

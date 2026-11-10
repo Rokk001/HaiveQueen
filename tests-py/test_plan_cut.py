@@ -40,7 +40,7 @@ class CutRoleTests(unittest.TestCase):
     """The cutting instructions of the role file."""
 
     def test_role_file_tells_how_to_cut(self):
-        text = roles.role_text("queen-cut", {"project": "P", "plan": "x.md"})
+        text = roles.role_text("queen-cut", {"project": "P", "plan": "x.md", "branch": "b", "worktree": "w"})
         for part in ("free text or already formatted", "## Requirements", "- <id>: <requirement text>", "ids the plan author already gave",
                      'capability = "<name>"', "contains no other work", "run in parallel", "depends_on", "have no depends_on between them",
                      "belongs to no package", "as small and sensible as possible"):

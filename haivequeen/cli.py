@@ -385,7 +385,7 @@ def cmd_plan(args, conn):
     if not path.is_file():
         return fail("plan file not found: %s" % plan)
     parsed = plan_mod.load_plan(str(path))
-    problems = plan_mod.check_plan(parsed, {c for p in env.providers if p.get("enabled", True) for c in p.get("capabilities", [])}, plan_mod.load_requirements(str(path)))
+    problems = plan_mod.check_plan(parsed, {c for p in env.providers if p.get("enabled", True) for c in p.get("capabilities", [])}, plan_mod.load_requirements(str(path)), main_checkout=env.code_repo)
     if problems:
         return fail("the plan is not cut properly: " + "; ".join(problems))
     status = parsed.status
@@ -393,7 +393,13 @@ def cmd_plan(args, conn):
         runtime.save_cut_assignments(conn, args.project, plan, parsed.packages, path.read_text(encoding="utf-8-sig"))
         status = runtime.set_plan_status(conn, args.project, plan, "QUEUED")["status"]
     runtime.sync_plans(conn, args.project)
-    out({"ok": True, "plan": plan, "status": status, "packages": [p.id for p in parsed.packages], "warnings": plan_mod.plan_warnings(parsed)})
+    from haivequeen import bees
+    default = bees.cut_default(env, plan)
+    handoff = parsed.branch != default[0] or not plan_mod.same_folder(parsed.worktree, default[1])   # the cut Queen started in the default worktree
+    result = {"ok": True, "plan": plan, "status": status, "packages": [p.id for p in parsed.packages], "warnings": plan_mod.plan_warnings(parsed), "handoff": handoff}
+    if handoff:
+        result["next"] = "the header names branch %s and worktree %s, not the worktree you run in: write your handoff and end now; the next Queen starts in the worktree of the header" % (parsed.branch, parsed.worktree)
+    out(result)
     return 0
 
 

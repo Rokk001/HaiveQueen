@@ -324,7 +324,7 @@ class ClaudeRunTest(RunnerBase):
 
     def test_queen_branch_named_by_plan_wins_over_cwd_branch(self):
         (self.ws / "plans").mkdir()
-        (self.ws / "plans" / "Demo-PLAN.md").write_text("# Demo\n- Feature branch: `demo-plan`\n", encoding="utf-8")
+        (self.ws / "plans" / "Demo-PLAN.md").write_text("+++\nbranch = \"demo-plan\"\nworktree = \"w\"\n+++\n# Demo\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(self.ws), "init", "-q", "-b", "other-work"], check=True, capture_output=True)
         self.assertEqual(self.queen_policy("QUEEN-NAMED")["branch"], "demo-plan")
 
@@ -371,8 +371,7 @@ class ClaudeRunTest(RunnerBase):
         runtime.queue_upsert(self.conn, "demo", "late-plan", plan="plans/Other-PLAN.md", status="ready")
         self.assertFalse(self.hook_allows("QUEEN-LATE", ready))   # the branch belongs to another plan
         (self.ws / "plans").mkdir()
-        (self.ws / "plans" / "Demo-PLAN.md").write_text("# Demo\n", encoding="utf-8")
-        (self.ws / "plans" / "Demo-STATE.md").write_text("Plan: Demo; branch state-plan; started\n", encoding="utf-8")
+        (self.ws / "plans" / "Demo-PLAN.md").write_text("+++\nbranch = \"state-plan\"\nworktree = \"w\"\n+++\n# Demo\n", encoding="utf-8")
         self.assertTrue(self.hook_allows("QUEEN-LATE", ready.replace("late-plan", "state-plan")))
 
     # Verify the project default reaches the Claude CLI.

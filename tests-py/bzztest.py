@@ -48,7 +48,7 @@ def minutes_ago(n):
     return (datetime.now() - timedelta(minutes=n)).isoformat(timespec="seconds")
 
 
-def write_plan(path, status, packages=(), title="Dummy plan"):
+def write_plan(path, status, packages=(), title="Dummy plan", branch="", worktree=""):
     """Write a plan file with a TOML header; an empty status writes a plan without any header. Packages: dicts id, title, class, agent, capability, depends."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -56,6 +56,10 @@ def write_plan(path, status, packages=(), title="Dummy plan"):
         path.write_text("# %s\nNo header here.\n" % title, encoding="utf-8")
         return
     t = '+++\nstatus = "%s"\n' % status
+    if branch:
+        t += 'branch = %s\n' % json.dumps(branch)
+    if worktree:
+        t += 'worktree = %s\n' % json.dumps(str(worktree))
     for p in packages:
         t += '[[packages]]\nid = "%s"\ntitle = "%s"\n' % (p["id"], p.get("title", ""))
         for k in ("class", "agent", "capability", "verify"):
@@ -138,10 +142,10 @@ class RoundCase(unittest.TestCase):
         """The environment of one project."""
         return next(e for e in self.envs() if e.name == name)
 
-    def plan(self, status="IN_PROGRESS", packages=(), project="testproj", rel=REL, title="Dummy plan"):
+    def plan(self, status="IN_PROGRESS", packages=(), project="testproj", rel=REL, title="Dummy plan", branch="", worktree=""):
         """Write the dummy plan of a project and read it into the database."""
         ws = self.repo if project == "testproj" else self.base / ("repo-" + project)
-        write_plan(ws / rel, status, packages, title)
+        write_plan(ws / rel, status, packages, title, branch, worktree)
         runtime.sync_plans(self.conn, project, str(ws))
 
     def allow_ready(self, project="testproj", rel=REL):

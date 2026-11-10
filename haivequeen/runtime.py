@@ -553,6 +553,32 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
     return {"plan": plan, "status": status}
 
 
+@filetxn.coordinated
+def set_plan_header(conn, project, plan, branch, worktree, workspace=None) -> dict:
+    """Write the header fields `branch` and `worktree` of a plan file (replaced when present, else inserted below the status line)."""
+    path = _workspace(conn, project, workspace) / plan
+    if not path.is_file():
+        raise CmdError(f"plan file not found: {plan}")
+    text = filetxn.read(path).decode("utf-8").replace("\r\n", "\n")
+    lines = text.split("\n")
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "+++"), None) if lines and lines[0].strip() == "+++" else None
+    if end is None:
+        raise CmdError(f"no plan header found in {plan}")
+    header = lines[1:end]
+    first_table = next((i for i, line in enumerate(header) if line.strip().startswith("[")), len(header))
+    for key, value in (("branch", branch), ("worktree", worktree)):
+        row = f"{key} = {json.dumps(str(value), ensure_ascii=False)}"
+        found = next((i for i, line in enumerate(header[:first_table]) if re.match(rf"^\s*{key}\s*=", line)), None)
+        if found is not None:
+            header[found] = row
+        else:
+            at = next((i + 1 for i, line in enumerate(header[:first_table]) if re.match(r"^\s*status\s*=", line)), 0)
+            header.insert(at, row)
+            first_table += 1
+    filetxn.write(path, "\n".join(lines[:1] + header + lines[end:]).encode("utf-8"))
+    return {"plan": plan, "branch": branch, "worktree": str(worktree)}
+
+
 # ---- queue, questions, decisions ----
 
 def queue_upsert(conn, project, branch, tip=None, plan=None, status=None, note=None, run=None) -> dict:

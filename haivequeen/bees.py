@@ -985,29 +985,50 @@ def state_branch(env, plan):
     return ''
 
 
-# The branch HaiveQueen creates for a plan that names none.
+# The branch HaiveQueen proposes to the cut Queen when the plan text names none.
 def derived_branch(plan):
     """The plan file name in lower case without -PLAN and .md (docs/plans/Feature-X-PLAN.md gives feature-x)."""
     from pathlib import Path
     return re.sub(r'-plan$', '', Path(plan).stem, flags=re.I).lower()
 
 
-def branch_is_derived(env, plan):
-    """True when the plan's branch is only the derived name: the plan, its state file and the owner name none."""
-    resolved = plan_worktree(env, plan)
-    if not resolved or resolved[0] != derived_branch(plan):
-        return False
+def same_folder(a, b):
+    """True when both paths name the same folder (case, separators and links ignored)."""
+    import os
+    return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(os.path.realpath(str(b)))
+
+
+def cut_default(env, plan):
+    """The default rule of the cut: (branch, worktree folder). The owner's choice of a new branch wins; else the derived branch in the project's worktree location."""
+    from pathlib import Path
+    from . import routine
     conn = getattr(env, 'conn', None)
-    if conn is not None and runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan):
-        return False
-    text = (env.workspace / plan).read_text(encoding='utf-8-sig')
-    return not re.search(r'(?im)feature[ -]branch\s*:|\bbranch(?:es)?\b\s*:?\s*`|^\s*[-*]?\s*git\s*:\s*branch', text) and not state_branch(env, plan) and \
-        not (conn is not None and runtime.list_questions(conn, env.name, status='answered', plan=plan, item='worktree'))
+    branch = (runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan) if conn is not None else None) or derived_branch(plan)
+    return branch, Path(routine.new_worktree(env, scheduler.to_slug(branch)))
 
 
-# Resolve the plan's named branch and optional named worktree.
 def plan_worktree(env, plan):
-    """Read an unambiguous branch and worktree, including numbered Branches rules."""
+    """The plan branch and worktree folder from the two fields `branch` and `worktree` of the plan header, or None when the header lacks one.
+
+    The plan text, the state file and the file name are never searched."""
+    from pathlib import Path
+    parsed = plan_mod.load_plan(str(env.workspace / plan))
+    if not parsed.branch or not parsed.worktree:
+        return None
+    return parsed.branch, Path(parsed.worktree).expanduser()
+
+
+def target_worktree(env, plan):
+    """The header's (branch, folder); for a plan still to be cut and without both fields the default rule of the cut."""
+    resolved = plan_worktree(env, plan)
+    if resolved or plan_mod.load_plan(str(env.workspace / plan)).status not in plan_mod.CUT_STATUSES:
+        return resolved
+    return cut_default(env, plan)
+
+
+# The search of earlier versions, used one last time to write the header of a plan that is past the cut.
+def legacy_search(env, plan):
+    """Read the branch and worktree from the owner's choice, the plan text, the state file or an owner answer, else the derived branch (migration of B-6 only)."""
     import re
     from pathlib import Path
     conn = getattr(env, 'conn', None)
@@ -1051,7 +1072,7 @@ def plan_worktree(env, plan):
 def foreign_plan_branch(env, plan):
     """Leave a queued or existing branch with no run history untouched."""
     import subprocess
-    resolved = plan_worktree(env, plan)
+    resolved = target_worktree(env, plan)
     if not resolved:
         return False
     branch, _ = resolved
@@ -1103,7 +1124,7 @@ def resolve_existing_branch(env, plan):
 
     Returns 'take over' or 'new' when the owner decided (the Plan may start), else '' (the plan waits for the answer)."""
     from .i18n import tr
-    branch = plan_worktree(env, plan)[0]
+    branch = target_worktree(env, plan)[0]
     for q in reversed(runtime.list_questions(env.conn, env.name, status='answered', plan=plan, item=BRANCH_ITEM)):
         choice = branch_choice(q.get('answer'))
         if choice == 'take over':
@@ -1113,6 +1134,9 @@ def resolve_existing_branch(env, plan):
         if choice == 'new':
             name = free_branch_name(env, branch)
             runtime.kv_set(env.conn, env.name, NEW_BRANCH_KEY + plan, name)
+            if plan_worktree(env, plan):   # the header is the only source: the owner's choice goes into its two fields
+                from . import routine
+                runtime.set_plan_header(env.conn, env.name, plan, name, routine.new_worktree(env, scheduler.to_slug(name)), workspace=env.workspace)
             env.log('plan %s: the owner wants a new branch; %s is created instead of %s' % (plan, name, branch))
             return choice
     if not runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=BRANCH_ITEM):
@@ -1123,29 +1147,59 @@ def resolve_existing_branch(env, plan):
     return ''
 
 
-# Reuse or create the explicitly named branch in a separate Git worktree.
-def prepare_queen_worktree(env, plan):
-    """Prepare the plan branch without changing the main checkout."""
+def worktree_entries(env):
+    """(folder, branch) of every worktree of the code repository ('' for a detached one); None when Git cannot list them."""
     import subprocess
+    listing = subprocess.run(['git', '-C', str(env.code_repo), 'worktree', 'list', '--porcelain'], capture_output=True, text=True, encoding='utf-8', errors='replace')
+    if listing.returncode:
+        return None
+    found = []
+    for entry in listing.stdout.replace('\r\n', '\n').split('\n\n'):
+        fields = entry.splitlines()
+        directory = next((line[9:] for line in fields if line.startswith('worktree ')), '')
+        branch = next((line[18:] for line in fields if line.startswith('branch refs/heads/')), '')
+        if directory:
+            found.append((directory, branch))
+    return found
+
+
+# One line when the folder or the branch of the header is taken by something else.
+def worktree_conflict(env, plan):
+    """'' when the header's worktree folder and branch fit together; else the one line for the dashboard and the round log: the folder, the branch found there and the branch the header expects. Nothing is changed on disk."""
     from pathlib import Path
-    resolved = plan_worktree(env, plan)
+    resolved = target_worktree(env, plan)
+    entries = worktree_entries(env)
+    if not resolved or entries is None:
+        return ''
+    branch, folder = resolved
+    here = next((b for d, b in entries if same_folder(d, folder)), None)
+    if here is None and Path(folder).exists() and not same_folder(folder, env.code_repo):
+        here = ''
+    if here is not None and here != branch:
+        return 'folder %s holds branch %s; the plan header expects branch %s in it' % (folder, here or '(none)', branch)
+    for directory, found in entries:
+        if found == branch and not same_folder(directory, folder):
+            return 'folder %s holds branch %s; the plan header expects branch %s in folder %s' % (Path(directory), found, branch, folder)
+    return ''
+
+
+# Reuse or create the branch named by the plan header in its worktree folder.
+def prepare_queen_worktree(env, plan):
+    """Prepare the plan branch in the header's worktree folder without changing the main checkout; None when the header is incomplete or the line of worktree_conflict applies."""
+    import subprocess
+    resolved = target_worktree(env, plan)
     if resolved is None:
         return None
     branch, target = resolved
+    conflict = worktree_conflict(env, plan)
+    if conflict:
+        env.log('cannot prepare plan worktree: ' + conflict)
+        return None
     git = ['git', '-C', str(env.code_repo)]
-    listing = subprocess.run(git + ['worktree', 'list', '--porcelain'], capture_output=True, text=True, encoding='utf-8', errors='replace')
-    if listing.returncode:
+    if same_folder(target, env.code_repo):
         return None
-    entries = listing.stdout.replace('\r\n', '\n').split('\n\n')
-    for entry in entries:
-        fields = entry.splitlines()
-        if 'branch refs/heads/' + branch in fields:
-            directory = next((line[9:] for line in fields if line.startswith('worktree ')), '')
-            if directory and Path(directory).resolve() != env.code_repo.resolve():
-                return str(Path(directory))
-            return None
-    if target.exists() or target.resolve() == env.code_repo.resolve():
-        return None
+    if target.exists():
+        return str(target) if any(same_folder(d, target) and b == branch for d, b in worktree_entries(env) or []) else None
     exists = subprocess.run(git + ['show-ref', '--verify', '--quiet', 'refs/heads/' + branch], capture_output=True).returncode == 0
     if exists:
         args = ['worktree', 'add', str(target), branch]
@@ -1159,3 +1213,76 @@ def prepare_queen_worktree(env, plan):
         env.log('cannot prepare plan worktree: ' + result.stderr.strip())
         return None
     return str(target)
+
+
+# After the cut: the default worktree and branch the cut Queen started in are removed when the header names others and they are unused.
+def cleanup_cut_default(env, plan):
+    """Remove the cut's default worktree and branch when the header names another pair and they hold no commit of their own and no change; otherwise keep them and name them in the round log. Done once per plan."""
+    import subprocess
+    resolved = plan_worktree(env, plan)
+    marker = 'cut-cleanup:' + plan
+    conn = getattr(env, 'conn', None)
+    if not resolved or (conn is not None and runtime.kv_get(conn, env.name, marker)):
+        return
+    branch, folder = cut_default(env, plan)
+    if branch == resolved[0] or same_folder(folder, resolved[1]):
+        return
+
+    def run(*args, cwd=None):
+        return subprocess.run(['git', '-C', str(cwd or env.code_repo), *args], capture_output=True, text=True, encoding='utf-8', errors='replace')
+
+    registered = any(same_folder(d, folder) for d, _ in worktree_entries(env) or [])
+    branch_exists = run('show-ref', '--verify', '--quiet', 'refs/heads/' + branch).returncode == 0
+    if not registered and not branch_exists:
+        return
+    remote_name = str(env.settings.get('remoteName') or 'origin')
+    integration = str(env.settings.get('integrationBranch') or 'main')
+    base = remote_name + '/' + integration if run('show-ref', '--verify', '--quiet', 'refs/remotes/%s/%s' % (remote_name, integration)).returncode == 0 else integration
+    unused = not branch_exists or run('merge-base', '--is-ancestor', 'refs/heads/' + branch, base).returncode == 0
+    if unused and registered:
+        changes = run('status', '--porcelain', cwd=str(folder))
+        unused = changes.returncode == 0 and not changes.stdout.strip()
+    if unused and registered and run('worktree', 'remove', str(folder)).returncode:
+        unused = False
+    if unused and branch_exists and run('branch', '-D', branch).returncode:
+        unused = False
+    if unused:
+        env.log('plan %s: the default worktree %s and branch %s of the cut were unused and are removed' % (plan, folder, branch))
+    else:
+        env.log('plan %s: the default worktree %s and branch %s of the cut hold their own commits or changes and stay; remove them by hand if unused' % (plan, folder, branch))
+    if conn is not None:
+        runtime.kv_set(conn, env.name, marker, '1')
+
+
+# B-6: plans past the cut get the two header fields once.
+MIGRATE_STATUSES = ('QUEUED', 'RUNNING', 'WAITING', 'REVIEW', 'PAUSED')
+
+
+def migrate_headers(env):
+    """Write `branch` and `worktree` into the header of every plan past the cut that lacks one: the branch and folder of the plan's last Queen while that folder exists, else the search of earlier versions one last time. One log line per written header; returns the plans written."""
+    import subprocess
+    from pathlib import Path
+    written = []
+    for row in runtime.list_plans(env.conn, env.name):
+        plan = row['path']
+        try:
+            parsed = plan_mod.load_plan(str(env.workspace / plan))
+            if parsed.status not in MIGRATE_STATUSES or (parsed.branch and parsed.worktree):
+                continue
+            pair = None
+            for queen in reversed([a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('plan_path') == plan and a.get('phase') == 'queen' and a.get('cwd')]):
+                cwd = Path(queen['cwd'])
+                if cwd.is_dir() and not same_folder(cwd, env.code_repo):
+                    shown = subprocess.run(['git', '-C', str(cwd), 'branch', '--show-current'], capture_output=True, text=True, encoding='utf-8', errors='replace')
+                    if shown.returncode == 0 and shown.stdout.strip():
+                        pair = (shown.stdout.strip(), cwd)
+                        break
+            pair = pair or legacy_search(env, plan)
+            if not pair:
+                continue
+            runtime.set_plan_header(env.conn, env.name, plan, pair[0], str(pair[1]), workspace=env.workspace)
+            env.log('plan %s: branch and worktree written to the header: %s, %s' % (plan, pair[0], pair[1]))
+            written.append(plan)
+        except (OSError, runtime.CmdError) as exc:
+            env.log('plan %s: header branch and worktree not written: %s' % (plan, exc))
+    return written
