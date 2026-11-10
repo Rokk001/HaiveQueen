@@ -266,6 +266,8 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     (r"^plan (.+?): branch and worktree written to the header: (.+)$", r"Plan \1: Branch und Worktree in den Plankopf geschrieben: \2"),
     (r"^plan (.+?): header branch and worktree not written: (.+)$", r"Plan \1: Branch und Worktree nicht in den Plankopf geschrieben: \2"),
     (r"^header branch and worktree not migrated: (.+)$", r"Branch und Worktree des Plankopfs nicht übernommen: \1"),
+    (r"^plan (.+?): unused cut resources cleaned up: worktree (.+?), branch (.+?)$", r"Plan \1: Unbenutzte Ressourcen des Zuschnitts aufgeräumt: Worktree \2, Branch \3"),
+    (r"^plan (.+?): cut worktree (.+?) or branch (.+?) could not be safely removed and stays; inspect it by hand$", r"Plan \1: Worktree \2 oder Branch \3 des Zuschnitts konnte nicht sicher entfernt werden und bleibt; bitte von Hand prüfen"),
     (r"^plan (.+?): the default worktree (.+?) and branch (.+?) of the cut were unused and are removed$", r"Plan \1: Der Standard-Worktree \2 und der Branch \3 des Zuschnitts waren unbenutzt und sind entfernt"),
     (r"^plan (.+?): the default worktree (.+?) and branch (.+?) of the cut hold their own commits or changes and stay; remove them by hand if unused$", r"Plan \1: Der Standard-Worktree \2 und der Branch \3 des Zuschnitts enthalten eigene Commits oder Änderungen und bleiben; entferne sie von Hand, falls unbenutzt"),
     (r"^folder (.+?) holds branch (.+?); the plan header expects branch (.+?) in (.+)$", r"Ordner \1 enthält Branch \2; der Plankopf erwartet Branch \3 in \4"),

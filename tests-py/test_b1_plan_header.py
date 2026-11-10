@@ -170,6 +170,7 @@ class CutTests(GitCase):
         self.assertIn("worktree =", text)
         self.assertIn("/w/wt-dummy", text)
         self.assertIn("handoff", text)
+        self.assertIn("that choice wins over the plan text", text)
 
     def test_default_rule_is_the_lowercase_file_name_with_the_project_folder(self):
         branch, worktree = bees.cut_default(self.hq_env(), REL)
@@ -229,17 +230,19 @@ class CutTests(GitCase):
         self.assertIn('"handoff": true', output)
 
     def test_unused_default_worktree_and_branch_are_removed(self):
-        self.sent(branch="fix/x", worktree=str(self.base / "wt-x"))
+        self.sent()
         default = bees.cut_default(self.hq_env(), REL)
-        self.git("worktree", "add", "-b", default[0], str(default[1]), "main")
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        runtime.set_plan_header(self.conn, "testproj", REL, "fix/x", str(self.base / "wt-x"), workspace=self.repo)
         bees.cleanup_cut_default(self.hq_env(), REL)
         self.assertFalse(Path(default[1]).exists())
         self.assertEqual(self.git("branch", "--list", default[0]), "")
 
     def test_used_default_worktree_stays_and_is_named(self):
-        self.sent(branch="fix/x", worktree=str(self.base / "wt-x"))
+        self.sent()
         default = bees.cut_default(self.hq_env(), REL)
-        self.git("worktree", "add", "-b", default[0], str(default[1]), "main")
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        runtime.set_plan_header(self.conn, "testproj", REL, "fix/x", str(self.base / "wt-x"), workspace=self.repo)
         self.commit("own work", cwd=default[1])
         lines = []
         env = self.hq_env()
@@ -250,12 +253,52 @@ class CutTests(GitCase):
         self.assertTrue(any(default[0] in line for line in lines))
 
     def test_dirty_default_worktree_stays(self):
-        self.sent(branch="fix/x", worktree=str(self.base / "wt-x"))
+        self.sent()
         default = bees.cut_default(self.hq_env(), REL)
-        self.git("worktree", "add", "-b", default[0], str(default[1]), "main")
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        runtime.set_plan_header(self.conn, "testproj", REL, "fix/x", str(self.base / "wt-x"), workspace=self.repo)
         (Path(default[1]) / "new.txt").write_text("x", encoding="utf-8")
         bees.cleanup_cut_default(self.hq_env(), REL)
         self.assertTrue(Path(default[1]).exists())
+
+
+    def test_existing_taken_over_resources_are_preserved(self):
+        self.sent()
+        branch, folder = bees.cut_default(self.hq_env(), REL)
+        self.git("worktree", "add", "-b", branch, str(folder), "main")
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        runtime.set_plan_header(self.conn, "testproj", REL, "other", str(self.base / "other"), workspace=self.repo)
+        bees.cleanup_cut_default(self.hq_env(), REL)
+        self.assertTrue(folder.exists())
+        self.assertTrue(self.git("branch", "--list", branch))
+
+    def test_existing_branch_is_preserved_when_created_worktree_is_removed(self):
+        self.sent()
+        branch, folder = bees.cut_default(self.hq_env(), REL)
+        self.git("branch", branch)
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        runtime.set_plan_header(self.conn, "testproj", REL, "other", str(self.base / "other"), workspace=self.repo)
+        bees.cleanup_cut_default(self.hq_env(), REL)
+        self.assertFalse(folder.exists())
+        self.assertTrue(self.git("branch", "--list", branch))
+
+    def test_same_branch_different_folder_removes_only_old_worktree(self):
+        self.sent()
+        branch, folder = bees.cut_default(self.hq_env(), REL)
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        runtime.set_plan_header(self.conn, "testproj", REL, branch, str(self.base / "other"), workspace=self.repo)
+        bees.cleanup_cut_default(self.hq_env(), REL)
+        self.assertFalse(folder.exists())
+        self.assertTrue(self.git("branch", "--list", branch))
+
+    def test_same_folder_different_branch_preserves_checked_out_resources(self):
+        self.sent()
+        branch, folder = bees.cut_default(self.hq_env(), REL)
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        runtime.set_plan_header(self.conn, "testproj", REL, "other", str(folder), workspace=self.repo)
+        bees.cleanup_cut_default(self.hq_env(), REL)
+        self.assertTrue(folder.exists())
+        self.assertTrue(self.git("branch", "--list", branch))
 
 
 class MigrationTests(GitCase):
@@ -288,6 +331,15 @@ class MigrationTests(GitCase):
     def test_gone_folder_falls_back_to_the_search(self):
         self.plan("PAUSED", [{"id": "P1", "title": "First"}])
         self.agent("old-queen", phase="queen", cwd=str(self.base / "gone"))
+        bees.migrate_headers(self.hq_env())
+        self.assertEqual(self.header().branch, "dummy")
+
+    def test_missing_last_queen_does_not_use_older_existing_queen(self):
+        folder = self.base / "wt-old"
+        self.git("worktree", "add", "-b", "old", str(folder), "main")
+        self.plan("PAUSED", [{"id": "P1", "title": "First"}])
+        self.agent("older", phase="queen", cwd=str(folder))
+        self.agent("latest", phase="queen", cwd=str(self.base / "gone"))
         bees.migrate_headers(self.hq_env())
         self.assertEqual(self.header().branch, "dummy")
 

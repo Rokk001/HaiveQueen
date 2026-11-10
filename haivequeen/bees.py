@@ -1355,46 +1355,60 @@ def prepare_queen_worktree(env, plan):
     if result.returncode:
         env.log('cannot prepare plan worktree: ' + result.stderr.strip())
         return None
+    if plan_mod.load_plan(str(env.workspace / plan)).status in plan_mod.CUT_STATUSES and getattr(env, 'conn', None) is not None:
+        import json
+        runtime.kv_set(env.conn, env.name, 'cut-created:' + plan, json.dumps({'branch': branch, 'folder': str(target), 'created_branch': not exists}))
     return str(target)
 
 
 # After the cut: the default worktree and branch the cut Queen started in are removed when the header names others and they are unused.
 def cleanup_cut_default(env, plan):
-    """Remove the cut's default worktree and branch when the header names another pair and they hold no commit of their own and no change; otherwise keep them and name them in the round log. Done once per plan."""
+    """Remove only resources created for this cut that are no longer named and are clean."""
+    import json
     import subprocess
     resolved = plan_worktree(env, plan)
-    marker = 'cut-cleanup:' + plan
     conn = getattr(env, 'conn', None)
-    if not resolved or (conn is not None and runtime.kv_get(conn, env.name, marker)):
+    marker = 'cut-cleanup:' + plan
+    if not resolved or conn is None or runtime.kv_get(conn, env.name, marker):
         return
-    branch, folder = cut_default(env, plan)
-    if branch == resolved[0] or same_folder(folder, resolved[1]):
+    try:
+        created = json.loads(runtime.kv_get(conn, env.name, 'cut-created:' + plan) or 'null')
+        if not isinstance(created, dict) or not all(k in created for k in ('branch', 'folder', 'created_branch')):
+            return
+    except (ValueError, TypeError):
+        return
+    branch, folder = created['branch'], created['folder']
+    remove_folder = not same_folder(folder, resolved[1])
+    remove_branch = bool(created['created_branch']) and branch != resolved[0]
+    if not remove_folder and not remove_branch:
         return
 
     def run(*args, cwd=None):
         return subprocess.run(['git', '-C', str(cwd or env.code_repo), *args], capture_output=True, text=True, encoding='utf-8', errors='replace')
 
-    registered = any(same_folder(d, folder) for d, _ in worktree_entries(env) or [])
-    branch_exists = run('show-ref', '--verify', '--quiet', 'refs/heads/' + branch).returncode == 0
-    if not registered and not branch_exists:
+    entries = worktree_entries(env)
+    if entries is None:
         return
-    remote_name = str(env.settings.get('remoteName') or 'origin')
+    registered = next(((d, b) for d, b in entries if same_folder(d, folder)), None)
+    branch_exists = run('show-ref', '--verify', '--quiet', 'refs/heads/' + branch).returncode == 0
+    remote = str(env.settings.get('remoteName') or 'origin')
     integration = str(env.settings.get('integrationBranch') or 'main')
-    base = remote_name + '/' + integration if run('show-ref', '--verify', '--quiet', 'refs/remotes/%s/%s' % (remote_name, integration)).returncode == 0 else integration
+    base = remote + '/' + integration if run('show-ref', '--verify', '--quiet', 'refs/remotes/%s/%s' % (remote, integration)).returncode == 0 else integration
     unused = not branch_exists or run('merge-base', '--is-ancestor', 'refs/heads/' + branch, base).returncode == 0
-    if unused and registered:
-        changes = run('status', '--porcelain', cwd=str(folder))
-        unused = changes.returncode == 0 and not changes.stdout.strip()
-    if unused and registered and run('worktree', 'remove', str(folder)).returncode:
+    if registered:
+        changes = run('status', '--porcelain', cwd=folder)
+        unused = unused and registered[1] == branch and changes.returncode == 0 and not changes.stdout.strip()
+    elif __import__('pathlib').Path(folder).exists():
         unused = False
-    if unused and branch_exists and run('branch', '-D', branch).returncode:
+    if unused and remove_folder and registered and run('worktree', 'remove', folder).returncode:
+        unused = False
+    if unused and remove_branch and branch_exists and run('branch', '-d', branch).returncode:
         unused = False
     if unused:
-        env.log('plan %s: the default worktree %s and branch %s of the cut were unused and are removed' % (plan, folder, branch))
+        env.log('plan %s: unused cut resources cleaned up: worktree %s, branch %s' % (plan, folder, branch))
     else:
-        env.log('plan %s: the default worktree %s and branch %s of the cut hold their own commits or changes and stay; remove them by hand if unused' % (plan, folder, branch))
-    if conn is not None:
-        runtime.kv_set(conn, env.name, marker, '1')
+        env.log('plan %s: cut worktree %s or branch %s could not be safely removed and stays; inspect it by hand' % (plan, folder, branch))
+    runtime.kv_set(conn, env.name, marker, '1')
 
 
 # B-6: plans past the cut get the two header fields once.
@@ -1413,13 +1427,13 @@ def migrate_headers(env):
             if parsed.status not in MIGRATE_STATUSES or (parsed.branch and parsed.worktree):
                 continue
             pair = None
-            for queen in reversed([a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('plan_path') == plan and a.get('phase') == 'queen' and a.get('cwd')]):
-                cwd = Path(queen['cwd'])
+            queens = [a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('plan_path') == plan and a.get('phase') == 'queen']
+            if queens and queens[-1].get('cwd'):
+                cwd = Path(queens[-1]['cwd'])
                 if cwd.is_dir() and not same_folder(cwd, env.code_repo):
                     shown = subprocess.run(['git', '-C', str(cwd), 'branch', '--show-current'], capture_output=True, text=True, encoding='utf-8', errors='replace')
                     if shown.returncode == 0 and shown.stdout.strip():
                         pair = (shown.stdout.strip(), cwd)
-                        break
             pair = pair or legacy_search(env, plan)
             if not pair:
                 continue

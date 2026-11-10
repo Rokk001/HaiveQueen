@@ -1052,6 +1052,8 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 prompt += ' Project integration configuration: ' + json.dumps(integration_steps.configuration(env, path), ensure_ascii=False)
                 if plan['status'] in plan_mod.CUT_STATUSES:   # a plan the owner sent as free text: the Queen cuts it into packages before any Bee starts
                     prompt += '\n' + roles.role_text('queen-cut', {'project': env.name, 'plan': path, 'branch': bees.cut_default(env, path)[0], 'worktree': bees.cut_default(env, path)[1]})
+                    chosen = runtime.kv_get(conn, env.name, bees.NEW_BRANCH_KEY + path) or runtime.kv_get(conn, env.name, bees.TAKEOVER_KEY + path)
+                    prompt += '\nOwner branch choice before the cut: ' + (str(chosen) if chosen else 'none') + '.'
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
                 cwd = routine.pick_cwd(prior, str(env.code_repo), workspace=routine.other_workspace(env)) if prior else str(env.code_repo)
                 if plan['status'] not in plan_mod.CUT_STATUSES:
