@@ -1016,11 +1016,11 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 if dry_run:
                     report.append('START Queen ' + path)
                     continue
+                from . import bees
+                if bees.foreign_plan_branch(env, path) and not bees.resolve_existing_branch(env, path):
+                    not_started(env, path, 'its branch %s exists without run history: waiting for the owner to take it over or create a new one' % bees.target_worktree(env, path)[0])
+                    continue
                 if not hive:
-                    from . import bees
-                    if bees.foreign_plan_branch(env, path) and not bees.resolve_existing_branch(env, path):
-                        not_started(env, path, 'its branch %s exists without run history: waiting for the owner to take it over or create a new one' % bees.target_worktree(env, path)[0])
-                        continue
                     used = {r['colour'] for r in db.rows(conn, "SELECT colour FROM hives WHERE state != 'done'")}
                     colour = next((c for c in loop.AGENT_COLOURS if c not in used), None)
                     if colour is None:
