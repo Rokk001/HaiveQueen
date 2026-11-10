@@ -1,143 +1,80 @@
-# Foreign commit attribution with concurrent Agents
+# Agent branches and end audit
 
-The unconditional B-8 reporting guarantee remains open. Missing or rewritten
-audit evidence now fails the attempt with an explicit audit error, rather than
-silently passing or inventing a foreign branch name. This does not supply
-process identity for commands that discard the assigned environment.
+## Accepted scope (B-8, decision 1039)
 
-## Approach 1: scan shared Git history
+B-8 is complete under decision 1039. Agents must never create or commit on a
+branch other than their assigned package sub-branch. HaiveQueen checks the
+attempt when it ends, reports an identified foreign branch by name and counts
+that attempt as failed. The existing audit at `f19f0cd` is retained.
 
-Snapshots of refs, objects and repository-wide reflogs can find new commits.
-They cannot identify which Agent issued a command. Git commit author and
-committer fields are supplied by the caller; reflogs identify a worktree and
-ref, not an Agent process. Timestamps cannot distinguish concurrent writers.
+The audit covers commits in the Agent's exclusively assigned worktree using
+its HEAD reflog, including commits after switching to the plan branch or a
+sibling package branch and switching back. The assigned Git environment also
+collects durable hook evidence for foreign commits in other worktrees,
+including the plan worktree and other packages' worktrees. Shared branch
+history alone is not used to blame an Agent for concurrent legitimate work.
 
-The regression `test_shared_history_cannot_identify_a_cleared_environment_writer`
-starts two guards and commits in the second assigned worktree with the guard
-environment removed. The same Git invocation produces the same evidence
-whether the first Agent entered that worktree or the second Agent worked
-legitimately. A scan blaming the first Agent would also blame it for legitimate
-concurrent work. A scan that correctly ignores the second Agent's own commit
-cannot detect the first case. No extra interpretation of these shared bytes
-resolves that ambiguity.
+Commits outside the assigned worktree with a cleared Git environment are out
+of scope under decision 1039. No executor, sandbox or unconditional attribution
+of deliberately hidden commits is required. Earlier assessments that left
+B-8 partial pending an execution boundary are superseded by that decision.
 
-Per-worktree hooks or repository-wide hooks do not supply the missing process
-identity. A command can override `core.hooksPath`; a PATH wrapper can be bypassed
-by invoking Git directly. A periodic monitor can miss a commit and subsequent
-cleanup between observations. Serializing all Agents would sacrifice
-concurrency and still would not make editable logs authoritative.
+## Assignment and naming (B-7 and B-9)
 
-This approach is rejected as a reliable attribution solution. The current
-worktree-local audit is retained because it excludes other packages' history.
-Its missing/rewritten evidence is now reported honestly as unavailable.
+The cut Queen writes `branch` and `worktree` into the plan's TOML header.
+`bzz plan check` refuses missing fields or the main checkout as the plan
+worktree. After the cut these fields are the source of the plan assignment.
 
-## Approach 2: enforce an execution and filesystem boundary
+At `bzz agent start`, HaiveQueen creates or reuses the package pair:
 
-A reliable design needs identity and evidence outside the Agent's control.
-Every process capable of repository writes would have to run under an
-attempt-specific enforced identity; access to other packages' worktrees,
-shared refs and audit evidence would need mediation. A trusted service could
-apply allowed branch updates and retain rejected branch names. Separate Agent
-identities or isolated filesystems could preserve parallel execution.
+- Branch: `<plan branch>-<package id in lower case>`, starting from the current
+  plan branch tip.
+- Folder: `<worktree prefix>-<plan tag in lower case>-<package id in lower case>`
+  in the configured worktree location.
 
-An environment variable or process-tree snapshot alone is insufficient: the
-environment can be cleared and short-lived descendants can exit before a
-snapshot. An isolated clone alone is also insufficient when the Agent can
-still access the original repository. Native subagents currently share their
-Queen's execution context, so they would need their own enforceable boundary
-as well. The current cooperative guard provides none of these guarantees.
+The Queen does not choose an Agent worktree. Process Agents start in the
+assigned folder; native subagents receive the folder, branch and Git
+environment in the start response. A replacement uses the same pair. A branch
+already checked out elsewhere uses that folder; a conflicting package folder
+blocks that package and logs the folder, actual branch and expected branch.
+Existing package worktrees and branches with Agent names are reused and kept.
+Running Agents and Queens are neither moved nor ended by this assignment rule.
 
-This is a viable architectural direction, but is not implemented here.
-It requires runner and provider support, operating-system access controls,
-protected durable audit storage, and a specified path for accepted changes
-to reach the existing package branch. Acceptance must cover direct Git
-invocation, cleared environments, hooks overrides, reflog removal, detached
-commits, cross-worktree writes, surviving descendants, native subagents and
-concurrent legitimate commits without false attribution. Existing running
-Agents must remain in place while any new boundary is introduced.
+## How the audit works
 
-### Runner feasibility review
+`branchguard.prepare` records the worktree HEAD reflog baseline and installs
+attempt-specific hooks through Git environment configuration. It preserves
+existing repository hooks without changing shared Git configuration.
+`branchguard.audit` reads new worktree-local HEAD entries, tracks checkouts and
+branch renames, and identifies new commits on a foreign branch. Detached
+commits are reported as `(detached HEAD)`; fast-forward merges and switching
+branches without a commit do not count as foreign commits.
 
-The process path in `agent_runner.py` launches the provider with
-`subprocess.Popen`, an assigned working directory and environment. It does
-not assign a separate operating-system identity or mediate filesystem writes.
-The native subagent start path returns a prompt and Git environment
-to the Queen; it does not launch a separately restricted process. Consequently
-neither path provides a boundary on which unconditional attribution can rely.
-Adding a watcher, another environment marker or a wrapper at these call sites
-would retain the ambiguity demonstrated by the concurrent-worktree regression.
+The hooks preserve named evidence even after a switch back or reflog expiry.
+The reflog fallback detects commits made in the assigned worktree after a
+hooksPath override or removal of the Git environment. Missing, expired or
+rewritten audit evidence fails with `branch_audit_error`; it does not invent a
+foreign branch. Identified commits use `foreign_branch` in structured results.
+Detected failures persist and repeated result reports count the attempt once.
 
-Closing the requirement needs an enforced boundary for both paths, including
-provider-native tool execution, before collecting protected branch evidence.
-That requires a runner/provider integration design rather than an additional
-Git-history heuristic. Until then, retain the existing concurrent-worktree
-exclusion and report B-8 as partial; do not blame an Agent for another
-package's legitimate commits.
+The end check applies to `bzz done`, runner termination, reattachment,
+embedded Queen termination and `bzz agent result`, including result aliases.
+A claimed successful result cannot override detected foreign-branch evidence.
 
-### Concrete enforcement gaps
+## Verification
 
-These are findings about the current implementation, not guarantees about
-what an external provider might support:
+Real-Git regressions in `tests-py/test_b2_worktrees.py` cover:
 
-| Entry point | Existing mechanism | Missing enforcement |
-| --- | --- | --- |
-| `agent_runner.py`, `main` | Adds the attempt's Git configuration to the environment, then calls `subprocess.Popen` with `cwd` and `env`. | No attempt-specific OS identity or filesystem access restriction is applied at launch. |
-| `bees.py`, `start_process`, native subagent return | Records an embedded attempt and returns its worktree, branch, environment and prompt to the Queen. | No restricted executor is created for the subagent's tools. Its database identity does not authenticate a filesystem write. |
-| `branchguard.py`, `prepare` and `record_violation` | Writes policy, hook scripts and violation evidence to ordinary files. | Durability across Git operations is not protection from a writer with access to those files. |
-| `proctree.py`, `Tracker` | Samples descendants and records PID/birth identities for process cleanup. | It does not mediate writes or attach an authenticated attempt identity to a Git operation. Native subagents also share the provider process. |
+- Rules forbidding creation and commits on another branch; naming, reuse,
+  conflict reporting and legacy worktree preservation.
+- Plan and sibling package branch commits in the assigned worktree and in
+  other worktrees with the assigned environment; named end results and a
+  single failed attempt.
+- Switch-back, detached HEAD, renames, hook overrides, missing or rewritten
+  reflogs, merge commits and fast-forward exclusions.
+- Process and native subagent assignment, terminal paths and concurrent
+  legitimate commits without false attribution.
 
-Changing only the working directory or isolating the profile does not restrict
-repository access. A linked worktree still uses shared repository metadata;
-allowing unrestricted writes to that metadata leaves other branches reachable.
-An independent clone would remove that shared metadata, but would only become
-a boundary if the executor could not write the original repository, other
-clones, the coordinator database or the audit store. A provider argument alone
-does not establish that contract for every configured provider and its native
-subagent tools. No such common contract is checked by the current start paths.
-
-### Minimum design to close B-8
-
-A feasible direction is a private clone per attempt inside an enforced
-executor, with a trusted publication service outside that executor:
-
-1. The coordinator binds an unforgeable execution identity to the attempt and
-   assigned branch before any repository-capable tool runs. Every descendant
-   and every native-subagent tool must retain that boundary. A provider unable
-   to supply an independently restricted native executor needs a separate
-   process executor or must refuse that execution mode.
-2. The executor denies writes to the original repository, other attempts and
-   coordinator state. Git commands within the private clone still need
-   mediation or protected evidence: a clone alone permits foreign local branch
-   commits, which B-8 also requires reporting by name.
-3. A trusted component records attempted foreign branch commits outside the
-   Agent's writable filesystem, before allowing or refusing the operation.
-   Interception must cover direct executables and repository-file writes as
-   well as provider tools; editable hooks are insufficient. If evidence becomes
-   unavailable, the attempt fails with an audit error rather than a guessed
-   branch name.
-4. Publication accepts only the assigned branch and verifies its expected tip
-   atomically. Use a short lock per target branch, not a repository-wide lock
-   for the lifetime of an attempt. Other packages can continue concurrently.
-   The end check must wait for all writers in the executor to stop before
-   finalizing the protected audit and attempt result.
-
-This is an implementation contract, not an implemented feature. The current
-code has no trusted executor or publication interface to extend into this
-contract. Introducing only its clone or hook portions would still leave B-8
-open. Existing active attempts must continue unchanged; any future enforced
-mode must distinguish their cooperative audits from its stronger evidence.
-
-The existing real-Git test
-`test_shared_history_cannot_identify_a_cleared_environment_writer` is the
-minimal counterexample to a history-only repair: the foreign branch advances,
-both worktree audits return no violation, and the evidence equally permits a
-legitimate concurrent writer. The process and native start-path tests
-`test_process_guard_uses_the_runners_final_name` and
-`test_cli_subagent_returns_created_pair` verify assignment and cooperative
-guard behavior only. Passing them does not establish executor isolation or
-unconditional attribution. B-8 remains partial until both execution paths pass
-the enforcement acceptance cases listed above.
-
-The bounded change here does not mark B-8 complete: it closes silent success
-for observably unavailable audit evidence, preserves concurrency and existing
-worktrees, and reports the remaining attribution requirement for integration.
+`test_shared_history_cannot_identify_a_cleared_environment_writer` documents
+the explicitly excluded case. It is retained to prevent false attribution
+from shared history; it does not leave B-8 open under decision 1039.

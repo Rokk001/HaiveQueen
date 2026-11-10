@@ -52,7 +52,59 @@ class PackageWorktrees(GitCase):
         self.assertEqual(bees.prepare_agent_worktree(self.env_b2, REL, "P1"), (str(legacy), "old-agent"))
 
     def test_agent_rules_forbid_other_branches(self):
-        self.assertIn("never create", roles.role_text("bee").lower())
+        text = roles.role_text("bee").lower()
+        self.assertIn("never create or commit on another branch", text)
+        self.assertIn("assigned by haivequeen", text)
+
+    def test_plan_and_sibling_commits_are_named_at_done_after_switch_back(self):
+        import contextlib
+        import io
+        import json
+        from unittest import mock
+        from haivequeen import cli, runtime
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        self.git('branch', 'feature/demo-p2')
+        report = self.base / 'result.txt'
+        report.write_text('finished', encoding='utf-8')
+        for index, branch in enumerate(('feature/demo', 'feature/demo-p2'), 1):
+            name = 'Attempt' + str(index)
+            with self.subTest(branch=branch):
+                self.agent(name, phase='bee', status='running', package='P1', cwd=pair[0], **{'class': 'medium'})
+                agent = runtime.get_agent(self.conn, self.env_b2.name, name)
+                bees.record_agent_branch_start(self.env_b2, name, *pair)
+                self.git('checkout', branch, cwd=pair[0])
+                # Exercise the retained HEAD audit without relying on hooks.
+                self.commit('foreign plan commit', cwd=pair[0])
+                self.git('checkout', pair[1], cwd=pair[0])
+                args = cli.build_parser().parse_args(['done', '--agent', str(agent['id']), '--result', str(report)])
+                output = io.StringIO()
+                with mock.patch('haivequeen.scheduler.load_projects', return_value=[self.env_b2]), contextlib.redirect_stdout(output):
+                    self.assertEqual(cli.cmd_done(args, self.conn), 0)
+                self.assertEqual(json.loads(output.getvalue())['foreign_branch'], branch)
+                self.assertIn(branch, runtime.get_agent(self.conn, self.env_b2.name, name)['last_line'])
+                for _ in range(2):
+                    bees.report_attempt(self.env_b2, REL, 'P1', 'medium', 'succeeded', name)
+                self.assertFalse(bees.package_done(self.conn, self.env_b2.name, REL, 'P1'))
+                self.assertEqual(bees.failure_count(self.conn, self.env_b2.name, REL, 'P1', 'medium'), index)
+
+    def test_plan_and_sibling_worktree_commits_keep_environment_evidence(self):
+        from haivequeen import runtime
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        for index, branch in enumerate(('feature/demo', 'feature/demo-p2'), 1):
+            name = 'Attempt' + str(index)
+            other = self.base / ('other-' + str(index))
+            with self.subTest(branch=branch):
+                if index == 2:
+                    self.git('branch', branch)
+                self.git('worktree', 'add', str(other), branch)
+                self.agent(name, phase='bee', status='running', package='P1', cwd=pair[0], **{'class': 'medium'})
+                bees.record_agent_branch_start(self.env_b2, name, *pair)
+                self.guarded_commit(other, name=name, no_verify=True)
+                ended = runtime.upsert_agent(self.conn, self.env_b2.name, name, {'status': 'done'})
+                self.assertIn('Foreign branch commit: ' + branch, ended['last_line'])
+                self.assertEqual(bees.agent_branch_violation(self.env_b2, name), branch)
+                self.assertFalse(bees.package_done(self.conn, self.env_b2.name, REL, 'P1'))
+                self.assertEqual(bees.failure_count(self.conn, self.env_b2.name, REL, 'P1', 'medium'), index)
 
     def test_conflict_is_logged(self):
         from haivequeen import routine
