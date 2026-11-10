@@ -139,13 +139,14 @@ class RoundCase(unittest.TestCase):
         return sch.load_projects(self.conn, self.machine)
 
     def mock_agent_worktrees(self):
-        """Isolate Git preparation in routing/rule unit tests; real Git is covered by B2 tests."""
+        """Isolate Git preparation and audit in routing/rule tests; B2 tests use real Git."""
         from unittest import mock
         folder = self.base / 'assigned-agent-worktree'
         folder.mkdir(exist_ok=True)
         for patcher in (mock.patch('haivequeen.bees.prepare_agent_worktree', return_value=(str(folder), 'plan-p1')),
                         mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True),
-                        mock.patch('haivequeen.branchguard.prepare', return_value={})):
+                        mock.patch('haivequeen.branchguard.prepare', return_value={}),
+                        mock.patch('haivequeen.branchguard.violation', return_value='')):
             patcher.start()
             self.addCleanup(patcher.stop)
 
