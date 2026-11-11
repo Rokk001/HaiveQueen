@@ -373,7 +373,10 @@ def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
             reason = "Plan scheduling"
     deadline = time.monotonic() + timeout
     if not _hive_schedule_guard.acquire(timeout=max(0.0, timeout)):
-        raise TimeoutError("Plan scheduling is busy: the lock is held by another thread of this process (%d)" % os.getpid())
+        held = _read_hive_lock(path)
+        why = held[1] if held else ""
+        raise TimeoutError("Plan scheduling is busy: the lock is held by another thread of this process (%d)%s" %
+                           (os.getpid(), " (%s)" % why if why else ""))
     stop = threading.Event()
     beat = None
     try:

@@ -53,11 +53,11 @@ def _names(decision, rid):
     return rid.upper() in {t for t in ITEM_SPLIT.split(str(decision.get("item") or "").strip().upper()) if t}
 
 
-def evaluate(plan_text, state_text, decisions, assignments=None, versions=()):
+def evaluate(plan_text, state_text, decisions, assignments=None, versions=(), submitted_only=False):
     """Check the requirement list of the state file against the requirement ids of the plan and the state file; returns a Result."""
     res = Result()
     required = {}
-    for source in (plan_text, state_text, *versions):
+    for source in ((plan_text,) if submitted_only else (plan_text, state_text, *versions)):
         for rid, text in plans.parse_requirements(source):
             required.setdefault(rid, text)
     res.ids = list(required)
@@ -145,7 +145,7 @@ def gate(env, plan, queen):
     if submitted is None:
         return False, ("the plan version the user submitted cannot be determined reliably: ask for the plan to be submitted again (status SENT), "
                        "then call bzz ready again"), False
-    res = evaluate(plan_text, state_text, decisions, assignments if assignments is not None else [], (submitted,))
+    res = evaluate(submitted, state_text, decisions, assignments if assignments is not None else [], submitted_only=True)
     if res.no_ids or res.blocking:
         return False, refusal_text(res), False
     if owner_released(env, plan, queen):

@@ -191,7 +191,7 @@ class GateTests(RoundCase):
         """Submitted, changed by the user in two requirements, submitted again: the list check and the check agent use the latest submission."""
         text = (self.repo / REL).read_text(encoding="utf-8")
         (self.repo / REL).write_text(text.replace("third thing", "third thing, now different").replace("- G-2: second thing\n", "- G-4: fourth thing\n"), encoding="utf-8")
-        self.state(*FULL, "- G-4: done | t")
+        self.state(*FULL)
         with self.runner("passed"):
             code, res = self.ready()   # the first submission is the reference: G-2 and the old text of G-3
         self.assertEqual(code, 0, res)
@@ -213,6 +213,10 @@ class GateTests(RoundCase):
         self.assertIn("G-3: third thing, now different", prompt)
         self.assertIn("G-4: fourth thing", prompt)
         self.assertNotIn("G-3: third thing\n", prompt + "\n")
+
+    def test_new_generation_does_not_reuse_submission(self):
+        runtime.reset_cut_assignments(self.conn, "testproj", REL)
+        self.assertIsNone(runtime.get_submission(self.conn, "testproj", REL))
 
     def test_status_line_set_to_sent_in_the_file_is_a_submission(self):
         """The user sets the status line of the plan to SENT in the file: the next sync records that version as the submission."""

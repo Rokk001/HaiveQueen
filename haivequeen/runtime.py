@@ -288,6 +288,7 @@ def save_cut_assignments(conn, project, plan, packages, plan_text, source="check
 def _reset_cut(conn, project, plan):
     """Inside a transaction: a new plan generation starts at this path; the old cut record no longer applies."""
     conn.execute("DELETE FROM kv WHERE project=? AND key=?", (project, CUT_KEY + plan))
+    conn.execute("DELETE FROM kv WHERE project=? AND key=?", (project, SUBMISSION_KEY + plan))
     conn.execute("INSERT INTO kv (project, key, value, updated_at) VALUES (?,?,?,?) ON CONFLICT(project, key) DO UPDATE SET "
                  "value=excluded.value, updated_at=excluded.updated_at", (project, CUT_RESET_KEY + plan, db.now(), db.now()))
 
