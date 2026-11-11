@@ -43,7 +43,10 @@ class IsolationActiveTest(unittest.TestCase):
             guard.write_bytes(b"0")
             other = base / "compile-check.lock.unrelated"
             other.write_text("stray", encoding="utf-8")
-            self.assertEqual(isolation.real_folder_changes([base], before), [str(other)])
+            nested = base / "compile-check.lock.directory" / "file"
+            nested.parent.mkdir()
+            nested.write_text("stray", encoding="utf-8")
+            self.assertEqual(isolation.real_folder_changes([base], before), sorted([str(other), str(nested)]))
             for path in (lock, guard):
                 self.assertTrue(isolation.guard_event("open", (str(path), "w", 0), self.guarded(base)))
                 self.assertTrue(isolation.guard_event("os.remove", (str(path), None), self.guarded(base)))
