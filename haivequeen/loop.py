@@ -442,10 +442,8 @@ def _do_start(c, a, forced_pick=None) -> int:
     hf = run_dir / "HANDOFF"
     if phase == "fix":   # the fix agent has no role file of its own: its task is the whole prompt
         hdr = "You are the fix agent %s. Language: write all free text for the owner in %s.\n\nTASK\n\n" % (nm, roles.language(env.settings))
-    elif phase == "bee":
-        hdr = roles.role_text("bee-start", {"language": roles.language(env.settings)}) + "\n\n"
-    elif phase == "queen":
-        hdr = roles.role_text("queen-start", {"language": roles.language(env.settings)}) + "\n\n"
+    elif phase in ("bee", "queen"):   # the role text (queen.md, bee.md) is the start of the prompt itself
+        hdr = ""
     elif protocol == "claude":
         hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of AGENT-RULES.md and the rule sections you need) are "
                "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name only when your task "

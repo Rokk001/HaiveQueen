@@ -891,7 +891,7 @@ def approx_start_parts(a, pcfg, cfg, workspace, protocol, message=""):
     try:
         from . import roles
         settings = scheduler.build_settings(cfg, pcfg)
-        role = roles.role_text("queen-start" if a.phase == "queen" else "bee-start", {"language": roles.language(settings)})
+        role = roles.role_text("queen" if a.phase == "queen" else "bee", {"language": roles.language(settings)})
         rules = profile.project_rules(pcfg, pcfg.get("codeRepo") or workspace or a.cwd, protocol, a.cwd)
         return startctx.approx_parts(role, rules["inline"], message)   # the message the CLI starts with; the prompt file it reads afterwards is not in the first turn
     except Exception:

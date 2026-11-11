@@ -623,7 +623,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--result", required=True)
     p.set_defaults(fn=cmd_done)
 
-    p = sub.add_parser("ready", description="Report the plan branch ready for integration. A plan with nothing left to integrate (no plan branch, or every commit already in the integration branch) writes no queue row, needs no compile check, build or deploy, and closes after the fresh check and the owner check.")
+    p = sub.add_parser("ready", description="Report the plan branch ready for integration; the Queen ends after it. The Orchestrator then merges, checks, builds, pushes and deploys the plan (Compile check command, Build command, Deploy command); a red step starts a fix agent. A plan with nothing left to integrate (no plan branch, or every commit already in the integration branch) writes no queue row, needs no compile check, build or deploy, and closes after the fresh check and the owner check.")
     for a in ("project", "branch", "tip", "plan"):
         p.add_argument(f"--{a}", required=True)
     p.add_argument("--note", default="")

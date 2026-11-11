@@ -1227,14 +1227,12 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     row_key = '%s-%d' % (name, k)
                 name = row_key
                 questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
-                prompt = 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and owner answers of your plan and those released for the whole Project are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --cwd \'<absolute worktree path>\' (single quotes, no JSON). Work independent packages, answer the completeness question and integrate only when no requirements remain. ' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name)
+                prompt = bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls), roles.language(env.settings)) + '\n\n' + 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and owner answers of your plan and those released for the whole Project are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --cwd \'<absolute worktree path>\' (single quotes, no JSON). Work independent packages, answer the completeness question and integrate only when no requirements remain. ' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name)
                 points = runtime.kv_get(conn, env.name, POINTS_KEY + path)
                 if points:   # the fresh check of the completion report found open points: this Queen works exactly on them
                     prompt += 'The check of the completion report found these open points; fix them, then report completion again: ' + points + ' '
                     runtime.kv_set(conn, env.name, POINTS_KEY + path, '')
                 prompt += integration_steps.start_text(env, path, pick['name'])
-                from . import bees
-                prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls), roles.language(env.settings))
                 topics = integration_steps.owner_topics_text(env)
                 if topics:
                     prompt += '\n' + topics

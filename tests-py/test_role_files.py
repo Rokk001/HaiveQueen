@@ -17,7 +17,7 @@ class RoleFileTests(unittest.TestCase):
     """The role files hold the texts; the settings fill the values."""
 
     def test_the_role_files_exist_and_hold_no_private_value(self):
-        for name in ("queen", "queen-start", "queen-cut", "bee", "bee-start"):
+        for name in ("queen", "queen-cut", "bee"):
             text = read(name)
             self.assertTrue(text.strip(), name)
             self.assertNotRegex(text, r"[A-Za-z]:\|/Users/|/home/", name)
@@ -42,7 +42,8 @@ class RoleFileTests(unittest.TestCase):
 
     def test_bee_prompt_comes_from_the_file(self):
         text = bees.bee_prompt("Ada", "P1", "do it", ["a", "b"], ["x.py", "y.py"], ["r1", "r2"])
-        self.assertTrue(text.startswith("Work only package P1: do it\nSteps:\n1. a\n2. b\nPaths: x.py, y.py\nUse the worktree"))
+        self.assertTrue(text.startswith("You are an Agent."))
+        self.assertIn("\n\nTASK\n\nWork only package P1: do it\nSteps:\n1. a\n2. b\nPaths: x.py, y.py\nUse the worktree", text)
         self.assertNotIn("r1", text)
         self.assertIn("bzz note: Ada P1: step n/2 <short text>.", text)
 
@@ -64,7 +65,7 @@ class RoleStartTests(RoundCase):
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")
         text = self.prompt(queen["name"])
-        head = read("queen-start").split("{{language}}")[0]
+        head = read("queen").split("{{language}}")[0]
         self.assertTrue(text.startswith(head), text[:200])
         self.assertIn("Keep token use economical.", text)
 
@@ -80,10 +81,10 @@ class RoleStartTests(RoundCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         for f in roles.ROLES_DIR.glob("*.md"):
             shutil.copy(f, tmp / f.name)
-        (tmp / "bee-start.md").write_text("You are a changed Agent.\n\nTASK\n", encoding="utf-8")
+        (tmp / "bee.md").write_text("You are a changed Agent.\n\nTASK\n", encoding="utf-8")
         with mock.patch("haivequeen.bees.valid_bee_worktree", return_value=True), mock.patch("haivequeen.bees.prepare_agent_worktree", return_value=(str(bee_wt), "plan-p1")), mock.patch.object(roles, "ROLES_DIR", tmp):
             self.assertTrue(bees.start_process(self.env(), REL, "P1", "Ada", "heavy", "do first", ["one"], ["source.py"], ["work rule"], cwd=str(bee_wt)))
-        self.assertTrue(self.prompt("Ada").startswith("You are a changed Agent.\n\nTASK\n\n"))
+        self.assertTrue(self.prompt("Ada").startswith("You are a changed Agent.\n\nTASK"))
 
 
 class LanguageTests(RoundCase):
@@ -113,6 +114,5 @@ class LanguageTests(RoundCase):
 
     def test_bee_is_told_the_configured_language(self):
         self.machine["language"] = "Deutsch"
-        for name in ("bee-start", "queen-start", "ready-check"):
+        for name in ("bee", "queen", "ready-check"):
             self.assertIn("{{language}}", read(name), name)
-        self.assertIn("{{language}}", read("queen"))
