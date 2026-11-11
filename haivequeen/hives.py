@@ -246,8 +246,7 @@ def withdraw_integrated(conn, row):
     """Withdraw a queue row in ready or blocked whose tip is already in the integration branch."""
     if row and row['status'] in ('ready', 'blocked'):
         with db.transaction(conn):
-            note = 'withdrawn: tip already integrated' if row.get('tip_contained', True) else 'withdrawn: plan branch already integrated'   # no integrator works on a closed plan's row
-            conn.execute("UPDATE queue SET status='withdrawn',note=?,updated_at=? WHERE id=?", (note, db.now(), row['id']))
+            conn.execute("UPDATE queue SET status='withdrawn',note=?,updated_at=? WHERE id=?", ('withdrawn: tip already integrated', db.now(), row['id']))
 
 
 # Close persisted Hive scheduling state after authoritative plan completion.

@@ -262,7 +262,7 @@ class OwnerActionTests(NothingLeftCase):
         self.assertEqual(self.questions("queen-ended"), [])
 
     def test_ready_row_is_withdrawn_whatever_its_tip(self):
-        for contained, text in ((True, "withdrawn: tip already integrated"), (False, "withdrawn: plan branch already integrated")):
+        for contained, text in ((True, "withdrawn: tip already integrated"), (False, "withdrawn: tip already integrated")):
             self.conn.execute("DELETE FROM queue")
             self.conn.execute("INSERT INTO queue(project,plan_path,branch,tip,status,note,updated_at) VALUES('testproj',?,'dummy','abc1234','ready','',?)", (REL, db.now()))
             row = dict(self.rows()[0], tip_contained=contained)
