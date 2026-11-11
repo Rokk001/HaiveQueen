@@ -238,3 +238,33 @@ class CheckTests(NothingLeftCase):
         self.assertEqual(self.questions("queen-ended"), [])
         self.assertEqual(len(self.queens()), count + 1)
         self.assertIsNone(hives.completion_report(self.conn, "testproj", REL))
+
+
+class OwnerActionTests(NothingLeftCase):
+    """The owner's accept and reject through the owner action work without an integrated queue row."""
+
+    def test_accept_without_queue_row(self):
+        from haivequeen import owner
+        asked = self.close_normally()
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(self.rows(), [])
+        owner.validate(self.conn, "accept", "testproj", REL)
+        owner.apply(self.conn, "accept", "testproj", REL)
+        self.assertEqual(self.status(), "DONE")
+        self.assertEqual(hives.get(self.conn, "testproj", REL)["state"], "done")
+
+    def test_reject_without_queue_row_returns_to_work(self):
+        from haivequeen import owner
+        self.close_normally()
+        owner.validate(self.conn, "reject", "testproj", REL, text="not good")
+        owner.apply(self.conn, "reject", "testproj", REL, text="not good")
+        self.assertEqual(self.status(), "RUNNING")
+        self.assertEqual(self.questions("queen-ended"), [])
+
+    def test_ready_row_is_withdrawn_whatever_its_tip(self):
+        for contained, text in ((True, "withdrawn: tip already integrated"), (False, "withdrawn: plan branch already integrated")):
+            self.conn.execute("DELETE FROM queue")
+            self.conn.execute("INSERT INTO queue(project,plan_path,branch,tip,status,note,updated_at) VALUES('testproj',?,'dummy','abc1234','ready','',?)", (REL, db.now()))
+            row = dict(self.rows()[0], tip_contained=contained)
+            hives.withdraw_integrated(self.conn, row)
+            self.assertEqual((self.rows()[0]["status"], self.rows()[0]["note"]), ("withdrawn", text))

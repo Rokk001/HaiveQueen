@@ -211,9 +211,11 @@ def nothing_to_integrate(conn, env, plan, queen=None):
             head = None
         if head is not None and head.returncode == 0 and head.stdout.strip() and not contained(head.stdout.strip()):
             return False, None
-    if row is not None and not (re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or '') and exists(row['tip']) and contained(row['tip'])):
-        row = None   # only a row whose tip is contained in the integration branch is withdrawn as already integrated
-    return True, (dict(row) if row is not None else None)
+    if row is None:
+        return True, None
+    found = dict(row)
+    found['tip_contained'] = bool(re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or '') and exists(row['tip']) and contained(row['tip']))
+    return True, found
 
 
 COMPLETE_KEY = 'hive-complete:'   # a Queen reported completion of a plan without anything to integrate: {"state": "pending"|"passed", "agent": name, "at": time}
@@ -244,7 +246,8 @@ def withdraw_integrated(conn, row):
     """Withdraw a queue row in ready or blocked whose tip is already in the integration branch."""
     if row and row['status'] in ('ready', 'blocked'):
         with db.transaction(conn):
-            conn.execute("UPDATE queue SET status='withdrawn',note=?,updated_at=? WHERE id=?", ('withdrawn: tip already integrated', db.now(), row['id']))
+            note = 'withdrawn: tip already integrated' if row.get('tip_contained', True) else 'withdrawn: plan branch already integrated'   # no integrator works on a closed plan's row
+            conn.execute("UPDATE queue SET status='withdrawn',note=?,updated_at=? WHERE id=?", (note, db.now(), row['id']))
 
 
 # Close persisted Hive scheduling state after authoritative plan completion.
