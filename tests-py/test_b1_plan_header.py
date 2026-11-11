@@ -120,6 +120,23 @@ class HeaderIsTheOnlySourceTests(GitCase):
 class ConflictTests(GitCase):
     """B-4: a folder with another branch, or the branch checked out elsewhere, blocks the start with one line and changes nothing."""
 
+    def test_start_conflict_preserves_unused_cut_resources(self):
+        self.sent()
+        default_branch, default_folder = bees.cut_default(self.hq_env(), REL)
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        folder = self.base / "wt-x"
+        self.git("worktree", "add", "-b", "other", str(folder), "main")
+        self.plan("QUEUED", [{"id": "P1", "title": "First"}], branch="fix/x", worktree=str(folder))
+        self.assertTrue(Path(default_folder).is_dir())
+        self.assertTrue(bees.worktree_conflict(self.hq_env(), REL))
+        from haivequeen import loop
+        with mock.patch('haivequeen.worktrees.cleanup'):
+            loop.run_round(self.conn, self.machine, self.envs(), free_ram=lambda: 16.0, settle=0)
+        self.assertTrue(Path(default_folder).is_dir())
+        self.assertEqual(self.git("branch", "--show-current", cwd=default_folder), default_branch)
+        self.assertEqual(self.git("branch", "--show-current", cwd=folder), "other")
+        self.assertFalse(any(a["phase"] == "queen" for a in runtime.list_agents(self.conn, "testproj", "all")))
+
     def test_folder_holds_another_branch(self):
         folder = self.base / "wt-x"
         self.git("worktree", "add", "-b", "other", str(folder), "main")
