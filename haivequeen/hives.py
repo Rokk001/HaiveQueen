@@ -137,10 +137,19 @@ def integrated_ready(conn, env, hive):
     rejected = runtime.list_questions(conn, env.name, status='answered', plan=plan, item='owner-check-answered')
     if rejected and db.owner_check_result(conn, rejected[-1]['id']) == 'rejected' and str(rejected[-1].get('answered_at') or '') >= str(row['updated_at'] or ''):
         return None
-    if hive.get('ready_id'):
-        return dict(row) if row['id'] == hive['ready_id'] else None
     from . import bees
     named = bees.plan_worktree(env, plan)
+    if named and re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or ''):
+        try:   # a plan branch with commits beyond the integrated tip is not finished by this row
+            has = subprocess.run(['git', '-C', str(env.code_repo), 'rev-parse', '--verify', '--quiet', 'refs/heads/' + named[0]], capture_output=True, text=True, timeout=10)
+            if has.returncode == 0 and has.stdout.strip():
+                behind = subprocess.run(['git', '-C', str(env.code_repo), 'merge-base', '--is-ancestor', 'refs/heads/' + named[0], row['tip']], capture_output=True, text=True, timeout=10)
+                if behind.returncode == 1:
+                    return None
+        except (OSError, subprocess.SubprocessError):
+            return None
+    if hive.get('ready_id'):
+        return dict(row) if row['id'] == hive['ready_id'] else None
     if not named or row['branch'] != named[0] or not re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or ''):
         return None
     try:
@@ -152,6 +161,94 @@ def integrated_ready(conn, env, hive):
     return dict(row) if result.returncode == 0 and tip and tip.startswith(row['tip']) else None
 
 
+# Whether the plan has nothing left to integrate, and the queue row that has to be withdrawn when it closes.
+def nothing_to_integrate(conn, env, plan, queen=None):
+    """Return (True, row) when every commit of the plan is already in the project's integration branch, else (False, None); row is the plan's latest queue row or None.
+
+    The plan has no plan branch, or its branch is fully contained in the integration branch; the status of the latest row does not matter then,
+    except while an integration run of it is in progress. Without a plan branch the tip of the latest row must be contained. HaiveQueen checks this in git."""
+    row = conn.execute("SELECT * FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (env.name, plan)).fetchone()
+    if row is not None and row['status'] == 'in_run':
+        return False, None
+    code = str(env.code_repo)
+    remote = str(env.settings.get('remoteName') or 'origin')
+    branch_name = str(env.settings.get('integrationBranch') or 'main')
+
+    def git(*args):
+        try:
+            return subprocess.run(['git', '-C', code] + list(args), capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    def exists(ref):
+        done = git('rev-parse', '--verify', '--quiet', ref + '^{commit}')
+        return bool(done and done.returncode == 0 and done.stdout.strip())
+
+    target = next((ref for ref in ('refs/remotes/%s/%s' % (remote, branch_name), 'refs/heads/' + branch_name) if exists(ref)), None)
+    if target is None:
+        return False, None
+
+    def contained(commit):
+        done = git('merge-base', '--is-ancestor', commit, target)
+        return bool(done and done.returncode == 0)
+
+    from . import bees
+    try:
+        named = bees.plan_worktree(env, plan)
+    except (OSError, ValueError):
+        named = None
+    branch = named[0] if named else ''
+    if branch and exists('refs/heads/' + branch):
+        if not contained('refs/heads/' + branch):
+            return False, None
+    elif row is not None:
+        if not re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or '') or not exists(row['tip']) or not contained(row['tip']):
+            return False, None
+    if queen and queen.get('cwd') and os.path.isdir(str(queen['cwd'])) and os.path.abspath(str(queen['cwd'])) != os.path.abspath(code):   # a commit in the Queen's own worktree counts too
+        try:
+            head = subprocess.run(['git', '-C', str(queen['cwd']), 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            head = None
+        if head is not None and head.returncode == 0 and head.stdout.strip() and not contained(head.stdout.strip()):
+            return False, None
+    if row is None:
+        return True, None
+    found = dict(row)
+    found['tip_contained'] = bool(re.fullmatch(r'[0-9a-fA-F]{7,64}', row['tip'] or '') and exists(row['tip']) and contained(row['tip']))
+    return True, found
+
+
+COMPLETE_KEY = 'hive-complete:'   # a Queen reported completion of a plan without anything to integrate: {"state": "pending"|"passed", "agent": name, "at": time}
+POINTS_KEY = 'hive-open-points:'   # open points of a failed completion check, handed to the next Queen
+
+
+# The completion report of a plan without anything to integrate, or None.
+def completion_report(conn, project, plan):
+    """The recorded completion report of the plan ({"state", "agent", "at"}), or None."""
+    raw = runtime.kv_get(conn, project, COMPLETE_KEY + plan)
+    try:
+        value = json.loads(raw) if raw else None
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) and value.get('state') in ('pending', 'passed') else None
+
+
+# Record or clear the completion report.
+def set_completion(conn, project, plan, state, agent=''):
+    """Record the completion report of a plan (state pending or passed; keeps the time of the first report) or clear it with state ''."""
+    old = completion_report(conn, project, plan)
+    value = '' if not state else json.dumps({'state': state, 'agent': agent or (old or {}).get('agent', ''), 'at': (old or {}).get('at') or db.now()})
+    runtime.kv_set(conn, project, COMPLETE_KEY + plan, value)
+
+
+# Withdraw the ready or blocked row of a plan that closes without integration.
+def withdraw_integrated(conn, row):
+    """Withdraw a queue row in ready or blocked whose tip is already in the integration branch."""
+    if row and row['status'] in ('ready', 'blocked'):
+        with db.transaction(conn):
+            conn.execute("UPDATE queue SET status='withdrawn',note=?,updated_at=? WHERE id=?", ('withdrawn: tip already integrated', db.now(), row['id']))
+
+
 # Close persisted Hive scheduling state after authoritative plan completion.
 def finish_hive(conn, project, plan):
     """Retire the Plan and only its obsolete automatic end questions."""
@@ -161,6 +258,8 @@ def finish_hive(conn, project, plan):
         conn.execute("DELETE FROM hive_integration WHERE project=? AND plan_path=?", (project, plan))
         conn.execute("UPDATE hives SET state='done',questions_json=NULL,claimed_at=NULL,reset_at=NULL WHERE project=? AND plan_path=?", (project, plan))
     runtime.kv_set(conn, project, 'hive-blocker:' + plan, '')
+    runtime.kv_set(conn, project, COMPLETE_KEY + plan, '')
+    runtime.kv_set(conn, project, POINTS_KEY + plan, '')
 
 
 # Reconcile authoritative completion before start gates without touching active agents.
@@ -183,15 +282,27 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
         if plan['status'] not in plan_mod.STARTABLE_STATUSES:
             continue
         integrated = integrated_ready(conn, env, hive)
+        bare = False
+        report = completion_report(conn, env.name, plan['path'])
+        if integrated and report and report['state'] == 'pending':
+            if not retry_completion_check(conn, env, plan['path']):
+                if not completion_report(conn, env.name, plan['path']):
+                    runtime.kv_set(conn, env.name, 'hive-rejected-ready:' + plan['path'], str(integrated['id']))
+                continue
         if not integrated:
-            continue
-        integration_steps.sync(env, plan['path'], hive['provider'])   # a Deploy step no provider can do becomes an owner question here
+            integrated = completed_without_integration(conn, env, plan, hive)
+            if not integrated:
+                continue
+            bare = True
+        if not bare:
+            integration_steps.sync(env, plan['path'], hive['provider'])   # a Deploy step no provider can do becomes an owner question here
         step = owner_check_step(conn, env.name, plan['path'])
         if step and step[0] == 'wait':
             wait_for_owner_check(conn, env.name, plan['path'], step[1])
             _move_status(conn, env, plan['path'], 'REVIEW')
         elif step and step[0] == 'fix':
             runtime.kv_set(conn, env.name, 'hive-rejected-ready:' + plan['path'], str(integrated['id']))
+            set_completion(conn, env.name, plan['path'], '')   # the new Queen reports completion again
             reopen_after_owner_check(conn, env.name, plan['path'])
             _move_status(conn, env, plan['path'], 'RUNNING')
         else:
@@ -200,15 +311,60 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
             if questions:
                 wait_for_answers(conn, env.name, plan['path'], questions)
                 continue
-            if integration_steps.open_steps(env, plan['path']):
+            if not bare and integration_steps.open_steps(env, plan['path']):
                 continue   # integrated, but a step package is open: the next Queen starts it, the plan stays open
             if (not owner_check_questions(conn, env.name, plan['path']) and not owner_accepted(conn, env.name, plan['path'], integrated.get('updated_at'))
                     and owner_check_wanted(env, plan['path'])):
-                file_owner_check(conn, env, plan['path'])   # the system asks for the acceptance itself; the Queen is not relied on to do it
+                file_owner_check(conn, env, plan['path'], integrated=not bare)   # the system asks for the acceptance itself; the Queen is not relied on to do it
                 _move_status(conn, env, plan['path'], 'REVIEW')
                 continue
             runtime.set_plan_status(conn, env.name, plan['path'], 'DONE', str(env.workspace))
             finish_hive(conn, env.name, plan['path'])
+
+
+# Retry an explicitly pending completion check before either close path can proceed.
+def retry_completion_check(conn, env, path, queen=None):
+    """Keep waiting, reopen on failure, or record the passed fresh check."""
+    from . import readygate
+    if queen is None:
+        queen = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all'))
+                      if a.get('plan_path') == path and a.get('phase') == 'queen'), None)
+    if queen is None:
+        return False
+    accepted, message, waiting = readygate.gate(env, path, queen)
+    if waiting:
+        return False
+    if not accepted:
+        set_completion(conn, env.name, path, '')
+        runtime.kv_set(conn, env.name, POINTS_KEY + path, message)
+        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state!='done'", (env.name, path))
+        _move_status(conn, env, path, 'RUNNING')
+        return False
+    set_completion(conn, env.name, path, 'passed')
+    return True
+
+
+# The close of a plan whose Queen reported completion and that has nothing left to integrate.
+def completed_without_integration(conn, env, plan, hive):
+    """Return {"id", "updated_at"} when the plan's completion report is checked and nothing is left to integrate, else None.
+
+    A pending report runs the fresh check here (again after a restart). A passed check goes on to the owner check; a failed one sends the plan
+    back to a new Queen with the open points; a check that cannot start stays pending for the next round."""
+    path = plan['path']
+    report = completion_report(conn, env.name, path)
+    if not report:
+        return None
+    queen = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all')) if a.get('plan_path') == path and a.get('phase') == 'queen'), None)
+    left, row = nothing_to_integrate(conn, env, path, queen) if queen is not None else (False, None)
+    if not left:
+        set_completion(conn, env.name, path, '')
+        return None
+    if report['state'] == 'pending':
+        if not retry_completion_check(conn, env, path, queen):
+            return None
+        report = completion_report(conn, env.name, path)
+    withdraw_integrated(conn, row)   # no integrator works on a row whose tip is already integrated
+    return {'id': 'complete', 'updated_at': report['at']}
 
 
 # Change the status of a plan in the course of its life cycle; a plan file that cannot be written keeps its status.
@@ -296,7 +452,7 @@ def owner_check_wanted(env, plan):
 
 
 # Ask the owner to accept an integrated plan.
-def file_owner_check(conn, env, plan):
+def file_owner_check(conn, env, plan, integrated=True):
     """File the owner check question of an integrated plan (the configured text or its default, with the final report of its last Queen) and park the Plan until the owner answers; returns the question id."""
     final = ''
     last = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all')) if a.get('plan_path') == plan and a.get('phase') == 'queen'), None)
@@ -306,7 +462,7 @@ def file_owner_check(conn, env, plan):
         except OSError:
             final = ''
     language = roles.language(env.settings)
-    text = tr('Check the integrated result', language=language)   # the default text; the decision is taken by buttons
+    text = tr('Check the integrated result' if integrated else 'Check the result of the plan', language=language)   # the default text; the decision is taken by buttons
     if final:
         text += tr('\n\nReport of the Queen:\n', language=language) + final
     qid = db.add_question(conn, env.name, plan, 'owner-check', text, '')
@@ -910,6 +1066,9 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                         except Exception as exc:
                             env.log('stopped packages not reported: %s' % exc)
                     continue
+                if hive and not dry_run and completion_report(conn, env.name, plan['path']):
+                    not_started(env, plan['path'], 'completion reported: the check of the result is pending')   # no new Queen and no queen-ended question while the report waits for its check
+                    continue
                 if hive and hive['state'] == 'handoff':
                     if not can_handoff(conn, env.name, plan['path']):
                         not_started(env, plan['path'], 'handing off, Agent processes are still running')
@@ -1016,11 +1175,11 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 if dry_run:
                     report.append('START Queen ' + path)
                     continue
+                from . import bees
+                if bees.foreign_plan_branch(env, path) and not bees.resolve_existing_branch(env, path):
+                    not_started(env, path, 'its branch %s exists without run history: waiting for the owner to take it over or create a new one' % bees.target_worktree(env, path)[0])
+                    continue
                 if not hive:
-                    from . import bees
-                    if bees.foreign_plan_branch(env, path) and not bees.resolve_existing_branch(env, path):
-                        not_started(env, path, 'its branch %s exists without run history: waiting for the owner to take it over or create a new one' % bees.target_worktree(env, path)[0])
-                        continue
                     used = {r['colour'] for r in db.rows(conn, "SELECT colour FROM hives WHERE state != 'done'")}
                     colour = next((c for c in loop.AGENT_COLOURS if c not in used), None)
                     if colour is None:
@@ -1040,6 +1199,10 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 name = row_key
                 questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
                 prompt = 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and owner answers of your plan and those released for the whole Project are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --cwd \'<absolute worktree path>\' (single quotes, no JSON). Work independent packages, answer the completeness question and integrate only when no requirements remain. ' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name)
+                points = runtime.kv_get(conn, env.name, POINTS_KEY + path)
+                if points:   # the fresh check of the completion report found open points: this Queen works exactly on them
+                    prompt += 'The check of the completion report found these open points; fix them, then report completion again: ' + points + ' '
+                    runtime.kv_set(conn, env.name, POINTS_KEY + path, '')
                 prompt += integration_steps.start_text(env, path, pick['name'])
                 if plan['status'] not in plan_mod.CUT_STATUSES:   # a plan still to be cut gets its step packages when it is integrated
                     integration_steps.sync(env, path, pick['name'])
@@ -1056,13 +1219,13 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     prompt += '\nOwner branch choice before the cut: ' + (str(chosen) if chosen else 'none') + '.'
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
                 cwd = routine.pick_cwd(prior, str(env.code_repo), workspace=routine.other_workspace(env)) if prior else str(env.code_repo)
-                if plan['status'] not in plan_mod.CUT_STATUSES:
-                    bees.cleanup_cut_default(env, path)   # the next Queen after a cut whose header names another worktree: the unused default of the cut goes
                 clash = bees.worktree_conflict(env, path)
                 if clash:   # the header's folder holds another branch or its branch is checked out elsewhere: nothing is changed on disk
                     conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
                     not_started(env, path, clash)
                     continue
+                if plan['status'] not in plan_mod.CUT_STATUSES:
+                    bees.cleanup_cut_default(env, path)   # the next Queen after a cut whose header names another worktree: the unused default of the cut goes
                 named = bees.target_worktree(env, path)
                 keep = bool(prior) and bees.valid_queen_worktree(env, cwd) and bool(named) and routine.same_dir(cwd, str(named[1]))   # the Queen continues only in the worktree of the header
                 if (named and not keep) or not bees.valid_queen_worktree(env, cwd):

@@ -16,3 +16,6 @@ Project rules remain binding: the checked-in AGENTS.md and CLAUDE.md of the repo
 10. Token economy is the first quality goal; context conservation is second. Give Agents only the material they need. A Queen whose provider cannot start subagents uses `beeMode = "process"`: every Agent is then a separate process.
 
 HaiveQueen creates or reuses the package worktree at Agent start. Its branch is `<plan branch>-<package id in lower case>`; its folder is `<worktree prefix>-<plan tag in lower case>-<package id in lower case>`. The start answer gives both, including for subagents. An Agent never creates or commits on another branch.
+## Plans with nothing left to integrate
+
+A plan that changes no tracked file of the code repo has no plan branch and no queue row on purpose; a plan whose branch is already fully in the integration branch has nothing left to integrate either. Such a plan closes the same way as an integrated one, without integration: the Queen reports with `bzz ready` (no new queue row, no compile check, no Build or Deploy step) and ends. A fresh check agent passes the report, then the owner check asks to check the result of the plan (unless the plan header says `owner_check = "none"`), and acceptance sets DONE. No "queen-ended" question is filed. A failed check or a rejection sends the plan back to a new Queen with the open points.

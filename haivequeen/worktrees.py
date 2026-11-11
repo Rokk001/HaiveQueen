@@ -100,6 +100,38 @@ def _plan_use(env, path):
     return False
 
 
+# Preserve all worktrees involved in an unresolved plan header conflict.
+def _conflicting_plan_use(env, record):
+    """Keep the header, checked-out branch, and cut-created worktree until the conflict is resolved."""
+    import json
+    from . import bees
+    if getattr(env, 'conn', None) is None or not env.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='plans'").fetchone():
+        return False
+    for plan in runtime.list_plans(env.conn, env.name):
+        if plan['status'] in ('DONE', 'CANCELLED'):
+            continue
+        try:
+            path = plan['path']
+            named = bees.plan_worktree(env, path)
+            if not named or not bees.worktree_conflict(env, path):
+                continue
+            try:
+                has_kv = env.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='kv'").fetchone()
+                created = json.loads(runtime.kv_get(env.conn, env.name, 'cut-created:' + path) or 'null') if has_kv else None
+            except (ValueError, TypeError):
+                created = None
+            folders = [named[1]]
+            if has_kv:
+                folders.append(bees.cut_default(env, path)[1])
+            if isinstance(created, dict) and created.get('folder'):
+                folders.append(created['folder'])
+            if record.get('branch') == named[0] or any(_within(record['worktree'], folder) and _within(folder, record['worktree']) for folder in folders):
+                return True
+        except (OSError, ValueError, TypeError):
+            continue
+    return False
+
+
 # Require completed branch evidence alongside repository and active-agent protections.
 def _candidate_reason(env, record, first, queue, integration_ref=None):
     """Verify current branch completion and keep worktrees with any safety blocker."""
@@ -108,6 +140,8 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
     protected = [env.code_repo, env.workspace]
     if first or any(_within(path, item) or _within(item, path) for item in protected):
         return 'protected worktree'
+    if _conflicting_plan_use(env, record):
+        return 'unresolved plan worktree conflict'
     if record.get('locked') or record.get('prunable'):
         return 'locked or missing'
     if any(row.get('branch') == record.get('branch') and row.get('status') in ('ready', 'in_run', 'blocked')

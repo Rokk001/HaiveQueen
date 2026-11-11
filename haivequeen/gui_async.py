@@ -82,11 +82,13 @@ def run_async(widget, work, done, failed=None, poll_ms=25):
 
     _workers_start()
     try:
-        threading.Thread(target=target, daemon=True).start()
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
     except BaseException:
         _workers_stop()
         raise
     widget.after(poll_ms, poll)
+    return thread
 
 
 # Read with a connection of the thread's own.

@@ -117,8 +117,66 @@ class HeaderIsTheOnlySourceTests(GitCase):
         self.assertTrue(bees.foreign_plan_branch(self.hq_env(), REL))
 
 
+    def test_cut_history_does_not_hide_existing_header_branch_in_round(self):
+        from haivequeen import loop
+        self.sent()
+        self.agent("cut-queen", phase="queen", status="done")
+        self.git("branch", "fix/x")
+        self.plan("QUEUED", [{"id": "P1", "title": "First"}], branch="fix/x", worktree=str(self.base / "wt-x"))
+        parsed = self.header()
+        runtime.save_cut_assignments(self.conn, "testproj", REL, parsed.packages, (self.repo / REL).read_text(encoding="utf-8"))
+        hives.create(self.conn, "testproj", REL, "claude", "123456")
+        loop.run_round(self.conn, self.machine, self.envs(), free_ram=lambda: 16.0, settle=0)
+        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item=bees.BRANCH_ITEM)), 1)
+        self.assertFalse(any(a["name"] != "cut-queen" and a["phase"] == "queen" for a in runtime.list_agents(self.conn, "testproj", "all")))
+
+    def test_branch_created_by_cut_is_not_foreign(self):
+        self.sent()
+        branch, folder = bees.cut_default(self.hq_env(), REL)
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        self.agent("cut-queen", phase="queen", status="done")
+        self.plan("QUEUED", [{"id": "P1", "title": "First"}], branch=branch, worktree=str(folder))
+        parsed = self.header()
+        runtime.save_cut_assignments(self.conn, "testproj", REL, parsed.packages, (self.repo / REL).read_text(encoding="utf-8"))
+        self.assertFalse(bees.foreign_plan_branch(self.hq_env(), REL))
+
+
 class ConflictTests(GitCase):
     """B-4: a folder with another branch, or the branch checked out elsewhere, blocks the start with one line and changes nothing."""
+
+    def test_start_conflict_preserves_unused_cut_resources(self):
+        self.sent()
+        default_branch, default_folder = bees.cut_default(self.hq_env(), REL)
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        folder = self.base / "wt-x"
+        self.git("worktree", "add", "-b", "other", str(folder), "main")
+        self.plan("QUEUED", [{"id": "P1", "title": "First"}], branch="fix/x", worktree=str(folder))
+        self.assertTrue(Path(default_folder).is_dir())
+        self.assertTrue(bees.worktree_conflict(self.hq_env(), REL))
+        from haivequeen import loop
+        with mock.patch('haivequeen.worktrees._process_busy', return_value=False):
+            loop.run_round(self.conn, self.machine, self.envs(), free_ram=lambda: 16.0, settle=0)
+        self.assertTrue(Path(default_folder).is_dir())
+        self.assertEqual(self.git("branch", "--show-current", cwd=default_folder), default_branch)
+        self.assertEqual(self.git("branch", "--show-current", cwd=folder), "other")
+        self.assertFalse(any(a["phase"] == "queen" for a in runtime.list_agents(self.conn, "testproj", "all")))
+
+    def test_round_preserves_checked_out_header_branch_but_cleans_unrelated_worktree(self):
+        self.sent()
+        default_branch, default_folder = bees.cut_default(self.hq_env(), REL)
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        elsewhere = self.base / "wt-elsewhere"
+        unrelated = self.base / "wt-unrelated"
+        self.git("worktree", "add", "-b", "fix/x", str(elsewhere), "main")
+        self.git("worktree", "add", "-b", "unrelated", str(unrelated), "main")
+        self.plan("QUEUED", [{"id": "P1", "title": "First"}], branch="fix/x", worktree=str(self.base / "wt-target"))
+        from haivequeen import loop
+        with mock.patch('haivequeen.worktrees._process_busy', return_value=False):
+            loop.run_round(self.conn, self.machine, self.envs(), free_ram=lambda: 16.0, settle=0)
+        self.assertEqual(self.git("branch", "--show-current", cwd=default_folder), default_branch)
+        self.assertEqual(self.git("branch", "--show-current", cwd=elsewhere), "fix/x")
+        self.assertFalse(unrelated.exists())
+        self.assertFalse(any(a["phase"] == "queen" for a in runtime.list_agents(self.conn, "testproj", "all")))
 
     def test_folder_holds_another_branch(self):
         folder = self.base / "wt-x"
