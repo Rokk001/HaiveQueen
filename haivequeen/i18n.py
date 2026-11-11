@@ -157,6 +157,7 @@ _WORKTREE_REASONS = (
     ("HEAD cannot be read", "HEAD nicht lesbar"),
     ("used by a plan that is not finished", "von einem nicht beendeten Plan benutzt"),
     ("protected worktree", "geschützter Worktree"),
+    ("unresolved plan worktree conflict", "ungelöster Konflikt um den Plan-Worktree"),
     ("locked or missing", "gesperrt oder fehlt"),
     ("branch has an open queue row", "Branch hat eine offene Zeile in der Warteschlange"),
     ("branch has no current integrated queue row", "Branch hat keine aktuelle integrierte Zeile in der Warteschlange"),

@@ -283,6 +283,29 @@ class GermanTextsTest(unittest.TestCase):
         self.assertGreater(len(seen), 25)   # the scan really finds the reasons
         self.assertEqual(sorted(reason for reason in seen if i18n._worktree_reason(reason) == reason), [])
 
+    def test_conflicting_plan_worktree_reason_is_translated(self):
+        self.assertEqual(i18n._worktree_reason("unresolved plan worktree conflict"),
+                         "ungelöster Konflikt um den Plan-Worktree")
+
+    def test_round_syncs_only_real_workspace_paths_before_cleanup(self):
+        conn = mock.Mock()
+        for workspace, expected in ((mock.Mock(), None), (Path("workspace"), "workspace")):
+            env = mock.Mock(name="project", workspace=workspace)
+            env.name = "project"
+            with self.subTest(workspace=workspace), mock.patch.object(loop.usage, "refresh_claude_usage"), \
+                    mock.patch.object(loop.profile, "notify_missing"), mock.patch("haivequeen.offline.recheck"), \
+                    mock.patch("haivequeen.servers.retest_not_ready", return_value=False), \
+                    mock.patch.object(loop.runtime, "sync_plans") as sync, \
+                    mock.patch("haivequeen.worktrees.cleanup") as cleanup, \
+                    mock.patch.object(loop, "hive_schedule_lock", side_effect=RuntimeError("stop")):
+                with self.assertRaisesRegex(RuntimeError, "stop"):
+                    loop.run_round(conn, {}, [env])
+                cleanup.assert_called_once_with(env)
+                if expected is None:
+                    sync.assert_not_called()
+                else:
+                    sync.assert_called_once_with(conn, "project", expected)
+
     def test_words_of_agents_and_owner_stay_as_written_even_when_they_look_like_program_lines(self):
         line = "Ada started (the build)"
         self.assertEqual(i18n.log_text(line), "Ada gestartet (the build)")   # the pattern fits: only the source of the line can protect it
