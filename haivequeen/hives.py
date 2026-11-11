@@ -1176,95 +1176,98 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 if dry_run:
                     report.append('START Queen ' + path)
                     continue
-                from . import bees
+                from . import bees, worktrees
                 if bees.foreign_plan_branch(env, path) and not bees.resolve_existing_branch(env, path):
                     not_started(env, path, 'its branch %s exists without run history: waiting for the owner to take it over or create a new one' % bees.target_worktree(env, path)[0])
                     continue
-                if not hive:
-                    used = {r['colour'] for r in db.rows(conn, "SELECT colour FROM hives WHERE state != 'done'")}
-                    colour = next((c for c in loop.AGENT_COLOURS if c not in used), None)
-                    if colour is None:
-                        colour = next(format(i, '06X') for i in range(1, 0x1000000) if format(i, '06X') not in used)
-                    hive = create(conn, env.name, path, pick['name'], colour)
-                claimed = conn.execute("UPDATE hives SET state='starting',claimed_at=? WHERE project=? AND plan_path=? AND state IN ('waiting','requeen')", (db.now(), env.name, path))
-                if claimed.rowcount != 1:
-                    not_started(env, path, 'the Plan is already claimed')
-                    continue
-                existing_names = [a['name'] for a in runtime.list_agents(conn, env.name, 'all')]
-                predecessors = [a for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('phase') == 'queen' and a.get('person')]
-                name = loop.agent_identity(conn, [predecessors[-1]['person']] if predecessors else ())['Person']
-                row_key, k = name, 1
-                while row_key in existing_names:   # an earlier agent of this project carried the name: the row key gets a number, the Queen keeps her plain name
-                    k += 1
-                    row_key = '%s-%d' % (name, k)
-                name = row_key
-                questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
-                prompt = 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and owner answers of your plan and those released for the whole Project are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --cwd \'<absolute worktree path>\' (single quotes, no JSON). Work independent packages, answer the completeness question and integrate only when no requirements remain. ' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name)
-                points = runtime.kv_get(conn, env.name, POINTS_KEY + path)
-                if points:   # the fresh check of the completion report found open points: this Queen works exactly on them
-                    prompt += 'The check of the completion report found these open points; fix them, then report completion again: ' + points + ' '
-                    runtime.kv_set(conn, env.name, POINTS_KEY + path, '')
-                prompt += integration_steps.start_text(env, path, pick['name'])
-                if plan['status'] not in plan_mod.CUT_STATUSES:   # a plan still to be cut gets its step packages when it is integrated
-                    integration_steps.sync(env, path, pick['name'])
-                from . import bees
-                prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls), roles.language(env.settings))
-                topics = integration_steps.owner_topics_text(env)
-                if topics:
-                    prompt += '\n' + topics
-                prompt += '\nConfigured Agent providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint') or p.get('server')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', []) and not p.get('unavailable')], ensure_ascii=False)
-                prompt += ' Project integration configuration: ' + json.dumps(integration_steps.configuration(env, path), ensure_ascii=False)
-                if plan['status'] in plan_mod.CUT_STATUSES:   # a plan the owner sent as free text: the Queen cuts it into packages before any Bee starts
-                    prompt += '\n' + roles.role_text('queen-cut', {'project': env.name, 'plan': path, 'branch': bees.cut_default(env, path)[0], 'worktree': bees.cut_default(env, path)[1]})
-                    chosen = runtime.kv_get(conn, env.name, bees.NEW_BRANCH_KEY + path) or runtime.kv_get(conn, env.name, bees.TAKEOVER_KEY + path)
-                    prompt += '\nOwner branch choice before the cut: ' + (str(chosen) if chosen else 'none') + '.'
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
                 cwd = routine.pick_cwd(prior, str(env.code_repo), workspace=routine.other_workspace(env)) if prior else str(env.code_repo)
-                from . import worktrees
                 named_plan = bees.target_worktree(env, path)
-                worktrees.wait_for_removal('worktree', cwd)
+                targets = [('worktree', cwd)]
                 if named_plan:
-                    worktrees.wait_for_removal('branch', (env.code_repo, named_plan[0]))
-                    worktrees.wait_for_removal('worktree', named_plan[1])
-                clash = bees.worktree_conflict(env, path)
-                if clash:   # the header's folder holds another branch or its branch is checked out elsewhere: nothing is changed on disk
-                    conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
-                    not_started(env, path, clash)
-                    continue
-                if plan['status'] not in plan_mod.CUT_STATUSES:
-                    bees.cleanup_cut_default(env, path)   # the next Queen after a cut whose header names another worktree: the unused default of the cut goes
-                named = bees.target_worktree(env, path)
-                keep = bool(prior) and bees.valid_queen_worktree(env, cwd) and bool(named) and routine.same_dir(cwd, str(named[1]))   # the Queen continues only in the worktree of the header
-                if (named and not keep) or not bees.valid_queen_worktree(env, cwd):
-                    try:
-                        cwd = bees.prepare_queen_worktree(env, path)
-                    except (OSError, ValueError) as exc:
-                        env.log('cannot prepare Queen worktree: ' + str(exc))
-                        cwd = None
-                    if not cwd:
-                        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
-                        not_started(env, path, 'worktree for branch %s could not be prepared (%s)' % named if named else 'the plan header names no branch and worktree')
+                    targets.extend([('branch', (env.code_repo, named_plan[0])), ('worktree', named_plan[1])])
+                with worktrees.removal_locks(targets) as busy:
+                    if busy is not None:
+                        result['projects'][env.name]['started'] += started
+                        result['projects'][env.name]['actions'] += started
+                        raise worktrees.RemovalBusy(busy, result)
+                    if not hive:
+                        used = {r['colour'] for r in db.rows(conn, "SELECT colour FROM hives WHERE state != 'done'")}
+                        colour = next((c for c in loop.AGENT_COLOURS if c not in used), None)
+                        if colour is None:
+                            colour = next(format(i, '06X') for i in range(1, 0x1000000) if format(i, '06X') not in used)
+                        hive = create(conn, env.name, path, pick['name'], colour)
+                    claimed = conn.execute("UPDATE hives SET state='starting',claimed_at=? WHERE project=? AND plan_path=? AND state IN ('waiting','requeen')", (db.now(), env.name, path))
+                    if claimed.rowcount != 1:
+                        not_started(env, path, 'the Plan is already claimed')
                         continue
-                action = {'name': name, 'type': pick['name'], 'phase': 'queen', 'plan': path, 'package': '', 'cwd': cwd, 'prompt': prompt, 'class': cls}
-                st = {'names': existing_names, 'busy': [], 'plan_status': {sch.norm_plan(path): plan['status']}, 'by_path': {sch.norm_plan(path): plan}}
-                ctx = {'env': env, 'state': st, 'pool': pool, 'report': report, 'dry': False, 'settle': settle}
-                try:
-                    count = loop._do_start(ctx, action, forced_pick=pick)
-                except Exception:
-                    conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
-                    raise
-                if count:
-                    # the embedded Bees of the old Queen keep their rows and places until their end is confirmed
-                    bees.after_queen_start(conn, env.name, path)
-                    runtime.kv_set(conn, env.name, 'hive-blocker:' + path, '')
-                    for package in runtime.list_packages(conn, env.name, path):
-                        runtime.kv_delete(conn, env.name, "wait:%s|%s" % (path, package["id"]))
-                    env.update_agent(name, {'color': hive['colour']})
-                    queen = runtime.get_agent(conn, env.name, name)
-                    conn.execute("UPDATE hive_integration SET owner_pid=? WHERE project=? AND plan_path=? AND acquired=1", (queen.get('pid'), env.name, path))
-                    conn.execute("UPDATE hives SET state='running',provider=?,reset_at=NULL,claimed_at=NULL WHERE project=? AND plan_path=?", (pick['name'], env.name, path))   # an owner's provider choice stays until the owner changes it
-                    queen_count += 1
-                    started += 1
+                    existing_names = [a['name'] for a in runtime.list_agents(conn, env.name, 'all')]
+                    predecessors = [a for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('phase') == 'queen' and a.get('person')]
+                    name = loop.agent_identity(conn, [predecessors[-1]['person']] if predecessors else ())['Person']
+                    row_key, k = name, 1
+                    while row_key in existing_names:   # an earlier agent of this project carried the name: the row key gets a number, the Queen keeps her plain name
+                        k += 1
+                        row_key = '%s-%d' % (name, k)
+                    name = row_key
+                    questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
+                    prompt = 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and owner answers of your plan and those released for the whole Project are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --cwd \'<absolute worktree path>\' (single quotes, no JSON). Work independent packages, answer the completeness question and integrate only when no requirements remain. ' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name)
+                    points = runtime.kv_get(conn, env.name, POINTS_KEY + path)
+                    if points:   # the fresh check of the completion report found open points: this Queen works exactly on them
+                        prompt += 'The check of the completion report found these open points; fix them, then report completion again: ' + points + ' '
+                        runtime.kv_set(conn, env.name, POINTS_KEY + path, '')
+                    prompt += integration_steps.start_text(env, path, pick['name'])
+                    if plan['status'] not in plan_mod.CUT_STATUSES:   # a plan still to be cut gets its step packages when it is integrated
+                        integration_steps.sync(env, path, pick['name'])
+                    from . import bees
+                    prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls), roles.language(env.settings))
+                    topics = integration_steps.owner_topics_text(env)
+                    if topics:
+                        prompt += '\n' + topics
+                    prompt += '\nConfigured Agent providers: ' + json.dumps([{'name': p['name'], 'protocol': p['protocol'], 'classes': p.get('classes', {}), 'capabilities': p.get('capabilities', []), 'local': bool(p.get('endpoint') or p.get('server')), 'beeMode': p.get('beeMode')} for p in env.providers if p['name'] not in machine.get('excludedProviders', []) and not p.get('unavailable')], ensure_ascii=False)
+                    prompt += ' Project integration configuration: ' + json.dumps(integration_steps.configuration(env, path), ensure_ascii=False)
+                    if plan['status'] in plan_mod.CUT_STATUSES:   # a plan the owner sent as free text: the Queen cuts it into packages before any Bee starts
+                        prompt += '\n' + roles.role_text('queen-cut', {'project': env.name, 'plan': path, 'branch': bees.cut_default(env, path)[0], 'worktree': bees.cut_default(env, path)[1]})
+                        chosen = runtime.kv_get(conn, env.name, bees.NEW_BRANCH_KEY + path) or runtime.kv_get(conn, env.name, bees.TAKEOVER_KEY + path)
+                        prompt += '\nOwner branch choice before the cut: ' + (str(chosen) if chosen else 'none') + '.'
+                    clash = bees.worktree_conflict(env, path)
+                    if clash:   # the header's folder holds another branch or its branch is checked out elsewhere: nothing is changed on disk
+                        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
+                        not_started(env, path, clash)
+                        continue
+                    if plan['status'] not in plan_mod.CUT_STATUSES:
+                        bees.cleanup_cut_default(env, path)   # the next Queen after a cut whose header names another worktree: the unused default of the cut goes
+                    named = bees.target_worktree(env, path)
+                    keep = bool(prior) and bees.valid_queen_worktree(env, cwd) and bool(named) and routine.same_dir(cwd, str(named[1]))   # the Queen continues only in the worktree of the header
+                    if (named and not keep) or not bees.valid_queen_worktree(env, cwd):
+                        try:
+                            cwd = bees.prepare_queen_worktree(env, path)
+                        except (OSError, ValueError) as exc:
+                            env.log('cannot prepare Queen worktree: ' + str(exc))
+                            cwd = None
+                        if not cwd:
+                            conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
+                            not_started(env, path, 'worktree for branch %s could not be prepared (%s)' % named if named else 'the plan header names no branch and worktree')
+                            continue
+                    action = {'name': name, 'type': pick['name'], 'phase': 'queen', 'plan': path, 'package': '', 'cwd': cwd, 'prompt': prompt, 'class': cls}
+                    st = {'names': existing_names, 'busy': [], 'plan_status': {sch.norm_plan(path): plan['status']}, 'by_path': {sch.norm_plan(path): plan}}
+                    ctx = {'env': env, 'state': st, 'pool': pool, 'report': report, 'dry': False, 'settle': settle}
+                    try:
+                        count = loop._do_start(ctx, action, forced_pick=pick)
+                    except Exception:
+                        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
+                        raise
+                    if count:
+                        # the embedded Bees of the old Queen keep their rows and places until their end is confirmed
+                        bees.after_queen_start(conn, env.name, path)
+                        runtime.kv_set(conn, env.name, 'hive-blocker:' + path, '')
+                        for package in runtime.list_packages(conn, env.name, path):
+                            runtime.kv_delete(conn, env.name, "wait:%s|%s" % (path, package["id"]))
+                        env.update_agent(name, {'color': hive['colour']})
+                        queen = runtime.get_agent(conn, env.name, name)
+                        conn.execute("UPDATE hive_integration SET owner_pid=? WHERE project=? AND plan_path=? AND acquired=1", (queen.get('pid'), env.name, path))
+                        conn.execute("UPDATE hives SET state='running',provider=?,reset_at=NULL,claimed_at=NULL WHERE project=? AND plan_path=?", (pick['name'], env.name, path))   # an owner's provider choice stays until the owner changes it
+                        queen_count += 1
+                        started += 1
             result['projects'][env.name]['started'] += started
             result['projects'][env.name]['actions'] += started
     if not dry_run:

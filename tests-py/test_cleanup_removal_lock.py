@@ -1,5 +1,6 @@
 """The cleanup locks only the worktree or branch it removes: starts of everything else run at once (L-1, L-2)."""
 import os
+from pathlib import Path
 import sqlite3
 import subprocess
 import sys
@@ -10,7 +11,7 @@ from unittest import mock
 import isolation
 from bzztest import REL, RoundCase
 from haivequeen import bees, hives, loop, runtime, worktrees
-from test_worktrees import CleanupTests
+import test_worktrees
 
 
 # Run a function in a thread and remember its result or error.
@@ -33,12 +34,17 @@ def in_thread(function, *args):
 class RemovalLockTests(unittest.TestCase):
     """While a removal takes long, no start waits except one for exactly that worktree."""
 
-    setUp = CleanupTests.setUp
-    git = CleanupTests.git
+    def setUp(self):
+        test_worktrees.CleanupTests.setUp(self)
+        patch = mock.patch.object(worktrees, '_process_busy', return_value=False)
+        patch.start()
+        self.addCleanup(patch.stop)
 
-    # Branch locks and reservations belong to one repository.
-    def test_branch_lock_and_reservation_belong_to_one_repository(self):
-        """The same branch name in another repository is neither busy nor reserved."""
+    git = test_worktrees.CleanupTests.git
+
+    # Branch locks belong to one repository.
+    def test_branch_locks_belong_to_one_repository(self):
+        """The same branch name in another repository is not busy."""
         other = self.repo / 'other-repo'
         with worktrees.removal_lock('branch', (self.repo, 'feature-x')) as mine:
             self.assertTrue(mine)
@@ -46,9 +52,9 @@ class RemovalLockTests(unittest.TestCase):
             self.assertFalse(worktrees.removal_busy('branch', (other, 'feature-x')))
             with worktrees.removal_lock('branch', (other, 'feature-x')) as second:
                 self.assertTrue(second)
-    # The slow eligibility checks run before the per-item lock.
-    def test_worktree_eligibility_is_checked_before_the_lock(self):
-        """While the checks of a worktree run, its removal lock is not held."""
+    # An early check is followed by fresh validation under the target lock.
+    def test_worktree_eligibility_is_rechecked_under_the_lock(self):
+        """Check once without blocking starts, then revalidate before removal."""
         seen = []
         real_reason, real_busy = worktrees._candidate_reason, worktrees._process_busy
         # Look at the lock during the checks.
@@ -64,36 +70,56 @@ class RemovalLockTests(unittest.TestCase):
             result = worktrees.prune(self.env)
         self.assertEqual(result['removed'], [os.path.normpath(str(self.linked))])
         self.assertTrue(seen)
-        self.assertEqual(seen, [None] * len(seen))
+        self.assertIn(None, seen)
+        self.assertIn(os.getpid(), seen)
 
-    def test_branch_eligibility_is_checked_before_the_lock(self):
-        """The Git checks of a branch run without its removal lock."""
+    def test_branch_eligibility_is_rechecked_under_the_lock(self):
+        """Branch eligibility and its tip are rechecked before deletion."""
         env = mock.Mock(code_repo=self.repo, settings={})
         env.name = 'p'
         env.conn.execute.return_value.fetchone.return_value = None
+        env.conn.execute.return_value.fetchall.return_value = []
         seen = []
         # Record the lock at each Git call before the deletion.
         def git(repo, *args):
             """Look at the lock."""
             if args[:2] != ('branch', '-D'):
                 seen.append(worktrees.removal_holder('branch', (self.repo, 'feature-x')))
-            return subprocess.CompletedProcess(args, 0, '', '')
+            return subprocess.CompletedProcess(args, 0, 'x' if args[0] == 'rev-parse' else '', '')
         result = {'deleted': [], 'kept': []}
         with mock.patch.object(worktrees, '_git', git), mock.patch.object(worktrees, '_open_plan_branches', return_value=set()):
             worktrees._delete_plan_branches(env, 'plan', {'branch': 'feature-x', 'tip': 'a'}, 'origin', {}, {'feature-x': 'x'}, set(), set(), result)
         self.assertEqual(result['deleted'], ['local feature-x'])
         self.assertTrue(seen)
-        self.assertEqual(seen, [None] * len(seen))
+        self.assertIn(None, seen)
+        self.assertIn(os.getpid(), seen)
 
-    # Without a database file the round does not run the cleanup.
-    def test_no_database_file_skips_the_cleanup(self):
-        """An in-memory database: nothing runs in the round and no thread starts."""
-        env = mock.Mock()
-        env.conn.execute.return_value = [(0, 'main', '')]
-        with mock.patch.object(worktrees, 'cleanup') as cleanup:
-            self.assertIsNone(worktrees.cleanup_beside_round([env]))
-        cleanup.assert_not_called()
-        env.log.assert_not_called()
+    def test_agent_starting_after_initial_check_prevents_worktree_removal(self):
+        real = worktrees._candidate_reason
+        def reason(*args, **kwargs):
+            result = real(*args, **kwargs)
+            if worktrees.removal_holder('worktree', self.linked) is None:
+                self.agents.append({'cwd': str(self.linked), 'status': 'starting', 'phase': 'bee'})
+            return result
+        with mock.patch.object(worktrees, '_candidate_reason', side_effect=reason):
+            result = worktrees.prune(self.env)
+        self.assertEqual(result['removed'], [])
+        self.assertTrue(self.linked.exists())
+        self.assertIn('used by active agent', str(result['kept']))
+
+    def test_branch_tip_changed_after_initial_check_is_kept(self):
+        env = mock.Mock(code_repo=self.repo, settings={})
+        env.name = 'p'
+        env.conn.execute.return_value.fetchone.return_value = None
+        result = {'deleted': [], 'kept': []}
+        def git(repo, *args):
+            return subprocess.CompletedProcess(args, 0, 'new-tip' if args[0] == 'rev-parse' else '', '')
+        with mock.patch.object(worktrees, '_git', side_effect=git) as calls, \
+             mock.patch.object(worktrees, '_open_plan_branches', return_value=set()):
+            worktrees._delete_plan_branches(env, 'plan', {'branch': 'feature-x', 'tip': 'a'}, 'origin', {}, {'feature-x': 'old-tip'}, set(), set(), result)
+        self.assertEqual(result['deleted'], [])
+        self.assertIn('branch changed during cleanup', str(result['kept']))
+        self.assertFalse(any(c.args[1:3] == ('branch', '-D') for c in calls.call_args_list))
 
     # Start a removal that stays inside the git call until released.
     def slow_removal(self):
@@ -111,6 +137,10 @@ class RemovalLockTests(unittest.TestCase):
         self.addCleanup(patch.stop)
         self.addCleanup(self.release.set)
         thread = in_thread(worktrees.prune, self.env)
+        def finish():
+            self.release.set()
+            thread.join(30)
+        self.addCleanup(finish)
         self.assertTrue(self.entered.wait(30))
         return thread
 
@@ -154,6 +184,7 @@ class RemovalLockTests(unittest.TestCase):
     def test_agent_start_waits_outside_the_scheduling_lock_and_is_refused_on_timeout(self):
         """start_process waits for the removal before it takes the scheduling lock."""
         conn = sqlite3.connect(':memory:')
+        self.addCleanup(conn.close)
         conn.execute('CREATE TABLE bee_worktrees(project, plan_path, package, cwd)')
         env = mock.Mock(conn=conn)
         env.name = 'p'
@@ -223,6 +254,38 @@ class RemovalLockTests(unittest.TestCase):
         self.assertFalse(worktrees.removal_busy('worktree', self.linked))
         self.assertIn(str(self.linked), worktrees.prune(self.env)['removed'])
 
+    def test_process_exit_releases_target_guard_and_stale_pid_is_recovered(self):
+        """A separate process excludes starts until it dies without releasing its PID."""
+        script = '''
+import os, sys
+from pathlib import Path
+from haivequeen import platform, worktrees
+platform.data_dir = lambda: Path(sys.argv[1])
+with worktrees.removal_lock('worktree', sys.argv[2]) as mine:
+    print('held' if mine else 'busy', flush=True)
+    sys.stdin.readline()
+    os._exit(0)
+'''
+        root = worktrees._removal_lock_path('worktree', self.linked).parent.parent
+        child = subprocess.Popen([sys.executable, '-c', script, str(root), str(self.linked)],
+                                 cwd=Path(__file__).resolve().parent.parent,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), 'held')
+            with worktrees.removal_lock('worktree', self.linked) as mine:
+                self.assertFalse(mine)
+            child.stdin.write('\n')
+            child.stdin.flush()
+            child.wait(10)
+            with worktrees.removal_lock('worktree', self.linked) as mine:
+                self.assertTrue(mine)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(10)
+            child.stdin.close()
+            child.stdout.close()
+
     # The deletion of integrated branches locks one branch only.
     def test_branch_deletion_locks_only_its_branch(self):
         """A branch being deleted is busy; the scheduling lock and other branches are not; no double deletion."""
@@ -239,6 +302,7 @@ class RemovalLockTests(unittest.TestCase):
         env = mock.Mock(code_repo=self.repo, settings={})
         env.name = 'p'
         env.conn.execute.return_value.fetchone.return_value = None
+        env.conn.execute.return_value.fetchall.return_value = []
         row = {'branch': 'feature-x', 'tip': 'a'}
         # Delete the branch of one plan.
         def delete():
@@ -247,7 +311,7 @@ class RemovalLockTests(unittest.TestCase):
             worktrees._delete_plan_branches(env, 'plan', row, 'origin', {}, {'feature-x': 'x'}, set(), set(), result)
             return result
         with mock.patch.object(worktrees, '_git', slow_git), mock.patch.object(worktrees, '_open_plan_branches', return_value=set()):
-            with mock.patch.object(worktrees, '_git', lambda repo, *a: slow_git(repo, *a) if a[:2] == ('branch', '-D') else subprocess.CompletedProcess(a, 0, '', '')):
+            with mock.patch.object(worktrees, '_git', lambda repo, *a: slow_git(repo, *a) if a[:2] == ('branch', '-D') else subprocess.CompletedProcess(a, 0, 'x' if a[0] == 'rev-parse' else '', '')):
                 thread = in_thread(delete)
                 self.assertTrue(entered.wait(30))
                 with loop.hive_schedule_lock(timeout=1):

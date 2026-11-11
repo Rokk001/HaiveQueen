@@ -362,28 +362,52 @@ def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
             if conn is not None and isinstance(workspace, (str, os.PathLike)):
                 runtime.sync_plans(conn, env.name, os.fspath(workspace))
             worktrees.cleanup(env)
-    with hive_schedule_lock():
-        if dry_run:
-            import sqlite3
-            snapshot = sqlite3.connect(":memory:", isolation_level=None)
-            snapshot.row_factory = sqlite3.Row
-            try:
-                conn.backup(snapshot)
-                copied = [sch.ProjectEnv(snapshot, e.name, e.workspace, e.settings, e.colour, e.priority, e.plan_globs, e.plan_exclude) for e in envs]
-                result = hives.schedule_round(snapshot, machine, copied, dry_run=True, free_ram=free_ram, alive=alive,
+    from . import worktrees
+    deadline = None
+    completed = {}
+    while True:
+        try:
+            with hive_schedule_lock():
+                if dry_run:
+                    import sqlite3
+                    snapshot = sqlite3.connect(":memory:", isolation_level=None)
+                    snapshot.row_factory = sqlite3.Row
+                    try:
+                        conn.backup(snapshot)
+                        copied = [sch.ProjectEnv(snapshot, e.name, e.workspace, e.settings, e.colour, e.priority, e.plan_globs, e.plan_exclude) for e in envs]
+                        result = hives.schedule_round(snapshot, machine, copied, dry_run=True, free_ram=free_ram, alive=alive,
+                                                      settle=settle, plan_files=plan_files)
+                    finally:
+                        snapshot.close()
+                    if out_file:
+                        Path(out_file).parent.mkdir(parents=True, exist_ok=True)
+                        Path(out_file).write_text(json.dumps(result, indent=2), encoding="utf-8")
+                        if envs:
+                            e = envs[-1]
+                            snapshot_view = {"project": e.name, "repo": str(e.code_repo), "workspace": str(e.workspace), "dryRun": True}
+                            Path(out_file).with_suffix(".snapshot.json").write_text(json.dumps(snapshot_view, indent=2), encoding="utf-8")
+                    return result
+                result = hives.schedule_round(conn, machine, envs, dry_run=False, free_ram=free_ram, alive=alive,
                                               settle=settle, plan_files=plan_files)
-            finally:
-                snapshot.close()
-            if out_file:
-                Path(out_file).parent.mkdir(parents=True, exist_ok=True)
-                Path(out_file).write_text(json.dumps(result, indent=2), encoding="utf-8")
-                if envs:
-                    e = envs[-1]
-                    snapshot_view = {"project": e.name, "repo": str(e.code_repo), "workspace": str(e.workspace), "dryRun": True}
-                    Path(out_file).with_suffix(".snapshot.json").write_text(json.dumps(snapshot_view, indent=2), encoding="utf-8")
-            return result
-        return hives.schedule_round(conn, machine, envs, dry_run=False, free_ram=free_ram, alive=alive,
-                                    settle=settle, plan_files=plan_files)
+                for project, previous in completed.items():
+                    current = result['projects'][project]
+                    current['started'] += previous['started']
+                    current['actions'] += previous['actions']
+                    current['report'] = previous['report'] + current['report']
+                return result
+        except worktrees.RemovalBusy as exc:
+            # No start is left to another round. Wait without scheduling held,
+            # then select again from current agents, slots, plans and owner gates.
+            if deadline is None:
+                deadline = time.monotonic() + 30.0
+            for project, progress in exc.result['projects'].items():
+                previous = completed.setdefault(project, {'started': 0, 'actions': 0, 'report': []})
+                previous['started'] += progress['started']
+                previous['actions'] += progress['actions']
+                previous['report'].extend(progress['report'])
+            worktrees.wait_for_removal(*exc.target, timeout=max(0.0, deadline - time.monotonic()))
+            if time.monotonic() >= deadline:
+                raise worktrees.removal_timeout(*exc.target)
 
 
 def _min_ram(env) -> float:

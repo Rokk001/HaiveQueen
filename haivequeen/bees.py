@@ -971,156 +971,159 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
     LAST_REFUSAL = ''
     from . import worktrees
     try:
-        for kind, key in start_removal_targets(env, plan, package, cwd):
-            worktrees.wait_for_removal(kind, key)
+        with worktrees.start_with_removal_locks(lambda: start_removal_targets(env, plan, package, cwd)):
+            return _start_process_locked(env, plan, package, name, cls, task, steps, paths, rules, cwd, no_subagents)
     except worktrees.RemovalTimeout as exc:
         return refuse(env, package, str(exc))
+
+
+def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rules, cwd, no_subagents):
+    """Validate and start while scheduling and the cleanup target locks are held."""
     from pathlib import Path
-    from . import hives, loop, routine, worktrees
-    with loop.hive_schedule_lock():
-        check_dependencies(env, plan, package)
-        draining = drain_refusal()
-        if draining:
-            return refuse(env, package, draining)
-        hive = hives.get(env.conn, env.name, plan)
-        if not hive or not hives.can_start_bee(env.conn, env.name, plan, False, env.settings.get('contextLimitTokens', 300000)):
-            return refuse(env, package, 'the Plan may not start an Agent now (Plan state %s, context limit or HANDOFF reached)' % (hive['state'] if hive else 'missing'))
-        active = runtime.list_agents(env.conn, None, 'active')
-        queen = next((a for a in active if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'queen' and a.get('status') in ('running', 'starting')), None)
-        if not queen:
-            return refuse(env, package, 'no running Queen of this plan')
-        held = {str(a.get('person') or a.get('name')) for a in active if a.get('status') in ('running', 'starting')} | open_embedded_names(env.conn, (env.name, plan, package))
-        if re.sub(r'-\d+$', '', str(name)) in held:   # a name is held by one Queen or Bee at a time
-            return refuse(env, package, 'the name %s is already held by a running Queen or Agent; use the free name %s' % (name, loop.agent_identity(env.conn)['Person']))
-        from . import platform as osplat
-        from . import agent_process
-        running = [{**a, 'status': 'running'} for a in active if agent_process.counts(a)]
-        ensure_attempts(env.conn)
-        embedded_count = env.conn.execute('SELECT COUNT(*) FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', (env.name, plan)).fetchone()[0]
-        if embedded_count + sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
-            return refuse(env, package, 'the Queen already has %s Agents running' % env.settings.get('beesPerQueen', 3))
-        plan_row = next((p for p in runtime.list_plans(env.conn, env.name) if p['path'] == plan), None)
-        if plan_row and plan_row['status'] in plan_mod.CUT_STATUSES:
-            return refuse(env, package, 'the plan is not cut yet: write its packages into the header and run bzz plan check first')
-        package_row = next((p for p in env.packages(plan) if p['id'] == package), None)
-        if not package_row:
-            return refuse(env, package, 'the package is not in the plan')
-        if package_stopped(env.conn, env.name, plan, package):
-            return refuse(env, package, 'the owner stopped this package; it starts again only after the owner resumes it')
-        pending = stopping_embedded(env.conn, env.name, plan, package)
-        if pending:
-            return refuse(env, package, 'the stopped subagent Agent %s of this package has not confirmed its end; once it has ended, report it with bzz agent result --outcome interrupted' % pending[0][2])
-        unconfirmed = unconfirmed_embedded(env.conn, env.name, plan, package)
-        if unconfirmed:   # no replacement while the earlier subagent Bee may still run
-            if own_embedded(unconfirmed[0], queen):
-                return refuse(env, package, 'the subagent Agent %s of this package has not confirmed its end; record its result with bzz agent result first' % unconfirmed[0]['name'])
-            return refuse(env, package, 'the subagent Agent %s of the earlier Queen %s has not confirmed its end; record its result with bzz agent result --ended-evidence first' % (
-                unconfirmed[0]['name'], unconfirmed[0].get('queen') or 'unknown'))
-        requested_class = package_row['cls']
-        threshold = int(env.settings.get('escalateAfter', 3))
-        excluded = env.settings.get('excludedProviders', [])
-        need = routine.package_needs_for(env, plan, package)
-        allowed = [p for p in env.providers if p['name'] not in excluded and
-                   (p in capable_providers(env.providers, need) if need else
-                    ((p.get('endpoint') or p.get('server')) or p['name'] == hive['provider']))]
+    from . import hives, loop, routine
+    check_dependencies(env, plan, package)
+    draining = drain_refusal()
+    if draining:
+        return refuse(env, package, draining)
+    hive = hives.get(env.conn, env.name, plan)
+    if not hive or not hives.can_start_bee(env.conn, env.name, plan, False, env.settings.get('contextLimitTokens', 300000)):
+        return refuse(env, package, 'the Plan may not start an Agent now (Plan state %s, context limit or HANDOFF reached)' % (hive['state'] if hive else 'missing'))
+    active = runtime.list_agents(env.conn, None, 'active')
+    queen = next((a for a in active if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'queen' and a.get('status') in ('running', 'starting')), None)
+    if not queen:
+        return refuse(env, package, 'no running Queen of this plan')
+    held = {str(a.get('person') or a.get('name')) for a in active if a.get('status') in ('running', 'starting')} | open_embedded_names(env.conn, (env.name, plan, package))
+    if re.sub(r'-\d+$', '', str(name)) in held:   # a name is held by one Queen or Bee at a time
+        return refuse(env, package, 'the name %s is already held by a running Queen or Agent; use the free name %s' % (name, loop.agent_identity(env.conn)['Person']))
+    from . import platform as osplat
+    from . import agent_process
+    running = [{**a, 'status': 'running'} for a in active if agent_process.counts(a)]
+    ensure_attempts(env.conn)
+    embedded_count = env.conn.execute('SELECT COUNT(*) FROM embedded_bees WHERE project=? AND plan_path=? AND ended_at IS NULL', (env.name, plan)).fetchone()[0]
+    if embedded_count + sum(1 for a in running if a.get('project') == env.name and a.get('plan_path') == plan and a.get('phase') == 'bee') >= int(env.settings.get('beesPerQueen', 3)):
+        return refuse(env, package, 'the Queen already has %s Agents running' % env.settings.get('beesPerQueen', 3))
+    plan_row = next((p for p in runtime.list_plans(env.conn, env.name) if p['path'] == plan), None)
+    if plan_row and plan_row['status'] in plan_mod.CUT_STATUSES:
+        return refuse(env, package, 'the plan is not cut yet: write its packages into the header and run bzz plan check first')
+    package_row = next((p for p in env.packages(plan) if p['id'] == package), None)
+    if not package_row:
+        return refuse(env, package, 'the package is not in the plan')
+    if package_stopped(env.conn, env.name, plan, package):
+        return refuse(env, package, 'the owner stopped this package; it starts again only after the owner resumes it')
+    pending = stopping_embedded(env.conn, env.name, plan, package)
+    if pending:
+        return refuse(env, package, 'the stopped subagent Agent %s of this package has not confirmed its end; once it has ended, report it with bzz agent result --outcome interrupted' % pending[0][2])
+    unconfirmed = unconfirmed_embedded(env.conn, env.name, plan, package)
+    if unconfirmed:   # no replacement while the earlier subagent Bee may still run
+        if own_embedded(unconfirmed[0], queen):
+            return refuse(env, package, 'the subagent Agent %s of this package has not confirmed its end; record its result with bzz agent result first' % unconfirmed[0]['name'])
+        return refuse(env, package, 'the subagent Agent %s of the earlier Queen %s has not confirmed its end; record its result with bzz agent result --ended-evidence first' % (
+            unconfirmed[0]['name'], unconfirmed[0].get('queen') or 'unknown'))
+    requested_class = package_row['cls']
+    threshold = int(env.settings.get('escalateAfter', 3))
+    excluded = env.settings.get('excludedProviders', [])
+    need = routine.package_needs_for(env, plan, package)
+    allowed = [p for p in env.providers if p['name'] not in excluded and
+               (p in capable_providers(env.providers, need) if need else
+                ((p.get('endpoint') or p.get('server')) or p['name'] == hive['provider']))]
+    base_class = next((name for name in scheduler.CLASS_NAMES[scheduler.class_index(requested_class):]
+                       if any((p.get('classes', {}).get(name) or {}).get('model') for p in allowed)), None)
+    use_other_provider = False
+    if base_class is None and not need:
+        others = [p for p in env.providers if p['name'] not in excluded]
         base_class = next((name for name in scheduler.CLASS_NAMES[scheduler.class_index(requested_class):]
-                           if any((p.get('classes', {}).get(name) or {}).get('model') for p in allowed)), None)
-        use_other_provider = False
-        if base_class is None and not need:
-            others = [p for p in env.providers if p['name'] not in excluded]
-            base_class = next((name for name in scheduler.CLASS_NAMES[scheduler.class_index(requested_class):]
-                               if any((p.get('classes', {}).get(name) or {}).get('model') for p in others)), None)
-            use_other_provider = base_class is not None
-        if base_class is None:
-            language = roles.language(env.settings)
-            text = (tr('No configured provider offers the capability %s. How should this package continue?', ', '.join(need), language=language) if need
-                    else tr('No configured provider offers the required class or a higher class. How should this package continue?', language=language))
-            if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, plan=plan, item=package)):
-                db.add_question(env.conn, env.name, plan, package, text, tr('Configure an eligible provider.', language=language))
-            return refuse(env, package, 'no configured provider offers the required class or the capability %s (question filed)' % ', '.join(need) if need else 'no configured provider offers the required class (question filed)')
-        current = base_class
-        if retry_epoch(env.conn, env.name, plan, package) is not None:
-            offered = escalation_providers(env, plan, package)
-            while next_class(offered, current, excluded):
-                current = next_class(offered, current, excluded)
-            cls = current   # the owner's answer directs the retry to the highest offered class
-        queen_class = env.settings.get('queenClass', 'medium')
-        if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
-                failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):
-            current = next_class(escalation_providers(env, plan, package), queen_class, excluded)
-            if current is None:
-                return refuse(env, package, 'the package failed %d times at the Queen class %s and no higher class is offered' % (threshold, queen_class))
-        while failure_count(env.conn, env.name, plan, package, current) >= threshold:
-            previous = current
-            current = next_class(escalation_providers(env, plan, package), current, excluded)
-            if current is None:
-                return refuse(env, package, 'the package failed %d times and no higher class is offered' % threshold)
-            if scheduler.class_index(previous) < scheduler.class_index(queen_class) <= scheduler.class_index(current):
-                env.log('Package %s raised to Queen class %s after failures' % (package, current))
-        ensure_attempts(env.conn)
-        stored = env.conn.execute('SELECT class FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
-        if stored and stored[0] == cls and scheduler.class_index(cls) > scheduler.class_index(current):
-            current = cls   # the package was already escalated to this higher class: keep it even when the failure counters were reset
-        if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
-            return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
-        queen_provider = scheduler.get_provider(env.providers, hive['provider'])
-        embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not (queen_provider.get('endpoint') or queen_provider.get('server')) and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
-        free = scheduler.provider_free(env.providers, running, env.conn)   # A subagent Bee needs a free slot of the Queen's provider like a Bee process
-        route_free = dict(free)
-        limited = [p['name'] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # a used-up window (reserve 0) blocks the provider
-        ensure_attempts(env.conn)
-        if embedded:   # a subagent Bee takes a free local provider first, else stays on the Queen's provider, else another one as for other Bees; an escalated package takes the best reserve among them
-            route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, current != base_class or use_other_provider, limited, conn=env.conn)
-        else:   # a process Bee is placed by the normal provider choice like a Queen; the stored assignment keeps only the class (above), the provider is chosen again here
-            route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, True, limited, conn=env.conn)
-        if not route:
-            return refuse(env, package, 'no provider with a free slot offers class %s' % current)
-        provider, selected_class = route
-        env.conn.execute('INSERT INTO bee_assignments(project,plan_path,package,class,provider) VALUES(?,?,?,?,?) ON CONFLICT(project,plan_path,package) DO UPDATE SET class=excluded.class,provider=excluded.provider', (env.name, plan, package, selected_class, provider))
-        pick = scheduler.get_provider(env.providers, provider)
-        pair = prepare_agent_worktree(env, plan, package)
-        if not pair:
-            return refuse(env, package, 'the package worktree could not be prepared; see the round log')
-        cwd, branch = pair
-        if not valid_bee_worktree(env, cwd, queen.get('cwd')):
-            return refuse(env, package, 'the package worktree is not a separate checkout of this repository')
-        # The runner otherwise adds a suffix after the guard was stored. Choose
-        # the final attempt identity first, for process and embedded Agents alike.
-        existing_names = {a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')}
-        existing_names.update(r[0] for r in env.conn.execute('SELECT name FROM embedded_bees WHERE project=?', (env.name,)))
-        requested, suffix = name, 1
-        while name in existing_names:
-            suffix += 1
-            name = '%s-%d' % (requested, suffix)
-        git_environment = record_agent_branch_start(env, name, cwd, branch)
-        if provider == hive['provider'] and embedded:
-            if cwd:
-                if Path(cwd).exists() and not valid_bee_worktree(env, cwd, queen.get('cwd')):
-                    return refuse(env, package, 'the worktree %s is not a valid separate worktree with a branch of this repository' % cwd)
-                env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(Path(cwd).absolute())))
-                cwd = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()[0]
-            entry = (pick.get('classes') or {}).get(selected_class) or {}
-            record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''), queen['name'])
-            record_step_count(env.conn, env.name, plan, package, len(steps))
-            # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
-            prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')))
-            prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
-            return {'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
-        if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
-            return refuse(env, package, 'an Agent process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
-        path = Path(cwd or '')
-        if not cwd or not valid_bee_worktree(env, path, queen.get('cwd')):
-            return refuse(env, package, 'no valid separate worktree for the Agent was given')
-        existing = [a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')]
-        state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'RUNNING'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
-        ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
-        action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs'))), 'class': selected_class}
-        action['prompt'] += '\n\nAssigned worktree: %s; assigned branch: %s.' % (cwd, branch)
-        if not loop._do_start(ctx, action, forced_pick=pick):
-            return refuse(env, package, 'the agent runner could not start the Agent process')
-        env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
+                           if any((p.get('classes', {}).get(name) or {}).get('model') for p in others)), None)
+        use_other_provider = base_class is not None
+    if base_class is None:
+        language = roles.language(env.settings)
+        text = (tr('No configured provider offers the capability %s. How should this package continue?', ', '.join(need), language=language) if need
+                else tr('No configured provider offers the required class or a higher class. How should this package continue?', language=language))
+        if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, plan=plan, item=package)):
+            db.add_question(env.conn, env.name, plan, package, text, tr('Configure an eligible provider.', language=language))
+        return refuse(env, package, 'no configured provider offers the required class or the capability %s (question filed)' % ', '.join(need) if need else 'no configured provider offers the required class (question filed)')
+    current = base_class
+    if retry_epoch(env.conn, env.name, plan, package) is not None:
+        offered = escalation_providers(env, plan, package)
+        while next_class(offered, current, excluded):
+            current = next_class(offered, current, excluded)
+        cls = current   # the owner's answer directs the retry to the highest offered class
+    queen_class = env.settings.get('queenClass', 'medium')
+    if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
+            failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):
+        current = next_class(escalation_providers(env, plan, package), queen_class, excluded)
+        if current is None:
+            return refuse(env, package, 'the package failed %d times at the Queen class %s and no higher class is offered' % (threshold, queen_class))
+    while failure_count(env.conn, env.name, plan, package, current) >= threshold:
+        previous = current
+        current = next_class(escalation_providers(env, plan, package), current, excluded)
+        if current is None:
+            return refuse(env, package, 'the package failed %d times and no higher class is offered' % threshold)
+        if scheduler.class_index(previous) < scheduler.class_index(queen_class) <= scheduler.class_index(current):
+            env.log('Package %s raised to Queen class %s after failures' % (package, current))
+    ensure_attempts(env.conn)
+    stored = env.conn.execute('SELECT class FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+    if stored and stored[0] == cls and scheduler.class_index(cls) > scheduler.class_index(current):
+        current = cls   # the package was already escalated to this higher class: keep it even when the failure counters were reset
+    if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
+        return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
+    queen_provider = scheduler.get_provider(env.providers, hive['provider'])
+    embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not (queen_provider.get('endpoint') or queen_provider.get('server')) and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
+    free = scheduler.provider_free(env.providers, running, env.conn)   # A subagent Bee needs a free slot of the Queen's provider like a Bee process
+    route_free = dict(free)
+    limited = [p['name'] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # a used-up window (reserve 0) blocks the provider
+    ensure_attempts(env.conn)
+    if embedded:   # a subagent Bee takes a free local provider first, else stays on the Queen's provider, else another one as for other Bees; an escalated package takes the best reserve among them
+        route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, current != base_class or use_other_provider, limited, conn=env.conn)
+    else:   # a process Bee is placed by the normal provider choice like a Queen; the stored assignment keeps only the class (above), the provider is chosen again here
+        route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, True, limited, conn=env.conn)
+    if not route:
+        return refuse(env, package, 'no provider with a free slot offers class %s' % current)
+    provider, selected_class = route
+    env.conn.execute('INSERT INTO bee_assignments(project,plan_path,package,class,provider) VALUES(?,?,?,?,?) ON CONFLICT(project,plan_path,package) DO UPDATE SET class=excluded.class,provider=excluded.provider', (env.name, plan, package, selected_class, provider))
+    pick = scheduler.get_provider(env.providers, provider)
+    pair = prepare_agent_worktree(env, plan, package)
+    if not pair:
+        return refuse(env, package, 'the package worktree could not be prepared; see the round log')
+    cwd, branch = pair
+    if not valid_bee_worktree(env, cwd, queen.get('cwd')):
+        return refuse(env, package, 'the package worktree is not a separate checkout of this repository')
+    # The runner otherwise adds a suffix after the guard was stored. Choose
+    # the final attempt identity first, for process and embedded Agents alike.
+    existing_names = {a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')}
+    existing_names.update(r[0] for r in env.conn.execute('SELECT name FROM embedded_bees WHERE project=?', (env.name,)))
+    requested, suffix = name, 1
+    while name in existing_names:
+        suffix += 1
+        name = '%s-%d' % (requested, suffix)
+    git_environment = record_agent_branch_start(env, name, cwd, branch)
+    if provider == hive['provider'] and embedded:
+        if cwd:
+            if Path(cwd).exists() and not valid_bee_worktree(env, cwd, queen.get('cwd')):
+                return refuse(env, package, 'the worktree %s is not a valid separate worktree with a branch of this repository' % cwd)
+            env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(Path(cwd).absolute())))
+            cwd = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()[0]
+        entry = (pick.get('classes') or {}).get(selected_class) or {}
+        record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''), queen['name'])
         record_step_count(env.conn, env.name, plan, package, len(steps))
-        return {'kind': 'process', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute()), 'branch': branch}
+        # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
+        prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')))
+        prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
+        return {'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
+    if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
+        return refuse(env, package, 'an Agent process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
+    path = Path(cwd or '')
+    if not cwd or not valid_bee_worktree(env, path, queen.get('cwd')):
+        return refuse(env, package, 'no valid separate worktree for the Agent was given')
+    existing = [a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')]
+    state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'RUNNING'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
+    ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
+    action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs'))), 'class': selected_class}
+    action['prompt'] += '\n\nAssigned worktree: %s; assigned branch: %s.' % (cwd, branch)
+    if not loop._do_start(ctx, action, forced_pick=pick):
+        return refuse(env, package, 'the agent runner could not start the Agent process')
+    env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
+    record_step_count(env.conn, env.name, plan, package, len(steps))
+    return {'kind': 'process', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute()), 'branch': branch}
 
 
 # The worktrees and the branch that a start of this package would use.
@@ -1140,6 +1143,7 @@ def start_removal_targets(env, plan, package, cwd=None):
         named = None
     if named:
         from . import routine
+        found.append(('worktree', named[1]))
         found.append(('branch', (env.code_repo, named[0])))
         found.append(('branch', (env.code_repo, named[0] + '-' + package.lower())))
         found.append(('worktree', routine.new_worktree(env, routine.plan_tag(env, plan).lower() + '-' + package.lower())))
@@ -1152,7 +1156,8 @@ def start_removal_targets(env, plan, package, cwd=None):
         entries = worktree_entries(env) or []
         paths = [key for kind, key in found if kind == 'worktree']
         for folder, branch in entries:
-            if branch and any(same_folder(folder, path) for path in paths):
+            if branch and (branch == named[0] + '-' + package.lower() or any(same_folder(folder, path) for path in paths)):
+                found.append(('worktree', folder))
                 found.append(('branch', (env.code_repo, branch)))
     try:
         known = env.conn.execute('SELECT branch FROM bee_worktree_branches WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
