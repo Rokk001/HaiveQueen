@@ -361,7 +361,7 @@ def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
             workspace = getattr(env, 'workspace', None)
             if conn is not None and isinstance(workspace, (str, os.PathLike)):
                 runtime.sync_plans(conn, env.name, os.fspath(workspace))
-        worktrees.cleanup_beside_round(envs)   # the round never waits for the cleanup
+            worktrees.cleanup(env)
     with hive_schedule_lock():
         if dry_run:
             import sqlite3

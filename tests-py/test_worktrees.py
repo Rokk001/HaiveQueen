@@ -637,14 +637,13 @@ class CleanupSchedulingTests(unittest.TestCase):
         import os
         import sqlite3
         from haivequeen import scheduler
-        with tempfile.TemporaryDirectory() as folder:   # the cleanup runs beside the round on a file database
+        with tempfile.TemporaryDirectory() as folder:
             conn = sqlite3.connect(os.path.join(folder, 'test.db'))
             env = SimpleNamespace(name='test', settings={}, log=mock.Mock(), conn=conn, workspace=None, colour=None, priority=0, plan_globs=[], plan_exclude=[])
             with mock.patch.object(hives, 'schedule_round', return_value={}), \
                  mock.patch.object(scheduler, 'ProjectEnv', lambda *args: env), \
                  mock.patch.object(worktrees, 'prune', create=True, return_value={'removed': [], 'kept': [], 'notRemovable': []}) as prune:
                 loop.run_round(None, {}, envs=[env])
-                worktrees._background['thread'].join(30)
             conn.close()
         prune.assert_called_once_with(env)
 

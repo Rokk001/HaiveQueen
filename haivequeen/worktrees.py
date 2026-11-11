@@ -784,43 +784,6 @@ def delete_integrated_branches(env):
     return _delete_branches_locked(env)
 
 
-# Run the cleanup of all projects of a round beside the round.
-_background = {'thread': None}
-
-
-def cleanup_beside_round(envs):
-    """Start the cleanup of every project in a thread of its own with its own database connection, so the round never waits for it; a cleanup that still runs is not started twice.
-    A project without a database file (only in tests; the product always has one) is skipped in this round: the cleanup would run in the round and delay it."""
-    import threading
-    from . import db, scheduler
-    running = _background['thread']
-    if running is not None and running.is_alive():
-        return None
-    files = {}
-    for env in envs:
-        try:
-            files[env.name] = next((row[2] for row in env.conn.execute('PRAGMA database_list') if row[1] == 'main'), '')
-        except Exception:
-            files[env.name] = ''
-    if not envs or not all(files.values()):
-        return None
-    # Run the cleanup of each project on a connection of this thread.
-    def work():
-        """Clean up every project with its own connection."""
-        for env in envs:
-            conn = db.connect(files[env.name])
-            try:
-                cleanup(scheduler.ProjectEnv(conn, env.name, env.workspace, env.settings, env.colour, env.priority, env.plan_globs, env.plan_exclude))
-            except Exception as exc:
-                env.log('Worktree cleanup failed: ' + str(exc))
-            finally:
-                conn.close()
-    thread = threading.Thread(target=work, name='worktree-cleanup')
-    _background['thread'] = thread
-    thread.start()
-    return thread
-
-
 # The cleanup after an integration and in every round.
 def cleanup(env):
     """Run the cleanup steps the Project switched on and log each result; a failing step never stops the next one or the caller."""
