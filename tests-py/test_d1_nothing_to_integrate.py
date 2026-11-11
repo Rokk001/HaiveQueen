@@ -215,6 +215,35 @@ class CheckTests(NothingLeftCase):
         self.assertEqual(self.questions("queen-ended"), [])
         self.assertEqual(len(self.queens()), count)
 
+    def test_integrated_row_does_not_bypass_a_pending_completion_check(self):
+        with self.runner("unavailable", "no slot"):
+            self.assertEqual(self.ready()[1].get("waiting"), True)
+        self.git("branch", "dummy")
+        runtime.queue_upsert(self.conn, "testproj", "dummy", tip=self.git("rev-parse", "HEAD"), plan=REL, status="integrated")
+        self.queen_ends()
+        with self.runner("unavailable", "no slot"):
+            self.round(alive=lambda pid: False)
+        self.assertEqual(self.questions("owner-check"), [])
+        self.assertEqual(hives.completion_report(self.conn, "testproj", REL)["state"], "pending")
+        with self.runner("passed"):
+            self.round(alive=lambda pid: False)
+        self.assertEqual(len(self.questions("owner-check")), 1)
+
+    def test_integrated_row_with_failed_pending_check_reopens_work(self):
+        with self.runner("unavailable", "no slot"):
+            self.ready()
+        self.git("branch", "dummy")
+        runtime.queue_upsert(self.conn, "testproj", "dummy", tip=self.git("rev-parse", "HEAD"), plan=REL, status="integrated")
+        self.queen_ends()
+        count = len(self.queens())
+        with self.runner("failed", "missing point"):
+            self.round(alive=lambda pid: False)
+        self.assertEqual(self.status(), "RUNNING")
+        self.assertEqual(len(self.queens()), count + 1)
+        self.assertEqual(self.questions("owner-check"), [])
+        self.assertEqual(self.questions("queen-ended"), [])
+        self.assertIsNone(hives.integrated_ready(self.conn, self.env(), hives.get(self.conn, "testproj", REL)))
+
     def test_failed_check_after_the_queen_ended_starts_a_new_queen(self):
         with self.runner("unavailable", "no slot"):
             self.ready()
