@@ -13,8 +13,16 @@ from haivequeen import export as export_mod, init as init_mod, views  # noqa: E4
 STUBS = ()
 
 
+_CONN = None   # the database of the running command; set by main()
+
+
 def out(obj) -> None:
-    """Print an object as JSON on stdout."""
+    """Print an object as JSON on stdout; a running Queen's answer carries her undelivered owner messages (key owner_messages), and only then."""
+    agent = os.environ.get("BZZ_AGENT")
+    if _CONN is not None and agent and isinstance(obj, dict):
+        messages = runtime.take_owner_messages(_CONN, agent)
+        if messages:
+            obj = {**obj, "owner_messages": messages}
     print(json.dumps(obj, ensure_ascii=False))
 
 
@@ -743,6 +751,8 @@ def main(argv=None) -> int:
     desktop = getattr(args, "desktop", False)
     try:
         conn = db.connect(config.db_path())
+        global _CONN
+        _CONN = conn
         code = args.fn(args, conn)
     except Exception as exc:
         if not desktop:
@@ -750,6 +760,7 @@ def main(argv=None) -> int:
         args.desktop_result = {"ok": False, "error": str(exc)}
         code = fail(str(exc))
     finally:
+        _CONN = None
         if conn is not None:
             conn.close()
     if desktop:

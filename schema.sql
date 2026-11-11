@@ -97,6 +97,14 @@ CREATE TABLE IF NOT EXISTS decisions (
     status TEXT NOT NULL DEFAULT 'active'   -- active, rule (moved into a rule file) or superseded; validated in runtime.update_decision
 );
 
+-- Delivery of owner decisions to a running Queen (one row per decision and Queen): through the start prompt or the answer of a bzz command.
+CREATE TABLE IF NOT EXISTS decision_deliveries (
+    decision_id INTEGER NOT NULL,
+    agent TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    PRIMARY KEY (decision_id, agent)
+);
+
 CREATE TABLE IF NOT EXISTS queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project TEXT NOT NULL,

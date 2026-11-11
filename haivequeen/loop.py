@@ -464,7 +464,7 @@ def _do_start(c, a, forced_pick=None) -> int:
         if protocol != "claude":   # Claude gets the rules in its system prompt file (rules.md); every other provider reads them from its prompt
             loaded = profile.rules_text(profile.project_rules(env.settings, env.code_repo, protocol, a["cwd"]))
         if phase == "queen":
-            loaded += "\n" + profile.queen_load(env.conn, env.name, env.workspace, plan, predecessors[-1]["person"] if predecessors else None)
+            loaded += "\n" + profile.queen_load(env.conn, env.name, env.workspace, plan, predecessors[-1]["person"] if predecessors else None, nm)
     pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff + ("\n\n" + loaded.strip() + "\n" if loaded.strip() else ""), encoding="utf-8")
     ident = agent_identity(env.conn, [predecessors[-1]['person']] if phase == 'queen' and predecessors else ())
     if phase in ("bee", "queen"):   # a Bee and a Queen are named by their short female name (A2); the number of a repeated row key is not part of it
