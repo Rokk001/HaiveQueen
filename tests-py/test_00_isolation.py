@@ -29,6 +29,25 @@ class IsolationActiveTest(unittest.TestCase):
         for rel in ("profile/claude/settings.json", "profile/codex/config.toml", "config.toml", "logs/notes.txt", "profile/stray.txt"):
             self.assertFalse(isolation.is_live(isolation.Path(rel)), rel)
 
+    def test_concurrent_compile_lock_changes_are_ignored_but_writes_are_guarded(self):
+        """A concurrent check changes its locks, while unrelated files and test writes remain visible."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            lock = base / "compile-check.lock"
+            lock.write_text("pid:1\n", encoding="utf-8")
+            before = isolation.snapshot_real([base])
+            lock.unlink()
+            guard = base / "compile-check.lock.guard"
+            guard.write_bytes(b"0")
+            other = base / "compile-check.lock.unrelated"
+            other.write_text("stray", encoding="utf-8")
+            self.assertEqual(isolation.real_folder_changes([base], before), [str(other)])
+            for path in (lock, guard):
+                self.assertTrue(isolation.guard_event("open", (str(path), "w", 0), self.guarded(base)))
+                self.assertTrue(isolation.guard_event("os.remove", (str(path), None), self.guarded(base)))
+
     def test_a_live_rewrite_of_a_settings_file_is_not_a_change_and_hides_nothing(self):
         """The running loop rewrites profile/codex/config.toml at every Codex start: the snapshot leaves that file out whatever its time, and every
         other file still counts. A test's write to the settings file is found by the audit guard instead, also while a live run folder is written."""
