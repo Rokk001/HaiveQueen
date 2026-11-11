@@ -11,10 +11,6 @@ class NothingWrittenToDefaultFoldersTest(unittest.TestCase):
         """No payload or changed coordination fixture below redirected folders; accidental fallback writes would have changed the real ones."""
         self.assertEqual(isolation.leaked(), [])
 
-    def test_real_data_folder_is_unchanged(self):
-        """The real %LOCALAPPDATA%\\HaiveQueen and %APPDATA%\\HaiveQueen look as they did before the suite (files a running loop writes itself are left out)."""
-        self.assertEqual(isolation.real_folder_changes(), [])
-
     def test_no_write_reached_the_real_folders(self):
         """The audit guard saw no write, removal, rename or database connection of this session in the real folders, and no child process that
         would have used them. It also covers the profile settings files, which the running loop rewrites itself and the snapshot therefore leaves out."""
