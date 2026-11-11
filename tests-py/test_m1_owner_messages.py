@@ -6,6 +6,7 @@ import os
 import unittest
 from unittest import mock
 
+import bzztest
 from bzztest import REL, RoundCase, db, runtime
 from haivequeen import cli, inbox, profile
 
@@ -79,6 +80,14 @@ class OwnerMessageTest(RoundCase):
         runtime.add_decision(self.conn, "testproj", "owner", "WIDE")
         self.assertEqual(len(self.note("Mia")[1]["owner_messages"]), 1)
         self.assertEqual(len(self.note("Nora")[1]["owner_messages"]), 1)
+
+    def test_decision_stored_before_the_queen_started_is_not_an_owner_message(self):
+        old = runtime.add_decision(self.conn, "testproj", "owner", "OLD", REL)
+        old_wide = runtime.add_decision(self.conn, "testproj", "owner", "OLD-WIDE")
+        self.conn.execute("UPDATE decisions SET ts=? WHERE id IN (?,?)", (bzztest.minutes_ago(60), old, old_wide))
+        self.agent("Late", phase="queen", status="running", started=1)
+        self.assertNotIn("owner_messages", self.note("Late")[1])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM decision_deliveries WHERE agent='Late'").fetchone()[0], 0)
 
     def test_ended_queen_leaves_it_to_the_next_start_prompt_once(self):
         did = runtime.add_decision(self.conn, "testproj", "owner", "LEFT-OVER", REL)
