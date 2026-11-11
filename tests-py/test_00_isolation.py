@@ -21,7 +21,7 @@ class IsolationActiveTest(unittest.TestCase):
 
     def test_files_the_running_loop_and_dashboard_rewrite_are_live(self):
         """The loop's periodic server test result and the dashboard's update check are rewritten while the suite runs: not a change made by a test."""
-        for rel in ("server-tests.json", "update-check.json"):
+        for rel in ("server-tests.json", "update-check.json", "removal-locks/branch-1.lock.guard"):
             self.assertTrue(isolation.is_live(isolation.Path(rel)), rel)
 
     def test_files_haivequeen_writes_itself_are_not_live(self):
