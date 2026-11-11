@@ -202,7 +202,6 @@ _WORKTREE_REASONS = (
     ("a start is using it", "ein Start verwendet ihn gerade"),
     ("already removed", "bereits entfernt"),
     ("another cleanup is deleting it", "eine andere Bereinigung löscht ihn gerade"),
-    ("its worktree or branch is being removed by a cleanup; the start is left to the next round", "sein Worktree oder Branch wird gerade von einer Bereinigung entfernt; der Start bleibt der nächsten Runde überlassen"),
     ("remote not readable: ", "Remote nicht lesbar: "),
     ("the integrated tip is not in the integration branch", "der integrierte Stand ist nicht im Integrations-Branch"),
 )
