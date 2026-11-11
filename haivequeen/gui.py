@@ -1512,6 +1512,9 @@ class Dashboard:
             from . import bees
             if found[0]["package"]:
                 bees.stop_package(self.conn, bee["project"], found[0]["plan_path"] or bee["plan_path"], found[0]["package"])
+            else:   # a fix agent of the Orchestrator: never restarted automatically, its plan waits for the owner (M-4)
+                from . import orchestrator
+                orchestrator.owner_stop(self.conn, bee["project"], bee["agent"])
             osplat.kill_process_tree(found[0]["pid"])
             self.refresh_soon()
 

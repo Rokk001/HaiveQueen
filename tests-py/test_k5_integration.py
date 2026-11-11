@@ -237,23 +237,14 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "milestones.txt").write_text("".join(line + "\n" for line in lines), encoding="utf-8")
 
-    def test_ready_is_refused_while_the_build_package_is_open(self):
+    def test_ready_is_not_held_by_a_build_package(self):
+        """O-1: the Build is a step of the Orchestrator after ready, not of the Queen."""
         self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), deployEnabled=False)
         self.hive()
         self.queen()
         code, result = self.ready()
-        self.assertEqual(code, 1)
-        self.assertIn(integration.BUILD, result["error"])
-        self.assertFalse(db.queue_rows(self.conn, "testproj"))
-        bees.set_package_state(self.conn, "testproj", REL, integration.BUILD, "done", "queen")
-        self.assertEqual(self.ready()[0], 0)
-
-    def test_ready_leaves_the_deploy_package_open(self):
-        self.use(provider("claude", "Coding", "Queen", "Build"), provider("shipper", "Deploy"))
-        env = self.hive()
-        self.queen()
-        self.assertEqual(self.ready()[0], 0)
-        self.assertEqual(integration.open_steps(env, REL), [integration.DEPLOY])
+        self.assertEqual(code, 0, result)
+        self.assertTrue(db.queue_rows(self.conn, "testproj"))
 
     def worktree(self):
         """A Git folder with one commit, used as the Queen's worktree; returns its path."""
@@ -276,48 +267,11 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         self.queen(folder)
         return folder
 
-    def test_ready_is_refused_until_bzz_compile_check_ran(self):
+    def test_ready_needs_no_compile_check_result(self):
         self.checked()
         code, result = self.ready()
-        self.assertEqual(code, 1)
-        self.assertIn("bzz compile-check --project testproj --plan %s" % REL, result["error"])
-
-    def test_a_compile_check_line_in_the_milestones_does_not_count(self):
-        """Ella-12 ran the check wrapped twice; whatever the milestones say, only the stored result of bzz compile-check opens bzz ready."""
-        self.checked()
-        self.milestones("Green\t10:05 Compile test - Exit 0: ok")
-        self.assertEqual(self.ready()[0], 1)
-
-    def test_compile_check_runs_the_command_in_the_worktree_and_ready_accepts_that_commit(self):
-        folder = self.checked()
-        code, result = self.call(cli.cmd_compile_check)
-        self.assertEqual((code, result["ok"], result["exit"]), (0, True, 0), result)
-        self.assertEqual(result["commit"], integration.head_commit(folder))
-        self.assertEqual(Path(Path(folder, "ran.txt").read_text(encoding="utf-8")).resolve(), Path(folder).resolve())
-        stored = integration.compile_result(self.conn, "testproj", "Ada")
-        self.assertEqual((stored["ok"], stored["commit"], stored["command"]), (True, result["commit"], self.env().settings["compileCheck"]))
-        self.assertTrue(stored["time"] and stored["seconds"] >= 0)
-        live = (self.env().run_dir("Ada") / "milestones.txt").read_text(encoding="utf-8").splitlines()
-        self.assertEqual(integration.COMPILE_MILESTONE.match(live[-1]).group(1), "Green")
-        self.assertEqual(self.ready()[0], 0)
-
-    def test_a_red_compile_check_exits_1_and_ready_is_refused(self):
-        self.checked(exit_code=3)
-        code, result = self.call(cli.cmd_compile_check)
-        self.assertEqual((code, result["ok"], result["exit"]), (1, False, 3), result)
-        code, refused = self.ready()
-        self.assertEqual(code, 1)
-        self.assertIn("failed", refused["error"])
-
-    def test_a_commit_after_the_compile_check_needs_a_new_run(self):
-        folder = self.checked()
-        self.assertEqual(self.call(cli.cmd_compile_check)[0], 0)
-        self.commit(folder, "two")
-        code, refused = self.ready()
-        self.assertEqual(code, 1)
-        self.assertIn("run bzz compile-check", refused["error"])
-        self.assertEqual(self.call(cli.cmd_compile_check)[0], 0)
-        self.assertEqual(self.ready()[0], 0)
+        self.assertEqual(code, 0, result)
+        self.assertIsNone(integration.compile_result(self.conn, "testproj", "Ada"))
 
     def test_compile_check_is_for_the_queen_of_the_hive_only(self):
         self.use(self.providers[0], compileCheck="npm test")
@@ -325,15 +279,6 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         code, result = self.call(cli.cmd_compile_check)
         self.assertEqual(code, 1)
         self.assertIn("not this Plan's Queen", result["error"])
-
-    def test_compile_check_does_nothing_when_switched_off(self):
-        self.use(self.providers[0], compileCheck="")
-        self.hive()
-        self.queen(self.worktree())
-        code, result = self.call(cli.cmd_compile_check)
-        self.assertEqual(code, 0)
-        self.assertIn("skipped", result)
-        self.assertIsNone(integration.compile_result(self.conn, "testproj", "Ada"))
 
     def test_compile_check_has_a_command_line(self):
         args = cli.build_parser().parse_args(["compile-check", "--project", "p", "--plan", "x.md"])
@@ -392,19 +337,6 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         self.assertEqual(code, 1)
         self.assertIn("switched off", result["error"])
 
-    def test_open_deploy_package_keeps_the_integrated_plan_open(self):
-        self.use(provider("claude", "Coding", "Queen", "Build"), provider("shipper", "Deploy"))
-        env = self.hive()
-        integration.sync(env, REL, "claude")
-        ready = db.add_ready(self.conn, "testproj", "b", integrated_tip(self.repo), REL, "")
-        self.conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (ready["id"], "testproj", REL))
-        runtime.queue_upsert(self.conn, "testproj", "b", status="integrated")
-        hives.reconcile_completed(self.conn, env, alive=lambda pid: False)
-        self.assertEqual(runtime.list_questions(self.conn, "testproj", plan=REL, item="owner-check"), [])
-        bees.set_package_state(self.conn, "testproj", REL, integration.DEPLOY, "done", "queen")
-        hives.reconcile_completed(self.conn, env, alive=lambda pid: False)
-        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", plan=REL, item="owner-check")), 1)
-
 
 class VerifyBuildTests(IntegrationCase):
     """With the build switch off, verify = "build" is closed like a code package."""
@@ -424,7 +356,7 @@ class VerifyBuildTests(IntegrationCase):
 
 
 class StartTextTests(IntegrationCase):
-    """The Queen start text holds only the switched-on steps."""
+    """The Queen start text holds no integration step: she calls bzz ready and ends (O-1)."""
 
     def text(self, name="claude"):
         return integration.start_text(self.env(), REL, name)
@@ -432,54 +364,13 @@ class StartTextTests(IntegrationCase):
     def config(self):
         return integration.configuration(self.env(), REL)
 
-    def test_release_worktree_only_with_deploy_on(self):
-        self.use(self.providers[0])
-        self.hive()
-        self.assertIn("release worktree", self.text())
-        self.use(self.providers[0], deployEnabled=False)
-        self.assertNotIn("release worktree", self.text())
-        self.assertIn("Deploy step is switched off", self.text())
-
-    def test_steps_are_numbered_without_gap(self):
-        self.use(self.providers[0], deployEnabled=False, compileCheck="")
+    def test_the_text_ends_at_bzz_ready(self):
+        self.use(self.providers[0], compileCheck="npm test", deployEnabled=True)
         self.hive()
         text = self.text()
-        self.assertIn("1. Register your own branch", text)
-        self.assertIn("3. Integrate your own branch", text)
-        self.assertNotIn("4. ", text)
-        self.assertIn("compile check is switched off", text)
-
-    def test_compile_check_step_with_a_command(self):
-        self.use(self.providers[0], compileCheck="npm test")
-        self.hive()
-        text = self.text()
-        self.assertIn("Run the compile check with bzz compile-check --project testproj --plan %s" % REL, text)
-        self.assertIn("Do not run that command yourself", text)
-
-    def test_delegated_steps_name_their_packages(self):
-        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build", "Deploy"))
-        self.hive()
-        text = self.text()
-        self.assertIn(integration.BUILD, text)
-        self.assertIn(integration.DEPLOY, text)
-        self.assertNotIn("release worktree", text)
-
-    def test_no_provider_tells_the_queen_to_wait_for_the_owner(self):
-        self.use(provider("claude", "Coding", "Queen"), deployEnabled=False)
-        self.hive()
-        self.assertIn("WAITING_FOR_OWNER", self.text())
-
-    def test_deploy_without_a_provider_does_not_promise_a_refused_release(self):
-        self.use(provider("claude", "Coding", "Queen", "Build"))
-        self.hive()
-        text = self.text()
-        self.assertIn("the end of the plan is held back", text)
-        self.assertNotIn("bzz integration release and the end of the plan", text)
-
-    def test_build_off_states_the_verify_rule(self):
-        self.use(self.providers[0], buildEnabled=False)
-        self.hive()
-        self.assertIn("verify build is closed like a code package", self.text())
+        self.assertIn("bzz ready --project testproj --plan %s" % REL, text)
+        for word in ("compile-check", "integration acquire", "integration release", "release worktree", "Deploy step", "Build step"):
+            self.assertNotIn(word, text)
 
     def test_owner_topics_win_over_triage_and_empty_list_is_silent(self):
         self.use(self.providers[0])

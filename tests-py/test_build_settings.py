@@ -415,8 +415,8 @@ class InstructionsTest(RoundCase):
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")
         text = (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8")
-        for part in ("Parallel as the --parallel value", "do not ask a question about that difference"):
-            self.assertIn(part, text)
+        for part in ("Parallel as the --parallel value", "bzz integration acquire"):
+            self.assertNotIn(part, text)   # the Queen builds nothing (O-1); the Orchestrator applies the job values before Build and Deploy
 
 
 class IconTest(unittest.TestCase):

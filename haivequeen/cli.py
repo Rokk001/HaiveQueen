@@ -89,14 +89,7 @@ def cmd_ready(args, conn) -> int:
                 out({"ok": True, "nothing_to_integrate": True})
                 return 0
             hives.set_completion(conn, args.project, plan, "")
-            from haivequeen import integration
-            integration.sync(env, plan, hives.get(conn, args.project, plan)["provider"])
-            held = integration.open_steps(env, plan, ("Build",))
-            if held:
-                return fail("ready refused: integration step package %s is not done; start an Agent for it, or wait for the answer of the owner" % ", ".join(held))
-            missing = integration.compile_check_missing(env, row, plan)
-            if missing:
-                return fail("ready refused: " + missing)
+            # no compile check result is needed: the Orchestrator runs the check, the build, the push and the deploy after an accepted ready
             accepted, message, waiting = readygate.gate(env, plan, row)   # requirement list first, then the fresh check agent
             if not accepted:
                 if waiting:
@@ -145,6 +138,8 @@ def cmd_compile_check(args, conn) -> int:
     row = runtime.get_agent(conn, args.project, agent) if agent else None
     if not row or row.get("phase") not in ("queen", "bee") or not _plan_matches(conn, args.project, row.get("plan_path"), args.plan) or hives.get(conn, args.project, row.get("plan_path")) is None:
         return fail("compile-check refused: not this Plan's Queen or Agent")
+    if row.get("phase") == "queen" and not getattr(args, "worktree", None):   # her subagent Agents call it with their worktree (F-9)
+        return fail("compile-check refused: the Queen runs no compile check; the Orchestrator runs it after bzz ready")
     env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
     if env is None:
         return fail("compile-check refused: unknown project")

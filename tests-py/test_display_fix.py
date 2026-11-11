@@ -43,21 +43,16 @@ class QueenNameTest(RoundCase):
 class QueenOrderTest(RoundCase):
     """The Queen order runs ready before acquiring the integration place: the release worktree may only be recreated by the Queen who holds the place."""
 
-    def test_ready_precedes_acquire_and_release_worktree(self):
-        """The Queen runs the compile check and ready before acquiring the place."""
-        self.conn.execute("UPDATE projects SET legacy_deploy=1")   # the release worktree step is in the text only with deploy on
-        for entry in self.machine["providers"]:   # and only for a Queen whose provider has the Deploy tick
-            entry.update(capabilitiesVersion=1, capabilities=["Coding", "Queen", "Build", "Deploy"])
-        self.machine["compileCheck"] = "npm test"   # without a compile check command the step is not in the text
+    def test_the_queen_prompt_ends_at_ready(self):
+        """O-1: the Queen is told to call bzz ready and end; no integration step follows."""
+        self.machine["compileCheck"] = "npm test"
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         queen = next(a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen")
         text = (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8")
-        marks = ["compile check", "bzz ready", "bzz integration acquire", "release worktree", "bzz integration release"]
-        at = [text.find(m) for m in marks]
-        self.assertNotIn(-1, at, dict(zip(marks, at)))
-        self.assertEqual(at, sorted(at), dict(zip(marks, at)))
-        self.assertNotIn("Register your own branch with bzz ready, then", text)
+        self.assertIn("bzz ready", text)
+        for mark in ("bzz compile-check --project", "bzz integration acquire --project", "release worktree", "bzz integration release --project"):
+            self.assertNotIn(mark, text)
 
 
 class PlannedBuildJobsTest(unittest.TestCase):
@@ -85,14 +80,14 @@ class PlannedBuildJobsTest(unittest.TestCase):
 
 
 class QueenEndRuleTest(unittest.TestCase):
-    """A Queen ends only when the plan is integrated, only owner questions remain, or the Beekeeper asked for a handoff."""
+    """A Queen ends only when bzz ready was accepted, only owner questions remain, or the Beekeeper asked for a handoff."""
 
     def test_the_queen_order_names_the_three_ways_to_end(self):
         """The Queen instructions say that she works through all open packages in one run and list the only three reasons to end."""
         from haivequeen import bees
         text = bees.queen_instructions("medium", 3, 3, 300000)
         self.assertIn("You end only when", text)
-        for reason in ("integrated", "WAITING_FOR_OWNER", "HANDOFF"):
+        for reason in ("bzz ready", "WAITING_FOR_OWNER", "HANDOFF"):   # O-1: the Queen ends at an accepted ready
             self.assertIn(reason, text[text.index("You end only when"):])
         self.assertIn("never end after an intermediate step", text)
         self.assertIn("wins over any rule", text[text.index("never end after an intermediate step"):])

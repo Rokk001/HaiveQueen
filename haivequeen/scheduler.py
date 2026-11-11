@@ -53,6 +53,8 @@ DEFAULT_SETTINGS = {
     "worktreeLocation": "",
     "ownerTopics": [],
     "compileCheck": "",
+    "buildCommand": "",    # the Build step of the Orchestrator pipeline: one command line run in the plan's worktree; empty = the step is skipped
+    "deployCommand": "",   # the Deploy step of the Orchestrator pipeline, likewise
     "buildEnabled": True,
     "deployEnabled": False,  # an Apiary from before the switches keeps it on: build_settings(legacy_deploy)
     "deleteFinishedWorktrees": True,

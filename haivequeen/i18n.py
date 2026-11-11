@@ -159,6 +159,7 @@ _WORKTREE_REASONS = (
     ("protected worktree", "geschützter Worktree"),
     ("unresolved plan worktree conflict", "ungelöster Konflikt um den Plan-Worktree"),
     ("locked or missing", "gesperrt oder fehlt"),
+    ("the Orchestrator integrates this plan", "der Orchestrator integriert diesen Plan"),
     ("branch has an open queue row", "Branch hat eine offene Zeile in der Warteschlange"),
     ("branch has no current integrated queue row", "Branch hat keine aktuelle integrierte Zeile in der Warteschlange"),
     ("integrated queue tip is invalid", "Commit der integrierten Zeile in der Warteschlange ist ungültig"),
@@ -201,6 +202,17 @@ _WORKTREE_REASONS = (
 
 _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     (r"^Owner action: (.*)$", r"Aktion des Owners: \1"),
+    # ---- the Orchestrator pipeline
+    (r"^Orchestrator: plan (.*): (.*)$", r"Orchestrator: Plan \1: \2"),
+    (r"^(.+): Queen done, integration taken over$", r"\1: Queen fertig, Integration übernommen"),
+    (r"^(.+): (Merge|Check|Build|Push|Deploy) started( \(\d+/\d+\))?$", r"\1: \2 gestartet\3"),
+    (r"^(.+): (Merge|Check|Build|Push|Deploy) done( \(\d+/\d+\))?(?: - (.*))?$", lambda m: "%s: %s fertig%s%s" % (m.group(1), m.group(2), m.group(3) or "", (" - " + m.group(4)) if m.group(4) else "")),
+    (r"^(.+): (Merge|Check|Build|Push|Deploy) red( \(\d+/\d+\))? - (.*)$", r"\1: \2 rot\3 - \4"),
+    (r"^(.+): fix agent (\S+) started \(Fix: (.*)\)$", r"\1: Fix-Agent \2 gestartet (Fix: \3)"),
+    (r"^(.+): fix agent (\S+) ended$", r"\1: Fix-Agent \2 beendet"),
+    (r"^(.+): fix agent (stopped|escalation), the owner is asked \(question (\d+)\)$", r"\1: Fix-Agent \2, der Owner wird gefragt (Frage \3)"),
+    (r"^(.+): integration done, commit (\S+)$", r"\1: Integration fertig, Commit \2"),
+    (r"^(.+): the remote integration branch moved, integration starts again at Merge$", r"\1: der Remote-Integrationsbranch hat sich bewegt, die Integration beginnt wieder bei Merge"),
     # ---- worktree cleanup, before the general patterns: its JSON holds free text
     (r"^Worktree cleanup failed: (.*)$", lambda m: "Worktree-Bereinigung fehlgeschlagen: " + _worktree_reason(m.group(1))),
     (r"^Worktree cleanup: (.*)$", _worktree_cleanup),
@@ -597,6 +609,10 @@ GERMAN = {
     "No configured provider offers the required class or a higher class. How should this package continue?": "Kein eingerichteter Anbieter bietet die nötige oder eine höhere Klasse. Wie soll dieses Paket weitergehen?",
     "Configure an eligible provider.": "Richte einen geeigneten Anbieter ein.",
     "\n\nReport of the Queen:\n": "\n\nBericht der Queen:\n",
+    "\n\nReport of the fix agent:\n": "\n\nBericht des Fix-Agenten:\n", "\n\nIntegrated commit: ": "\n\nIntegrierter Commit: ", "\nSteps that ran: ": "\nAusgeführte Schritte: ",
+    "The fix agent of plan %s was stopped by you. It is not restarted automatically. What should happen next?": "Der Fix-Agent des Plans %s wurde von dir gestoppt. Er wird nicht automatisch neu gestartet. Wie soll es weitergehen?",
+    "The fix agents of plan %s could not fix the integration (step: %s) in any offered class. How should it go on?": "Die Fix-Agenten des Plans %s konnten die Integration (Schritt: %s) in keiner angebotenen Klasse reparieren. Wie soll es weitergehen?",
+    "Give an instruction for the next fix agent.": "Gib eine Anweisung für den nächsten Fix-Agenten.",
     "no final text (status %s)": "kein Abschlusstext (Status %s)",
     "Queen %s of this Plan ended without new work (no commit, no changed file, no question). Her last text: %s How should the Plan continue?": 'Queen %s dieses Plans endete ohne neue Arbeit (kein Commit, keine geänderte Datei, keine Frage). Ihr letzter Text: %s Wie soll der Plan weitermachen?',
     "Answer what blocks her, or say how she should count or decide it; then the next Queen starts.": "Antworte, was sie blockiert, oder sage, wie sie es zählen oder entscheiden soll; dann startet die nächste Queen.",

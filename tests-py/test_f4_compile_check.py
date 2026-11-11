@@ -91,9 +91,8 @@ class WhoMayCheckTests(CompileCheckCase):
         self.assertIsNone(integration.compile_result(self.conn, "testproj", "Ada"))
         self.assertTrue(runtime.kv_get(self.conn, "testproj", integration.COMPILE_AGENT_KEY + "Bo"))
         self.as_agent("Ada")
-        code, refused = self.ready()
-        self.assertEqual(code, 1)
-        self.assertIn("compile check was not run", refused["error"])
+        code, accepted = self.ready()
+        self.assertEqual(code, 0, accepted)   # O-1: the Queen needs no compile check result, the Orchestrator runs the check
 
     def test_a_subagent_agent_names_its_worktree_and_the_result_does_not_count_for_ready(self):
         _queen_tree, bee_tree = self.setup_plan(QUICK)
@@ -105,7 +104,7 @@ class WhoMayCheckTests(CompileCheckCase):
         self.assertEqual((code, result["ok"]), (0, True), result)
         self.assertEqual(result["commit"], integration.head_commit(sub_tree))
         self.assertIsNone(integration.compile_result(self.conn, "testproj", "Ada"))
-        self.assertEqual(self.ready()[0], 1)
+        self.assertEqual(self.ready()[0], 0)   # ready needs no check result of the Queen (O-1)
         code, result = self.call(worktree=bee_tree)   # the worktree of the running process Agent Bo is one of the Plan's Agents too
         self.assertEqual(code, 0, result)
 
@@ -135,11 +134,13 @@ class WhoMayCheckTests(CompileCheckCase):
         self.assertEqual(code, 0)
         self.assertIn("skipped", result)
 
-    def test_the_queen_result_still_counts_for_ready(self):
+    def test_the_queen_runs_no_compile_check_of_her_own(self):
         self.setup_plan(QUICK)
         self.as_agent("Ada")
-        self.assertEqual(self.call()[0], 0)
-        self.assertIsNotNone(integration.compile_result(self.conn, "testproj", "Ada"))
+        code, result = self.call()
+        self.assertEqual(code, 1)
+        self.assertIn("Queen runs no compile check", result["error"])
+        self.assertIsNone(integration.compile_result(self.conn, "testproj", "Ada"))
         self.assertEqual(self.ready()[0], 0)
 
     def test_the_command_line_takes_a_worktree(self):
@@ -363,10 +364,10 @@ class SettingTests(unittest.TestCase):
 
 class RoleTextTests(unittest.TestCase):
     def test_agent_and_queen_texts_name_the_command_and_waiting_without_polling(self):
-        for name in ("bee", "queen"):
-            text = (roles.ROLES_DIR / (name + ".md")).read_text(encoding="utf-8")
-            self.assertIn("bzz compile-check", text, name)
-            self.assertIn("without polling", text, name)
+        text = (roles.ROLES_DIR / "bee.md").read_text(encoding="utf-8")
+        self.assertIn("bzz compile-check", text)
+        self.assertIn("without polling", text)
+        self.assertNotIn("bzz compile-check", (roles.ROLES_DIR / "queen.md").read_text(encoding="utf-8"))   # O-1: the Queen runs no compile check
         self.assertIn("--worktree", (roles.ROLES_DIR / "bee.md").read_text(encoding="utf-8"))
 
 

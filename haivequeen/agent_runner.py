@@ -855,7 +855,7 @@ def report_prompt(prompt_file, project, agent_id, phase=None):
     """Return the CLI prompt with phase-specific reporting commands and no double quotes."""
     orch = "'%s' -I '%s'" % (osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py")
     text = ('Read the file "%s" completely and carry out exactly the task described there. Do nothing else.' % prompt_file)
-    if phase == "bee":
+    if phase in ("bee", "fix"):
         text += " Final report: %s done --agent %s --result <file>; step report: %s note --project %s --text <text>." % (orch, agent_id, orch, project)
         return text.replace('"', "")
     text += (" Report only with these commands, never by editing a queue file or state table by hand (the handoff text in the state file of the plan stays your own file): "

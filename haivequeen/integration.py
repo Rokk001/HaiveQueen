@@ -225,10 +225,21 @@ def _acquire_compile_lock(poll):
         time.sleep(poll)
 
 
+# Give the machine-wide compile check lock back.
+def _release_compile_lock(lock, poll):
+    """Remove the lock file of this process."""
+    with _compile_lock_guard(lock, poll):
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+
 # Run the compile command and watch its progress.
-def _watch_compile(command, cwd, stall_seconds, max_seconds, poll):
+def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, label="compile check", on_start=None):
     """Run `command` in `cwd` until it ends; returns (exit code, output text). The check ends red (124) after max_seconds of running and red (125,
-    "stalled") when for stall_seconds neither a new output line appeared nor the CPU time of its process tree grew."""
+    "stalled") when for stall_seconds neither a new output line appeared nor the CPU time of its process tree grew. `env` adds environment variables,
+    `label` names the command in the messages and `on_start(pid)` is called once the process runs (the Orchestrator keeps it to end the command)."""
     import collections
     import threading
     lines = collections.deque(maxlen=400)
@@ -241,7 +252,10 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll):
 
     # The configured command line is the owner's own text, so the system shell runs it (named explicitly, no shell flag): cmd /s keeps a quoted program path intact.
     line = 'cmd.exe /d /s /c "%s"' % command if os.name == "nt" else ["/bin/sh", "-c", command]
-    proc = subprocess.Popen(line, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+    proc = subprocess.Popen(line, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                            env={**os.environ, **env} if env else None)
+    if on_start:
+        on_start(proc.pid)
     proctree.exempt_register(proc.pid)   # started by HaiveQueen, not by the agent: the cleanup of the agent's leftover processes leaves it alone
     reader = threading.Thread(target=read, args=(proc.stdout,), daemon=True)
     reader.start()
@@ -254,9 +268,9 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll):
             if state["lines"] != seen_lines or abs(cpu - seen_cpu) > 0.001:
                 seen_lines, seen_cpu, last_progress = state["lines"], cpu, now
             if now - started > max_seconds:
-                ended = (124, "the compile check ran longer than %g minutes (compileMaxMinutes)" % (max_seconds / 60.0))
+                ended = (124, "the %s ran longer than %g minutes (compileMaxMinutes)" % (label, max_seconds / 60.0))
             elif now - last_progress > stall_seconds:
-                ended = (125, "stalled: the compile check made no output and used no CPU for %g minutes (compileStallMinutes)" % (stall_seconds / 60.0))
+                ended = (125, "stalled: the %s made no output and used no CPU for %g minutes (compileStallMinutes)" % (label, stall_seconds / 60.0))
             if ended:
                 osplat.kill_process_tree(proc.pid)
                 break
@@ -296,11 +310,7 @@ def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True
             code, output = 127, "the compile check could not start: %s" % exc
     finally:
         if lock:
-            with _compile_lock_guard(lock, poll):
-                try:
-                    lock.unlink()
-                except OSError:
-                    pass
+            _release_compile_lock(lock, poll)
     result = {"ok": code == 0, "exit": code, "commit": commit, "time": db.now(), "seconds": round(time.time() - started, 1), "command": command}
     if code == 125:
         result["stalled"] = True
@@ -319,79 +329,21 @@ def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True
     return {**result, "output": "\n".join(output.strip().splitlines()[-40:])[-4000:]}
 
 
-# Whether the Queen's run has a passed compile check for her current commit.
-def compile_check_missing(env, queen, plan):
-    """The reason `bzz ready` waits for the compile check, or '': the step is on, a command is configured and the Queen has no green `bzz compile-check` result for the commit her worktree stands on."""
-    if not switches(env.settings)["compileCheck"] or not str(env.settings.get("compileCheck") or "").strip():
-        return ""
-    again = "run bzz compile-check --project %s --plan %s, then call bzz ready again" % (env.name, plan)
-    result = compile_result(env.conn, env.name, queen["name"])
-    if not result:
-        return "the compile check was not run in this Queen run; " + again
-    if not result.get("ok"):
-        return "the last compile check of this Queen run failed; fix it, " + again
-    head = head_commit(queen.get("cwd"))
-    if not head:
-        return "the commit of the worktree cannot be read, so the compile check cannot be matched to it"
-    if result.get("commit") != head:
-        return "the green compile check is for commit %s but the worktree is at %s; %s" % (str(result.get("commit"))[:7], head[:7], again)
-    return ""
-
-
-# The integration part of the Queen's start text.
+# The end of the Queen's start text.
 def start_text(env, plan, provider_name):
-    """The numbered integration order with only the switched-on steps, followed by what the switches and capabilities mean for this Queen."""
-    on = switches(env.settings)
-    states = step_states(env, provider_name)
-    acquire = ("Use bzz integration acquire --project %s --plan %s. Use the returned buildJobs EnvVar and Jobs for the integration build and the plan build, and the returned Parallel as the "
-               "--parallel value of the build command (also in the variable named by ParallelVar); the build starts only while the free RAM is at least MinFreeGB. These values win over a "
-               "--parallel value or RAM minimum in a project rule: do not ask a question about that difference. If it reports waiting for integration, write a handoff and end until restarted. "
-               "After acquiring the place, abort any unfinished merge in the project integration checkout before integrating again." % (env.name, plan))
-    order = [("Run the compile check with bzz compile-check --project %s --plan %s: it runs the command compileCheck of the project configuration in your worktree and stores the result for your current commit. "
-              "Do not run that command yourself; bzz ready accepts only this result and only for the commit your worktree is at, so run it again after every new commit. Then register your own branch with bzz ready."
-              % (env.name, plan) if on["compileCheck"] else "Register your own branch with bzz ready."), acquire]
-    if states["Deploy"] == "queen":
-        order.append("If the release worktree of the project is missing, create it again and build it according to the integration rules of the project; only the Queen who holds the integration place may do this.")
-    order.append("Integrate your own branch, then release the integration place with bzz integration release --project %s --plan %s." % (env.name, plan))
-    text = "Then follow this order. " + " ".join("%d. %s" % (i + 1, step) for i, step in enumerate(order))
+    """What the Queen does at the end: she does not integrate. HaiveQueen's Orchestrator merges, checks, builds, pushes and deploys after her `bzz ready`."""
+    text = ("When every requirement is done, merge the branches of your Agents into the plan branch, write the completeness answer, call bzz ready --project %s --plan %s and end your run. "
+            "Do nothing after that: the Orchestrator of HaiveQueen takes over the plan after an accepted bzz ready." % (env.name, plan))
     text += " If only open owner questions remain, write a handoff and end your final report with WAITING_FOR_OWNER."
-    if not on["compileCheck"]:
-        text += " The compile check is switched off for this Project: do not run it."
-    text += " " + _step_sentence("Build", BUILD, states["Build"], "before bzz ready", "bzz ready is refused")
-    deploy_held = "the end of the plan is held back" if states["Deploy"] == "owner" else "bzz integration release and the end of the plan are held back"   # the place is not held for an owner answer
-    text += " " + _step_sentence("Deploy", DEPLOY, states["Deploy"], "after you integrated and before you release the integration place", deploy_held)
-    if not on["build"]:
-        text += " A package marked verify build is closed like a code package (compile check and evidence); never report build as a wait."
-    text += " These switches win over project rules and over the configured integration steps below."
     return text
-
-
-# One sentence about a Build or Deploy step.
-def _step_sentence(capability, package, state, when, held):
-    """What the Queen does for a step in the given state."""
-    if state == "off":
-        return "The %s step is switched off for this Project: do not perform it." % capability
-    if state == "queen":
-        return "The %s step is switched on and it is yours: do it yourself %s, according to the integration rules of the project." % (capability, when)
-    if state == "package":
-        return ("The %s step is switched on but your provider lacks %s: it is package %s of this plan, for a provider that has %s. Start an Agent for it with bzz agent start %s; until it is done %s."
-                % (capability, capability, package, capability, when, held))
-    return ("The %s step is switched on but no configured provider has %s: the owner has been asked (item %s); until a provider has it, the step is switched off or his answer lets you set package %s done, %s. "
-            "Go on with everything else, then write a handoff and end your final report with WAITING_FOR_OWNER." % (capability, capability, package, package, held))
 
 
 # The project integration configuration a Queen gets.
 def configuration(env, plan):
-    """Branch, remote, worktree location and the settings of the switched-on steps; a configured integrator prompt is expanded with the same values."""
+    """Branch, remote and worktree location of the project (the Orchestrator runs the commands; the Queen gets none of them)."""
     s = env.settings
-    on = switches(s)
-    config = {"integrationBranch": str(s.get("integrationBranch") or "main"), "remoteName": str(s.get("remoteName") or "origin"),
-              "worktreeLocation": str(s.get("worktreeLocation") or "beside the repository")}
-    if on["compileCheck"] and s.get("compileCheck"):
-        config["compileCheck"] = s["compileCheck"]
-    if on["build"] or on["deploy"]:
-        config.update({key: s[key] for key in ("integratorInstructions", "buildFlowDoc") if s.get(key)})
-    return config
+    return {"integrationBranch": str(s.get("integrationBranch") or "main"), "remoteName": str(s.get("remoteName") or "origin"),
+            "worktreeLocation": str(s.get("worktreeLocation") or "beside the repository")}
 
 
 # The owner topics in the Queen's start text.

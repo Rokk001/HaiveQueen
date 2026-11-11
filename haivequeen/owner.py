@@ -136,6 +136,8 @@ def apply(conn, action, project=None, plan=None, **fields):
             if ready:
                 runtime.kv_set(conn, project, "hive-rejected-ready:" + plan, str(ready[0]))
             hives.reopen_after_owner_check(conn, project, plan)
+            from . import orchestrator
+            orchestrator.begin_owner_fix(conn, project, plan, fields.get("text") or "")   # a fix agent gets his answer; no Queen starts
             for package in fields.get("packages", []):
                 bees.set_package_state(conn, project, plan, package, "rejected", by)
             if paused:
