@@ -291,37 +291,121 @@ def _state_summary(env, quiet=False) -> dict:
 # Track failed releases and serialize threads before recovering a lock owned by this process.
 _hive_schedule_guard = threading.Lock()
 _abandoned_hive_locks = set()
+HIVE_LOCK_HEARTBEAT = 5.0   # seconds between two heartbeats of the holder
+HIVE_LOCK_EXPIRY = 60.0     # a lock whose last heartbeat is older than this is abandoned
+
+
+def _read_hive_lock(path: Path):
+    """Return (pid, reason, age in seconds) of the scheduling lock, or None when it is missing or not readable yet.
+
+    The lock file holds the holder's process id and the reason as JSON; its modification time is the heartbeat."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+        age = time.time() - path.stat().st_mtime
+        try:
+            data = json.loads(raw)
+            return int(data["pid"]), str(data.get("reason", "")), age
+        except (ValueError, KeyError, TypeError):
+            return int(raw.strip()), "", age   # lock file of an older version: only the process id
+    except (OSError, ValueError):
+        return None
+
+
+def hive_lock_abandoned(pid: int, age: float) -> bool:
+    """A lock is abandoned when its holder is gone or its heartbeat has expired."""
+    return not osplat.process_alive(pid) or age > HIVE_LOCK_EXPIRY
+
+
+def _try_hive_lock(path: Path, reason: str):
+    """Try once to take the scheduling lock. Returns None on success, else (pid, reason) of the holder (pid -1: unreadable)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(3):
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            held = _read_hive_lock(path)
+            if held is None:
+                try:
+                    if time.time() - path.stat().st_mtime <= HIVE_LOCK_EXPIRY:
+                        return -1, ""   # just created and not written yet
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    return -1, ""
+                held = (-1, "", HIVE_LOCK_EXPIRY + 1)   # damaged and stale
+            pid, why, age = held
+            if pid != -1 and not hive_lock_abandoned(pid, age):
+                return pid, why
+            try:
+                again = _read_hive_lock(path)
+                if (again is None and pid == -1) or (again is not None and again[:2] == held[:2]):
+                    path.unlink()   # only the lock that was judged abandoned
+            except OSError:
+                return pid, why
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"pid": os.getpid(), "reason": reason}))
+        return None
+    return -1, ""
+
+
+def _hive_heartbeat(path: Path, stop: threading.Event) -> None:
+    """Refresh the heartbeat (modification time) of the lock while the holder works."""
+    while not stop.wait(HIVE_LOCK_HEARTBEAT):
+        try:
+            os.utime(str(path))
+        except OSError:
+            pass
 
 
 # Serialize Hive scheduling between the loop and owner commands.
 @contextmanager
-def hive_schedule_lock(timeout: float = 30.0):
-    """Serialize Plan scheduling and recover an owned lock after a failed release."""
+def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
+    """Serialize Plan scheduling; the lock holds the holder's process id, its reason and a heartbeat.
+
+    A lock of a dead holder or with an expired heartbeat is taken over; a wait that gives up names the holder and what it is doing."""
     path = osplat.data_dir() / "hive-schedule.lock"
+    if not reason:
+        try:
+            frame = sys._getframe(2)   # the caller of the with statement
+            reason = "%s.%s" % (Path(frame.f_code.co_filename).stem, frame.f_code.co_name)
+        except ValueError:
+            reason = "Plan scheduling"
     deadline = time.monotonic() + timeout
     if not _hive_schedule_guard.acquire(timeout=max(0.0, timeout)):
-        raise TimeoutError("Plan scheduling is busy")
+        raise TimeoutError("Plan scheduling is busy: the lock is held by another thread of this process (%d)" % os.getpid())
+    stop = threading.Event()
+    beat = None
     try:
         while True:
             if path in _abandoned_hive_locks:
                 try:
-                    if path.read_text(encoding="ascii").strip() == str(os.getpid()):
+                    held = _read_hive_lock(path)
+                    if held is not None and held[0] == os.getpid():
                         path.unlink()
                     _abandoned_hive_locks.discard(path)
                 except FileNotFoundError:
                     _abandoned_hive_locks.discard(path)
                 except OSError:
                     pass
-            if _take_pid_lock(path, own_ok=False) == 0:
+            holder = _try_hive_lock(path, reason)
+            if holder is None:
                 break
             if time.monotonic() >= deadline:
-                raise TimeoutError("Plan scheduling is busy")
+                pid, why = holder
+                raise TimeoutError("Plan scheduling is busy: the lock is held by process %s%s" % (
+                    pid if pid != -1 else "unknown", " (%s)" % why if why else ""))
             time.sleep(0.1)
+        beat = threading.Thread(target=_hive_heartbeat, args=(path, stop), daemon=True)
+        beat.start()
         try:
             yield
         finally:
+            stop.set()
+            beat.join(timeout=2)
             try:
-                if path.exists() and path.read_text(encoding="ascii").strip() == str(os.getpid()):
+                held = _read_hive_lock(path)
+                if held is not None and held[0] == os.getpid():
                     path.unlink()
                 _abandoned_hive_locks.discard(path)
             except OSError:
@@ -362,7 +446,7 @@ def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
             if conn is not None and isinstance(workspace, (str, os.PathLike)):
                 runtime.sync_plans(conn, env.name, os.fspath(workspace))
             worktrees.cleanup(env)
-    with hive_schedule_lock():
+    with hive_schedule_lock(reason="scheduling round"):
         if dry_run:
             import sqlite3
             snapshot = sqlite3.connect(":memory:", isolation_level=None)
