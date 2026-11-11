@@ -142,6 +142,25 @@ class CloseTests(NothingLeftCase):
             code, res = self.ready()
         self.assertEqual((code, res.get("nothing_to_integrate")), (0, True))
 
+    def test_contained_branch_with_uncontained_or_invalid_row_tip(self):
+        self.git("branch", "dummy")
+        self.git("checkout", "-q", "-b", "side")
+        (self.repo / "side.txt").write_text("work", encoding="utf-8")
+        self.git("add", "side.txt")
+        self.git("commit", "-qm", "side work")
+        tip = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "main")
+        for status in ("ready", "blocked"):
+            for row_tip in (tip, "invalid", "0123456789abcdef0123456789abcdef01234567"):
+                with self.subTest(status=status, tip=row_tip):
+                    self.conn.execute("DELETE FROM queue")
+                    runtime.queue_upsert(self.conn, "testproj", "other", tip=row_tip, plan=REL, status=status)
+                    with self.runner("passed"):
+                        code, res = self.ready()
+                    self.assertEqual((code, res.get("nothing_to_integrate")), (0, True))
+                    self.assertEqual(self.rows()[0]["status"], "withdrawn")
+                    self.assertEqual(self.rows()[0]["note"], "withdrawn: plan branch already integrated")
+
     def test_no_compile_check_build_or_deploy(self):
         with mock.patch("haivequeen.integration.compile_check_missing", return_value="never run") as missing, self.runner("passed"):
             code, res = self.ready()

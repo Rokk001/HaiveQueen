@@ -202,7 +202,11 @@ def nothing_to_integrate(conn, env, plan, queen=None):
             head = None
         if head is not None and head.returncode == 0 and head.stdout.strip() and not contained(head.stdout.strip()):
             return False, None
-    return True, (dict(row) if row is not None else None)
+    result = dict(row) if row is not None else None
+    if result is not None and result['status'] in ('ready', 'blocked'):
+        tip = result['tip'] or ''
+        result['_tip_integrated'] = bool(re.fullmatch(r'[0-9a-fA-F]{7,64}', tip) and exists(tip) and contained(tip))
+    return True, result
 
 
 COMPLETE_KEY = 'hive-complete:'   # a Queen reported completion of a plan without anything to integrate: {"state": "pending"|"passed", "agent": name, "at": time}
@@ -230,10 +234,11 @@ def set_completion(conn, project, plan, state, agent=''):
 
 # Withdraw the ready or blocked row of a plan that closes without integration.
 def withdraw_integrated(conn, row):
-    """Withdraw a queue row in ready or blocked whose tip is already in the integration branch."""
+    """Withdraw the obsolete row with the reason established by the Git check."""
     if row and row['status'] in ('ready', 'blocked'):
+        reason = 'withdrawn: tip already integrated' if row.get('_tip_integrated') else 'withdrawn: plan branch already integrated'
         with db.transaction(conn):
-            conn.execute("UPDATE queue SET status='withdrawn',note=?,updated_at=? WHERE id=?", ('withdrawn: tip already integrated', db.now(), row['id']))
+            conn.execute("UPDATE queue SET status='withdrawn',note=?,updated_at=? WHERE id=?", (reason, db.now(), row['id']))
 
 
 # Close persisted Hive scheduling state after authoritative plan completion.
@@ -350,7 +355,7 @@ def completed_without_integration(conn, env, plan, hive):
         if not retry_completion_check(conn, env, path, queen):
             return None
         report = completion_report(conn, env.name, path)
-    withdraw_integrated(conn, row)   # no integrator works on a row whose tip is already integrated
+    withdraw_integrated(conn, row)   # no integrator works on the obsolete row
     return {'id': 'complete', 'updated_at': report['at']}
 
 
