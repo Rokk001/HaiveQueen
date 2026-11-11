@@ -137,6 +137,9 @@ def integrated_ready(conn, env, hive):
     rejected = runtime.list_questions(conn, env.name, status='answered', plan=plan, item='owner-check-answered')
     if rejected and db.owner_check_result(conn, rejected[-1]['id']) == 'rejected' and str(rejected[-1].get('answered_at') or '') >= str(row['updated_at'] or ''):
         return None
+    # A queue status alone does not prove that the plan branch reached integration.
+    if not nothing_to_integrate(conn, env, plan)[0]:
+        return None
     if hive.get('ready_id'):
         return dict(row) if row['id'] == hive['ready_id'] else None
     from . import bees
