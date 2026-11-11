@@ -30,7 +30,7 @@ STATUS_COL = {"ok": "green", "idle": "blue", "wait": "amber"}
 CELL, GOLD = 18, "#f6b800"   # slot cell width at normal size and the gold of the logo
 LEVEL_FILL = {"ok": "green", "warn": "yellow", "bad": "red", "slots": "#2b8cff", "dim": "dim"}   # bar colour of a model limit by its level
 REPO_URL = "https://github.com/Rokk001/HaiveQueen"   # opened by a click on the repository name in the header
-TAG_COL = {"QUEEN": "gold", "AGENT": "cyan", "PROJECT": "green", "SYSTEM": "green"}
+TAG_COL = {"Orch.": "gold", "QUEEN": "gold", "AGENT": "cyan", "PROJECT": "green", "SYSTEM": "green"}
 FONTS = ("Cascadia Mono", "Consolas", "Courier New")   # the mockup uses a Cascadia-like monospace font
 NO_WINDOW = {"creationflags": 0x08000000} if osplat.is_windows() else {}   # CREATE_NO_WINDOW: helper commands must not flash a console
 
@@ -845,12 +845,23 @@ class Dashboard:
             self.pic("row_icon" if chosen else "row_icon_dim", x0 + 58, y, "w")
             self.text(x0 + 90, y, self.fit(r["name"], 120, 14), 14, "gold" if chosen else "text", "w")
             self.text(x0 + 218, y, self.fit(r["apiary"], 86, 14), 14, "cyan", "w")
-            self.text(x0 + 312, y, self.fit(r["queen"], 68, 14), 14, "text", "w")
+            self.text(x0 + 312, y, self.fit(("⚙ " if r.get("orch") else "") + r["queen"], 68, 14), 14, "gold" if r.get("orch") else "text", "w")
             self.text(x0 + 386, y, "%d/%d" % (r["bees_running"], r["bees_total"]), 14, "text", "w")
             self.bar(x0 + 436, y - 7, 70, 14, r["progress"] / 100, "seg", 7)
             self.text(x0 + 513, y, "%d/%d" % (r["done"], r["total"]), 13, "text", "w")
-            self.dot(x0 + 582, y, colour)
-            self.text(x0 + 594, y, self.fit(r["status"], 300 if r["runtime"] else 380, 12), 12, colour, "w")
+            if r.get("orch"):   # the chain of the Orchestrator: done green with a check mark, running highlighted, red with a cross, not yet run grey; then Integration n/m or Fix agent running
+                cx = x0 + 582
+                for step, st in r["orch"]["chain"]:
+                    mark, col = {"done": (" ✓", "green"), "running": (" ▶", "gold"), "red": (" ✗", "red")}.get(st, ("", "dim"))
+                    label = tr(step) + mark
+                    w = self.tw(label, 11) + 12
+                    self.rect(cx, y - 9, cx + w, y + 9, outline=col, fill="select" if st == "running" else "")
+                    self.text(cx + 6, y, label, 11, col, "w")
+                    cx += w + 4
+                self.text(cx + 6, y, self.fit(r["status"], max(40, x1 - 140 - cx), 12), 12, "text", "w")
+            else:
+                self.dot(x0 + 582, y, colour)
+                self.text(x0 + 594, y, self.fit(r["status"], 300 if r["runtime"] else 380, 12), 12, colour, "w")
             self.text(x1 - 26, y, r["runtime"], 14, "text", "e")
         if rows:
             r = rows[self.sel["hives"]]
@@ -871,7 +882,9 @@ class Dashboard:
         parents = {(b["apiary"], b["plan_path"]) for b in rows if b["kind"] == "queen"}   # Hives whose Bees are drawn below their Queen
         hives = {b["hive"] for b in rows}
         counts = (running, len(workers) - running, len(hives))
-        self.panel(x0, y0, x1, y1, tr("QUEENS AND AGENTS"), tr("%d running, %d waiting across %d plan", *counts) if len(hives) == 1 else tr("%d running, %d waiting across %d plans", *counts), ((tr("Enter"), tr("live")), ("X", tr("stop")), ("M", tr("queen"))))
+        orch = s["tiles"].get("orchestrators", 0)
+        tail = tr(" · %d Orchestrator", orch) if orch else ""
+        self.panel(x0, y0, x1, y1, tr("QUEENS AND AGENTS"), (tr("%d running, %d waiting across %d plan", *counts) if len(hives) == 1 else tr("%d running, %d waiting across %d plans", *counts)) + tail, ((tr("Enter"), tr("live")), ("X", tr("stop")), ("M", tr("queen"))))
         for name, x in (("#", 24), (tr("AGENT"), 80), (tr("MODEL"), 170), (tr("PLAN"), 300), (tr("TASK"), 410), (tr("CONTEXT"), 580), (tr("TOKENS"), 690), (tr("STATUS"), 790), (tr("RUNTIME"), 920)):
             self.text(x0 + x, y0 + 56, name, 13, "dim", "w")
         self.pick_clamp("bees", len(rows))
@@ -892,7 +905,9 @@ class Dashboard:
             # Every cell is shortened with an ellipsis inside its own column (the width up to the next column minus a gap), so columns never overlap.
             if r["kind"] == "queen":
                 self.text(x0 + 80, y, self.fit(r["name"], 84, 14), 14, "gold", "w")
-            elif (r["apiary"], r["plan_path"]) in parents:
+            elif r["kind"] == "orch":
+                self.text(x0 + 80, y, self.fit("⚙ " + r["name"], 84, 14), 14, "gold", "w")
+            elif r["kind"] == "fix" or (r["apiary"], r["plan_path"]) in parents:
                 self.text(x0 + 80, y, "└", 14, "dim", "w")
                 tree = self.tw("└", 14) + 8
                 self.text(x0 + 80 + tree, y, self.fit(r["name"], 84 - tree, 14), 14, "gold" if chosen else "text", "w")
@@ -1486,6 +1501,9 @@ class Dashboard:
             return
         if bee.get("stopped"):
             self.resume_package(bee)
+            return
+        if bee["kind"] == "orch":
+            self.inform(tr("The Orchestrator is part of HaiveQueen and cannot be stopped here. Stop the plan to end its pipeline."))
             return
         if bee["kind"] == "queen":
             self.inform(tr("X stops Agents only. Use the Queen menu (M, or a right click on the Queen) to restart or end a Queen."))
