@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from bzztest import REL, RoundCase
+from bzztest import REL, RoundCase, integrated_tip
 from haivequeen import agent_runner, bees, cli, db, gui_config, hives, inbox, integration, plans, routine, runtime, scheduler, worktrees
 
 
@@ -396,7 +396,7 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         self.use(provider("claude", "Coding", "Queen", "Build"), provider("shipper", "Deploy"))
         env = self.hive()
         integration.sync(env, REL, "claude")
-        ready = db.add_ready(self.conn, "testproj", "b", "abc1234", REL, "")
+        ready = db.add_ready(self.conn, "testproj", "b", integrated_tip(self.repo), REL, "")
         self.conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (ready["id"], "testproj", REL))
         runtime.queue_upsert(self.conn, "testproj", "b", status="integrated")
         hives.reconcile_completed(self.conn, env, alive=lambda pid: False)

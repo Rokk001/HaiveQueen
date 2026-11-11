@@ -13,7 +13,7 @@ SUPERSEDED = ("superseded", "ueberholt", "überholt")   # the reason of a withdr
 WHO = ("owner", "coordinator")
 OWNER_KEYS = {
     "accept": {"text"}, "reject": {"text", "packages"}, "pause": set(), "resume": set(),
-    "release": {"commit"}, "provider": {"action", "provider"}, "unassign": {"package"},
+    "release": {"commit"}, "provider": {"action", "provider"}, "unassign": {"package"}, "stop_agent": {"name"},
 }
 ANSWER_KEYS = {"question_id", "text", "by"}
 DECISION_KEYS = {"text", "source", "plan", "item"}
@@ -184,7 +184,7 @@ def parse_file(path: Path, project: str, conn, repo=None, ref: str = "origin/mai
             if target != project:
                 raise InboxError(where + ": project must match the inbox project")
             plan = fields.pop("plan", None)
-            if action != "provider" and (not isinstance(plan, str) or not plan.strip()):
+            if action not in ("provider", "stop_agent") and (not isinstance(plan, str) or not plan.strip()):
                 raise InboxError(where + ": plan is required")
             for key in keys - {"packages"}:
                 if key in fields and not isinstance(fields[key], str):

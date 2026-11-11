@@ -152,6 +152,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
             text = text.replace(old, new, 1)
         (self.repo / REL).write_text(text + '\nReworded after the cut.\n\n## Requirements\n\n' + requirement_lines, encoding='utf-8')
         runtime.sync_plans(self.conn, 'testproj')
+        runtime.record_submission(self.conn, 'testproj', REL, (self.repo / REL).read_text(encoding='utf-8'))   # submitted again: the edited text is the reference
         (self.repo / REL.replace('-PLAN.md', '-STATE.md')).write_text('# State\n', encoding='utf-8')
         return readygate.gate(self.env(), REL, {'cwd': ''})
 
@@ -178,6 +179,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         self.plan('READY', self.OWNER, title='Another plan')
         with (self.repo / REL).open('a', encoding='utf-8') as f:
             f.write('\n## Requirements\n\n- R-1: owner check\n')
+        runtime.record_submission(self.conn, 'testproj', REL, (self.repo / REL).read_text(encoding='utf-8'))
         state = self.repo / REL.replace('-PLAN.md', '-STATE.md')
         state.write_text('# State\n', encoding='utf-8')
         accepted, message, _ = readygate.gate(self.env(), REL, {'cwd': ''})

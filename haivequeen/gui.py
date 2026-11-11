@@ -910,7 +910,10 @@ class Dashboard:
             self.text(x0 + 690, y, self.fit("%s/%s" % (gui_data.fmt_tokens(r["tin"]), gui_data.fmt_tokens(r["tout"])), 92, 13), 13, "cyan", "w")
             self.dot(x0 + 797, y, colour)
             self.text(x0 + 809, y, self.fit(tr(r["status"]), 100, 14), 14, colour, "w")
-            self.text(x0 + 920, y, self.fit(r["runtime"], 90, 14), 14, "text", "w")
+            self.text(x0 + 920, y, self.fit(r["runtime"], 58, 14), 14, "text", "w")
+            if r.get("stop_agent"):   # the Stop button of the Agent row; dimmed when this Agent cannot be stopped alone (its reason shows on a click)
+                self.text(x0 + 982, y, tr("Stop"), 13, "dim" if r.get("stop_disabled") else "red", "w")
+                self.hit(x0 + 978, y - 9, x1 - 22, y + 9, self.stop_agent_button, r)
         if not rows:
             self.text(x0 + 24, y0 + 90, tr("no queens or agents"), 15, "dim", "w")
 
@@ -1474,6 +1477,22 @@ class Dashboard:
             self.complain(tr("%s failed: %s", command, (err or out or "").strip()[:300] or tr("exit code %d", proc.returncode)))
         self.refresh_soon()
 
+    # The Stop button in the row of an Agent.
+    def stop_agent_button(self, row):
+        """Click on the Stop button of an Agent row: after a confirmation the shared owner function ends exactly this Agent; a subagent Agent (no process of its own)
+        shows the reason instead."""
+        from . import owner
+        if row.get("stop_disabled"):
+            self.inform(row["stop_disabled"])
+            return
+        if not self.confirm(tr("Stop agent %s (%s)? The package stays stopped until you resume it.", row["name"], row.get("task") or "")):
+            return
+        try:
+            owner.stop_agent(self.conn, row["project"], row["stop_agent"])
+        except Exception as exc:
+            self.complain(tr("Could not stop the Agent: %s", exc))
+        self.refresh_soon()
+
     # Stop the selected Bee.
     def stop_bee(self):
         """Kill the process tree of the selected Agent after a confirmation; its package stays stopped until the owner resumes it ("Resume package").
@@ -1493,11 +1512,8 @@ class Dashboard:
         if bee.get("stopping"):   # the place stays held until the Queen confirms that her subagent ended
             self.inform(tr("The stop of %s (%s) is pending: the Agent keeps its place until its Queen confirms that it has ended.", bee["name"], bee["task"]))
             return
-        if bee.get("embedded"):   # a subagent of its Queen has no process of its own: its Queen is told to end it and confirm its end (STOP-PACKAGES)
-            if self.confirm(tr("Stop agent %s (%s)? The package stays stopped until you resume it.", bee["name"], bee["task"])):
-                from . import bees
-                bees.stop_package(self.conn, bee["project"], bee["plan_path"], bee.get("package") or bee["task"])
-                self.refresh_soon()
+        if bee.get("embedded"):   # a subagent of its Queen has no process of its own: it cannot be stopped alone
+            self.inform(bee["stop_disabled"])
             return
         if not bee["agent"]:
             self.inform(tr("This Agent has not started yet, so there is nothing to stop."))
@@ -1507,12 +1523,13 @@ class Dashboard:
 
     # Stop the process Agent once its row is read.
     def stop_process_agent(self, bee, found):
-        """After a confirmation kill the process tree of the Agent of `bee` (`found`: its agents rows, None when the read failed)."""
+        """After a confirmation end the Agent of `bee` through the shared owner function (`found`: its agents rows, None when the read failed)."""
         if found and found[0]["pid"] and self.confirm(tr("Stop agent %s (%s)? The package stays stopped until you resume it.", bee["name"], bee["task"])):
-            from . import bees
-            if found[0]["package"]:
-                bees.stop_package(self.conn, bee["project"], found[0]["plan_path"] or bee["plan_path"], found[0]["package"])
-            osplat.kill_process_tree(found[0]["pid"])
+            from . import owner
+            try:
+                owner.stop_agent(self.conn, bee["project"], bee["agent"])
+            except Exception as exc:
+                self.complain(tr("Could not stop the Agent: %s", exc))
             self.refresh_soon()
 
     # Switch the log between following and top-aligned.

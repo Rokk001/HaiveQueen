@@ -4,6 +4,7 @@ Nothing here touches a real project: every test builds its own folders, BZZ_TEST
 """
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,19 @@ from haivequeen import scheduler as sch  # noqa: E402
 
 ENV_KEYS = ("BZZ_DATA_DIR", "BZZ_CONFIG_DIR", "BZZ_LOG_DIR", "BZZ_RUNTIME_OVERRIDE", "BZZ_TEST_NOSTART", "BZZ_PROVIDER_LIMITS_FILE", "BZZ_HOST")
 REL = "docs/plans/dummy/DUMMY-PLAN.md"
+
+
+def integrated_tip(repo):
+    """Create a real commit contained in the dummy project's main branch."""
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.invalid")
+    git("add", "-A")
+    git("commit", "-qm", "integrated plan")
+    return git("rev-parse", "HEAD")
 
 
 def provider(name, slots, use="preferred", caps=(), limit="", classes=("light", "medium", "heavy"), proto="claude", build=True):
@@ -167,6 +181,7 @@ class RoundCase(unittest.TestCase):
         ws = self.repo if project == "testproj" else self.base / ("repo-" + project)
         with (ws / rel).open("a", encoding="utf-8") as f:
             f.write("\n## Requirements\n\n- T-1: dummy requirement\n")
+        runtime.record_submission(self.conn, project, rel, (ws / rel).read_text(encoding="utf-8"))   # the plan as submitted is the reference of the ready check
         (ws / rel.replace("-PLAN.md", "-STATE.md")).write_text("# State\n\n## Completeness\n\n- T-1: done | test evidence\n", encoding="utf-8")
         patcher = mock.patch.object(readygate, "CHECK_RUNNER", lambda request: ("passed", ""))
         patcher.start()

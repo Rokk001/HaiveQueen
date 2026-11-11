@@ -29,6 +29,8 @@ HaiveQueen is a local orchestrator for coding agents ([Claude Code](https://clau
 
 **4. A plan is not done because an agent says so.** Before integration the Queen lists every requirement of the plan with evidence in the state file under `## Completeness`. `bzz ready` is refused for a missing, open or partial requirement, and then an independent **check agent** (fresh, not part of the plan, read-only) compares the plan as submitted with the list and the branch. Only `READY-CHECK: PASSED` accepts the branch.
 
+Cleanup locks only the worktree or branch being removed; a start needing that target waits, while unrelated starts can proceed. The scheduling lock records its process, reason and heartbeat; dead or expired holders are recovered, and a timeout identifies the holder and reason. The ready check uses the latest submitted plan, including submissions made by setting its status to `SENT`; if that version is unavailable, submit again. The check agent receives owner and coordinator decisions, and an item naming several requirement IDs applies to each.
+
 **5. A plan cutter with requirements and dependencies.** Hand over free text (`status = "SENT"`). The Queen first writes every requirement as `- <id>: <text>` into the state file, then cuts the plan into small packages with class, `depends_on` and the requirements each covers. `bzz plan check` refuses a cut in which a requirement belongs to no package.
 
 **6. Role files you can read and change without code.** What the Queen, an Agent, the plan cutter and the check agent are told lives in plain Markdown files in [`roles/`](roles).
@@ -301,8 +303,13 @@ Every project has an inbox folder: `<workspace>/.haivequeen/inbox/`. Anyone (the
 - Only files that end in `.toml` (UTF-8) are read, oldest first. Write a file as `<name>.toml.tmp` and rename it when it is complete; other endings are ignored.
 - A file holds `[[answer]]` tables (`question_id`, `text`, `by` = `owner` or `coordinator`) and `[[decision]]` tables (`text`, `source` = `owner` or `coordinator`, optional `plan` and `item`). See [`examples/inbox.example.toml`](examples/inbox.example.toml).
 - It may also hold `[[queue]]` tables, orders to the integration queue: `branch`, `action` (`withdraw`, `mark_cleanup` or `requeue`), `reason` and an optional `tip` (full or abbreviated commit id; without it every row of the branch is meant). `withdraw` sets the ready or blocked row(s) to `withdrawn`, but only when the tip is contained in `origin/<integrationBranch>` (checked with `git merge-base --is-ancestor`) or the reason is exactly `superseded` (the German `ueberholt` is still read); otherwise the whole file moves to `inbox/failed/`. `mark_cleanup` stores the mark `erledigt, Aufraeumen erlaubt: <reason>` for the branch; no row changes and nothing is deleted. `requeue` sets the newest ready or blocked row back to `ready` for the next integration run. A row that is in a run or already integrated is never touched.
+- A `[[stop_agent]]` table (`name`) stops one running Agent like `bzz agent stop <name>`; subagents and the Queen are refused (see the command table).
 - Values go through the same functions as `bzz answer` and `bzz decisions add`: same checks, same events, and a Plan waiting for an answer can resume.
 - A file is taken over completely or not at all, then moves to `inbox/done/<YYYYMMDD-HHMMSS>-<name>.toml`. An invalid file moves to `inbox/failed/` with `<name>.error.txt` next to it that names the reason and the line, and a warning event is written.
+
+## Owner messages
+
+A decision with source `owner` (from `bzz decisions add`, the inbox, the dashboard or an owner action such as stopping an Agent) is delivered to a running Queen of its plan, once, in her next `bzz` answer as the key `owner_messages`. Decisions of other sources (`auto`, `coordinator`) are never delivered this way, and a delivered message is not repeated. The Queen treats each message as an instruction from the owner.
 
 ## Command line
 
@@ -346,6 +353,7 @@ Existing `[[decision]]` entries with `item = "owner-release"` continue to work.
 | `bzz init <folder>`, `bzz register <folder>` | owner | create and register a project |
 | `bzz export`, `bzz views --project p` | owner | export the state, write the Markdown views |
 | `bzz import-legacy ...` | owner | import the state of version 1 (see [`docs/MIGRATION-v1.md`](docs/MIGRATION-v1.md)) |
+| `bzz agent stop <name>` | owner | end the one running Agent (the same action as the dashboard button and an inbox `[[stop_agent]]` entry with `name`). A subagent of the Queen is refused with the reason (use the stop key described above), the Queen is stoppable only by `bzz dequeen`, and agents cannot use the command. The package stays stopped and waits for an explicit owner instruction; the Queen is told by an owner message |
 | `bzz dequeen <plan>` / `bzz requeen <plan> [provider]` | owner | leave a Plan queenless or start a new Queen, optionally on another provider |
 | `bzz agent start`, `bzz agent result`, `bzz agent wait` | Queen | start an Agent (a refused start answers `waiting` with a `reason`), record an attempt or wait for its provider; a failed result needs evidence (`--open-requirements` or `--error`) or `--blocked-by question\|build\|owner\|package\|provider` (a question also needs `--blocked-ref <id>`), which is no failure and sets the package to waiting |
 | `bzz package --project p --plan f --package id --state working\|waiting\|implemented\|done\|rejected [--reason ...]` | Queen | report the progress of a package; `waiting` needs `--reason` (`question:<id>`, `build`, `owner`, `package` or `provider`); the window's progress bar counts the done ones |

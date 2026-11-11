@@ -11,7 +11,7 @@ from . import platform as osplat
 from . import filetxn
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 BUSY_TIMEOUT_MS = 10000
 
 

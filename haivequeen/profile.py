@@ -427,7 +427,7 @@ def section(text, heading_part) -> str:
     return ""
 
 
-def queen_load(conn, project, workspace, plan, predecessor=None) -> str:
+def queen_load(conn, project, workspace, plan, predecessor=None, agent=None) -> str:
     """What a Queen loads besides her role file and the project rules: the plan, the plan's state file, the handoff of her predecessor (if any), and the
     decisions and the owner answers of her Project. Nothing else."""
     from . import plans
@@ -451,6 +451,8 @@ def queen_load(conn, project, workspace, plan, predecessor=None) -> str:
         parts.append("# Handoff of your predecessor %s\n\n%s" % (predecessor, handoff or "(none written)"))
     all_decisions = runtime.list_decisions(conn, project, active_only=False)
     decisions = [d for d in all_decisions if d["status"] == "active" and (not d["plan_path"] or d["plan_path"] == plan)]
+    if agent:   # what the start prompt shows is delivered; the bzz answers of this Queen do not repeat it
+        runtime.mark_decisions_delivered(conn, agent, [d for d in decisions if d["source"] == "owner"])
     parts.append("# Decisions of this plan and Project\n\n" + ("\n".join("- #%s%s: %s" % (d["id"], " (plan %s)" % d["plan_path"] if d.get("plan_path") else "", d["text"]) for d in decisions) or "(none)"))
     # Answered questions normally have a decision containing the question and answer.
     # Keep older orphan answers, without reviving answers whose decision was superseded.

@@ -25,6 +25,7 @@ class NothingLeftCase(RoundCase):
         super().setUp()
         self.plan("READY", [{"id": "P1", "title": "First"}])
         (self.repo / REL).write_text((self.repo / REL).read_text(encoding="utf-8") + BODY, encoding="utf-8")
+        runtime.record_submission(self.conn, "testproj", REL, (self.repo / REL).read_text(encoding="utf-8"))   # the plan as submitted is the reference of the ready check
         (self.repo / STATE).write_text(LIST, encoding="utf-8")
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Test")
@@ -142,6 +143,25 @@ class CloseTests(NothingLeftCase):
             code, res = self.ready()
         self.assertEqual((code, res.get("nothing_to_integrate")), (0, True))
 
+    def test_contained_branch_with_uncontained_or_invalid_row_tip(self):
+        self.git("branch", "dummy")
+        self.git("checkout", "-q", "-b", "side")
+        (self.repo / "side.txt").write_text("work", encoding="utf-8")
+        self.git("add", "side.txt")
+        self.git("commit", "-qm", "side work")
+        tip = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "main")
+        for status in ("ready", "blocked"):
+            for row_tip in (tip, "invalid", "0123456789abcdef0123456789abcdef01234567"):
+                with self.subTest(status=status, tip=row_tip):
+                    self.conn.execute("DELETE FROM queue")
+                    runtime.queue_upsert(self.conn, "testproj", "other", tip=row_tip, plan=REL, status=status)
+                    with self.runner("passed"):
+                        code, res = self.ready()
+                    self.assertEqual((code, res.get("nothing_to_integrate")), (0, True))
+                    self.assertEqual(self.rows()[0]["status"], "withdrawn")
+                    self.assertEqual(self.rows()[0]["note"], "withdrawn: plan branch already integrated")
+
     def test_no_compile_check_build_or_deploy(self):
         with mock.patch("haivequeen.integration.compile_check_missing", return_value="never run") as missing, self.runner("passed"):
             code, res = self.ready()
@@ -168,6 +188,30 @@ class NeverCloseTests(NothingLeftCase):
             code, res = self.ready()
         self.assertNotIn("nothing_to_integrate", res)
         self.assertIsNone(hives.completion_report(self.conn, "testproj", REL))
+
+    def test_integrated_row_cannot_close_unmerged_branch(self):
+        tip = self.side_commit("dummy")
+        row = runtime.queue_upsert(self.conn, "testproj", "dummy", tip=tip, plan=REL, status="integrated")
+        self.queen_ends()
+        for ready_id in (None, row["id"]):
+            self.conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (ready_id, "testproj", REL))
+            self.assertIsNone(hives.integrated_ready(self.conn, self.env(), hives.get(self.conn, "testproj", REL)))
+            self.round(alive=lambda pid: False)
+            self.assertNotEqual(self.status(), "DONE")
+            self.assertEqual(self.questions("owner-check"), [])
+
+    def test_integrated_row_closes_after_branch_is_merged(self):
+        tip = self.side_commit("dummy")
+        row = runtime.queue_upsert(self.conn, "testproj", "dummy", tip=tip, plan=REL, status="integrated")
+        self.git("merge", "--no-edit", "dummy")
+        self.queen_ends()
+        self.assertIsNotNone(hives.integrated_ready(self.conn, self.env(), hives.get(self.conn, "testproj", REL)))
+        self.conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (row["id"], "testproj", REL))
+        self.round(alive=lambda pid: False)
+        self.assertEqual(len(self.questions("owner-check")), 1)
+        self.answer_check("accepted")
+        self.round(alive=lambda pid: False)
+        self.assertEqual(self.status(), "DONE")
 
     def test_withdrawn_row_with_foreign_tip_does_not_count(self):
         tip = self.side_commit("side")
@@ -291,7 +335,7 @@ class OwnerActionTests(NothingLeftCase):
         self.assertEqual(self.questions("queen-ended"), [])
 
     def test_ready_row_is_withdrawn_whatever_its_tip(self):
-        for contained, text in ((True, "withdrawn: tip already integrated"), (False, "withdrawn: tip already integrated")):
+        for contained, text in ((True, "withdrawn: tip already integrated"), (False, "withdrawn: plan branch already integrated")):
             self.conn.execute("DELETE FROM queue")
             self.conn.execute("INSERT INTO queue(project,plan_path,branch,tip,status,note,updated_at) VALUES('testproj',?,'dummy','abc1234','ready','',?)", (REL, db.now()))
             row = dict(self.rows()[0], tip_contained=contained)

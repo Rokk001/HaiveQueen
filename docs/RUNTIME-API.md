@@ -42,13 +42,18 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 | `queue upsert` | `--project --branch [--tip] [--plan] [--status ready\|in_run\|integrated\|blocked\|withdrawn] [--note] [--run]` | the row; changes the newest row of the branch, a new tip after `integrated` adds a row |
 | `questions` | `[--project] [--open] [--status] [--plan] [--item]` | question rows |
 | `decisions list` | `[--project] [--plan] [--item] [--all]` | decision rows; only `active` ones unless `--all` (status values: `active`, `rule`, `superseded`) |
-| `decisions add` | `--project --source owner\|coordinator\|auto --text [--plan] [--item]` | `{ok, id}` |
+| `decisions add` | `--project --source owner\|coordinator\|auto --text [--plan] [--item]` | `{ok, id}` ; a decision with source `owner` reaches a running Queen of its plan once, in her next `bzz` answer as `owner_messages` |
 | `decisions update` | `<id> [--plan] [--item] [--status active\|rule\|superseded]` | `{ok, decision}` |
 | `pause` / `resume` | none | the run state `{state, since, running_agents}`; see "Run state" below |
 | `run-state` | none | `{state, since, running_agents}` |
 | `starts-allowed` | none | `{allowed, state}`; the round asks this before every agent start |
 | `reattach` | `--project --alive-pids 123,456` | `{ok, kept, failed}`; see "Run state" below |
 | `done`, `ready`, `ask`, `note`, `answer`, `status` | see the command line help | agent and owner commands |
+
+## Owner messages and stopping an Agent
+
+- `owner_messages`: the next JSON answer of any `bzz` command run by a running Queen carries an `owner_messages` list with her undelivered owner-source decisions, once; without any, the key is absent.
+- `bzz agent stop <name>` (owner only; also the dashboard button and an inbox `[[stop_agent]]` entry): ends one running Agent. A subagent is refused with the reason, the Queen can only be ended by `bzz dequeen`. The package stays stopped and waits for an explicit owner instruction; the Queen receives an owner message.
 
 ## Run state and restart (D8)
 
