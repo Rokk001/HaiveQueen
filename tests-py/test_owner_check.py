@@ -1,4 +1,6 @@
 """Owner check after integration: a Plan whose plan has points only the owner can check stays open in the state 'owner_check'."""
+import subprocess
+
 from bzztest import REL, RoundCase
 from haivequeen import bees, db, hives, plans, runtime, owner
 
@@ -18,7 +20,15 @@ class OwnerCheckTests(RoundCase):
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         queen = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] in ("running", "starting")][0]
-        ready = db.add_ready(self.conn, "testproj", "branch", "abc", REL, "")
+        def git(*args):
+            return subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+        git("init", "-q", "-b", "main")
+        git("config", "user.name", "Test")
+        git("config", "user.email", "test@example.invalid")
+        git("add", "-A")
+        git("commit", "-qm", "integrated plan")
+        tip = git("rev-parse", "HEAD")
+        ready = db.add_ready(self.conn, "testproj", "branch", tip, REL, "")
         self.conn.execute("UPDATE hives SET ready_id=? WHERE project='testproj' AND plan_path=?", (ready["id"], REL))
         runtime.queue_upsert(self.conn, "testproj", "branch", status="integrated")
         qid = db.add_question(self.conn, "testproj", REL, item, "Please check the courtyard light.", "")
@@ -33,6 +43,14 @@ class OwnerCheckTests(RoundCase):
     def queens(self):
         """All Queen rows of the dummy plan."""
         return [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen"]
+
+    def test_owner_check_requires_contained_integrated_tip(self):
+        """A linked integrated row cannot justify an owner check for an unknown tip."""
+        self.integrated_hive_with_question()
+        hive = hives.get(self.conn, "testproj", REL)
+        self.assertIsNotNone(hives.integrated_ready(self.conn, self.env(), hive))
+        self.conn.execute("UPDATE queue SET tip='abcdef0' WHERE id=?", (hive["ready_id"],))
+        self.assertIsNone(hives.integrated_ready(self.conn, self.env(), hive))
 
     def test_open_question_keeps_the_hive_open(self):
         """After integration the plan is not DONE while the owner check question is open; the Plan waits in 'owner_check' and no Queen starts."""
