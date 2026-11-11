@@ -210,7 +210,7 @@ def match_sub(queen, name):
 
 
 # Describe one Hive for the active-hives table.
-def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None, rejected=None, waiting=None, embedded=None, plan_rejected=None) -> dict:
+def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None, rejected=None, waiting=None, embedded=None, plan_rejected=None, orch=None) -> dict:
     """Row of one Plan: name, project, queen with context and tokens, Agents busy/assigned, progress (finished packages of all packages), status and runtime.
 
     `assigned` and `completed` come from bee_tables, `ctx_limit(agent)` gives an agent's context limit in tokens, `agents_all` (all rows, also archived)
@@ -236,6 +236,9 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
         status, kind = (tr("Running, plan paused") if live else tr("Plan paused")), "wait"
     elif live:
         status, kind = tr("Running"), "ok"
+    elif (orch or {}).get(key):   # the Orchestrator integrates the plan: its chain and counter are drawn in the table
+        info = orch[key]
+        status, kind = (tr("Fix agent running") if info["phase"] == "fix" else tr("Integration %d/%d", info["n"], info["m"])), "ok"
     else:
         status = status_text(hive)
         kind = "wait" if status else "idle"
@@ -248,14 +251,15 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     hin = sum(agent_tokens(a)[0] for a in (agents_all if agents_all is not None else agents) if (a.get("project"), a.get("plan_path")) == key)
     hout = sum(agent_tokens(a)[1] for a in (agents_all if agents_all is not None else agents) if (a.get("project"), a.get("plan_path")) == key)
     return {"name": hive_name(hive["plan_path"]), "apiary": hive["project"], "plan_path": hive["plan_path"],
-            "queen": str((queen or {}).get("person") or (queen or {}).get("name") or "–") if live else "–", "queen_agent": (queen or {}).get("name"),   # a Queen that has ended no longer holds her name
+            "queen": "Orch." if (orch or {}).get(key) and not (live or is_rejected or is_paused) else str((queen or {}).get("person") or (queen or {}).get("name") or "–") if live else "–", "queen_agent": (queen or {}).get("name"),   # a Queen that has ended no longer holds her name
             "queen_model": overview.model_short(queen.get("provider"), queen.get("model"), queen.get("effort")) if live else "",
             "queen_ctx": int((queen or {}).get("ctxTokens") or 0) if live else 0, "queen_ctx_limit": int(ctx_limit(queen)) if live and ctx_limit else 0,
             "queen_tin": qin, "queen_tout": qout, "hive_tin": hin, "hive_tout": hout,
             "steps": {b["name"]: b["step"] for b in hive.get("bees", []) if b.get("step")},
             "package_steps": {p: r["step"] for p, r in (hive.get("package_steps") or {}).items()},
             "bees_running": len(running_pkgs), "bees_total": len(open_pkgs) if live else len(running_pkgs), "live": live, "paused": is_paused, "plan_rejected": is_rejected, "done": len(done), "implemented": (implemented or {}).get(key, 0), "rejected": len(rejected_pkgs), "waiting": len(waiting_pkgs), "waiting_reasons": ", ".join("%s %s" % (p, why) for p, why in waiting_pkgs), "total": total_pkg, "progress": progress,
-            "status": status, "kind": kind, "runtime": fmt_elapsed(queen.get("started_at"), now) if live else ""}
+            "status": status, "kind": kind, "runtime": fmt_elapsed(queen.get("started_at"), now) if live else (fmt_elapsed((orch or {}).get(key, {}).get("started"), now) if not (is_rejected or is_paused) and (orch or {}).get(key) else ""),
+            "orch": (orch or {}).get(key) if not (live or is_rejected or is_paused) else None}
 
 
 # Describe one running Bee for the busy-bees table.
@@ -307,8 +311,46 @@ def embedded_rows(conn) -> list:
     return [dict(r) for r in db.rows(conn, "SELECT * FROM embedded_bees WHERE ended_at IS NULL ORDER BY started_at")]
 
 
+# Read the pipeline of the Orchestrator for the plans it integrates.
+def orch_info(conn, env, hive, now=None) -> dict:
+    """What the dashboard shows of a plan the Orchestrator integrates (kv orch:<plan>), or None when it is not in the pipeline (or waits for the owner).
+
+    {phase, step, chain: [(step, "done"|"running"|"red"|"todo")], n, m, task, status, fix_agent, fix_task, started}; a step without a command is not part of the chain and not counted."""
+    from . import orchestrator
+    state = orchestrator.load(conn, hive["project"], hive["plan_path"])
+    if not state or state.get("phase") not in ("pipeline", "fix"):
+        return None
+    steps = orchestrator.chain(env) if env is not None else list(orchestrator.STEPS)
+    done = state.get("steps") or {}
+    chain = [(s, done.get(s) if done.get(s) in ("done", "running", "red") else "todo") for s in steps]
+    fix = state.get("fix") or {}
+    step = fix.get("step") if state["phase"] == "fix" and fix.get("reason") == "step" else state.get("step")
+    n = steps.index(step) + 1 if step in steps else len(steps)
+    word = {"running": "running", "red": "red", "done": "done"}.get(done.get(step), "waiting")
+    if state["phase"] == "fix" and fix.get("reason") == "step":
+        word = "red"
+    task = "Integration: %s %s" % (step, word) if step in steps else ("Integration: owner rejection" if fix.get("reason") == "owner" else "Integration: Close")
+    running = state["phase"] == "pipeline" and not hive.get("blocker")
+    reason = "owner rejection" if fix.get("reason") == "owner" else "%s red" % fix.get("step")
+    return {"phase": state["phase"], "step": step, "chain": chain, "n": n, "m": len(steps), "task": task, "status": "running" if running else "waiting",
+            "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started")}
+
+
+# Build the Orchestrator row and the fix agent row of a plan.
+def orch_rows(hive, info, agents, now, ctx_limit=None) -> list:
+    """The "Orchestrator" row (kind "orch") of a plan in the pipeline and, below it, its running fix agent (kind "fix")."""
+    rows = [{"kind": "orch", "name": "Orchestrator", "agent": None, "project": hive["apiary"], "plan_path": hive["plan_path"], "model": "–", "hive": hive["name"],
+             "apiary": hive["apiary"], "task": info["task"], "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": info["status"], "runtime": hive["runtime"] or "–"}]
+    agent = next((a for a in agents if info["fix_agent"] and a.get("name") == info["fix_agent"] and a.get("phase") == "fix"), None)
+    if agent and agent.get("status") in runtime.ACTIVE_STATUSES:
+        row = bee_row(agent, now, None, ctx_limit)
+        row.update(kind="fix", task=info["fix_task"], step="", step_frac=0.0)
+        rows.append(row)
+    return rows
+
+
 # Collect the Bees of the active Hives: running Bee processes and packages that have a Bee assigned but no process yet.
-def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None, hive_rows=None, embedded=None, package_steps=None, startable=None, stopped=None) -> list:
+def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_keys=None, hive_rows=None, embedded=None, package_steps=None, startable=None, stopped=None, orch=None) -> list:
     """Rows for the Agents table. A package with an Agent assignment but no running process shows as 'waiting'; finished packages are left out.
 
     `hive_keys` limits the waiting rows to the (project, plan) pairs whose Queen is running: only a running Queen starts Agents, so the assignments of any other Plan are not waiting Agents.
@@ -363,6 +405,8 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
             mine = [r for r in rows if (r["apiary"], r["plan_path"]) == (hive["apiary"], hive["plan_path"])]
             ordered += [queen_row(hive)] + mine
             placed.update(id(r) for r in mine)
+        elif (orch or {}).get((hive["apiary"], hive["plan_path"])):
+            ordered += orch[(hive["apiary"], hive["plan_path"])]
     return ordered + [r for r in rows if id(r) not in placed]
 
 
@@ -374,7 +418,9 @@ def log_line(event, who=None) -> tuple:
     when = db.parse_time(event["ts"])
     stamp = localtime.time(when) if when else "--:--"
     agent, project = event["agent"], event["project"]
-    if agent:
+    if agent == "Orchestrator" and event["kind"] == "orch":
+        tag = "Orch."
+    elif agent:
         phase, person = (who or {}).get(agent, (str(agent).split("__")[-1], str(agent).split("__")[0]))
         tag = ("QUEEN" if str(phase).startswith("queen") else "AGENT") + " " + str(person)
     elif project and project != runstate.GLOBAL_PROJECT:
@@ -637,7 +683,17 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     plan_rejected = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='CANCELLED'")}
     plan_done = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='DONE'")}   # rejected and done Hives only show in the Hives window
     embedded = embedded_rows(conn)
-    hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected, waiting, embedded, plan_rejected) for h in hives.hive_data(conn, project, agents)]
+    hive_data = hives.hive_data(conn, project, agents)
+    orch = {}
+    for h in hive_data:
+        try:
+            info = orch_info(conn, envs.get(h["project"]), h, now)
+        except Exception:   # a broken state must not stop the window
+            info = None
+        if info:
+            orch[(h["project"], h["plan_path"])] = info
+    hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected, waiting, embedded, plan_rejected, orch) for h in hive_data]
+    orch_table = {(h["apiary"], h["plan_path"]): orch_rows(h, h["orch"], agents, now, ctx_limit) for h in hive_rows if h.get("orch")}
     live = [a for a in agents if a.get("status") in runtime.ACTIVE_STATUSES]
     queens = [a for a in live if a.get("phase") == "queen"]
     steps = {k: v for h in hive_rows for k, v in h["steps"].items()}
@@ -646,7 +702,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     from . import bees as bee_mod
     stopped = [s for s in bee_mod.stopped_packages(conn) if not project or s[0] == project]
     bees = bee_list(agents, assigned, completed, now, ctx_limit, steps, {(h["apiary"], h["plan_path"]) for h in hive_rows if h["live"]}, hive_rows, embedded, package_steps,
-                    bee_mod.startable_map(conn), stopped)
+                    bee_mod.startable_map(conn), stopped, orch_table)
     workers = [b for b in bees if b["kind"] == "bee"]
     apiaries = sorted({h["apiary"] for h in hive_rows})
     slots = int(cfg.get("slots", config.DEFAULT_CONFIG["slots"]) or 0)   # the General setting Agent slots: the busy tile counts every running agent (Queens, process Agents, subagent Agents) against it
@@ -667,7 +723,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     overlays, start_tile = gui_overlays.build(conn, d["usage"], agents_all, shown, bees, apiaries, day, [str(p.get("name")) for p in cfg.get("providers") or [] if p.get("name")])
     return {"now": now, "project": project, "run_state": d["run"]["state"], "orchestrator": orchestrator, "version": _version(),
-            "tiles": {"apiaries": len(apiaries), "hives": sum(1 for h in hive_rows if h["live"] and not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done), "queens": len(queens), "bees": len(queens) + sum(1 for b in workers if b["status"] in ("running", "stopping")),
+            "tiles": {"apiaries": len(apiaries), "hives": sum(1 for h in hive_rows if h["live"] and not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done), "queens": len(queens), "orchestrators": len(orch_table), "bees": len(queens) + sum(1 for b in bees if b["kind"] in ("bee", "fix") and b["status"] in ("running", "stopping")),
                       "bee_capacity": slots, "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today), "start_ctx": start_tile},
             "overlays": overlays,
             "hives": [h for h in hive_rows if not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done], "bees": bees, "apiaries": apiaries,
