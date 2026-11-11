@@ -184,6 +184,14 @@ class GermanTextsTest(unittest.TestCase):
         self.assertEqual(gui_data.blocker_text("waiting for provider codex: quota used up"), "Wartet auf Anbieter codex: Kontingent aufgebraucht")
         self.assertEqual(gui_data.blocker_text("waiting for the build: x"), "Wartet auf den Build: x")
 
+    def test_start_block_messages_have_a_german_form(self):
+        for text in ("an Agent may not start now (starts paused or stopped, or the plan is paused): plan paused",
+                     "the check agent may not start now (starts paused or stopped, or the plan is paused): stopped"):
+            german = i18n.log_text(text)
+            self.assertNotEqual(german, text)
+            self.assertIn("darf jetzt nicht starten", german)
+            self.assertTrue(german.endswith(text.rsplit(": ", 1)[1]))
+
     def test_idle_kind_does_not_depend_on_the_language(self):
         row = gui_data.hive_row({"project": "A", "plan_path": "docs/plans/X-PLAN.md", "state": "other"}, [], {}, datetime(2026, 1, 1))
         self.assertEqual((row["status"], row["kind"]), ("Untätig", "idle"))

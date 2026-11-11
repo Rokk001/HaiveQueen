@@ -347,6 +347,8 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     (r"^the package failed (\d+) times and no higher class is offered$", r"das Paket scheiterte \1-mal und keine höhere Klasse wird angeboten"),
     (r"^class (\S+) was requested but the system computes class (\S+) \(plan class (\S+), no stored escalation\)$", r"Klasse \1 wurde angefordert, das System berechnet aber Klasse \2 (Planklasse \3, keine gespeicherte Eskalation)"),
     (r"^the worktree (.+) is not a valid separate worktree with a branch of this repository$", r"der Worktree \1 ist kein gültiger eigener Worktree mit einem Branch dieses Repositorys"),
+    (r"^an Agent may not start now \(starts paused or stopped, or the plan is paused\): (.*)$", r"ein Agent darf jetzt nicht starten (Starts pausiert oder gestoppt, oder der Plan ist pausiert): \1"),
+    (r"^the check agent may not start now \(starts paused or stopped, or the plan is paused\): (.*)$", r"der Prüf-Agent darf jetzt nicht starten (Starts pausiert oder gestoppt, oder der Plan ist pausiert): \1"),
     (r"^an Agent process may not start now \(starts paused or stopped, too little free RAM, or no free slot of provider (\S+)\)$", r"ein Agent-Prozess darf jetzt nicht starten (Starts pausiert oder gestoppt, zu wenig freier RAM oder kein freier Slot von Anbieter \1)"),
     (r"^no valid separate worktree for the Agent was given$", "für den Agenten wurde kein gültiger eigener Worktree angegeben"),
     (r"^the agent runner could not start the Agent process$", "der Agent-Runner konnte den Agent-Prozess nicht starten"),
