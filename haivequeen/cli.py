@@ -13,8 +13,16 @@ from haivequeen import export as export_mod, init as init_mod, views  # noqa: E4
 STUBS = ()
 
 
+_CONN = None   # the database of the running command; set by main()
+
+
 def out(obj) -> None:
-    """Print an object as JSON on stdout."""
+    """Print an object as JSON on stdout; a running Queen's answer carries her undelivered owner messages (key owner_messages), and only then."""
+    agent = os.environ.get("BZZ_AGENT")
+    if _CONN is not None and agent and isinstance(obj, dict):
+        messages = runtime.take_owner_messages(_CONN, agent)
+        if messages:
+            obj = {**obj, "owner_messages": messages}
     print(json.dumps(obj, ensure_ascii=False))
 
 
@@ -437,9 +445,26 @@ def cmd_package(args, conn):
 
 
 # Run a Bee or record its package attempt for the calling Queen.
+def cmd_agent_stop(args, conn):
+    """Owner only: end the one running Agent named on the command line (not the Queen, not a subagent); the Queen is told by an owner message."""
+    from haivequeen import owner
+    if "BZZ_AGENT" in os.environ:
+        return fail("this command is only available to the owner; agents cannot use it")
+    try:
+        out(owner.apply(conn, "stop_agent", args.project, None, name=args.target or args.name))
+        return 0
+    except (ValueError, KeyError, runtime.CmdError) as exc:
+        return fail(str(exc))
+
+
 def cmd_bee(args, conn):
     """Route and start an Agent, or record an attempt for escalation."""
     from haivequeen import bees, scheduler
+    if args.action == "stop":
+        return cmd_agent_stop(args, conn)
+    missing = [f for f in ("plan", "package", "cls") if not getattr(args, f)]
+    if missing:
+        return fail("agent %s requires --plan, --package and --class" % args.action)
     agent = os.environ.get("BZZ_AGENT")
     queen = runtime.get_agent(conn, args.project, agent) if agent else None
     if not queen or queen.get("phase") != "queen" or queen.get("status") not in ("running", "starting") or not _plan_matches(conn, args.project, queen.get("plan_path"), args.plan):
@@ -555,10 +580,15 @@ def build_parser() -> argparse.ArgumentParser:
         "The plan tag is derived from the plan file name without -PLAN and kept for the life of the plan. "
         "Names are based on plan and package, never after an Agent. A new branch starts from the current tip of the plan branch; "
         "a replacement Agent reuses the same worktree and branch. The answer gives cwd and branch, also for subagents. "
-        "Agents must not create or commit on another branch."))
-    p.add_argument("action", choices=["start", "result", "wait"])
-    for field in ("project", "plan", "package", "class"):
-        p.add_argument("--" + field, required=True, dest="cls" if field == "class" else field)
+        "Agents must not create or commit on another branch. "
+        "Stop: 'bzz agent stop <name>' is for the owner only (also the dashboard button and an inbox [[stop_agent]] entry); it ends the one running Agent, "
+        "refuses a subagent of the Queen with the reason, and refuses the Queen, who can only be ended by bzz dequeen. "
+        "The package stays stopped and waits for an explicit owner instruction. The Queen gets the stop as an owner message in owner_messages."))
+    p.add_argument("action", choices=["start", "result", "wait", "stop"])
+    p.add_argument("target", nargs="?", default="", help="stop: the name of the one running Agent to end (owner only; not the Queen, not a subagent)")
+    p.add_argument("--project", required=True)
+    for field in ("plan", "package", "class"):   # required by every action except stop
+        p.add_argument("--" + field, default="", dest="cls" if field == "class" else field)
     p.add_argument("--name", default="")
     p.add_argument("--provider", default="")
     p.add_argument("--task", default="")
@@ -714,6 +744,8 @@ def main(argv=None) -> int:
     desktop = getattr(args, "desktop", False)
     try:
         conn = db.connect(config.db_path())
+        global _CONN
+        _CONN = conn
         code = args.fn(args, conn)
     except Exception as exc:
         if not desktop:
@@ -721,6 +753,7 @@ def main(argv=None) -> int:
         args.desktop_result = {"ok": False, "error": str(exc)}
         code = fail(str(exc))
     finally:
+        _CONN = None
         if conn is not None:
             conn.close()
     if desktop:

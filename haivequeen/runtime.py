@@ -15,6 +15,7 @@ AGENT_COLUMNS = (
 )
 AGENT_ALIASES = {"plan": "plan_path", "pane": "pane_id"}
 ACTIVE_STATUSES = ("running", "starting")
+STOPPED_LINE = "stopped by the owner"   # last_line of an Agent row the owner stopped alone
 QUEUE_STATUSES = ("ready", "in_run", "integrated", "blocked", "withdrawn")
 MIRRORS = {"rounds": "ROUNDS.log", "events": "ORCH-EVENTS.log"}
 
@@ -215,6 +216,7 @@ def kv_set(conn, project, key, value) -> None:
 
 
 CUT_KEY = "cut-verification:"   # + plan path: the requirement/verify pairs of the accepted cut, its plan generation and plan title
+SUBMISSION_KEY = "submission:"   # + plan path: the plan text of the latest submission (the plan reaching status SENT) and its time
 CUT_RESET_KEY = "cut-reset:"     # + plan path: when the owner or a reused path started a new plan generation
 
 
@@ -235,6 +237,20 @@ def _cut_record(value):
     if not isinstance(pairs, list) or not all(isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) for p in pairs):
         return None
     return record
+
+
+def record_submission(conn, project, plan, text):
+    """Keep the plan text as sent: the ready check takes it as its reference."""
+    kv_set(conn, project, SUBMISSION_KEY + plan, json.dumps({"text": str(text or ""), "at": datetime.now().timestamp()}))
+
+
+def get_submission(conn, project, plan):
+    """The text of the latest submission of a plan, or None when there is no readable record."""
+    try:
+        record = json.loads(kv_get(conn, project, SUBMISSION_KEY + plan) or "null")
+    except (ValueError, TypeError):
+        return None
+    return record["text"] if isinstance(record, dict) and isinstance(record.get("text"), str) else None
 
 
 def _generation(conn, project, plan):
@@ -273,6 +289,7 @@ def save_cut_assignments(conn, project, plan, packages, plan_text, source="check
 def _reset_cut(conn, project, plan):
     """Inside a transaction: a new plan generation starts at this path; the old cut record no longer applies."""
     conn.execute("DELETE FROM kv WHERE project=? AND key=?", (project, CUT_KEY + plan))
+    conn.execute("DELETE FROM kv WHERE project=? AND key=?", (project, SUBMISSION_KEY + plan))
     conn.execute("INSERT INTO kv (project, key, value, updated_at) VALUES (?,?,?,?) ON CONFLICT(project, key) DO UPDATE SET "
                  "value=excluded.value, updated_at=excluded.updated_at", (project, CUT_RESET_KEY + plan, db.now(), db.now()))
 
@@ -434,6 +451,11 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
                     _recover_cut(conn, project, rel, Path(plan.path).read_text(encoding="utf-8-sig"))
                 except OSError:
                     pass
+            if plan.status == "SENT" and (before is None or before[0] != "SENT"):
+                try:   # the status line of the file was set to SENT: a submission as well
+                    record_submission(conn, project, rel, Path(plan.path).read_text(encoding="utf-8-sig"))
+                except OSError:
+                    pass
             conn.execute(
                 "INSERT INTO plans (project, path, title, status, updated_at) VALUES (?,?,?,?,?) "
                 "ON CONFLICT(project, path) DO UPDATE SET title=excluded.title, status=excluded.status, "
@@ -555,6 +577,8 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
     with db.transaction(conn):
         conn.execute("UPDATE plans SET status=?, updated_at=? WHERE project=? AND path=?",
                      (status, db.now(), project, plan))
+    if status == "SENT":
+        record_submission(conn, project, plan, nl.join(lines))
     if status in ENDED_WAIT_STATUSES:
         drop_provider_wait(conn, project, plan)
     return {"plan": plan, "status": status}
@@ -670,3 +694,27 @@ def add_decision(conn, project, source, text, plan=None, item=None) -> int:
         return conn.execute(
             "INSERT INTO decisions (project, ts, source, text, plan_path, item) VALUES (?,?,?,?,?,?)",
             (project, db.now(), source, text, plan, item)).lastrowid
+
+
+def mark_decisions_delivered(conn, agent, decisions) -> None:
+    """Mark decisions as delivered to one Queen (her start prompt shows them), so no bzz answer repeats them."""
+    with db.transaction(conn):
+        for d in decisions:
+            conn.execute("INSERT OR IGNORE INTO decision_deliveries (decision_id, agent, ts) VALUES (?,?,?)", (d["id"], agent, db.now()))
+
+
+def take_owner_messages(conn, agent) -> list:
+    """The owner decisions (source owner, active) stored for the plan or the whole Project of the running Queen `agent` since she started that she has not
+    received yet, as [{id, text}]; each is marked delivered with her name in the same transaction and never returned again. Other callers get []."""
+    row = conn.execute("SELECT project, plan_path, started_at FROM agents WHERE name=? AND phase='queen' AND archived=0 AND status IN ('running','starting') "
+                       "ORDER BY id DESC LIMIT 1", (agent,)).fetchone()
+    if row is None or not row["started_at"]:
+        return []
+    with db.transaction(conn):
+        found = conn.execute(
+            "SELECT id, text FROM decisions d WHERE project=? AND source='owner' AND status='active' AND (plan_path IS NULL OR plan_path='' OR plan_path=?) "
+            "AND ts>=? AND NOT EXISTS (SELECT 1 FROM decision_deliveries x WHERE x.decision_id=d.id AND x.agent=?) ORDER BY id",
+            (row["project"], row["plan_path"], row["started_at"], agent)).fetchall()
+        for d in found:
+            conn.execute("INSERT INTO decision_deliveries (decision_id, agent, ts) VALUES (?,?,?)", (d["id"], agent, db.now()))
+    return [{"id": d["id"], "text": d["text"]} for d in found]

@@ -317,7 +317,7 @@ def register(sub) -> None:
         "list": (h_decisions_list, [PO, ("--plan", {}), ("--item", {}), ("--all", {"action": "store_true"})]),
         "update": (h_decisions_update, [("id", {"type": int}), ("--plan", {}), ("--item", {}),
                                         ("--status", {"choices": runtime.DECISION_STATUSES})]),
-        "add": (h_decisions_add, [P, ("--source", {"required": True}), ("--text", {"required": True}),
+        "add": (h_decisions_add, [P, ("--source", {"required": True, "help": "owner, coordinator or auto; a new decision with source owner reaches a running Queen of the plan once, in her next bzz answer as owner_messages"}), ("--text", {"required": True}),
                                   ("--plan", {}), ("--item", {})]),
     })
     register_runstate(sub)

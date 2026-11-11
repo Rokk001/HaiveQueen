@@ -106,6 +106,10 @@ def _round_done(match):
 def _worktree_reason(reason):
     """Why a worktree stays, in German on one line; the text of Git or the system and any path behind a known start stay as written."""
     reason = " ".join(str(reason).split())
+    match = re.match(r"^the (\S+) (.*) is being removed by a cleanup(?: \(process id (\S+)\))? that is still running$", reason)
+    if match:
+        holder = " (Prozess-ID %s)" % match.group(3) if match.group(3) else ""
+        return "%s %s wird von einer laufenden Bereinigung%s entfernt" % ({"worktree": "Der Worktree", "branch": "Der Branch"}.get(match.group(1), "Das Ziel"), match.group(2), holder)
     for english, german in _WORKTREE_REASONS:
         if reason.startswith(english):
             return german + reason[len(english):]
@@ -195,6 +199,10 @@ _WORKTREE_REASONS = (
     ("git branch -D failed", "git branch -D fehlgeschlagen"),
     ("push failed: ", "Push fehlgeschlagen: "),
     ("an agent of the plan is running", "ein Agent des Plans läuft"),
+    ("another cleanup is removing it", "eine andere Bereinigung entfernt ihn gerade"),
+    ("a start is using it", "ein Start verwendet ihn gerade"),
+    ("already removed", "bereits entfernt"),
+    ("another cleanup is deleting it", "eine andere Bereinigung löscht ihn gerade"),
     ("remote not readable: ", "Remote nicht lesbar: "),
     ("the integrated tip is not in the integration branch", "der integrierte Stand ist nicht im Integrations-Branch"),
 )
@@ -463,6 +471,7 @@ GERMAN = {
     "Answer \"take over\" to continue on %s, or \"new\" to create a new branch from the integration branch.": "Antworte \"übernehmen\", um auf %s weiterzuarbeiten, oder \"neu\", um einen neuen Branch vom Integrationsbranch anzulegen.",
     "Stop agent %s (%s)? The package stays stopped until you resume it.": "Agent %s (%s) stoppen? Das Paket bleibt gestoppt, bis du es fortsetzt.",
     "Resume package": "Paket fortsetzen", "Resume package %s?": "Paket %s fortsetzen?", "Could not resume the package: %s": "Das Paket konnte nicht fortgesetzt werden: %s",
+    "Could not stop the Agent: %s": "Der Agent konnte nicht gestoppt werden: %s",
     "stopping": "wird gestoppt",
     "The stop of %s (%s) is pending: the Agent keeps its place until its Queen confirms that it has ended.": "Das Stoppen von %s (%s) steht aus: Der Agent behält seinen Platz, bis seine Queen bestätigt, dass er beendet ist.",
     "startable, not started": "startbar, nicht gestartet", "Cancel plan": "Plan abbrechen", "Plan cancelled": "Plan abgebrochen",

@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -87,125 +88,14 @@ class ListTests(unittest.TestCase):
         res = self.check(completeness(*FULL[:2]), decisions=[decision])
         self.assertEqual([i for i, _ in res.blocking], ["G-3"])
 
-    def test_plan_history_includes_removed_and_current_requirements(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            subprocess.run(['git', 'init', '-q', str(root)], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
-            plan = root / 'PLAN.md'
-            plan.write_text('# Plan\n\n## Requirements\n\n- G-1: old\n', encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
-            current = '# Plan\n\n## Requirements\n\n- G-2: new\n'
-            plan.write_text(current, encoding='utf-8')
-            texts = readygate.plan_versions(str(plan), current)
-            ids = {rid for text in texts for rid, _ in plans.parse_requirements(text)}
-            self.assertEqual(ids, {'G-1', 'G-2'})
-            res = readygate.evaluate(current, '## Completeness\n- G-2: done | test\n', [], [], texts)
-            self.assertEqual([rid for rid, _ in res.blocking], ['G-1'])
-
-    def test_plan_history_stops_at_a_deleted_earlier_plan(self):
-        """A plan file that was deleted and later written again at the same path: the history before the deletion belongs to another plan and never blocks the gate."""
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            subprocess.run(['git', 'init', '-q', str(root)], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
-            plan = root / 'PLAN.md'
-            plan.write_text('# Old plan\n\n## Requirements\n\n- G-9: of the old plan\n', encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'old plan'], check=True)
-            subprocess.run(['git', '-C', str(root), 'rm', '-q', 'PLAN.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'remove old plan'], check=True)
-            plan.write_text('# Plan\n\n## Requirements\n\n- G-1: first\n', encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'new plan'], check=True)
-            current = '# Plan\n\n## Requirements\n\n- G-2: second\n'
-            plan.write_text(current, encoding='utf-8')
-            texts = readygate.plan_versions(str(plan), current)
-            self.assertEqual({rid for text in texts for rid, _ in plans.parse_requirements(text)}, {'G-1', 'G-2'})
-
-    def test_plan_history_follows_committed_rename(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            subprocess.run(['git', 'init', '-q', str(root)], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
-            old = root / 'OLD.md'
-            old.write_text('# Plan\n\n## Requirements\n\n- G-0: old\n', encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'OLD.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
-            old.write_text('# Plan\n\n## Requirements\n\n- G-1: revised\n', encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'OLD.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'revise'], check=True)
-            subprocess.run(['git', '-C', str(root), 'mv', 'OLD.md', 'PLAN.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'rename'], check=True)
-            plan = root / 'PLAN.md'
-            current = '# Plan\n\n## Requirements\n\n- G-2: new\n'
-            plan.write_text(current, encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'update'], check=True)
-            texts = readygate.plan_versions(str(plan), current)
-            self.assertEqual({rid for text in texts for rid, _ in plans.parse_requirements(text)}, {'G-0', 'G-1', 'G-2'})
-
-    def test_plan_history_stops_at_a_copy(self):
-        """Plan B created as a copy of plan A and changed afterwards: git reports status C, plan_versions(B) raises no error and holds versions of B only."""
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            subprocess.run(['git', 'init', '-q', str(root)], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
-            body = '# Plan\n\n## Requirements\n\n' + ''.join('- A-%d: line %d of the shared text\n' % (i, i) for i in range(1, 12))
-            (root / 'A.md').write_text(body, encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'A.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'plan A'], check=True)
-            (root / 'B.md').write_text(body + '- B-1: own\n', encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'B.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'plan B as a copy of A'], check=True)
-            current = body + '- B-1: own\n- B-2: added later\n'
-            (root / 'B.md').write_text(current, encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'B.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'change plan B'], check=True)
-            status = subprocess.run(['git', '-C', str(root), 'log', '--follow', '--format=COMMIT:%H', '--name-status', '--', 'B.md'], capture_output=True, text=True, check=True).stdout
-            self.assertRegex(status, r'(?m)^C\d+\t', "git must report the copy with status C, else this test proves nothing")
-            texts = readygate.plan_versions(str(root / 'B.md'), current)
-            self.assertEqual(len(texts), 3)   # the current text, the change commit and the commit that created B
-            self.assertTrue(all('B-1: own' in text for text in texts))
-
-    def test_plan_history_read_error_is_not_silently_ignored(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            subprocess.run(['git', 'init', '-q', str(root)], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
-            plan = root / 'PLAN.md'
-            plan.write_text(PLAN_BODY, encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
-            real_run = subprocess.run
-            def fail_show(args, **kwargs):
-                if 'show' in args:
-                    raise subprocess.CalledProcessError(1, args)
-                return real_run(args, **kwargs)
-            with mock.patch('haivequeen.readygate.subprocess.run', side_effect=fail_show):
-                with self.assertRaises(readygate.PlanHistoryError):
-                    readygate.plan_versions(str(plan), PLAN_BODY)
-
-    def test_shallow_plan_history_is_rejected(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            subprocess.run(['git', 'init', '-q', str(root)], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
-            plan = root / 'PLAN.md'
-            plan.write_text(PLAN_BODY, encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'PLAN.md'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'initial'], check=True)
-            head = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True)
-            (root / '.git' / 'shallow').write_text(head, encoding='ascii')
-            with self.assertRaises(readygate.PlanHistoryError):
-                readygate.plan_versions(str(plan), PLAN_BODY)
+    def test_item_of_several_ids_applies_to_each(self):
+        """A decision whose item names two ids sets both aside; an item naming other ids sets none."""
+        decision = {"item": "G-2, G-3", "text": "set aside", "status": "active"}
+        res = self.check(completeness(FULL[0]), decisions=[decision])
+        self.assertEqual((res.blocking, sorted(res.aside)), ([], ["G-2", "G-3"]))
+        other = {"item": "G-22,G-33", "text": "set aside", "status": "active"}
+        res = self.check(completeness(FULL[0]), decisions=[other])
+        self.assertEqual([i for i, _ in res.blocking], ["G-2", "G-3"])
 
     def test_plan_without_ids_is_refused(self):
         """No requirement id anywhere: refused with the hint that requirements need ids."""
@@ -246,6 +136,11 @@ class GateTests(RoundCase):
         self.round()
         self.queen = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"][0]
         self.requests = []
+        self.submit()
+
+    def submit(self):
+        """The user submits the plan as it is in the file now."""
+        runtime.record_submission(self.conn, "testproj", REL, (self.repo / REL).read_text(encoding="utf-8"))
 
     def state(self, *lines):
         """Write the Queen's state file beside the plan."""
@@ -292,18 +187,68 @@ class GateTests(RoundCase):
         """File an owner decision for the plan."""
         runtime.add_decision(self.conn, "testproj", "owner", text, plan=REL if plan is None else plan, item=item)
 
-    def test_check_agent_gets_only_the_current_text_of_a_changed_requirement(self):
-        """The owner changed the text of G-3: the check agent sees the new text only, the old one is no target any more."""
+    def test_latest_submission_is_the_reference_of_both_checks(self):
+        """Submitted, changed by the user in two requirements, submitted again: the list check and the check agent use the latest submission."""
         text = (self.repo / REL).read_text(encoding="utf-8")
-        self.git_repo(self.repo)
-        (self.repo / REL).write_text(text.replace("third thing", "third thing, now different"), encoding="utf-8")
+        (self.repo / REL).write_text(text.replace("third thing", "third thing, now different").replace("- G-2: second thing\n", "- G-4: fourth thing\n"), encoding="utf-8")
         self.state(*FULL)
+        with self.runner("passed"):
+            code, res = self.ready()   # the first submission is the reference: G-2 and the old text of G-3
+        self.assertEqual(code, 0, res)
+        self.assertIn("G-2: second thing", self.requests[-1]["prompt"])
+        self.assertIn("G-3: third thing\n", self.requests[-1]["prompt"] + "\n")
+        self.submit()
+        self.requests.clear()
+        self.state(*FULL)
+        with self.runner("passed"):
+            code, res = self.ready()   # the second submission: G-4 is required by the list check
+        self.assertEqual(code, 1)
+        self.assertIn("G-4", res["error"])
+        self.assertEqual(self.requests, [])
+        self.state(*FULL[0:1], "- G-3: done | t", "- G-4: done | t", "- G-2: done | t")
         with self.runner("passed"):
             code, res = self.ready()
         self.assertEqual(code, 0, res)
         prompt = self.requests[-1]["prompt"]
         self.assertIn("G-3: third thing, now different", prompt)
+        self.assertIn("G-4: fourth thing", prompt)
         self.assertNotIn("G-3: third thing\n", prompt + "\n")
+
+    def test_new_generation_does_not_reuse_submission(self):
+        runtime.reset_cut_assignments(self.conn, "testproj", REL)
+        self.assertIsNone(runtime.get_submission(self.conn, "testproj", REL))
+
+    def test_status_line_set_to_sent_in_the_file_is_a_submission(self):
+        """The user sets the status line of the plan to SENT in the file: the next sync records that version as the submission."""
+        path = self.repo / REL
+        text = path.read_text(encoding="utf-8")
+        self.conn.execute("DELETE FROM kv WHERE key LIKE 'submission:%'")
+        self.assertIsNone(runtime.get_submission(self.conn, "testproj", REL))
+        path.write_text(re.sub(r'(?m)^status = ".*"$', 'status = "SENT"', text).replace("- G-3: third thing", "- G-3: third thing, sent"), encoding="utf-8")
+        runtime.sync_plans(self.conn, "testproj", workspace=self.repo)
+        self.assertIn("G-3: third thing, sent", runtime.get_submission(self.conn, "testproj", REL))
+
+    def test_unknown_submission_stops_the_ready_check(self):
+        """Without a submission record no other version takes its place: understandable message, no check agent."""
+        self.conn.execute("DELETE FROM kv WHERE key LIKE 'submission:%'")
+        self.state(*FULL)
+        with self.runner("passed"):
+            code, res = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("submitted again", res["error"])
+        self.assertEqual((self.requests, self.queued()), ([], []))
+
+    def test_check_agent_gets_the_decisions_of_owner_and_coordinator(self):
+        """The text of an owner decision and of a coordinator decision reaches the check agent; one with an item of two ids sets both aside."""
+        runtime.add_decision(self.conn, "testproj", "owner", "owner says alpha", plan=REL, item="G-1")
+        runtime.add_decision(self.conn, "testproj", "coordinator", "coordinator says beta", plan=REL, item="G-2,G-3")
+        self.state(*FULL[:1])
+        with self.runner("passed"):
+            code, res = self.ready()   # G-2 and G-3 are not listed: the coordinator decision names both, as before only a named id is set aside
+        self.assertEqual(code, 0, res)
+        prompt = self.requests[-1]["prompt"]
+        self.assertIn("owner says alpha", prompt)
+        self.assertIn("coordinator says beta", prompt)
 
     def test_owner_release_for_the_head_commit_accepts_without_the_check_agent(self):
         """An active owner-release of this plan naming the HEAD commit (full or 7 characters) accepts; the list is still required."""
@@ -349,30 +294,6 @@ class GateTests(RoundCase):
             self.conn.execute("DELETE FROM decisions")
             self.conn.commit()
 
-    def test_check_agent_gets_the_requirements_of_every_plan_version(self):
-        """End to end: a requirement only an earlier committed version had is required at bzz ready (it blocks until listed); the check agent is handed the current version only."""
-        def git(*args):
-            subprocess.run(["git", "-C", str(self.repo)] + list(args), check=True, capture_output=True)
-        git("init", "-q")
-        git("config", "user.name", "Test")
-        git("config", "user.email", "test@example.invalid")
-        text = (self.repo / REL).read_text(encoding="utf-8")
-        (self.repo / REL).write_text(text + "- H-77: removed later\n", encoding="utf-8")
-        git("add", REL)
-        git("commit", "-qm", "first version")
-        (self.repo / REL).write_text(text, encoding="utf-8")
-        self.state(*FULL)
-        with self.runner("passed"):
-            code, res = self.ready()
-        self.assertEqual(code, 1)
-        self.assertIn("H-77", res["error"])
-        self.assertEqual(self.requests, [])
-        self.state(*(FULL + ("- H-77: done | test evidence",)))
-        with self.runner("passed"):
-            code, res = self.ready()
-        self.assertEqual(code, 0, res)
-        self.assertNotIn("H-77", self.requests[-1]["prompt"])
-
     def test_list_refusal_starts_no_check_agent(self):
         """A bad list is refused with the ids and the check agent is not asked."""
         self.state(FULL[0], "- G-2: partial | half", "- G-3: done")
@@ -395,6 +316,7 @@ class GateTests(RoundCase):
     def test_plan_without_ids_is_refused(self):
         """A plan without requirement ids is refused with the hint."""
         (self.repo / REL).write_text((self.repo / REL).read_text(encoding="utf-8").replace(PLAN_BODY, "\nno ids here\n"), encoding="utf-8")
+        self.submit()
         with self.runner("passed"):
             code, res = self.ready()
         self.assertEqual(code, 1)

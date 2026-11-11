@@ -2,7 +2,8 @@
 from . import filetxn
 import re
 
-from . import bees, config, db, hives, runtime, servers
+from . import platform as osplat
+from . import agent_process, bees, config, db, hives, integration, runtime, servers
 
 
 def is_check(item):
@@ -28,6 +29,9 @@ def validate(conn, action, project=None, plan=None, **fields):
         if fields.get("provider_action") not in ("enable", "disable", "test"):
             raise ValueError("provider action must be enable, disable or test")
         provider_settings(fields.get("provider"))
+        return
+    if action == "stop_agent":
+        stoppable_agent(conn, project, fields.get("name"))
         return
     status = hives._plan_status(conn, project, plan)
     if action in ("accept", "reject"):
@@ -73,6 +77,50 @@ def validate(conn, action, project=None, plan=None, **fields):
         raise ValueError("unknown owner action " + action)
 
 
+EMBEDDED_REASON = "Agent %s runs as a subagent inside its Queen and has no process of its own, so it cannot be stopped alone"
+STOPPED_LINE = runtime.STOPPED_LINE
+
+
+def stoppable_agent(conn, project, name):
+    """The agents row of the Agent `name` that the owner may stop alone; raise ValueError with the reason when it cannot be stopped."""
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("stop requires the Agent name")
+    if name in bees.open_embedded_names(conn):
+        raise ValueError(EMBEDDED_REASON % name)
+    row = runtime.get_agent(conn, project, name)
+    if row is None or row.get("archived"):
+        raise ValueError("unknown Agent " + name)
+    if row.get("phase") == "queen":
+        raise ValueError("%s is a Queen; a Queen is ended only with bzz dequeen" % name)
+    if row.get("phase") not in ("bee", "verify", "fix"):
+        raise ValueError("%s is no package, fix or ready-check Agent" % name)
+    if row.get("status") not in runtime.ACTIVE_STATUSES or not agent_process.counts(row):
+        raise ValueError("Agent %s is not running" % name)
+    return row
+
+
+def stop_agent(conn, project, name, stop=None):
+    """End exactly one running package or ready-check Agent (the one action behind the dashboard button, bzz agent stop and the inbox entry).
+
+    Its process tree is ended, its row closes as done without a result (no failure, retry or escalation is counted, no question is asked), the package of a
+    package Agent stays open and stopped until the owner resumes it, a ready check counts as aborted, and the Queen of the plan gets the owner message
+    'Agent <name> stopped by the owner' like any new owner decision. The Queen and the other Agents keep running."""
+    row = stoppable_agent(conn, project, name)
+    stop = stop or osplat.kill_process_tree
+    if row.get("pid") and stop(row["pid"]) is False:
+        raise ValueError("could not end Agent " + row["name"])
+    if row.get("phase") == "fix":   # a fix agent of the Orchestrator: never restarted automatically, its plan waits for the owner (M-4)
+        from . import orchestrator
+        orchestrator.owner_stop(conn, project, row["name"])
+    runtime.upsert_agent(conn, project, row["name"], {"status": "done", "pid": None, "ended_at": db.now(), "last_line": STOPPED_LINE})
+    plan = row.get("plan_path") or None
+    if row.get("phase") == "bee" and row.get("package") and plan:
+        bees.stop_package(conn, project, plan, row["package"])
+    runtime.add_decision(conn, project, "owner", "Agent %s stopped by the owner" % row["name"], plan)
+    return {"ok": True, "stopped": row["name"], "package": row.get("package") or "", "plan": plan or ""}
+
+
 def provider_settings(name):
     """Load the same migrated settings edited by the provider page."""
     from . import gui_config
@@ -102,6 +150,8 @@ def apply(conn, action, project=None, plan=None, **fields):
         provider["enabled"] = operation == "enable"
         gui_config.save_file(path, data)
         return {"ok": True, "provider": provider["name"], "enabled": provider["enabled"]}
+    if action == "stop_agent":
+        return stop_agent(conn, project, fields["name"])
     if action == "pause":
         hives.pause_plan(conn, project, plan)
     elif action == "resume":

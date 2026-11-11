@@ -316,17 +316,14 @@ class StoppedPackageTests(RoundCase):
         return f.read_text(encoding="utf-8") if f.is_file() else ""
 
     def test_stop_bee_on_an_embedded_bee_stays_pending_until_its_end_is_confirmed(self):
-        """X on an embedded (subagent) Agent stops its package and tells the Queen to end it, but the row stays open and keeps its Agent place
+        """A stopped package with an embedded (subagent) Agent tells the Queen to end it, but the row stays open and keeps its Agent place
         until the Queen confirms its end; only her result for the package closes it with the outcome stopped."""
         from haivequeen import gui
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
         queen = dict(runtime.list_agents(self.conn, "testproj", "active")[0])
         row = next(r for r in gui_data.bee_list([queen], {}, set(), datetime.now(), embedded=gui_data.embedded_rows(self.conn)) if r["name"] == "Cia")
         cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "stop_bee"))
-        app = mock.Mock(conn=self.conn, confirm=lambda text: True, selected=lambda table: row)
-        with mock.patch("haivequeen.platform.kill_process_tree") as kill:
-            cls.stop_bee(app)
-        kill.assert_not_called()   # the Queen's process must survive
+        bees.stop_package(self.conn, "testproj", REL, "P1")
         self.assertTrue(bees.package_stopped(self.conn, "testproj", REL, "P1"))
         open_rows = gui_data.embedded_rows(self.conn)
         self.assertEqual([(r["name"], r["outcome"]) for r in open_rows], [("Cia", "stopping")])   # not closed, not ended
@@ -458,8 +455,8 @@ class StoppedPackageTests(RoundCase):
         self.assertEqual(bees.free_bee_places(env, REL, 5), 3)
         self.assertEqual(self.queen_notice("Queen-B"), "")
 
-    def test_stop_bee_on_an_embedded_bee_stops_it_and_tells_its_queen(self):
-        """An embedded (subagent) Agent has no process of its own: X stops its package and tells the Queen to end the subagent."""
+    def test_stop_bee_on_an_embedded_bee_is_refused_with_the_reason(self):
+        """An embedded (subagent) Agent has no process of its own: X refuses with the reason and stops nothing (M-4)."""
         from haivequeen import gui
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
         queen = dict(runtime.list_agents(self.conn, "testproj", "active")[0])
@@ -469,15 +466,9 @@ class StoppedPackageTests(RoundCase):
         app = mock.Mock(conn=self.conn, confirm=lambda text: True, selected=lambda table: row)
         with mock.patch("haivequeen.platform.kill_process_tree") as kill:
             cls.stop_bee(app)
-        kill.assert_not_called()   # the Queen's process must survive
-        app.inform.assert_not_called()   # no "has not started yet"
-        self.assertTrue(bees.package_stopped(self.conn, "testproj", REL, "P1"))
-        self.assertIn("P1", self.stop_notice())
-        self.assertFalse(self.start("P1"))   # the Queen cannot start it again as a subagent either
-        self.assertIn("owner stopped", bees.LAST_REFUSAL)
-        bees.report_attempt(self.env(), REL, "P1", "medium", "interrupted", "Cia")   # her confirmation ends the pending stop
-        bees.resume_package(self.conn, "testproj", REL, "P1")
-        self.assertEqual(self.stop_notice(), "")
+        kill.assert_not_called()
+        app.inform.assert_called_once_with(row["stop_disabled"])
+        self.assertFalse(bees.package_stopped(self.conn, "testproj", REL, "P1"))
 
     def test_the_stop_notice_names_every_stopped_package_of_the_plan(self):
         bees.stop_package(self.conn, "testproj", REL, "P1")

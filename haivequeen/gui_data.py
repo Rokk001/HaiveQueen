@@ -291,7 +291,8 @@ def bee_row(agent, now, steps=None, ctx_limit=None, package_steps=None) -> dict:
             "hive": hive_name(agent.get("plan_path") or ""), "apiary": agent.get("project"),
             "task": str(agent.get("task") or agent.get("package") or i18n.log_text(str(agent.get("last_line") or "")))[:40].strip(), "step": step, "step_frac": step_fraction(step),
             "ctx": int(agent.get("ctxTokens") or 0), "ctx_limit": int(ctx_limit(agent)) if ctx_limit else 0, "tin": tin, "tout": tout,
-            "status": "running" if agent.get("status") in runtime.ACTIVE_STATUSES else str(agent.get("status")), "runtime": fmt_elapsed(agent.get("started_at"), now)}
+            "status": "running" if agent.get("status") in runtime.ACTIVE_STATUSES else str(agent.get("status")), "runtime": fmt_elapsed(agent.get("started_at"), now),
+            "stop_agent": agent.get("name"), "stop_disabled": ""}   # the Stop button of the row: the Agent it ends; a non-empty stop_disabled is the reason it is off
 
 
 # Describe the running Queen of a Hive for the Bees table, from the Hive's row.
@@ -301,6 +302,12 @@ def queen_row(hive) -> dict:
             "model": hive["queen_model"] or "–", "hive": hive["name"], "apiary": hive["apiary"], "task": "Queen",
             "ctx": hive["queen_ctx"], "ctx_limit": hive["queen_ctx_limit"], "tin": hive["queen_tin"], "tout": hive["queen_tout"],
             "status": "running", "runtime": hive["runtime"]}
+
+
+def _embedded_reason(name) -> str:
+    """Why a subagent Agent has no working Stop button: it has no process of its own."""
+    from . import owner
+    return owner.EMBEDDED_REASON % name
 
 
 # Read the embedded Bees (subagents of a Queen) that have not reported yet.
@@ -374,7 +381,8 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
                      "ctx": int((sub or {}).get("ctx") or 0), "ctx_limit": int(ctx_limit(queen)) if sub and ctx_limit else 0,
                      "tin": int((sub or {}).get("tin") or 0), "tout": int((sub or {}).get("tout") or 0),
                      "status": "stopping" if bee.get("outcome") == "stopping" else "running", "stopping": bee.get("outcome") == "stopping",
-                     "runtime": fmt_elapsed(bee["started_at"], now), "embedded": True, "package": bee["package"]})
+                     "runtime": fmt_elapsed(bee["started_at"], now), "embedded": True, "package": bee["package"],
+                     "stop_agent": bee["name"], "stop_disabled": _embedded_reason(bee["name"])})
         seen.add((bee["project"], bee["plan_path"], bee["package"]))
     for (project, plan, package) in sorted(assigned or {}):
         if (project, plan, package) in seen or (project, plan, package) in (completed or ()) or (hive_keys is not None and (project, plan) not in hive_keys):
