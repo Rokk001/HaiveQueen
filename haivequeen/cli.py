@@ -559,7 +559,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="bzz")
     sub = ap.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("agent", aliases=["bee"], help="start an agent or report its package result (bee is a compatibility alias)", description="Start creates or reuses the package worktree and <plan branch>-<package id> branch; the answer gives cwd and branch. Agents must not create or commit on another branch.")
+    p = sub.add_parser("agent", aliases=["bee"], help="start an agent or report its package result (bee is a compatibility alias)", description=(
+        "Start creates or reuses the package branch <plan branch>-<package id in lower case> and folder "
+        "<worktree prefix>-<plan tag in lower case>-<package id in lower case> in the project's worktree location. "
+        "The plan tag is derived from the plan file name without -PLAN and kept for the life of the plan. "
+        "Names are based on plan and package, never after an Agent. A new branch starts from the current tip of the plan branch; "
+        "a replacement Agent reuses the same worktree and branch. The answer gives cwd and branch, also for subagents. "
+        "Agents must not create or commit on another branch."))
     p.add_argument("action", choices=["start", "result", "wait"])
     for field in ("project", "plan", "package", "class"):
         p.add_argument("--" + field, required=True, dest="cls" if field == "class" else field)
@@ -588,7 +594,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason", default="")
     p.set_defaults(fn=cmd_package)
 
-    p = sub.add_parser("plan", help="check a plan; owner: accept, reject, pause, resume or release")
+    p = sub.add_parser("plan", help="check a plan; owner: accept, reject, pause, resume or release", description=(
+        "The TOML header requires branch (the plan branch) and worktree (the plan worktree folder). "
+        "The Queen writes both at the cut; HaiveQueen reads them only from these header fields. "
+        "Check refuses a missing branch or worktree, or a worktree that is the project's main checkout, and names the problem. "
+        "The plan stays SENT until the check passes and sets it to QUEUED; agent start is refused until then."))
     p.add_argument("action", choices=["check", "accept", "reject", "pause", "resume", "release"])
     for field in ("project", "plan"):
         p.add_argument("--" + field, required=True)
