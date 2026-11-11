@@ -106,6 +106,10 @@ def _round_done(match):
 def _worktree_reason(reason):
     """Why a worktree stays, in German on one line; the text of Git or the system and any path behind a known start stay as written."""
     reason = " ".join(str(reason).split())
+    match = re.match(r"^the (\S+) (.*) is being removed by a cleanup(?: \(process id (\S+)\))? that is still running$", reason)
+    if match:
+        holder = " (Prozess-ID %s)" % match.group(3) if match.group(3) else ""
+        return "%s %s wird von einer laufenden Bereinigung%s entfernt" % ({"worktree": "Der Worktree", "branch": "Der Branch"}.get(match.group(1), "Das Ziel"), match.group(2), holder)
     for english, german in _WORKTREE_REASONS:
         if reason.startswith(english):
             return german + reason[len(english):]
@@ -194,6 +198,11 @@ _WORKTREE_REASONS = (
     ("git branch -D failed", "git branch -D fehlgeschlagen"),
     ("push failed: ", "Push fehlgeschlagen: "),
     ("an agent of the plan is running", "ein Agent des Plans läuft"),
+    ("another cleanup is removing it", "eine andere Bereinigung entfernt ihn gerade"),
+    ("a start is using it", "ein Start verwendet ihn gerade"),
+    ("already removed", "bereits entfernt"),
+    ("another cleanup is deleting it", "eine andere Bereinigung löscht ihn gerade"),
+    ("its worktree or branch is being removed by a cleanup; the start is left to the next round", "sein Worktree oder Branch wird gerade von einer Bereinigung entfernt; der Start bleibt der nächsten Runde überlassen"),
     ("remote not readable: ", "Remote nicht lesbar: "),
     ("the integrated tip is not in the integration branch", "der integrierte Stand ist nicht im Integrations-Branch"),
 )

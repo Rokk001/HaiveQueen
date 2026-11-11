@@ -1,6 +1,7 @@
 """Agent routing, package attempts and scoped Queen instructions."""
 import json
 import re
+import sqlite3
 import time
 
 from . import buildjobs, db, roles, runtime, scheduler, servers
@@ -968,8 +969,22 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
     A refusal returns False and leaves its reason in LAST_REFUSAL."""
     global LAST_REFUSAL
     LAST_REFUSAL = ''
+    from . import worktrees
+    # The start reserves its worktree and branch atomically; when a cleanup removes one of them it waits for that removal, without holding the scheduling lock.
+    try:
+        waited = []
+        with worktrees.start_reservation(start_removal_targets(env, plan, package, cwd), waited=waited):
+            return _start_process_reserved(env, plan, package, name, cls, task, steps, paths, rules, cwd, no_subagents, bool(waited))
+    except worktrees.RemovalTimeout as exc:
+        return refuse(env, package, str(exc))
+
+
+# The start while its worktree and branch are reserved against a cleanup.
+def _start_process_reserved(env, plan, package, name, cls, task, steps, paths, rules, cwd, no_subagents, waited):
+    """The part of start_process that runs while the reservation holds."""
+    global LAST_REFUSAL
     from pathlib import Path
-    from . import hives, loop, routine
+    from . import hives, loop, routine, worktrees
     with loop.hive_schedule_lock():
         check_dependencies(env, plan, package)
         draining = drain_refusal()
@@ -1114,6 +1129,46 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
         record_step_count(env.conn, env.name, plan, package, len(steps))
         return {'kind': 'process', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute()), 'branch': branch}
+
+
+# The worktrees and the branch that a start of this package would use.
+def start_removal_targets(env, plan, package, cwd=None):
+    """List (kind, key) of the worktree paths and the plan branch that the Agent start would use; a cleanup removing exactly one of them blocks only this start."""
+    found = []
+    try:
+        saved = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+    except sqlite3.OperationalError:   # the table is created with the first attempt
+        saved = None
+    for path in (cwd, saved[0] if saved else None):
+        if path:
+            found.append(('worktree', path))
+    try:
+        named = plan_worktree(env, plan)
+    except (OSError, ValueError):
+        named = None
+    if named:
+        from . import routine
+        found.append(('branch', (env.code_repo, named[0])))
+        found.append(('branch', (env.code_repo, named[0] + '-' + package.lower())))
+        found.append(('worktree', routine.new_worktree(env, routine.plan_tag(env, plan).lower() + '-' + package.lower())))
+    if named:
+        # A previous attempt can be reused even before a worktree row exists.
+        for previous in runtime.list_agents(env.conn, env.name, 'all'):
+            if (previous.get('plan_path') == plan and previous.get('package') == package
+                    and previous.get('phase') == 'bee' and previous.get('cwd')):
+                found.append(('worktree', previous['cwd']))
+        entries = worktree_entries(env) or []
+        paths = [key for kind, key in found if kind == 'worktree']
+        for folder, branch in entries:
+            if branch and any(same_folder(folder, path) for path in paths):
+                found.append(('branch', (env.code_repo, branch)))
+    try:
+        known = env.conn.execute('SELECT branch FROM bee_worktree_branches WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+        if known and known[0]:
+            found.append(('branch', (env.code_repo, known[0])))
+    except sqlite3.OperationalError:
+        pass
+    return found
 
 
 # Read the branch from the 'Plan: X; branch Y; baseline Z' line of the plan's state file next to it.

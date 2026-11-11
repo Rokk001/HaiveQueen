@@ -1,4 +1,5 @@
 """Safe cleanup of worktrees whose commits are integrated."""
+import contextlib
 import re
 import subprocess
 
@@ -304,18 +305,28 @@ def _prune_candidates(env, records, queue, process_busy, dry, integration_ref=No
             if dry:
                 result['removed'].append(path)
                 continue
-            reason = _candidate_reason(env, record, index == 0, queue, integration_ref)
-            if reason or process_busy(path) is not False:
-                result['kept'].append({'path': path, 'reason': reason or 'process working directory or unknown process state'})
-                continue
-            removed = _remove_with_links(env.code_repo, path, targets)
-            if removed.returncode:
-                result['notRemovable'].append({'path': path, 'reason': removed.stderr.strip()})
-                continue
-            result['removed'].append(path)
-            for _, target, before in targets:
-                if _target_size(target) != before:
-                    result['notRemovable'].append({'path': path, 'reason': 'link target changed: ' + str(target)})
+            with removal_lock('worktree', path) as mine:   # only this worktree is locked, and only while it is removed
+                if not mine:
+                    result['kept'].append({'path': path, 'reason': 'another cleanup is removing it'})
+                    continue
+                if start_reserved('worktree', path):   # a start reserved it after the first check: the start wins
+                    result['kept'].append({'path': path, 'reason': 'a start is using it'})
+                    continue
+                if not os.path.isdir(path):   # the slow checks ran before the lock; only a cheap look is left here
+                    result['kept'].append({'path': path, 'reason': 'already removed'})
+                    continue
+                reason = _candidate_reason(env, record, index == 0, queue, integration_ref)
+                if reason or process_busy(path) is not False:
+                    result['kept'].append({'path': path, 'reason': reason or 'process working directory or unknown process state'})
+                    continue
+                removed = _remove_with_links(env.code_repo, path, targets)
+                if removed.returncode:
+                    result['notRemovable'].append({'path': path, 'reason': removed.stderr.strip()})
+                    continue
+                result['removed'].append(path)
+                for _, target, before in targets:
+                    if _target_size(target) != before:
+                        result['notRemovable'].append({'path': path, 'reason': 'link target changed: ' + str(target)})
         except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
             result['notRemovable'].append({'path': path, 'reason': str(exc)})
     return result
@@ -547,9 +558,13 @@ def _delete_plan_branches(env, plan, row, remote_name, heads, local, checked_out
     for name, commit in sorted(local.items()):
         if not belongs(name):
             continue
-        reason = blocker(name, commit) or ('checked out in a worktree' if name in checked_out else '')
-        if not reason and _git(env.code_repo, 'branch', '-D', name).returncode:
-            reason = 'git branch -D failed'
+        key = (env.code_repo, name)
+        reason = blocker(name, commit) or ('checked out in a worktree' if name in checked_out else '')   # the slow checks run before the lock
+        if not reason:
+            with removal_lock('branch', key) as mine:   # only this branch is locked, and only while it is deleted
+                reason = 'another cleanup is deleting it' if not mine else 'a start is using it' if start_reserved('branch', key) else ''
+                if not reason and _git(env.code_repo, 'branch', '-D', name).returncode:
+                    reason = 'git branch -D failed'
         if reason:
             result['kept'].append({'branch': name, 'where': 'local', 'reason': reason})
         else:
@@ -557,10 +572,14 @@ def _delete_plan_branches(env, plan, row, remote_name, heads, local, checked_out
     for name, commit in sorted(heads.items()):
         if not belongs(name):
             continue
+        key = (env.code_repo, name)
         reason = blocker(name, commit)
         if not reason:
-            pushed = _delete_remote(env.code_repo, remote_name, name, commit)
-            reason = 'push failed: ' + pushed.stderr.strip()[:200] if pushed.returncode else ''
+            with removal_lock('branch', key) as mine:
+                reason = 'another cleanup is deleting it' if not mine else 'a start is using it' if start_reserved('branch', key) else ''
+                if not reason:
+                    pushed = _delete_remote(env.code_repo, remote_name, name, commit)
+                    reason = 'push failed: ' + pushed.stderr.strip()[:200] if pushed.returncode else ''
         if reason:
             result['kept'].append({'branch': name, 'where': 'remote', 'reason': reason})
         else:
@@ -616,30 +635,190 @@ def _delete_branches_locked(env):
     return result
 
 
-# Run a cleanup step alone: one at a time on this machine and no agent start meanwhile.
-def _serialized(step):
-    """Hold the cleanup lock and the scheduling lock while `step` runs and return its result."""
+# The lock file of one removal: only the worktree or branch being removed is locked, never the scheduling.
+def _removal_lock_path(kind, key):
+    """Lock file for `kind` ('worktree' or 'branch') and `key` (a path, or (repository path, branch name)) in the data folder."""
+    import hashlib
     import os
-    import time
-    from . import loop, platform
-    lock = platform.data_dir() / 'worktree-cleanup.lock'
-    deadline = time.monotonic() + 30
-    while loop._take_pid_lock(lock, own_ok=False) != 0:
-        if time.monotonic() >= deadline:
-            raise TimeoutError('worktree cleanup is busy')
-        time.sleep(0.1)
+    from . import platform
+    # A worktree is its resolved path; a branch is its repository (resolved path) and its name, so the same name in another repository is another lock.
+    if kind == 'worktree':
+        text = os.path.normcase(os.path.realpath(str(key)))
+    else:
+        repo, name = key
+        text = os.path.normcase(os.path.realpath(str(repo))) + '|' + str(name)
+    return platform.data_dir() / 'removal-locks' / ('%s-%s.lock' % (kind, hashlib.sha1(text.encode('utf-8')).hexdigest()[:20]))
+
+
+# Hold the removal lock of exactly one worktree or branch while it is removed.
+@contextlib.contextmanager
+def removal_lock(kind, key):
+    """Yield True while this process holds the removal lock of the worktree or branch; yield False at once when another living cleanup holds it
+    (no double removal). The lock of a dead holder is taken over."""
+    import os
+    from . import loop
+    path = _removal_lock_path(kind, key)
+    if loop._take_pid_lock(path, own_ok=False, wait=1.0) != 0:
+        yield False
+        return
     try:
-        with loop.hive_schedule_lock():
-            return step()
+        yield True
     finally:
-        if lock.exists() and lock.read_text(encoding='ascii').strip() == str(os.getpid()):
-            lock.unlink()
+        try:
+            if path.exists() and path.read_text(encoding='ascii').strip() == str(os.getpid()):
+                path.unlink()
+        except OSError:
+            pass
+
+
+# Tell whether a living cleanup is removing exactly this worktree or branch; takes no lock and blocks nobody.
+def removal_holder(kind, key):
+    """Process id of the living cleanup that removes the worktree or branch, 0 when its lock is just created and not written yet, None when nobody removes it."""
+    from . import platform as osplat
+    path = _removal_lock_path(kind, key)
+    try:
+        holder = int(path.read_text(encoding='ascii').strip())
+    except (OSError, ValueError):
+        return 0 if path.exists() else None
+    return holder if osplat.process_alive(holder) else None
+
+
+def removal_busy(kind, key):
+    """True while the removal lock of the worktree or branch is held by a living process."""
+    return removal_holder(kind, key) is not None
+
+
+# The reservations of the starts: one file per living start in a folder of its own per worktree or branch.
+def _reservation_dir(kind, key):
+    """Folder of the start reservations of `kind` and `key`."""
+    path = _removal_lock_path(kind, key)
+    return path.parent.parent / 'start-reservations' / path.stem
+
+
+def start_reserved(kind, key):
+    """True while a living start has reserved the worktree or branch; the files of dead processes are removed."""
+    from . import platform as osplat
+    try:
+        entries = list(_reservation_dir(kind, key).iterdir())
+    except OSError:
+        return False
+    found = False
+    for entry in entries:
+        try:
+            alive = osplat.process_alive(int(entry.name.split('-', 1)[0]))
+        except ValueError:
+            alive = False
+        if alive:
+            found = True
+        else:
+            try:
+                entry.unlink()
+            except OSError:
+                pass
+    return found
+
+
+# A start reserves what it uses before it looks for a removal; the cleanup looks for a reservation after it took its lock.
+@contextlib.contextmanager
+def start_reservation(targets, wait=True, timeout=30.0, waited=None):
+    """Reserve every (kind, key) of `targets` for this start, then make sure no cleanup removes one of them: start and cleanup each set their mark before they look for the
+    other's, so one of them always sees the other. When a removal runs, the reservation is given back and the start waits for it (`wait`, at most `timeout` seconds, then
+    TimeoutError naming the removal and its process id) or yields False at once (`wait` False). Yields True with everything reserved until the block ends."""
+    import os
+    import uuid
+    held = []
+    # Give the reservations back.
+    def release():
+        """Remove the files of this start."""
+        while held:
+            try:
+                held.pop().unlink()
+            except OSError:
+                pass
+    try:
+        while True:
+            for kind, key in targets:
+                folder = _reservation_dir(kind, key)
+                folder.mkdir(parents=True, exist_ok=True)
+                mark = folder / ('%d-%s' % (os.getpid(), uuid.uuid4().hex[:8]))
+                mark.write_text('', encoding='ascii')
+                held.append(mark)
+            busy = next(((kind, key) for kind, key in targets if removal_busy(kind, key)), None)
+            if busy is None:
+                yield True
+                return
+            release()
+            if not wait:
+                yield False
+                return
+            if waited is not None:
+                waited.append(busy)   # the caller learns that the start waited for a removal
+            wait_for_removal(busy[0], busy[1], timeout)   # raises TimeoutError at the end of the wait
+    finally:
+        release()
+
+
+# The wait for a removal ran out.
+class RemovalTimeout(TimeoutError):
+    """A start waited as long as it waits for the scheduling lock and the removal still runs."""
+
+
+# A start for exactly the worktree or branch being removed waits for the end of the removal.
+def wait_for_removal(kind, key, timeout=30.0):
+    """Wait until no living cleanup removes the worktree or branch, at most `timeout` seconds (the wait for the scheduling lock); then raise TimeoutError naming the removal and the process id of its holder."""
+    import time
+    deadline = time.monotonic() + timeout
+    while True:
+        holder = removal_holder(kind, key)
+        if holder is None:
+            return
+        if time.monotonic() >= deadline:
+            raise RemovalTimeout('the %s %s is being removed by a cleanup (process id %s) that is still running' % (kind, key[1] if kind == 'branch' else key, holder or 'unknown'))
+        time.sleep(0.1)
 
 
 # Delete the branches of integrated plans.
 def delete_integrated_branches(env):
-    """Delete local and remote plan and sub-branches of integrated plans when nothing can be lost; returns {deleted, kept}. The program does this, never an agent."""
-    return _serialized(lambda: _delete_branches_locked(env))
+    """Delete local and remote plan and sub-branches of integrated plans when nothing can be lost; returns {deleted, kept}. The program does this, never an agent.
+    It locks only the branch it deletes at that moment."""
+    return _delete_branches_locked(env)
+
+
+# Run the cleanup of all projects of a round beside the round.
+_background = {'thread': None}
+
+
+def cleanup_beside_round(envs):
+    """Start the cleanup of every project in a thread of its own with its own database connection, so the round never waits for it; a cleanup that still runs is not started twice.
+    A project without a database file (only in tests; the product always has one) is skipped in this round: the cleanup would run in the round and delay it."""
+    import threading
+    from . import db, scheduler
+    running = _background['thread']
+    if running is not None and running.is_alive():
+        return None
+    files = {}
+    for env in envs:
+        try:
+            files[env.name] = next((row[2] for row in env.conn.execute('PRAGMA database_list') if row[1] == 'main'), '')
+        except Exception:
+            files[env.name] = ''
+    if not envs or not all(files.values()):
+        return None
+    # Run the cleanup of each project on a connection of this thread.
+    def work():
+        """Clean up every project with its own connection."""
+        for env in envs:
+            conn = db.connect(files[env.name])
+            try:
+                cleanup(scheduler.ProjectEnv(conn, env.name, env.workspace, env.settings, env.colour, env.priority, env.plan_globs, env.plan_exclude))
+            except Exception as exc:
+                env.log('Worktree cleanup failed: ' + str(exc))
+            finally:
+                conn.close()
+    thread = threading.Thread(target=work, name='worktree-cleanup')
+    _background['thread'] = thread
+    thread.start()
+    return thread
 
 
 # The cleanup after an integration and in every round.
@@ -662,5 +841,5 @@ def cleanup(env):
 
 # Run the cleanup with the process working-directory safety check.
 def prune(env, dry=False):
-    """Serialize cleanup and retain worktrees with unknown process state."""
-    return _serialized(lambda: _prune_with_checker(env, _process_busy, dry))
+    """Remove finished worktrees, each under its own removal lock, and retain worktrees with unknown process state."""
+    return _prune_with_checker(env, _process_busy, dry)

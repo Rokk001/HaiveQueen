@@ -118,6 +118,10 @@ class RoundCase(unittest.TestCase):
 
     def tearDown(self):
         """Restore the environment and remove the temp folder."""
+        from haivequeen import worktrees
+        running = worktrees._background['thread']   # the cleanup beside a round uses its own connection
+        if running is not None:
+            running.join(60)
         self.conn.close()
         for k, v in self.saved.items():
             if v is None:
