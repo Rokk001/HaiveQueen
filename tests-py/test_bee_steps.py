@@ -201,7 +201,9 @@ class SubagentRulesTest(RoundCase):
     def test_process_start_marks_package_working(self):
         """A successful process Agent start records the package as working."""
         self.machine['providers'][1]['beeMode'] = 'process'
-        with mock.patch('haivequeen.loop._do_start', return_value=True):
+        # Keep the real process-start gate independent of the host's free RAM.
+        with mock.patch('haivequeen.loop._do_start', return_value=True), \
+                mock.patch('haivequeen.loop.ram_gb', return_value=16.0):
             out = self.start(no_subagents=True)
         self.assertEqual(out['kind'], 'process')
         self.assertEqual(self.conn.execute("SELECT state FROM package_progress WHERE package='P1'").fetchone()[0], 'working')
