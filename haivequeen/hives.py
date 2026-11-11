@@ -496,7 +496,6 @@ def wait_for_owner_check(conn, project, plan, questions):
 # Reopen a Hive after a owner check answer that says something is not right: the old ready row no longer closes the plan and the next Queen fixes exactly that.
 def reopen_after_owner_check(conn, project, plan):
     """Reopen a Plan after a owner check answer that says something is not right: the old ready row no longer closes the plan and the next Queen fixes exactly that."""
-    integration_steps.reset(conn, project, plan)
     with db.transaction(conn):
         conn.execute("UPDATE questions SET item='owner-check-answered' WHERE project=? AND plan_path=? AND (item='owner-check' OR (item LIKE 'owner-check-%' AND item!='owner-check-answered')) AND status='answered'", (project, plan))
         conn.execute("UPDATE hives SET state='waiting',ready_id=NULL,questions_json=NULL WHERE project=? AND plan_path=?", (project, plan))
@@ -1193,8 +1192,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     not_started(env, path, 'no provider with a free slot and a free limit offers class %s' % cls)
                     continue
                 if hive and hive['state'] == 'integration_wait':
-                    on = integration_steps.switches(env.settings)
-                    low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get('buildJobs')), free_ram() * 1024.0) if on['build'] or on['deploy'] else None
+                    low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get('buildJobs')), free_ram() * 1024.0) if integration_steps.builds(env.settings) else None
                     if low:   # below the minimum free RAM before a build: the place is not taken, the Queen waits and is asked again next round (also after a restart)
                         not_started(env, path, 'waiting for the build: ' + low)
                         continue
@@ -1235,8 +1233,6 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     prompt += 'The check of the completion report found these open points; fix them, then report completion again: ' + points + ' '
                     runtime.kv_set(conn, env.name, POINTS_KEY + path, '')
                 prompt += integration_steps.start_text(env, path, pick['name'])
-                if plan['status'] not in plan_mod.CUT_STATUSES:   # a plan still to be cut gets its step packages when it is integrated
-                    integration_steps.sync(env, path, pick['name'])
                 from . import bees
                 prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls), roles.language(env.settings))
                 topics = integration_steps.owner_topics_text(env)

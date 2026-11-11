@@ -244,6 +244,12 @@ class ProcessTreeTest(unittest.TestCase):
 class AcquireTest(RoundCase):
     """B-0, B-6c, B-9, B-10d: what bzz integration acquire hands out and when it waits."""
 
+    def setUp(self):
+        """The Project has a Build command, so its integration builds and needs a job count and free RAM."""
+        super().setUp()
+        toml = self.repo / ".haivequeen" / "project.toml"
+        toml.write_text(toml.read_text(encoding="utf-8") + '\nbuildCommand = "make"\n', encoding="utf-8")
+
     def config_file(self, text):
         """Write config.toml of the machine for the cli commands."""
         d = self.base / "cfg"

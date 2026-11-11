@@ -447,10 +447,9 @@ def _do_start(c, a, forced_pick=None) -> int:
     elif phase == "queen":
         hdr = roles.role_text("queen-start", {"language": roles.language(env.settings)}) + "\n\n"
     elif protocol == "claude":
-        flow_doc = env.settings.get("buildFlowDoc", "")
         hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of AGENT-RULES.md and the rule sections you need) are "
-               "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name%s only when your task "
-               "needs them. Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, " (e.g. %s)" % flow_doc if flow_doc else ""))
+               "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name only when your task "
+               "needs them. Update the plan's state. End when your task is finished.\n\nTASK\n\n" % nm)
     else:
         rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"   # a project with a separate code repo keeps its rules in the workspace
         hdr = ("You are the agent %s (one task, then you end). Follow all rules in section 1 of %s and every rule of the repository (%s and the "
@@ -646,6 +645,8 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
     """The loop body (see run_loop)."""
     close_obsolete_questions(conn)
     try:
+        from . import integration
+        integration.retire_legacy_steps(conn)   # open INTEGRATION-BUILD/INTEGRATION-DEPLOY packages and their questions block no plan
         from . import projsettings, proctree
         if projsettings.migrate_all(conn=conn):   # every known project.toml moves to the slim set once; the old files stay as .bak
             machine = config.load_config()

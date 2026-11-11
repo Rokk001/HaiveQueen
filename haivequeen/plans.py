@@ -10,7 +10,7 @@ STATUSES = ("DRAFT", "SENT", "PREPARING", "QUEUED", "RUNNING", "WAITING", "REVIE
 LEGACY_STATUSES = {"SUBMITTED": "SENT", "READY": "QUEUED", "IN_PROGRESS": "RUNNING", "REJECTED": "CANCELLED"}   # old names in existing plan files; written with the new name at the next status change
 CLASSES = ("light", "medium", "heavy")
 VERIFIES = ("code", "build", "owner")   # who closes the last requirements of a package: the Bee (code), the build, or the owner
-STEP_PACKAGES = {"Build": "INTEGRATION-BUILD", "Deploy": "INTEGRATION-DEPLOY"}   # package ids HaiveQueen itself adds to a plan for an integration step (see integration.py)
+LEGACY_STEP_PACKAGES = ("INTEGRATION-BUILD", "INTEGRATION-DEPLOY")   # package ids of the time before the Orchestrator; retired (integration.retire_legacy_steps), a plan may not use them
 DEFAULT_GLOBS = ("docs/plans/*.md",)
 CUT_STATUSES = ("SENT", "PREPARING")   # plans whose Queen still cuts them into packages
 STARTABLE_STATUSES = ("QUEUED", "RUNNING", "WAITING", "REVIEW")
@@ -260,8 +260,8 @@ def check_plan(plan, capabilities, requirements=(), main_checkout=None):
         problems.append("the header lists no package")
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
         problems.append("package id %s is used more than once" % dup)
-    for reserved in sorted(set(ids) & set(STEP_PACKAGES.values())):
-        problems.append("package id %s is reserved for an integration step" % reserved)
+    for reserved in sorted(set(ids) & set(LEGACY_STEP_PACKAGES)):
+        problems.append("package id %s is retired (it was an integration step package)" % reserved)
     deps = {p.id: package_dependencies(plan, p) for p in plan.packages}
     for p in plan.packages:
         if not p.title.strip():

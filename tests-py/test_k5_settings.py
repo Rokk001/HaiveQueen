@@ -10,25 +10,24 @@ class OwnerCheckSettingsTests(unittest.TestCase):
             hives.file_owner_check(None, env, 'plan.md')
         self.assertEqual(add.call_args.args[4], 'Check the integrated result')
 
-class IntegrationSwitchDefaultsTests(unittest.TestCase):
-    def test_existing_apiary_keeps_integration_steps(self):
+class IntegrationCommandDefaultsTests(unittest.TestCase):
+    def test_no_switches_and_no_commands_by_default(self):
         from haivequeen import scheduler
         settings = scheduler.build_settings({}, {}, legacy_deploy=True)
-        self.assertNotIn('compileCheckEnabled', settings)   # the switch is gone: an empty compile check command means no compile check
-        self.assertTrue(settings['buildEnabled'])
-        self.assertTrue(settings['deployEnabled'])
+        for key in ('compileCheckEnabled', 'buildEnabled', 'deployEnabled', 'buildFlowDoc', 'integratorInstructions'):
+            self.assertNotIn(key, settings)
+        self.assertEqual((settings['compileCheck'], settings['buildCommand'], settings['deployCommand']), ('', '', ''))
         self.assertTrue(settings['deleteFinishedWorktrees'])
         self.assertFalse(settings['deleteIntegratedBranches'])
 
-    def test_new_apiary_disables_deploy(self):
+    def test_new_apiary_has_no_commands(self):
         import tempfile
         from haivequeen import init, config, scheduler
         with tempfile.TemporaryDirectory() as folder:
             init.init_project(folder)
             settings = scheduler.build_settings({}, config.load_project(folder))
-        self.assertNotIn('compileCheckEnabled', settings)   # the switch is gone: an empty compile check command means no compile check
-        self.assertTrue(settings['buildEnabled'])
-        self.assertFalse(settings['deployEnabled'])
+        self.assertNotIn('buildEnabled', settings)
+        self.assertEqual((settings['buildCommand'], settings['deployCommand']), ('', ''))
 
 class CompileCommandTests(unittest.TestCase):
     def test_configured_command_is_recognized_in_command_position(self):

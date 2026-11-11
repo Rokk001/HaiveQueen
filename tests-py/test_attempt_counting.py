@@ -41,12 +41,12 @@ class AttemptCountingTest(RoundCase):
         self.assertEqual(self.failures('C1'), 2)
 
     # The QS-7 reports: work finished, requirements stay open until the build and the owner check.
-    def test_open_requirements_of_a_build_or_owner_package_never_count(self):
-        """Three attempts with the same open requirements and changing text do not count for a package closed by build or owner."""
-        for package in ('B1', 'O1'):
+    def test_open_requirements_of_an_owner_package_never_count_and_a_build_package_is_a_code_package(self):
+        """Three attempts with the same open requirements and changing text do not count for a package closed by the owner; a package marked build is closed like code (O-4)."""
+        for package, expected in (('B1', 2), ('O1', 0)):
             for n in range(3):
                 self.assertEqual(self.result(package, 'failed', '%s-%d' % (package, n), '--open-requirements', '["T-1","T-2"]', '--error', 'text %d' % n), 0)
-            self.assertEqual(self.failures(package), 0)
+            self.assertEqual(self.failures(package), expected)
 
     # A package the Bee has finished (implemented) never escalates.
     def test_implemented_package_never_counts(self):
@@ -70,12 +70,12 @@ class AttemptCountingTest(RoundCase):
         self.assertEqual((state['state'], state['reason']), ('working', ''))
 
     # Blocked by a build or the owner needs no question.
-    def test_waiting_for_build_or_owner(self):
-        """blocked-by build and owner set waiting with that reason and count nothing."""
-        self.assertEqual(self.result('B1', 'failed', 'b1', '--blocked-by', 'build'), 0)
+    def test_waiting_for_the_owner_and_never_for_a_build(self):
+        """blocked-by owner sets waiting with that reason and counts nothing; the Queen never waits for a build (the Build step comes after bzz ready)."""
+        self.assertNotEqual(self.result('B1', 'failed', 'b1', '--blocked-by', 'build'), 0)
         self.assertEqual(self.result('O1', 'failed', 'o1', '--blocked-by', 'owner'), 0)
         reasons = {r['package']: r['reason'] for r in self.conn.execute("SELECT package, reason FROM package_progress WHERE state='waiting'")}
-        self.assertEqual(reasons, {'B1': 'build', 'O1': 'owner'})
+        self.assertEqual(reasons, {'O1': 'owner'})
         self.assertEqual((self.failures('B1'), self.failures('O1')), (0, 0))
 
     # Wrong input is refused and stores nothing.
@@ -103,11 +103,11 @@ class AttemptCountingTest(RoundCase):
 
     # The verify count of the second counter ignores packages closed by build or owner.
     def test_open_verify_items_count_only_for_code_packages(self):
-        """A finished verify with open items is one failure for a code package and none for a build package."""
-        agents = [{'plan': REL, 'package': p, 'bundle': [], 'phase': 'verify', 'status': 'done', 'name': 'V-' + p} for p in ('C1', 'B1')]
+        """A finished verify with open items is one failure for a code package (a package marked build is one) and none for an owner package."""
+        agents = [{'plan': REL, 'package': p, 'bundle': [], 'phase': 'verify', 'status': 'done', 'name': 'V-' + p} for p in ('C1', 'O1')]
         with mock.patch.object(routine, 'verify_open_count', return_value=2):
             self.assertEqual(routine.package_failures(self.env(), agents, REL, 'C1'), 1)
-            self.assertEqual(routine.package_failures(self.env(), agents, REL, 'B1'), 0)
+            self.assertEqual(routine.package_failures(self.env(), agents, REL, 'O1'), 0)
 
 
 class PlanVerifyTest(unittest.TestCase):

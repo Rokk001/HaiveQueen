@@ -1,9 +1,8 @@
 """Explicit owner actions shared by the CLI, questions window and inbox."""
 from . import filetxn
 import re
-from types import SimpleNamespace
 
-from . import bees, config, db, hives, integration, runtime, servers
+from . import bees, config, db, hives, runtime, servers
 
 
 def is_check(item):
@@ -54,7 +53,6 @@ def validate(conn, action, project=None, plan=None, **fields):
         else:
             blockers = [str(q["item"] or q["id"]) for q in questions
                         if not is_check(q["item"]) and not incidental_question(q["item"])]
-            blockers += integration.open_steps(SimpleNamespace(conn=conn, name=project), plan)
             if blockers:
                 raise ValueError("still open: " + ", ".join(blockers))
     elif action == "pause":

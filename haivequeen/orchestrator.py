@@ -162,6 +162,7 @@ def _worktree(env, plan):
 def run_round(conn, env, free_mb, alive=None):
     """One step of the pipeline of every plan of the project; returns the plans that were closed in this round."""
     closed = []
+    integration.retire_legacy_steps(conn)   # step packages and capability questions of the time before the Orchestrator block no plan
     for plan in runtime.list_plans(conn, env.name):
         try:
             if advance(conn, env, plan["path"], free_mb, alive) == "closed":

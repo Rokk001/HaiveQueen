@@ -1,8 +1,5 @@
-"""The integration steps of a Project: the switches decide which steps run, the capabilities decide who does them.
-
-A switched-on Build or Deploy step the Queen's provider cannot do becomes a package for a provider that can (ids in plans.STEP_PACKAGES); the rows live
-beside the packages of the plan file and survive reading it again. With no such provider the owner is asked once. `bzz ready` waits for the Build package,
-`bzz integration release` and the closing of the plan wait for the Deploy package.
+"""The integration helpers of a Project: the progress-watched command runner (compile check, Build, Deploy), the machine lock of the compile check and the
+start text of the Queen. The Orchestrator (orchestrator.py) runs the steps; retire_legacy_steps removes the step packages of the time before it.
 """
 import json
 import errno
@@ -13,111 +10,39 @@ import subprocess
 import time
 from datetime import datetime
 
-from . import db, localtime, plans, platform as osplat, proctree, roles, routine, runtime, scheduler as sch
-from .i18n import tr
+from . import db, localtime, plans, platform as osplat, proctree, runtime
 
-BUILD = plans.STEP_PACKAGES["Build"]
-DEPLOY = plans.STEP_PACKAGES["Deploy"]
 COMPILE_MILESTONE = re.compile(r"^(\w+)\t\S+ Compile test\b")   # the live line of a compile check in milestones.txt (the dashboard shows it)
 COMPILE_KEY = "compile-check:"   # + Queen name: the stored result of `bzz compile-check` for that Queen run
 POLL_SECONDS = 1.0   # how often a compile check looks at its process and at the lock of the machine
 COMPILE_AGENT_KEY = "compile-agent:"   # + name or worktree: the stored result of an Agent; it never counts for `bzz ready`
 
 
-# The three switches of an Apiary.
-def switches(settings):
-    """{compileCheck, build, deploy} of the settings (scheduler.build_settings fills in the defaults, also for a Project from before the switches)."""
-    return {"compileCheck": bool(str(settings.get("compileCheck") or "").strip()), "build": bool(settings.get("buildEnabled", True)),
-            "deploy": bool(settings.get("deployEnabled", False))}
+# Whether the pipeline builds or deploys.
+def builds(settings):
+    """True when the Project has a Build command or a Deploy command (then an integration needs free RAM and a job count)."""
+    return bool(str(settings.get("buildCommand") or "").strip() or str(settings.get("deployCommand") or "").strip())
 
 
-# Who does each step.
-def step_states(env, provider_name):
-    """{Build, Deploy}: off (switched off), queen (her provider has the capability), package (another provider has it) or owner (no provider has it)."""
-    from . import bees
-    on = switches(env.settings)
-    excluded = env.settings.get("excludedProviders", [])
-    offered = [p for p in env.providers if p["name"] not in excluded and p.get("slots", 1) > 0]
-    own = sch.get_provider(env.providers, provider_name)
-    states = {}
-    for capability, enabled in (("Build", on["build"]), ("Deploy", on["deploy"])):
-        if not enabled:
-            states[capability] = "off"
-        elif own is not None and bees.capable_providers([own], [capability]):   # only the ticks decide; a provider no longer in the settings has none
-            states[capability] = "queen"
-        else:
-            states[capability] = "package" if bees.capable_providers(offered, [capability]) else "owner"
-    return states
-
-
-# Create and remove the step packages of a plan.
-def sync(env, plan, provider_name):
-    """Bring the step packages of the plan in line with the switches and the capabilities; asks the owner once for a step no provider can do; returns the states."""
-    states = step_states(env, provider_name)
-    existing = {p["id"] for p in runtime.list_packages(env.conn, env.name, plan)}
-    language = roles.language(env.settings)
-    for capability, package in plans.STEP_PACKAGES.items():
-        if states[capability] != "owner":   # the owner need not answer any more, and an open question would hold the plan
-            for question in runtime.list_questions(env.conn, env.name, status="open", plan=plan, item=package):
-                db.answer_question(env.conn, question["id"], tr("No longer needed: the step is switched off or a provider can do it now.", language=language), "auto")
-        if states[capability] in ("off", "queen"):
-            if package in existing:
-                env.conn.execute("DELETE FROM packages WHERE project=? AND plan_path=? AND id=?", (env.name, plan, package))
-            continue
-        if package not in existing:
-            env.conn.execute("INSERT INTO packages (project, plan_path, id, title, class, agent_type, capability, verify, depends_on) VALUES (?,?,?,?,?,?,?,?,?)",
-                             (env.name, plan, package, tr("Integration step: %s", tr(capability, language=language), language=language), str(env.settings.get("queenClass", "medium")), "", capability, "code", json.dumps(["all"])))
-        if states[capability] == "owner":
-            text = tr("No configured provider offers the capability %s. How should this package continue?", capability, language=language)
-            if not runtime.list_questions(env.conn, env.name, plan=plan, item=package):
-                db.add_question(env.conn, env.name, plan, package, text, tr("Configure an eligible provider.", language=language))
-    return states
-
-
-# The step packages that still hold the plan back.
-def open_steps(env, plan, capabilities=("Build", "Deploy")):
-    """Ids of the step packages of the plan that exist and are not done, in the order of the steps."""
-    from . import bees
-    bees.ensure_attempts(env.conn)
-    rows = {p["id"] for p in runtime.list_packages(env.conn, env.name, plan)}
-    done = {r[0] for r in env.conn.execute("SELECT package FROM package_progress WHERE project=? AND plan_path=? AND state='done'", (env.name, plan))}
-    return [package for capability, package in plans.STEP_PACKAGES.items()
-            if capability in capabilities and package in rows and package not in done and not bees.package_done(env.conn, env.name, plan, package)]
-
-
-# Who may close a step package.
-def done_refusal(conn, project, plan, package):
-    """Why the Queen may not set a step package done, or '': an Agent result closes it, by hand only after an answer of the owner to its question."""
-    from . import bees
-    if package not in plans.STEP_PACKAGES.values() or bees.package_done(conn, project, plan, package):
-        return ""
-    if any(q.get("answered_by") != "auto" for q in runtime.list_questions(conn, project, status="answered", plan=plan, item=package)):
-        return ""
-    return "integration step package %s is closed by the result of its Agent or after an answer of the owner; start an Agent for it" % package
-
-
-# Whether a Bee was started for a step package.
-def result_refusal(conn, project, plan, package):
-    """Why a succeeded result of a step package is refused, or '': it needs a started Agent."""
-    from . import bees
-    if package not in plans.STEP_PACKAGES.values() or bees.package_done(conn, project, plan, package):
-        return ""
-    bees.ensure_attempts(conn)
-    if conn.execute("SELECT 1 FROM bee_assignments WHERE project=? AND plan_path=? AND package=?", (project, plan, package)).fetchone():
-        return ""
-    return "no Agent was started for integration step package %s; start one with bzz agent start" % package
-
-
-# A new integration needs its steps again.
-def reset(conn, project, plan):
-    """Forget the step packages of the plan and their results: after an owner check that says something is not right, the next integration builds and deploys again."""
+# Step packages of the time before the Orchestrator.
+def retire_legacy_steps(conn):
+    """Remove the packages INTEGRATION-BUILD and INTEGRATION-DEPLOY of every plan with their results and close their open questions (the capability
+    owner question included): the Orchestrator runs the Build and Deploy commands itself, so these packages and questions block no plan. Returns the
+    number of packages and questions removed."""
     from . import bees
     bees.ensure_attempts(conn)
-    for package in plans.STEP_PACKAGES.values():
-        conn.execute("DELETE FROM packages WHERE project=? AND plan_path=? AND id=?", (project, plan, package))
-        conn.execute("DELETE FROM package_progress WHERE project=? AND plan_path=? AND package=?", (project, plan, package))
-        conn.execute("DELETE FROM bee_completed WHERE project=? AND plan_path=? AND package=?", (project, plan, package))
-        conn.execute("UPDATE questions SET item=? WHERE project=? AND plan_path=? AND item=? AND status='answered'", (package + "-answered", project, plan, package))   # the new integration asks again
+    ids = tuple(plans.LEGACY_STEP_PACKAGES)
+    marks = ",".join("?" * len(ids))
+    removed = 0
+    with db.transaction(conn):
+        removed += conn.execute("DELETE FROM packages WHERE id IN (%s)" % marks, ids).rowcount
+        conn.execute("DELETE FROM package_progress WHERE package IN (%s)" % marks, ids)
+        conn.execute("DELETE FROM bee_completed WHERE package IN (%s)" % marks, ids)
+        for row in conn.execute("SELECT id, project FROM questions WHERE status IN ('open','triage','fault_check') AND item IN (%s)" % marks, ids).fetchall():
+            conn.execute("UPDATE questions SET status='answered', answer=?, answered_by='auto', answered_at=? WHERE id=?",
+                         ("No longer needed: the Orchestrator runs the Build and Deploy commands, no provider is involved.", db.now(), row["id"]))
+            removed += 1
+    return removed
 
 
 # The commit a worktree stands on.

@@ -1,4 +1,4 @@
-"""K5: Project switches, delegation of integration steps, command recognition and branch cleanup."""
+"""K5: delegation-free integration settings, command recognition and branch cleanup."""
 import argparse
 import io
 import json
@@ -28,11 +28,6 @@ class IntegrationCase(RoundCase):
 
     providers = [provider("claude", "Coding", "Queen", "Build", "Deploy")]
 
-    def setUp(self):
-        """The Project of these tests is one from before the switches, so its deploy is on without an entry."""
-        super().setUp()
-        self.conn.execute("UPDATE projects SET legacy_deploy=1")
-
     def hive(self, name="claude", status="IN_PROGRESS"):
         """Write the plan and create its Plan on provider `name`."""
         self.plan(status, [{"id": "P1", "title": "Work", "class": "medium"}])
@@ -45,167 +40,6 @@ class IntegrationCase(RoundCase):
         toml = self.repo / ".haivequeen" / "project.toml"
         lines = ['%s = %s' % (key, json.dumps(value)) for key, value in project.items()]
         toml.write_text(toml.read_text(encoding="utf-8") + "\n".join(lines) + "\n", encoding="utf-8")
-
-
-class StepStateTests(IntegrationCase):
-    """The switches decide whether a step runs, the capabilities who does it."""
-
-    def test_queen_with_the_capability_does_the_step_herself(self):
-        env = self.hive()
-        states = integration.step_states(env, "claude")
-        self.assertEqual(states, {"Build": "queen", "Deploy": "queen"})
-        integration.sync(env, REL, "claude")
-        self.assertEqual([p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)], ["P1"])
-
-    def test_provider_no_longer_in_the_settings_has_no_ticks(self):
-        """Without exceptions: a Queen whose provider is gone does no step herself; it goes to a provider with the tick."""
-        env = self.hive()
-        self.assertEqual(integration.step_states(env, "removed"), {"Build": "package", "Deploy": "package"})
-        self.use(provider("claude", "Coding", "Queen"))
-        env = self.env()
-        self.assertEqual(integration.step_states(env, "removed"), {"Build": "owner", "Deploy": "owner"})
-
-    def test_step_package_title_follows_the_language(self):
-        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), deployEnabled=False)
-        self.machine["language"] = "German"   # the language is a General setting
-        env = self.hive()
-        integration.sync(env, REL, "claude")
-        self.assertEqual(next(p for p in env.packages(REL) if p["id"] == integration.BUILD)["content"], "Integrationsschritt: Build")
-
-    def test_switched_off_step_is_off_even_without_any_provider(self):
-        self.use(provider("claude", "Coding", "Queen"), buildEnabled=False, deployEnabled=False)
-        env = self.hive()
-        self.assertEqual(integration.step_states(env, "claude"), {"Build": "off", "Deploy": "off"})
-        integration.sync(env, REL, "claude")
-        self.assertEqual(runtime.list_questions(self.conn, "testproj"), [])
-
-    def test_missing_capability_becomes_a_package_for_a_provider_that_has_it(self):
-        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Coding", "Build", "Deploy"))
-        env = self.hive()
-        integration.sync(env, REL, "claude")
-        rows = {p["id"]: p for p in env.packages(REL)}
-        self.assertEqual(rows[integration.BUILD]["capability"], "Build")
-        self.assertEqual(rows[integration.DEPLOY]["capability"], "Deploy")
-        self.assertEqual(routine.package_needs_for(env, REL, integration.BUILD), ["Build"])
-        self.assertEqual([p["name"] for p in bees.escalation_providers(env, REL, integration.BUILD)], ["builder"])
-        self.assertIn("P1", rows[integration.BUILD]["depends"])
-        self.assertIn(integration.BUILD, rows[integration.DEPLOY]["depends"])
-        self.assertNotIn(integration.DEPLOY, rows[integration.BUILD]["depends"])
-        self.assertNotIn(integration.BUILD, rows["P1"]["depends"])
-
-    def test_step_packages_survive_reading_the_plan_again(self):
-        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build", "Deploy"))
-        env = self.hive()
-        integration.sync(env, REL, "claude")
-        runtime.sync_plans(self.conn, "testproj", str(self.repo))
-        self.assertIn(integration.BUILD, [p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)])
-
-    def test_a_package_that_depends_on_all_does_not_wait_for_a_step_package(self):
-        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build", "Deploy"))
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "Work", "class": "medium"}, {"id": "LAST", "title": "Last", "class": "medium", "depends": ["all"]}])
-        hives.create(self.conn, "testproj", REL, "claude", "123456")
-        env = self.env()
-        integration.sync(env, REL, "claude")
-        rows = {p["id"]: p for p in env.packages(REL)}
-        self.assertEqual(rows["LAST"]["depends"], ["P1"])
-
-    def test_no_provider_asks_the_owner_once(self):
-        self.use(provider("claude", "Coding", "Queen"), deployEnabled=False)
-        env = self.hive()
-        integration.sync(env, REL, "claude")
-        integration.sync(env, REL, "claude")
-        asked = runtime.list_questions(self.conn, "testproj", plan=REL, item=integration.BUILD)
-        self.assertEqual(len(asked), 1)
-        self.assertIn("Build", asked[0]["question"])
-        db.answer_question(self.conn, asked[0]["id"], "later", "owner")
-        integration.sync(env, REL, "claude")
-        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", plan=REL, item=integration.BUILD)), 1)
-
-    def test_excluded_or_slotless_provider_does_not_count(self):
-        self.use(provider("claude", "Coding", "Queen"), provider("off", "Build", slots=0), provider("gone", "Build"), deployEnabled=False)
-        self.machine["excludedProviders"] = ["gone"]
-        env = self.hive()
-        self.assertEqual(integration.step_states(env, "claude")["Build"], "owner")
-
-    def test_switching_off_or_gaining_the_capability_removes_the_open_package(self):
-        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), deployEnabled=False)
-        env = self.hive()
-        integration.sync(env, REL, "claude")
-        self.assertEqual(integration.open_steps(env, REL), [integration.BUILD])
-        env.settings["buildEnabled"] = False
-        integration.sync(env, REL, "claude")
-        self.assertEqual(integration.open_steps(env, REL), [])
-        self.assertNotIn(integration.BUILD, [p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)])
-
-    def test_queen_of_an_existing_provider_does_only_the_steps_of_its_old_entries(self):
-        """An old `build` entry lets her Queen build; Deploy, never listed, is no exception and goes to the owner here."""
-        old = {"name": "claude", "protocol": "claude", "slots": 2, "capabilities": ["blender", "build"], "classes": {"medium": {"model": "m"}}}
-        self.use(old)
-        env = self.hive()
-        self.assertEqual(integration.sync(env, REL, "claude"), {"Build": "queen", "Deploy": "owner"})
-        self.assertEqual([q["item"] for q in runtime.list_questions(self.conn, "testproj", plan=REL)], [integration.DEPLOY])
-        self.assertEqual([p["id"] for p in runtime.list_packages(self.conn, "testproj", REL)], ["P1", integration.DEPLOY])
-
-    def test_queen_of_an_existing_provider_without_build_delegates_to_a_ticked_provider(self):
-        """An old entry without `build` gets no implicit Build or Deploy; both become packages routed to the provider with the ticks."""
-        old = {"name": "claude", "protocol": "claude", "slots": 2, "capabilities": ["images"], "classes": {"medium": {"model": "m"}}}
-        legacy_builder = {"name": "oldbuild", "protocol": "claude", "slots": 2, "capabilities": ["build"], "classes": {"medium": {"model": "m"}}}
-        self.use(old, legacy_builder, provider("deployer", "Deploy"))
-        env = self.hive()
-        self.assertEqual(integration.sync(env, REL, "claude"), {"Build": "package", "Deploy": "package"})
-        self.assertEqual([p["name"] for p in bees.escalation_providers(env, REL, integration.BUILD)], ["oldbuild"])
-        self.assertEqual([p["name"] for p in bees.escalation_providers(env, REL, integration.DEPLOY)], ["deployer"])
-
-    def test_queen_of_a_new_provider_without_the_ticks_delegates(self):
-        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), provider("deployer", "Deploy"))
-        env = self.hive()
-        self.assertEqual(integration.sync(env, REL, "claude"), {"Build": "package", "Deploy": "package"})
-        self.assertEqual([p["name"] for p in bees.escalation_providers(env, REL, integration.BUILD)], ["builder"])
-        self.assertEqual([p["name"] for p in bees.escalation_providers(env, REL, integration.DEPLOY)], ["deployer"])
-
-    def test_existing_provider_without_the_tick_is_no_target_for_a_step_package(self):
-        old = {"name": "old", "protocol": "claude", "slots": 2, "capabilities": ["images"], "classes": {"medium": {"model": "m"}}}
-        self.use(provider("claude", "Coding", "Queen"), old, deployEnabled=False)
-        env = self.hive()
-        self.assertEqual(integration.sync(env, REL, "claude")["Build"], "owner")
-
-    def test_ticks_chosen_by_the_owner_decide_for_the_queen(self):
-        self.use(provider("claude", "Coding", "Queen", "Build"), deployEnabled=True)
-        env = self.hive()
-        self.assertEqual(integration.step_states(env, "claude"), {"Build": "queen", "Deploy": "owner"})
-
-    def test_open_question_goes_when_the_step_no_longer_needs_the_owner(self):
-        self.use(provider("claude", "Coding", "Queen"), deployEnabled=False)
-        env = self.hive()
-        integration.sync(env, REL, "claude")
-        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item=integration.BUILD)), 1)
-        env.settings["buildEnabled"] = False
-        integration.sync(env, REL, "claude")
-        self.assertEqual(runtime.list_questions(self.conn, "testproj", status="open", plan=REL), [])
-
-    def test_a_new_integration_asks_the_owner_again(self):
-        self.use(provider("claude", "Coding", "Queen"), deployEnabled=False)
-        env = self.hive()
-        integration.sync(env, REL, "claude")
-        asked = runtime.list_questions(self.conn, "testproj", plan=REL, item=integration.BUILD)
-        db.answer_question(self.conn, asked[0]["id"], "done by hand", "owner")
-        integration.reset(self.conn, "testproj", REL)
-        integration.sync(env, REL, "claude")
-        self.assertEqual(len(runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item=integration.BUILD)), 1)
-
-    def test_done_step_is_not_open_and_reopening_needs_it_again(self):
-        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), deployEnabled=False)
-        env = self.hive()
-        integration.sync(env, REL, "claude")
-        bees.set_package_state(self.conn, "testproj", REL, integration.BUILD, "done", "queen")
-        self.assertEqual(integration.open_steps(env, REL), [])
-        hives.reopen_after_owner_check(self.conn, "testproj", REL)
-        integration.sync(env, REL, "claude")
-        self.assertEqual(integration.open_steps(env, REL), [integration.BUILD])
-
-    def test_plan_may_not_use_a_reserved_package_id(self):
-        plan = plans.Plan(path="x", status="READY", title="t", packages=[plans.Package(id=integration.BUILD, title="t")])
-        self.assertTrue(any(integration.BUILD in p for p in plans.check_plan(plan, set())))
 
 
 class ReadyAndReleaseGateTests(IntegrationCase):
@@ -239,7 +73,7 @@ class ReadyAndReleaseGateTests(IntegrationCase):
 
     def test_ready_is_not_held_by_a_build_package(self):
         """O-1: the Build is a step of the Orchestrator after ready, not of the Queen."""
-        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"), deployEnabled=False)
+        self.use(provider("claude", "Coding", "Queen"), provider("builder", "Build"))
         self.hive()
         self.queen()
         code, result = self.ready()
@@ -291,17 +125,17 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         self.assertEqual(self.ready()[0], 0)
 
     def test_acquire_reports_the_steps_and_skips_the_ram_wait_without_build_and_deploy(self):
-        self.use(self.providers[0], buildEnabled=False, deployEnabled=False, compileCheck="")
+        self.use(self.providers[0], compileCheck="")
         self.hive()
         self.queen()
         with mock.patch("haivequeen.buildjobs.waiting_for_ram", return_value="too little RAM"), mock.patch("haivequeen.platform.free_ram_mb", return_value=100.0):
             code, result = self.call(cli.cmd_integration, action="acquire", owner_pid=None)
         self.assertEqual(code, 0, result)
-        self.assertEqual(result["integrationSteps"], {"compileCheck": False, "Build": "off", "Deploy": "off"})
+        self.assertEqual(result["integrationSteps"], {"compileCheck": False, "build": False, "deploy": False})
         self.assertIsNone(result["buildJobs"])
 
-    def test_acquire_waits_for_ram_when_a_build_is_on(self):
-        self.use(self.providers[0])
+    def test_acquire_waits_for_ram_when_a_build_command_is_set(self):
+        self.use(self.providers[0], buildCommand="make")
         self.hive()
         self.queen()
         with mock.patch("haivequeen.buildjobs.waiting_for_ram", return_value="too little RAM"), mock.patch("haivequeen.platform.free_ram_mb", return_value=100.0):
@@ -309,17 +143,14 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         self.assertEqual(code, 1)
         self.assertIn("too little RAM", result["error"])
 
-    def test_release_is_refused_after_integration_while_deploy_is_open(self):
-        self.use(provider("claude", "Coding", "Queen", "Build"), provider("shipper", "Deploy"))
+    def test_release_after_integration_is_not_held_by_a_deploy_package(self):
+        """O-4: no step package exists any more; the Deploy command is a step of the Orchestrator."""
+        self.use(provider("claude", "Coding", "Queen", "Build"), provider("shipper", "Deploy"), deployCommand="make deploy")
         self.hive()
         self.queen()
         self.assertEqual(self.ready()[0], 0)
         runtime.queue_upsert(self.conn, "testproj", "b", status="integrated")
         with mock.patch("haivequeen.worktrees.cleanup"):
-            code, result = self.call(cli.cmd_integration, action="release")
-            self.assertEqual(code, 1)
-            self.assertIn(integration.DEPLOY, result["error"])
-            bees.set_package_state(self.conn, "testproj", REL, integration.DEPLOY, "done", "queen")
             self.assertEqual(self.call(cli.cmd_integration, action="release")[0], 0)
 
     def test_release_before_integration_is_not_refused(self):
@@ -329,29 +160,26 @@ class ReadyAndReleaseGateTests(IntegrationCase):
         with mock.patch("haivequeen.worktrees.cleanup"):
             self.assertEqual(self.call(cli.cmd_integration, action="release")[0], 0)
 
-    def test_build_wait_is_refused_with_the_switch_off(self):
-        self.use(self.providers[0], buildEnabled=False)
+    def test_build_wait_is_refused(self):
+        self.use(self.providers[0])
         self.hive()
         self.queen()
         code, result = self.call(cli.cmd_package, package="P1", state="waiting", reason="build")
         self.assertEqual(code, 1)
-        self.assertIn("switched off", result["error"])
+        self.assertIn("Orchestrator", result["error"])
 
 
 class VerifyBuildTests(IntegrationCase):
-    """With the build switch off, verify = "build" is closed like a code package."""
+    """A package marked verify = "build" is closed like a code package: the build is the Build step after bzz ready (O-4)."""
 
-    def test_verify_build_counts_as_code_only_with_the_switch_off(self):
+    def test_verify_build_counts_as_code(self):
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "Work", "class": "medium"}])
         self.conn.execute("UPDATE packages SET verify='build'")
-        self.assertEqual(self.env().packages(REL)[0]["verify"], "build")
-        self.use(self.providers[0], buildEnabled=False)
         self.assertEqual(self.env().packages(REL)[0]["verify"], "code")
 
     def test_verify_owner_stays(self):
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "Work", "class": "medium"}])
         self.conn.execute("UPDATE packages SET verify='owner'")
-        self.use(self.providers[0], buildEnabled=False)
         self.assertEqual(self.env().packages(REL)[0]["verify"], "owner")
 
 
@@ -365,7 +193,7 @@ class StartTextTests(IntegrationCase):
         return integration.configuration(self.env(), REL)
 
     def test_the_text_ends_at_bzz_ready(self):
-        self.use(self.providers[0], compileCheck="npm test", deployEnabled=True)
+        self.use(self.providers[0], compileCheck="npm test", deployCommand="make deploy")
         self.hive()
         text = self.text()
         self.assertIn("bzz ready --project testproj --plan %s" % REL, text)
@@ -383,13 +211,13 @@ class StartTextTests(IntegrationCase):
 
     def test_configuration_holds_remote_branch_location_and_only_active_steps(self):
         self.use(self.providers[0], remoteName="upstream", integrationBranch="", worktreeLocation="D:/trees", compileCheck="",
-                 buildEnabled=False, deployEnabled=False, buildFlowDoc="docs/build.md", integratorInstructions="ship it")
+                 buildCommand="make", deployCommand="make deploy")
         self.hive()
         config = self.config()
         self.assertEqual(config["remoteName"], "upstream")
         self.assertEqual(config["integrationBranch"], "main")
         self.assertEqual(config["worktreeLocation"], "D:/trees")
-        for key in ("compileCheck", "buildFlowDoc", "integratorInstructions"):
+        for key in ("compileCheck", "buildCommand", "deployCommand"):
             self.assertNotIn(key, config)
 
 
@@ -455,15 +283,14 @@ class MigrationTests(unittest.TestCase):
         ticked = scheduler.get_providers({"providers": [provider("p", "Coding", "Queen")]})[0]
         self.assertEqual(ticked["capabilities"], ["Coding", "Queen"])
 
-    def test_existing_apiary_without_keys_keeps_all_steps(self):
-        self.assertEqual(integration.switches(scheduler.build_settings({}, {}, legacy_deploy=True)), {"compileCheck": False, "build": True, "deploy": True})   # no command, no compile check
-
     def test_new_apiary_file_has_the_new_defaults(self):
         from haivequeen import init
         with tempfile.TemporaryDirectory() as folder:
             init.init_project(folder)
             data = tomllib.loads((Path(folder) / ".haivequeen" / "project.toml").read_text(encoding="utf-8"))
-        self.assertEqual(integration.switches(scheduler.build_settings({}, data)), {"compileCheck": False, "build": True, "deploy": False})   # the example has no compile check command
+        settings = scheduler.build_settings({}, data)
+        self.assertEqual((settings["compileCheck"], settings["buildCommand"], settings["deployCommand"]), ("", "", ""))   # the example has no commands
+        self.assertNotIn("buildEnabled", data)
         self.assertTrue(data["deleteFinishedWorktrees"])
         self.assertFalse(data["deleteIntegratedBranches"])
         self.assertNotIn("remoteName", data)
@@ -610,15 +437,14 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(shown["worktreeLocation"], "")
         self.assertEqual(shown["ownerTopics"], [])
         self.assertEqual(shown["ownerCheckText"], "")
-        self.assertIs(shown["compileCheckEnabled"], True)
-        self.assertIs(shown["buildEnabled"], True)
-        self.assertIs(shown["deployEnabled"], False)
+        for key in ("compileCheckEnabled", "buildEnabled", "deployEnabled"):
+            self.assertNotIn(key, shown)
         self.assertIs(shown["deleteFinishedWorktrees"], True)
         self.assertIs(shown["deleteIntegratedBranches"], False)
 
     def test_saved_values_stay(self):
-        shown = gui_config.apiary_settings({"deployEnabled": False, "remoteName": "upstream"})
-        self.assertIs(shown["deployEnabled"], False)
+        shown = gui_config.apiary_settings({"deployCommand": "make deploy", "remoteName": "upstream"})
+        self.assertEqual(shown["deployCommand"], "make deploy")
         self.assertEqual(shown["remoteName"], "upstream")
 
     def test_labels_are_translated(self):

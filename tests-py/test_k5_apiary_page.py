@@ -49,8 +49,7 @@ compileCheck = "python.exe -W ignore -m unittest discover -s tests-py -p test*.p
 queue = "views/QUEUE.md"
 '''
 
-INTERNAL = ("workspace", "codeRepo", "repo", "worktreePrefix", "worktreeLocation", "planGlobs", "planExclude", "ignoredBuildOutput", "buildFlowDoc",
-            "integratorInstructions", "buildProcessNames", "compileCheck", "compileCheckEnabled", "integrationBranch", "remoteName", "ownerTopics", "views", "queue")
+INTERNAL = ("workspace", "codeRepo", "repo", "worktreePrefix", "worktreeLocation", "planGlobs", "planExclude", "ignoredBuildOutput", "buildProcessNames", "compileCheck", "compileCheckEnabled", "buildCommand", "deployCommand", "integrationBranch", "remoteName", "ownerTopics", "views", "queue")
 # A typical value of each kind (owner decision 742): it must show without clipping.
 TYPICAL = {"short": "HaiveQueen-Pilot", "path": r"C:\Users\example\Projects\Example-Workspace\hq\plans"}
 
@@ -234,12 +233,12 @@ class ApiaryPageTests(ApiaryPageCase):
         win = self.window()
         self.new_apiary(win, "Fresh Game", repo)
         self.assertTrue(win.collect())
-        win.target()["file"]["buildEnabled"] = False
+        win.target()["file"]["buildCommand"] = "make"
         win.build_form()
         win.save()
         self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertEqual(gui_config.load_raw(self.base / "config.toml")["projects"][-1], {"name": "Fresh Game", "workspace": str(repo)})
-        self.assertEqual(gui_config.load_raw(repo / ".haivequeen" / "project.toml"), {"buildEnabled": False, "worktreePrefix": "Fresh-Game"})
+        self.assertEqual(gui_config.load_raw(repo / ".haivequeen" / "project.toml"), {"buildCommand": "make", "worktreePrefix": "Fresh-Game"})
         self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='Fresh Game'").fetchone()[0], str(repo.resolve()))
 
     def test_new_apiary_with_a_separate_plans_folder(self):
@@ -288,11 +287,13 @@ class ApiaryPageTests(ApiaryPageCase):
         win = self.window("HaiveQueen")
         win.win.update()
         paths = {path for path, _g, _l in win.getters}
-        advanced = {path for path in paths if path[0] == "file" and path[1] in ("plans", "worktreeLocation", "buildEnabled", "deployEnabled", "colour", "priority",
-                                                                               "buildProcessNames", "ownerTopics", "buildFlowDoc", "integratorInstructions")}
-        self.assertEqual(len(advanced), 10)
+        advanced = {path for path in paths if path[0] == "file" and path[1] in ("plans", "worktreeLocation", "colour", "priority",
+                                                                               "buildProcessNames", "ownerTopics")}
+        self.assertEqual(len(advanced), 6)
         self.assertFalse([path for path in advanced if win.rows[path].winfo_ismapped()])
         self.assertTrue(win.rows[("file", "compileCheck")].winfo_ismapped())
+        self.assertTrue(win.rows[("file", "buildCommand")].winfo_ismapped())
+        self.assertTrue(win.rows[("file", "deployCommand")].winfo_ismapped())
         self.assertTrue(win.rows[("file", "integrationBranch")].winfo_ismapped())
         win.advanced_button.invoke()
         win.win.update()
