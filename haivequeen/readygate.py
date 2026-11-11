@@ -5,8 +5,10 @@
    plan, lines `- <id>: <text>`) and of the state file (its own section Requirements) must appear there exactly once with status done and an
    evidence. Requirements covered only by owner-verified packages, and ids an active decision of the owner names (set aside), are listed separately
    and do not block. The count line `Open requirements: <n>` does not decide here.
-2. The check agent. A fresh agent (configured class, eligible free provider, took no part in the plan) compares the plan as
-   submitted with the list and the branch and ends with `READY-CHECK: PASSED` or `READY-CHECK: FAILED` plus the missing points. Only a passed
+2. The reference. Both checks use the plan text of the latest submission (the plan reaching status SENT, also by its status line set to SENT in
+   the file). When none is recorded the gate stops and asks for a new submission; no other version takes its place.
+3. The check agent. A fresh agent (configured class, eligible free provider, took no part in the plan) compares the plan as
+   submitted, with the decisions of the plan (owner and coordinator), with the list and the branch and ends with `READY-CHECK: PASSED` or `READY-CHECK: FAILED` plus the missing points. Only a passed
    result accepts the branch. When the agent cannot run, `bzz ready` waits and the Queen calls it again next round.
 """
 import os
@@ -21,6 +23,7 @@ CHECK_RUNNER = None   # tests replace this: callable(request dict) -> (verdict, 
 COMPLETENESS_HEADING = re.compile(r"(?im)^#{1,6}\s*completeness\s*$")
 LIST_LINE = re.compile(r"^\s*[-*]\s*([A-Za-z0-9_.-]+)\s*:\s*(.*?)\s*$")
 VERDICT_LINE = re.compile(r"(?im)^[ \t]*READY-CHECK:[ \t]*(PASSED|FAILED)\b")
+ITEM_SPLIT = re.compile(r"[\s,;/&]+")
 DONE_STATUS = ("done", "erledigt")
 
 
@@ -46,15 +49,15 @@ def parse_completeness(text):
 
 
 def _names(decision, rid):
-    """Only a decision explicitly filed for this requirement sets it aside."""
-    return str(decision.get("item") or "").strip().upper() == rid.upper()
+    """Only a decision explicitly filed for this requirement sets it aside; an item of several ids ("R4,R5") names each of them."""
+    return rid.upper() in {t for t in ITEM_SPLIT.split(str(decision.get("item") or "").strip().upper()) if t}
 
 
-def evaluate(plan_text, state_text, decisions, assignments=None, versions=()):
+def evaluate(plan_text, state_text, decisions, assignments=None, versions=(), submitted_only=False):
     """Check the requirement list of the state file against the requirement ids of the plan and the state file; returns a Result."""
     res = Result()
     required = {}
-    for source in (plan_text, state_text, *versions):
+    for source in ((plan_text,) if submitted_only else (plan_text, state_text, *versions)):
         for rid, text in plans.parse_requirements(source):
             required.setdefault(rid, text)
     res.ids = list(required)
@@ -124,46 +127,6 @@ def _read(paths):
     return "", paths[0]
 
 
-class PlanHistoryError(Exception):
-    """The plan history could not be read reliably."""
-
-
-def plan_versions(path, current):
-    """Read the current plan and its committed versions, if it has Git history."""
-    folder = os.path.dirname(os.path.abspath(path))
-    try:
-        probe = subprocess.run(['git', '-C', folder, 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
-        if probe.returncode:
-            if 'not a git repository' in probe.stderr.lower():
-                return [current]
-            raise PlanHistoryError('cannot locate the plan repository')
-        root = probe.stdout.strip()
-        shallow = subprocess.run(['git', '-C', root, 'rev-parse', '--is-shallow-repository'], capture_output=True, text=True, check=True).stdout.strip()
-        if shallow != 'false':
-            raise PlanHistoryError('the plan repository has incomplete history')
-        relative = os.path.relpath(path, root).replace('\\', '/')
-        history = subprocess.run(['git', '-C', root, '-c', 'core.quotePath=false', 'log', '--follow', '--format=COMMIT:%H', '--name-status', '--', relative], capture_output=True, text=True, encoding='utf-8', check=True).stdout
-        versions = [current]
-        commit = None
-        for line in history.splitlines():
-            if line.startswith('COMMIT:'):
-                commit = line[7:]
-            elif line and commit:
-                fields = line.split('\t')
-                if fields[0].startswith('D'):
-                    break   # the file was deleted here: older versions at this path belong to an earlier plan
-                result = subprocess.run(['git', '-C', root, 'show', '%s:%s' % (commit, relative)], capture_output=True, check=True)
-                versions.append(result.stdout.decode('utf-8-sig', errors='replace'))
-                if fields[0].startswith('C'):
-                    break   # the file was created here as a copy of another plan: older versions belong to that plan
-                if fields[0].startswith('R') and len(fields) == 3 and fields[2] == relative:
-                    relative = fields[1]
-                commit = None
-        return versions
-    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
-        raise PlanHistoryError('cannot read the plan history') from exc
-
-
 def owner_released(env, plan, queen):
     """True when an active decision of exactly this plan with item owner-release names the Queen's HEAD commit (full id or at least 7 characters) or says "any commit"."""
     releases = [d for d in runtime.list_decisions(env.conn, env.name, plan=plan, item="owner-release", active_only=True)
@@ -189,19 +152,23 @@ def gate(env, plan, queen):
     decisions = [d for d in runtime.list_decisions(env.conn, env.name, active_only=True) if not d["plan_path"] or d["plan_path"] == plan]
     assignments = runtime.cut_assignments(env.conn, env.name, plan, plan_text)
     # No trustworthy cut record (older worked plan, reused path, another plan title): require evidence; requirements added after the cut need evidence too.
-    try:
-        versions = plan_versions(plan_file, plan_text)
-    except PlanHistoryError as exc:
-        return False, str(exc), True
-    res = evaluate(plan_text, state_text, decisions, assignments if assignments is not None else [], versions)
+    submitted = runtime.get_submission(env.conn, env.name, plan)
+    if submitted is None:
+        return False, ("the plan version the user submitted cannot be determined reliably: ask for the plan to be submitted again (status SENT), "
+                       "then call bzz ready again"), False
+    res = evaluate(submitted, state_text, decisions, assignments if assignments is not None else [], submitted_only=True)
     if res.no_ids or res.blocking:
         return False, refusal_text(res), False
     if owner_released(env, plan, queen):
         return True, "", False
     skipped = ", ".join(res.owner + res.aside) or "none"
     prompt = roles.role_text("ready-check", {"plan_file": plan_file, "state_file": state_file, "cwd": queen.get("cwd") or str(env.workspace), "skipped": skipped, "language": roles.language(env.settings)})
-    current = dict.fromkeys(plans.parse_requirements(plan_text))   # only the current version: changed texts of earlier versions are no longer the target
-    prompt += "\n\nRequirements of the current plan version:\n" + "\n".join("- %s: %s" % pair for pair in current)
+    reference = dict.fromkeys(plans.parse_requirements(submitted))
+    prompt += "\n\nRequirements of the plan as submitted:\n" + "\n".join("- %s: %s" % pair for pair in reference)
+    shown = [d for d in decisions if str(d.get("source")) in ("owner", "coordinator")]
+    if shown:
+        prompt += "\n\nDecisions of the plan (owner and coordinator):\n" + "\n".join(
+            "- decision %s (%s, item %s): %s" % (d.get("id"), d.get("source"), d.get("item") or "-", " ".join(str(d.get("text") or "").split())) for d in shown)
     request = {"env": env, "queen": queen, "plan": plan, "cwd": queen.get("cwd") or str(env.workspace), "prompt": prompt}
     runner = CHECK_RUNNER or (lambda r: start_check_agent(r["env"], r["queen"], r))
     verdict, text = runner(request)

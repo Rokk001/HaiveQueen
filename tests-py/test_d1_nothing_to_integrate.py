@@ -25,6 +25,7 @@ class NothingLeftCase(RoundCase):
         super().setUp()
         self.plan("READY", [{"id": "P1", "title": "First"}])
         (self.repo / REL).write_text((self.repo / REL).read_text(encoding="utf-8") + BODY, encoding="utf-8")
+        runtime.record_submission(self.conn, "testproj", REL, (self.repo / REL).read_text(encoding="utf-8"))   # the plan as submitted is the reference of the ready check
         (self.repo / STATE).write_text(LIST, encoding="utf-8")
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Test")

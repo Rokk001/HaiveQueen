@@ -40,72 +40,20 @@ class ProcessDirectoryTests(unittest.TestCase):
                 child.terminate()
                 child.wait(timeout=5)
 
-    # No new agent can start while a candidate is being removed.
-    def test_cleanup_holds_agent_scheduling_lock(self):
-        """No new agent can start while a candidate is being removed."""
-        from contextlib import contextmanager
-        held = []
-        @contextmanager
-        # Track whether cleanup holds the scheduler lock.
-        def scheduling_lock():
-            """Track whether cleanup holds the scheduler lock."""
-            held.append(True)
-            try:
-                yield
-            finally:
-                held.pop()
-        # Assert the scheduler is locked while cleanup runs.
+    # The cleanup takes no scheduling lock; only the one worktree it removes is locked (test_cleanup_removal_lock.py).
+    def test_cleanup_does_not_hold_agent_scheduling_lock(self):
+        """No scheduling lock is held while a candidate is checked or removed."""
+        from haivequeen import loop
+        # Assert the scheduler is not locked while cleanup runs.
         def check(*args):
-            """Assert the scheduler is locked while cleanup runs."""
-            self.assertTrue(held)
+            """Assert the scheduler is not locked while cleanup runs."""
+            with loop.hive_schedule_lock(timeout=1):
+                pass
             return {}
         with tempfile.TemporaryDirectory() as folder, \
              mock.patch('haivequeen.platform.data_dir', return_value=Path(folder)), \
-             mock.patch('haivequeen.loop.hive_schedule_lock', scheduling_lock), \
              mock.patch.object(worktrees, '_prune_with_checker', side_effect=check):
             worktrees.prune(None)
-
-    # Concurrent cleanup calls must not manipulate the same links together.
-    def test_cleanup_calls_are_serialized(self):
-        """Concurrent cleanup calls must not manipulate the same links together."""
-        import threading
-        entered = threading.Event()
-        release = threading.Event()
-        overlap = threading.Event()
-        attempted = threading.Event()
-        from haivequeen import loop
-        take_lock = loop._take_pid_lock
-        def observed_take(*args, **kwargs):
-            result = take_lock(*args, **kwargs)
-            if result != 0:
-                attempted.set()
-            return result
-        # Hold the first cleanup until the second has attempted to start.
-        def run_cleanup(*args):
-            """Hold the first cleanup until the second has attempted to start."""
-            if entered.is_set():
-                overlap.set()
-            else:
-                entered.set()
-                release.wait()
-            return {}
-        with tempfile.TemporaryDirectory() as folder, \
-             mock.patch('haivequeen.platform.data_dir', return_value=Path(folder)), \
-             mock.patch.object(loop, '_take_pid_lock', side_effect=observed_take), \
-             mock.patch.object(worktrees, '_prune_with_checker', side_effect=run_cleanup):
-            first = threading.Thread(target=worktrees.prune, args=(None,))
-            second = threading.Thread(target=worktrees.prune, args=(None,))
-            first.start()
-            self.assertTrue(entered.wait(30))
-            second.start()
-            try:
-                self.assertTrue(attempted.wait(30))
-                self.assertFalse(overlap.is_set())
-            finally:
-                release.set()
-                first.join(30)
-                second.join(30)
-            self.assertFalse(first.is_alive() or second.is_alive())
 
     # A process using a directory prevents its cleanup.
     def test_current_process_directory_is_busy(self):
@@ -686,10 +634,17 @@ class CleanupSchedulingTests(unittest.TestCase):
     def test_round_calls_cleanup_for_each_project(self):
         """A normal round checks old worktrees for every project."""
         from haivequeen import hives, loop
-        env = SimpleNamespace(name='test', settings={}, log=mock.Mock())
-        with mock.patch.object(hives, 'schedule_round', return_value={}), \
-             mock.patch.object(worktrees, 'prune', create=True, return_value={'removed': [], 'kept': [], 'notRemovable': []}) as prune:
-            loop.run_round(None, {}, envs=[env])
+        import os
+        import sqlite3
+        from haivequeen import scheduler
+        with tempfile.TemporaryDirectory() as folder:
+            conn = sqlite3.connect(os.path.join(folder, 'test.db'))
+            env = SimpleNamespace(name='test', settings={}, log=mock.Mock(), conn=conn, workspace=None, colour=None, priority=0, plan_globs=[], plan_exclude=[])
+            with mock.patch.object(hives, 'schedule_round', return_value={}), \
+                 mock.patch.object(scheduler, 'ProjectEnv', lambda *args: env), \
+                 mock.patch.object(worktrees, 'prune', create=True, return_value={'removed': [], 'kept': [], 'notRemovable': []}) as prune:
+                loop.run_round(None, {}, envs=[env])
+            conn.close()
         prune.assert_called_once_with(env)
 
     # Releasing the integration place triggers a cleanup afterwards.
