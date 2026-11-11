@@ -181,6 +181,7 @@ class OwnerCommands(RoundCase):
         self.assertEqual(self.invoke(*args)[0], 0)
 
     def test_unassign_running_package_selects_provider_on_next_start(self):
+        self.mock_agent_worktrees()
         self.machine["providers"][0]["slots"] = 1
         self.plan("IN_PROGRESS", packages=[{"id": "P1", "title": "First", "class": "medium"}])
         hives.create(self.conn, "testproj", REL, "claude", "123456")

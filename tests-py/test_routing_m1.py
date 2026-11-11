@@ -95,6 +95,7 @@ class SelectRouteReserveTests(RoundCase):
 
     # A process Bee of a Queen is placed by normal provider choice like a Queen, not on the Queen's provider.
     def test_process_bee_of_a_queen_is_placed_by_normal_provider_choice(self):
+        self.mock_agent_worktrees()
         self.limits(claude={'usedPercent': 30, 'resetHours': 84}, codex={'usedPercent': 60, 'resetHours': 84})
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
         hives.create(self.conn, 'testproj', REL, 'codex', '123456')
@@ -109,6 +110,7 @@ class SelectRouteReserveTests(RoundCase):
 
     # A stored package assignment keeps only the class; the provider is chosen again at every start of a process Bee.
     def test_stored_assignment_does_not_keep_a_process_bee_on_its_old_provider(self):
+        self.mock_agent_worktrees()
         self.limits(claude={'usedPercent': 30, 'resetHours': 84}, codex={'usedPercent': 60, 'resetHours': 84})
         self.plan('IN_PROGRESS', [{'id': 'I1', 'title': 'First'}])
         hives.create(self.conn, 'testproj', REL, 'codex', '123456')
@@ -144,6 +146,7 @@ class SubagentBeeTests(RoundCase):
         self.agent('Ada', phase='queen', status='running', provider='claude', pid=42)
 
     def start_bee(self):
+        self.mock_agent_worktrees()
         wt = self.base / 'bee-wt'
         wt.mkdir()
         with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), \

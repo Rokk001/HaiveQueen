@@ -134,9 +134,9 @@ class S7Test(RoundCase):
         """The Queen resumes in the existing plan worktree instead of the newer workspace."""
         from haivequeen import db
         self.reset_rt()
-        self.plan("IN_PROGRESS", [{"id": "D3", "title": "item with worktree"}])
         pkg_wt = self.base / "wt-d3"
         pkg_wt.mkdir()
+        self.plan("IN_PROGRESS", [{"id": "D3", "title": "item with worktree"}], branch="dummy", worktree=str(pkg_wt))
         self.agent("Z-D3-work", package="D3", cwd=str(pkg_wt), started=60, ended=50)
         self.agent("Z-OTHER-work", package="OTHER", cwd=str(self.repo), started=40, ended=30)
         q = db.add_question(self.conn, "testproj", REL, "D3", "Which one?", "A")
@@ -148,9 +148,9 @@ class S7Test(RoundCase):
     def test_fix_and_plan_start_use_worktree_not_workspace(self):
         """The Queen resumes the blocked plan in its existing worktree instead of the newer workspace."""
         self.reset_rt()
-        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         old_wt = self.base / "wt-old"
         old_wt.mkdir()
+        self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}], branch="dummy", worktree=str(old_wt))
         self.agent("Z-ZZ-work", package="ZZ", cwd=str(old_wt), started=60, ended=50)
         self.agent("Z-YY-work", package="YY", cwd=str(self.repo), started=40, ended=30)
         runtime.queue_upsert(self.conn, "testproj", "feature/dummy", "abc123def", REL, "blocked", "2 checks red: x")

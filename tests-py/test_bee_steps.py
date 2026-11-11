@@ -189,18 +189,21 @@ class SubagentRulesTest(RoundCase):
     # Run bzz bee start.
     def start(self, no_subagents=False):
         """Return the parsed answer of bzz agent start for package P1."""
+        self.mock_agent_worktrees()
         args = cli.build_parser().parse_args(['bee', 'start', '--project', 'testproj', '--plan', REL, '--package', 'P1', '--class', 'medium', '--name', 'Ada',
                                               '--task', 'build the thing', '--steps', '["read", "write", "test"]', '--cwd', str(self.wt)] + (['--no-subagents'] if no_subagents else []))
         output = io.StringIO()
         with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), mock.patch.object(cli.config, 'load_config', return_value=self.machine), \
-                mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), contextlib.redirect_stdout(output):
+                mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), mock.patch('haivequeen.bees.prepare_agent_worktree', return_value=(str(self.wt), 'plan-p1')), contextlib.redirect_stdout(output):
             self.assertEqual(cli.cmd_bee(args, self.conn), 0, output.getvalue())
         return json.loads(output.getvalue().strip().splitlines()[-1])
 
     def test_process_start_marks_package_working(self):
         """A successful process Agent start records the package as working."""
         self.machine['providers'][1]['beeMode'] = 'process'
-        with mock.patch('haivequeen.loop._do_start', return_value=True):
+        # Keep the real process-start gate independent of the host's free RAM.
+        with mock.patch('haivequeen.loop._do_start', return_value=True), \
+                mock.patch('haivequeen.loop.ram_gb', return_value=16.0):
             out = self.start(no_subagents=True)
         self.assertEqual(out['kind'], 'process')
         self.assertEqual(self.conn.execute("SELECT state FROM package_progress WHERE package='P1'").fetchone()[0], 'working')

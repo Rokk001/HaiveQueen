@@ -21,12 +21,14 @@ class PlanBranchTests(RoundCase):
         """A plan that says '**Git:** branch `X` from `origin/...`' names branch X (the form of the INGAME-QS plans)."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.add_plan_text("\n- **Git:** branch `fix/ingame-qs-5` from `origin/integration/all`. Push normally.\n")
+        bees.migrate_headers(self.env())   # the search of earlier versions runs once, for a plan past the cut
         self.assertEqual(bees.plan_worktree(self.env(), REL)[0], "fix/ingame-qs-5")
 
     def test_state_file_names_the_branch_when_the_plan_does_not(self):
         """Without a branch in the plan, the 'Plan: X; branch Y; baseline Z' line of the state file next to it names the branch."""
         self.plan("READY", [{"id": "P1", "title": "First"}])
         (self.repo / "docs/plans/dummy/DUMMY-STATE.md").write_text("# State\n\nPlan: DUMMY-PLAN.md; branch fix/dummy; baseline origin/integration/all (3af31cbe2).\n", encoding="utf-8")
+        bees.migrate_headers(self.env())
         self.assertEqual(bees.plan_worktree(self.env(), REL)[0], "fix/dummy")
 
     def test_answered_question_still_names_the_branch(self):
@@ -35,6 +37,7 @@ class PlanBranchTests(RoundCase):
         self.plan("READY", [{"id": "P1", "title": "First"}])
         qid = db.add_question(self.conn, "testproj", REL, "worktree", "Which branch and worktree should this plan use?", "")
         db.answer_question(self.conn, qid, "feature/test\n" + str(self.wt), "owner")
+        bees.migrate_headers(self.env())
         self.assertEqual(bees.plan_worktree(self.env(), REL), ("feature/test", self.wt))
 
 

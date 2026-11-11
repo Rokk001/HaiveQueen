@@ -31,7 +31,9 @@ def cmd_done(args, conn) -> int:
         row = db.finish_agent(conn, args.agent, text)
     except KeyError as exc:
         return fail(str(exc))
-    out({"ok": True, "agent": args.agent, "project": row["project"]})
+    from haivequeen import bees, branchguard
+    violation = bees.branch_violation(conn, row['project'], row['name']) if row['phase'] == 'bee' else ''
+    out({"ok": True, "agent": args.agent, "project": row["project"], **branchguard.failure_fields(violation)})
     return 0
 
 
@@ -404,7 +406,7 @@ def cmd_plan(args, conn):
     if not path.is_file():
         return fail("plan file not found: %s" % plan)
     parsed = plan_mod.load_plan(str(path))
-    problems = plan_mod.check_plan(parsed, {c for p in env.providers if p.get("enabled", True) for c in p.get("capabilities", [])}, plan_mod.load_requirements(str(path)))
+    problems = plan_mod.check_plan(parsed, {c for p in env.providers if p.get("enabled", True) for c in p.get("capabilities", [])}, plan_mod.load_requirements(str(path)), main_checkout=env.code_repo)
     if problems:
         return fail("the plan is not cut properly: " + "; ".join(problems))
     status = parsed.status
@@ -412,7 +414,13 @@ def cmd_plan(args, conn):
         runtime.save_cut_assignments(conn, args.project, plan, parsed.packages, path.read_text(encoding="utf-8-sig"))
         status = runtime.set_plan_status(conn, args.project, plan, "QUEUED")["status"]
     runtime.sync_plans(conn, args.project)
-    out({"ok": True, "plan": plan, "status": status, "packages": [p.id for p in parsed.packages], "warnings": plan_mod.plan_warnings(parsed)})
+    from haivequeen import bees
+    default = bees.cut_default(env, plan)
+    handoff = parsed.branch != default[0] or not plan_mod.same_folder(parsed.worktree, default[1])   # the cut Queen started in the default worktree
+    result = {"ok": True, "plan": plan, "status": status, "packages": [p.id for p in parsed.packages], "warnings": plan_mod.plan_warnings(parsed), "handoff": handoff}
+    if handoff:
+        result["next"] = "the header names branch %s and worktree %s, not the worktree you run in: write your handoff and end now; the next Queen starts in the worktree of the header" % (parsed.branch, parsed.worktree)
+    out(result)
     return 0
 
 
@@ -504,6 +512,12 @@ def cmd_bee(args, conn):
                 blocked = "question:" + args.blocked_ref
         elif args.outcome == "failed" and not requirements and not args.error:
             return fail("a failed attempt needs evidence: --open-requirements or --error; if the Agent only waits for an answer, a build or the owner use --blocked-by")
+        args.attempt, violation = bees.package_branch_violation(env, plan, args.package, args.attempt)
+        if violation:
+            from haivequeen import branchguard
+            args.outcome = 'failed'
+            args.error = branchguard.failure_text(violation)
+            blocked = ''
         if args.outcome == "succeeded":
             from haivequeen import integration
             refused = integration.result_refusal(conn, args.project, plan, args.package)
@@ -512,13 +526,13 @@ def cmd_bee(args, conn):
         refused = bees.release_refusal(conn, args.project, plan, args.package, queen, getattr(args, "ended_evidence", "") or "", args.outcome)
         if refused:   # only trustworthy evidence ends a subagent Bee of an earlier Queen
             return fail(refused)
-        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked)
+        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked, force_failure=bool(violation))
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
-        out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls})
+        out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls, **({**branchguard.failure_fields(violation), "outcome": "failed"} if violation else {})})
         return 0
-    if not args.name or not args.task or not args.cwd:
-        return fail("start requires an Agent name, task and worktree")
+    if not args.name or not args.task:
+        return fail("start requires an Agent name and task")
     try:
         steps = json.loads(args.steps)
         paths = json.loads(args.paths)
@@ -564,7 +578,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="bzz")
     sub = ap.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("agent", aliases=["bee"], help="start an agent or report its package result (bee is a compatibility alias)")
+    p = sub.add_parser("agent", aliases=["bee"], help="start an agent or report its package result (bee is a compatibility alias)", description=(
+        "Start creates or reuses the package branch <plan branch>-<package id in lower case> and folder "
+        "<worktree prefix>-<plan tag in lower case>-<package id in lower case> in the project's worktree location. "
+        "The plan tag is derived from the plan file name without -PLAN and kept for the life of the plan. "
+        "Names are based on plan and package, never after an Agent. A new branch starts from the current tip of the plan branch; "
+        "a replacement Agent reuses the same worktree and branch. The answer gives cwd and branch, also for subagents. "
+        "Agents must not create or commit on another branch."))
     p.add_argument("action", choices=["start", "result", "wait"])
     for field in ("project", "plan", "package", "class"):
         p.add_argument("--" + field, required=True, dest="cls" if field == "class" else field)
@@ -574,7 +594,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--steps", default="[]")
     p.add_argument("--paths", default="[]")
     p.add_argument("--rules", default="[]")
-    p.add_argument("--cwd", default="")
+    p.add_argument("--cwd", default="", help="legacy option; package worktree is chosen by HaiveQueen")
     p.add_argument("--outcome", choices=["failed", "interrupted", "succeeded"])
     p.add_argument("--attempt", default="")
     p.add_argument("--open-requirements", default="[]")
@@ -593,7 +613,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason", default="")
     p.set_defaults(fn=cmd_package)
 
-    p = sub.add_parser("plan", help="check a plan; owner: accept, reject, pause, resume or release")
+    p = sub.add_parser("plan", help="check a plan; owner: accept, reject, pause, resume or release", description=(
+        "The TOML header requires branch (the plan branch) and worktree (the plan worktree folder). "
+        "The Queen writes both at the cut; HaiveQueen reads them only from these header fields. "
+        "Check refuses a missing branch or worktree, or a worktree that is the project's main checkout, and names the problem. "
+        "The plan stays SENT until the check passes and sets it to QUEUED; agent start is refused until then."))
     p.add_argument("action", choices=["check", "accept", "reject", "pause", "resume", "release"])
     for field in ("project", "plan"):
         p.add_argument("--" + field, required=True)

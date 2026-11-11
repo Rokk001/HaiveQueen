@@ -57,7 +57,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         """A header set back to SUBMITTED and checked again with other verify values does not replace the accepted cut."""
         self.queen_of('SUBMITTED', self.CODE)
         self.assertEqual(self.check()[0], 0)
-        self.plan('SUBMITTED', self.OWNER)
+        self.plan('SUBMITTED', self.OWNER, branch='fix/x', worktree=str(self.base / 'wt-x'))
         self.assertEqual(self.check()[0], 0)
         self.assertEqual(self.stored(), [['R-1', 'code']])
 
@@ -75,7 +75,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         """Another plan written over an active path (another title) does not inherit the cut, and a later check cannot record one."""
         self.queen_of('SUBMITTED', self.OWNER)
         self.assertEqual(self.check()[0], 0)
-        self.plan('SUBMITTED', self.OWNER, title='Another plan')
+        self.plan('SUBMITTED', self.OWNER, title='Another plan', branch='fix/x', worktree=str(self.base / 'wt-x'))
         self.assertIsNone(self.stored())
         self.assertEqual(self.check()[0], 0)
         self.assertIsNone(self.stored())
@@ -95,7 +95,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         self.assertEqual(self.check()[0], 0)
         runtime.set_plan_status(self.conn, 'testproj', REL, 'DONE')
         self.finish('queen')
-        self.plan('SUBMITTED', self.CODE, title='Second plan')
+        self.plan('SUBMITTED', self.CODE, title='Second plan', branch='fix/x', worktree=str(self.base / 'wt-x'))
         self.assertIsNone(runtime.kv_get(self.conn, 'testproj', 'cut-verification:' + REL))
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
         self.assertEqual(self.check()[0], 0)
@@ -111,7 +111,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         hives.reject_plan(self.conn, 'testproj', REL)
         self.assertIsNone(runtime.kv_get(self.conn, 'testproj', 'cut-verification:' + REL))
         hives.start_again(self.conn, 'testproj', REL)
-        self.plan('DRAFT', self.OWNER)
+        self.plan('DRAFT', self.OWNER, branch='fix/x', worktree=str(self.base / 'wt-x'))
         hives.start_plan(self.conn, 'testproj', REL)
         self.assertIn('status = "SENT"', self.text())
         self.assertIsNone(self.stored())   # Start records no cut: the plan is prepared like any sent plan
@@ -121,12 +121,12 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
 
     def test_unworked_ready_plan_is_recovered(self):
         """An older READY plan no agent has worked on yet gets its header as cut record."""
-        self.plan('READY', self.OWNER)
+        self.plan('READY', self.OWNER, branch='fix/x', worktree=str(self.base / 'wt-x'))
         self.assertEqual(self.stored(), [['R-1', 'owner']])
 
     def test_worked_older_plan_is_not_recovered(self):
         """An older plan with a Queen or Bee before any cut record stays without one: evidence is required."""
-        self.plan('READY', self.OWNER)
+        self.plan('READY', self.OWNER, branch='fix/x', worktree=str(self.base / 'wt-x'))
         runtime.kv_delete(self.conn, 'testproj', 'cut-verification:' + REL)
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
         runtime.sync_plans(self.conn, 'testproj')
@@ -139,7 +139,7 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         self.finish('queen')
         self.conn.execute("UPDATE agents SET started_at=?", ('2026-01-01T00:00:00',))
         runtime.set_plan_status(self.conn, 'testproj', REL, 'DONE')
-        self.plan('READY', self.OWNER, title='Second plan')
+        self.plan('READY', self.OWNER, title='Second plan', branch='fix/x', worktree=str(self.base / 'wt-x'))
         self.assertEqual(self.stored(), [['R-1', 'owner']])
 
     def gate_after_edit(self, packages, extra_header, requirement_lines):

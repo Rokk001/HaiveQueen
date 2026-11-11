@@ -42,6 +42,7 @@ class BeeDependencies(RoundCase):
 
     # Every routing result is gated before side effects and the refusal is logged.
     def test_refusal_and_completion_for_queen_and_subagent(self):
+        self.mock_agent_worktrees()
         self.agent('existing', phase='bee', status='running', pid=55)
         for extra in (('--no-subagents',), ()):
             code, output = self.start('P2', extra)
@@ -53,7 +54,9 @@ class BeeDependencies(RoundCase):
         self.assertIn('dependency P1 of package P2 not done', (self.base / 'logs' / 'ROUNDS.log').read_text())
         bees.report_attempt(self.env(), REL, 'P1', 'medium', 'succeeded', 'done')
         self.machine['providers'][1]['beeMode'] = 'subagent'   # a Codex Queen that can start embedded subagents
-        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
+        # Routing can choose a process provider even for a subagent-capable Queen.
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), \
+                mock.patch('haivequeen.loop.ram_gb', return_value=16.0):
             code, output = self.start('P2')
         self.assertEqual(code, 0, output)
 

@@ -147,7 +147,7 @@ class BranchTests(RoundCase):
         git(self.repo, "remote", "add", "origin", str(self.remote))
         git(self.repo, "push", "-q", "origin", "main")
         git(self.repo, "fetch", "-q", "origin")
-        self.plan("QUEUED", [{"id": "P1", "title": "First"}], rel="docs/plans/dummy/Feature-X-PLAN.md")
+        self.plan("QUEUED", [{"id": "P1", "title": "First"}], rel="docs/plans/dummy/Feature-X-PLAN.md", branch="feature-x", worktree=str(self.base / "wt-feature-x"))
         self.rel = "docs/plans/dummy/Feature-X-PLAN.md"
 
     def test_plan_without_branch_gets_a_created_branch_from_the_integration_branch(self):

@@ -40,6 +40,8 @@ class Plan:
     warnings: list = field(default_factory=list)
     errors: list = field(default_factory=list)   # header problems shown in the GUI: broken header, unknown status or class
     owner_check: str = "ask"   # "ask": the owner accepts the integrated plan; "none" (header owner_check = "none") skips that question
+    branch: str = ""      # header field `branch`: the plan branch, the only source of it
+    worktree: str = ""    # header field `worktree`: the folder of the plan worktree, the only source of it
 
 
 def normalize_status(value):
@@ -139,7 +141,8 @@ def parse_plan_text(text, path=""):
                 requirements=_depends(row.get("requirements")),
             ))
     owner_check = "none" if str(header.get("owner_check", "")).strip().lower() in ("none", "false", "no", "off") else "ask"
-    return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings, errors=errors, owner_check=owner_check)
+    return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings, errors=errors, owner_check=owner_check,
+                branch=str(header.get("branch") or "").strip(), worktree=str(header.get("worktree") or "").strip())
 
 
 @filetxn.coordinated
@@ -234,13 +237,24 @@ def requirement_problems(plan, requirements):
     return problems
 
 
-def check_plan(plan, capabilities, requirements=()):
+def same_folder(a, b):
+    """True when both paths name the same folder (case, separators and a trailing separator ignored)."""
+    return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+
+
+def check_plan(plan, capabilities, requirements=(), main_checkout=None):
     """Problems that keep a cut plan from running, as a list of texts (empty when it is fine).
 
     `capabilities` is the set of capability names the configured providers offer. Checked: at least one package, unique ids, a title per
     package, every dependency names a package of the plan (or all), no dependency cycle and every named capability is offered by a provider.
-    `requirements` is the list (id, text) the Queen wrote down; each must belong to at least one package."""
+    `requirements` is the list (id, text) the Queen wrote down; each must belong to at least one package.
+    The header must name `branch` and `worktree`, and the worktree must not be `main_checkout` (the project's main checkout)."""
     problems = []
+    for key in ("branch", "worktree"):
+        if not getattr(plan, key, ""):
+            problems.append("the header has no `%s` field (the plan %s)" % (key, "branch" if key == "branch" else "worktree folder"))
+    if plan.worktree and main_checkout and same_folder(plan.worktree, main_checkout):
+        problems.append("the header `worktree` is the main checkout of the project (%s): name a separate worktree folder" % plan.worktree)
     ids = [p.id for p in plan.packages]
     if not plan.packages:
         problems.append("the header lists no package")

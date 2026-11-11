@@ -70,6 +70,7 @@ class SlotAndProviderChoiceTests(RoundCase):
 
     # With no free slot on any provider the Bee waits.
     def test_bee_waits_when_no_provider_has_a_free_slot(self):
+        self.mock_agent_worktrees()
         self.machine['providers'][0]['slots'] = 1
         self.machine['providers'][1]['slots'] = 1
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
@@ -86,6 +87,7 @@ class SlotAndProviderChoiceTests(RoundCase):
 
     # A subagent Bee on the Queen's own provider needs a free slot of it.
     def test_subagent_bee_takes_a_free_slot_of_the_queen_provider(self):
+        self.mock_agent_worktrees()
         self.machine['providers'][0]['slots'] = 2
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'medium'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
@@ -186,6 +188,7 @@ class SlotAndProviderChoiceTests(RoundCase):
 
     # The Queen's provider is full and two providers offer the needed capability: the Bee goes to the one with the higher reserve, not the first free one.
     def test_bee_with_capability_goes_to_higher_reserve_provider(self):
+        self.mock_agent_worktrees()
         self.third_images_provider()
         self.machine['providers'][0]['slots'] = 1
         self.limits(claude=0, codex=90, gemini=10)

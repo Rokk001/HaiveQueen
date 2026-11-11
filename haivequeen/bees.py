@@ -74,6 +74,7 @@ def ensure_attempts(conn):
     conn.execute('CREATE TABLE IF NOT EXISTS bee_retry_answers (question_id INTEGER PRIMARY KEY, project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, signal_rowid INTEGER NOT NULL, previous_counts TEXT NOT NULL)')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_assignments (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, class TEXT NOT NULL, provider TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_worktrees (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, cwd TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
+    conn.execute('CREATE TABLE IF NOT EXISTS bee_worktree_branches (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, branch TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     conn.execute('CREATE TABLE IF NOT EXISTS bee_completed (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     conn.execute('CREATE TABLE IF NOT EXISTS package_progress (project TEXT NOT NULL, plan_path TEXT NOT NULL, package TEXT NOT NULL, state TEXT NOT NULL, agent TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(project,plan_path,package))')
     if 'reason' not in [r[1] for r in conn.execute('PRAGMA table_info(package_progress)')]:
@@ -124,9 +125,18 @@ def close_embedded(conn, project, plan, package=None, outcome='done', keep_stopp
         where += ' AND package=?'
         args.append(package)
     confirmed = 0
-    if not keep_stopping:
-        confirmed = conn.execute("UPDATE embedded_bees SET ended_at=?, outcome='stopped'" + where + ' AND outcome=?', [db.now()] + args + [STOPPING]).rowcount
-    conn.execute('UPDATE embedded_bees SET ended_at=?, outcome=?' + where + ' AND outcome!=?', [db.now(), outcome] + args + [STOPPING])
+    cur = conn.execute('SELECT rowid AS rid,* FROM embedded_bees' + where, args)
+    names = [c[0] for c in cur.description]
+    for values in cur.fetchall():
+        row = dict(zip(names, values))
+        stopping = row['outcome'] == STOPPING
+        if stopping and keep_stopping:
+            continue
+        confirmed += int(stopping)
+        end = 'stopped' if stopping else outcome
+        if enforce_agent_end(conn, project, row):
+            end = 'failed'
+        conn.execute('UPDATE embedded_bees SET ended_at=?, outcome=? WHERE rowid=?', (db.now(), end, row['rid']))
     return confirmed
 
 
@@ -217,6 +227,8 @@ def close_ended_embedded(conn, project=None, alive=None) -> int:
         if not queen_has_ended(conn, row, alive):
             continue
         outcome = 'stopped' if row.get('outcome') == STOPPING else 'interrupted'
+        if enforce_agent_end(conn, row['project'], row):
+            outcome = 'failed'
         conn.execute('UPDATE embedded_bees SET ended_at=?, outcome=? WHERE rowid=? AND ended_at IS NULL', (db.now(), outcome, row['rid']))
         closed.append(row)
         plans.add((row['project'], row['plan_path']))
@@ -297,7 +309,7 @@ def stopping_embedded(conn, project, plan=None, package=None):
 
 
 # Count a failed attempt, ignoring technical interruptions.
-def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', verify='code'):
+def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', verify='code', force_failure=False):
     """Record an attempt once. A failed attempt counts only when the same error came again or, for a package closed by code, the same requirement stayed open. A package in state implemented never counts; for a package closed by build or owner open requirements alone never count."""
     ensure_attempts(conn)
     if outcome == 'succeeded':
@@ -307,6 +319,13 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
         return
     with db.transaction(conn):
         if attempt and conn.execute('INSERT OR IGNORE INTO bee_attempt_reports(project,plan_path,package,attempt) VALUES(?,?,?,?)', (project, plan, package, attempt)).rowcount == 0:
+            if force_failure:
+                prior = conn.execute('SELECT counted FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND attempt=?', (project, plan, package, attempt)).fetchone()
+                if prior and not prior[0]:
+                    conn.execute('UPDATE bee_attempt_signals SET counted=1,error=? WHERE project=? AND plan_path=? AND package=? AND attempt=?', (error, project, plan, package, attempt))
+                    conn.execute('INSERT INTO bee_attempts VALUES(?,?,?,?,1) ON CONFLICT(project,plan_path,package,class) DO UPDATE SET failures=failures+1', (project, plan, package, cls))
+                    conn.execute('DELETE FROM bee_completed WHERE project=? AND plan_path=? AND package=?', (project, plan, package))
+                    set_package_state(conn, project, plan, package, 'working', attempt)
             return
         if attempt:
             epoch = retry_epoch(conn, project, plan, package)
@@ -314,7 +333,7 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
             state = conn.execute('SELECT state FROM package_progress WHERE project=? AND plan_path=? AND package=?', (project, plan, package)).fetchone()
             same_requirement = verify == 'code' and previous and set(open_requirements or []) & set(json.loads(previous[0]))
             same_error = previous and error and error == previous[1]
-            counted = bool(outcome == 'failed' and not (state and state[0] == 'implemented') and (same_requirement or same_error))
+            counted = bool(outcome == 'failed' and (force_failure or (not (state and state[0] == 'implemented') and (same_requirement or same_error))))
             conn.execute('INSERT INTO bee_attempt_signals VALUES(?,?,?,?,?,?,?,?)', (project, plan, package, cls, attempt, json.dumps(open_requirements or []), error, int(counted)))
         if attempt and counted:
             conn.execute('INSERT INTO bee_attempts(project,plan_path,package,class,failures) VALUES(?,?,?,?,1) ON CONFLICT(project,plan_path,package,class) DO UPDATE SET failures=failures+1', (project, plan, package, cls))
@@ -750,8 +769,12 @@ def escalation_providers(env, plan, package):
 
 
 # Record an attempt and file one owner question when the top class is exhausted.
-def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked=''):
+def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked='', force_failure=False):
     """Record an outcome and ask once after the highest class fails repeatedly. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
+    attempt, foreign = package_branch_violation(env, plan, package, attempt)
+    if foreign:
+        from . import branchguard
+        outcome, error, blocked, force_failure = 'failed', branchguard.failure_text(foreign), '', True
     had_open = bool(unconfirmed_embedded(env.conn, env.name, plan, package))
     if close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome):   # the embedded Bee of this package has reported
         runtime.append_event(env.conn, env.name, 'The stopped subagent Agent of package %s has ended; its Agent place is free' % package, kind='note', mirror='none')
@@ -761,7 +784,7 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
         set_package_state(env.conn, env.name, plan, package, 'waiting', 'queen', blocked)
         return
     row = next((p for p in env.packages(plan) if p['id'] == package), None)
-    record_attempt(env.conn, env.name, plan, package, cls, outcome, attempt, open_requirements, error, row['verify'] if row else 'code')
+    record_attempt(env.conn, env.name, plan, package, cls, outcome, attempt, open_requirements, error, row['verify'] if row else 'code', force_failure)
     if outcome == 'succeeded':
         env.conn.execute('DELETE FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package))
     threshold = int(env.settings.get('escalateAfter', 3))
@@ -771,6 +794,125 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
         text = tr(FAILURE_QUESTION, language=language)
         if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=package)):
             db.add_question(env.conn, env.name, plan, package, text, tr('Review the failed attempts and choose the next approach.', language=language))
+
+
+def prepare_agent_worktree(env, plan, package):
+    """Reuse a package checkout or create its branch from the current plan tip."""
+    import subprocess
+    from pathlib import Path
+    from . import routine
+    ensure_attempts(env.conn)
+    entries = worktree_entries(env)
+    resolved = plan_worktree(env, plan)
+    if entries is None or not resolved:
+        env.log('Agent worktree cannot be prepared: missing plan header or Git worktree list')
+        return None
+    saved = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+    if saved:
+        found = next(((d, b) for d, b in entries if same_folder(d, saved[0])), None)
+        if found and found[1]:
+            known = env.conn.execute('SELECT branch FROM bee_worktree_branches WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+            if known and known[0] != found[1]:
+                env.log('folder %s holds branch %s; package %s expects branch %s' % (saved[0], found[1], package, known[0]))
+                return None
+            env.conn.execute('INSERT OR IGNORE INTO bee_worktree_branches VALUES (?,?,?,?)', (env.name, plan, package, found[1]))
+            return str(Path(found[0])), found[1]
+        env.log('Agent worktree %s is unavailable or has no branch' % saved[0])
+        return None
+    for previous in reversed(runtime.list_agents(env.conn, env.name, 'all')):
+        if (previous.get('plan_path') == plan and previous.get('package') == package and previous.get('phase') == 'bee'
+                and previous.get('cwd') and valid_bee_worktree(env, previous['cwd'], None)):
+            found = next(((d, b) for d, b in entries if previous.get('cwd') and same_folder(d, previous['cwd']) and b), None)
+            if found:
+                env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, found[0]))
+                env.conn.execute('INSERT OR IGNORE INTO bee_worktree_branches VALUES (?,?,?,?)', (env.name, plan, package, found[1]))
+                return str(Path(found[0])), found[1]
+    branch = resolved[0] + '-' + package.lower()
+    folder = Path(routine.new_worktree(env, routine.plan_tag(env, plan).lower() + '-' + package.lower()))
+    here = next(((d, b) for d, b in entries if same_folder(d, folder)), None)
+    if here and here[1] != branch:
+        env.log('folder %s holds branch %s; package %s expects branch %s' % (folder, here[1] or '(none)', package, branch))
+        return None
+    elsewhere = next(((d, b) for d, b in entries if b == branch), None)
+    if elsewhere:
+        folder = Path(elsewhere[0])
+    elif not here:
+        if folder.exists():
+            env.log('folder %s holds branch (none); package %s expects branch %s' % (folder, package, branch))
+            return None
+        git = ['git', '-C', str(env.code_repo)]
+        exists = subprocess.run(git + ['show-ref', '--verify', '--quiet', 'refs/heads/' + branch], capture_output=True).returncode == 0
+        args = ['worktree', 'add', str(folder), branch] if exists else ['worktree', 'add', '-b', branch, str(folder), resolved[0]]
+        result = subprocess.run(git + args, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        if result.returncode:
+            env.log('Agent worktree cannot be prepared: ' + result.stderr.strip())
+            return None
+    env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(folder)))
+    env.conn.execute('INSERT OR IGNORE INTO bee_worktree_branches VALUES (?,?,?,?)', (env.name, plan, package, branch))
+    return str(folder), branch
+
+
+def record_agent_branch_start(env, name, cwd, branch):
+    from . import branchguard
+    import uuid
+    folder = env.run_dir(name) / ('git-guard-' + uuid.uuid4().hex)
+    overrides = branchguard.prepare(folder, cwd, branch)
+    runtime.kv_delete(env.conn, env.name, 'agent-violation:' + name)
+    runtime.kv_delete(env.conn, env.name, 'agent-violation-reported:' + name)
+    runtime.kv_set(env.conn, env.name, 'agent-branch:' + name, json.dumps({'cwd': cwd, 'branch': branch, 'guard': str(folder), 'environment': overrides}))
+    return overrides
+
+
+def agent_branch_violation(env, name):
+    return branch_violation(env.conn, env.name, name)
+
+
+def package_branch_violation(env, plan, package, attempt):
+    """An embedded Agent's evidence follows its identity even if the Queen uses a result alias."""
+    for row in unconfirmed_embedded(env.conn, env.name, plan, package):
+        foreign = branch_violation(env.conn, env.name, row['name'])
+        if foreign:
+            return row['name'], foreign
+    return attempt, branch_violation(env.conn, env.name, attempt) if attempt else ''
+
+
+def branch_violation(conn, project, name):
+    from . import branchguard
+    saved = runtime.kv_get(conn, project, 'agent-violation:' + name)
+    if saved:
+        return saved
+    raw = runtime.kv_get(conn, project, 'agent-branch:' + name)
+    if not raw:
+        return ''
+    data = json.loads(raw)
+    if data.get('guard'):
+        return branchguard.violation(data['guard'])
+    return ''
+
+
+def enforce_agent_end(conn, project, row):
+    """Check every terminal path, including missing runners and embedded Queen exits."""
+    from . import branchguard
+    name = row['name']
+    foreign = branch_violation(conn, project, name)
+    if not foreign:
+        return ''
+    runtime.kv_set(conn, project, 'agent-violation:' + name, foreign)
+    text = branchguard.failure_text(foreign)
+    raw = runtime.kv_get(conn, project, 'agent-branch:' + name)
+    data = json.loads(raw) if raw else {}
+    if data.get('guard'):
+        from pathlib import Path
+        try:
+            (Path(data['guard']).parent / 'branch-violation.txt').write_text(text + '\n', encoding='utf-8')
+        except OSError:
+            pass  # Runtime evidence below survives a removed run directory.
+    record_attempt(conn, project, row['plan_path'], row['package'], row.get('class') or 'medium',
+                   'failed', name, error=text, force_failure=True)
+    if not runtime.kv_get(conn, project, 'agent-violation-reported:' + name):
+        runtime.append_event(conn, project, text, kind='note', agent=name, mirror='none', data=branchguard.failure_fields(foreign))
+        runtime.kv_set(conn, project, 'agent-violation-reported:' + name, foreign)
+    return foreign
 
 
 # Verify the Bee has a distinct worktree in the same repository.
@@ -929,17 +1071,21 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         provider, selected_class = route
         env.conn.execute('INSERT INTO bee_assignments(project,plan_path,package,class,provider) VALUES(?,?,?,?,?) ON CONFLICT(project,plan_path,package) DO UPDATE SET class=excluded.class,provider=excluded.provider', (env.name, plan, package, selected_class, provider))
         pick = scheduler.get_provider(env.providers, provider)
-        saved = env.conn.execute('SELECT cwd FROM bee_worktrees WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
-        if saved:
-            cwd = saved[0]
-        else:
-            for previous in reversed(runtime.list_agents(env.conn, env.name, 'all')):
-                previous_cwd = previous.get('cwd')
-                if (previous.get('plan_path') == plan and previous.get('package') == package and
-                        previous.get('phase') == 'bee' and previous_cwd and
-                        valid_bee_worktree(env, previous_cwd, queen.get('cwd'))):
-                    cwd = previous_cwd
-                    break
+        pair = prepare_agent_worktree(env, plan, package)
+        if not pair:
+            return refuse(env, package, 'the package worktree could not be prepared; see the round log')
+        cwd, branch = pair
+        if not valid_bee_worktree(env, cwd, queen.get('cwd')):
+            return refuse(env, package, 'the package worktree is not a separate checkout of this repository')
+        # The runner otherwise adds a suffix after the guard was stored. Choose
+        # the final attempt identity first, for process and embedded Agents alike.
+        existing_names = {a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')}
+        existing_names.update(r[0] for r in env.conn.execute('SELECT name FROM embedded_bees WHERE project=?', (env.name,)))
+        requested, suffix = name, 1
+        while name in existing_names:
+            suffix += 1
+            name = '%s-%d' % (requested, suffix)
+        git_environment = record_agent_branch_start(env, name, cwd, branch)
         if provider == hive['provider'] and embedded:
             if cwd:
                 if Path(cwd).exists() and not valid_bee_worktree(env, cwd, queen.get('cwd')):
@@ -951,7 +1097,8 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
             record_step_count(env.conn, env.name, plan, package, len(steps))
             # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
             prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')))
-            return {'kind': 'subagent', 'provider': provider, 'class': selected_class, 'cwd': cwd, 'prompt': prompt}
+            prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
+            return {'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
         if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
             return refuse(env, package, 'an Agent process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
         path = Path(cwd or '')
@@ -961,11 +1108,12 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
         state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'RUNNING'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
         ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
         action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs'))), 'class': selected_class}
+        action['prompt'] += '\n\nAssigned worktree: %s; assigned branch: %s.' % (cwd, branch)
         if not loop._do_start(ctx, action, forced_pick=pick):
             return refuse(env, package, 'the agent runner could not start the Agent process')
         env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
         record_step_count(env.conn, env.name, plan, package, len(steps))
-        return {'kind': 'process', 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute())}
+        return {'kind': 'process', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute()), 'branch': branch}
 
 
 # Read the branch from the 'Plan: X; branch Y; baseline Z' line of the plan's state file next to it.
@@ -985,29 +1133,56 @@ def state_branch(env, plan):
     return ''
 
 
-# The branch HaiveQueen creates for a plan that names none.
+# The branch HaiveQueen proposes to the cut Queen when the plan text names none.
 def derived_branch(plan):
     """The plan file name in lower case without -PLAN and .md (docs/plans/Feature-X-PLAN.md gives feature-x)."""
     from pathlib import Path
     return re.sub(r'-plan$', '', Path(plan).stem, flags=re.I).lower()
 
 
-def branch_is_derived(env, plan):
-    """True when the plan's branch is only the derived name: the plan, its state file and the owner name none."""
-    resolved = plan_worktree(env, plan)
-    if not resolved or resolved[0] != derived_branch(plan):
-        return False
+def same_folder(a, b):
+    """True when both paths name the same folder (case, separators and links ignored)."""
+    import os
+    return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(os.path.realpath(str(b)))
+
+
+def cut_default(env, plan):
+    """The default rule of the cut: (branch, worktree folder). The owner's choice of a new branch wins; else the derived branch in the project's worktree location."""
+    from pathlib import Path
+    from . import routine
     conn = getattr(env, 'conn', None)
-    if conn is not None and runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan):
-        return False
-    text = (env.workspace / plan).read_text(encoding='utf-8-sig')
-    return not re.search(r'(?im)feature[ -]branch\s*:|\bbranch(?:es)?\b\s*:?\s*`|^\s*[-*]?\s*git\s*:\s*branch', text) and not state_branch(env, plan) and \
-        not (conn is not None and runtime.list_questions(conn, env.name, status='answered', plan=plan, item='worktree'))
+    chosen_new = runtime.kv_get(conn, env.name, NEW_BRANCH_KEY + plan) if conn is not None else None
+    takeover = runtime.kv_get(conn, env.name, TAKEOVER_KEY + plan) if conn is not None else None
+    branch = chosen_new or takeover or derived_branch(plan)
+    if takeover and not chosen_new:
+        for folder, checked_out in worktree_entries(env) or []:
+            if checked_out == branch and not same_folder(folder, env.code_repo):
+                return branch, Path(folder)
+    return branch, Path(routine.new_worktree(env, scheduler.to_slug(branch)))
 
 
-# Resolve the plan's named branch and optional named worktree.
 def plan_worktree(env, plan):
-    """Read an unambiguous branch and worktree, including numbered Branches rules."""
+    """The plan branch and worktree folder from the two fields `branch` and `worktree` of the plan header, or None when the header lacks one.
+
+    The plan text, the state file and the file name are never searched."""
+    from pathlib import Path
+    parsed = plan_mod.load_plan(str(env.workspace / plan))
+    if not parsed.branch or not parsed.worktree:
+        return None
+    return parsed.branch, Path(parsed.worktree).expanduser()
+
+
+def target_worktree(env, plan):
+    """The header's (branch, folder); for a plan still to be cut and without both fields the default rule of the cut."""
+    resolved = plan_worktree(env, plan)
+    if resolved or plan_mod.load_plan(str(env.workspace / plan)).status not in plan_mod.CUT_STATUSES:
+        return resolved
+    return cut_default(env, plan)
+
+
+# The search of earlier versions, used one last time to write the header of a plan that is past the cut.
+def legacy_search(env, plan):
+    """Read the branch and worktree from the owner's choice, the plan text, the state file or an owner answer, else the derived branch (migration of B-6 only)."""
     import re
     from pathlib import Path
     conn = getattr(env, 'conn', None)
@@ -1051,7 +1226,7 @@ def plan_worktree(env, plan):
 def foreign_plan_branch(env, plan):
     """Leave a queued or existing branch with no run history untouched."""
     import subprocess
-    resolved = plan_worktree(env, plan)
+    resolved = target_worktree(env, plan)
     if not resolved:
         return False
     branch, _ = resolved
@@ -1059,8 +1234,21 @@ def foreign_plan_branch(env, plan):
         return False
     if env.conn.execute("SELECT 1 FROM queue WHERE project=? AND branch=? AND status IN ('ready','blocked','in_run') LIMIT 1", (env.name, branch)).fetchone():
         return True
-    if any(a.get('plan_path') == plan for a in runtime.list_agents(env.conn, env.name, 'all')):
+    history = [a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('plan_path') == plan]
+    text = (env.workspace / plan).read_text(encoding='utf-8-sig')
+    record = runtime._cut_record(runtime.kv_get(env.conn, env.name, runtime.CUT_KEY + plan))
+    cut = (record if record and record.get('source') == 'check' and record.get('at')
+           and runtime.cut_assignments(env.conn, env.name, plan, text) is not None else None)
+    if any(not cut or not a.get('started_at') or a['started_at'] > cut['at'] for a in history):
         return False
+    if cut:
+        import json
+        try:
+            created = json.loads(runtime.kv_get(env.conn, env.name, 'cut-created:' + plan) or 'null')
+        except (TypeError, ValueError):
+            created = None
+        if isinstance(created, dict) and created.get('branch') == branch and created.get('created_branch') is True:
+            return False
     remote_name = str(env.settings.get('remoteName') or 'origin')
     for ref in ('refs/heads/' + branch, 'refs/remotes/' + remote_name + '/' + branch):
         result = subprocess.run(['git', '-C', str(env.code_repo), 'show-ref', '--verify', '--quiet', ref], capture_output=True)
@@ -1103,7 +1291,7 @@ def resolve_existing_branch(env, plan):
 
     Returns 'take over' or 'new' when the owner decided (the Plan may start), else '' (the plan waits for the answer)."""
     from .i18n import tr
-    branch = plan_worktree(env, plan)[0]
+    branch = target_worktree(env, plan)[0]
     for q in reversed(runtime.list_questions(env.conn, env.name, status='answered', plan=plan, item=BRANCH_ITEM)):
         choice = branch_choice(q.get('answer'))
         if choice == 'take over':
@@ -1113,6 +1301,9 @@ def resolve_existing_branch(env, plan):
         if choice == 'new':
             name = free_branch_name(env, branch)
             runtime.kv_set(env.conn, env.name, NEW_BRANCH_KEY + plan, name)
+            if plan_worktree(env, plan):   # the header is the only source: the owner's choice goes into its two fields
+                from . import routine
+                runtime.set_plan_header(env.conn, env.name, plan, name, routine.new_worktree(env, scheduler.to_slug(name)), workspace=env.workspace)
             env.log('plan %s: the owner wants a new branch; %s is created instead of %s' % (plan, name, branch))
             return choice
     if not runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=BRANCH_ITEM):
@@ -1123,30 +1314,61 @@ def resolve_existing_branch(env, plan):
     return ''
 
 
-# Reuse or create the explicitly named branch in a separate Git worktree.
-def prepare_queen_worktree(env, plan):
-    """Prepare the plan branch without changing the main checkout."""
+def worktree_entries(env):
+    """(folder, branch) of every worktree of the code repository ('' for a detached one); None when Git cannot list them."""
     import subprocess
+    listing = subprocess.run(['git', '-C', str(env.code_repo), 'worktree', 'list', '--porcelain'], capture_output=True, text=True, encoding='utf-8', errors='replace')
+    if listing.returncode:
+        return None
+    found = []
+    for entry in listing.stdout.replace('\r\n', '\n').split('\n\n'):
+        fields = entry.splitlines()
+        directory = next((line[9:] for line in fields if line.startswith('worktree ')), '')
+        branch = next((line[18:] for line in fields if line.startswith('branch refs/heads/')), '')
+        if directory:
+            found.append((directory, branch))
+    return found
+
+
+# One line when the folder or the branch of the header is taken by something else.
+def worktree_conflict(env, plan):
+    """'' when the header's worktree folder and branch fit together; else the one line for the dashboard and the round log: the folder, the branch found there and the branch the header expects. Nothing is changed on disk."""
     from pathlib import Path
-    resolved = plan_worktree(env, plan)
+    resolved = target_worktree(env, plan)
+    entries = worktree_entries(env)
+    if not resolved or entries is None:
+        return ''
+    branch, folder = resolved
+    here = next((b for d, b in entries if same_folder(d, folder)), None)
+    if here is None and Path(folder).exists() and not same_folder(folder, env.code_repo):
+        here = ''
+    if here is not None and here != branch:
+        return 'folder %s holds branch %s; the plan header expects branch %s in it' % (folder, here or '(none)', branch)
+    for directory, found in entries:
+        if found == branch and not same_folder(directory, folder):
+            return 'folder %s holds branch %s; the plan header expects branch %s in folder %s' % (Path(directory), found, branch, folder)
+    return ''
+
+
+# Reuse or create the branch named by the plan header in its worktree folder.
+def prepare_queen_worktree(env, plan):
+    """Prepare the plan branch in the header's worktree folder without changing the main checkout; None when the header is incomplete or the line of worktree_conflict applies."""
+    import subprocess
+    resolved = target_worktree(env, plan)
     if resolved is None:
         return None
     branch, target = resolved
+    conflict = worktree_conflict(env, plan)
+    if conflict:
+        env.log('cannot prepare plan worktree: ' + conflict)
+        return None
     git = ['git', '-C', str(env.code_repo)]
-    listing = subprocess.run(git + ['worktree', 'list', '--porcelain'], capture_output=True, text=True, encoding='utf-8', errors='replace')
-    if listing.returncode:
+    if same_folder(target, env.code_repo):
         return None
-    entries = listing.stdout.replace('\r\n', '\n').split('\n\n')
-    for entry in entries:
-        fields = entry.splitlines()
-        if 'branch refs/heads/' + branch in fields:
-            directory = next((line[9:] for line in fields if line.startswith('worktree ')), '')
-            if directory and Path(directory).resolve() != env.code_repo.resolve():
-                return str(Path(directory))
-            return None
-    if target.exists() or target.resolve() == env.code_repo.resolve():
-        return None
+    if target.exists():
+        return str(target) if any(same_folder(d, target) and b == branch for d, b in worktree_entries(env) or []) else None
     exists = subprocess.run(git + ['show-ref', '--verify', '--quiet', 'refs/heads/' + branch], capture_output=True).returncode == 0
+    remote = False
     if exists:
         args = ['worktree', 'add', str(target), branch]
     else:
@@ -1158,4 +1380,91 @@ def prepare_queen_worktree(env, plan):
     if result.returncode:
         env.log('cannot prepare plan worktree: ' + result.stderr.strip())
         return None
+    if plan_mod.load_plan(str(env.workspace / plan)).status in plan_mod.CUT_STATUSES and getattr(env, 'conn', None) is not None:
+        import json
+        runtime.kv_set(env.conn, env.name, 'cut-created:' + plan, json.dumps({'branch': branch, 'folder': str(target), 'created_branch': not exists and not remote}))
     return str(target)
+
+
+# After the cut: the default worktree and branch the cut Queen started in are removed when the header names others and they are unused.
+def cleanup_cut_default(env, plan):
+    """Remove only resources created for this cut that are no longer named and are clean."""
+    import json
+    import subprocess
+    resolved = plan_worktree(env, plan)
+    conn = getattr(env, 'conn', None)
+    marker = 'cut-cleanup:' + plan
+    if not resolved or conn is None or runtime.kv_get(conn, env.name, marker):
+        return
+    try:
+        created = json.loads(runtime.kv_get(conn, env.name, 'cut-created:' + plan) or 'null')
+        if not isinstance(created, dict) or not all(k in created for k in ('branch', 'folder', 'created_branch')):
+            return
+    except (ValueError, TypeError):
+        return
+    branch, folder = created['branch'], created['folder']
+    remove_folder = not same_folder(folder, resolved[1])
+    remove_branch = bool(created['created_branch']) and branch != resolved[0]
+    if not remove_folder and not remove_branch:
+        return
+
+    def run(*args, cwd=None):
+        return subprocess.run(['git', '-C', str(cwd or env.code_repo), *args], capture_output=True, text=True, encoding='utf-8', errors='replace')
+
+    entries = worktree_entries(env)
+    if entries is None:
+        return
+    registered = next(((d, b) for d, b in entries if same_folder(d, folder)), None)
+    branch_exists = run('show-ref', '--verify', '--quiet', 'refs/heads/' + branch).returncode == 0
+    remote = str(env.settings.get('remoteName') or 'origin')
+    integration = str(env.settings.get('integrationBranch') or 'main')
+    base = remote + '/' + integration if run('show-ref', '--verify', '--quiet', 'refs/remotes/%s/%s' % (remote, integration)).returncode == 0 else integration
+    unused = not branch_exists or run('merge-base', '--is-ancestor', 'refs/heads/' + branch, base).returncode == 0
+    if registered:
+        changes = run('status', '--porcelain', cwd=folder)
+        unused = unused and registered[1] == branch and changes.returncode == 0 and not changes.stdout.strip()
+    elif __import__('pathlib').Path(folder).exists():
+        unused = False
+    if unused and remove_folder and registered and run('worktree', 'remove', folder).returncode:
+        unused = False
+    if unused and remove_branch and branch_exists and run('branch', '-D', branch).returncode:
+        unused = False
+    if unused:
+        env.log('plan %s: unused cut resources cleaned up: worktree %s, branch %s' % (plan, folder, branch))
+    else:
+        env.log('plan %s: cut worktree %s or branch %s could not be safely removed and stays; inspect it by hand' % (plan, folder, branch))
+    runtime.kv_set(conn, env.name, marker, '1')
+
+
+# B-6: plans past the cut get the two header fields once.
+MIGRATE_STATUSES = ('QUEUED', 'RUNNING', 'WAITING', 'REVIEW', 'PAUSED')
+
+
+def migrate_headers(env):
+    """Write `branch` and `worktree` into the header of every plan past the cut that lacks one: the branch and folder of the plan's last Queen while that folder exists, else the search of earlier versions one last time. One log line per written header; returns the plans written."""
+    import subprocess
+    from pathlib import Path
+    written = []
+    for row in runtime.list_plans(env.conn, env.name):
+        plan = row['path']
+        try:
+            parsed = plan_mod.load_plan(str(env.workspace / plan))
+            if parsed.status not in MIGRATE_STATUSES or (parsed.branch and parsed.worktree):
+                continue
+            pair = None
+            queens = [a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('plan_path') == plan and a.get('phase') == 'queen']
+            if queens and queens[-1].get('cwd'):
+                cwd = Path(queens[-1]['cwd'])
+                if cwd.is_dir() and not same_folder(cwd, env.code_repo):
+                    shown = subprocess.run(['git', '-C', str(cwd), 'branch', '--show-current'], capture_output=True, text=True, encoding='utf-8', errors='replace')
+                    if shown.returncode == 0 and shown.stdout.strip():
+                        pair = (shown.stdout.strip(), cwd)
+            pair = pair or legacy_search(env, plan)
+            if not pair:
+                continue
+            runtime.set_plan_header(env.conn, env.name, plan, pair[0], str(pair[1]), workspace=env.workspace)
+            env.log('plan %s: branch and worktree written to the header: %s, %s' % (plan, pair[0], pair[1]))
+            written.append(plan)
+        except (OSError, runtime.CmdError) as exc:
+            env.log('plan %s: header branch and worktree not written: %s' % (plan, exc))
+    return written

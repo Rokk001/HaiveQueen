@@ -11,7 +11,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import bzztest  # noqa: E402,F401  (isolates the data folders)
-from haivequeen import cli_presets, db, gui_config, i18n, profile, servers  # noqa: E402
+from haivequeen import cli_presets, db, gui_async, gui_config, i18n, profile, servers  # noqa: E402
 
 CONFIG = '''slots = 8
 
@@ -88,12 +88,36 @@ class PageCase(unittest.TestCase):
         self.addCleanup(env.stop)
         os.environ.pop(profile.NO_CHECK_ENV, None)
         self.conn = db.connect(self.folder / "o.db")
+        self.workers = []
+        run_async = gui_async.run_async
+        test_servers = gui_config.ConfigWindow.test_servers
+
+        def track_read(*args, **kwargs):
+            thread = run_async(*args, **kwargs)
+            self.workers.append(thread)
+            return thread
+
+        def track_test(window, old_data):
+            thread = test_servers(window, old_data)
+            self.workers.append(thread)
+            return thread
+
+        for patch in (mock.patch.object(gui_async, "run_async", side_effect=track_read),
+                      mock.patch.object(gui_config.ConfigWindow, "test_servers", new=track_test)):
+            patch.start()
+            self.addCleanup(patch.stop)
 
     def tearDown(self):
+        self.wait_workers()
         self.root.destroy()
         gc.collect()   # Tk objects are freed in the main thread, never by the collector in a reading thread
         self.conn.close()
         self.tmp.cleanup()
+
+    def wait_workers(self):
+        """Finish all work before destroying Tk and removing its data folder."""
+        for thread in self.workers:
+            thread.join()
 
     def window(self):
         return gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
@@ -114,6 +138,35 @@ class PageCase(unittest.TestCase):
 
 
 class FiveSections(PageCase):
+    def test_cleanup_waits_for_background_lock_users(self):
+        """A closed window can still have a read and a post-save test using its data folder."""
+        import threading
+        from haivequeen import filetxn
+
+        win = self.window()
+        entered, release, tested = threading.Event(), threading.Event(), threading.Event()
+
+        def read():
+            with filetxn.locked():
+                entered.set()
+                release.wait(5)
+
+        def server_test(_old, _new):
+            with filetxn.locked():
+                tested.set()
+
+        gui_async.run_async(win.win, read, lambda _result: None)
+        self.assertTrue(entered.wait(5))
+        with mock.patch.object(servers, "test_after_save", side_effect=server_test):
+            win.test_servers({})
+            win.win.destroy()
+            timer = threading.Timer(0.05, release.set)
+            timer.start()
+            self.wait_workers()
+            timer.join()
+        self.assertTrue(tested.is_set())
+        self.assertTrue(all(not thread.is_alive() for thread in self.workers))
+
     def test_sections_in_order_with_advanced_closed_at_every_opening(self):
         """CLI, model source, models, use, advanced (closed each time the page opens)."""
         win = self.window()

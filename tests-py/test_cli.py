@@ -33,6 +33,32 @@ class CliTest(unittest.TestCase):
                            capture_output=True, text=True, encoding="utf-8")
         return r.returncode, r.stdout
 
+    def test_plan_help_explains_header_and_check(self):
+        """The public help explains the required header and the cut/check gate."""
+        code, output = self.run_orch("plan", "--help")
+        self.assertEqual(code, 0)
+        help_text = " ".join(output.split())
+        for detail in ("TOML header", "branch (the plan branch)",
+                       "worktree (the plan worktree folder)", "Queen writes both at the cut",
+                       "only from these header fields", "missing branch or worktree",
+                       "main checkout", "stays SENT", "QUEUED", "agent start"):
+            with self.subTest(detail=detail):
+                self.assertIn(detail, help_text)
+
+    def test_agent_help_explains_package_assignment(self):
+        """Both command names expose the complete package naming and reuse contract."""
+        for command in ("agent", "bee"):
+            code, output = self.run_orch(command, "--help")
+            self.assertEqual(code, 0)
+            help_text = " ".join(output.split())
+            for detail in ("<plan branch>-<package id in lower case>",
+                           "<worktree prefix>-<plan tag in lower case>-<package id in lower case>",
+                           "project's worktree location", "file name without -PLAN",
+                           "never after an Agent", "current tip of the plan branch",
+                           "replacement Agent", "cwd and branch", "must not create or commit on another branch"):
+                with self.subTest(command=command, detail=detail):
+                    self.assertIn(detail, help_text)
+
     # ask -> questions --open -> answer -> no open questions.
     def test_ask_answer_questions(self):
         """ask -> questions --open -> answer -> no open questions."""

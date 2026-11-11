@@ -8,9 +8,9 @@ from bzztest import REL, RoundCase, runtime
 from haivequeen import bees, cli, hives, plans
 
 
-def plan_of(packages, status="READY"):
+def plan_of(packages, status="READY", branch="b", worktree="/w"):
     """Build a Plan from package tuples (id, title, depends_on, capability)."""
-    return plans.Plan(path="x.md", status=status, packages=[plans.Package(id=i, title=t, depends_on=d, capability=c) for i, t, d, c in packages])
+    return plans.Plan(path="x.md", status=status, packages=[plans.Package(id=i, title=t, depends_on=d, capability=c) for i, t, d, c in packages], branch=branch, worktree=worktree)
 
 
 class CheckPlanTests(unittest.TestCase):
@@ -91,7 +91,7 @@ class SubmittedPlanTests(RoundCase):
 
     def queen_of(self, status, packages):
         """Write the plan with the given status, give it a Hive and a running Queen."""
-        self.plan(status, packages)
+        self.plan(status, packages, branch="fix/x", worktree=str(self.base / "wt-x"))
         hives.create(self.conn, "testproj", REL, "claude", "123456")
         self.agent("queen", phase="queen", status="running", provider="claude", pid=42)
 

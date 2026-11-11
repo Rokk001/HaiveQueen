@@ -123,6 +123,7 @@ class QueenLoadTest(RoundCase):
 
 class BeeLoadTest(RoundCase):
     def test_bee_gets_the_complete_rules_whatever_the_queen_passes(self):
+        self.mock_agent_worktrees()
         git_repo(self.repo, {"AGENTS.md": "RULE-AGENTS", "CLAUDE.md": "RULE-CLAUDE", "README.md": "README-TEXT"})
         local = provider("local", 2, proto="codex")
         local["endpoint"] = {"baseUrl": "http://localhost"}
@@ -132,7 +133,7 @@ class BeeLoadTest(RoundCase):
         self.agent("queen", phase="queen", status="running", pid=42)
         bee_wt = self.base / "bee-wt"
         bee_wt.mkdir()
-        with mock.patch("haivequeen.bees.valid_bee_worktree", return_value=True):
+        with mock.patch("haivequeen.bees.valid_bee_worktree", return_value=True), mock.patch("haivequeen.bees.prepare_agent_worktree", return_value=(str(bee_wt), "plan-p1")):
             started = bees.start_process(self.env(), REL, "P1", "Ada", "heavy", "do first", ["one"], ["source.py"], ["ONLY-THIS-RULE"], cwd=str(bee_wt))
         self.assertTrue(started)
         text = (self.env().run_dir("Ada") / "prompt.md").read_text(encoding="utf-8-sig")
