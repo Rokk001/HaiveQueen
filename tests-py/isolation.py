@@ -20,7 +20,7 @@ if REPO not in sys.path:   # haivequeen of this checkout, not an installed copy,
 os.environ["BZZ_NO_DESKTOP"] = "1"   # desktop messages of the program (faults without an Apiary) are never shown during tests
 
 REAL_FOLDERS = [Path(os.environ[_v]) / "HaiveQueen" for _v in ("LOCALAPPDATA", "APPDATA") if os.environ.get(_v)]
-LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-update.lock", "hive-schedule.lock", "start.lock", "start.pending", "gui.pid", "worktree-cleanup.lock", "server-tests.json", "update-check.json", "inbox-writes.lock", "inbox-transactions")  # written by a running loop (STOP: set by a self-update; server-tests.json: its periodic test of the own LLM servers) or an open graphical dashboard (gui.pid, update-check.json: its update check), not by tests; the audit guard still finds a test that writes them
+LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-update.lock", "hive-schedule.lock", "compile-check.lock", "start.lock", "start.pending", "gui.pid", "worktree-cleanup.lock", "server-tests.json", "update-check.json", "inbox-writes.lock", "inbox-transactions")  # written by a running loop (STOP: set by a self-update; server-tests.json: its periodic test of the own LLM servers) or an open graphical dashboard (gui.pid, update-check.json: its update check), not by tests; the audit guard still finds a test that writes them
 
 
 def own_profile_setting(rel: Path) -> bool:
