@@ -1190,10 +1190,10 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 if named_plan:
                     targets.extend([('branch', (env.code_repo, named_plan[0])), ('worktree', named_plan[1])])
                 with worktrees.removal_locks(targets) as busy:
-                    if busy is not None:
-                        result['projects'][env.name]['started'] += started
-                        result['projects'][env.name]['actions'] += started
-                        raise worktrees.RemovalBusy(busy, result)
+                    if busy is not None:   # only this start waits: a later round tries again once the removal ended; the round goes on
+                        worktrees.defer_start(busy)
+                        not_started(env, path, 'its worktree or branch is being removed by a cleanup, the start is tried again in a later round')
+                        continue
                     if not hive:
                         used = {r['colour'] for r in db.rows(conn, "SELECT colour FROM hives WHERE state != 'done'")}
                         colour = next((c for c in loop.AGENT_COLOURS if c not in used), None)
@@ -1327,4 +1327,5 @@ def wake_marker(conn, envs):
                 except OSError:
                     continue
     state = runtime.kv_get(conn, '*', 'run-state')
-    return (tuple(agents), questions, hive_rows, places, due, tuple(sorted(files)), state)
+    from . import worktrees
+    return (tuple(agents), questions, hive_rows, places, due, tuple(sorted(files)), state, worktrees.deferred_busy())

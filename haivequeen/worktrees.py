@@ -2,6 +2,7 @@
 import contextlib
 import re
 import subprocess
+import threading
 
 from . import db, runtime, platform as osplat
 
@@ -781,14 +782,6 @@ class RemovalTimeout(TimeoutError):
     """A start waited as long as it waits for the scheduling lock and the removal still runs."""
 
 
-class RemovalBusy(Exception):
-    """Release scheduling before waiting, then repeat selection in the same call."""
-    def __init__(self, target, result=None):
-        self.target = target
-        self.result = result
-        super().__init__(*target)
-
-
 def removal_timeout(kind, key, holder=None):
     """Use the existing translated timeout wording for every cleanup wait."""
     holder = removal_holder(kind, key) if holder is None else holder
@@ -832,6 +825,90 @@ def cleanup(env):
                 env.log('Branch cleanup: ' + json.dumps(done, ensure_ascii=False))
         except Exception as exc:
             env.log('Branch cleanup failed: ' + str(exc))
+
+
+# The cleanup runs in a thread of its own, one per project, and never holds the round.
+_cleanup_threads = {}
+_cleanup_guard = threading.Lock()
+_deferred = {}   # starts the round moved to a later round: target text -> (kind, key)
+
+
+def _database_file(env):
+    """The database file of the environment's connection, read in the calling thread; None when there is no file (the thread then uses the environment as it is)."""
+    import sqlite3
+    conn = getattr(env, 'conn', None)
+    if not isinstance(conn, sqlite3.Connection):
+        return None
+    row = conn.execute('PRAGMA database_list').fetchone()
+    return row[2] if row and row[2] else None
+
+
+def _background_cleanup(env, database):
+    """Thread body: run the cleanup on a database connection of its own (a connection belongs to one thread); any error is logged and never raised."""
+    import copy
+    own, conn = env, None
+    try:
+        if database:
+            conn = db.connect(database)
+            own = copy.copy(env)
+            own.conn = conn
+        cleanup(own)
+    except BaseException as exc:
+        try:
+            own.log('Worktree cleanup failed: ' + str(exc))
+        except Exception:
+            pass
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def cleanup_in_background(env):
+    """Start the cleanup of the project in a thread of its own unless the previous one still runs; returns True when one was started. It never waits."""
+    with _cleanup_guard:
+        running = _cleanup_threads.get(env.name)
+        if running is not None and running.is_alive():
+            return False
+        thread = threading.Thread(target=_background_cleanup, args=(env, _database_file(env)), name='worktree-cleanup-' + str(env.name), daemon=True)
+        _cleanup_threads[env.name] = thread
+        thread.start()
+        return True
+
+
+def cleanup_running(name=None):
+    """True while the cleanup of this project (any project without a name) runs."""
+    with _cleanup_guard:
+        return any(t.is_alive() for key, t in _cleanup_threads.items() if name is None or key == name)
+
+
+def wait_cleanups(timeout=30.0):
+    """Wait until the running cleanups ended, at most `timeout` seconds; for tests and the end of the program."""
+    import time
+    deadline = time.monotonic() + timeout
+    with _cleanup_guard:
+        threads = list(_cleanup_threads.values())
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+
+
+def defer_start(target):
+    """Remember that a start of the round waits for the end of this removal; the loop wakes a round when it ended."""
+    with _cleanup_guard:
+        _deferred[repr(target)] = target
+
+
+def deferred_busy():
+    """The deferred targets whose removal still runs; one that ended is forgotten, so this value changes when a removal ends."""
+    with _cleanup_guard:
+        items = list(_deferred.items())
+    busy = []
+    for text, (kind, key) in items:
+        if removal_busy(kind, key):
+            busy.append(text)
+        else:
+            with _cleanup_guard:
+                _deferred.pop(text, None)
+    return tuple(sorted(busy))
 
 
 # Run the cleanup with the process working-directory safety check.
