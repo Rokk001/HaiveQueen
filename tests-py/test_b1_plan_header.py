@@ -154,11 +154,28 @@ class ConflictTests(GitCase):
         self.assertTrue(Path(default_folder).is_dir())
         self.assertTrue(bees.worktree_conflict(self.hq_env(), REL))
         from haivequeen import loop
-        with mock.patch('haivequeen.worktrees.cleanup'):
+        with mock.patch('haivequeen.worktrees._process_busy', return_value=False):
             loop.run_round(self.conn, self.machine, self.envs(), free_ram=lambda: 16.0, settle=0)
         self.assertTrue(Path(default_folder).is_dir())
         self.assertEqual(self.git("branch", "--show-current", cwd=default_folder), default_branch)
         self.assertEqual(self.git("branch", "--show-current", cwd=folder), "other")
+        self.assertFalse(any(a["phase"] == "queen" for a in runtime.list_agents(self.conn, "testproj", "all")))
+
+    def test_round_preserves_checked_out_header_branch_but_cleans_unrelated_worktree(self):
+        self.sent()
+        default_branch, default_folder = bees.cut_default(self.hq_env(), REL)
+        bees.prepare_queen_worktree(self.hq_env(), REL)
+        elsewhere = self.base / "wt-elsewhere"
+        unrelated = self.base / "wt-unrelated"
+        self.git("worktree", "add", "-b", "fix/x", str(elsewhere), "main")
+        self.git("worktree", "add", "-b", "unrelated", str(unrelated), "main")
+        self.plan("QUEUED", [{"id": "P1", "title": "First"}], branch="fix/x", worktree=str(self.base / "wt-target"))
+        from haivequeen import loop
+        with mock.patch('haivequeen.worktrees._process_busy', return_value=False):
+            loop.run_round(self.conn, self.machine, self.envs(), free_ram=lambda: 16.0, settle=0)
+        self.assertEqual(self.git("branch", "--show-current", cwd=default_folder), default_branch)
+        self.assertEqual(self.git("branch", "--show-current", cwd=elsewhere), "fix/x")
+        self.assertFalse(unrelated.exists())
         self.assertFalse(any(a["phase"] == "queen" for a in runtime.list_agents(self.conn, "testproj", "all")))
 
     def test_folder_holds_another_branch(self):

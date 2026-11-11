@@ -358,6 +358,8 @@ def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
                 env.log("SERVER TEST ERROR %s" % exc)
         from . import worktrees
         for env in envs:
+            if conn is not None and getattr(env, 'workspace', None) is not None:
+                runtime.sync_plans(conn, env.name, str(env.workspace))
             worktrees.cleanup(env)
     with hive_schedule_lock():
         if dry_run:
