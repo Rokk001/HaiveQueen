@@ -283,6 +283,12 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
             continue
         integrated = integrated_ready(conn, env, hive)
         bare = False
+        report = completion_report(conn, env.name, plan['path'])
+        if integrated and report and report['state'] == 'pending':
+            if not retry_completion_check(conn, env, plan['path']):
+                if not completion_report(conn, env.name, plan['path']):
+                    runtime.kv_set(conn, env.name, 'hive-rejected-ready:' + plan['path'], str(integrated['id']))
+                continue
         if not integrated:
             integrated = completed_without_integration(conn, env, plan, hive)
             if not integrated:
@@ -316,6 +322,28 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
             finish_hive(conn, env.name, plan['path'])
 
 
+# Retry an explicitly pending completion check before either close path can proceed.
+def retry_completion_check(conn, env, path, queen=None):
+    """Keep waiting, reopen on failure, or record the passed fresh check."""
+    from . import readygate
+    if queen is None:
+        queen = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all'))
+                      if a.get('plan_path') == path and a.get('phase') == 'queen'), None)
+    if queen is None:
+        return False
+    accepted, message, waiting = readygate.gate(env, path, queen)
+    if waiting:
+        return False
+    if not accepted:
+        set_completion(conn, env.name, path, '')
+        runtime.kv_set(conn, env.name, POINTS_KEY + path, message)
+        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state!='done'", (env.name, path))
+        _move_status(conn, env, path, 'RUNNING')
+        return False
+    set_completion(conn, env.name, path, 'passed')
+    return True
+
+
 # The close of a plan whose Queen reported completion and that has nothing left to integrate.
 def completed_without_integration(conn, env, plan, hive):
     """Return {"id", "updated_at"} when the plan's completion report is checked and nothing is left to integrate, else None.
@@ -332,17 +360,8 @@ def completed_without_integration(conn, env, plan, hive):
         set_completion(conn, env.name, path, '')
         return None
     if report['state'] == 'pending':
-        from . import readygate
-        accepted, message, waiting = readygate.gate(env, path, queen)
-        if waiting:
+        if not retry_completion_check(conn, env, path, queen):
             return None
-        if not accepted:
-            set_completion(conn, env.name, path, '')
-            runtime.kv_set(conn, env.name, POINTS_KEY + path, message)
-            conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state!='done'", (env.name, path))
-            _move_status(conn, env, path, 'RUNNING')
-            return None
-        set_completion(conn, env.name, path, 'passed')
         report = completion_report(conn, env.name, path)
     withdraw_integrated(conn, row)   # no integrator works on a row whose tip is already integrated
     return {'id': 'complete', 'updated_at': report['at']}
