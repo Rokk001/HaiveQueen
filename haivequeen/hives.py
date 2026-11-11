@@ -1221,54 +1221,50 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
                 cwd = routine.pick_cwd(prior, str(env.code_repo), workspace=routine.other_workspace(env)) if prior else str(env.code_repo)
                 from . import worktrees
-                removing = [('worktree', cwd)]
                 named_plan = bees.target_worktree(env, path)
+                worktrees.wait_for_removal('worktree', cwd)
                 if named_plan:
-                    removing += [('branch', (env.code_repo, named_plan[0])), ('worktree', named_plan[1])]
-                with worktrees.start_reservation(removing, wait=False) as free:   # reserved atomically: a cleanup that starts later keeps the worktree and branch
-                    if not free:   # the round never waits: this start goes to the next round
-                        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
-                        not_started(env, path, 'its worktree or branch is being removed by a cleanup; the start is left to the next round')
-                        continue
-                    clash = bees.worktree_conflict(env, path)
-                    if clash:
-                        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
-                        not_started(env, path, clash)
-                        continue
-                    if plan['status'] not in plan_mod.CUT_STATUSES:
-                        bees.cleanup_cut_default(env, path)
-                    named = bees.target_worktree(env, path)
-                    keep = bool(prior) and bees.valid_queen_worktree(env, cwd) and bool(named) and routine.same_dir(cwd, str(named[1]))
-                    if (named and not keep) or not bees.valid_queen_worktree(env, cwd):
-                        try:
-                            cwd = bees.prepare_queen_worktree(env, path)
-                        except (OSError, ValueError) as exc:
-                            env.log('cannot prepare Queen worktree: ' + str(exc))
-                            cwd = None
-                        if not cwd:
-                            conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
-                            not_started(env, path, 'worktree for branch %s could not be prepared (%s)' % named if named else 'the plan header names no branch and worktree')
-                            continue
-                    action = {'name': name, 'type': pick['name'], 'phase': 'queen', 'plan': path, 'package': '', 'cwd': cwd, 'prompt': prompt, 'class': cls}
-                    st = {'names': existing_names, 'busy': [], 'plan_status': {sch.norm_plan(path): plan['status']}, 'by_path': {sch.norm_plan(path): plan}}
-                    ctx = {'env': env, 'state': st, 'pool': pool, 'report': report, 'dry': False, 'settle': settle}
+                    worktrees.wait_for_removal('branch', (env.code_repo, named_plan[0]))
+                    worktrees.wait_for_removal('worktree', named_plan[1])
+                clash = bees.worktree_conflict(env, path)
+                if clash:   # the header's folder holds another branch or its branch is checked out elsewhere: nothing is changed on disk
+                    conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
+                    not_started(env, path, clash)
+                    continue
+                if plan['status'] not in plan_mod.CUT_STATUSES:
+                    bees.cleanup_cut_default(env, path)   # the next Queen after a cut whose header names another worktree: the unused default of the cut goes
+                named = bees.target_worktree(env, path)
+                keep = bool(prior) and bees.valid_queen_worktree(env, cwd) and bool(named) and routine.same_dir(cwd, str(named[1]))   # the Queen continues only in the worktree of the header
+                if (named and not keep) or not bees.valid_queen_worktree(env, cwd):
                     try:
-                        count = loop._do_start(ctx, action, forced_pick=pick)
-                    except Exception:
-                        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
-                        raise
-                    if count:
-                        # the embedded Bees of the old Queen keep their rows and places until their end is confirmed
-                        bees.after_queen_start(conn, env.name, path)
-                        runtime.kv_set(conn, env.name, 'hive-blocker:' + path, '')
-                        for package in runtime.list_packages(conn, env.name, path):
-                            runtime.kv_delete(conn, env.name, "wait:%s|%s" % (path, package["id"]))
-                        env.update_agent(name, {'color': hive['colour']})
-                        queen = runtime.get_agent(conn, env.name, name)
-                        conn.execute("UPDATE hive_integration SET owner_pid=? WHERE project=? AND plan_path=? AND acquired=1", (queen.get('pid'), env.name, path))
-                        conn.execute("UPDATE hives SET state='running',provider=?,reset_at=NULL,claimed_at=NULL WHERE project=? AND plan_path=?", (pick['name'], env.name, path))   # an owner's provider choice stays until the owner changes it
-                        queen_count += 1
-                        started += 1
+                        cwd = bees.prepare_queen_worktree(env, path)
+                    except (OSError, ValueError) as exc:
+                        env.log('cannot prepare Queen worktree: ' + str(exc))
+                        cwd = None
+                    if not cwd:
+                        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
+                        not_started(env, path, 'worktree for branch %s could not be prepared (%s)' % named if named else 'the plan header names no branch and worktree')
+                        continue
+                action = {'name': name, 'type': pick['name'], 'phase': 'queen', 'plan': path, 'package': '', 'cwd': cwd, 'prompt': prompt, 'class': cls}
+                st = {'names': existing_names, 'busy': [], 'plan_status': {sch.norm_plan(path): plan['status']}, 'by_path': {sch.norm_plan(path): plan}}
+                ctx = {'env': env, 'state': st, 'pool': pool, 'report': report, 'dry': False, 'settle': settle}
+                try:
+                    count = loop._do_start(ctx, action, forced_pick=pick)
+                except Exception:
+                    conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=? AND state='starting'", (env.name, path))
+                    raise
+                if count:
+                    # the embedded Bees of the old Queen keep their rows and places until their end is confirmed
+                    bees.after_queen_start(conn, env.name, path)
+                    runtime.kv_set(conn, env.name, 'hive-blocker:' + path, '')
+                    for package in runtime.list_packages(conn, env.name, path):
+                        runtime.kv_delete(conn, env.name, "wait:%s|%s" % (path, package["id"]))
+                    env.update_agent(name, {'color': hive['colour']})
+                    queen = runtime.get_agent(conn, env.name, name)
+                    conn.execute("UPDATE hive_integration SET owner_pid=? WHERE project=? AND plan_path=? AND acquired=1", (queen.get('pid'), env.name, path))
+                    conn.execute("UPDATE hives SET state='running',provider=?,reset_at=NULL,claimed_at=NULL WHERE project=? AND plan_path=?", (pick['name'], env.name, path))   # an owner's provider choice stays until the owner changes it
+                    queen_count += 1
+                    started += 1
             result['projects'][env.name]['started'] += started
             result['projects'][env.name]['actions'] += started
     if not dry_run:

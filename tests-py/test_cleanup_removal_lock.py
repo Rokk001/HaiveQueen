@@ -46,10 +46,6 @@ class RemovalLockTests(unittest.TestCase):
             self.assertFalse(worktrees.removal_busy('branch', (other, 'feature-x')))
             with worktrees.removal_lock('branch', (other, 'feature-x')) as second:
                 self.assertTrue(second)
-        with worktrees.start_reservation([('branch', (self.repo, 'feature-x'))]):
-            self.assertTrue(worktrees.start_reserved('branch', (self.repo, 'feature-x')))
-            self.assertFalse(worktrees.start_reserved('branch', (other, 'feature-x')))
-
     # The slow eligibility checks run before the per-item lock.
     def test_worktree_eligibility_is_checked_before_the_lock(self):
         """While the checks of a worktree run, its removal lock is not held."""
@@ -274,73 +270,6 @@ class RemovalLockTests(unittest.TestCase):
         self.assertIn(str(os.getpid()), str(caught.exception))
         self.assertIn('process id', str(caught.exception))
 
-    # A start that reserved the worktree before the cleanup took its lock keeps it.
-    def test_cleanup_keeps_a_worktree_a_start_reserved(self):
-        """The start passed the check, the cleanup re-checks under its lock and keeps the worktree."""
-        with worktrees.start_reservation([('worktree', self.linked)]) as ok:
-            self.assertTrue(ok)
-            self.assertTrue(worktrees.start_reserved('worktree', self.linked))
-            result = worktrees.prune(self.env)
-        self.assertEqual(result['removed'], [])
-        self.assertTrue(self.linked.exists())
-        self.assertIn(str(self.linked), [k['path'] for k in result['kept']])
-        self.assertFalse(worktrees.start_reserved('worktree', self.linked))
-        self.assertIn(str(self.linked), worktrees.prune(self.env)['removed'])
-
-    # A start that meets a running removal gives its reservation back while it waits.
-    def test_waiting_start_leaves_no_reservation(self):
-        """On timeout nothing stays reserved; a start without wait gets False."""
-        self.slow_removal()
-        with self.assertRaises(TimeoutError):
-            with worktrees.start_reservation([('worktree', self.linked)], timeout=0.2):
-                pass
-        self.assertFalse(worktrees.start_reserved('worktree', self.linked))
-        with worktrees.start_reservation([('worktree', self.linked)], wait=False) as ok:
-            self.assertFalse(ok)
-        self.assertFalse(worktrees.start_reserved('worktree', self.linked))
-
-    # The reservation of a dead start blocks nothing.
-    def test_reservation_of_a_dead_process_is_ignored(self):
-        """A start that died leaves a file; the cleanup is not blocked by it."""
-        child = subprocess.Popen([sys.executable, '-c', 'pass'])
-        child.wait(30)
-        folder = worktrees._reservation_dir('worktree', self.linked)
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / ('%d-x' % child.pid)).write_text('', encoding='ascii')
-        self.assertFalse(worktrees.start_reserved('worktree', self.linked))
-
-    # An Agent start holds the reservation while it starts.
-    def test_agent_start_holds_the_reservation(self):
-        """From the check until the start ends the worktree is reserved."""
-        conn = sqlite3.connect(':memory:')
-        conn.execute('CREATE TABLE bee_worktrees(project, plan_path, package, cwd)')
-        env = mock.Mock(conn=conn)
-        env.name = 'p'
-        seen = []
-        # Look from inside the start.
-        def locked(**kwargs):
-            """Record the reservation, then refuse the start."""
-            seen.append(worktrees.start_reserved('worktree', self.linked))
-            raise RuntimeError('stop')
-        with mock.patch.object(bees, 'plan_worktree', return_value=None), mock.patch.object(loop, 'hive_schedule_lock', locked):
-            with self.assertRaises(RuntimeError):
-                bees.start_process(env, 'plan.md', 'P1', 'N', 'medium', 'task', [], [], [], cwd=str(self.linked))
-        self.assertEqual(seen, [True])
-        self.assertFalse(worktrees.start_reserved('worktree', self.linked))
-
-    # The deletion of a branch keeps a branch that a start reserved.
-    def test_branch_deletion_keeps_a_reserved_branch(self):
-        """A reserved branch is not deleted."""
-        env = mock.Mock(code_repo=self.repo, settings={})
-        env.name = 'p'
-        env.conn.execute.return_value.fetchone.return_value = None
-        result = {'deleted': [], 'kept': []}
-        with mock.patch.object(worktrees, '_git', lambda repo, *a: subprocess.CompletedProcess(a, 0, '', '')), mock.patch.object(worktrees, '_open_plan_branches', return_value=set()):
-            with worktrees.start_reservation([('branch', (self.repo, 'feature-x'))]):
-                worktrees._delete_plan_branches(env, 'plan', {'branch': 'feature-x', 'tip': 'a'}, 'origin', {}, {'feature-x': 'x'}, set(), set(), result)
-        self.assertEqual(result['deleted'], [])
-        self.assertEqual(result['kept'][0]['reason'], 'a start is using it')
-
     # The cleanup steps never take the scheduling lock.
     def test_cleanup_steps_do_not_take_the_scheduling_lock(self):
         """prune and delete_integrated_branches never ask for the scheduling lock."""
@@ -348,59 +277,6 @@ class RemovalLockTests(unittest.TestCase):
             worktrees.prune(self.env)
             with mock.patch.object(worktrees, '_delete_branches_locked', return_value={}):
                 worktrees.delete_integrated_branches(self.env)
-
-
-# The round never waits for the cleanup.
-class RoundCleanupTests(RoundCase):
-    """A round neither waits for a cleanup nor starts into the worktree being removed."""
-
-    # The cleanup runs beside the round.
-    def test_round_does_not_wait_for_the_cleanup(self):
-        """The round returns while the cleanup of a project still runs."""
-        entered, release = threading.Event(), threading.Event()
-        # Block the cleanup.
-        def slow(env):
-            """Wait until released."""
-            entered.set()
-            release.wait(30)
-        self.addCleanup(release.set)
-        self.plan("READY", [{"id": "P1", "title": "First"}], branch="feature", worktree=str(self.wt))
-        with mock.patch.object(worktrees, 'cleanup', slow):
-            self.round()
-            self.assertTrue(entered.wait(30))
-            release.set()
-            worktrees._background['thread'].join(30)
-
-    # A start for exactly the branch being removed goes to the next round.
-    def test_start_for_the_removed_branch_is_left_to_the_next_round(self):
-        """With the branch of the plan being removed no Queen starts; the next round starts her."""
-        self.plan("READY", [{"id": "P1", "title": "First"}], branch="feature", worktree=str(self.wt))
-        branch = bees.plan_worktree(self.env(), REL)[0]
-        with mock.patch.object(worktrees, 'cleanup_beside_round'), worktrees.removal_lock('branch', (self.env().code_repo, branch)) as mine:
-            self.assertTrue(mine)
-            self.round()
-            self.assertEqual(hives.get(self.conn, "testproj", REL)["state"], "waiting")
-            self.assertFalse(any(a["phase"] == "queen" for a in runtime.list_agents(self.conn, "testproj", "all")))
-            self.assertIn("being removed by a cleanup", self.log())
-        with mock.patch.object(worktrees, 'cleanup_beside_round'), mock.patch.object(bees, 'worktree_conflict', return_value=''), mock.patch.object(bees, 'prepare_queen_worktree', return_value=str(self.wt)), mock.patch('haivequeen.loop._do_start', return_value=1) as start:
-            self.round()
-        self.assertTrue(start.called)
-
-    # A Queen start holds the reservation until her start ends.
-    def test_queen_start_reserves_the_branch(self):
-        """Between the check and the start the plan branch is reserved, so a cleanup keeps it; afterwards it is free."""
-        self.plan("READY", [{"id": "P1", "title": "First"}], branch="feature", worktree=str(self.wt))
-        branch = bees.plan_worktree(self.env(), REL)[0]
-        seen = []
-        # Look from inside the start.
-        def starting(ctx, action, forced_pick=None):
-            """Record the reservation."""
-            seen.append(worktrees.start_reserved('branch', (self.env().code_repo, branch)))
-            return 1
-        with mock.patch.object(worktrees, 'cleanup_beside_round'), mock.patch.object(bees, 'worktree_conflict', return_value=''), mock.patch.object(bees, 'prepare_queen_worktree', return_value=str(self.wt)), mock.patch('haivequeen.loop._do_start', starting):
-            self.round()
-        self.assertEqual(seen, [True])
-        self.assertFalse(worktrees.start_reserved('branch', (self.env().code_repo, branch)))
 
 
 if __name__ == '__main__':

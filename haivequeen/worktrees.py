@@ -309,9 +309,6 @@ def _prune_candidates(env, records, queue, process_busy, dry, integration_ref=No
                 if not mine:
                     result['kept'].append({'path': path, 'reason': 'another cleanup is removing it'})
                     continue
-                if start_reserved('worktree', path):   # a start reserved it after the first check: the start wins
-                    result['kept'].append({'path': path, 'reason': 'a start is using it'})
-                    continue
                 if not os.path.isdir(path):   # the slow checks ran before the lock; only a cheap look is left here
                     result['kept'].append({'path': path, 'reason': 'already removed'})
                     continue
@@ -562,7 +559,7 @@ def _delete_plan_branches(env, plan, row, remote_name, heads, local, checked_out
         reason = blocker(name, commit) or ('checked out in a worktree' if name in checked_out else '')   # the slow checks run before the lock
         if not reason:
             with removal_lock('branch', key) as mine:   # only this branch is locked, and only while it is deleted
-                reason = 'another cleanup is deleting it' if not mine else 'a start is using it' if start_reserved('branch', key) else ''
+                reason = 'another cleanup is deleting it' if not mine else ''
                 if not reason and _git(env.code_repo, 'branch', '-D', name).returncode:
                     reason = 'git branch -D failed'
         if reason:
@@ -576,7 +573,7 @@ def _delete_plan_branches(env, plan, row, remote_name, heads, local, checked_out
         reason = blocker(name, commit)
         if not reason:
             with removal_lock('branch', key) as mine:
-                reason = 'another cleanup is deleting it' if not mine else 'a start is using it' if start_reserved('branch', key) else ''
+                reason = 'another cleanup is deleting it' if not mine else ''
                 if not reason:
                     pushed = _delete_remote(env.code_repo, remote_name, name, commit)
                     reason = 'push failed: ' + pushed.stderr.strip()[:200] if pushed.returncode else ''
@@ -686,76 +683,6 @@ def removal_holder(kind, key):
 def removal_busy(kind, key):
     """True while the removal lock of the worktree or branch is held by a living process."""
     return removal_holder(kind, key) is not None
-
-
-# The reservations of the starts: one file per living start in a folder of its own per worktree or branch.
-def _reservation_dir(kind, key):
-    """Folder of the start reservations of `kind` and `key`."""
-    path = _removal_lock_path(kind, key)
-    return path.parent.parent / 'start-reservations' / path.stem
-
-
-def start_reserved(kind, key):
-    """True while a living start has reserved the worktree or branch; the files of dead processes are removed."""
-    from . import platform as osplat
-    try:
-        entries = list(_reservation_dir(kind, key).iterdir())
-    except OSError:
-        return False
-    found = False
-    for entry in entries:
-        try:
-            alive = osplat.process_alive(int(entry.name.split('-', 1)[0]))
-        except ValueError:
-            alive = False
-        if alive:
-            found = True
-        else:
-            try:
-                entry.unlink()
-            except OSError:
-                pass
-    return found
-
-
-# A start reserves what it uses before it looks for a removal; the cleanup looks for a reservation after it took its lock.
-@contextlib.contextmanager
-def start_reservation(targets, wait=True, timeout=30.0, waited=None):
-    """Reserve every (kind, key) of `targets` for this start, then make sure no cleanup removes one of them: start and cleanup each set their mark before they look for the
-    other's, so one of them always sees the other. When a removal runs, the reservation is given back and the start waits for it (`wait`, at most `timeout` seconds, then
-    TimeoutError naming the removal and its process id) or yields False at once (`wait` False). Yields True with everything reserved until the block ends."""
-    import os
-    import uuid
-    held = []
-    # Give the reservations back.
-    def release():
-        """Remove the files of this start."""
-        while held:
-            try:
-                held.pop().unlink()
-            except OSError:
-                pass
-    try:
-        while True:
-            for kind, key in targets:
-                folder = _reservation_dir(kind, key)
-                folder.mkdir(parents=True, exist_ok=True)
-                mark = folder / ('%d-%s' % (os.getpid(), uuid.uuid4().hex[:8]))
-                mark.write_text('', encoding='ascii')
-                held.append(mark)
-            busy = next(((kind, key) for kind, key in targets if removal_busy(kind, key)), None)
-            if busy is None:
-                yield True
-                return
-            release()
-            if not wait:
-                yield False
-                return
-            if waited is not None:
-                waited.append(busy)   # the caller learns that the start waited for a removal
-            wait_for_removal(busy[0], busy[1], timeout)   # raises TimeoutError at the end of the wait
-    finally:
-        release()
 
 
 # The wait for a removal ran out.

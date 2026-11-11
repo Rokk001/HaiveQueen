@@ -970,19 +970,11 @@ def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=
     global LAST_REFUSAL
     LAST_REFUSAL = ''
     from . import worktrees
-    # The start reserves its worktree and branch atomically; when a cleanup removes one of them it waits for that removal, without holding the scheduling lock.
     try:
-        waited = []
-        with worktrees.start_reservation(start_removal_targets(env, plan, package, cwd), waited=waited):
-            return _start_process_reserved(env, plan, package, name, cls, task, steps, paths, rules, cwd, no_subagents, bool(waited))
+        for kind, key in start_removal_targets(env, plan, package, cwd):
+            worktrees.wait_for_removal(kind, key)
     except worktrees.RemovalTimeout as exc:
         return refuse(env, package, str(exc))
-
-
-# The start while its worktree and branch are reserved against a cleanup.
-def _start_process_reserved(env, plan, package, name, cls, task, steps, paths, rules, cwd, no_subagents, waited):
-    """The part of start_process that runs while the reservation holds."""
-    global LAST_REFUSAL
     from pathlib import Path
     from . import hives, loop, routine, worktrees
     with loop.hive_schedule_lock():
