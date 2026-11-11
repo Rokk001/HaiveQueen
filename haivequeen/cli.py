@@ -68,7 +68,7 @@ def cmd_ready(args, conn) -> int:
             env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
             if env is None:
                 return fail("ready refused: unknown project")
-            bare = hives.nothing_to_integrate(conn, env, plan, row)[0] if hives.integrated_ready(conn, env, hives.get(conn, args.project, plan)) is None else False
+            bare = hives.nothing_to_integrate(conn, env, plan, row)[0]
             if bare:   # nothing left to integrate: no queue row, no compile check, no Build or Deploy step; only the requirement list and the fresh check
                 accepted, message, waiting = readygate.gate(env, plan, row)
                 if not accepted and not waiting:
