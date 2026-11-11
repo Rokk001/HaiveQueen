@@ -215,6 +215,7 @@ def kv_set(conn, project, key, value) -> None:
 
 
 CUT_KEY = "cut-verification:"   # + plan path: the requirement/verify pairs of the accepted cut, its plan generation and plan title
+SUBMISSION_KEY = "submission:"   # + plan path: the plan text of the latest submission (the plan reaching status SENT) and its time
 CUT_RESET_KEY = "cut-reset:"     # + plan path: when the owner or a reused path started a new plan generation
 
 
@@ -235,6 +236,20 @@ def _cut_record(value):
     if not isinstance(pairs, list) or not all(isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) for p in pairs):
         return None
     return record
+
+
+def record_submission(conn, project, plan, text):
+    """Keep the plan text as sent: the ready check takes it as its reference."""
+    kv_set(conn, project, SUBMISSION_KEY + plan, json.dumps({"text": str(text or ""), "at": datetime.now().timestamp()}))
+
+
+def get_submission(conn, project, plan):
+    """The text of the latest submission of a plan, or None when there is no readable record."""
+    try:
+        record = json.loads(kv_get(conn, project, SUBMISSION_KEY + plan) or "null")
+    except (ValueError, TypeError):
+        return None
+    return record["text"] if isinstance(record, dict) and isinstance(record.get("text"), str) else None
 
 
 def _generation(conn, project, plan):
@@ -434,6 +449,11 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
                     _recover_cut(conn, project, rel, Path(plan.path).read_text(encoding="utf-8-sig"))
                 except OSError:
                     pass
+            if plan.status == "SENT" and (before is None or before[0] != "SENT"):
+                try:   # the status line of the file was set to SENT: a submission as well
+                    record_submission(conn, project, rel, Path(plan.path).read_text(encoding="utf-8-sig"))
+                except OSError:
+                    pass
             conn.execute(
                 "INSERT INTO plans (project, path, title, status, updated_at) VALUES (?,?,?,?,?) "
                 "ON CONFLICT(project, path) DO UPDATE SET title=excluded.title, status=excluded.status, "
@@ -555,6 +575,8 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
     with db.transaction(conn):
         conn.execute("UPDATE plans SET status=?, updated_at=? WHERE project=? AND path=?",
                      (status, db.now(), project, plan))
+    if status == "SENT":
+        record_submission(conn, project, plan, nl.join(lines))
     if status in ENDED_WAIT_STATUSES:
         drop_provider_wait(conn, project, plan)
     return {"plan": plan, "status": status}
