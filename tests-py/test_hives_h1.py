@@ -1004,16 +1004,17 @@ class HiveRoundTests(RoundCase):
         import io
         import os
         from haivequeen import cli
-        from bzztest import REL
+        from bzztest import REL, integrated_tip
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.allow_ready()
         self.round()
+        tip = integrated_tip(self.repo)
         queen = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running" and a["phase"] == "queen"][0]
         saved = os.environ.get("BZZ_AGENT")
         try:
             os.environ["BZZ_AGENT"] = queen["name"]
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(cli.cmd_ready(argparse.Namespace(project="testproj", branch="branch", tip="abc", plan=REL, note=""), self.conn), 0)
+                self.assertEqual(cli.cmd_ready(argparse.Namespace(project="testproj", branch="branch", tip=tip, plan=REL, note=""), self.conn), 0)
         finally:
             if saved is None:
                 os.environ.pop("BZZ_AGENT", None)
