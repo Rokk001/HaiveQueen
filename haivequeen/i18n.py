@@ -451,6 +451,7 @@ GERMAN = {
     "Answer \"take over\" to continue on %s, or \"new\" to create a new branch from the integration branch.": "Antworte \"übernehmen\", um auf %s weiterzuarbeiten, oder \"neu\", um einen neuen Branch vom Integrationsbranch anzulegen.",
     "Stop agent %s (%s)? The package stays stopped until you resume it.": "Agent %s (%s) stoppen? Das Paket bleibt gestoppt, bis du es fortsetzt.",
     "Resume package": "Paket fortsetzen", "Resume package %s?": "Paket %s fortsetzen?", "Could not resume the package: %s": "Das Paket konnte nicht fortgesetzt werden: %s",
+    "Could not stop the Agent: %s": "Der Agent konnte nicht gestoppt werden: %s",
     "stopping": "wird gestoppt",
     "The stop of %s (%s) is pending: the Agent keeps its place until its Queen confirms that it has ended.": "Das Stoppen von %s (%s) steht aus: Der Agent behält seinen Platz, bis seine Queen bestätigt, dass er beendet ist.",
     "startable, not started": "startbar, nicht gestartet", "Cancel plan": "Plan abbrechen", "Plan cancelled": "Plan abgebrochen",

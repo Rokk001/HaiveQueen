@@ -102,6 +102,17 @@ def parse_verdict(text):
     return last.group(1).lower(), (text[last.end():].strip() if last.group(1).upper() == "FAILED" else "")
 
 
+ABORTED_TEXT = ("the check agent was stopped by the owner, so the check counts as aborted and no new check starts on its own; "
+                "call bzz ready again only after an explicit instruction of the owner")
+
+
+def ended_verdict(row, text):
+    """(verdict, text) of an ended check agent: `aborted` when the owner stopped it, else the verdict of its answer."""
+    if str((row or {}).get("last_line") or "") == runtime.STOPPED_LINE:
+        return "aborted", ABORTED_TEXT
+    return parse_verdict(text)
+
+
 def _read(paths):
     """Text and path of the first readable file of a list ('' and the first path when none is)."""
     for p in paths:
@@ -196,6 +207,8 @@ def gate(env, plan, queen):
     verdict, text = runner(request)
     if verdict == "passed":
         return True, "", False
+    if verdict == "aborted":
+        return False, ABORTED_TEXT, False
     if verdict == "failed":
         return False, "the check agent found missing points, fix them and call bzz ready again:\n" + (text or "(none named)"), False
     return False, "the check agent could not run (%s): ready waits, call bzz ready again next round" % (text or "no reason given"), True
@@ -239,6 +252,6 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
                 text = (env.run_dir(name) / "final.txt").read_text(encoding="utf-8-sig")
             except OSError:
                 text = ""
-            return parse_verdict(text)
+            return ended_verdict(row, text)
         sleep(5)
     return "unavailable", "the check agent did not end in time"

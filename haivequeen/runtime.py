@@ -15,6 +15,7 @@ AGENT_COLUMNS = (
 )
 AGENT_ALIASES = {"plan": "plan_path", "pane": "pane_id"}
 ACTIVE_STATUSES = ("running", "starting")
+STOPPED_LINE = "stopped by the owner"   # last_line of an Agent row the owner stopped alone
 QUEUE_STATUSES = ("ready", "in_run", "integrated", "blocked", "withdrawn")
 MIRRORS = {"rounds": "ROUNDS.log", "events": "ORCH-EVENTS.log"}
 

@@ -469,9 +469,26 @@ def cmd_package(args, conn):
 
 
 # Run a Bee or record its package attempt for the calling Queen.
+def cmd_agent_stop(args, conn):
+    """Owner only: end the one running Agent named on the command line (not the Queen, not a subagent); the Queen is told by an owner message."""
+    from haivequeen import owner
+    if "BZZ_AGENT" in os.environ:
+        return fail("this command is only available to the owner; agents cannot use it")
+    try:
+        out(owner.apply(conn, "stop_agent", args.project, None, name=args.target or args.name))
+        return 0
+    except (ValueError, KeyError, runtime.CmdError) as exc:
+        return fail(str(exc))
+
+
 def cmd_bee(args, conn):
     """Route and start an Agent, or record an attempt for escalation."""
     from haivequeen import bees, scheduler
+    if args.action == "stop":
+        return cmd_agent_stop(args, conn)
+    missing = [f for f in ("plan", "package", "cls") if not getattr(args, f)]
+    if missing:
+        return fail("agent %s requires --plan, --package and --class" % args.action)
     agent = os.environ.get("BZZ_AGENT")
     queen = runtime.get_agent(conn, args.project, agent) if agent else None
     if not queen or queen.get("phase") != "queen" or queen.get("status") not in ("running", "starting") or not _plan_matches(conn, args.project, queen.get("plan_path"), args.plan):
@@ -593,9 +610,11 @@ def build_parser() -> argparse.ArgumentParser:
         "Names are based on plan and package, never after an Agent. A new branch starts from the current tip of the plan branch; "
         "a replacement Agent reuses the same worktree and branch. The answer gives cwd and branch, also for subagents. "
         "Agents must not create or commit on another branch."))
-    p.add_argument("action", choices=["start", "result", "wait"])
-    for field in ("project", "plan", "package", "class"):
-        p.add_argument("--" + field, required=True, dest="cls" if field == "class" else field)
+    p.add_argument("action", choices=["start", "result", "wait", "stop"])
+    p.add_argument("target", nargs="?", default="", help="stop: the name of the one running Agent to end (owner only; not the Queen, not a subagent)")
+    p.add_argument("--project", required=True)
+    for field in ("plan", "package", "class"):   # required by every action except stop
+        p.add_argument("--" + field, default="", dest="cls" if field == "class" else field)
     p.add_argument("--name", default="")
     p.add_argument("--provider", default="")
     p.add_argument("--task", default="")
