@@ -29,6 +29,8 @@ HaiveQueen is a local orchestrator for coding agents ([Claude Code](https://clau
 
 **4. A plan is not done because an agent says so.** Before integration the Queen lists every requirement of the plan with evidence in the state file under `## Completeness`. `bzz ready` is refused for a missing, open or partial requirement, and then an independent **check agent** (fresh, not part of the plan, read-only) compares the plan as submitted with the list and the branch. Only `READY-CHECK: PASSED` accepts the branch.
 
+Cleanup locks only the worktree or branch being removed; a start needing that target waits, while unrelated starts can proceed. The scheduling lock records its process, reason and heartbeat; dead or expired holders are recovered, and a timeout identifies the holder and reason. The ready check uses the latest submitted plan, including submissions made by setting its status to `SENT`; if that version is unavailable, submit again. The check agent receives owner and coordinator decisions, and an item naming several requirement IDs applies to each.
+
 **5. A plan cutter with requirements and dependencies.** Hand over free text (`status = "SENT"`). The Queen first writes every requirement as `- <id>: <text>` into the state file, then cuts the plan into small packages with class, `depends_on` and the requirements each covers. `bzz plan check` refuses a cut in which a requirement belongs to no package.
 
 **6. Role files you can read and change without code.** What the Queen, an Agent, the plan cutter and the check agent are told lives in plain Markdown files in [`roles/`](roles).

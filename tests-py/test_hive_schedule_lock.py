@@ -39,8 +39,8 @@ class HiveScheduleLockTests(unittest.TestCase):
         """A nested lock cannot enter or remove the outer active lock."""
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"BZZ_DATA_DIR": directory}):
             path = Path(directory) / "hive-schedule.lock"
-            with loop.hive_schedule_lock():
-                with self.assertRaises(TimeoutError):
+            with loop.hive_schedule_lock(reason="scheduling round"):
+                with self.assertRaisesRegex(TimeoutError, "scheduling round"):
                     with loop.hive_schedule_lock(timeout=0.01):
                         self.fail("entered an already held lock")
                 self.assertTrue(path.exists())
