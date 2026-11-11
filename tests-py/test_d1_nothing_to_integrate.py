@@ -188,6 +188,30 @@ class NeverCloseTests(NothingLeftCase):
         self.assertNotIn("nothing_to_integrate", res)
         self.assertIsNone(hives.completion_report(self.conn, "testproj", REL))
 
+    def test_integrated_row_cannot_close_unmerged_branch(self):
+        tip = self.side_commit("dummy")
+        row = runtime.queue_upsert(self.conn, "testproj", "dummy", tip=tip, plan=REL, status="integrated")
+        self.queen_ends()
+        for ready_id in (None, row["id"]):
+            self.conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (ready_id, "testproj", REL))
+            self.assertIsNone(hives.integrated_ready(self.conn, self.env(), hives.get(self.conn, "testproj", REL)))
+            self.round(alive=lambda pid: False)
+            self.assertNotEqual(self.status(), "DONE")
+            self.assertEqual(self.questions("owner-check"), [])
+
+    def test_integrated_row_closes_after_branch_is_merged(self):
+        tip = self.side_commit("dummy")
+        row = runtime.queue_upsert(self.conn, "testproj", "dummy", tip=tip, plan=REL, status="integrated")
+        self.git("merge", "--no-edit", "dummy")
+        self.queen_ends()
+        self.assertIsNotNone(hives.integrated_ready(self.conn, self.env(), hives.get(self.conn, "testproj", REL)))
+        self.conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (row["id"], "testproj", REL))
+        self.round(alive=lambda pid: False)
+        self.assertEqual(len(self.questions("owner-check")), 1)
+        self.answer_check("accepted")
+        self.round(alive=lambda pid: False)
+        self.assertEqual(self.status(), "DONE")
+
     def test_withdrawn_row_with_foreign_tip_does_not_count(self):
         tip = self.side_commit("side")
         runtime.queue_upsert(self.conn, "testproj", "side", tip=tip, plan=REL, status="withdrawn", note="already integrated")

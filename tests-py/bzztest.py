@@ -4,6 +4,7 @@ Nothing here touches a real project: every test builds its own folders, BZZ_TEST
 """
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,19 @@ from haivequeen import scheduler as sch  # noqa: E402
 
 ENV_KEYS = ("BZZ_DATA_DIR", "BZZ_CONFIG_DIR", "BZZ_LOG_DIR", "BZZ_RUNTIME_OVERRIDE", "BZZ_TEST_NOSTART", "BZZ_PROVIDER_LIMITS_FILE", "BZZ_HOST")
 REL = "docs/plans/dummy/DUMMY-PLAN.md"
+
+
+def integrated_tip(repo):
+    """Create a real commit contained in the dummy project's main branch."""
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.invalid")
+    git("add", "-A")
+    git("commit", "-qm", "integrated plan")
+    return git("rev-parse", "HEAD")
 
 
 def provider(name, slots, use="preferred", caps=(), limit="", classes=("light", "medium", "heavy"), proto="claude", build=True):
