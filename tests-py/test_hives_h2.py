@@ -421,18 +421,25 @@ class QueenIntegrationTests(RoundCase):
         self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'running')
         self.assertTrue(any(a['phase'] == 'queen' and a['status'] == 'running' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
 
-    # A native subagent consumes no additional provider process slot and can start while paused.
-    # A native Bee takes a slot of the Queen's provider; it still starts during a pause.
+    # A running native Bee keeps its provider slot during a pause; new starts are refused.
     def test_native_bee_takes_a_slot_and_continues_during_pause(self):
-        from haivequeen import hives, runstate
+        from haivequeen import hives, runstate, scheduler
         from bzztest import REL
         self.machine['providers'][0]['slots'] = 2
-        self.plan('READY', [{'id': 'P1', 'title': 'First'}])
+        self.plan('READY', [{'id': 'P1', 'title': 'First'}, {'id': 'P2', 'title': 'Second'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
-        runstate.pause(self.conn)
         result = bees.start_process(self.env(), REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [])
+        self.assertTrue(result, bees.LAST_REFUSAL)
         self.assertEqual(result['kind'], 'subagent')
+        self.assertEqual(scheduler.embedded_slots(self.conn), {'claude': 1})
+        runstate.pause(self.conn)
+        self.round(alive=lambda pid: pid == 42)
+        self.assertEqual(scheduler.embedded_slots(self.conn), {'claude': 1})
+        row = self.conn.execute('SELECT name, ended_at FROM embedded_bees WHERE package=?', ('P1',)).fetchone()
+        self.assertEqual((row['name'], row['ended_at']), ('Ada', None))
+        self.assertFalse(bees.start_process(self.env(), REL, 'P2', 'Bea', 'medium', 'task', [], [], []))
+        self.assertEqual(scheduler.embedded_slots(self.conn), {'claude': 1})
         self.assertFalse(any(a['phase'] == 'bee' for a in runtime.list_agents(self.conn, 'testproj', 'all')))
 
     def test_embedded_bees_count_toward_queen_limit(self):
