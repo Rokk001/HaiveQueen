@@ -1056,13 +1056,13 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     prompt += '\nOwner branch choice before the cut: ' + (str(chosen) if chosen else 'none') + '.'
                 prior = [routine.view(a) for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('cwd') and Path(a['cwd']).is_dir()]
                 cwd = routine.pick_cwd(prior, str(env.code_repo), workspace=routine.other_workspace(env)) if prior else str(env.code_repo)
-                if plan['status'] not in plan_mod.CUT_STATUSES:
-                    bees.cleanup_cut_default(env, path)   # the next Queen after a cut whose header names another worktree: the unused default of the cut goes
                 clash = bees.worktree_conflict(env, path)
                 if clash:   # the header's folder holds another branch or its branch is checked out elsewhere: nothing is changed on disk
                     conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
                     not_started(env, path, clash)
                     continue
+                if plan['status'] not in plan_mod.CUT_STATUSES:
+                    bees.cleanup_cut_default(env, path)   # the next Queen after a cut whose header names another worktree: the unused default of the cut goes
                 named = bees.target_worktree(env, path)
                 keep = bool(prior) and bees.valid_queen_worktree(env, cwd) and bool(named) and routine.same_dir(cwd, str(named[1]))   # the Queen continues only in the worktree of the header
                 if (named and not keep) or not bees.valid_queen_worktree(env, cwd):
