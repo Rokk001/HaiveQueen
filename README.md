@@ -158,7 +158,7 @@ Without a login a provider counts as not available and its packages wait; all ot
 
 ```bash
 bzz start                             # starts the loop in the background and opens the dashboard window
-bzz stop                              # no new agents; running agents finish their task
+bzz stop                              # no new agent of any kind (incl. subagents); running agents finish their task
 ```
 
 Put your machine settings (providers, slots) into `config.toml` (see [`examples/config.example.toml`](examples/config.example.toml); folder: `%APPDATA%\HaiveQueen` on Windows, `~/.config/HaiveQueen` on Linux).
@@ -217,7 +217,7 @@ Free Markdown below the header: the agents read it.
 
 **Submitting a plan that is not cut yet.** Write the plan as free Markdown under a header that only says `status = "SENT"`. The plan gets a run and a Queen like any other, and her first step is to cut it: she reads the text and the capabilities of the configured providers, writes `branch`, `worktree` and the packages (id, title, class, `depends_on`, `verify`) into the header and makes work that only some providers can do (any capability that not every provider offers, such as `Image generation`) a package of its own with `capability`. `bzz plan check` then verifies the header (at least one package, unique ids, a title each, known dependencies without a cycle, every capability offered by a configured provider); when it passes the plan becomes `QUEUED` and the Queen starts Agents. It also warns (without blocking) when a package without a capability waits for one that needs a capability, because that package then stops whenever the provider is missing. `bzz agent start` is refused while a plan is still `SENT` or `PREPARING`. Plans whose header already lists packages run as before. A package that waits for a missing provider stops only itself: the Queen keeps working every other package that can start, and the Plan waits only when none can.
 
-A plan may be paused and resumed in the window. A paused plan gets no new Queen or Agent; a running Queen keeps working.
+A plan may be paused and resumed in the window. A paused plan gets no new Queen, Agent, embedded subagent or ready-check agent; a running Queen keeps working.
 
 ## Failures and escalation
 
@@ -345,7 +345,7 @@ Existing `[[decision]]` entries with `item = "owner-release"` continue to work.
 |---|---|---|
 | `bzz start` / `bzz stop` | owner | start the loop in the background and open the dashboard (`--foreground`, `--rounds N`, `--round-minutes M`), or stop starting new agents |
 | `bzz gui [--detach] [--project p]` | owner | open the graphical dashboard window |
-| `bzz pause` / `bzz resume` | owner | pause new starts, or resume them; `bzz pause --now` also asks every running agent to hand off after its current step, so you do not have to wait for them to run out |
+| `bzz pause` / `bzz resume` | owner | pause the start of every kind of Agent (Queen, separate Agent, embedded subagent, ready-check agent), or resume; running agents are not ended; `bzz pause --now` also asks every running agent to hand off after its current step, so you do not have to wait for them to run out |
 | `bzz status [--project p] [--json]` | owner | "X / Y integrated (%)" and a task / agent / status table per project |
 | `bzz questions [--open]`, `bzz answer <id> "<text>" --by owner` | owner | read and answer questions of the agents |
 | `bzz queue [upsert]` | owner, Queen | the integration queue |
@@ -368,7 +368,7 @@ Existing `[[decision]]` entries with `item = "owner-release"` continue to work.
 - A Plan without a Queen shows its recorded start blocker or the numbers of its pending questions instead of a generic waiting label.
 - Automatic worktree cleanup requires confirmation that the branch's current commit was integrated; a missing or superseded confirmation keeps the worktree.
 - Round totals count actual Queen launches, independent of earlier run timestamps.
-- Pause prevents new Queens and separate Agent processes until you resume; stop lets running agents finish and then ends HaiveQueen. Existing subagents continue.
+- Pause and stop prevent every new start of every kind of Agent: Queens, separate Agent processes, embedded subagents and the check agent of `bzz ready`. Pause lasts until you resume; stop lets running agents finish, then ends HaiveQueen, and `bzz start` allows starts again. Running Queens and Agents are not ended; a refused start gives the reason.
 
 ## Documentation
 

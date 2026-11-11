@@ -87,12 +87,26 @@ def context_limit(conn, project, plan):
         conn.execute("UPDATE hives SET state='handoff' WHERE project=? AND plan_path=?", (project, plan))
 
 
-# Return whether the Hive may start a Bee, respecting pause for process Bees.
-def can_start_bee(conn, project, plan, own_process=False, context_limit=300000):
-    """Return whether the Plan may start an Agent, respecting context and pause."""
+# The reason no Agent of any kind (Queen, own-process Agent, embedded subagent, ready-check agent) may start now, or '' when starting is allowed.
+def start_block_reason(conn, project, plan=None):
+    """Return why starting is blocked ('stopped', 'paused' or 'plan paused'), or '' when none is. Running Agents are never touched by this check."""
     from . import loop, runstate
+    if loop.stop_flag().exists():
+        return 'stopped'
+    if not runstate.starts_allowed(conn):
+        return 'paused'
+    if plan is not None:
+        row = conn.execute("SELECT status FROM plans WHERE project=? AND path=?", (project, plan)).fetchone()
+        if row is not None and row[0] == 'PAUSED':
+            return 'plan paused'
+    return ''
+
+
+# Return whether the Hive may start an Agent of any kind; stop, pause and a PAUSED plan block every kind.
+def can_start_bee(conn, project, plan, own_process=False, context_limit=300000):
+    """Return whether the Plan may start an Agent of any kind (own_process is kept for callers and no longer changes the pause and stop check)."""
     row = get(conn, project, plan)
-    if own_process and (loop.stop_flag().exists() or not runstate.starts_allowed(conn)):
+    if start_block_reason(conn, project, plan):
         return False
     for agent in runtime.list_agents(conn, project, 'active'):
         if agent.get('plan_path') == plan and agent.get('phase') == 'queen' and agent.get('status') in ('running', 'starting'):
@@ -1251,6 +1265,11 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                             conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
                             not_started(env, path, 'worktree for branch %s could not be prepared (%s)' % named if named else 'the plan header names no branch and worktree')
                             continue
+                    blocked = start_block_reason(conn, env.name, path)
+                    if blocked:   # stop, pause or a PAUSED plan: no Queen starts, a running one is not ended
+                        conn.execute("UPDATE hives SET state='waiting',claimed_at=NULL WHERE project=? AND plan_path=?", (env.name, path))
+                        not_started(env, path, blocked)
+                        continue
                     action = {'name': name, 'type': pick['name'], 'phase': 'queen', 'plan': path, 'package': '', 'cwd': cwd, 'prompt': prompt, 'class': cls}
                     st = {'names': existing_names, 'busy': [], 'plan_status': {sch.norm_plan(path): plan['status']}, 'by_path': {sch.norm_plan(path): plan}}
                     ctx = {'env': env, 'state': st, 'pool': pool, 'report': report, 'dry': False, 'settle': settle}

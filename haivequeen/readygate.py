@@ -192,6 +192,9 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
     hive = hives.get(env.conn, env.name, plan)
     if not hive:
         return "unavailable", "no Plan of this plan"
+    blocked = hives.start_block_reason(env.conn, env.name, plan)
+    if blocked:
+        return "unavailable", "the check agent may not start now (starts paused or stopped, or the plan is paused): %s" % blocked
     active = runtime.list_agents(env.conn, None, "active")
     running = [{**a, "status": "running"} for a in active if agent_process.counts(a)]
     free = scheduler.provider_free(env.providers, running, env.conn)

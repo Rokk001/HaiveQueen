@@ -531,6 +531,10 @@ def _do_start(c, a, forced_pick=None) -> int:
     if forced_pick is None:
         raise ValueError("a provider must be selected before starting an agent")
     pick = forced_pick
+    if not dry:   # every kind of start (Queen, Agent process, ready-check agent) is refused under stop, pause or a PAUSED plan
+        from . import hives
+        if hives.start_block_reason(env.conn, env.name, str(a["plan"])):
+            return 0
     protocol, prov = pick["protocol"], pick["name"]
     nm, k = str(a["name"]), 1
     while nm in st["names"]:
@@ -1073,6 +1077,6 @@ def register(sub) -> None:
     p.add_argument("--detach", action="store_true", help="open the window as a process of its own and return (default: run it in this process)")
     p.add_argument("--project", help="show one Project only")
     p.set_defaults(fn=cmd_gui)
-    p = sub.add_parser("stop")
+    p = sub.add_parser("stop", help="start no new Agent of any kind (Queen, separate Agent, subagent, ready-check agent); running agents finish", description="Create the STOP flag: no new Queen, separate Agent process, embedded subagent or ready-check agent starts, running ones finish their task and the loop ends. bzz start allows starts again.")
     p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")
     p.set_defaults(fn=cmd_stop)

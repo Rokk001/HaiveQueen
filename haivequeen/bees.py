@@ -986,6 +986,9 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
     if draining:
         return refuse(env, package, draining)
     hive = hives.get(env.conn, env.name, plan)
+    blocked = hives.start_block_reason(env.conn, env.name, plan)
+    if blocked:   # stop, pause and a PAUSED plan block every kind of Agent, embedded subagents included
+        return refuse(env, package, 'an Agent may not start now (starts paused or stopped, or the plan is paused): %s' % blocked)
     if not hive or not hives.can_start_bee(env.conn, env.name, plan, False, env.settings.get('contextLimitTokens', 300000)):
         return refuse(env, package, 'the Plan may not start an Agent now (Plan state %s, context limit or HANDOFF reached)' % (hive['state'] if hive else 'missing'))
     active = runtime.list_agents(env.conn, None, 'active')
