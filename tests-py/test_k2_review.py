@@ -1,4 +1,6 @@
 """Regression coverage for K2 resource accounting and supervisor recovery."""
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -6,11 +8,44 @@ from types import SimpleNamespace
 from unittest import mock
 
 import bzztest  # noqa: F401
-from haivequeen import buildjobs, config, hives, integration, orchestrator, runtime
+from haivequeen import buildjobs, cli, config, hives, integration, orchestrator, projsettings, runtime, scheduler
 from test_k2_detached_compile import DetachedCompileCase
 
 
 class CoreAccountingTests(DetachedCompileCase):
+    def test_orchestrator_waits_without_starting_a_zero_job_build(self):
+        env = SimpleNamespace(name='project', conn=self.conn, settings={'buildCommand': 'build', 'buildJobs': 8})
+        state = {'steps': {}}
+        with mock.patch.object(buildjobs, 'plan_build', return_value={'Jobs': 0, 'Parallel': 1, 'Environment': {}}), \
+             mock.patch.object(integration, 'head_commit', return_value=''), \
+             mock.patch.object(orchestrator, '_log'), \
+             mock.patch.object(orchestrator, '_counter', return_value=''), \
+             mock.patch.object(orchestrator, '_harvest', return_value=None), \
+             mock.patch.object(orchestrator, '_async', return_value=True), \
+             mock.patch.object(orchestrator, '_result_file', return_value=self.base / 'result'), \
+             mock.patch.object(orchestrator, '_blocker') as blocker, \
+             mock.patch.object(orchestrator, '_set_status') as status, \
+             mock.patch.object(orchestrator.threading.Thread, 'start') as start:
+            self.assertIsNone(orchestrator._command(self.conn, env, 'plan', state, self.base, 'Build', 64000))
+        blocker.assert_called_once()
+        status.assert_called_once_with(self.conn, env, 'plan', 'WAITING')
+        start.assert_not_called()
+        self.assertNotIn('job', state)
+
+    def test_integration_waits_without_acquiring_for_a_zero_job_build(self):
+        env = SimpleNamespace(settings={'buildCommand': 'build', 'buildJobs': 8}, name='project', conn=self.conn)
+        args = SimpleNamespace(action='acquire', project='project', plan='plan', owner_pid=os.getpid())
+        with mock.patch.dict(os.environ, {'BZZ_AGENT': ''}), \
+             mock.patch.object(scheduler, 'load_projects', return_value=[env]), \
+             mock.patch.object(projsettings, 'remote_wait_reason', return_value=''), \
+             mock.patch.object(buildjobs.osplat, 'free_ram_mb', return_value=64000), \
+             mock.patch.object(buildjobs, 'plan_build', return_value={'Jobs': 0}), \
+             mock.patch.object(hives, 'take_integration') as take, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(cli.cmd_integration(args, self.conn), 1)
+        self.assertIn('waiting for integration', output.getvalue())
+        take.assert_not_called()
+
     def test_acquired_integration_reserves_cores_without_an_agent_build(self):
         hives.take_integration(self.conn, 'project', 'plan', owner_pid=os.getpid(), build_jobs=3)
         hives.take_integration(self.conn, 'project', 'waiting', owner_pid=os.getpid(), build_jobs=8)
@@ -31,6 +66,13 @@ class CoreAccountingTests(DetachedCompileCase):
         with mock.patch.object(config, 'load_config', return_value={'buildJobs': {'parallel': 2}}):
             self.assertEqual(buildjobs.allocated_cores(buildjobs.running_builds(self.conn)), 6)
             self.assertEqual(buildjobs.running_builds(self.conn, exclude='queen'), [])
+
+    def test_external_refresh_excludes_only_its_project_and_plan(self):
+        for project in ('project', 'other'):
+            hives.take_integration(self.conn, project, 'plan', owner_pid=os.getpid(), build_jobs=2)
+        with mock.patch.object(config, 'load_config', return_value={'buildJobs': {'parallel': 2}}):
+            self.assertEqual(buildjobs.allocated_cores(
+                buildjobs.running_builds(self.conn, exclude=('project', 'plan'))), 4)
 
     def test_orchestrator_build_allocation_counts_until_the_result_exists(self):
         result_file = self.base / 'build-result.json'
@@ -79,6 +121,19 @@ class CoreAccountingTests(DetachedCompileCase):
         with mock.patch.object(buildjobs, '_running_checks', return_value=1):
             self.assertEqual(buildjobs.plan_build(env, free_mb=64000, cores=8)['Jobs'], 1)
             self.assertEqual(buildjobs.plan_build(env, free_mb=64000, cores=8, exclude='builder')['Jobs'], 4)
+
+    def test_next_build_waits_when_builds_and_checks_use_the_budget(self):
+        env = SimpleNamespace(name='project', conn=self.conn,
+                              settings={'buildJobs': {'cores': 8, 'parallel': 2}})
+        for jobs, parallel, checks in ((2, 3, 2), (4, 2, 0), (0, 1, 8), (3, 3, 0), (2, 3, 1)):
+            with self.subTest(jobs=jobs, parallel=parallel, checks=checks), \
+                 mock.patch.object(buildjobs, 'running_builds', return_value=(
+                     [{'jobs': jobs, 'parallel': parallel}] if jobs else [])), \
+                 mock.patch.object(buildjobs, '_running_checks', return_value=checks):
+                planned = buildjobs.plan_build(env, free_mb=64000, cores=8)
+                self.assertEqual(planned['Jobs'], 0)
+                self.assertEqual(planned['Why'], 'cores')
+                self.assertEqual(planned['Environment']['BUILD_JOBS'], '0')
 
 
 class SupervisorRecoveryTests(DetachedCompileCase):

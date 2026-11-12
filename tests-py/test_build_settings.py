@@ -400,6 +400,29 @@ class RunnerVariablesTest(RunnerBase):
         self.assertNotIn("buildJobs", self.row("B-bee"))
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM build_measurements").fetchone()[0], 0)
 
+    def test_agent_start_counts_compile_checks_and_waits_for_cores(self):
+        """Startup uses the current shared core budget before exporting build variables."""
+        self.write_config('[buildJobs]\nenvVar = "BUILD_MP_JOBS"\ncores = 8\nparallel = 2\nfirstJobs = 8\n')
+        (self.base / 'stream.txt').write_text(claude_stream(), encoding='utf-8')
+        for name, counts in (('checks-running', [2]), ('checks-full', [8, 2])):
+            with self.subTest(name=name):
+                (self.base / 'record.json').unlink(missing_ok=True)
+                self.prepare(name)
+                script = ('import sys\nfrom haivequeen import agent_runner as ar, buildjobs\n'
+                          'ar.osplat.logical_cores = lambda: 8\n'
+                          'ar.osplat.free_ram_mb = lambda: 64000\n'
+                          'counts = iter(%r)\n' % counts +
+                          'buildjobs._running_checks = lambda: next(counts, 2)\n'
+                          'sys.exit(ar.main(sys.argv[1:]))\n')
+                result = subprocess.run([sys.executable, '-c', script,
+                    '--project', 'demo', '--name', name, '--provider', 'claude',
+                    '--plan', 'plans/Demo-PLAN.md', '--package', 'P1', '--phase', 'bee',
+                    '--cwd', str(self.ws), '--prompt-file', str(self.prompt), '--runs-dir', str(self.runs)],
+                    cwd=str(ROOT), env=self.env, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((self.record()['mp_jobs'], self.record()['parallel']), ('1', '2'))
+                self.assertEqual('Waiting for build cores' in result.stdout, counts[0] == 8)
+
 
 class InstructionsTest(RoundCase):
     """B-7, B-9: the build instructions of the agents name the variables and say that the values win over a project rule."""

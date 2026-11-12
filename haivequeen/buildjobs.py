@@ -183,8 +183,11 @@ def complete_measure(env, name: str, jobs: int, start_free_mb: float, sample_fil
     return {"MinFreeMB": low, "UseMB": use, "StoredMB": stored, "PeakMB": smp["PeakMB"]}
 
 
-def running_builds(conn, exclude: str = None) -> list:
-    """Agent and integration build allocations, without counting a Queen twice."""
+def running_builds(conn, exclude: str | tuple = None) -> list:
+    """Agent and integration build allocations, without counting a Queen twice.
+
+    Exclude an agent name or the (project, plan) pair of an external integration.
+    """
     found = []
     agents = []
     for row in conn.execute("SELECT name,extra_json,project,plan_path,pid FROM agents WHERE status='running' AND archived=0"):
@@ -201,7 +204,7 @@ def running_builds(conn, exclude: str = None) -> list:
             continue
         owner = next((a for a in agents if a['project'] == project and
                       ((pid and a.get('pid') == pid) or a.get('plan_path') == plan)), None)
-        if owner and owner['name'] == exclude:
+        if (owner['name'] if owner else (project, plan)) == exclude:
             continue
         if parallel is None:
             parallel = settings_from(config.load_config().get('buildJobs') or 0)['Parallel']
@@ -274,9 +277,10 @@ def rule_text(value) -> str:
             % (bj["EnvVar"], bj["ParallelVar"], bj["MinFreeGB"], bj["MinRamVar"]))
 
 
-def plan_build(env, free_mb: float = None, cores: int = None, exclude: str = None, host: str = None) -> dict:
+def plan_build(env, free_mb: float = None, cores: int = None, exclude: str | tuple = None, host: str = None) -> dict:
     """Job count the next build of this project gets, computed now: {Jobs, Why, PerJobMB, Parallel, EnvVar, ParallelVar, MinRamVar, MinFreeGB,
-    FreeMB, Environment}, or None when the project has no build block. Builds that run now share the chosen cores (`exclude` = the asking agent)."""
+    FreeMB, Environment}, or None when the project has no build block. Jobs is zero while the shared core budget cannot fit a job.
+    Builds and compile checks that run now share the chosen cores (`exclude` = the asking agent or external integration pair)."""
     bj = settings_from(env.settings.get("buildJobs"))
     if bj is None:
         return None
@@ -287,7 +291,9 @@ def plan_build(env, free_mb: float = None, cores: int = None, exclude: str = Non
     calc = job_count(bj, cores, free, stored_per_job(env.conn, env.name, host, bj["Measurements"]),
                      concurrent=len(running) + checks)
     available = core_limit(bj, cores) - allocated_cores(running) - checks
-    calc["Jobs"] = min(calc["Jobs"], max(1, available // bj["Parallel"]))
+    calc["Jobs"] = min(calc["Jobs"], max(0, available // bj["Parallel"]))
+    if calc["Jobs"] == 0:
+        calc["Why"] = "cores"
     calc.update({"EnvVar": bj["EnvVar"], "ParallelVar": bj["ParallelVar"], "MinRamVar": bj["MinRamVar"], "MinFreeGB": bj["MinFreeGB"],
                  "FreeMB": free, "Environment": build_environment(bj, calc["Jobs"])})
     return calc

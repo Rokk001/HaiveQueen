@@ -434,6 +434,10 @@ def _command(conn, env, plan, state, folder, step, free_mb):
                 _set_status(conn, env, plan, "WAITING")
                 return None
             planned = buildjobs.plan_build(env, free_mb=free_mb) if bj is not None else None
+            if planned is not None and planned["Jobs"] == 0:
+                _blocker(conn, env, plan, "waiting for the %s: waiting for build cores" % step.lower())
+                _set_status(conn, env, plan, "WAITING")
+                return None
             extra = planned["Environment"] if planned else None
         token = uuid.uuid4().hex
         result_file = _result_file(env.name, plan, token)

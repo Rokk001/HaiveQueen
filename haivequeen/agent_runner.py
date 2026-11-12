@@ -21,6 +21,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from . import buildjobs, config, db, interrupt, localtime, offline, overview, proctree, profile, roles, runtime, scheduler, servers, startctx
 from . import platform as osplat
@@ -1092,9 +1093,14 @@ def run_agent(a, out=None):
         if guard:
             env.update(json.loads(guard).get('environment', {}))
     if bj:
-        bj_start_mb = float(osplat.free_ram_mb())
-        measured = buildjobs.stored_per_job(conn, a.project, count=bj["Measurements"])
-        calc = buildjobs.job_count(bj, osplat.logical_cores(), bj_start_mb, measured, concurrent=len(buildjobs.running_builds(conn, a.name)))
+        build_env = SimpleNamespace(conn=conn, name=a.project, settings={"buildJobs": bj_raw})
+        calc = buildjobs.plan_build(build_env, exclude=a.name)
+        if calc["Jobs"] == 0:
+            run.say("Waiting for build cores", "Yellow")
+        while calc["Jobs"] == 0:
+            time.sleep(1)
+            calc = buildjobs.plan_build(build_env, exclude=a.name)
+        bj_start_mb = calc["FreeMB"]
         bj_jobs, why = calc["Jobs"], calc["Why"]
         env.update(buildjobs.build_environment(bj, bj_jobs))   # the job count (configured name), the parallel value and the minimum free RAM
         try:
