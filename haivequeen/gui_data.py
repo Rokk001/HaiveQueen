@@ -322,7 +322,7 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
     With `hive_rows` (the Plan rows) every Plan with a running Queen gets the Queen's row first and its Agents directly below it; Agents of other Plans follow."""
     rows, seen = [], set()
     for agent in agents:
-        if agent.get("phase") == "bee" and agent.get("status") in runtime.ACTIVE_STATUSES:
+        if (agent.get("phase") == "bee" or (agent.get("phase") == "verify" and agent.get("package") == "READY-CHECK")) and agent.get("status") in runtime.ACTIVE_STATUSES:
             rows.append(bee_row(agent, now, steps, ctx_limit, package_steps))
             seen.add((agent.get("project"), agent.get("plan_path"), agent.get("package")))
     for bee in embedded or ():   # a Bee that runs as a subagent of its Queen has no agent row: it shows up under her like any other Bee

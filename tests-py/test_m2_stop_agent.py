@@ -172,6 +172,22 @@ class StopAgentTest(RoundCase):
         kill.assert_not_called()
         app.inform.assert_called_with("reason text")
 
+    def test_dashboard_lists_and_stops_running_ready_check(self):
+        from haivequeen import gui
+        cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "stop_agent_button"))
+        agents = [dict(a) for a in runtime.list_agents(self.conn, "testproj", "active")]
+        rows = gui_data.bee_list(agents, {}, set(), datetime.now())
+        row = next(r for r in rows if r.get("agent") == "Queen-A-ready-check")
+        self.assertEqual(row["stop_agent"], "Queen-A-ready-check")
+        self.assertEqual(row["stop_disabled"], "")
+        app = mock.Mock(conn=self.conn, confirm=lambda text: True)
+        with mock.patch("haivequeen.platform.kill_process_tree", return_value=True) as kill:
+            cls.stop_agent_button(app, row)
+        self.assert_only_stopped("Queen-A-ready-check", kill)
+        agents = [dict(a) for a in runtime.list_agents(self.conn, "testproj", "active")]
+        self.assertFalse(any(r.get("agent") == "Queen-A-ready-check"
+                             for r in gui_data.bee_list(agents, {}, set(), datetime.now())))
+
 
 class QueenRoleTextTest(unittest.TestCase):
     def test_role_text(self):
