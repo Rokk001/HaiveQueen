@@ -455,20 +455,21 @@ class RulesTest(Dirs):
         self.assertTrue(example)
 
 
-def python_child_script(pid_file, seconds):
-    """Python code: start a child that sleeps, write its pid, then wait `seconds` and exit (the child outlives its parent)."""
+def python_child_script(pid_file, seconds, release_file=None):
+    """Start a child, then wait for a release or a timeout before leaving it behind."""
+    wait = ("while not __import__('os').path.exists(%r): time.sleep(0.05)\n" % str(release_file)
+            if release_file else "time.sleep(%s)\n" % seconds)
     return ("import subprocess,sys,time\n"
             "c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)'])\n"
-            "open(%r,'w').write(str(c.pid))\n"
-            "time.sleep(%s)\n" % (str(pid_file), seconds))
+            "open(%r,'w').write(str(c.pid))\n" % str(pid_file) + wait)
 
 
 class LeftoverProcessTest(Dirs):
     """P-12: an agent leaves no running process behind; processes of HaiveQueen itself are not touched."""
 
-    def spawn_parent(self, name, seconds=0.0):
+    def spawn_parent(self, name, seconds=0.0, release_file=None):
         pid_file = self.root / name
-        parent = subprocess.Popen([sys.executable, "-c", python_child_script(pid_file, seconds)])
+        parent = subprocess.Popen([sys.executable, "-c", python_child_script(pid_file, seconds, release_file)])
         deadline = time.time() + 20
         while not pid_file.is_file() or not pid_file.read_text():
             self.assertLess(time.time(), deadline)
@@ -485,11 +486,22 @@ class LeftoverProcessTest(Dirs):
         for pid in pids:
             osplat.kill_process_tree(pid)
 
+    def test_cleanup_ends_children_before_supervisors_regardless_of_pid(self):
+        procs = {900: {"ppid": 1}, 100: {"ppid": 900}, 50: {"ppid": 100}}
+        with (mock.patch.object(proctree, "is_exempt", return_value=False),
+              mock.patch.object(osplat, "process_alive", return_value=True),
+              mock.patch.object(proctree, "_terminate") as terminate):
+            self.assertEqual(proctree.kill_recorded(procs), [50, 100, 900])
+        self.assertEqual([call.args[0] for call in terminate.call_args_list], [50, 100, 900])
+
     def test_child_that_outlives_its_parent_is_ended(self):
         tracker = proctree.Tracker(os.getpid(), self.root / "run")
-        parent, child = self.spawn_parent("c1", 1.5)
-        self.addCleanup(self.kill, child)
+        release = self.root / "release-c1"
+        parent, child = self.spawn_parent("c1", release_file=release)
+        self.addCleanup(self.kill, parent.pid, child)
         tracker.poll()
+        self.assertIn(child, tracker.procs)
+        release.touch()
         parent.wait(timeout=20)
         self.assertTrue(osplat.process_alive(child))   # the orphan runs on
         ended = tracker.finish()
@@ -522,9 +534,12 @@ class LeftoverProcessTest(Dirs):
         runs = self.root / "runs"
         folder = runs / "proj" / "agent-1"
         tracker = proctree.Tracker(os.getpid(), folder)
-        parent, child = self.spawn_parent("c5", 0.5)
-        self.addCleanup(self.kill, child)
+        release = self.root / "release-c5"
+        parent, child = self.spawn_parent("c5", release_file=release)
+        self.addCleanup(self.kill, parent.pid, child)
         tracker.poll()
+        self.assertIn(child, tracker.procs)
+        release.touch()
         parent.wait(timeout=20)
         state = json.loads((folder / proctree.STATE_FILE).read_text())
         state["root"], state["rootIdentity"] = 2 ** 22 - 3, "gone"   # the runner vanished with HaiveQueen
