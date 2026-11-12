@@ -330,8 +330,10 @@ def create_process(original, args):
             executable = Path(sys.executable)
         command = subprocess.list2cmdline([str(executable), '-I', str(Path(__file__).resolve()),
                                            str(request_read), str(reply_write), str(os.getpid())])
+        caller_cwd = os.getcwd()
+        broker_cwd = os.path.abspath(os.sep)
         broker, thread, _pid, _tid = original(None, command, None, None, True, 0x08000208,
-                                             None, None, startup)
+                                             None, broker_cwd, startup)
         _winapi.CloseHandle(thread)
         _winapi.CloseHandle(broker)
         for handle in (request_read, reply_write):
@@ -340,7 +342,7 @@ def create_process(original, args):
         request_fd = msvcrt.open_osfhandle(request_write, os.O_WRONLY | os.O_BINARY)
         owned.remove(request_write)
         with os.fdopen(request_fd, 'wb') as stream:
-            _send(stream, args)
+            _send(stream, (args, caller_cwd))
         reply_fd = msvcrt.open_osfhandle(reply_read, os.O_RDONLY | os.O_BINARY)
         owned.remove(reply_read)
         with os.fdopen(reply_fd, 'rb') as stream:
@@ -365,9 +367,17 @@ def _supervise(request, reply, parent_pid):
         try:
             request_fd = msvcrt.open_osfhandle(request, os.O_RDONLY | os.O_BINARY)
             with os.fdopen(request_fd, 'rb') as source:
-                args = list(_receive(source))
+                args, caller_cwd = _receive(source)
+                args = list(args)
             args[5] |= 1  # DEBUG_PROCESS receives every native descendant
-            process, thread, pid, tid = _winapi.CreateProcess(*args)
+            # Preserve CreateProcess path resolution and inherited cwd without
+            # retaining the caller directory for the lifetime of the tree.
+            broker_cwd = os.getcwd()
+            try:
+                os.chdir(caller_cwd)
+                process, thread, pid, tid = _winapi.CreateProcess(*args)
+            finally:
+                os.chdir(broker_cwd)
             # The tool owns these inherited handles now. Keeping pipe writers
             # here would make communicate() wait for unrelated detached leaves.
             if args[4]:

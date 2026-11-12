@@ -6,6 +6,7 @@ The native-debugger regression stays executable as an expected failure.
 """
 import subprocess
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -118,6 +119,42 @@ class NoConsoleTest(unittest.TestCase):
                 time.sleep(0.02)
             self.assertTrue(result.exists(), out)
             self.assertEqual(result.read_text(), '0', out)
+
+    def test_supervisor_does_not_hold_callers_working_directory(self):
+        with tempfile.TemporaryDirectory() as outer:
+            work = Path(outer) / 'work'
+            work.mkdir()
+            release = Path(outer) / 'release'
+            finished = Path(outer) / 'finished'
+            leaf = ("import pathlib,time\n"
+                    "while not pathlib.Path(%r).exists(): time.sleep(0.02)\n"
+                    "pathlib.Path(%r).touch()\n" % (str(release), str(finished)))
+            driver = ("import sys,subprocess\nsys.path.insert(0,%r)\n"
+                      "from haivequeen import platform\n"
+                      "subprocess.Popen([sys.executable,'-I','-c',%r],cwd=%r,creationflags=8,"
+                      "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+                      % (str(ROOT), leaf, str(ROOT)))
+            try:
+                subprocess.run([sys.executable, '-I', '-c', driver], cwd=work,
+                               creationflags=DETACHED_PROCESS, check=True, timeout=30)
+                shutil.rmtree(work)
+            finally:
+                release.touch()
+                deadline = time.monotonic() + 30
+                while not finished.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+            self.assertTrue(finished.exists(), 'detached child did not finish')
+
+    def test_supervisor_preserves_inherited_working_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / 'child.py'
+            script.write_text("import os; open('cwd.txt', 'w').write(os.getcwd())", encoding='utf-8')
+            driver = ("import sys,subprocess\nsys.path.insert(0,%r)\n"
+                      "from haivequeen import platform\n"
+                      "subprocess.run([sys.executable,'child.py'],check=True)\n" % str(ROOT))
+            subprocess.run([sys.executable, '-I', '-c', driver], cwd=tmp,
+                           capture_output=True, text=True, check=True, timeout=30)
+            self.assertEqual(Path((Path(tmp) / 'cwd.txt').read_text()), Path(tmp))
 
     def test_supervisor_does_not_keep_finished_commands_pipes_open(self):
         with tempfile.TemporaryDirectory() as tmp:
