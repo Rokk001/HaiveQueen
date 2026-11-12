@@ -231,6 +231,7 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     (r"^round done: (\d+) Queen\(s\) started((?:; .*)?)$", _round_done),
     (r"^round skipped \((.*)\)$", r"Runde übersprungen (\1)"),
     (r"^(.*) not started: (.*)$", lambda m: "%s nicht gestartet: %s" % (m.group(1), _german_line(m.group(2)))),
+    (r"^its worktree or branch is being removed by a cleanup, the start is tried again in a later round$", "sein Worktree oder Branch wird gerade von einer Bereinigung entfernt, der Start wird in einer späteren Runde erneut versucht"),
     (r"^ROUND ERROR ", "RUNDENFEHLER "),
     (r"^(.*) ended: (\d+) leftover process\(es\) of the agent ended$", lambda m: "%s beendet: %s übrig gebliebene(r) Prozess(e) des Agenten beendet" % (m.group(1), m.group(2))),
     (r"^project settings migration or cleanup of leftover processes failed: ", "Migration der Projekteinstellungen oder Bereinigung übrig gebliebener Prozesse fehlgeschlagen: "),

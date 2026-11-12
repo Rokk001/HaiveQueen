@@ -644,8 +644,10 @@ class CleanupSchedulingTests(unittest.TestCase):
                  mock.patch.object(scheduler, 'ProjectEnv', lambda *args: env), \
                  mock.patch.object(worktrees, 'prune', create=True, return_value={'removed': [], 'kept': [], 'notRemovable': []}) as prune:
                 loop.run_round(None, {}, envs=[env])
+                worktrees.wait_cleanups(30)   # the cleanup runs apart from the round
             conn.close()
-        prune.assert_called_once_with(env)
+        prune.assert_called_once()   # on a copy of the environment with a database connection of the cleanup thread
+        self.assertEqual(prune.call_args.args[0].name, 'test')
 
     # Releasing the integration place triggers a cleanup afterwards.
     def test_release_runs_cleanup_after_releasing_place(self):
