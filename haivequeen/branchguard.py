@@ -47,8 +47,7 @@ def prepare(folder, cwd, branch):
         'head_log': str(path), 'log_offset': len(baseline), 'log_prefix': hashlib.sha256(baseline).hexdigest()}), encoding='utf-8')
     command = ' '.join(shlex.quote(str(x).replace('\\', '/')) for x in (sys.executable, '-I', Path(__file__).resolve()))
     # Preserve the repository's other hooks too. No shared Git config or hook is modified.
-    hooks = {p.name for p in Path(original).iterdir() if p.is_file() and not p.name.endswith('.sample')
-             and p.name not in {'policy.json', 'violation.json'} and not p.name.startswith('violation-')} if Path(original).is_dir() else set()
+    hooks = {p.name for p in Path(original).iterdir() if p.is_file() and not p.name.endswith('.sample')} if Path(original).is_dir() else set()
     for hook in hooks | {'pre-commit', 'reference-transaction'}:
         path = folder / hook
         path.write_text('#!/bin/sh\nexec ' + command + ' ' + shlex.quote(str(folder).replace('\\', '/')) + ' ' + shlex.quote(hook) + ' "$@"\n', encoding='utf-8', newline='\n')

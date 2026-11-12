@@ -377,6 +377,32 @@ class GateTests(RoundCase):
             code, result = self.ready()
         self.assertEqual(code, 0, result)
 
+    def test_omitted_unlisted_text_in_plan_with_ids_is_reported(self):
+        original = "# Request\n## Requirements\n- R1: Paint the door.\n\nAlso repair the window.\n"
+        runtime.record_submission(self.conn, "testproj", REL, original)
+        state = self.repo / STATE
+        state.write_text("# State\n\n## Requirements\n- R1: Paint the door.\n\n## Completeness\n- R1: done | door test\n", encoding="utf-8")
+
+        def check(request):
+            self.requests.append(request)
+            submitted = request["prompt"].split("Plan as submitted (original text):\n", 1)[1].split("\nEnd of plan as submitted.", 1)[0]
+            missing = "Also repair the window." in submitted and "Repair the window." not in state.read_text(encoding="utf-8")
+            return ("failed", "- Repair the window.") if missing else ("passed", "")
+
+        with mock.patch.object(readygate, "CHECK_RUNNER", check):
+            code, result = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("Repair the window", result["error"])
+        state.write_text(state.read_text(encoding="utf-8").replace("\n\n## Completeness", "\n- R2: Repair the window.\n\n## Completeness"), encoding="utf-8")
+        with mock.patch.object(readygate, "CHECK_RUNNER", check):
+            code, result = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("R2", result["error"])
+        state.write_text(state.read_text(encoding="utf-8") + "- R2: done | window test\n", encoding="utf-8")
+        with mock.patch.object(readygate, "CHECK_RUNNER", check):
+            code, result = self.ready()
+        self.assertEqual(code, 0, result)
+
     def test_cut_plan_accepts_added_package_and_checks_new_requirement(self):
         original = "# Request\n- Paint the door.\n- Repair the window.\n"
         runtime.record_submission(self.conn, "testproj", REL, original)
