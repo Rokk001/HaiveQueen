@@ -4,6 +4,7 @@ import io
 import json
 import os
 import unittest
+from datetime import datetime
 from unittest import mock
 
 from bzztest import REL, RoundCase, db, runtime
@@ -103,6 +104,17 @@ class OwnerMessageTest(RoundCase):
         runtime.add_decision(self.conn, "testproj", "owner", "WIDE")
         self.assertEqual(len(self.note("Mia")[1]["owner_messages"]), 1)
         self.assertEqual(len(self.note("Nora")[1]["owner_messages"]), 1)
+
+    def test_decision_before_start_in_same_second_is_not_delivered(self):
+        self.agent("Zoe", phase="work", status="done")
+        with mock.patch.object(db, "datetime") as clock:
+            clock.now.return_value = datetime(2026, 1, 1, 12, 0, 0, 100000)
+            runtime.add_decision(self.conn, "testproj", "owner", "BEFORE", REL)
+            clock.now.return_value = datetime(2026, 1, 1, 12, 0, 0, 200000)
+            self.agent("Zoe", phase="queen", status="starting", started_at=db.now())
+            clock.now.return_value = datetime(2026, 1, 1, 12, 0, 0, 300000)
+            after = runtime.add_decision(self.conn, "testproj", "owner", "AFTER", REL)
+            self.assertEqual(self.note("Zoe")[1]["owner_messages"], [{"id": after, "text": "AFTER"}])
 
     def test_ended_queen_leaves_it_to_the_next_start_prompt_once(self):
         did = runtime.add_decision(self.conn, "testproj", "owner", "LEFT-OVER", REL)
