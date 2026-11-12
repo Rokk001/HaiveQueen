@@ -29,6 +29,13 @@ class IsolationActiveTest(unittest.TestCase):
         for rel in ("profile/claude/settings.json", "profile/codex/config.toml", "config.toml", "logs/notes.txt", "profile/stray.txt"):
             self.assertFalse(isolation.is_live(isolation.Path(rel)), rel)
 
+    def test_removal_lock_files_of_a_live_loop_are_not_a_change(self):
+        """The live loop creates removal-locks/<kind>-<hash>.lock.guard files; other files in that folder still count."""
+        for rel in ("removal-locks/branch-1.lock.guard", "removal-locks/worktree-2.lock.guard"):
+            self.assertTrue(isolation.is_live(isolation.Path(rel)), rel)
+        for rel in ("removal-locks/stray.txt", "removal-locks/sub/branch-1.lock.guard"):
+            self.assertFalse(isolation.is_live(isolation.Path(rel)), rel)
+
     def test_concurrent_compile_lock_changes_are_ignored_but_writes_are_guarded(self):
         """A concurrent check changes its locks, while unrelated files and test writes remain visible."""
         import tempfile

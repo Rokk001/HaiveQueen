@@ -186,8 +186,9 @@ def package_dependencies(plan, package):
     return deps
 
 
-REQUIREMENTS_HEADING = re.compile(r"(?im)^#{1,6}\s*requirements\s*$")
+REQUIREMENTS_HEADING = re.compile(r"(?im)^#{1,6}\s*requirements(?:\s*\([^)]*\))?\s*$")   # also "Requirements (<note>)"
 REQUIREMENT_LINE = re.compile(r"^\s*[-*]\s*([A-Za-z0-9_.-]+)\s*:\s*(.*\S)\s*$")
+REQUIREMENT_LINE_NO_COLON = re.compile(r"^\s*[-*]\s*([A-Za-z]+-\d+[A-Za-z]?)\s+(.*\S)\s*$")   # "- B-1 <text>"
 
 
 def state_file_path(plan_path):
@@ -204,7 +205,7 @@ def parse_requirements(text):
         if line.lstrip().startswith("#"):
             inside = bool(REQUIREMENTS_HEADING.match(line.strip()))
             continue
-        m = REQUIREMENT_LINE.match(line) if inside else None
+        m = (REQUIREMENT_LINE.match(line) or REQUIREMENT_LINE_NO_COLON.match(line)) if inside else None
         if m:
             found.append((m.group(1), m.group(2)))
     return found

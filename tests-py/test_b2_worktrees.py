@@ -152,6 +152,23 @@ class PackageWorktrees(GitCase):
             self.git('checkout', pair[1], cwd=pair[0])
         self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '')
 
+    def test_commit_in_unrelated_repository_is_not_guarded(self):
+        import json
+        import os
+        import subprocess
+        from haivequeen import runtime
+        pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
+        bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
+        data = json.loads(runtime.kv_get(self.conn, self.env_b2.name, 'agent-branch:Ada'))
+        temp = self.base / 'unrelated-repo'
+        temp.mkdir()
+        run = lambda *a: subprocess.run(['git', '-C', str(temp), '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', *a],
+                                        env={**os.environ, **data['environment']}, capture_output=True, text=True)
+        self.assertEqual(run('init', '-b', 'master').returncode, 0)
+        result = run('commit', '--allow-empty', '-m', 'temp')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '')
+
     def test_cross_worktree_no_verify_and_expired_reflogs(self):
         pair = bees.prepare_agent_worktree(self.env_b2, REL, 'P1')
         bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
@@ -364,7 +381,7 @@ class PackageWorktrees(GitCase):
         environment = bees.record_agent_branch_start(self.env_b2, 'Ada', *pair)
         result = subprocess.run(['git', '-C', pair[0], '-c', 'user.name=T', '-c', 'user.email=t@example.invalid',
                                  'commit', '--allow-empty', '-m', 'allowed'], env={**os.environ, **environment}, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(marker.exists())
         self.assertEqual(self.git('config', '--local', 'core.hooksPath'), str(hooks))
         self.assertEqual(bees.agent_branch_violation(self.env_b2, 'Ada'), '')

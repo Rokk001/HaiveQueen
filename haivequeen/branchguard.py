@@ -39,9 +39,11 @@ def prepare(folder, cwd, branch):
                               capture_output=True, text=True, check=True).stdout.strip()
     head_log = subprocess.run(['git', '-C', str(cwd), 'rev-parse', '--path-format=absolute', '--git-path', 'logs/HEAD'],
                               capture_output=True, text=True, check=True).stdout.strip()
+    common = subprocess.run(['git', '-C', str(cwd), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                            capture_output=True, text=True, check=True).stdout.strip()
     path = Path(head_log)
     baseline = path.read_bytes() if path.exists() else b''
-    (folder / 'policy.json').write_text(json.dumps({'branch': branch, 'original': original,
+    (folder / 'policy.json').write_text(json.dumps({'branch': branch, 'original': original, 'common_dir': common,
         'head_log': str(path), 'log_offset': len(baseline), 'log_prefix': hashlib.sha256(baseline).hexdigest()}), encoding='utf-8')
     command = ' '.join(shlex.quote(str(x).replace('\\', '/')) for x in (sys.executable, '-I', Path(__file__).resolve()))
     # Preserve the repository's other hooks too. No shared Git config or hook is modified.
@@ -122,11 +124,32 @@ def record_violation(folder, branch):
     os.replace(temporary, Path(folder) / 'violation.json')
 
 
+def _same(a, b):
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _in_project_repo(policy):
+    """B-8 applies only to the project repository and its worktrees."""
+    if 'common_dir' not in policy:  # Attempts started before this check was added.
+        return True
+    here = subprocess.run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], capture_output=True, text=True)
+    return here.returncode != 0 or _same(here.stdout.strip(), policy['common_dir'])
+
+
 def main():
     folder, hook, *args = sys.argv[1:]
     policy = json.loads((Path(folder) / 'policy.json').read_text(encoding='utf-8'))
     payload = sys.stdin.buffer.read() if hook == 'reference-transaction' else None
     foreign = ''
+    if not _in_project_repo(policy):
+        # Another repository (for example a temporary test repository): not guarded;
+        # run that repository's own hook, never the project's.
+        # Not --git-path hooks: the guard's core.hooksPath would point back at this hook.
+        here = subprocess.run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], capture_output=True, text=True)
+        own = Path(here.stdout.strip()) / 'hooks' / hook
+        if own.is_file() and os.access(own, os.X_OK):
+            return subprocess.run(['sh', '-c', 'exec "$0" "$@"', str(own), *args], input=payload).returncode
+        return 0
     if hook == 'pre-commit':
         current = subprocess.run(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], capture_output=True, text=True)
         branch = current.stdout.strip() or '(detached HEAD)'

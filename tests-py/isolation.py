@@ -37,6 +37,8 @@ def is_live(rel: Path) -> bool:
     itself (profile.SPECS) and anything directly in profile/ are not live, so a test that writes them is still found."""
     if rel.parts[0].startswith("compile-check.lock"):
         return len(rel.parts) == 1 and rel.name in ("compile-check.lock", "compile-check.lock.guard")  # only the machine-wide locks
+    if rel.parts[0] == "removal-locks":   # lock files of the live loop's worktree and branch removals
+        return len(rel.parts) == 2 and rel.name.endswith(".lock.guard")
     if rel.parts[0] == "exempt-processes":   # marker files of live agent processes
         return True
     if rel.parts[0].startswith(LIVE_TOP) or (rel.parts[0] == "logs" and len(rel.parts) > 2):
