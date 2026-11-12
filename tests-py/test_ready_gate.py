@@ -377,6 +377,33 @@ class GateTests(RoundCase):
             code, result = self.ready()
         self.assertEqual(code, 0, result)
 
+    def test_cut_plan_accepts_added_package_and_checks_new_requirement(self):
+        original = "# Request\n- Paint the door.\n- Repair the window.\n"
+        runtime.record_submission(self.conn, "testproj", REL, original)
+        path = self.repo / REL
+        text = path.read_text(encoding="utf-8")
+        text = text.replace('depends_on = []\n', 'depends_on = []\nrequirements = ["R1"]\n', 1)
+        path.write_text(text, encoding="utf-8")
+        state = self.repo / STATE
+        state.write_text("# State\n\n## Requirements\n- R1: Paint the door.\n\n## Completeness\n- R1: done | door test\n", encoding="utf-8")
+        # Add the omitted requirement and a package to the already cut header.
+        state.write_text(state.read_text(encoding="utf-8").replace("\n\n## Completeness", "\n- R2: Repair the window.\n\n## Completeness"), encoding="utf-8")
+        text = path.read_text(encoding="utf-8").replace('+++\n# Dummy plan', '[[packages]]\nid = "P2"\ntitle = "Repair window"\ndepends_on = []\nrequirements = ["R2"]\n+++\n# Dummy plan', 1)
+        path.write_text(text, encoding="utf-8")
+        cut = plans.load_plan(path)
+        self.assertEqual([p.id for p in cut.packages], ["P1", "P2"])
+        self.assertEqual(plans.requirement_problems(cut, plans.load_requirements(path)), [])
+        with self.runner("passed"):
+            code, result = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("R2", result["error"])
+        self.assertEqual(self.requests, [])
+        state.write_text(state.read_text(encoding="utf-8") + "- R2: done | window test\n", encoding="utf-8")
+        with self.runner("passed"):
+            code, result = self.ready()
+        self.assertEqual(code, 0, result)
+        self.assertIn(original, self.requests[-1]["prompt"])
+
     def test_passed_result_is_accepted(self):
         """Complete list and a passed check agent: the branch is registered."""
         self.state(*FULL)
