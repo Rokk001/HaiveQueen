@@ -12,6 +12,7 @@ import re
 import sys
 import time
 from datetime import datetime
+from contextlib import contextmanager
 
 from . import config, runtime
 from . import platform as osplat
@@ -277,10 +278,34 @@ def rule_text(value) -> str:
             % (bj["EnvVar"], bj["ParallelVar"], bj["MinFreeGB"], bj["MinRamVar"]))
 
 
+@contextmanager
+def reservation_guard():
+    """Serialize core budget checks and publication with compile-slot acquisition.
+
+    Callers publish their allocation before leaving; no worker runs under this lock.
+    """
+    from . import integration
+    path = integration._compile_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with integration._compile_lock_guard(path, 0.01):
+        yield
+
+
+def reserve_agent_build(env, name):
+    """Calculate and publish a build agent's allocation in one critical section."""
+    with reservation_guard():
+        planned = plan_build(env, exclude=name)
+        if planned and planned['Jobs'] > 0:
+            runtime.upsert_agent(env.conn, env.name, name, {
+                'buildJobs': planned['Jobs'], 'buildParallel': planned['Parallel']})
+        return planned
+
+
 def plan_build(env, free_mb: float = None, cores: int = None, exclude: str | tuple = None, host: str = None) -> dict:
     """Job count the next build of this project gets, computed now: {Jobs, Why, PerJobMB, Parallel, EnvVar, ParallelVar, MinRamVar, MinFreeGB,
     FreeMB, Environment}, or None when the project has no build block. Jobs is zero while the shared core budget cannot fit a job.
-    Builds and compile checks that run now share the chosen cores (`exclude` = the asking agent or external integration pair)."""
+    Builds and compile checks that run now share the chosen cores (`exclude` = the asking agent or external integration pair).
+    When starting a build, hold reservation_guard across this calculation and publication of the allocation."""
     bj = settings_from(env.settings.get("buildJobs"))
     if bj is None:
         return None

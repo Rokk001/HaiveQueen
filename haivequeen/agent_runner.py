@@ -1094,12 +1094,14 @@ def run_agent(a, out=None):
             env.update(json.loads(guard).get('environment', {}))
     if bj:
         build_env = SimpleNamespace(conn=conn, name=a.project, settings={"buildJobs": bj_raw})
-        calc = buildjobs.plan_build(build_env, exclude=a.name)
+        calc = (buildjobs.plan_build(build_env, exclude=a.name) if a.phase in ("queen", "bee")
+                else buildjobs.reserve_agent_build(build_env, a.name))
         if calc["Jobs"] == 0:
             run.say("Waiting for build cores", "Yellow")
         while calc["Jobs"] == 0:
             time.sleep(1)
-            calc = buildjobs.plan_build(build_env, exclude=a.name)
+            calc = (buildjobs.plan_build(build_env, exclude=a.name) if a.phase in ("queen", "bee")
+                    else buildjobs.reserve_agent_build(build_env, a.name))
         bj_start_mb = calc["FreeMB"]
         bj_jobs, why = calc["Jobs"], calc["Why"]
         env.update(buildjobs.build_environment(bj, bj_jobs))   # the job count (configured name), the parallel value and the minimum free RAM
@@ -1117,7 +1119,6 @@ def run_agent(a, out=None):
         else:
             sampler = threading.Thread(target=sampler_loop, daemon=True, args=(
                 samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or buildjobs.SAMPLE_SEC), os.getpid()))
-            runtime.upsert_agent(conn, a.project, a.name, {"buildJobs": bj_jobs, "buildParallel": bj["Parallel"]})
             run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
         if sampler:
             sampler.start()

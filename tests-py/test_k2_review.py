@@ -4,6 +4,7 @@ import io
 import json
 import os
 import subprocess
+import threading
 from types import SimpleNamespace
 from unittest import mock
 
@@ -12,7 +13,79 @@ from haivequeen import buildjobs, cli, config, hives, integration, orchestrator,
 from test_k2_detached_compile import DetachedCompileCase
 
 
+real_thread_start = threading.Thread.start
+
+
 class CoreAccountingTests(DetachedCompileCase):
+    def test_build_and_compile_acquisitions_share_one_atomic_reservation(self):
+        for kind in ('agent', 'integration', 'orchestrator'):
+            with self.subTest(kind=kind):
+                settings = {'buildCommand': 'build', 'buildJobs': {'cores': 1}}
+                env = SimpleNamespace(name='project', conn=self.conn, settings=settings)
+                calculated, attempting, granted = (threading.Event() for _ in range(3))
+                slots, errors = [], []
+                original = buildjobs.plan_build
+
+                def pause_before_publication(*args, **kwargs):
+                    planned = original(*args, **kwargs)
+                    calculated.set()
+                    self.assertTrue(attempting.wait(5))
+                    granted.wait(0.3)
+                    return planned
+
+                def acquire_check():
+                    try:
+                        if not calculated.wait(5):
+                            raise AssertionError('build did not calculate its allocation')
+                        attempting.set()
+                        slots.append(integration._acquire_compile_slot(settings, 0.01))
+                        granted.set()
+                    except Exception as exc:
+                        errors.append(exc)
+
+                state = {'steps': {}}
+                with mock.patch.dict(os.environ, {**self.env, 'BZZ_AGENT': ''}), \
+                     mock.patch.object(config, 'load_config', return_value={'buildJobs': settings['buildJobs']}), \
+                     mock.patch.object(integration.osplat, 'free_ram_mb', return_value=64000), \
+                     mock.patch.object(integration.osplat, 'logical_cores', return_value=1), \
+                     mock.patch.object(buildjobs, 'plan_build', side_effect=pause_before_publication), \
+                     mock.patch.object(scheduler, 'load_projects', return_value=[env]), \
+                     mock.patch.object(projsettings, 'remote_wait_reason', return_value=''), \
+                     mock.patch.object(integration, 'head_commit', return_value=''), \
+                     mock.patch.object(orchestrator, '_log'), \
+                     mock.patch.object(orchestrator, '_counter', return_value=''), \
+                     mock.patch.object(orchestrator, '_harvest', return_value=None), \
+                     mock.patch.object(orchestrator, '_async', return_value=True), \
+                     mock.patch.object(orchestrator, '_result_file', return_value=self.base / 'result'), \
+                     mock.patch.object(orchestrator.threading.Thread, 'start', autospec=True) as start:
+                    # Keep the real Thread.start for the competing acquisition.
+                    thread = threading.Thread(target=acquire_check)
+                    real_thread_start(thread)
+                    try:
+                        if kind == 'agent':
+                            runtime.upsert_agent(self.conn, 'project', 'builder', {'status': 'running'})
+                            self.assertEqual(buildjobs.reserve_agent_build(env, 'builder')['Jobs'], 1)
+                        elif kind == 'integration':
+                            args = SimpleNamespace(action='acquire', project='project', plan='plan', owner_pid=os.getpid())
+                            with contextlib.redirect_stdout(io.StringIO()):
+                                self.assertEqual(cli.cmd_integration(args, self.conn), 0)
+                        else:
+                            orchestrator._command(self.conn, env, 'plan', state, self.base, 'Build', 64000)
+                            start.assert_called_once()
+                        self.assertFalse(granted.is_set(), 'build and compile check both reserved the last core')
+                        self.assertEqual(buildjobs.allocated_cores(buildjobs.running_builds(self.conn)), 1)
+                    finally:
+                        runtime.upsert_agent(self.conn, 'project', 'builder', {'buildJobs': None})
+                        hives.release_integration(self.conn, 'project', 'plan')
+                        orchestrator.save(self.conn, 'project', 'plan', {'steps': {}})
+                        orchestrator.JOBS.pop(('project', 'plan'), None)
+                        thread.join(5)
+                        for slot in slots:
+                            integration._release_compile_slot(slot, 0.01)
+                    self.assertFalse(thread.is_alive())
+                    self.assertEqual(errors, [])
+                    self.assertTrue(granted.is_set(), 'compile check did not start after build released its core')
+
     def test_orchestrator_waits_without_starting_a_zero_job_build(self):
         env = SimpleNamespace(name='project', conn=self.conn, settings={'buildCommand': 'build', 'buildJobs': 8})
         state = {'steps': {}}
