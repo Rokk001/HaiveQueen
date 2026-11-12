@@ -1,5 +1,7 @@
 """HaiveQueen command line: python haivequeen/cli.py <command>. Machine-readable output is JSON on stdout."""
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -13,16 +15,8 @@ from haivequeen import export as export_mod, init as init_mod, views  # noqa: E4
 STUBS = ()
 
 
-_CONN = None   # the database of the running command; set by main()
-
-
 def out(obj) -> None:
-    """Print an object as JSON on stdout; a running Queen's answer carries her undelivered owner messages (key owner_messages), and only then."""
-    agent = os.environ.get("BZZ_AGENT")
-    if _CONN is not None and agent and isinstance(obj, dict):
-        messages = runtime.take_owner_messages(_CONN, agent)
-        if messages:
-            obj = {**obj, "owner_messages": messages}
+    """Print an object as JSON on stdout."""
     print(json.dumps(obj, ensure_ascii=False))
 
 
@@ -751,16 +745,33 @@ def main(argv=None) -> int:
     desktop = getattr(args, "desktop", False)
     try:
         conn = db.connect(config.db_path())
-        global _CONN
-        _CONN = conn
-        code = args.fn(args, conn)
+        agent = os.environ.get("BZZ_AGENT")
+        row = conn.execute("SELECT * FROM agents WHERE name=? ORDER BY id DESC LIMIT 1", (agent,)).fetchone() if agent else None
+        queen = row and dict(row).get("phase") == "queen" and not row["archived"] and row["status"] in ("running", "starting")
+        if queen:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = args.fn(args, conn)
+            raw = output.getvalue()
+            messages = runtime.take_owner_messages(conn, agent)
+            if messages:
+                try:
+                    result = json.loads(raw)
+                except ValueError:
+                    result = raw
+                result = {**result, "owner_messages": messages} if isinstance(result, dict) else {
+                    "result": result, "owner_messages": messages}
+                print(json.dumps(result, ensure_ascii=False))
+            else:
+                print(raw, end="")
+        else:
+            code = args.fn(args, conn)
     except Exception as exc:
         if not desktop:
             raise
         args.desktop_result = {"ok": False, "error": str(exc)}
         code = fail(str(exc))
     finally:
-        _CONN = None
         if conn is not None:
             conn.close()
     if desktop:

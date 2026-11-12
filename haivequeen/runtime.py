@@ -680,7 +680,7 @@ def mark_decisions_delivered(conn, agent, decisions) -> None:
 
 
 def take_owner_messages(conn, agent) -> list:
-    """The owner decisions (source owner, active) stored for the plan or the whole Project of the running Queen `agent` since she started that she has not
+    """The owner decisions (source owner) stored for the plan or the whole Project of the running Queen `agent` since she started that she has not
     received yet, as [{id, text}]; each is marked delivered with her name in the same transaction and never returned again. Other callers get []."""
     row = conn.execute("SELECT project, plan_path, started_at FROM agents WHERE name=? AND phase='queen' AND archived=0 AND status IN ('running','starting') "
                        "ORDER BY id DESC LIMIT 1", (agent,)).fetchone()
@@ -688,7 +688,7 @@ def take_owner_messages(conn, agent) -> list:
         return []
     with db.transaction(conn):
         found = conn.execute(
-            "SELECT id, text FROM decisions d WHERE project=? AND source='owner' AND status='active' AND (plan_path IS NULL OR plan_path='' OR plan_path=?) "
+            "SELECT id, text FROM decisions d WHERE project=? AND source='owner' AND (plan_path IS NULL OR plan_path='' OR plan_path=?) "
             "AND ts>=? AND NOT EXISTS (SELECT 1 FROM decision_deliveries x WHERE x.decision_id=d.id AND x.agent=?) ORDER BY id",
             (row["project"], row["plan_path"], row["started_at"], agent)).fetchall()
         for d in found:

@@ -41,6 +41,30 @@ class OwnerMessageTest(RoundCase):
         marks = self.conn.execute("SELECT decision_id, agent FROM decision_deliveries ORDER BY decision_id").fetchall()
         self.assertEqual([(r[0], r[1]) for r in marks], [(own, "Mia"), (wide, "Mia")])
 
+    def test_list_command_delivers_pending_message_once(self):
+        did = runtime.add_decision(self.conn, "testproj", "owner", "LIST-MESSAGE", REL)
+        _, res = self.bzz("decisions", "list", "--project", "testproj")
+        self.assertEqual(res["owner_messages"], [{"id": did, "text": "LIST-MESSAGE"}])
+        self.assertIsInstance(res["result"], list)
+        self.assertNotIn("owner_messages", self.note()[1])
+
+    def test_text_and_error_commands_deliver(self):
+        first = runtime.add_decision(self.conn, "testproj", "owner", "TEXT", REL)
+        _, res = self.bzz("status", "--project", "testproj")
+        self.assertEqual(res["owner_messages"], [{"id": first, "text": "TEXT"}])
+        self.assertIsInstance(res["result"], str)
+        second = runtime.add_decision(self.conn, "testproj", "owner", "ERROR", REL)
+        _, res = self.bzz("decisions", "update", "999999", "--status", "active")
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["owner_messages"], [{"id": second, "text": "ERROR"}])
+
+    def test_superseded_pending_decisions_are_delivered_in_order(self):
+        first = runtime.add_decision(self.conn, "testproj", "owner", "FIRST", REL, "owner-release")
+        second = runtime.add_decision(self.conn, "testproj", "owner", "SECOND", REL, "owner-release")
+        self.assertEqual(self.note()[1]["owner_messages"], [
+            {"id": first, "text": "FIRST"}, {"id": second, "text": "SECOND"}])
+        self.assertNotIn("owner_messages", self.note()[1])
+
     def test_bzz_decisions_add_is_delivered(self):
         self.bzz("decisions", "add", "--project", "testproj", "--source", "owner", "--plan", REL, "--text", "VIA-CLI", agent=None)
         self.assertEqual([m["text"] for m in self.note()[1]["owner_messages"]], ["VIA-CLI"])
