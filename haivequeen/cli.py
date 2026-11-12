@@ -535,7 +535,7 @@ def cmd_bee(args, conn):
         rules = json.loads(args.rules)
         if not all(isinstance(x, list) and all(isinstance(v, str) for v in x) for x in (steps, paths, rules)) or not steps:
             return fail("steps, paths and rules must be string lists and steps must not be empty")
-        started = bees.start_process(env, plan, args.package, args.name, args.cls, args.task, steps, paths, rules, cwd=args.cwd, no_subagents=args.no_subagents)
+        started = bees.start_process(env, plan, args.package, args.name, args.cls, args.task, steps, paths, rules, cwd=args.cwd, no_subagents=not args.subagents or args.no_subagents)
     except (ValueError, TypeError) as exc:
         return fail(str(exc))
     if isinstance(started, dict):
@@ -603,7 +603,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--blocked-by", choices=["question", "build", "owner", "package", "provider"], default="")
     p.add_argument("--blocked-ref", default="")
     p.add_argument("--ended-evidence", default="", help="existing Agent result file; release also requires its matching agent row to have ended or its known process to be absent")
-    p.add_argument("--no-subagents", action="store_true")
+    p.add_argument("--subagents", action="store_true", help="the Queen has a native subagent tool available")
+    p.add_argument("--no-subagents", action="store_true", help="force separate processes")
     p.set_defaults(fn=cmd_bee)
 
     p = sub.add_parser("package", help="record package progress; owner: unassign its stored provider")
