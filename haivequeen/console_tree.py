@@ -6,8 +6,8 @@ is changed. This module uses only the standard library.
 
 This is not a universal Windows policy: a native debugger can start
 its own DEBUG_PROCESS chain, which Windows then routes away from this broker.
-Owner decision 1117 accepts this as a known limitation without adding native
-or external dependencies. The regression remains an expected failure so a
+This is an accepted limitation without adding native or external dependencies.
+The regression remains an expected failure so a
 future fix produces an unexpected success until the marker is removed.
 x86/x64 Win32 startup and the internal CreateProcessInternalW /
 process-parameters layouts are the

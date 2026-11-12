@@ -1,6 +1,6 @@
 """N1: hide Windows process-tree consoles and preserve graphical windows.
 
-Known limitation (owner decision 1117): native tools starting their own
+Accepted limitation: native tools starting their own
 DEBUG_PROCESS chains take debug-event ownership away from the supervisor.
 The native-debugger regression stays executable as an expected failure.
 """
@@ -139,13 +139,26 @@ class NoConsoleTest(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_native_debugger_descendant_remains_hidden(self):
-        """Known limitation (1117): Windows routes a tool's debug chain away from us."""
+        """Accepted limitation: Windows routes a tool's debug chain away from us."""
+        self._debugger_descendant_probe()
+
+    def test_existing_debugger_keeps_native_descendants_hidden(self):
+        """An already-debugged caller can launch an independent console supervisor."""
+        for debug_children in (False, True):
+            with self.subTest(debug_children=debug_children):
+                self._debugger_descendant_probe(import_policy=True, debug_children=debug_children)
+
+    def _debugger_descendant_probe(self, import_policy=False, debug_children=False):
         with tempfile.TemporaryDirectory() as tmp:
             result = str(Path(tmp) / 'debugged.txt')
             probe = ("import ctypes as c;k=c.WinDLL('kernel32');u=c.WinDLL('user32');"
                      "k.GetConsoleWindow.restype=c.c_void_p;u.IsWindowVisible.argtypes=[c.c_void_p];"
                      "open(%r,'w').write(str(int(bool(u.IsWindowVisible(k.GetConsoleWindow())))))" % result)
             child = "import subprocess,sys;subprocess.run([sys.executable,'-I','-c',%r],creationflags=0x10,check=True)" % probe
+            if import_policy:
+                child = ("import ctypes,sys;assert ctypes.windll.kernel32.IsDebuggerPresent();"
+                         "sys.path.insert(0,%r);from haivequeen import platform;import subprocess;"
+                         "subprocess.run([sys.executable,'-I','-c',%r],check=True)" % (str(ROOT), child))
             native = '''import _winapi,ctypes as c,subprocess,sys
 from ctypes import wintypes as w
 class U(c.Union):
@@ -156,7 +169,7 @@ k=c.WinDLL('kernel32',use_last_error=True)
 k.WaitForDebugEvent.argtypes=[c.POINTER(E),w.DWORD]
 k.ContinueDebugEvent.argtypes=[w.DWORD,w.DWORD,w.DWORD]
 k.CloseHandle.argtypes=[w.HANDLE]
-p,t,pid,tid=_winapi.CreateProcess(None,%r,None,None,False,0x08000001,None,None,subprocess.STARTUPINFO())
+p,t,pid,tid=_winapi.CreateProcess(None,%r,None,None,False,%r,None,None,subprocess.STARTUPINFO())
 count=0
 try:
     while True:
@@ -181,7 +194,8 @@ try:
 finally:
     _winapi.CloseHandle(p)
     _winapi.CloseHandle(t)
-''' % subprocess.list2cmdline([sys.executable, '-I', '-c', child])
+''' % (subprocess.list2cmdline([sys.executable, '-I', '-c', child]),
+       0x08000003 if import_policy and not debug_children else 0x08000001)
             out = run_without_console("from haivequeen import platform\nimport subprocess\n"
                                       "subprocess.run([sys.executable,'-I','-c',%r],check=True)" % native)
             self.assertTrue(Path(result).exists(), out)

@@ -38,7 +38,7 @@ def hide_console_windows() -> None:
     Detached calls keep their flags. GUI startup visibility is untouched. Safe
     to call more than once. A native debugger broker intercepts ordinary Win32
     descendant creation before allocation; console_tree documents its
-    known limitation, accepted under owner decision 1117, when native tools
+    accepted limitation when native tools
     establish their own debugging chains and Windows redirects those events.
     """
     if not is_windows() or getattr(subprocess.Popen, "_hq_no_window", False):
@@ -66,8 +66,8 @@ def hide_console_windows() -> None:
     subprocess.Popen._hq_no_window = True
 
     import _winapi
-    if ctypes.windll.kernel32.IsDebuggerPresent():
-        return  # an existing debugger owns this process's debug events
+    # The supervisor is a separate process and can debug new children even
+    # when this caller already belongs to another debugger's chain.
     import importlib.util
     spec = importlib.util.spec_from_file_location('_hq_console_tree', Path(__file__).with_name('console_tree.py'))
     policy = importlib.util.module_from_spec(spec)
