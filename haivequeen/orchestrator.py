@@ -214,6 +214,9 @@ def advance(conn, env, plan, free_mb, alive=None):
         state = _new_state(conn, env, plan, hive)
         _save_last(conn, env.name, plan, fix_agent="", steps=[], commit="")
         _log(env, "%s: Queen done, integration taken over" % _short(plan))
+    if state.get("job", {}).get("cancelling"):
+        if not _cancel_pipeline_job(conn, env.name, plan, state):
+            return None
     if _plan_status(conn, env.name, plan) in ("PAUSED", "CANCELLED", "DONE", "DRAFT"):
         _harvest_only(conn, env, plan, state)   # a running command ends; nothing new starts
         return None
@@ -743,24 +746,48 @@ def owner_stop(conn, project, agent_name):
     return False
 
 
+def _cancel_pipeline_job(conn, project, plan, state, stop=None):
+    """Keep the job recorded until its command and supervisor have actually stopped."""
+    record = state.get("job")
+    if not record:
+        return True
+    stop = stop or osplat.kill_process_tree
+    record["cancelling"] = True
+    job = JOBS.get((project, plan))
+    if job and job.token != record.get("token"):
+        job = None
+    if job:
+        job.cancelled = True
+    pid = (job.pid if job else None) or record.get("pid")
+    if pid and record.get("cancel_pid") != pid:
+        stop(pid)
+        record["cancel_pid"] = pid
+    save(conn, project, plan, state)
+    if job and job.alive():
+        return False
+    if record.get("compile"):
+        # A supervisor may publish before exiting, and recovery must also confirm
+        # that an orphaned check has ended before the worktree can be reused.
+        if osplat.process_alive(record["pid"]):
+            return False
+        if integration.poll_compile_check(conn, project, record) is None:
+            return False
+    elif pid and osplat.process_alive(pid):
+        return False
+    JOBS.pop((project, plan), None)
+    state.pop("job", None)
+    state["steps"] = {k: v for k, v in state["steps"].items() if v != "running"}
+    save(conn, project, plan, state)
+    return True
+
+
 def stop_plan(conn, project, plan, stop=None):
     """Stopping the plan ends its running pipeline command and its fix agent; the pipeline goes on at the resume."""
     stop = stop or osplat.kill_process_tree
     state = load(conn, project, plan)
     if state is None:
         return
-    job = JOBS.get((project, plan))
-    if job is not None:
-        job.cancelled = True
-        if job.pid:
-            stop(job.pid)
-    if state.get("job") and state["job"].get("pid") and not job:
-        stop(state["job"]["pid"])
-    if state.get("job"):
-        if state["job"].get("compile"):
-            integration.poll_compile_check(conn, project, state["job"])
-        state.pop("job", None)
-        state["steps"] = {k: v for k, v in state["steps"].items() if v != "running"}
+    _cancel_pipeline_job(conn, project, plan, state, stop)
     fix = state.get("fix")
     if state.get("phase") == "fix" and fix and fix.get("agent"):
         for row in runtime.list_agents(conn, project, "active"):
