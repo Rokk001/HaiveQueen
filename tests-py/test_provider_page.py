@@ -568,55 +568,34 @@ class BeeModeAndLimitSource(PageCase):
         note = win.notes["beeMode"]
         self.assertIn("Subagent", note)
         self.assertIn("Process", note)
-        self.assertIn("inside her own process", note)
+        self.assertIn("when supported", note)
         self.assertIn("best reserve", note)
         self.assertNotIn("\n", note)
 
-    def test_subagent_is_greyed_out_for_codex_custom_cli_and_local_llm(self):
-        """Subagent cannot be chosen for a CLI without embedded Agents and for a Local LLM provider; it shows as Process there."""
+    def test_subagent_is_selectable_and_persistent_for_all_providers(self):
         win = self.window()
-        for name in ("codex", "wrapped", "lms"):
-            with self.subTest(provider=name):
-                self.provider(win, name)
-                self.assertEqual(self.bee_states(win), ["disabled", "normal"])
-                self.assertEqual(self.bee_getter(win)(), "process")
-                self.assertEqual(win.bee_var.get(), "Process")
-        for name in ("claude", "claude-api"):
+        for name in ("codex", "wrapped", "lms", "claude", "claude-api"):
             with self.subTest(provider=name):
                 self.provider(win, name)
                 self.assertEqual(self.bee_states(win), ["normal", "normal"])
                 self.assertEqual(self.bee_getter(win)(), "subagent")
+        win.save()
+        self.assertTrue(all(self.saved()[name]["beeMode"] == "subagent" for name in
+                            ("codex", "wrapped", "lms", "claude", "claude-api")))
 
-    def test_subagent_greys_out_when_the_cli_or_access_type_changes(self):
-        """Switching the shown provider to Codex CLI or to Local LLM greys Subagent at once."""
+    def test_stored_subagent_survives_scheduler_load(self):
+        from haivequeen import scheduler as sch
+        providers = {p["name"]: p for p in sch.get_providers(gui_config.load_migrated(self.folder / "config.toml"))}
+        for name in ("codex", "wrapped", "lms", "claude", "claude-api"):
+            self.assertEqual(providers[name]["beeMode"], "subagent")
+
+    def test_mode_survives_cli_and_access_changes(self):
         win = self.window()
         self.provider(win, "claude")
         win.choose_cli("Codex CLI")
-        self.assertEqual(self.bee_states(win), ["disabled", "normal"])
-        self.assertEqual(self.bee_getter(win)(), "process")
-        win.choose_cli("Claude Code")
+        self.assertEqual(self.bee_getter(win)(), "subagent")
         win.choose_access("Local LLM")
-        self.assertEqual(self.bee_states(win), ["disabled", "normal"])
-        self.assertEqual(self.bee_getter(win)(), "process")
-
-    def test_stored_subagent_of_codex_and_local_llm_is_process_before_any_save(self):
-        """Such a provider with subagent in config.toml counts as Process from the first load (scheduler, before any save) and is shown so."""
-        from haivequeen import scheduler as sch
-        providers = {p["name"]: p for p in sch.get_providers(gui_config.load_migrated(self.folder / "config.toml"))}
-        self.assertEqual(providers["codex"]["beeMode"], "process")
-        self.assertEqual(providers["lms"]["beeMode"], "process")
-        self.assertEqual(providers["wrapped"]["beeMode"], "process")
-        self.assertEqual(providers["claude"]["beeMode"], "subagent")
-        self.assertEqual(providers["claude-api"]["beeMode"], "subagent")
-
-    def test_stored_subagent_of_codex_and_local_llm_is_saved_as_process(self):
-        """Shown as Process, so a save writes process for them."""
-        win = self.window()
-        win.save()
-        saved = self.saved()
-        self.assertEqual(saved["codex"]["beeMode"], "process")
-        self.assertEqual(saved["lms"]["beeMode"], "process")
-        self.assertEqual(saved["claude"]["beeMode"], "subagent")
+        self.assertEqual(self.bee_getter(win)(), "subagent")
 
     def test_no_usage_check_field_on_the_provider_page(self):
         """The field Usage check is removed from every provider page."""

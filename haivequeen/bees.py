@@ -1070,7 +1070,7 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
     if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
         return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
     queen_provider = scheduler.get_provider(env.providers, hive['provider'])
-    embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not (queen_provider.get('endpoint') or queen_provider.get('server')) and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
+    embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
     free = scheduler.provider_free(env.providers, running, env.conn)   # A subagent Bee needs a free slot of the Queen's provider like a Bee process
     route_free = dict(free)
     limited = [p['name'] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # a used-up window (reserve 0) blocks the provider
