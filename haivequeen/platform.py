@@ -36,8 +36,9 @@ def hide_console_windows() -> None:
     """On Windows replace console creation requests with CREATE_NO_WINDOW.
 
     Detached calls keep their flags. GUI startup visibility is untouched. Safe
-    to call more than once. Native descendants can still allocate a new console;
-    this interpreter-local wrapper cannot enforce a process-tree policy.
+    to call more than once. A native debugger broker intercepts ordinary Win32
+    descendant creation before allocation; console_tree documents its remaining
+    limitation when native tools establish their own debugging chains.
     """
     if not is_windows() or getattr(subprocess.Popen, "_hq_no_window", False):
         return
@@ -62,6 +63,20 @@ def hide_console_windows() -> None:
 
     subprocess.Popen.__init__ = patched
     subprocess.Popen._hq_no_window = True
+
+    import _winapi
+    if ctypes.windll.kernel32.IsDebuggerPresent():
+        return  # an existing debugger owns this process's debug events
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('_hq_console_tree', Path(__file__).with_name('console_tree.py'))
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    create = _winapi.CreateProcess
+
+    def create_process(*args):
+        return policy.create_process(create, args)
+
+    _winapi.CreateProcess = create_process
 
 
 hide_console_windows()
@@ -268,6 +283,21 @@ def process_command_line(pid):
     except (OSError, ValueError, TypeError, subprocess.SubprocessError):
         return None
     return None
+
+
+def is_console_supervisor(pid) -> bool:
+    """Recognize this installation's private supervisor command exactly."""
+    if not is_windows():
+        return False
+    executable = Path(sys.executable).with_name('pythonw.exe')
+    if not executable.exists():
+        executable = Path(sys.executable)
+    prefix = subprocess.list2cmdline([str(executable), '-I', str(Path(__file__).with_name('console_tree.py').resolve())]) + ' '
+    command = process_command_line(pid) or ''
+    if not command.casefold().startswith(prefix.casefold()):
+        return False
+    arguments = command[len(prefix):].split()
+    return len(arguments) == 3 and all(value.isdecimal() for value in arguments)
 
 
 # Collect a process and everything it started, children before parents.
