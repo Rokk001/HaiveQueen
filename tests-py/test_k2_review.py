@@ -82,6 +82,13 @@ class CoreAccountingTests(DetachedCompileCase):
 
 
 class SupervisorRecoveryTests(DetachedCompileCase):
+    def test_normal_exit_one_without_output_remains_a_failure(self):
+        proc = self.start("import pathlib,sys\npathlib.Path('started').touch()\nsys.exit(1)\n")
+        stdout, _ = proc.communicate(timeout=15)
+        result = json.loads(stdout.strip().splitlines()[-1])
+        self.assertEqual(result['exit'], 1)
+        self.assertFalse(result.get('aborted'), result)
+
     def test_normal_exit_one_with_output_remains_a_failure(self):
         proc = self.start("import os,pathlib,sys\nprint('progress before termination', flush=True)\npathlib.Path('started').write_text(str(os.getpid()))\nsys.exit(1)\n")
         stdout, _ = proc.communicate(timeout=15)
@@ -91,11 +98,10 @@ class SupervisorRecoveryTests(DetachedCompileCase):
 
     def test_killed_command_with_output_is_stored_as_aborted(self):
         proc = self.start("import os,pathlib,time\nprint('progress before termination', flush=True)\npathlib.Path('started').write_text(str(os.getpid()))\ntime.sleep(60)\n")
-        pid = int((self.base / 'started').read_text())
-        if os.name == 'nt':
-            subprocess.run(['taskkill', '/PID', str(pid), '/F'], capture_output=True, check=True)
-        else:
-            os.kill(pid, 9)
+        holder = self.wait_for(lambda: integration._read_holders(self.data / 'compile-check.lock'))[0]
+        request = json.loads(runtime.kv_get(self.conn, 'project',
+                                          integration.COMPILE_REQUEST_KEY + holder['run_token']))
+        self.assertTrue(integration.osplat.kill_process_tree(request['check_pid']))
         stdout, _ = proc.communicate(timeout=15)
         result = json.loads(stdout.strip().splitlines()[-1])
         self.assertIn('progress before termination', result['output'])

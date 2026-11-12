@@ -221,6 +221,14 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, lab
     """Run `command` in `cwd` until it ends; returns (exit code, output text). The check ends red (124) after max_seconds of running and red (125,
     "stalled") when for stall_seconds neither a new output line appeared nor the CPU time of its process tree grew. `env` adds environment variables,
     `label` names the command in the messages and `on_start(pid)` is called once the process runs (the Orchestrator keeps it to end the command)."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="compile-completion-") as folder:
+        return _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll,
+                                  Path(folder) / "exit", env, label, on_start)
+
+
+def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completion, env, label, on_start):
+    """Watch a launcher whose completion record distinguishes an exit from an interrupted run."""
     import collections
     import threading
     lines = collections.deque(maxlen=400)
@@ -233,7 +241,11 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, lab
 
     # The configured command line is the owner's own text, so the system shell runs it (named explicitly, no shell flag): cmd /s keeps a quoted program path intact.
     line = 'cmd.exe /d /s /c "%s"' % command if os.name == "nt" else ["/bin/sh", "-c", command]
-    proc = subprocess.Popen(line, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+    launcher = ("import json, pathlib, subprocess, sys; "
+                "code = subprocess.call(json.loads(sys.argv[1])); "
+                "pathlib.Path(sys.argv[2]).write_text(str(code), encoding='ascii')")
+    proc = subprocess.Popen([sys.executable, "-I", "-c", launcher, json.dumps(line), str(completion)],
+                            cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                             env={**os.environ, **env} if env else None, **({"start_new_session": True} if os.name != "nt" else {}))
     if on_start:
         on_start(proc.pid)
@@ -266,7 +278,13 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, lab
     text = "\n".join(lines)
     if ended:
         return ended[0], ended[1] + ("; last output lines:\n" + "\n".join(list(lines)[-20:]) if lines else "; no output at all")
-    return proc.returncode, text
+    try:
+        code = int(completion.read_text(encoding="ascii"))
+    except (OSError, ValueError):
+        code = None
+    if proc.returncode != 0 or code is None:
+        return -1, text + ("\n" if text else "") + "the command launcher ended without completing the run"
+    return code, text
 
 
 # Run the compile check of the project for a Queen or an Agent.
@@ -294,8 +312,8 @@ def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones
         result = {"ok": code == 0, "exit": code, "commit": commit, "time": db.now(), "seconds": round(time.time() - started, 1), "command": command}
         if code == 125:
             result["stalled"] = True
-        # cmd.exe reports TerminateProcess (taskkill /F) as 1, including for a killed child.
-        if code is not None and (code < 0 or code >= 0xC0000000 or (os.name == "nt" and code == 1 and not output.strip())):
+        # A missing launcher completion record returns a negative code; an ordinary exit 1 is a failure.
+        if code is not None and (code < 0 or code >= 0xC0000000):
             result["aborted"] = True
         result["output"] = "\n".join(output.strip().splitlines()[-40:])[-4000:]
         if store:

@@ -74,13 +74,12 @@ class DetachedCompileTests(DetachedCompileCase):
         result = self.wait_for(self.result)
         self.assertTrue(result['ok'], result)
 
-    def test_killed_command_is_reported_as_aborted(self):
+    def test_killed_launcher_is_reported_as_aborted(self):
         proc = self.start("import os, pathlib, time\npathlib.Path('started').write_text(str(os.getpid()))\ntime.sleep(60)\n")
-        pid = int((self.base / 'started').read_text())
-        if os.name == 'nt':
-            subprocess.run(['taskkill', '/PID', str(pid), '/F'], capture_output=True, check=True)
-        else:
-            os.kill(pid, 9)
+        holder = self.wait_for(lambda: integration._read_holders(self.data / 'compile-check.lock'))[0]
+        request = json.loads(runtime.kv_get(self.conn, 'project',
+                                          integration.COMPILE_REQUEST_KEY + holder['run_token']))
+        self.assertTrue(integration.osplat.kill_process_tree(request['check_pid']))
         stdout, _ = proc.communicate(timeout=15)
         result = json.loads(stdout.strip().splitlines()[-1])
         self.assertTrue(result.get('aborted'), result)
