@@ -7,6 +7,8 @@ from contextlib import contextmanager
 import os
 import re
 import subprocess
+import sys
+from pathlib import Path
 import time
 from datetime import datetime
 
@@ -133,7 +135,17 @@ def _read_holders(path) -> list:
 
 def _live_holders(path) -> list:
     """The listed checks whose process still exists (the slot of a process that died is free again)."""
-    return [h for h in _read_holders(path) if osplat.process_alive(h["pid"])]
+    live = []
+    for holder in _read_holders(path):
+        if osplat.process_alive(holder["pid"]):
+            live.append(holder)
+        elif holder.get("database") and holder.get("project"):
+            conn = db.connect(holder["database"])
+            try:
+                poll_compile_check(conn, holder["project"], {**holder, "token": holder["run_token"]}, clean_slot=False)
+            finally:
+                conn.close()
+    return live
 
 
 def _compile_holders() -> list:
@@ -177,7 +189,7 @@ def _slot_wait(settings, holders, builds) -> str:
 
 
 # Wait for a slot of the machine.
-def _acquire_compile_slot(settings, poll, builds=None):
+def _acquire_compile_slot(settings, poll, builds=None, owner=None):
     """Wait until a compile check may start (see _slot_wait), list it and return its token for _release_compile_slot."""
     import uuid
     path = _compile_lock_path()
@@ -188,7 +200,7 @@ def _acquire_compile_slot(settings, poll, builds=None):
             holders = _live_holders(path)
             if _slot_wait(settings, holders, builds) is None:
                 token = uuid.uuid4().hex
-                path.write_text(json.dumps({"holders": holders + [{"token": token, "pid": os.getpid()}]}), encoding="utf-8")
+                path.write_text(json.dumps({"holders": holders + [{**(owner or {}), "token": token, "pid": os.getpid()}]}), encoding="utf-8")
                 return token
             path.write_text(json.dumps({"holders": holders}), encoding="utf-8")
         time.sleep(poll)
@@ -256,7 +268,7 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, lab
 
 
 # Run the compile check of the project for a Queen or an Agent.
-def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True):
+def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, store=True, owner=None):
     """Run the setting compileCheck in the worktree `cwd` (default: that of `queen`, the row of the caller), store {ok, exit, commit, time, seconds, command} under
     `key` (default: the result of the Queen's run that `bzz ready` reads), add the live line to the milestones of the caller and return the result with the end of the
     output under "output". At most the setting maxConcurrentCompileChecks checks run at the same time per machine, and only while RAM and cores are free: waiting counts for neither limit. The settings compileStallMinutes (10) and
@@ -269,7 +281,7 @@ def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True
     longest = float(env.settings.get("compileMaxMinutes", 120)) * 60.0
     lock = None
     try:
-        lock = _acquire_compile_slot(env.settings, poll)
+        lock = _acquire_compile_slot(env.settings, poll, owner=owner) if owner else _acquire_compile_slot(env.settings, poll)
         started = time.time()   # after the wait for a slot
         try:
             code, output = _watch_compile(command, cwd, stall, longest, poll)
@@ -281,7 +293,12 @@ def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True
     result = {"ok": code == 0, "exit": code, "commit": commit, "time": db.now(), "seconds": round(time.time() - started, 1), "command": command}
     if code == 125:
         result["stalled"] = True
-    runtime.kv_set(env.conn, env.name, key or COMPILE_KEY + queen["name"], json.dumps(result))
+    # cmd.exe reports TerminateProcess (taskkill /F) as 1, including for a killed child.
+    if code is not None and (code < 0 or code >= 0xC0000000 or (os.name == "nt" and code == 1 and not output.strip())):
+        result["aborted"] = True
+    result["output"] = "\n".join(output.strip().splitlines()[-40:])[-4000:]
+    if store:
+        runtime.kv_set(env.conn, env.name, key or COMPILE_KEY + queen["name"], json.dumps(result))
     last = next((" ".join(line.split()) for line in reversed(output.splitlines()) if line.strip()), "")
     live = "%s\t%s Compile test - Exit %s%s\n" % ("Green" if result["ok"] else "Red", localtime.time(datetime.now()), code, (": " + last[:140]) if last else "")
     try:
@@ -294,6 +311,120 @@ def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True
     except OSError:
         pass
     return {**result, "output": "\n".join(output.strip().splitlines()[-40:])[-4000:]}
+
+
+# Each detached supervisor owns its slot and writes a result before exiting.
+COMPILE_RUN_KEY = "compile-run:"
+COMPILE_REQUEST_KEY = "compile-request:"
+SUPERVISORS = {}   # retain child handles until they can be reaped
+
+
+def _database_path(conn):
+    from . import config
+    return str(conn.execute("PRAGMA database_list").fetchone()[2]) if conn is not None else str(config.db_path())
+
+
+def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True):
+    """Start an independent supervisor and return its durable result address and PID."""
+    import uuid
+    token = uuid.uuid4().hex
+    database = _database_path(env.conn)
+    conn = db.connect(database)
+    try:
+        request = {"settings": env.settings, "cwd": str(cwd or queen.get("cwd") or ""),
+                   "name": queen["name"], "key": key or COMPILE_KEY + queen["name"],
+                   "poll": POLL_SECONDS if poll is None else poll,
+                   "milestones": str(env.run_dir(queen["name"])) if milestones else ""}
+        request["commit"] = head_commit(request["cwd"])
+        runtime.kv_set(conn, env.name, COMPILE_REQUEST_KEY + token, json.dumps(request))
+    finally:
+        conn.close()
+    bootstrap = "import sys; sys.path.insert(0, sys.argv[1]); from haivequeen.integration import compile_supervisor; compile_supervisor(*sys.argv[2:])"
+    options = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    try:
+        proc = subprocess.Popen([sys.executable, "-I", "-c", bootstrap, str(Path(__file__).resolve().parent.parent), database, env.name, token],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, **options)
+    except OSError as exc:
+        conn = db.connect(database)
+        try:
+            result = _aborted_result(request, "the compile supervisor could not start: %s" % exc)
+            with db.transaction(conn):
+                runtime.kv_set(conn, env.name, COMPILE_RUN_KEY + token, json.dumps(result))
+                runtime.kv_set(conn, env.name, request["key"], json.dumps(result))
+        finally:
+            conn.close()
+        return {"token": token, "pid": 0, "database": database}
+    proctree.exempt_register(proc.pid)
+    SUPERVISORS[token] = proc
+    return {"token": token, "pid": proc.pid, "database": database}
+
+
+def compile_supervisor(database, project, token):
+    """Detached entry point: execute and publish the per-run and caller results together."""
+    from types import SimpleNamespace
+    conn = db.connect(database)
+    try:
+        request = json.loads(runtime.kv_get(conn, project, COMPILE_REQUEST_KEY + token))
+        env = SimpleNamespace(name=project, conn=conn, settings=request["settings"],
+                              run_dir=lambda name: Path(request["milestones"]))
+        try:
+            result = _execute_compile_check(env, {"name": request["name"]}, cwd=request["cwd"],
+                                            key=COMPILE_RUN_KEY + token, poll=request["poll"], milestones=bool(request["milestones"]), store=False,
+                                            owner={"database": database, "project": project, "run_token": token})
+        except Exception as exc:
+            result = _aborted_result(request, "the compile supervisor failed: %s" % exc)
+        with db.transaction(conn):
+            runtime.kv_set(conn, project, COMPILE_RUN_KEY + token, json.dumps(result))
+            runtime.kv_set(conn, project, request["key"], json.dumps(result))
+    finally:
+        proctree.exempt_clear(os.getpid())
+        conn.close()
+
+
+def _aborted_result(request, output):
+    return {"ok": False, "exit": 143, "aborted": True, "commit": request["commit"], "time": db.now(),
+            "seconds": 0, "command": request["settings"].get("compileCheck", ""), "output": output}
+
+
+def poll_compile_check(conn, project, job, clean_slot=True):
+    """Return the stored result, or recover an aborted supervisor; None while it lives."""
+    token = job["token"]
+    proc = SUPERVISORS.get(token)
+    if proc is not None and proc.poll() is not None:
+        SUPERVISORS.pop(token, None)
+    raw = runtime.kv_get(conn, project, COMPILE_RUN_KEY + token)
+    if raw:
+        return json.loads(raw)
+    if osplat.process_alive(job["pid"]):
+        return None
+    # Serialize recovery and check again: the supervisor may have published just before exit.
+    with db.transaction(conn):
+        raw = runtime.kv_get(conn, project, COMPILE_RUN_KEY + token)
+        if raw:
+            return json.loads(raw)
+        request = json.loads(runtime.kv_get(conn, project, COMPILE_REQUEST_KEY + token))
+        result = _aborted_result(request, "the compile supervisor ended without a result")
+        runtime.kv_set(conn, project, COMPILE_RUN_KEY + token, json.dumps(result))
+        runtime.kv_set(conn, project, request["key"], json.dumps(result))
+    proctree.exempt_clear(job["pid"])
+    path = _compile_lock_path()
+    if clean_slot and path.exists():
+        _release_compile_slot(None, request["poll"])
+    return result
+
+
+def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True):
+    """Wait for the database result of a detached supervisor; losing this waiter stops no check."""
+    job = start_compile_check(env, queen, cwd, key, poll, milestones)
+    conn = db.connect(job["database"])
+    try:
+        while True:
+            result = poll_compile_check(conn, env.name, job)
+            if result is not None:
+                return result
+            time.sleep(POLL_SECONDS if poll is None else poll)
+    finally:
+        conn.close()
 
 
 # The end of the Queen's start text.

@@ -162,17 +162,22 @@ class LimitTests(SlotCase):
         script = folder / "check.py"
         script.write_text("import sys, time\nlog = sys.argv[1]\nopen(log, 'a').write('start %s\\n' % time.time())\ntime.sleep(1.5)\nopen(log, 'a').write('end %s\\n' % time.time())\n", encoding="utf-8")
         results = {}
+        from haivequeen import config, db
 
         def run(name):
-            env = SimpleNamespace(name=name, conn=None, settings={"compileCheck": '"%s" "%s" "%s"' % (sys.executable, script, log), "compileStallMinutes": 5, "compileMaxMinutes": 5})
-            results[name] = integration.run_compile_check(env, {"name": "Q-" + name}, cwd=str(folder), poll=0.05, milestones=False)
+            conn = db.connect(config.db_path())
+            env = SimpleNamespace(name=name, conn=conn, settings={"compileCheck": '"%s" "%s" "%s"' % (sys.executable, script, log), "compileStallMinutes": 5, "compileMaxMinutes": 5})
+            try:
+                results[name] = integration.run_compile_check(env, {"name": "Q-" + name}, cwd=str(folder), poll=0.05, milestones=False)
+            finally:
+                conn.close()
         threads = [threading.Thread(target=run, args=(name,)) for name in ("alpha", "beta", "gamma")]
-        with mock.patch.object(integration.runtime, "kv_set"):
-            for thread in threads:
-                thread.start()
-                time.sleep(0.15)
-            for thread in threads:
-                thread.join(30)
+        for thread in threads:
+            thread.start()
+            time.sleep(0.15)
+        for thread in threads:
+            thread.join(30)
+        self.assertEqual(len(results), 3, results)
         self.assertTrue(all(r["ok"] for r in results.values()), results)
         events = [(float(line.split()[1]), line.split()[0]) for line in log.read_text(encoding="utf-8").splitlines()]
         events.sort()

@@ -134,7 +134,7 @@ def _agent_worktree(conn, project, plan, path) -> bool:
 
 # Run the compile check of the project for a Queen or an Agent.
 def cmd_compile_check(args, conn) -> int:
-    """Run the configured compile check in the worktree of the caller (a Queen or a process Agent) or, with --worktree, in the worktree of an Agent of the plan, and wait for its end.
+    """Wait for the stored result of a detached compile check in the worktree of the caller (a Queen or a process Agent) or, with --worktree, in the worktree of an Agent of the plan, and wait for its end.
     Only the result of the Queen in her own worktree is stored for `bzz ready`; the result of an Agent is stored for that Agent. Exit 0 only when it is green."""
     from haivequeen import hives, integration, scheduler as sch
     agent = os.environ.get("BZZ_AGENT")

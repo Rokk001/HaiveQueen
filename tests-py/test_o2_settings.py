@@ -1,6 +1,7 @@
 """O2: Build command and Deploy command on the project page (O-3); the switches, the instruction fields, the step packages and the capability owner
 question are gone (O-4); the migration lists the removed keys; the progress watch of Build and Deploy has no overall limit."""
 import json
+import os
 import sys
 import time
 import unittest
@@ -172,7 +173,7 @@ class ProgressWatch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             result = Path(folder) / "result.json"
             job = orchestrator.Job("t")
-            with mock.patch.object(orchestrator, "POLL", 0.1), mock.patch.object(integration, "_compile_lock_path", return_value=Path(folder) / "check.lock"):
+            with mock.patch.object(orchestrator, "POLL", 0.1), mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(Path(folder) / "data")}):
                 orchestrator._work(settings, job, step, command, folder, None, str(result))
             return json.loads(result.read_text(encoding="utf-8"))
 
