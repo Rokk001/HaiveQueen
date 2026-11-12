@@ -598,7 +598,7 @@ class CodexRunTest(RunnerBase):
         self.assertEqual(row["status"], "done")
         self.assertEqual(row["type"], "codex")
         self.assertEqual(row["ctxTokens"], 777)
-        self.assertEqual((row["tokens_in"], row["tokens_out"]), (900, 40))   # the final write uses the totals of the turn.completed event
+        self.assertEqual((row["tokens_in"], row["tokens_out"]), (950, 45))   # the final write uses the session log totals
         ms = (self.runs / "D-1" / "milestones.txt").read_text(encoding="utf-8")
         self.assertIn("Push - Exit 0: EXIT=0", ms)
         self.assertIn("Commit: Fix it (deadbee) - Exit 1", ms)
