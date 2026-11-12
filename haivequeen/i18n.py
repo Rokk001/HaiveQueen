@@ -209,6 +209,7 @@ _WORKTREE_REASONS = (
 
 
 _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
+    (r"^Waiting for build cores$", "Wartet auf Build-Kerne"),
     (r"^Owner action: (.*)$", r"Aktion des Owners: \1"),
     # ---- the Orchestrator pipeline
     (r"^Orchestrator: plan (.*): (.*)$", r"Orchestrator: Plan \1: \2"),
