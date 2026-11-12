@@ -124,17 +124,34 @@ def _terminate(pid) -> None:
 
 def kill_recorded(procs, protect=()) -> list:
     """End the recorded processes ({pid: {"identity", "ppid"}}) that still run with their recorded identity and are not exempt; returns the pids ended.
-    Children go before parents (newest first)."""
+    Children go before parents."""
     parents = {int(pid): info.get("ppid") for pid, info in procs.items()}
+    exempt = {pid for pid in parents if is_exempt(pid, parents)}
+    ancestors = set()
+    for pid in exempt:
+        parent = parents.get(pid)
+        while parent in parents and parent not in ancestors:
+            ancestors.add(parent)
+            parent = parents.get(parent)
+    def depth(pid):
+        seen = set()
+        while pid in parents and pid not in seen:
+            seen.add(pid)
+            pid = parents[pid]
+        return len(seen)
+
     ended = []
-    for pid in sorted(parents, reverse=True):
+    for pid in sorted(parents, key=depth, reverse=True):
         info = procs[pid] if pid in procs else procs[str(pid)]
         if pid in protect or not osplat.process_alive(pid):
             continue
         identity = info.get("identity")
         if identity and osplat.process_identity(pid) != identity:
             continue   # the process id belongs to another process now
-        if is_exempt(pid, parents):
+        # Ending its debugger would also end an exempt compile command or Bee.
+        # Other ancestors keep the existing cleanup behavior, and ordinary
+        # descendants of a supervisor remain eligible for cleanup.
+        if pid in exempt or (pid in ancestors and osplat.is_console_supervisor(pid)):
             continue
         _terminate(pid)
         ended.append(pid)

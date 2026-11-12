@@ -4,6 +4,7 @@ Inside the package use `from haivequeen import platform as osplat`; the standard
 is not affected because imports in this package are absolute.
 """
 import ctypes
+import inspect
 import ntpath
 import os
 import posixpath
@@ -30,24 +31,53 @@ def is_linux() -> bool:
     return sys.platform.startswith("linux")
 
 
-# Make every program this process starts run without a console window (git, claude, pwsh, anything).
+# Suppress console allocation for subprocess launches in this interpreter.
 def hide_console_windows() -> None:
-    """On Windows add CREATE_NO_WINDOW to every subprocess.Popen call, so no console (or Windows Terminal) window opens and closes again.
+    """On Windows replace console creation requests with CREATE_NO_WINDOW.
 
-    Calls that already ask for DETACHED_PROCESS or CREATE_NEW_CONSOLE keep their flags. Safe to call more than once."""
+    Detached calls keep their flags. GUI startup visibility is untouched. Safe
+    to call more than once. A native debugger broker intercepts ordinary Win32
+    descendant creation before allocation; console_tree documents its
+    accepted limitation when native tools
+    establish their own debugging chains and Windows redirects those events.
+    """
     if not is_windows() or getattr(subprocess.Popen, "_hq_no_window", False):
         return
     no_window, detached, new_console = 0x08000000, 0x00000008, 0x00000010
     original = subprocess.Popen.__init__
 
+    try:
+        position = list(inspect.signature(original).parameters).index("creationflags") - 1   # without self
+    except ValueError:   # another wrapper without the named parameter is already installed
+        position = 13
+
     def patched(self, *args, **kwargs):
-        flags = kwargs.get("creationflags", 0)
-        if not flags & (detached | new_console):
-            kwargs["creationflags"] = flags | no_window
+        positional = len(args) > position
+        flags = (args[position] if positional else kwargs.get("creationflags", 0)) or 0
+        if not flags & detached:
+            flags = (flags & ~new_console) | no_window
+            if positional:
+                args = args[:position] + (flags,) + args[position + 1:]
+            else:
+                kwargs["creationflags"] = flags
         original(self, *args, **kwargs)
 
     subprocess.Popen.__init__ = patched
     subprocess.Popen._hq_no_window = True
+
+    import _winapi
+    # The supervisor is a separate process and can debug new children even
+    # when this caller already belongs to another debugger's chain.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('_hq_console_tree', Path(__file__).with_name('console_tree.py'))
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    create = _winapi.CreateProcess
+
+    def create_process(*args):
+        return policy.create_process(create, args)
+
+    _winapi.CreateProcess = create_process
 
 
 hide_console_windows()
@@ -254,6 +284,21 @@ def process_command_line(pid):
     except (OSError, ValueError, TypeError, subprocess.SubprocessError):
         return None
     return None
+
+
+def is_console_supervisor(pid) -> bool:
+    """Recognize this installation's private supervisor command exactly."""
+    if not is_windows():
+        return False
+    executable = Path(sys.executable).with_name('pythonw.exe')
+    if not executable.exists():
+        executable = Path(sys.executable)
+    prefix = subprocess.list2cmdline([str(executable), '-I', str(Path(__file__).with_name('console_tree.py').resolve())]) + ' '
+    command = process_command_line(pid) or ''
+    if not command.casefold().startswith(prefix.casefold()):
+        return False
+    arguments = command[len(prefix):].split()
+    return len(arguments) == 3 and all(value.isdecimal() for value in arguments)
 
 
 # Collect a process and everything it started, children before parents.

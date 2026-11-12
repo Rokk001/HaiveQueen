@@ -333,6 +333,24 @@ class GateTests(RoundCase):
         self.assertIn("every requirement", self.requests[-1]["prompt"].lower())
         self.assertIn("state file and the branch", self.requests[-1]["prompt"].lower())
 
+    def test_free_text_instructions_use_cut_ids_without_refusing_original(self):
+        original = "# Request\nBuild the first thing.\nAlso build the second thing.\n"
+        runtime.record_submission(self.conn, "testproj", REL, original)
+        self.state(*FULL)
+        with self.runner("passed"):
+            code, result = self.ready()
+        self.assertEqual(code, 0, result)
+        root = Path(__file__).resolve().parent.parent
+        rules = (root / "docs" / "AGENT-RULES.md").read_text(encoding="utf-8")
+        queen = roles.role_text("queen")
+        check = self.requests[-1]["prompt"]
+        for text in (rules, queen, check):
+            self.assertNotRegex(text.lower(), r"a plan without ids is refused")
+            self.assertIn("ids from the state file", text.lower())
+            self.assertIn("original text", text.lower())
+        self.assertIn("missing from the state file by its text", check)
+        self.assertIn("state file and the branch", check)
+
     def test_original_with_ids_is_given_in_full_and_gate_still_checks_ids(self):
         original = runtime.get_submission(self.conn, "testproj", REL) + "\nA detail outside the list.\n"
         runtime.record_submission(self.conn, "testproj", REL, original)
