@@ -69,7 +69,6 @@ class EndCase(RoundCase):
         stack.enter_context(mock.patch("haivequeen.config.load_config", return_value={}))
         stack.enter_context(mock.patch.object(cli, "out"))
         stack.enter_context(mock.patch.object(cli, "fail", side_effect=lambda text: text))
-        stack.enter_context(mock.patch("haivequeen.integration.result_refusal", return_value=""))
         return stack
 
 

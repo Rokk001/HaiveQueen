@@ -855,7 +855,7 @@ def report_prompt(prompt_file, project, agent_id, phase=None):
     """Return the CLI prompt with phase-specific reporting commands and no double quotes."""
     orch = "'%s' -I '%s'" % (osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py")
     text = ('Read the file "%s" completely and carry out exactly the task described there. Do nothing else.' % prompt_file)
-    if phase == "bee":
+    if phase in ("bee", "fix"):
         text += " Final report: %s done --agent %s --result <file>; step report: %s note --project %s --text <text>." % (orch, agent_id, orch, project)
         return text.replace('"', "")
     text += (" Report only with these commands, never by editing a queue file or state table by hand (the handoff text in the state file of the plan stays your own file): "
@@ -891,7 +891,7 @@ def approx_start_parts(a, pcfg, cfg, workspace, protocol, message=""):
     try:
         from . import roles
         settings = scheduler.build_settings(cfg, pcfg)
-        role = roles.role_text("queen-start" if a.phase == "queen" else "bee-start", {"language": roles.language(settings)})
+        role = roles.role_text("queen" if a.phase == "queen" else "bee", {"language": roles.language(settings)})
         rules = profile.project_rules(pcfg, pcfg.get("codeRepo") or workspace or a.cwd, protocol, a.cwd)
         return startctx.approx_parts(role, rules["inline"], message)   # the message the CLI starts with; the prompt file it reads afterwards is not in the first turn
     except Exception:

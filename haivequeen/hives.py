@@ -113,7 +113,7 @@ def can_start_bee(conn, project, plan, own_process=False, context_limit=300000):
             flag = osplat.runs_dir() / project / agent['name'] / 'HANDOFF'
             if int(agent.get('ctxTokens') or 0) >= int(context_limit) or flag.exists():
                 return False
-    return bool(row and row['state'] not in ('handoff', 'queenless', 'resting', 'answer', 'owner_check', 'integration_wait', 'codex_wait', 'provider_wait', 'done'))
+    return bool(row and row['state'] not in ('handoff', 'queenless', 'resting', 'answer', 'owner_check', 'integration_wait', 'codex_wait', 'provider_wait', 'integrating', 'done'))
 
 
 # The owner check questions of a Hive, whatever suffix the Queen gave the item (owner-check, owner-check-build17, ...).
@@ -278,12 +278,14 @@ def finish_hive(conn, project, plan):
     runtime.kv_set(conn, project, 'hive-blocker:' + plan, '')
     runtime.kv_set(conn, project, COMPLETE_KEY + plan, '')
     runtime.kv_set(conn, project, POINTS_KEY + plan, '')
+    runtime.kv_set(conn, project, 'orch-fix:' + plan, '')
 
 
 # Reconcile authoritative completion before start gates without touching active agents.
 def reconcile_completed(conn, env, alive=None, plan_files=None):
     """Retire completed idle Plans and preserve every genuine owner blocker."""
     from . import scheduler as sch
+    from . import orchestrator
     runtime.sync_plans(conn, env.name, str(env.workspace))
     agents = runtime.list_agents(conn, env.name, 'active')
     for plan in runtime.list_plans(conn, env.name):
@@ -292,13 +294,15 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
         hive = get(conn, env.name, plan['path'])
         if not hive or hive['state'] == 'done':
             continue
-        if any(a.get('plan_path') == plan['path'] and a.get('phase') in ('queen', 'bee') and agent_process.counts(a, alive) for a in agents):
+        if any(a.get('plan_path') == plan['path'] and a.get('phase') in ('queen', 'bee', 'fix') and agent_process.counts(a, alive) for a in agents):
             continue
         if plan['status'] == 'DONE':
             finish_hive(conn, env.name, plan['path'])
             continue
         if plan['status'] not in plan_mod.STARTABLE_STATUSES:
             continue
+        if orchestrator.active(conn, env.name, plan['path']):
+            continue   # the Orchestrator integrates the plan (pipeline, fix agent or waiting for the owner)
         integrated = integrated_ready(conn, env, hive)
         bare = False
         report = completion_report(conn, env.name, plan['path'])
@@ -312,16 +316,16 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
             if not integrated:
                 continue
             bare = True
-        if not bare:
-            integration_steps.sync(env, plan['path'], hive['provider'])   # a Deploy step no provider can do becomes an owner question here
         step = owner_check_step(conn, env.name, plan['path'])
         if step and step[0] == 'wait':
             wait_for_owner_check(conn, env.name, plan['path'], step[1])
             _move_status(conn, env, plan['path'], 'REVIEW')
         elif step and step[0] == 'fix':
             runtime.kv_set(conn, env.name, 'hive-rejected-ready:' + plan['path'], str(integrated['id']))
-            set_completion(conn, env.name, plan['path'], '')   # the new Queen reports completion again
+            set_completion(conn, env.name, plan['path'], '')
+            answer = next((q.get('answer') for q in reversed(owner_check_questions(conn, env.name, plan['path'])) if q.get('answer')), '') or ''
             reopen_after_owner_check(conn, env.name, plan['path'])
+            orchestrator.begin_owner_fix(conn, env.name, plan['path'], answer)   # a fix agent gets the owner's answer, no Queen starts
             _move_status(conn, env, plan['path'], 'RUNNING')
         else:
             questions = [q['id'] for q in runtime.list_questions(conn, env.name, plan=plan['path'])
@@ -329,8 +333,6 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
             if questions:
                 wait_for_answers(conn, env.name, plan['path'], questions)
                 continue
-            if not bare and integration_steps.open_steps(env, plan['path']):
-                continue   # integrated, but a step package is open: the next Queen starts it, the plan stays open
             if (not owner_check_questions(conn, env.name, plan['path']) and not owner_accepted(conn, env.name, plan['path'], integrated.get('updated_at'))
                     and owner_check_wanted(env, plan['path'])):
                 file_owner_check(conn, env, plan['path'], integrated=not bare)   # the system asks for the acceptance itself; the Queen is not relied on to do it
@@ -473,7 +475,12 @@ def owner_check_wanted(env, plan):
 def file_owner_check(conn, env, plan, integrated=True):
     """File the owner check question of an integrated plan (the configured text or its default, with the final report of its last Queen) and park the Plan until the owner answers; returns the question id."""
     final = ''
+    from . import orchestrator
+    info = orchestrator.last_info(conn, env.name, plan) if conn is not None else {}
     last = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all')) if a.get('plan_path') == plan and a.get('phase') == 'queen'), None)
+    fixer = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all')) if a.get('plan_path') == plan and a.get('phase') == 'fix' and a.get('name') == info.get('fix_agent')), None) if info.get('fix_agent') else None
+    if fixer:   # a fix agent ran after the Queen: its current report replaces the outdated report of the Queen
+        last = fixer
     if last:
         try:
             final = (env.run_dir(last['name']) / 'final.txt').read_text(encoding='utf-8', errors='replace').strip()[:800]
@@ -481,8 +488,12 @@ def file_owner_check(conn, env, plan, integrated=True):
             final = ''
     language = roles.language(env.settings)
     text = tr('Check the integrated result' if integrated else 'Check the result of the plan', language=language)   # the default text; the decision is taken by buttons
+    if info.get('commit'):
+        text += tr('\n\nIntegrated commit: ', language=language) + str(info['commit'])[:12]
+    if info.get('steps'):
+        text += tr('\nSteps that ran: ', language=language) + ', '.join(info['steps'])
     if final:
-        text += tr('\n\nReport of the Queen:\n', language=language) + final
+        text += (tr('\n\nReport of the fix agent:\n', language=language) if fixer else tr('\n\nReport of the Queen:\n', language=language)) + final
     qid = db.add_question(conn, env.name, plan, 'owner-check', text, '')
     wait_for_owner_check(conn, env.name, plan, [qid])
     return qid
@@ -499,7 +510,6 @@ def wait_for_owner_check(conn, project, plan, questions):
 # Reopen a Hive after a owner check answer that says something is not right: the old ready row no longer closes the plan and the next Queen fixes exactly that.
 def reopen_after_owner_check(conn, project, plan):
     """Reopen a Plan after a owner check answer that says something is not right: the old ready row no longer closes the plan and the next Queen fixes exactly that."""
-    integration_steps.reset(conn, project, plan)
     with db.transaction(conn):
         conn.execute("UPDATE questions SET item='owner-check-answered' WHERE project=? AND plan_path=? AND (item='owner-check' OR (item LIKE 'owner-check-%' AND item!='owner-check-answered')) AND status='answered'", (project, plan))
         conn.execute("UPDATE hives SET state='waiting',ready_id=NULL,questions_json=NULL WHERE project=? AND plan_path=?", (project, plan))
@@ -720,7 +730,7 @@ def dequeen(conn, project, plan, stop=None):
             raise ValueError('could not end Plan process')
         runtime.upsert_agent(conn, project, row['name'], {'status': 'done', 'pid': None, 'ended_at': db.now(), 'last_line': 'dequeened'})
     with db.transaction(conn):
-        conn.execute("UPDATE hives SET state='queenless',reset_at=NULL,requested_provider=NULL WHERE project=? AND plan_path=?", (project, plan))
+        conn.execute("UPDATE hives SET state=CASE WHEN state='integrating' THEN state ELSE 'queenless' END,reset_at=NULL,requested_provider=NULL WHERE project=? AND plan_path=?", (project, plan))
         conn.execute("DELETE FROM hive_integration WHERE project=? AND plan_path=?", (project, plan))
 
 
@@ -749,6 +759,8 @@ def stop_hive(conn, project, plan, stop=None):
     pause_plan(conn, project, plan)
     if get(conn, project, plan) is not None:
         dequeen(conn, project, plan, stop=stop)
+        from . import orchestrator
+        orchestrator.stop_plan(conn, project, plan, stop=stop)   # also its running pipeline command and fix agent end
 
 
 # Is the Hive of a plan stopped?
@@ -960,6 +972,13 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
     if not dry_run:
         for env in envs:
             reconcile_completed(conn, env, alive=alive, plan_files=plan_files)
+        for env in envs:   # the Orchestrator integrates the plans whose Queen is done (no language model)
+            if not (loop.stop_flag().exists() or not runstate.starts_allowed(conn)):
+                from . import orchestrator
+                closed = orchestrator.run_round(conn, env, free_ram() * 1024.0, alive=alive)
+                if closed:
+                    reconcile_completed(conn, env, alive=alive, plan_files=closed)   # the owner check is filed at once
+        for env in envs:
             try:
                 from . import bees
                 bees.migrate_headers(env)   # B-6: a plan past the cut without the header fields gets them once
@@ -1048,6 +1067,13 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     continue
                 if plan['status'] not in plan_mod.QUEEN_STATUSES or (hive and hive['state'] == 'done'):
                     continue
+                if hive and hive['state'] == 'integrating':
+                    from . import orchestrator
+                    if orchestrator.active(conn, env.name, plan['path']):
+                        continue   # the Orchestrator holds the plan: no Queen starts for its integration or its fix
+                    if not dry_run:
+                        conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=? AND state='integrating'", (env.name, plan['path']))
+                        hive = get(conn, env.name, plan['path'])
                 if dry_run and hive and integrated_ready(conn, env, hive):
                     continue
                 if hive and hive['state'] == 'starting':
@@ -1180,8 +1206,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     not_started(env, path, 'no provider with a free slot and a free limit offers class %s' % cls)
                     continue
                 if hive and hive['state'] == 'integration_wait':
-                    on = integration_steps.switches(env.settings)
-                    low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get('buildJobs')), free_ram() * 1024.0) if on['build'] or on['deploy'] else None
+                    low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get('buildJobs')), free_ram() * 1024.0) if integration_steps.builds(env.settings) else None
                     if low:   # below the minimum free RAM before a build: the place is not taken, the Queen waits and is asked again next round (also after a restart)
                         not_started(env, path, 'waiting for the build: ' + low)
                         continue
@@ -1227,16 +1252,12 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                         row_key = '%s-%d' % (name, k)
                     name = row_key
                     questions = [q for q in runtime.list_questions(conn, env.name, plan=path) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
-                    prompt = 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and owner answers of your plan and those released for the whole Project are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --cwd \'<absolute worktree path>\' (single quotes, no JSON). Work independent packages, answer the completeness question and integrate only when no requirements remain. ' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name)
+                    prompt = bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls), roles.language(env.settings)) + '\n\n' + 'Work the entire plan %s. The plan, its state file, the handoff of your predecessor, the project rules, the decisions and owner answers of your plan and those released for the whole Project are loaded below. Check for new answers while you work. Open questions: %s. Continue in the plan worktree and branches; if none exists, create the plan worktree and branch according to the project rules before changing files. Record the worktree as the Queen cwd with bzz agents update-fields --project %s --name %s --cwd \'<absolute worktree path>\' (single quotes, no JSON). Work independent packages, answer the completeness question and integrate only when no requirements remain. ' % (env.workspace / path, json.dumps(questions, ensure_ascii=False), env.name, name)
                     points = runtime.kv_get(conn, env.name, POINTS_KEY + path)
                     if points:   # the fresh check of the completion report found open points: this Queen works exactly on them
                         prompt += 'The check of the completion report found these open points; fix them, then report completion again: ' + points + ' '
                         runtime.kv_set(conn, env.name, POINTS_KEY + path, '')
                     prompt += integration_steps.start_text(env, path, pick['name'])
-                    if plan['status'] not in plan_mod.CUT_STATUSES:   # a plan still to be cut gets its step packages when it is integrated
-                        integration_steps.sync(env, path, pick['name'])
-                    from . import bees
-                    prompt += '\n' + bees.queen_instructions(cls, env.settings.get('beesPerQueen', 3), env.settings.get('escalateAfter', 3), sch.context_limit(env.settings, env.providers, pick['name'], cls), roles.language(env.settings))
                     topics = integration_steps.owner_topics_text(env)
                     if topics:
                         prompt += '\n' + topics

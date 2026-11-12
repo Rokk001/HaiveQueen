@@ -419,9 +419,9 @@ def next_attempt(conn, project, plan, package, cls, providers, excluded, thresho
 
 
 # Write only the package task and relevant paths to a Bee; the complete project rules are loaded by the runner, a `rules` argument never replaces them.
-def bee_prompt(name, package, task, steps, paths, rules, build_rules=''):
+def bee_prompt(name, package, task, steps, paths, rules, build_rules='', language=None):
     """Build a slim Agent task with numbered progress reports."""
-    return roles.role_text('bee', {'package': package, 'task': task, 'steps': '\n'.join('%d. %s' % (i + 1, s) for i, s in enumerate(steps)), 'paths': ', '.join(paths), 'rules': '\n'.join(rules), 'name': name, 'step_count': len(steps), 'build_rules': build_rules}).rstrip()
+    return roles.role_text('bee', {'package': package, 'task': task, 'steps': '\n'.join('%d. %s' % (i + 1, s) for i, s in enumerate(steps)), 'paths': ', '.join(paths), 'rules': '\n'.join(rules), 'name': name, 'step_count': len(steps), 'build_rules': build_rules, 'language': language or roles.language({})}).rstrip()
 
 
 PACKAGE_STATES = ('working', 'waiting', 'implemented', 'done', 'rejected')   # progress states of a package; a package without a row is open; waiting = needs an answer, a build or the owner (the reason says which); rejected = the owner did not accept it
@@ -1109,7 +1109,7 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''), queen['name'])
         record_step_count(env.conn, env.name, plan, package, len(steps))
         # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
-        prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')))
+        prompt = bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')), roles.language(env.settings))
         prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
         return {'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
     if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
@@ -1120,7 +1120,7 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
     existing = [a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')]
     state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'RUNNING'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
     ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
-    action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs'))), 'class': selected_class}
+    action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')), roles.language(env.settings)), 'class': selected_class}
     action['prompt'] += '\n\nAssigned worktree: %s; assigned branch: %s.' % (cwd, branch)
     if not loop._do_start(ctx, action, forced_pick=pick):
         return refuse(env, package, 'the agent runner could not start the Agent process')
