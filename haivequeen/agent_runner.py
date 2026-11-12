@@ -12,6 +12,7 @@ Usage:
 import argparse
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -330,6 +331,44 @@ def get_codex_tokens(thread_id, sessions=None, first=False):
         return None
 
 
+def codex_task_name(name):
+    """The portable task name used for an embedded Codex Agent."""
+    return re.sub(r"[^a-z0-9_]", "_", str(name).lower())
+
+
+def get_codex_children(parent, sessions, names):
+    """Read direct child sessions only when their task name uniquely identifies an Agent."""
+    if not parent:
+        return {}
+    root = Path(sessions) if sessions else codex_sessions_dir()
+    identities = {}
+    for name in names:
+        identities.setdefault(codex_task_name(name), []).append(name)
+    candidates = {}
+    for path in root.rglob("*.jsonl"):
+        try:
+            with path.open(encoding="utf-8") as handle:
+                meta = json.loads(handle.readline())
+            payload = meta.get("payload", {})
+            spawn = payload.get("source", {}).get("subagent", {}).get("thread_spawn", {})
+            task = str(spawn.get("agent_path") or "").removeprefix("/root/")
+            if meta.get("type") != "session_meta" or spawn.get("parent_thread_id") != parent or "/" in task:
+                continue
+            if len(identities.get(task, [])) != 1 or not payload.get("id"):
+                continue
+            candidates.setdefault(task, []).append(str(payload["id"]))
+        except (OSError, ValueError, AttributeError, TypeError):
+            continue
+    result = {}
+    for task, ids in candidates.items():
+        if len(ids) != 1:
+            continue
+        usage = get_codex_tokens(ids[0], root)
+        if usage:
+            result[ids[0]] = {"name": identities[task][0], "desc": identities[task][0], **usage}
+    return result
+
+
 # ---------------------------------------------------------------- build jobs
 
 def sample_once(path, process_names, root_pid=None):
@@ -599,14 +638,34 @@ class AgentRun:
                 if not self.start_ctx:
                     first = get_codex_tokens(self.thread, self.sessions, first=True)
                     self.note_start(first["ctx"] if first else cx["ctx"])
+        if self.type == "codex" and self.phase == "queen" and self.thread:
+            try:
+                names = [r[0] for r in self.conn.execute("SELECT name FROM embedded_bees WHERE project=? AND plan_path=? AND queen=?", (self.project, self.plan, self.name))]
+                self.sub_ctx = get_codex_children(self.thread, self.sessions, names)
+                for child, entry in self.sub_ctx.items():
+                    if child not in self.sub_started:
+                        first = get_codex_tokens(child, self.sessions, first=True)
+                        if first:
+                            self.note_start(first["ctx"], "subbee", entry["desc"])
+                            self.sub_started.add(child)
+            except Exception:
+                pass
+        tin, tout = self.report_tokens()
         try:
             runtime.upsert_agent(self.conn, self.project, self.name, {
-                "tokensIn": self.tin, "tokensOut": self.tout, "ctxTokens": self.ctx, "lastLine": self.last,
+                "tokensIn": tin, "tokensOut": tout, "ctxTokens": self.ctx, "lastLine": self.last,
                 **({"startCtx": self.start_ctx} if self.start_ctx else {}),
                 **({"cacheRead": self.cache_read, "cacheWrite": self.cache_write} if self.cache_read is not None else {}),
-                **({"subCtx": self.sub_ctx} if self.sub_ctx else {})})
+                **({"subCtx": self.sub_ctx} if self.sub_ctx or (self.type == "codex" and self.phase == "queen") else {})})
         except Exception:
             pass   # a failed write must not end the run
+
+    def report_tokens(self):
+        """Codex child sessions have separate totals; store their sum with the Queen."""
+        if self.type == "codex" and self.phase == "queen":
+            return ((self.tin or 0) + sum(x["tin"] for x in self.sub_ctx.values()),
+                    (self.tout or 0) + sum(x["tout"] for x in self.sub_ctx.values()))
+        return self.tin, self.tout
 
     # Remember the first model turn of this run.
     def note_start(self, tokens, kind=None, agent=None):
@@ -1157,7 +1216,23 @@ def run_agent(a, out=None):
                 last_output, watch_stop = [time.monotonic()], threading.Event()
                 if stall_limit > 0:
                     threading.Thread(target=stall_watch, daemon=True, args=(last_output, stall_limit, mark_stalled, clear_stalled, watch_stop)).start()
-                for bline in proc.stdout:
+                lines = queue.Queue()
+                def read_output():
+                    try:
+                        for bline in proc.stdout:
+                            lines.put(bline)
+                    finally:
+                        lines.put(None)
+                threading.Thread(target=read_output, daemon=True).start()
+                while True:
+                    try:
+                        bline = lines.get(timeout=2)
+                    except queue.Empty:
+                        if run.type == "codex" and run.phase == "queen":
+                            run.push_state()
+                        continue
+                    if bline is None:
+                        break
                     last_output[0] = time.monotonic()
                     line = bline.decode("utf-8", errors="replace").rstrip("\r\n")
                     raw.write((line + "\n").encode("utf-8"))
@@ -1212,7 +1287,9 @@ def run_agent(a, out=None):
             offline.mark(conn, a.provider, run.last)
         except Exception:
             pass
-    run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx, "subCtx": run.sub_ctx,
+    run.push_state(True)
+    report_tin, report_tout = run.report_tokens()
+    run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": report_tin, "tokensOut": report_tout, "lastLine": run.last, "ctxTokens": run.ctx, "subCtx": run.sub_ctx,
                          **({"startCtx": run.start_ctx} if run.start_ctx else {}), **({"cacheRead": run.cache_read, "cacheWrite": run.cache_write} if run.cache_read is not None else {}),
                          "interrupted": kind, "retryAt": ""})
     if run.final and (a.phase == "queen" or short(run.final, 1500) != short(run.last_said, 1500)):
