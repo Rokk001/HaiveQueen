@@ -4,6 +4,7 @@ import io
 import json
 import os
 import unittest
+from datetime import datetime
 from unittest import mock
 
 import bzztest
@@ -111,7 +112,18 @@ class OwnerMessageTest(RoundCase):
         self.conn.execute("UPDATE decisions SET ts=? WHERE id IN (?,?)", (bzztest.minutes_ago(60), old, old_wide))
         self.agent("Late", phase="queen", status="running", started=1)
         self.assertNotIn("owner_messages", self.note("Late")[1])
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM decision_deliveries WHERE agent='Late'").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM decision_deliveries WHERE agent='Late'").fetchone()[0], 2)
+
+    def test_decision_before_start_in_same_second_is_not_delivered(self):
+        self.agent("Zoe", phase="work", status="done")
+        with mock.patch.object(db, "datetime") as clock:
+            clock.now.return_value = datetime(2026, 1, 1, 12, 0, 0, 100000)
+            runtime.add_decision(self.conn, "testproj", "owner", "BEFORE", REL)
+            clock.now.return_value = datetime(2026, 1, 1, 12, 0, 0, 200000)
+            self.agent("Zoe", phase="queen", status="starting", started_at=db.now())
+            clock.now.return_value = datetime(2026, 1, 1, 12, 0, 0, 300000)
+            after = runtime.add_decision(self.conn, "testproj", "owner", "AFTER", REL)
+            self.assertEqual(self.note("Zoe")[1]["owner_messages"], [{"id": after, "text": "AFTER"}])
 
     def test_ended_queen_leaves_it_to_the_next_start_prompt_once(self):
         did = runtime.add_decision(self.conn, "testproj", "owner", "LEFT-OVER", REL)

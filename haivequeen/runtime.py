@@ -111,6 +111,14 @@ def upsert_agent(conn, project, name, fields, create=True) -> dict:
             conn.execute(f"UPDATE agents SET {','.join(sets)} WHERE id=?",
                          list(cols.values()) + [json.dumps(merged) if merged else None, aid])
         result = _agent_out(conn.execute("SELECT * FROM agents WHERE id=?", (aid,)).fetchone())
+        if result.get("phase") == "queen" and (cols.get("status") == "starting" or
+                                                (row is None and cols.get("status") == "running")):
+            # Serialize the start boundary with decision inserts: timestamps alone can tie.
+            conn.execute(
+                "INSERT OR IGNORE INTO decision_deliveries (decision_id, agent, ts) "
+                "SELECT id, ?, ? FROM decisions WHERE project=? AND source='owner' "
+                "AND (plan_path IS NULL OR plan_path='' OR plan_path=?)",
+                (name, db.now(), project, result.get("plan_path")))
         if result.get('phase') == 'bee' and cols.get('status') and cols['status'] not in ACTIVE_STATUSES:
             from . import bees, branchguard
             foreign = bees.enforce_agent_end(conn, project, result)
