@@ -59,6 +59,18 @@ class LongCleanupTests(RoundCase):
         self.assertFalse(worktrees.cleanup_running('testproj'))
         self.round()   # the next round starts a new cleanup
 
+    def test_cleanup_thread_start_failure_does_not_stop_round(self):
+        self.plan('READY', [{'id': 'P1'}])
+        original_start = threading.Thread.start
+        def start(thread):
+            if thread.name.startswith('worktree-cleanup-'):
+                raise RuntimeError('thread unavailable')
+            return original_start(thread)
+        with mock.patch.object(threading.Thread, 'start', start):
+            result = self.round()
+        self.assertEqual(result['projects']['testproj']['started'], 1)
+        self.assertIn('thread unavailable', self.log())
+
     def test_queen_own_start_waits_but_the_round_does_not(self):
         target = ('worktree', self.base / 'target')
         env = self.env()

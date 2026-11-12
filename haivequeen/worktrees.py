@@ -872,10 +872,14 @@ def cleanup_in_background(env):
         running = _cleanup_threads.get(env.name)
         if running is not None and running.is_alive():
             return False
-        thread = threading.Thread(target=_background_cleanup, args=(env, _database_file(env)), name='worktree-cleanup-' + str(env.name), daemon=True)
-        _cleanup_threads[env.name] = thread
-        thread.start()
-        return True
+        try:
+            thread = threading.Thread(target=_background_cleanup, args=(env, _database_file(env)), name='worktree-cleanup-' + str(env.name), daemon=True)
+            thread.start()
+            _cleanup_threads[env.name] = thread
+            return True
+        except Exception as exc:
+            env.log('Worktree cleanup failed: ' + str(exc))
+            return False
 
 
 def cleanup_running(name=None):
