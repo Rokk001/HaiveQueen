@@ -369,7 +369,7 @@ def queen_build_monitor(project, plan, name, jobs, sample_file, process_names, s
                     started = datetime.now()
                     start_free = float(osplat.free_ram_mb())
                     Path(sample_file).write_text("", encoding="utf-8")
-                    runtime.upsert_agent(conn, project, name, {"buildJobs": jobs})
+                    runtime.upsert_agent(conn, project, name, {"buildJobs": jobs, "buildParallel": parallel})
                 sample_once(sample_file, process_names, root_pid)
             elif started is not None:
                 use = complete_build_measure(conn, project, name, jobs, start_free, sample_file, started, parallel, count)
@@ -1111,7 +1111,7 @@ def run_agent(a, out=None):
         else:
             sampler = threading.Thread(target=sampler_loop, daemon=True, args=(
                 samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or buildjobs.SAMPLE_SEC), os.getpid()))
-            runtime.upsert_agent(conn, a.project, a.name, {"buildJobs": bj_jobs})
+            runtime.upsert_agent(conn, a.project, a.name, {"buildJobs": bj_jobs, "buildParallel": bj["Parallel"]})
             run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
         if sampler:
             sampler.start()

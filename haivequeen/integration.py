@@ -142,7 +142,9 @@ def _live_holders(path) -> list:
         elif holder.get("database") and holder.get("project"):
             conn = db.connect(holder["database"])
             try:
-                poll_compile_check(conn, holder["project"], {**holder, "token": holder["run_token"]}, clean_slot=False)
+                result = poll_compile_check(conn, holder["project"], {**holder, "token": holder["run_token"]}, clean_slot=False)
+                if result is None:
+                    live.append(holder)   # termination failed: the orphan still owns its cores and slot
             finally:
                 conn.close()
     return live
@@ -159,12 +161,12 @@ def running_checks() -> int:
 
 
 def _running_builds() -> int:
-    """How many agents run a build now (the database of this computer)."""
+    """Cores allocated to running builds in the database of this computer."""
     from . import buildjobs, config
     conn = None
     try:
         conn = db.connect(config.db_path())
-        return len(buildjobs.running_builds(conn))
+        return buildjobs.allocated_cores(buildjobs.running_builds(conn))
     except Exception:
         return 0
     finally:
@@ -232,7 +234,7 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, lab
     # The configured command line is the owner's own text, so the system shell runs it (named explicitly, no shell flag): cmd /s keeps a quoted program path intact.
     line = 'cmd.exe /d /s /c "%s"' % command if os.name == "nt" else ["/bin/sh", "-c", command]
     proc = subprocess.Popen(line, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                            env={**os.environ, **env} if env else None)
+                            env={**os.environ, **env} if env else None, **({"start_new_session": True} if os.name != "nt" else {}))
     if on_start:
         on_start(proc.pid)
     proctree.exempt_register(proc.pid)   # started by HaiveQueen, not by the agent: the cleanup of the agent's leftover processes leaves it alone
@@ -268,7 +270,8 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, lab
 
 
 # Run the compile check of the project for a Queen or an Agent.
-def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, store=True, owner=None):
+def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, store=True, owner=None,
+                           acquired_slot=None, on_start=None):
     """Run the setting compileCheck in the worktree `cwd` (default: that of `queen`, the row of the caller), store {ok, exit, commit, time, seconds, command} under
     `key` (default: the result of the Queen's run that `bzz ready` reads), add the live line to the milestones of the caller and return the result with the end of the
     output under "output". At most the setting maxConcurrentCompileChecks checks run at the same time per machine, and only while RAM and cores are free: waiting counts for neither limit. The settings compileStallMinutes (10) and
@@ -281,24 +284,25 @@ def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones
     longest = float(env.settings.get("compileMaxMinutes", 120)) * 60.0
     lock = None
     try:
-        lock = _acquire_compile_slot(env.settings, poll, owner=owner) if owner else _acquire_compile_slot(env.settings, poll)
+        lock = acquired_slot or (_acquire_compile_slot(env.settings, poll, owner=owner) if owner else _acquire_compile_slot(env.settings, poll))
         started = time.time()   # after the wait for a slot
         try:
-            code, output = _watch_compile(command, cwd, stall, longest, poll)
+            options = {"on_start": on_start} if on_start else {}
+            code, output = _watch_compile(command, cwd, stall, longest, poll, **options)
         except OSError as exc:
             code, output = 127, "the compile check could not start: %s" % exc
+        result = {"ok": code == 0, "exit": code, "commit": commit, "time": db.now(), "seconds": round(time.time() - started, 1), "command": command}
+        if code == 125:
+            result["stalled"] = True
+        # cmd.exe reports TerminateProcess (taskkill /F) as 1, including for a killed child.
+        if code is not None and (code < 0 or code >= 0xC0000000 or (os.name == "nt" and code == 1 and not output.strip())):
+            result["aborted"] = True
+        result["output"] = "\n".join(output.strip().splitlines()[-40:])[-4000:]
+        if store:
+            runtime.kv_set(env.conn, env.name, key or COMPILE_KEY + queen["name"], json.dumps(result))
     finally:
-        if lock:
+        if lock and not acquired_slot:
             _release_compile_slot(lock, poll)
-    result = {"ok": code == 0, "exit": code, "commit": commit, "time": db.now(), "seconds": round(time.time() - started, 1), "command": command}
-    if code == 125:
-        result["stalled"] = True
-    # cmd.exe reports TerminateProcess (taskkill /F) as 1, including for a killed child.
-    if code is not None and (code < 0 or code >= 0xC0000000 or (os.name == "nt" and code == 1 and not output.strip())):
-        result["aborted"] = True
-    result["output"] = "\n".join(output.strip().splitlines()[-40:])[-4000:]
-    if store:
-        runtime.kv_set(env.conn, env.name, key or COMPILE_KEY + queen["name"], json.dumps(result))
     last = next((" ".join(line.split()) for line in reversed(output.splitlines()) if line.strip()), "")
     live = "%s\t%s Compile test - Exit %s%s\n" % ("Green" if result["ok"] else "Red", localtime.time(datetime.now()), code, (": " + last[:140]) if last else "")
     try:
@@ -363,19 +367,32 @@ def compile_supervisor(database, project, token):
     """Detached entry point: execute and publish the per-run and caller results together."""
     from types import SimpleNamespace
     conn = db.connect(database)
+    slot = None
     try:
         request = json.loads(runtime.kv_get(conn, project, COMPILE_REQUEST_KEY + token))
         env = SimpleNamespace(name=project, conn=conn, settings=request["settings"],
                               run_dir=lambda name: Path(request["milestones"]))
+
+        def started(pid):
+            request["check_pid"] = pid
+            request["check_identity"] = osplat.process_identity(pid)
+            runtime.kv_set(conn, project, COMPILE_REQUEST_KEY + token, json.dumps(request))
+
         try:
+            slot = _acquire_compile_slot(env.settings, request["poll"],
+                                         owner={"database": database, "project": project, "run_token": token})
             result = _execute_compile_check(env, {"name": request["name"]}, cwd=request["cwd"],
                                             key=COMPILE_RUN_KEY + token, poll=request["poll"], milestones=bool(request["milestones"]), store=False,
-                                            owner={"database": database, "project": project, "run_token": token})
+                                            acquired_slot=slot, on_start=started)
         except Exception as exc:
+            if not _end_orphan(request):
+                return   # leave the holder discoverable until recovery can end the command
             result = _aborted_result(request, "the compile supervisor failed: %s" % exc)
         with db.transaction(conn):
             runtime.kv_set(conn, project, COMPILE_RUN_KEY + token, json.dumps(result))
             runtime.kv_set(conn, project, request["key"], json.dumps(result))
+        if slot:
+            _release_compile_slot(slot, request["poll"])
     finally:
         proctree.exempt_clear(os.getpid())
         conn.close()
@@ -384,6 +401,23 @@ def compile_supervisor(database, project, token):
 def _aborted_result(request, output):
     return {"ok": False, "exit": 143, "aborted": True, "commit": request["commit"], "time": db.now(),
             "seconds": 0, "command": request["settings"].get("compileCheck", ""), "output": output}
+
+
+def _end_orphan(request):
+    """End this run's command before reclaiming its slot; keep the slot if it survives."""
+    pid = request.get("check_pid")
+    if pid and osplat.process_alive(pid):
+        identity = osplat.process_identity(pid)
+        if not identity or not request.get("check_identity"):
+            return False   # cannot verify ownership: retain the slot until the process is gone
+        if identity != request["check_identity"]:
+            return True   # the command is gone and the PID belongs to another process
+        osplat.kill_process_tree(pid)
+        if osplat.process_alive(pid):
+            return False
+    if pid:
+        proctree.exempt_clear(pid)
+    return True
 
 
 def poll_compile_check(conn, project, job, clean_slot=True):
@@ -403,6 +437,8 @@ def poll_compile_check(conn, project, job, clean_slot=True):
         if raw:
             return json.loads(raw)
         request = json.loads(runtime.kv_get(conn, project, COMPILE_REQUEST_KEY + token))
+        if not _end_orphan(request):
+            return None
         result = _aborted_result(request, "the compile supervisor ended without a result")
         runtime.kv_set(conn, project, COMPILE_RUN_KEY + token, json.dumps(result))
         runtime.kv_set(conn, project, request["key"], json.dumps(result))
@@ -421,6 +457,9 @@ def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True
         while True:
             result = poll_compile_check(conn, env.name, job)
             if result is not None:
+                proc = SUPERVISORS.pop(job["token"], None)
+                if proc is not None:
+                    proc.wait()   # the result is durable; let the supervisor close its database and release its slot
                 return result
             time.sleep(POLL_SECONDS if poll is None else poll)
     finally:

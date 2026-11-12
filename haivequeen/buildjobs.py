@@ -184,7 +184,7 @@ def complete_measure(env, name: str, jobs: int, start_free_mb: float, sample_fil
 
 
 def running_builds(conn, exclude: str = None) -> list:
-    """Agents that run a build now (status running and a job count in their row), without the agent named `exclude`: [{name, jobs}]."""
+    """Running build allocations, without `exclude`: [{name, jobs, parallel}]."""
     found = []
     for r in conn.execute("SELECT name, extra_json FROM agents WHERE status='running' AND archived=0"):
         try:
@@ -192,8 +192,14 @@ def running_builds(conn, exclude: str = None) -> list:
         except ValueError:
             continue
         if extra.get("buildJobs") and r[0] != exclude:
-            found.append({"name": r[0], "jobs": int(extra["buildJobs"])})
+            found.append({"name": r[0], "jobs": int(extra["buildJobs"]),
+                          "parallel": max(1, int(extra.get("buildParallel") or 1))})
     return found
+
+
+def allocated_cores(builds) -> int:
+    """Cores reserved by the actual job and parallel target allocations."""
+    return sum(max(1, b["jobs"]) * max(1, b.get("parallel", 1)) for b in builds)
 
 
 def _running_checks() -> int:
@@ -236,8 +242,13 @@ def plan_build(env, free_mb: float = None, cores: int = None, exclude: str = Non
     if bj is None:
         return None
     free = float(osplat.free_ram_mb() if free_mb is None else free_mb)
-    calc = job_count(bj, cores or osplat.logical_cores(), free, stored_per_job(env.conn, env.name, host, bj["Measurements"]),
-                     concurrent=len(running_builds(env.conn, exclude)) + _running_checks())
+    cores = cores or osplat.logical_cores()
+    running = running_builds(env.conn, exclude)
+    checks = _running_checks()
+    calc = job_count(bj, cores, free, stored_per_job(env.conn, env.name, host, bj["Measurements"]),
+                     concurrent=len(running) + checks)
+    available = core_limit(bj, cores) - allocated_cores(running) - checks
+    calc["Jobs"] = min(calc["Jobs"], max(1, available // bj["Parallel"]))
     calc.update({"EnvVar": bj["EnvVar"], "ParallelVar": bj["ParallelVar"], "MinRamVar": bj["MinRamVar"], "MinFreeGB": bj["MinFreeGB"],
                  "FreeMB": free, "Environment": build_environment(bj, calc["Jobs"])})
     return calc

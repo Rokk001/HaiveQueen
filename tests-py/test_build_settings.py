@@ -99,7 +99,7 @@ class ParallelJobsTest(unittest.TestCase):
             runtime.upsert_agent(conn, "p", "A-integrate", {"status": "running", "buildJobs": 3})
             runtime.upsert_agent(conn, "q", "B-queen", {"status": "running", "buildJobs": 2})
             env = type("E", (), {"name": "p", "conn": conn, "settings": {"buildJobs": {"cores": 6, "perJobMB": 1}}})()
-            self.assertEqual(bj.plan_build(env, free_mb=64000, cores=8)["Jobs"], 2)
+            self.assertEqual(bj.plan_build(env, free_mb=64000, cores=8)["Jobs"], 1)  # five cores already allocated
             self.assertEqual(bj.plan_build(env, free_mb=64000, cores=8, exclude="A-integrate")["Jobs"], 3)
 
     def test_the_parallel_value_is_a_whole_number_from_1(self):
@@ -350,14 +350,14 @@ class QueenMonitorTest(RoundCase):
     """B-6c: the count handed out at acquire replaces the one from the Queen start in the measurement."""
 
     def test_the_measurement_divides_by_the_count_of_acquire(self):
-        """The Queen was started with 2 jobs; acquire handed out 5: the stored use per job is the peak / min(5, processes seen); the test sees its own one process."""
+        """Acquire replaces 2 jobs with 5; one observed process and three parallel targets divide the measured peak by 3."""
         name = Path(sys.executable).name
         runtime.upsert_agent(self.conn, "testproj", "Q-queen", {"status": "running", "phase": "queen", "plan_path": REL})
         self.conn.execute("INSERT INTO hive_integration (project, plan_path, acquired, build_jobs) VALUES ('testproj', ?, 1, 5)", (REL,))
         self.conn.commit()
         stop = threading.Event()
         samples = self.base / "queen-samples.txt"
-        t = threading.Thread(target=agent_runner.queen_build_monitor, args=("testproj", REL, "Q-queen", 2, samples, [name], stop, 0.05, 1, os.getpid(), 10))
+        t = threading.Thread(target=agent_runner.queen_build_monitor, args=("testproj", REL, "Q-queen", 2, samples, [name], stop, 0.05, 3, os.getpid(), 10))
         t.start()
         time.sleep(0.6)
         stop.set()
@@ -365,7 +365,8 @@ class QueenMonitorTest(RoundCase):
         rows = self.conn.execute("SELECT jobs, per_job_mb, peak_mb FROM build_measurements WHERE project='testproj'").fetchall()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["jobs"], 5)
-        self.assertAlmostEqual(rows[0]["per_job_mb"], round(rows[0]["peak_mb"] / 1), delta=1)
+        self.assertEqual(runtime.get_agent(self.conn, "testproj", "Q-queen")["buildParallel"], 3)
+        self.assertAlmostEqual(rows[0]["per_job_mb"], round(rows[0]["peak_mb"] / 3), delta=1)
 
 
 class RunnerVariablesTest(RunnerBase):
