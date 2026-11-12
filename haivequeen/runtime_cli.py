@@ -328,11 +328,17 @@ HELP = {"pause": "block the start of every kind of Agent (Queen, separate Agent,
 
 def register_runstate(sub) -> None:
     """Add pause, resume, run-state, starts-allowed and reattach (run state and restart, D8)."""
-    from . import reattach, runstate
+    from . import loop, reattach, runstate
 
     def allowed(a, c):
         """starts-allowed: may the round start an agent now."""
-        return {"allowed": runstate.starts_allowed(c), "state": runstate.get_state(c)["state"]}
+        if not loop.loop_running():
+            state = "STOPPED"
+        elif loop.stop_flag().exists():
+            state = "STOPPING"
+        else:
+            state = runstate.get_state(c)["state"]
+        return {"allowed": state == "RUNNING", "state": state}
 
     def pause_now(a, c):
         """pause: stop new starts; with --now every running agent also gets the HANDOFF flag and ends after its current step."""
