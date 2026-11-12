@@ -322,6 +322,61 @@ class GateTests(RoundCase):
         self.assertEqual(code, 1)
         self.assertIn("need ids", res["error"])
 
+    def test_free_text_uses_cut_requirements_and_original_prompt(self):
+        original = "# Request\nBuild the first thing.\nAlso build the second thing.\n"
+        runtime.record_submission(self.conn, "testproj", REL, original)
+        self.state(*FULL)
+        with self.runner("passed"):
+            code, result = self.ready()
+        self.assertEqual(code, 0, result)
+        self.assertIn(original, self.requests[-1]["prompt"])
+        self.assertIn("every requirement", self.requests[-1]["prompt"].lower())
+        self.assertIn("state file and the branch", self.requests[-1]["prompt"].lower())
+
+    def test_original_with_ids_is_given_in_full_and_gate_still_checks_ids(self):
+        original = runtime.get_submission(self.conn, "testproj", REL) + "\nA detail outside the list.\n"
+        runtime.record_submission(self.conn, "testproj", REL, original)
+        self.state(*FULL[:2])
+        with self.runner("passed"):
+            code, result = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("G-3", result["error"])
+        self.assertEqual(self.requests, [])
+        self.state(*FULL)
+        with self.runner("passed"):
+            code, result = self.ready()
+        self.assertEqual(code, 0, result)
+        self.assertIn(original, self.requests[-1]["prompt"])
+
+    def test_omitted_original_requirement_is_reported_and_added(self):
+        original = "# Request\n- Paint the door.\n- Repair the window.\n"
+        runtime.record_submission(self.conn, "testproj", REL, original)
+        state = self.repo / STATE
+        state.write_text("# State\n\n## Requirements\n- R1: Paint the door.\n\n## Completeness\n- R1: done | door test\n", encoding="utf-8")
+        # A deterministic stand-in inspects the actual submitted text in the prompt and
+        # state, deriving its verdict from the omission rather than a preset verdict.
+        def check(request):
+            self.requests.append(request)
+            submitted = request["prompt"].split("Plan as submitted (original text):\n", 1)[1].split("\nEnd of plan as submitted.", 1)[0]
+            state_text = state.read_text(encoding="utf-8")
+            missing = [line[2:] for line in submitted.splitlines() if line.startswith("- ") and line[2:] not in state_text]
+            return ("failed", "\n".join("- " + item for item in missing)) if missing else ("passed", "")
+        with mock.patch.object(readygate, "CHECK_RUNNER", check):
+            code, result = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("Repair the window", result["error"])
+        self.assertIn("package", result["error"].lower())
+        self.assertIn("requirements", result["error"].lower())
+        state.write_text(state.read_text(encoding="utf-8").replace("\n\n## Completeness", "\n- R2: Repair the window.\n\n## Completeness"), encoding="utf-8")
+        with mock.patch.object(readygate, "CHECK_RUNNER", check):
+            code, result = self.ready()
+        self.assertEqual(code, 1)
+        self.assertIn("R2", result["error"])
+        state.write_text(state.read_text(encoding="utf-8") + "- R2: done | window test\n", encoding="utf-8")
+        with mock.patch.object(readygate, "CHECK_RUNNER", check):
+            code, result = self.ready()
+        self.assertEqual(code, 0, result)
+
     def test_passed_result_is_accepted(self):
         """Complete list and a passed check agent: the branch is registered."""
         self.state(*FULL)

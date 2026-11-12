@@ -57,7 +57,9 @@ def evaluate(plan_text, state_text, decisions, assignments=None, versions=(), su
     """Check the requirement list of the state file against the requirement ids of the plan and the state file; returns a Result."""
     res = Result()
     required = {}
-    for source in ((plan_text,) if submitted_only else (plan_text, state_text, *versions)):
+    # State requirements include the cut list and any omissions added after a failed check.
+    sources = (plan_text, state_text) if submitted_only else (plan_text, state_text, *versions)
+    for source in sources:
         for rid, text in plans.parse_requirements(source):
             required.setdefault(rid, text)
     res.ids = list(required)
@@ -164,6 +166,7 @@ def gate(env, plan, queen):
     skipped = ", ".join(res.owner + res.aside) or "none"
     prompt = roles.role_text("ready-check", {"plan_file": plan_file, "state_file": state_file, "cwd": queen.get("cwd") or str(env.workspace), "skipped": skipped, "language": roles.language(env.settings)})
     reference = dict.fromkeys(plans.parse_requirements(submitted))
+    prompt += "\n\nPlan as submitted (original text):\n" + submitted + "\nEnd of plan as submitted.\n"
     prompt += "\n\nRequirements of the plan as submitted:\n" + "\n".join("- %s: %s" % pair for pair in reference)
     shown = [d for d in decisions if str(d.get("source")) in ("owner", "coordinator")]
     if shown:
@@ -177,7 +180,9 @@ def gate(env, plan, queen):
     if verdict == "aborted":
         return False, ABORTED_TEXT, False
     if verdict == "failed":
-        return False, "the check agent found missing points, fix them and call bzz ready again:\n" + (text or "(none named)"), False
+        return False, ("the check agent found missing points. If a requirement from the submitted plan is missing from the state file, "
+                       "add it to ## Requirements, cut a package for it and have it implemented. Fix all missing points and call bzz ready again:\n"
+                       + (text or "(none named)")), False
     return False, "the check agent could not run (%s): ready waits, call bzz ready again next round" % (text or "no reason given"), True
 
 
