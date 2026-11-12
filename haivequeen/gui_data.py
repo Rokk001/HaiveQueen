@@ -206,7 +206,8 @@ def agent_tokens(agent) -> tuple:
 def match_sub(queen, name):
     """The entry {desc, ctx, tin, tout} of the Queen's subCtx whose Task description names the Agent `name`, or None."""
     return next((v for v in ((queen or {}).get("subCtx") or {}).values()
-                 if re.search(r"\b%s\b" % re.escape(str(name)), str(v.get("desc") or ""), re.I)), None)
+                 if (str(v.get("name")).casefold() == str(name).casefold() if v.get("name") else
+                     re.search(r"\b%s\b" % re.escape(str(name)), str(v.get("desc") or ""), re.I))), None)
 
 
 # Describe one Hive for the active-hives table.

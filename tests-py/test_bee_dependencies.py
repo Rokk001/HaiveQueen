@@ -27,6 +27,40 @@ class BeeDependencies(RoundCase):
             code = cli.cmd_bee(args, self.conn)
         return code, output.getvalue()
 
+    def test_cli_negotiates_capability_before_recording_a_start(self):
+        self.machine['providers'][1]['beeMode'] = 'subagent'
+        for extra, fallback in (((), True), (('--subagents',), False), (('--no-subagents',), True)):
+            with self.subTest(extra=extra), mock.patch.object(bees, 'start_process', return_value={'kind': 'process'}) as start:
+                code, output = self.start('P1', extra)
+                self.assertEqual(code, 0, output)
+                self.assertEqual(start.call_args.kwargs['no_subagents'], fallback)
+
+    def test_supported_and_unsupported_sessions_start_the_expected_kind(self):
+        import json
+        self.mock_agent_worktrees()
+        self.machine['providers'] = [self.machine['providers'][1]]
+        self.machine['providers'][0]['beeMode'] = 'subagent'
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), \
+                mock.patch('haivequeen.loop.ram_gb', return_value=16.0), \
+                mock.patch('haivequeen.loop._do_start', return_value=True) as process:
+            code, output = self.start('P1')
+            self.assertEqual(code, 0, output)
+            self.assertEqual(json.loads(output)['kind'], 'process')
+            process.assert_called_once()
+            self.assertEqual(bees.open_embedded_names(self.conn), set())
+            code, output = self.start('P1', ('--subagents',))
+            self.assertEqual(code, 0, output)
+            self.assertEqual(json.loads(output)['kind'], 'subagent')
+            self.assertEqual(len(bees.open_embedded_names(self.conn)), 1)
+            self.assertEqual(self.machine['providers'][0]['beeMode'], 'subagent')
+
+    def test_queen_prompt_negotiates_available_tools_without_cli_names(self):
+        prompt = bees.queen_instructions('medium', 3, 3, 300000)
+        self.assertIn('--subagents', prompt)
+        self.assertIn('available', prompt.lower())
+        self.assertNotIn('Subagent is available only for Claude Code', prompt)
+        self.assertNotIn('If Codex exec cannot start subagents', prompt)
+
     # A completed dependency remains completed after reopening the database and later failure.
     def test_success_persists_and_is_not_undone(self):
         args = cli.build_parser().parse_args(['bee', 'result', '--project', 'testproj', '--plan', REL,

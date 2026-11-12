@@ -209,6 +209,7 @@ _WORKTREE_REASONS = (
 
 
 _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
+    (r"^Waiting for build cores$", "Wartet auf Build-Kerne"),
     (r"^Owner action: (.*)$", r"Aktion des Owners: \1"),
     # ---- the Orchestrator pipeline
     (r"^Orchestrator: plan (.*): (.*)$", r"Orchestrator: Plan \1: \2"),
@@ -584,7 +585,7 @@ GERMAN = {
     "How many agents of this provider may work at the same time.": "Wie viele Agenten dieses Anbieters gleichzeitig arbeiten dürfen.",
     "A preferred provider gets work first; a fallback provider only when the preferred ones are busy or not available.": "Ein bevorzugter Anbieter bekommt zuerst Arbeit; ein Ausweich-Anbieter nur, wenn die bevorzugten ausgelastet oder nicht verfügbar sind.",
     "What this provider may be used for; a task only goes to a provider that has the capability it needs.": "Wofür dieser Anbieter genutzt werden darf; eine Aufgabe geht nur an einen Anbieter, der die nötige Fähigkeit hat.",
-    "Subagent: the Queen runs her Agents inside her own process on the same provider; Process: every Agent is a separate agent and goes to the provider with the best reserve.": "Subagent: die Queen führt ihre Agenten im eigenen Prozess auf demselben Anbieter aus; Process: jeder Agent ist ein eigener Agent und geht zum Anbieter mit der besten Reserve.",
+    "Subagent is available for every provider: the Queen runs Agents inside her process when supported, otherwise as separate processes; Process: every Agent is a separate process and goes to the provider with the best reserve.": "Subagent ist für jeden Anbieter verfügbar: Die Queen führt Agenten im eigenen Prozess aus, wenn unterstützt, sonst in separaten Prozessen; Process: Jeder Agent läuft in einem separaten Prozess beim Anbieter mit der besten Reserve.",
     "The tools an agent may use without asking, one per line.": "Die Tools, die ein Agent ohne Nachfrage nutzen darf, eines pro Zeile.",
     "The arguments HaiveQueen gives to the CLI, one per line; {model}, {effort} and the like are filled in at the start.": "Die Argumente, die HaiveQueen der CLI mitgibt, eines pro Zeile; {model}, {effort} und Ähnliches werden beim Start eingesetzt.",
     "Other settings of this provider exactly as they stand in config.toml; a new setting is written as typed.": "Weitere Einstellungen dieses Anbieters genau wie in config.toml; eine neue Einstellung wird so geschrieben, wie sie getippt wird.",
@@ -649,6 +650,8 @@ GERMAN = {
     'Agents per Queen': 'Agenten pro Queen',
     'The model class of the Queens (light, medium or heavy).': 'Die Modellklasse der Queens (light, medium oder heavy).',
     'How many Agents a Queen may have running at the same time.': 'Wie viele Agenten eine Queen gleichzeitig laufen haben darf.',
+    'Max concurrent compile checks': 'Maximal gleichzeitige Kompilierprüfungen',
+    'The most compile checks that run at the same time on this computer, across all projects, Queens and Agents.': 'Die höchste Zahl von Kompilierprüfungen, die gleichzeitig auf diesem Rechner laufen, für alle Projekte, Queens und Agenten.',
     'Plans': 'Pläne',
     '%s, %d tokens': '%s, %d Tokens',
     'Knowledge base': 'Wissensbasis',

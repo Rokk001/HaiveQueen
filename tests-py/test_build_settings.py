@@ -99,7 +99,7 @@ class ParallelJobsTest(unittest.TestCase):
             runtime.upsert_agent(conn, "p", "A-integrate", {"status": "running", "buildJobs": 3})
             runtime.upsert_agent(conn, "q", "B-queen", {"status": "running", "buildJobs": 2})
             env = type("E", (), {"name": "p", "conn": conn, "settings": {"buildJobs": {"cores": 6, "perJobMB": 1}}})()
-            self.assertEqual(bj.plan_build(env, free_mb=64000, cores=8)["Jobs"], 2)
+            self.assertEqual(bj.plan_build(env, free_mb=64000, cores=8)["Jobs"], 1)  # five cores already allocated
             self.assertEqual(bj.plan_build(env, free_mb=64000, cores=8, exclude="A-integrate")["Jobs"], 3)
 
     def test_the_parallel_value_is_a_whole_number_from_1(self):
@@ -350,14 +350,14 @@ class QueenMonitorTest(RoundCase):
     """B-6c: the count handed out at acquire replaces the one from the Queen start in the measurement."""
 
     def test_the_measurement_divides_by_the_count_of_acquire(self):
-        """The Queen was started with 2 jobs; acquire handed out 5: the stored use per job is the peak / min(5, processes seen); the test sees its own one process."""
+        """Acquire replaces 2 jobs with 5; one observed process and three parallel targets divide the measured peak by 3."""
         name = Path(sys.executable).name
         runtime.upsert_agent(self.conn, "testproj", "Q-queen", {"status": "running", "phase": "queen", "plan_path": REL})
         self.conn.execute("INSERT INTO hive_integration (project, plan_path, acquired, build_jobs) VALUES ('testproj', ?, 1, 5)", (REL,))
         self.conn.commit()
         stop = threading.Event()
         samples = self.base / "queen-samples.txt"
-        t = threading.Thread(target=agent_runner.queen_build_monitor, args=("testproj", REL, "Q-queen", 2, samples, [name], stop, 0.05, 1, os.getpid(), 10))
+        t = threading.Thread(target=agent_runner.queen_build_monitor, args=("testproj", REL, "Q-queen", 2, samples, [name], stop, 0.05, 3, os.getpid(), 10))
         t.start()
         time.sleep(0.6)
         stop.set()
@@ -365,7 +365,8 @@ class QueenMonitorTest(RoundCase):
         rows = self.conn.execute("SELECT jobs, per_job_mb, peak_mb FROM build_measurements WHERE project='testproj'").fetchall()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["jobs"], 5)
-        self.assertAlmostEqual(rows[0]["per_job_mb"], round(rows[0]["peak_mb"] / 1), delta=1)
+        self.assertEqual(runtime.get_agent(self.conn, "testproj", "Q-queen")["buildParallel"], 3)
+        self.assertAlmostEqual(rows[0]["per_job_mb"], round(rows[0]["peak_mb"] / 3), delta=1)
 
 
 class RunnerVariablesTest(RunnerBase):
@@ -398,6 +399,29 @@ class RunnerVariablesTest(RunnerBase):
         self.run_runner("B-bee", "claude", claude_stream(), phase="bee", env={"BZZ_SAMPLE_SEC": "0.2"})
         self.assertNotIn("buildJobs", self.row("B-bee"))
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM build_measurements").fetchone()[0], 0)
+
+    def test_agent_start_counts_compile_checks_and_waits_for_cores(self):
+        """Startup uses the current shared core budget before exporting build variables."""
+        self.write_config('[buildJobs]\nenvVar = "BUILD_MP_JOBS"\ncores = 8\nparallel = 2\nfirstJobs = 8\n')
+        (self.base / 'stream.txt').write_text(claude_stream(), encoding='utf-8')
+        for name, counts in (('checks-running', [2]), ('checks-full', [8, 2])):
+            with self.subTest(name=name):
+                (self.base / 'record.json').unlink(missing_ok=True)
+                self.prepare(name)
+                script = ('import sys\nfrom haivequeen import agent_runner as ar, buildjobs\n'
+                          'ar.osplat.logical_cores = lambda: 8\n'
+                          'ar.osplat.free_ram_mb = lambda: 64000\n'
+                          'counts = iter(%r)\n' % counts +
+                          'buildjobs._running_checks = lambda: next(counts, 2)\n'
+                          'sys.exit(ar.main(sys.argv[1:]))\n')
+                result = subprocess.run([sys.executable, '-c', script,
+                    '--project', 'demo', '--name', name, '--provider', 'claude',
+                    '--plan', 'plans/Demo-PLAN.md', '--package', 'P1', '--phase', 'bee',
+                    '--cwd', str(self.ws), '--prompt-file', str(self.prompt), '--runs-dir', str(self.runs)],
+                    cwd=str(ROOT), env=self.env, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((self.record()['mp_jobs'], self.record()['parallel']), ('1', '2'))
+                self.assertEqual('Waiting for build cores' in result.stdout, counts[0] == 8)
 
 
 class InstructionsTest(RoundCase):

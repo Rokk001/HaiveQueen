@@ -6,8 +6,7 @@ integration place released, worktree cleanup). A step whose command is empty is 
 plan's worktree; after its fix the pipeline starts again at step 1. The state of a plan is stored in the kv table (key orch:<plan>), so the pipeline
 goes on after a pause, a fix, an owner answer and a restart of HaiveQueen.
 
-Commands run in a thread of the HaiveQueen process (a stop of HaiveQueen waits for them); their result is stored in a file, so a result is not lost
-when the process ends first. Merge, Push and the fix agent start are quick and run in the round itself.
+Check runs in a detached supervisor and publishes its result in the database. Build and Deploy run in threads and store their results in files. Merge, Push and the fix agent start are quick and run in the round itself.
 """
 import json
 import os
@@ -42,9 +41,15 @@ class Job:
         self.pid = None
         self.cancelled = False
         self.thread = None
+        self.compile_job = None
 
     def alive(self):
         """True while the thread of the command runs."""
+        if self.compile_job:
+            proc = integration.SUPERVISORS.get(self.token)
+            if proc is not None:
+                return proc.poll() is None
+            return osplat.process_alive(self.pid)
         return bool(self.thread and self.thread.is_alive())
 
 
@@ -361,14 +366,23 @@ def _moved(conn, env, plan, state, step):
 
 
 def _work(env_settings, job, step, command, folder, extra_env, result_file):
-    """The thread of one command: run it (the Check under the lock of the machine), store the result in a file."""
+    """The thread of one command: run it (the Check in a slot of the machine), store the result in a file."""
+    if step == "Check":
+        from types import SimpleNamespace
+        from . import config
+        conn = db.connect(config.db_path())
+        try:
+            env = SimpleNamespace(settings={**env_settings, "compileCheck": command}, conn=conn, name="orchestrator")
+            result = integration.run_compile_check(env, {"name": job.token}, cwd=str(folder), poll=POLL, milestones=False)
+            Path(result_file).write_text(json.dumps({"token": job.token, "code": result["exit"], "output": result["output"]}), encoding="utf-8")
+        finally:
+            conn.close()
+        return
     poll = POLL
     stall = float(env_settings.get("compileStallMinutes", 10)) * 60.0
     longest = float(env_settings.get("compileMaxMinutes", 120)) * 60.0 if step == "Check" else float("inf")   # Build and Deploy have no fixed overall limit
     lock = None
     try:
-        if step == "Check":
-            lock = integration._acquire_compile_lock(poll)   # one compile check at a time on the machine
         if job.cancelled:
             code, output = 143, "stopped before the command started"
         else:
@@ -379,7 +393,7 @@ def _work(env_settings, job, step, command, folder, extra_env, result_file):
                 code, output = 127, "the %s command could not start: %s" % (step, exc)
     finally:
         if lock:
-            integration._release_compile_lock(lock, poll)
+            integration._release_compile_slot(lock, poll)
     if job.cancelled:
         code = code or 143
     try:
@@ -411,28 +425,47 @@ def _command(conn, env, plan, state, folder, step, free_mb):
         head = integration.head_commit(folder)
         if step == "Deploy" and head and state.get("deployed") == head:
             return _done(conn, env, plan, state, step, "already deployed")
-        extra = None
-        if step in ("Build", "Deploy"):
-            bj = buildjobs.settings_from(env.settings.get("buildJobs"))
-            low = buildjobs.waiting_for_ram(bj, free_mb)
-            if low:   # below the minimum free RAM before a build or deploy: wait, the next round asks again
-                _blocker(conn, env, plan, "waiting for the %s: %s" % (step.lower(), low))
-                _set_status(conn, env, plan, "WAITING")
-                return None
-            planned = buildjobs.plan_build(env, free_mb=free_mb) if bj is not None else None
-            extra = planned["Environment"] if planned else None
-        token = uuid.uuid4().hex
-        result_file = _result_file(env.name, plan, token)
-        j = Job(token)
-        JOBS[key] = j
-        state["job"] = {"step": step, "token": token, "file": str(result_file), "pid": None, "head": head}
-        state["steps"][step] = "running"
-        save(conn, env.name, plan, state)
+        with buildjobs.reservation_guard():
+            extra = planned = None
+            if step in ("Build", "Deploy"):
+                bj = buildjobs.settings_from(env.settings.get("buildJobs"))
+                low = buildjobs.waiting_for_ram(bj, free_mb)
+                if low:   # below the minimum free RAM before a build or deploy: wait, the next round asks again
+                    _blocker(conn, env, plan, "waiting for the %s: %s" % (step.lower(), low))
+                    _set_status(conn, env, plan, "WAITING")
+                    return None
+                planned = buildjobs.plan_build(env, free_mb=free_mb) if bj is not None else None
+                if planned is not None and planned["Jobs"] == 0:
+                    _blocker(conn, env, plan, "waiting for the %s: waiting for build cores" % step.lower())
+                    _set_status(conn, env, plan, "WAITING")
+                    return None
+                extra = planned["Environment"] if planned else None
+            token = uuid.uuid4().hex
+            result_file = _result_file(env.name, plan, token)
+            j = Job(token)
+            JOBS[key] = j
+            state["job"] = {"step": step, "token": token, "file": str(result_file), "pid": None, "head": head}
+            if planned:
+                state['job'].update(owner_pid=os.getpid(), buildJobs=planned['Jobs'], buildParallel=planned['Parallel'])
+            state["steps"][step] = "running"
+            save(conn, env.name, plan, state)
         _log(env, "%s: %s started %s" % (_short(plan), step, _counter(env, step)))
-        j.thread = threading.Thread(target=_work, args=(env.settings, j, step, command, folder, extra, result_file), daemon=False)
-        j.thread.start()
-        if not _async():
-            j.thread.join()
+        if step == "Check":
+            compile_job = integration.start_compile_check(env, {"name": token}, cwd=str(folder), key="orch-check:" + plan, poll=POLL, milestones=False)
+            j.token = compile_job["token"]
+            j.pid = compile_job["pid"]
+            j.compile_job = compile_job
+            state["job"].update(compile_job)
+            state["job"]["compile"] = True
+            save(conn, env.name, plan, state)
+            if not _async():
+                while integration.poll_compile_check(conn, env.name, compile_job) is None:
+                    time.sleep(POLL)
+        else:
+            j.thread = threading.Thread(target=_work, args=(env.settings, j, step, command, folder, extra, result_file), daemon=False)
+            j.thread.start()
+            if not _async():
+                j.thread.join()
     result = _harvest(conn, env, plan, state)
     if result is None:
         return None
@@ -457,6 +490,12 @@ def _harvest(conn, env, plan, state):
     job = state.get("job")
     if not job:
         return None
+    if job.get("compile"):
+        result = integration.poll_compile_check(conn, env.name, job)
+        if result is None:
+            return None
+        JOBS.pop((env.name, plan), None)
+        return result["exit"], result.get("output", "")
     key = (env.name, plan)
     j = JOBS.get(key)
     if j and j.token == job["token"]:
@@ -718,6 +757,8 @@ def stop_plan(conn, project, plan, stop=None):
     if state.get("job") and state["job"].get("pid") and not job:
         stop(state["job"]["pid"])
     if state.get("job"):
+        if state["job"].get("compile"):
+            integration.poll_compile_check(conn, project, state["job"])
         state.pop("job", None)
         state["steps"] = {k: v for k, v in state["steps"].items() if v != "running"}
     fix = state.get("fix")

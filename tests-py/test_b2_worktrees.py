@@ -456,7 +456,7 @@ class PackageWorktrees(GitCase):
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42, cwd=str(self.base / 'plan'))
         self.machine['providers'][0]['beeMode'] = 'subagent'
-        args = cli.build_parser().parse_args(['agent', 'start', '--project', 'testproj', '--plan', REL, '--package', 'P1', '--class', 'medium', '--name', 'Ada', '--task', 'work', '--steps', '["work"]'])
+        args = cli.build_parser().parse_args(['agent', 'start', '--project', 'testproj', '--plan', REL, '--package', 'P1', '--class', 'medium', '--name', 'Ada', '--task', 'work', '--steps', '["work"]', '--subagents'])
         output = io.StringIO()
         with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), mock.patch.object(cli.config, 'load_config', return_value=self.machine), contextlib.redirect_stdout(output):
             self.assertEqual(cli.cmd_bee(args, self.conn), 0, output.getvalue())

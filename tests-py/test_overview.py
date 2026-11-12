@@ -101,7 +101,7 @@ class OverviewTest(unittest.TestCase):
         with db.transaction(self.conn):
             self.conn.execute("INSERT INTO build_measurements (host, project, ts, jobs, per_job_mb) VALUES ('h1','alpha','x',2,900)")   # old whole-machine value: ignored
         s = dict(SYS, compiler_count=3)
-        self.assertIn("Build jobs 1 of 12 cores (next build) | per job not measured yet", self.data(sysinfo=s, project="beta")["bj"])
+        self.assertIn("Build jobs 0 of 12 cores (next build) | per job not measured yet", self.data(sysinfo=s, project="beta")["bj"])   # the running build exceeds the one-core budget
         with db.transaction(self.conn):
             self.conn.execute("UPDATE agents SET status='done', ended_at=? WHERE project='alpha'", (iso(1),))
             for ts, per in (("a", 900), ("b", 700), ("c", 800)):

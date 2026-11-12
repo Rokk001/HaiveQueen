@@ -134,7 +134,7 @@ def _agent_worktree(conn, project, plan, path) -> bool:
 
 # Run the compile check of the project for a Queen or an Agent.
 def cmd_compile_check(args, conn) -> int:
-    """Run the configured compile check in the worktree of the caller (a Queen or a process Agent) or, with --worktree, in the worktree of an Agent of the plan, and wait for its end.
+    """Wait for the stored result of a detached compile check in the worktree of the caller (a Queen or a process Agent) or, with --worktree, in the worktree of an Agent of the plan, and wait for its end.
     Only the result of the Queen in her own worktree is stored for `bzz ready`; the result of an Agent is stored for that Agent. Exit 0 only when it is green."""
     from haivequeen import hives, integration, scheduler as sch
     agent = os.environ.get("BZZ_AGENT")
@@ -326,11 +326,16 @@ def cmd_integration(args, conn):
         if row:
             conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
         return fail("waiting for integration: " + low)
-    job = buildjobs.plan_build(env, free_mb=free_mb, exclude=agent) if builds else None   # the count of this moment replaces the one set at the Queen start
-    if not hives.take_integration(conn, args.project, args.plan, owner_pid=owner_pid, build_jobs=job["Jobs"] if job else None):
-        if row:
-            conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
-        return fail("waiting for integration")
+    with buildjobs.reservation_guard():
+        job = buildjobs.plan_build(env, free_mb=free_mb, exclude=agent or (args.project, args.plan)) if builds else None   # refresh an existing allocation without counting itself
+        if job is not None and job["Jobs"] == 0:
+            if row:
+                conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
+            return fail("waiting for integration: waiting for build cores")
+        if not hives.take_integration(conn, args.project, args.plan, owner_pid=owner_pid, build_jobs=job["Jobs"] if job else None):
+            if row:
+                conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
+            return fail("waiting for integration")
     result = {"ok": True, "buildJobs": job}
     hive = hives.get(conn, args.project, args.plan)
     if env and hive:
@@ -535,7 +540,7 @@ def cmd_bee(args, conn):
         rules = json.loads(args.rules)
         if not all(isinstance(x, list) and all(isinstance(v, str) for v in x) for x in (steps, paths, rules)) or not steps:
             return fail("steps, paths and rules must be string lists and steps must not be empty")
-        started = bees.start_process(env, plan, args.package, args.name, args.cls, args.task, steps, paths, rules, cwd=args.cwd, no_subagents=args.no_subagents)
+        started = bees.start_process(env, plan, args.package, args.name, args.cls, args.task, steps, paths, rules, cwd=args.cwd, no_subagents=not args.subagents or args.no_subagents)
     except (ValueError, TypeError) as exc:
         return fail(str(exc))
     if isinstance(started, dict):
@@ -603,7 +608,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--blocked-by", choices=["question", "build", "owner", "package", "provider"], default="")
     p.add_argument("--blocked-ref", default="")
     p.add_argument("--ended-evidence", default="", help="existing Agent result file; release also requires its matching agent row to have ended or its known process to be absent")
-    p.add_argument("--no-subagents", action="store_true")
+    p.add_argument("--subagents", action="store_true", help="the Queen has a native subagent tool available")
+    p.add_argument("--no-subagents", action="store_true", help="force separate processes")
     p.set_defaults(fn=cmd_bee)
 
     p = sub.add_parser("package", help="record package progress; owner: unassign its stored provider")

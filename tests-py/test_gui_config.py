@@ -304,17 +304,17 @@ class WindowTest(unittest.TestCase):
 
     # Every provider offers the Bee mode with the value that applies when the file has no entry.
     def test_provider_offers_the_bee_mode_with_its_default(self):
-        """A claude provider shows subagent and a codex provider shows process; a subagent set for codex is shown and saved as process."""
+        """A claude provider shows subagent and a codex provider shows process; a subagent set for codex is shown and saved as subagent."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.select(1)   # provider claude
         self.assertEqual({path: getter() for path, getter, _like in win.getters}[("beeMode",)], "subagent")
         win.select(2)   # provider codex
         getters = {path: getter for path, getter, _like in win.getters}
         self.assertEqual(getters[("beeMode",)](), "process")
-        win.target()["beeMode"] = "subagent"   # a stored subagent of codex: Codex has no embedded Bees
+        win.target()["beeMode"] = "subagent"   # a stored selection stays selected
         win.build_form()
         win.save()
-        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["providers"][1]["beeMode"], "process")
+        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["providers"][1]["beeMode"], "subagent")
 
     # The language of the free text to the owner.
     def test_general_offers_the_language_and_saves_it(self):
