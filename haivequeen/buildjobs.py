@@ -196,6 +196,12 @@ def running_builds(conn, exclude: str = None) -> list:
     return found
 
 
+def _running_checks() -> int:
+    """The compile checks that run now: they share the cores of the builds."""
+    from . import integration
+    return integration.running_checks()
+
+
 def waiting_for_ram(bj: dict, free_mb: float):
     """The text why a build must wait (free RAM below the minimum free RAM before a build), or None when it may start."""
     if bj is None:
@@ -231,7 +237,7 @@ def plan_build(env, free_mb: float = None, cores: int = None, exclude: str = Non
         return None
     free = float(osplat.free_ram_mb() if free_mb is None else free_mb)
     calc = job_count(bj, cores or osplat.logical_cores(), free, stored_per_job(env.conn, env.name, host, bj["Measurements"]),
-                     concurrent=len(running_builds(env.conn, exclude)))
+                     concurrent=len(running_builds(env.conn, exclude)) + _running_checks())
     calc.update({"EnvVar": bj["EnvVar"], "ParallelVar": bj["ParallelVar"], "MinRamVar": bj["MinRamVar"], "MinFreeGB": bj["MinFreeGB"],
                  "FreeMB": free, "Environment": build_environment(bj, calc["Jobs"])})
     return calc

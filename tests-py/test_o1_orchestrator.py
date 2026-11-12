@@ -442,18 +442,38 @@ class AsyncCommands(OrchCase):
         self.assertEqual(self.run_order(), ["Check"])
         self.assertEqual(self.plan_status(), "REVIEW")
 
-    def test_only_one_compile_check_at_a_time(self):
+    def test_the_check_step_follows_the_limit_of_concurrent_compile_checks(self):
+        """K-2: with the limit at 2 the Check step runs beside one other compile check and waits while two run."""
         orchestrator.ASYNC = True
         self.check = self.echo("Check")
         self.project_toml()
         self.ready_plan()
-        lock = integration._acquire_compile_lock(0.05)   # another check of the machine runs
+        settings = self.env().settings
+        self.assertEqual(integration.compile_limit(settings), 2)
+        other = integration._acquire_compile_slot(settings, 0.05)   # another check of the machine runs
+        try:
+            self.round()
+            self.wait_job()
+            self.round()
+            self.assertEqual(self.run_order(), ["Check"])   # not held back by one other check
+        finally:
+            integration._release_compile_slot(other, 0.05)
+        self.assertEqual(integration._compile_holders(), [])
+
+    def test_the_check_step_waits_while_the_limit_is_reached(self):
+        orchestrator.ASYNC = True
+        self.check = self.echo("Check")
+        self.project_toml()
+        self.ready_plan()
+        settings = self.env().settings
+        held = [integration._acquire_compile_slot(settings, 0.05) for _ in range(integration.compile_limit(settings))]
         try:
             self.round()
             time.sleep(1.5)
             self.assertEqual(self.run_order(), [])
         finally:
-            integration._release_compile_lock(lock, 0.05)
+            for slot in held:
+                integration._release_compile_slot(slot, 0.05)
         self.wait_job()
         self.round()
         self.assertEqual(self.run_order(), ["Check"])

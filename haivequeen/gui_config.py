@@ -79,10 +79,12 @@ SETTING_HELP = {
     "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
 }
 GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model"),
-                  "owner": N_("Owner name"), "queenClass": N_("Queen class"), "beesPerQueen": N_("Agents per Queen")}
+                  "owner": N_("Owner name"), "queenClass": N_("Queen class"), "beesPerQueen": N_("Agents per Queen"),
+                  "maxConcurrentCompileChecks": N_("Max concurrent compile checks")}
 GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class."),
                 "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("The model class of the Queens (light, medium or heavy)."),
-                "beesPerQueen": N_("How many Agents a Queen may have running at the same time.")}
+                "beesPerQueen": N_("How many Agents a Queen may have running at the same time."),
+                "maxConcurrentCompileChecks": N_("The most compile checks that run at the same time on this computer, across all projects, Queens and Agents.")}
 SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Project."), "allowedTools": N_("Commands agents of this Project may run without asking.")})
 OTHER_HELP = N_("A further setting of this Project, as written in its settings file.")   # the explanation of a setting the page has no own text for
 GENERAL_OTHER_HELP = N_("A further HaiveQueen setting, as written in config.toml.")   # the same on the General page: these keys belong to HaiveQueen, not to a Project
@@ -337,6 +339,9 @@ def check(data, machine=True) -> list:
     for key, label in (("remoteName", "Remote name"), ("integrationBranch", "Integration branch")):
         if data.get(key) and not re.fullmatch(r"[\w][\w./-]*", str(data[key])):
             problems.append(tr("%s: letters, digits and . / - _ are expected, starting with a letter or digit", tr(label)))
+    limit = data.get("maxConcurrentCompileChecks")
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+        problems.append(tr("%s: a whole number from %d up is expected", tr(N_("Max concurrent compile checks")), 1))
     if str(data.get("nextVersion") or "").strip():
         from . import releases
         try:
@@ -872,7 +877,8 @@ class ConfigWindow(ProviderPages):
         shown.setdefault("owner", "")
         shown.setdefault("queenClass", "medium")
         shown.setdefault("beesPerQueen", 3)
-        main = {k: shown.pop(k) for k in ("language", "slots", "owner", "queenClass", "beesPerQueen", "roundMinutes", "escalateAfter") if k in shown}
+        shown.setdefault("maxConcurrentCompileChecks", 2)
+        main = {k: shown.pop(k) for k in ("language", "slots", "owner", "queenClass", "beesPerQueen", "maxConcurrentCompileChecks", "roundMinutes", "escalateAfter") if k in shown}
         self.fields(self.form, main, ())
         box = self.advanced_section()
         self.fields(box, shown, ())

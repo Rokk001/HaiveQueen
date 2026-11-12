@@ -1,4 +1,4 @@
-"""The integration helpers of a Project: the progress-watched command runner (compile check, Build, Deploy), the machine lock of the compile check and the
+"""The integration helpers of a Project: the progress-watched command runner (compile check, Build, Deploy), the machine slots of the compile checks and the
 start text of the Queen. The Orchestrator (orchestrator.py) runs the steps; retire_legacy_steps removes the step packages of the time before it.
 """
 import json
@@ -68,9 +68,20 @@ def compile_result(conn, project, queen_name):
     return data if isinstance(data, dict) else None
 
 
-# The lock that lets one compile check run at a time per machine.
+# The slots that let a limited number of compile checks run at the same time per machine.
+COMPILE_LIMIT_KEY = "maxConcurrentCompileChecks"   # the General setting "Max concurrent compile checks"
+DEFAULT_COMPILE_LIMIT = 2
+
+
+def compile_limit(settings) -> int:
+    """The maximum number of compile checks that run at the same time on this computer: the setting maxConcurrentCompileChecks (a whole number from 1,
+    default 2); a wrong value gives the default so that no wrong value stops all checks."""
+    value = (settings or {}).get(COMPILE_LIMIT_KEY, DEFAULT_COMPILE_LIMIT)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else DEFAULT_COMPILE_LIMIT
+
+
 def _compile_lock_path():
-    """The lock file of the machine (in the machine data folder)."""
+    """The file of the machine (in the machine data folder) that lists the compile checks that run now."""
     from . import config
     return config.data_dir() / "compile-check.lock"
 
@@ -110,54 +121,85 @@ def _compile_lock_guard(path, poll):
         os.close(guard)
 
 
-# Wait for the machine-wide compile check lock.
-def _acquire_compile_lock(poll):
-    """Publish a PID or recover a dead owner's lock, without exposing partial writes to contenders."""
+def _read_holders(path) -> list:
+    """The listed checks [{token, pid}] of the slot file; an unreadable or wrong file lists none."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        holders = data.get("holders") if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return []
+    return [h for h in holders if isinstance(h, dict) and isinstance(h.get("pid"), int)] if isinstance(holders, list) else []
+
+
+def _live_holders(path) -> list:
+    """The listed checks whose process still exists (the slot of a process that died is free again)."""
+    return [h for h in _read_holders(path) if osplat.process_alive(h["pid"])]
+
+
+def _compile_holders() -> list:
+    """The compile checks that run now on this computer (without a wait for the guard that blocks a writer)."""
+    return _live_holders(_compile_lock_path())
+
+
+def running_checks() -> int:
+    """How many compile checks run now on this computer; builds count them with the builds when they share the cores."""
+    return len(_compile_holders())
+
+
+def _running_builds() -> int:
+    """How many agents run a build now (the database of this computer)."""
+    from . import buildjobs, config
+    conn = None
+    try:
+        conn = db.connect(config.db_path())
+        return len(buildjobs.running_builds(conn))
+    except Exception:
+        return 0
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _slot_wait(settings, holders, builds) -> str:
+    """Why a compile check must wait now (text), or None when it may start: the limit is reached, the free RAM is below the minimum free RAM before a
+    build, or the cores of CPU cores per build are used up by the running builds and compile checks together (a check needs one core)."""
+    from . import buildjobs
+    if len(holders) >= compile_limit(settings):
+        return "%d compile checks run and the maximum is %d" % (len(holders), compile_limit(settings))
+    bj = buildjobs.settings_from((settings or {}).get("buildJobs") or 0)
+    reason = buildjobs.waiting_for_ram(bj, osplat.free_ram_mb())
+    if reason:
+        return reason
+    cores = buildjobs.core_limit(bj, osplat.logical_cores())
+    if builds() + len(holders) >= cores:
+        return "all %d CPU cores for builds are in use by builds and compile checks" % cores
+    return None
+
+
+# Wait for a slot of the machine.
+def _acquire_compile_slot(settings, poll, builds=None):
+    """Wait until a compile check may start (see _slot_wait), list it and return its token for _release_compile_slot."""
+    import uuid
     path = _compile_lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    builds = builds or _running_builds
     while True:
         with _compile_lock_guard(path, poll):
-            try:
-                handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                try:
-                    contents = path.read_text(encoding="utf-8")
-                    if contents.startswith("pid:"):
-                        holder = int(contents[4:-1]) if contents.endswith("\n") else None
-                    else:
-                        holder = int(contents.strip())
-                except ValueError:
-                    holder = None
-                except OSError:
-                    holder = 0  # A transient read error is not evidence of an abandoned lock.
-                if holder is None or (holder > 0 and not osplat.process_alive(holder)):
-                    try:
-                        path.unlink()
-                    except OSError:
-                        pass
-                    continue
-            else:
-                try:
-                    with os.fdopen(handle, "w", encoding="utf-8") as lock:
-                        lock.write("pid:%s\n" % os.getpid())
-                except BaseException:
-                    try:
-                        path.unlink()
-                    except OSError:
-                        pass
-                    raise
-                return path
+            holders = _live_holders(path)
+            if _slot_wait(settings, holders, builds) is None:
+                token = uuid.uuid4().hex
+                path.write_text(json.dumps({"holders": holders + [{"token": token, "pid": os.getpid()}]}), encoding="utf-8")
+                return token
+            path.write_text(json.dumps({"holders": holders}), encoding="utf-8")
         time.sleep(poll)
 
 
-# Give the machine-wide compile check lock back.
-def _release_compile_lock(lock, poll):
-    """Remove the lock file of this process."""
-    with _compile_lock_guard(lock, poll):
-        try:
-            lock.unlink()
-        except OSError:
-            pass
+# Give a slot back.
+def _release_compile_slot(token, poll):
+    """Remove the check with this token from the list."""
+    path = _compile_lock_path()
+    with _compile_lock_guard(path, poll):
+        path.write_text(json.dumps({"holders": [h for h in _live_holders(path) if h.get("token") != token]}), encoding="utf-8")
 
 
 # Run the compile command and watch its progress.
@@ -217,7 +259,7 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, lab
 def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True):
     """Run the setting compileCheck in the worktree `cwd` (default: that of `queen`, the row of the caller), store {ok, exit, commit, time, seconds, command} under
     `key` (default: the result of the Queen's run that `bzz ready` reads), add the live line to the milestones of the caller and return the result with the end of the
-    output under "output". Checks run one at a time per machine: waiting for another check counts for neither limit. The settings compileStallMinutes (10) and
+    output under "output". At most the setting maxConcurrentCompileChecks checks run at the same time per machine, and only while RAM and cores are free: waiting counts for neither limit. The settings compileStallMinutes (10) and
     compileMaxMinutes (120) end a check red; the commit is the one the worktree stood on before the run."""
     poll = POLL_SECONDS if poll is None else poll
     command = str(env.settings.get("compileCheck") or "").strip()
@@ -227,15 +269,15 @@ def run_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True
     longest = float(env.settings.get("compileMaxMinutes", 120)) * 60.0
     lock = None
     try:
-        lock = _acquire_compile_lock(poll)
-        started = time.time()   # after the wait for the lock
+        lock = _acquire_compile_slot(env.settings, poll)
+        started = time.time()   # after the wait for a slot
         try:
             code, output = _watch_compile(command, cwd, stall, longest, poll)
         except OSError as exc:
             code, output = 127, "the compile check could not start: %s" % exc
     finally:
         if lock:
-            _release_compile_lock(lock, poll)
+            _release_compile_slot(lock, poll)
     result = {"ok": code == 0, "exit": code, "commit": commit, "time": db.now(), "seconds": round(time.time() - started, 1), "command": command}
     if code == 125:
         result["stalled"] = True

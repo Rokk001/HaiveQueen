@@ -361,14 +361,14 @@ def _moved(conn, env, plan, state, step):
 
 
 def _work(env_settings, job, step, command, folder, extra_env, result_file):
-    """The thread of one command: run it (the Check under the lock of the machine), store the result in a file."""
+    """The thread of one command: run it (the Check in a slot of the machine), store the result in a file."""
     poll = POLL
     stall = float(env_settings.get("compileStallMinutes", 10)) * 60.0
     longest = float(env_settings.get("compileMaxMinutes", 120)) * 60.0 if step == "Check" else float("inf")   # Build and Deploy have no fixed overall limit
     lock = None
     try:
         if step == "Check":
-            lock = integration._acquire_compile_lock(poll)   # one compile check at a time on the machine
+            lock = integration._acquire_compile_slot(env_settings, poll)   # at most the configured number of compile checks at a time on the machine
         if job.cancelled:
             code, output = 143, "stopped before the command started"
         else:
@@ -379,7 +379,7 @@ def _work(env_settings, job, step, command, folder, extra_env, result_file):
                 code, output = 127, "the %s command could not start: %s" % (step, exc)
     finally:
         if lock:
-            integration._release_compile_lock(lock, poll)
+            integration._release_compile_slot(lock, poll)
     if job.cancelled:
         code = code or 143
     try:
