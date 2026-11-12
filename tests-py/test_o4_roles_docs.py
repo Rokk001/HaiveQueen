@@ -45,6 +45,11 @@ class MergedRoleFiles(unittest.TestCase):
     def test_bee_text_keeps_the_compile_check_rule(self):
         self.assertIn("bzz compile-check", role("bee"))
 
+    def test_queen_recovers_requirements_missing_from_the_cut(self):
+        text = role("queen")
+        self.assertNotIn("or a plan without requirement ids", text)
+        self.assertIn("add it to `## Requirements`, cut a package for it and have it implemented", text)
+
 
 class MergedRolePrompts(RoundCase):
     """O-8: a Queen prompt and an Agent prompt contain the role text once and read no start file."""
