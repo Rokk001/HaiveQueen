@@ -531,6 +531,10 @@ def _do_start(c, a, forced_pick=None) -> int:
     if forced_pick is None:
         raise ValueError("a provider must be selected before starting an agent")
     pick = forced_pick
+    if not dry:   # every kind of start (Queen, Agent process, ready-check agent) is refused under stop, pause or a PAUSED plan
+        from . import hives
+        if hives.start_block_reason(env.conn, env.name, str(a["plan"])):
+            return 0
     protocol, prov = pick["protocol"], pick["name"]
     nm, k = str(a["name"]), 1
     while nm in st["names"]:
@@ -551,15 +555,14 @@ def _do_start(c, a, forced_pick=None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     pf = run_dir / "prompt.md"
     hf = run_dir / "HANDOFF"
-    if phase == "bee":
-        hdr = roles.role_text("bee-start", {"language": roles.language(env.settings)}) + "\n\n"
-    elif phase == "queen":
-        hdr = roles.role_text("queen-start", {"language": roles.language(env.settings)}) + "\n\n"
+    if phase == "fix":   # the fix agent has no role file of its own: its task is the whole prompt
+        hdr = "You are the fix agent %s. Language: write all free text for the owner in %s.\n\nTASK\n\n" % (nm, roles.language(env.settings))
+    elif phase in ("bee", "queen"):   # the role text (queen.md, bee.md) is the start of the prompt itself
+        hdr = ""
     elif protocol == "claude":
-        flow_doc = env.settings.get("buildFlowDoc", "")
         hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of AGENT-RULES.md and the rule sections you need) are "
-               "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name%s only when your task "
-               "needs them. Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, " (e.g. %s)" % flow_doc if flow_doc else ""))
+               "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name only when your task "
+               "needs them. Update the plan's state. End when your task is finished.\n\nTASK\n\n" % nm)
     else:
         rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"   # a project with a separate code repo keeps its rules in the workspace
         hdr = ("You are the agent %s (one task, then you end). Follow all rules in section 1 of %s and every rule of the repository (%s and the "
@@ -571,14 +574,14 @@ def _do_start(c, a, forced_pick=None) -> int:
                    "wait for running Agents, finish your current step, record the handoff in the plan state and end." % hf)
     predecessors = [x for x in runtime.list_agents(env.conn, env.name, 'all') if x.get('phase') == 'queen' and x.get('plan_path') == plan and x.get('person')]
     loaded = ""
-    if phase in ("bee", "queen"):   # what a Queen and a Bee load is defined in profile.py; the project rules are complete, never a selection
+    if phase in ("bee", "queen", "fix"):   # what a Queen and a Bee load is defined in profile.py; the project rules are complete, never a selection
         if protocol != "claude":   # Claude gets the rules in its system prompt file (rules.md); every other provider reads them from its prompt
             loaded = profile.rules_text(profile.project_rules(env.settings, env.code_repo, protocol, a["cwd"]))
         if phase == "queen":
             loaded += "\n" + profile.queen_load(env.conn, env.name, env.workspace, plan, predecessors[-1]["person"] if predecessors else None, nm)
     pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff + ("\n\n" + loaded.strip() + "\n" if loaded.strip() else ""), encoding="utf-8")
     ident = agent_identity(env.conn, [predecessors[-1]['person']] if phase == 'queen' and predecessors else ())
-    if phase in ("bee", "queen"):   # a Bee and a Queen are named by their short female name (A2); the number of a repeated row key is not part of it
+    if phase in ("bee", "queen", "fix"):   # a Bee and a Queen are named by their short female name (A2); the number of a repeated row key is not part of it
         base = re.sub(r"-\d+$", "", nm)
         ident["Person"] = base if base in load_agent_names() else nm
     cls = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
@@ -755,6 +758,8 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
     """The loop body (see run_loop)."""
     close_obsolete_questions(conn)
     try:
+        from . import integration
+        integration.retire_legacy_steps(conn)   # open INTEGRATION-BUILD/INTEGRATION-DEPLOY packages and their questions block no plan
         from . import projsettings, proctree
         if projsettings.migrate_all(conn=conn):   # every known project.toml moves to the slim set once; the old files stay as .bak
             machine = config.load_config()
@@ -897,7 +902,8 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
         env.event("STOP file found: no new agents, waiting for running agents" if stopped else "Loop ending")
     state.update(next_at=None)
     write_state(conn, "idle", datetime.now(), None)
-    while active_count(conn) > 0:
+    from . import orchestrator
+    while active_count(conn) > 0 or orchestrator.running_jobs():   # a running pipeline command ends first
         sleep(wait_seconds)
         for env in envs:   # a row whose runner process is gone must not hold the stopped loop open
             routine.repair_stale_agents(env)
@@ -1073,6 +1079,6 @@ def register(sub) -> None:
     p.add_argument("--detach", action="store_true", help="open the window as a process of its own and return (default: run it in this process)")
     p.add_argument("--project", help="show one Project only")
     p.set_defaults(fn=cmd_gui)
-    p = sub.add_parser("stop")
+    p = sub.add_parser("stop", help="start no new Agent of any kind (Queen, separate Agent, subagent, ready-check agent); running agents finish", description="Create the STOP flag: no new Queen, separate Agent process, embedded subagent or ready-check agent starts, running ones finish their task and the loop ends. bzz start allows starts again.")
     p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")
     p.set_defaults(fn=cmd_stop)

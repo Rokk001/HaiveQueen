@@ -46,6 +46,7 @@ DEFAULT_SETTINGS = {
     "retryWaitMinutes": [1, 2, 4, 8, 15],   # wait before the n-th retry of consecutive interrupted ends (API, connection); the last value repeats
     "rateLimitWaitMinutes": 15,   # wait after a rate limit when no reset time of the limited provider is known
     "compileStallMinutes": 10,   # `bzz compile-check` ends a check red as stalled after this many minutes without output and without CPU use
+    "maxConcurrentCompileChecks": 2,   # the most compile checks that run at the same time on this computer (machine-wide, all projects)
     "compileMaxMinutes": 120,   # `bzz compile-check` ends a check red after this many minutes of running (waiting for another check does not count)
     "contextLimitTokens": 300000,
     "integrationBranch": "main",
@@ -53,24 +54,23 @@ DEFAULT_SETTINGS = {
     "worktreeLocation": "",
     "ownerTopics": [],
     "compileCheck": "",
-    "buildEnabled": True,
-    "deployEnabled": False,  # an Apiary from before the switches keeps it on: build_settings(legacy_deploy)
+    "buildCommand": "",    # the Build step of the Orchestrator pipeline: one command line run in the plan's worktree; empty = the step is skipped
+    "deployCommand": "",   # the Deploy step of the Orchestrator pipeline, likewise
     "deleteFinishedWorktrees": True,
     "deleteIntegratedBranches": False,
     "publishReleases": False,   # HaiveQueen publishes a GitHub release at each integration (only for a remote on GitHub)
     "nextVersion": "",          # the owner's next version (e.g. 2.1.0); without it the last digit counts up
-    "buildFlowDoc": "",
-    "integratorInstructions": "",
     "worktreePrefix": "wt",
     "buildProcessNames": [],
 }
-MACHINE_ONLY = ("hives", "excludedProviders", "providers", "providerRecheckMinutes", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
+MACHINE_ONLY = ("hives", "excludedProviders", "providers", "providerRecheckMinutes", "slots", "buildJobs", "maxConcurrentCompileChecks", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
 
 
 def effective_verify(settings: dict, verify) -> str:
-    """Who closes a package: its verify value, except that with the build switch off a package marked build is closed like a code package."""
+    """Who closes a package: its verify value, except that a package marked build is closed like a code package: the build is the Build step of the
+    Orchestrator after `bzz ready`, so it never holds the Queen."""
     value = str(verify or "code")
-    return "code" if value == "build" and not settings.get("buildEnabled", True) else value
+    return "code" if value == "build" else value
 
 
 def deep_merge(base: dict, over: dict) -> dict:
@@ -86,8 +86,8 @@ def deep_merge(base: dict, over: dict) -> dict:
 
 # Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project.
 def build_settings(machine: dict, project_cfg: dict, legacy_deploy: bool = False, workspace=None) -> dict:
-    """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project. With legacy_deploy (a Project from before the switches) the default of deployEnabled is on."""
-    defaults = {**DEFAULT_SETTINGS, "deployEnabled": True} if legacy_deploy else DEFAULT_SETTINGS
+    """Merge defaults, machine settings and project settings (project.toml); machine-only keys cannot be overridden by a project."""
+    defaults = DEFAULT_SETTINGS   # legacy_deploy has no effect any more: the switches are gone, the Deploy command decides
     merged = deep_merge(defaults, {k: v for k, v in machine.items() if k not in ("projects",)})
     from . import projsettings
     over = {k: v for k, v in project_cfg.items() if k not in MACHINE_ONLY and k not in projsettings.DROPPED_FROM_PROJECT}   # General and the providers decide the dropped ones
@@ -177,7 +177,7 @@ def get_providers(settings: dict) -> list:
             raise ValueError(tr("provider %s: use must be preferred, fallback or capability-only, not '%s'", name, use))
         proto = str(p.get("protocol") or name)
         fmt = profile.check_protocol(name, proto, p.get("outputFormat"))   # a CLI HaiveQueen cannot read is refused here, with a clear message
-        bee_mode = servers.bee_mode_of(p)   # the embedded Bee mode is a Claude Code feature with an access type other than Local LLM
+        bee_mode = servers.bee_mode_of(p)
         if bee_mode not in BEE_MODES:
             raise ValueError(tr("provider %s: beeMode must be subagent or process, not '%s'", name, bee_mode))
         limit = p.get("limit")
@@ -644,11 +644,9 @@ class ProjectEnv:
                         "content": str(p["title"] or ""), "depends": deps, "phase": str(p["phase"] or ""),
                         "depends_all": any(re.match(r"(?i)^all(e)?$", str(d)) for d in p["depends_on"]),
                         "capability": str(p["capability"] or ""), "verify": effective_verify(self.settings, p.get("verify"))})
-        steps = list(plans.STEP_PACKAGES.values())
-        rank = lambda package: steps.index(package) + 1 if package in steps else 0   # plan packages, then the Build step, then the Deploy step: "all" means what comes before
         for r in res:
             if r["depends_all"]:
-                r["depends"] += [x["id"] for x in res if x["id"] != r["id"] and x["id"] not in r["depends"] and (rank(x["id"]) < rank(r["id"]) or rank(x["id"]) == rank(r["id"]) == 0)]
+                r["depends"] += [x["id"] for x in res if x["id"] != r["id"] and x["id"] not in r["depends"]]
         return res
 
 

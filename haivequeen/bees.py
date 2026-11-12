@@ -419,9 +419,9 @@ def next_attempt(conn, project, plan, package, cls, providers, excluded, thresho
 
 
 # Write only the package task and relevant paths to a Bee; the complete project rules are loaded by the runner, a `rules` argument never replaces them.
-def bee_prompt(name, package, task, steps, paths, rules, build_rules=''):
+def bee_prompt(name, package, task, steps, paths, rules, build_rules='', language=None):
     """Build a slim Agent task with numbered progress reports."""
-    return roles.role_text('bee', {'package': package, 'task': task, 'steps': '\n'.join('%d. %s' % (i + 1, s) for i, s in enumerate(steps)), 'paths': ', '.join(paths), 'rules': '\n'.join(rules), 'name': name, 'step_count': len(steps), 'build_rules': build_rules}).rstrip()
+    return roles.role_text('bee', {'package': package, 'task': task, 'steps': '\n'.join('%d. %s' % (i + 1, s) for i, s in enumerate(steps)), 'paths': ', '.join(paths), 'rules': '\n'.join(rules), 'name': name, 'step_count': len(steps), 'build_rules': build_rules, 'language': language or roles.language({})}).rstrip()
 
 
 PACKAGE_STATES = ('working', 'waiting', 'implemented', 'done', 'rejected')   # progress states of a package; a package without a row is open; waiting = needs an answer, a build or the owner (the reason says which); rejected = the owner did not accept it
@@ -986,6 +986,9 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
     if draining:
         return refuse(env, package, draining)
     hive = hives.get(env.conn, env.name, plan)
+    blocked = hives.start_block_reason(env.conn, env.name, plan)
+    if blocked:   # stop, pause and a PAUSED plan block every kind of Agent, embedded subagents included
+        return refuse(env, package, 'an Agent may not start now (starts paused or stopped, or the plan is paused): %s' % blocked)
     if not hive or not hives.can_start_bee(env.conn, env.name, plan, False, env.settings.get('contextLimitTokens', 300000)):
         return refuse(env, package, 'the Plan may not start an Agent now (Plan state %s, context limit or HANDOFF reached)' % (hive['state'] if hive else 'missing'))
     active = runtime.list_agents(env.conn, None, 'active')
@@ -1067,7 +1070,7 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
     if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
         return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
     queen_provider = scheduler.get_provider(env.providers, hive['provider'])
-    embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not (queen_provider.get('endpoint') or queen_provider.get('server')) and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
+    embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
     free = scheduler.provider_free(env.providers, running, env.conn)   # A subagent Bee needs a free slot of the Queen's provider like a Bee process
     route_free = dict(free)
     limited = [p['name'] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # a used-up window (reserve 0) blocks the provider
@@ -1106,7 +1109,7 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         record_embedded_start(env.conn, env.name, plan, package, name, selected_class, provider, str(entry.get('model') or ''), str(entry.get('effort') or ''), queen['name'])
         record_step_count(env.conn, env.name, plan, package, len(steps))
         # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
-        prompt = roles.role_text('bee-start', {'language': roles.language(env.settings)}) + '\n\n' + bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')))
+        prompt = bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')), roles.language(env.settings))
         prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
         return {'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
     if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
@@ -1117,7 +1120,7 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
     existing = [a['name'] for a in runtime.list_agents(env.conn, env.name, 'all')]
     state = {'names': existing, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'RUNNING'}, 'by_path': {scheduler.norm_plan(plan): {'path': plan}}}
     ctx = {'env': env, 'state': state, 'pool': loop.Pool(free, 0), 'report': [], 'dry': False, 'settle': 0}
-    action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs'))), 'class': selected_class}
+    action = {'name': name, 'type': provider, 'phase': 'bee', 'plan': plan, 'package': package, 'cwd': str(path), 'prompt': bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')), roles.language(env.settings)), 'class': selected_class}
     action['prompt'] += '\n\nAssigned worktree: %s; assigned branch: %s.' % (cwd, branch)
     if not loop._do_start(ctx, action, forced_pick=pick):
         return refuse(env, package, 'the agent runner could not start the Agent process')

@@ -154,6 +154,21 @@ class SubagentBeeTests(RoundCase):
              mock.patch('haivequeen.loop.ram_gb', return_value=16.0):
             return bees.start_process(self.env(), REL, 'P1', 'Bea', 'medium', 'task', ['one'], [], [], cwd=str(wt))
 
+    def test_local_queen_can_embed_when_subagents_supported(self):
+        self.setup_queen(lm_slots=0)
+        self.machine['providers'][0]['endpoint'] = {'baseUrl': 'http://localhost:1'}
+        result = self.start_bee()
+        self.assertEqual((result['kind'], result['provider']), ('subagent', 'claude'))
+
+    def test_unsupported_queen_uses_process(self):
+        self.setup_queen(lm_slots=0)
+        self.mock_agent_worktrees()
+        with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), \
+             mock.patch('haivequeen.loop._do_start', return_value=True), \
+             mock.patch('haivequeen.loop.ram_gb', return_value=16.0):
+            result = bees.start_process(self.env(), REL, 'P1', 'Worker', 'medium', 'task', ['one'], [], [], no_subagents=True)
+        self.assertEqual(result['kind'], 'process')
+
     # A free local provider comes first. [pin: holds today]
     def test_subagent_bee_takes_a_free_local_provider_first(self):
         self.setup_queen()

@@ -234,12 +234,12 @@ class InterruptedIntegratorTest(RoundCase):
 
     # Verify the Queen receives the interrupted-merge recovery instruction.
     def test_next_integrator_aborts_an_unfinished_merge(self):
-        """The Queen is instructed to abort an unfinished merge before integrating."""
+        """The Queen is not told to integrate any more (O-1): the Orchestrator merges in the plan worktree, a fix agent resolves a conflict."""
         self.integrator()
         self.round()
         new = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen" and a["status"] == "running"]
         self.assertEqual(len(new), 1)
-        self.assertIn("abort any unfinished merge", (self.env().run_dir(new[0]["name"]) / "prompt.md").read_text(encoding="utf-8"))
+        self.assertNotIn("abort any unfinished merge", (self.env().run_dir(new[0]["name"]) / "prompt.md").read_text(encoding="utf-8"))
 
 
 class RunnerEndTest(RunnerBase):

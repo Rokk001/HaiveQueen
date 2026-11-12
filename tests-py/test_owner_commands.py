@@ -236,13 +236,13 @@ class OwnerCommands(RoundCase):
         self.assertEqual(len(active), 1)
         self.assertIn("abcdef1234567", active[0]["text"])
 
-    def test_accept_refuses_open_integration_step(self):
-        self.plan("REVIEW", packages=[{"id": plans.STEP_PACKAGES["Deploy"], "class": "medium"}])
+    def test_accept_is_not_held_by_an_open_legacy_integration_step(self):
+        """O-4: INTEGRATION-DEPLOY of the time before the Orchestrator blocks nothing."""
+        self.plan("REVIEW", packages=[{"id": plans.LEGACY_STEP_PACKAGES[1], "class": "medium"}])
         self.waiting_for_owner()
         db.add_question(self.conn, "testproj", REL, "owner-check", "Check?", "")
         code, result = self.invoke("plan", "accept", "--project", "testproj", "--plan", REL)
-        self.assertNotEqual(code, 0)
-        self.assertIn(plans.STEP_PACKAGES["Deploy"], result.get("error", ""))
+        self.assertEqual(code, 0, result)
 
     def test_reject_ends_release_and_delivers_finding(self):
         self.plan("REVIEW")

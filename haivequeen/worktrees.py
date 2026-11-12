@@ -148,6 +148,9 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
     if any(row.get('branch') == record.get('branch') and row.get('status') in ('ready', 'in_run', 'blocked')
            for row in queue if record.get('branch')):
         return 'branch has an open queue row'
+    from . import orchestrator
+    if record.get('branch') and orchestrator.holds_branch(env, record['branch']):
+        return 'the Orchestrator integrates this plan'
     completed = max((row for row in queue if record.get('branch') and row.get('branch') == record['branch']),
                     key=lambda row: row['id'], default=None)
     unqueued = not completed or completed.get('status') != 'integrated'

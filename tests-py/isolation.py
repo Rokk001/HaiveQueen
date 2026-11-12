@@ -20,7 +20,7 @@ if REPO not in sys.path:   # haivequeen of this checkout, not an installed copy,
 os.environ["BZZ_NO_DESKTOP"] = "1"   # desktop messages of the program (faults without an Apiary) are never shown during tests
 
 REAL_FOLDERS = [Path(os.environ[_v]) / "HaiveQueen" for _v in ("LOCALAPPDATA", "APPDATA") if os.environ.get(_v)]
-LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-update.lock", "hive-schedule.lock", "compile-check.lock", "start.lock", "start.pending", "gui.pid", "worktree-cleanup.lock", "server-tests.json", "update-check.json", "inbox-writes.lock", "inbox-transactions")  # written by a running loop (STOP: set by a self-update; server-tests.json: its periodic test of the own LLM servers) or an open graphical dashboard (gui.pid, update-check.json: its update check), not by tests; the audit guard still finds a test that writes them
+LIVE_TOP = ("haivequeen.db", "loop.lock", "exports", "runs", "STOP", "self-update.lock", "hive-schedule.lock", "compile-check.lock", "start.lock", "start.pending", "gui.pid", "worktree-cleanup.lock", "removal-locks", "server-tests.json", "update-check.json", "inbox-writes.lock", "inbox-transactions")  # written by a running loop (STOP: set by a self-update; server-tests.json: its periodic test of the own LLM servers) or an open graphical dashboard (gui.pid, update-check.json: its update check), not by tests; the audit guard still finds a test that writes them
 
 
 def own_profile_setting(rel: Path) -> bool:
@@ -37,6 +37,8 @@ def is_live(rel: Path) -> bool:
     itself (profile.SPECS) and anything directly in profile/ are not live, so a test that writes them is still found."""
     if rel.parts[0].startswith("compile-check.lock"):
         return len(rel.parts) == 1 and rel.name in ("compile-check.lock", "compile-check.lock.guard")  # only the machine-wide locks
+    if rel.parts[0] == "removal-locks":   # lock files of the live loop's worktree and branch removals
+        return len(rel.parts) == 2 and rel.name.endswith(".lock.guard")
     if rel.parts[0] == "exempt-processes":   # marker files of live agent processes
         return True
     if rel.parts[0].startswith(LIVE_TOP) or (rel.parts[0] == "logs" and len(rel.parts) > 2):

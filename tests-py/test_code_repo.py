@@ -156,12 +156,6 @@ class RunnerAndHeaderTest(CodeRepoCase):
         self.assertIn("Queen of this Plan", text)
         self.assertIn(self.plan_name(), text)
 
-    # Verify configured integration instructions reach the Queen.
-    def test_claude_header_names_build_flow_doc(self):
-        """A configured build flow document is included in the Queen task."""
-        self.set_code('buildFlowDoc = "FLOW.md"\n')
-        self.assertIn("FLOW.md", self.start_agent("claude"))
-
     # Verify the workspace rule path reaches a Codex Queen.
     def test_codex_queen_loads_the_rules_of_the_code_repo_not_the_workspace(self):
         """A code-repo project: the project rules are the checked-in instruction files of the code repo; an internal workspace file is no rule."""
