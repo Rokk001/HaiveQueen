@@ -10,6 +10,18 @@ import sys
 import uuid
 
 
+def _hide_console_windows():
+    """Git runs this file as a plain script (python -I): load the sibling platform module by path so the programs it starts open no console window."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('_hq_branchguard_platform', Path(__file__).with_name('platform.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)   # importing it installs the CREATE_NO_WINDOW hook on subprocess.Popen
+
+
+if __name__ == '__main__':
+    _hide_console_windows()
+
+
 # NUL cannot occur in a Git branch name. Keep unavailable evidence distinct
 # from an identified foreign branch while retaining the existing string API.
 AUDIT_ERROR = '\0audit:'

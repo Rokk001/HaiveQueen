@@ -4,6 +4,7 @@ Inside the package use `from haivequeen import platform as osplat`; the standard
 is not affected because imports in this package are absolute.
 """
 import ctypes
+import inspect
 import ntpath
 import os
 import posixpath
@@ -30,20 +31,33 @@ def is_linux() -> bool:
     return sys.platform.startswith("linux")
 
 
-# Make every program this process starts run without a console window (git, claude, pwsh, anything).
+# Suppress console allocation for subprocess launches in this interpreter.
 def hide_console_windows() -> None:
-    """On Windows add CREATE_NO_WINDOW to every subprocess.Popen call, so no console (or Windows Terminal) window opens and closes again.
+    """On Windows replace console creation requests with CREATE_NO_WINDOW.
 
-    Calls that already ask for DETACHED_PROCESS or CREATE_NEW_CONSOLE keep their flags. Safe to call more than once."""
+    Detached calls keep their flags. GUI startup visibility is untouched. Safe
+    to call more than once. Native descendants can still allocate a new console;
+    this interpreter-local wrapper cannot enforce a process-tree policy.
+    """
     if not is_windows() or getattr(subprocess.Popen, "_hq_no_window", False):
         return
     no_window, detached, new_console = 0x08000000, 0x00000008, 0x00000010
     original = subprocess.Popen.__init__
 
+    try:
+        position = list(inspect.signature(original).parameters).index("creationflags") - 1   # without self
+    except ValueError:   # another wrapper without the named parameter is already installed
+        position = 13
+
     def patched(self, *args, **kwargs):
-        flags = kwargs.get("creationflags", 0)
-        if not flags & (detached | new_console):
-            kwargs["creationflags"] = flags | no_window
+        positional = len(args) > position
+        flags = (args[position] if positional else kwargs.get("creationflags", 0)) or 0
+        if not flags & detached:
+            flags = (flags & ~new_console) | no_window
+            if positional:
+                args = args[:position] + (flags,) + args[position + 1:]
+            else:
+                kwargs["creationflags"] = flags
         original(self, *args, **kwargs)
 
     subprocess.Popen.__init__ = patched
