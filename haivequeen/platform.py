@@ -37,8 +37,9 @@ def hide_console_windows() -> None:
 
     Detached calls keep their flags. GUI startup visibility is untouched. Safe
     to call more than once. A native debugger broker intercepts ordinary Win32
-    descendant creation before allocation; console_tree documents its remaining
-    limitation when native tools establish their own debugging chains.
+    descendant creation before allocation; console_tree documents its
+    known limitation, accepted under owner decision 1117, when native tools
+    establish their own debugging chains and Windows redirects those events.
     """
     if not is_windows() or getattr(subprocess.Popen, "_hq_no_window", False):
         return

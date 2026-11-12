@@ -1,4 +1,9 @@
-"""N1: no console window opens anywhere in a Queen or Agent process tree (Windows), graphical windows stay."""
+"""N1: hide Windows process-tree consoles and preserve graphical windows.
+
+Known limitation (owner decision 1117): native tools starting their own
+DEBUG_PROCESS chains take debug-event ownership away from the supervisor.
+The native-debugger regression stays executable as an expected failure.
+"""
 import subprocess
 import os
 import sys
@@ -132,8 +137,9 @@ class NoConsoleTest(unittest.TestCase):
                                       "    pathlib.Path(%r).touch()\n" % (child, release))
             self.assertIn('finished', out)
 
+    @unittest.expectedFailure
     def test_native_debugger_descendant_remains_hidden(self):
-        """A native tool may debug a child, which starts its own console tool."""
+        """Known limitation (1117): Windows routes a tool's debug chain away from us."""
         with tempfile.TemporaryDirectory() as tmp:
             result = str(Path(tmp) / 'debugged.txt')
             probe = ("import ctypes as c;k=c.WinDLL('kernel32');u=c.WinDLL('user32');"

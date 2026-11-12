@@ -4,10 +4,13 @@ The debugger receives descendants before their first instruction and installs
 creation-call breakpoints. No window visibility or GUI startup state
 is changed. This module uses only the standard library.
 
-This candidate is not a universal Windows policy: a native debugger can start
+This is not a universal Windows policy: a native debugger can start
 its own DEBUG_PROCESS chain, which Windows then routes away from this broker.
-The corresponding regression is deliberately enabled. x86/x64 Win32 startup
-and the internal CreateProcessInternalW / process-parameters layouts are the
+Owner decision 1117 accepts this as a known limitation without adding native
+or external dependencies. The regression remains an expected failure so a
+future fix produces an unexpected success until the marker is removed.
+x86/x64 Win32 startup and the internal CreateProcessInternalW /
+process-parameters layouts are the
 supported interception points; this is not a security isolation boundary.
 """
 import ctypes as c
