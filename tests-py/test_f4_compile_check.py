@@ -1,4 +1,4 @@
-"""F4 (F-9): `bzz compile-check` for Queens and Agents, one check at a time per machine, with a progress watch."""
+"""F4 (F-9): `bzz compile-check` for Queens and Agents, at most the configured number of checks at a time per machine (K1), with a progress watch."""
 import argparse
 import io
 import json
@@ -153,141 +153,6 @@ class WhoMayCheckTests(CompileCheckCase):
 class ProgressWatchTests(CompileCheckCase):
     LIMITS = {"compileStallMinutes": 0.05, "compileMaxMinutes": 5}   # 3 seconds without progress
 
-    def test_simultaneous_checks_wait_for_a_new_empty_lock(self):
-        created = threading.Event()
-        write_pid = threading.Event()
-        first_acquired = threading.Event()
-        release_first = threading.Event()
-        second_acquired = threading.Event()
-        real_fdopen = os.fdopen
-
-        def delayed_fdopen(*args, **kwargs):
-            if threading.current_thread().name == "first-check":
-                # Model platforms where a newly created, still-open file can be
-                # read and unlinked before its creator writes the PID.
-                os.close(args[0])
-                created.set()
-                if not write_pid.wait(5):
-                    raise TimeoutError("first check was not released")
-                args = (os.open(str(integration._compile_lock_path()), os.O_WRONLY | os.O_CREAT), *args[1:])
-            return real_fdopen(*args, **kwargs)
-
-        def check(acquired, release=None):
-            lock = integration._acquire_compile_lock(0.01)
-            acquired.set()
-            if release:
-                release.wait(5)
-            with integration._compile_lock_guard(lock, 0.01):
-                lock.unlink()
-
-        first = threading.Thread(target=check, args=(first_acquired, release_first), name="first-check")
-        second = threading.Thread(target=check, args=(second_acquired,), name="second-check")
-        with mock.patch.object(integration.os, "fdopen", side_effect=delayed_fdopen):
-            try:
-                first.start()
-                self.assertTrue(created.wait(5))
-                second.start()
-                self.assertFalse(second_acquired.wait(0.2), "second check took an empty new lock")
-                write_pid.set()
-                self.assertTrue(first_acquired.wait(5))
-                self.assertFalse(second_acquired.wait(0.2), "checks ran together")
-            finally:
-                write_pid.set()
-                release_first.set()
-                first.join(5)
-                if second.ident is not None:
-                    second.join(5)
-        self.assertTrue(second_acquired.is_set())
-
-    def test_abandoned_empty_lock_is_recovered(self):
-        path = integration._compile_lock_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch()
-        acquired = threading.Event()
-
-        def take_lock():
-            lock = integration._acquire_compile_lock(0.01)
-            acquired.set()
-            lock.unlink()
-
-        thread = threading.Thread(target=take_lock, daemon=True)
-        thread.start()
-        self.assertTrue(acquired.wait(2), "abandoned empty lock was never recovered")
-        thread.join(2)
-
-    def test_abandoned_partial_pid_is_recovered_even_if_prefix_is_live(self):
-        path = integration._compile_lock_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("pid:%s" % os.getpid(), encoding="utf-8")
-        acquired = threading.Event()
-
-        def take_lock():
-            lock = integration._acquire_compile_lock(0.01)
-            acquired.set()
-            lock.unlink()
-
-        thread = threading.Thread(target=take_lock, daemon=True)
-        thread.start()
-        self.assertTrue(acquired.wait(2), "abandoned partial PID was never recovered")
-        thread.join(2)
-
-    def test_partial_pid_is_not_mistaken_for_dead_holder(self):
-        partial = threading.Event()
-        finish_write = threading.Event()
-        first_acquired = threading.Event()
-        release_first = threading.Event()
-        second_acquired = threading.Event()
-        real_fdopen = os.fdopen
-
-        class SplitWriter:
-            def __init__(self, handle):
-                self.handle = handle
-            def __enter__(self):
-                self.handle.__enter__()
-                return self
-            def __exit__(self, *args):
-                return self.handle.__exit__(*args)
-            def write(self, value):
-                split = 5 if value.startswith("pid:") else 1
-                self.handle.write(value[:split])
-                self.handle.flush()
-                partial.set()
-                if not finish_write.wait(5):
-                    raise TimeoutError("PID write was not released")
-                return self.handle.write(value[split:])
-
-        def split_fdopen(*args, **kwargs):
-            handle = real_fdopen(*args, **kwargs)
-            return SplitWriter(handle) if threading.current_thread().name == "partial-writer" else handle
-
-        def take_lock(acquired, release=None):
-            lock = integration._acquire_compile_lock(0.01)
-            acquired.set()
-            if release:
-                release.wait(5)
-            with integration._compile_lock_guard(lock, 0.01):
-                lock.unlink()
-
-        first = threading.Thread(target=take_lock, args=(first_acquired, release_first), name="partial-writer", daemon=True)
-        second = threading.Thread(target=take_lock, args=(second_acquired,), daemon=True)
-        with mock.patch.object(integration.os, "fdopen", side_effect=split_fdopen), \
-             mock.patch.object(integration.osplat, "process_alive", side_effect=lambda pid: pid == os.getpid()):
-            try:
-                first.start()
-                self.assertTrue(partial.wait(5))
-                second.start()
-                self.assertFalse(second_acquired.wait(0.2), "partial PID was treated as a dead owner")
-                finish_write.set()
-                self.assertTrue(first_acquired.wait(5))
-                self.assertFalse(second_acquired.wait(0.2), "checks ran together")
-            finally:
-                finish_write.set()
-                release_first.set()
-                first.join(5)
-                if second.ident is not None:
-                    second.join(5)
-        self.assertTrue(second_acquired.is_set())
-
     def run_check(self, script, **limits):
         self.machine.update({**self.LIMITS, **limits})
         self.setup_plan(script)
@@ -320,14 +185,19 @@ class ProgressWatchTests(CompileCheckCase):
         self.assertIn("compileMaxMinutes", result["output"])
         self.assertIn("tick", result["output"])
 
-    def test_a_second_check_waits_and_the_waiting_counts_for_neither_limit(self):
+    def fill(self, pids, count=None):
+        """List `count` (default: the limit of 2) checks of the given process as running on the machine."""
+        lock = integration._compile_lock_path()
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(json.dumps({"holders": [{"token": "t%d" % i, "pid": pids} for i in range(2 if count is None else count)]}), encoding="utf-8")
+        return lock
+
+    def test_a_check_beyond_the_limit_waits_and_the_waiting_counts_for_neither_limit(self):
         self.machine.update({"compileStallMinutes": 0.05, "compileMaxMinutes": 0.05})
         self.setup_plan(QUICK)
         self.as_agent("Bo")
-        lock = integration._compile_lock_path()
-        lock.parent.mkdir(parents=True, exist_ok=True)
-        lock.write_text(str(os.getpid()), encoding="utf-8")   # another check is running
-        timer = threading.Timer(5, lock.unlink)   # longer than both limits
+        lock = self.fill(os.getpid())   # the limit of 2 checks is reached
+        timer = threading.Timer(5, lambda: lock.write_text(json.dumps({"holders": []}), encoding="utf-8"))   # longer than both limits
         timer.start()
         self.addCleanup(timer.cancel)
         start = time.time()
@@ -335,17 +205,15 @@ class ProgressWatchTests(CompileCheckCase):
         self.assertEqual((code, result["ok"]), (0, True), result)
         self.assertGreaterEqual(time.time() - start, 5)
         self.assertLess(result["seconds"], 4)   # the wait is not part of the run time
-        self.assertFalse(lock.exists())
+        self.assertEqual(integration._compile_holders(), [])
 
-    def test_a_lock_of_a_dead_process_is_taken_over(self):
+    def test_the_slots_of_dead_processes_are_taken_over(self):
         self.machine.update(self.LIMITS)
         self.setup_plan(QUICK)
         self.as_agent("Bo")
-        lock = integration._compile_lock_path()
-        lock.parent.mkdir(parents=True, exist_ok=True)
         dead = subprocess.Popen([sys.executable, "-c", "pass"])
         dead.wait()
-        lock.write_text(str(dead.pid), encoding="utf-8")
+        self.fill(dead.pid)
         self.assertEqual(self.call()[0], 0)
 
 

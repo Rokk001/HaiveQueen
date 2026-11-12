@@ -244,6 +244,11 @@ class GermanTextsTest(unittest.TestCase):
         untranslated = [line for line in seen if line[2] not in NOT_LOG_TEXT and i18n.log_text(line[2]) == line[2]]
         self.assertEqual(untranslated, [])
 
+    def test_build_core_wait_has_a_german_log_and_live_form(self):
+        self.assertEqual(i18n.log_text('Waiting for build cores'), 'Wartet auf Build-Kerne')
+        self.assertEqual(i18n.live_text('Yellow', '12:00 Waiting for build cores'),
+                         '12:00 Wartet auf Build-Kerne')
+
     def test_lines_built_from_a_variable_have_a_german_form(self):
         """Lines the scan cannot see because the text is held in a variable first."""
         for line, german in (("dependency K1 of package K2 not done", "Abhängigkeit K1 von Paket K2 ist nicht fertig"),

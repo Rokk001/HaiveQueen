@@ -46,6 +46,7 @@ DEFAULT_SETTINGS = {
     "retryWaitMinutes": [1, 2, 4, 8, 15],   # wait before the n-th retry of consecutive interrupted ends (API, connection); the last value repeats
     "rateLimitWaitMinutes": 15,   # wait after a rate limit when no reset time of the limited provider is known
     "compileStallMinutes": 10,   # `bzz compile-check` ends a check red as stalled after this many minutes without output and without CPU use
+    "maxConcurrentCompileChecks": 2,   # the most compile checks that run at the same time on this computer (machine-wide, all projects)
     "compileMaxMinutes": 120,   # `bzz compile-check` ends a check red after this many minutes of running (waiting for another check does not count)
     "contextLimitTokens": 300000,
     "integrationBranch": "main",
@@ -62,7 +63,7 @@ DEFAULT_SETTINGS = {
     "worktreePrefix": "wt",
     "buildProcessNames": [],
 }
-MACHINE_ONLY = ("hives", "excludedProviders", "providers", "providerRecheckMinutes", "slots", "buildJobs", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
+MACHINE_ONLY = ("hives", "excludedProviders", "providers", "providerRecheckMinutes", "slots", "buildJobs", "maxConcurrentCompileChecks", "ramReserveMb", "weeklyLimitSources", "exportDir", "projects")
 
 
 def effective_verify(settings: dict, verify) -> str:

@@ -638,6 +638,7 @@ class BuildJobsTest(RunnerBase):
         self.assertEqual(row["status"], "done")
         expected = min(3, os.cpu_count() or 1)
         self.assertEqual(row["buildJobs"], expected)
+        self.assertEqual(row["buildParallel"], 1)
         self.assertEqual(self.record()["build_jobs"], str(expected))
         self.assertEqual((self.record()["parallel"], self.record()["min_ram"]), ("1", "0.5"))
         self.assertTrue((self.runs / "E-1" / "build-samples.txt").read_text(encoding="utf-8").strip())

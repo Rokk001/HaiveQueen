@@ -22,6 +22,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from . import buildjobs, config, db, interrupt, localtime, offline, overview, proctree, profile, roles, runtime, scheduler, servers, startctx
 from . import platform as osplat
@@ -408,7 +409,7 @@ def queen_build_monitor(project, plan, name, jobs, sample_file, process_names, s
                     started = datetime.now()
                     start_free = float(osplat.free_ram_mb())
                     Path(sample_file).write_text("", encoding="utf-8")
-                    runtime.upsert_agent(conn, project, name, {"buildJobs": jobs})
+                    runtime.upsert_agent(conn, project, name, {"buildJobs": jobs, "buildParallel": parallel})
                 sample_once(sample_file, process_names, root_pid)
             elif started is not None:
                 use = complete_build_measure(conn, project, name, jobs, start_free, sample_file, started, parallel, count)
@@ -1151,9 +1152,16 @@ def run_agent(a, out=None):
         if guard:
             env.update(json.loads(guard).get('environment', {}))
     if bj:
-        bj_start_mb = float(osplat.free_ram_mb())
-        measured = buildjobs.stored_per_job(conn, a.project, count=bj["Measurements"])
-        calc = buildjobs.job_count(bj, osplat.logical_cores(), bj_start_mb, measured, concurrent=len(buildjobs.running_builds(conn, a.name)))
+        build_env = SimpleNamespace(conn=conn, name=a.project, settings={"buildJobs": bj_raw})
+        calc = (buildjobs.plan_build(build_env, exclude=a.name) if a.phase in ("queen", "bee")
+                else buildjobs.reserve_agent_build(build_env, a.name))
+        if calc["Jobs"] == 0:
+            run.say("Waiting for build cores", "Yellow")
+        while calc["Jobs"] == 0:
+            time.sleep(1)
+            calc = (buildjobs.plan_build(build_env, exclude=a.name) if a.phase in ("queen", "bee")
+                    else buildjobs.reserve_agent_build(build_env, a.name))
+        bj_start_mb = calc["FreeMB"]
         bj_jobs, why = calc["Jobs"], calc["Why"]
         env.update(buildjobs.build_environment(bj, bj_jobs))   # the job count (configured name), the parallel value and the minimum free RAM
         try:
@@ -1170,7 +1178,6 @@ def run_agent(a, out=None):
         else:
             sampler = threading.Thread(target=sampler_loop, daemon=True, args=(
                 samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or buildjobs.SAMPLE_SEC), os.getpid()))
-            runtime.upsert_agent(conn, a.project, a.name, {"buildJobs": bj_jobs})
             run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
         if sampler:
             sampler.start()
