@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from argparse import Namespace
@@ -386,6 +387,46 @@ class DrainTests(RoundCase):
             with mock.patch.dict(os.environ, {selfupdate.RESTART_VAR: "1"}):
                 loop.cmd_start(args, self.conn)
             run_loop.assert_called_once()
+
+    def test_foreground_restart_consumes_allowance_before_running_the_loop(self):
+        self.hold_lock(4242)
+        args = Namespace(foreground=True, rounds=1, round_minutes=None, keep_pause=True, json=True, desktop=False)
+        seen = []
+
+        def run_loop(*unused):
+            child = """import json, os
+from argparse import Namespace
+from unittest import mock
+from haivequeen import loop, selfupdate
+args = Namespace(foreground=True, rounds=1, round_minutes=None, keep_pause=True, json=True, desktop=False)
+with mock.patch('haivequeen.config.load_config', return_value={}), mock.patch('haivequeen.updates.draining', return_value=True), mock.patch('haivequeen.updates.started_by_update_worker', return_value=False), mock.patch.object(selfupdate, 'clear_stale_lock'), mock.patch.object(loop, 'refuse_start', return_value=1), mock.patch.object(loop, 'run_loop', return_value=0):
+    print(json.dumps([os.environ.get(selfupdate.RESTART_VAR), loop.cmd_start(args, None)]))
+"""
+            result = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True, check=True)
+            seen.extend(json.loads(result.stdout))
+            return 0
+
+        with mock.patch.dict(os.environ, {selfupdate.RESTART_VAR: "1"}), \
+                mock.patch("haivequeen.updates.draining", return_value=True), \
+                mock.patch("os.getppid", return_value=999), \
+                mock.patch.object(loop, "run_loop", side_effect=run_loop):
+            self.assertEqual(loop.cmd_start(args, self.conn), 0)
+        self.assertEqual(seen, [None, 1])
+
+    def test_background_restart_only_passes_allowance_to_loop(self):
+        self.hold_lock(4242)
+        args = Namespace(foreground=False, rounds=0, round_minutes=0, keep_pause=True, json=True, desktop=False)
+        seen = []
+        with mock.patch.dict(os.environ, {selfupdate.RESTART_VAR: "1"}), \
+                mock.patch("haivequeen.updates.draining", return_value=True), \
+                mock.patch("os.getppid", return_value=999), \
+                mock.patch.object(loop, "loop_running", return_value=None), \
+                mock.patch.object(loop, "spawn_detached") as spawn, \
+                mock.patch("haivequeen.gui.launch_detached", side_effect=lambda: seen.append(os.environ.get(selfupdate.RESTART_VAR)) or {}), \
+                mock.patch("builtins.print"):
+            self.assertEqual(loop.cmd_start(args, self.conn), 0)
+        self.assertEqual(spawn.call_args.kwargs.get("env"), {selfupdate.RESTART_VAR: "1"})
+        self.assertEqual(seen, [None])
 
     def test_start_called_by_the_update_worker_is_allowed_without_the_variable(self):
         """A worker of an older version restarts without BZZ_UPDATE_RESTART: its child `start` is recognized by the parent process, else the loop never starts (rollback after 1800 s)."""
