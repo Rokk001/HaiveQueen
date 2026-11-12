@@ -193,6 +193,7 @@ class RefusedStartTest(SelfUpdateBase):
                 mock.patch.object(updates, "started_by_update_worker", return_value=False), \
                 mock.patch("haivequeen.updates.draining", return_value=True), mock.patch.object(selfupdate, "clear_stale_lock", return_value=""), \
                 mock.patch("builtins.print") as printed:
+            os.environ.pop(selfupdate.RESTART_VAR, None)
             code = loop.cmd_start(args, self.conn)
         self.assertEqual(code, 1)
         self.assertIn("waiting for running agents", json.loads(printed.call_args.args[0])["error"])
