@@ -75,52 +75,6 @@ class CleanupStartRaces(RoundCase):
                     self.assertTrue(worktrees.removal_busy('worktree', new))
                 wait.assert_called_once()
 
-    def test_scheduler_waits_outside_lock_and_starts_in_same_call(self):
-        for kind in ('worktree', 'branch'):
-            with self.subTest(kind=kind):
-                rel = 'docs/plans/other/OTHER-PLAN.md'
-                self.plan('READY', [{'id': 'P1'}], rel=rel, branch='blocked', worktree=str(self.base / 'blocked'))
-                self.plan('READY', [{'id': 'P1'}], branch='free', worktree=str(self.base / 'free'))
-                env = self.env()
-                target = ('worktree', self.base / 'blocked') if kind == 'worktree' else ('branch', (env.code_repo, 'blocked'))
-                seen = []
-                real_start = loop._do_start
-
-                holder = worktrees.removal_lock(*target)
-                self.assertTrue(holder.__enter__())
-                released = False
-                def wait(kind, key, timeout):
-                    nonlocal released
-                    self.assertEqual((kind, key), target)
-                    # Another caller can start while this round waits.
-                    with worktrees.start_with_removal_locks(lambda: [('worktree', self.base / 'unrelated')], timeout=1):
-                        pass
-                    holder.__exit__(None, None, None)
-                    released = True
-                def start(ctx, action, **kwargs):
-                    seen.append(action['plan'])
-                    branch, folder = bees.target_worktree(ctx['env'], action['plan'])
-                    for item in [('worktree', folder), ('branch', (env.code_repo, branch))]:
-                        with worktrees.removal_lock(*item) as mine:
-                            self.assertFalse(mine)
-                    return real_start(ctx, action, **kwargs)
-                try:
-                    with mock.patch.object(worktrees, 'cleanup'), \
-                         mock.patch.object(worktrees, 'wait_for_removal', side_effect=wait) as waiting, \
-                         mock.patch.object(loop, '_do_start', side_effect=start), \
-                         mock.patch.object(bees, 'worktree_conflict', return_value=''):
-                        result = self.round()
-                    waiting.assert_called_once()
-                    self.assertEqual(result['projects']['testproj']['started'], 2)
-                finally:
-                    if not released:
-                        holder.__exit__(None, None, None)
-                self.assertEqual(set(seen), {REL, rel})
-                # Permit the second subtest to start a fresh Queen.
-                for agent in runtime.list_agents(self.conn, 'testproj', 'all'):
-                    runtime.upsert_agent(self.conn, 'testproj', agent['name'], {'status': 'done', 'pid': None, 'exit_code': 0})
-                self.conn.execute('DELETE FROM hives')
-
 
 if __name__ == '__main__':
     unittest.main()

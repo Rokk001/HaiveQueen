@@ -173,6 +173,8 @@ class ConflictTests(GitCase):
         from haivequeen import loop
         with mock.patch('haivequeen.worktrees._process_busy', return_value=False):
             loop.run_round(self.conn, self.machine, self.envs(), free_ram=lambda: 16.0, settle=0)
+            from haivequeen import worktrees
+            worktrees.wait_cleanups(30)   # the cleanup runs apart from the round
         self.assertEqual(self.git("branch", "--show-current", cwd=default_folder), default_branch)
         self.assertEqual(self.git("branch", "--show-current", cwd=elsewhere), "fix/x")
         self.assertFalse(unrelated.exists())

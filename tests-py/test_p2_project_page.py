@@ -30,11 +30,10 @@ name = "Demo"
 workspace = "%s"
 '''
 
-MAIN_PATHS = {("entry", "name"), ("place", "repository"), ("file", "integrationBranch"), ("file", "compileCheck")}
-ADVANCED_PATHS = {("place", "plansFolder"), ("file", "plans"), ("file", "worktreeLocation"), ("file", "buildEnabled"), ("file", "deployEnabled"),
-                  ("file", "deleteFinishedWorktrees"), ("file", "deleteIntegratedBranches"), ("file", "onEvent", "command"), ("file", "onEvent", "workDir"),
-                  ("file", "onEvent", "timeoutSeconds"), ("file", "colour"), ("file", "priority"), ("file", "buildProcessNames"), ("file", "ownerTopics"),
-                  ("file", "buildFlowDoc"), ("file", "integratorInstructions")}
+MAIN_PATHS = {("entry", "name"), ("place", "repository"), ("file", "integrationBranch"), ("file", "compileCheck"), ("file", "buildCommand"),
+              ("file", "deployCommand")}
+ADVANCED_PATHS = {("place", "plansFolder"), ("file", "plans"), ("file", "worktreeLocation"), ("file", "deleteFinishedWorktrees"), ("file", "deleteIntegratedBranches"), ("file", "onEvent", "command"), ("file", "onEvent", "workDir"),
+                  ("file", "onEvent", "timeoutSeconds"), ("file", "colour"), ("file", "priority"), ("file", "buildProcessNames"), ("file", "ownerTopics")}
 KNOWLEDGE_PATHS = {("file", "upstreamRules"), ("file", "rulesOff")}
 
 
@@ -318,8 +317,8 @@ class ProjectPageTest(WindowCase):
         self.assertIn(("file", "remoteName"), self.paths(win))
         self.assertIn("remoteName", gui_config.SETTING_HELP)
 
-    def test_main_part_is_the_four_fields_of_p1(self):
-        self.assertEqual({p[-1] for p in MAIN_PATHS}, {"name", "repository", "integrationBranch", "compileCheck"})
+    def test_main_part_is_the_fields_of_p1_and_o3(self):
+        self.assertEqual({p[-1] for p in MAIN_PATHS}, {"name", "repository", "integrationBranch", "compileCheck", "buildCommand", "deployCommand"})
         win = self.window("project")
         advanced = set()
         for path in ADVANCED_PATHS:
@@ -334,6 +333,22 @@ class ProjectPageTest(WindowCase):
             while parent is not None and parent is not win.advanced_box:
                 parent = parent.master
             self.assertIsNone(parent, path)
+
+
+    def test_build_and_deploy_command_stand_under_the_compile_check_with_label_and_help(self):
+        self.file.write_text(self.SETTINGS + 'compileCheck = "make test"\nbuildCommand = "make"\n', encoding="utf-8")
+        win = self.window("project")
+        shown = {path: getter() for path, getter, _like in win.getters}
+        self.assertEqual((shown[("file", "compileCheck")], shown[("file", "buildCommand")], shown[("file", "deployCommand")]), ("make test", "make", ""))
+        ys = [win.rows[("file", key)].winfo_y() for key in ("compileCheck", "buildCommand", "deployCommand")]
+        self.assertEqual(ys, sorted(ys))
+        texts = {w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"}
+        for key in ("buildCommand", "deployCommand"):
+            self.assertIn(tr(gui_config.SETTING_LABELS[key]), texts)
+            self.assertIn(tr(gui_config.SETTING_HELP[key]), texts)
+        self.set_entry(win, ("file", "deployCommand"), "make deploy")
+        self.assertTrue(win.collect())
+        self.assertEqual(win.apiaries[0]["file"]["deployCommand"], "make deploy")
 
 
 class KnowledgeWindowTest(WindowCase):

@@ -8,7 +8,7 @@ import subprocess
 from unittest import mock
 
 from bzztest import REL, RoundCase
-from haivequeen import cli, db, hives, plans, readygate, runtime
+from haivequeen import cli, db, hives, integration, plans, readygate, runtime
 
 BODY = "\n## Requirements\n\n- G-1: first thing\n"
 STATE = REL.replace("DUMMY-PLAN.md", "DUMMY-STATE.md")
@@ -163,10 +163,10 @@ class CloseTests(NothingLeftCase):
                     self.assertEqual(self.rows()[0]["note"], "withdrawn: plan branch already integrated")
 
     def test_no_compile_check_build_or_deploy(self):
-        with mock.patch("haivequeen.integration.compile_check_missing", return_value="never run") as missing, self.runner("passed"):
+        with self.runner("passed"):
             code, res = self.ready()
         self.assertEqual(code, 0, res)
-        missing.assert_not_called()
+        self.assertFalse(hasattr(integration, "compile_check_missing"))   # no Queen compile check exists any more
         self.assertEqual(self.rows(), [])
 
 
@@ -309,7 +309,8 @@ class CheckTests(NothingLeftCase):
         self.round(alive=lambda pid: False)
         self.assertEqual(self.status(), "RUNNING")
         self.assertEqual(self.questions("queen-ended"), [])
-        self.assertEqual(len(self.queens()), count + 1)
+        self.assertEqual(len(self.queens()), count)   # O-6: no Queen starts for the fix, a fix agent gets the owner's answer
+        self.assertEqual(len([x for x in runtime.list_agents(self.conn, "testproj", "all") if x["phase"] == "fix"]), 1)
         self.assertIsNone(hives.completion_report(self.conn, "testproj", REL))
 
 

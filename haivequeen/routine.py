@@ -477,8 +477,8 @@ def base_values(env) -> dict:
     s = env.settings
     return {"owner": s.get("owner", "Owner"), "integrationBranch": s.get("integrationBranch") or "main", "remoteName": s.get("remoteName") or "origin",
             "compileCheck": s.get("compileCheck") or "no compile check (the compile check command is empty)",
-            "queueFile": "the integration queue", "queueName": "integration queue", "integratorInstructions": s.get("integratorInstructions", ""),
-            "buildFlowDoc": s.get("buildFlowDoc", ""), "buildRules": buildjobs.rule_text(s.get("buildJobs")), "project": env.name, "runsDir": str(env.run_dir("")).replace("\\", "/")}
+            "queueFile": "the integration queue", "queueName": "integration queue",
+            "buildRules": buildjobs.rule_text(s.get("buildJobs")), "project": env.name, "runsDir": str(env.run_dir("")).replace("\\", "/")}
 
 
 

@@ -99,13 +99,15 @@ class OwnerCheckTests(RoundCase):
         self.round()
         self.assertTrue([a for a in runtime.list_agents(self.conn, "testproj", "all") if a["plan_path"] == OTHER and a["phase"] == "queen"])
 
-    def test_explicit_rejection_restarts_queen_with_owner_finding(self):
+    def test_explicit_rejection_starts_a_fix_agent_with_the_owner_finding(self):
+        """O-6: no Queen starts for the fix; the Orchestrator starts a fix agent that gets the owner's answer."""
         self.integrated_hive_with_question()
         owner.apply(self.conn, "reject", "testproj", REL, text="Fix the courtyard lighting")
         self.round()
-        self.assertEqual(len(self.queens()), 2)
-        queen = self.queens()[-1]
-        prompt = self.env().run_dir(queen['name']) / 'prompt.md'
+        self.assertEqual(len(self.queens()), 1)
+        fixers = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "fix"]
+        self.assertEqual(len(fixers), 1)
+        prompt = self.env().run_dir(fixers[0]['name']) / 'prompt.md'
         self.assertIn("Fix the courtyard lighting", prompt.read_text(encoding='utf-8'))
         self.assertNotEqual(self.status(), "DONE")
 
@@ -116,8 +118,8 @@ class OwnerCheckTests(RoundCase):
         self.assertEqual(self.status(), "DONE")
         self.assertEqual(len(self.queens()), 1)
 
-    def test_queen_is_told_to_ask_for_the_play_test(self):
-        """The Queen instructions say how to ask for the owner check after integration and deploy."""
+    def test_queen_is_not_told_to_file_the_owner_check(self):
+        """O-1: HaiveQueen files the owner check after the integration; the Queen ends at bzz ready."""
         text = bees.queen_instructions("medium", 3, 3, 300000)
-        self.assertIn("--item owner-check", text)
-        self.assertIn("after integration and a switched-on deploy", text.lower())
+        self.assertNotIn("--item owner-check", text)
+        self.assertIn("bzz ready", text)

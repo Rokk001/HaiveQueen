@@ -323,6 +323,9 @@ def register(sub) -> None:
     register_runstate(sub)
 
 
+HELP = {"pause": "block the start of every kind of Agent (Queen, separate Agent, subagent, ready-check agent); running ones continue", "resume": "allow starts of every kind of Agent again"}
+
+
 def register_runstate(sub) -> None:
     """Add pause, resume, run-state, starts-allowed and reattach (run state and restart, D8)."""
     from . import reattach, runstate
@@ -347,7 +350,7 @@ def register_runstate(sub) -> None:
             ("run-state", lambda a, c: runstate.get_state(c), []),
             ("starts-allowed", allowed, []),
             ("reattach", re_attach, [P, ("--alive-pids", {"default": ""})])):
-        p = sub.add_parser(name)
+        p = sub.add_parser(name, help=HELP.get(name))
         for flag, kw in flags:
             p.add_argument(flag, **kw)
         p.set_defaults(fn=run(fn))

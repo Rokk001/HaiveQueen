@@ -21,12 +21,19 @@ class IsolationActiveTest(unittest.TestCase):
 
     def test_files_the_running_loop_and_dashboard_rewrite_are_live(self):
         """The loop's periodic server test result and the dashboard's update check are rewritten while the suite runs: not a change made by a test."""
-        for rel in ("server-tests.json", "update-check.json"):
+        for rel in ("server-tests.json", "update-check.json", "removal-locks/branch-1.lock.guard"):
             self.assertTrue(isolation.is_live(isolation.Path(rel)), rel)
 
     def test_files_haivequeen_writes_itself_are_not_live(self):
         """The settings files HaiveQueen writes into the profile and everything outside the profile still count: a test that writes them is found."""
         for rel in ("profile/claude/settings.json", "profile/codex/config.toml", "config.toml", "logs/notes.txt", "profile/stray.txt"):
+            self.assertFalse(isolation.is_live(isolation.Path(rel)), rel)
+
+    def test_removal_lock_files_of_a_live_loop_are_not_a_change(self):
+        """The live loop creates removal-locks/<kind>-<hash>.lock.guard files; other files in that folder still count."""
+        for rel in ("removal-locks/branch-1.lock.guard", "removal-locks/worktree-2.lock.guard"):
+            self.assertTrue(isolation.is_live(isolation.Path(rel)), rel)
+        for rel in ("removal-locks/stray.txt", "removal-locks/sub/branch-1.lock.guard"):
             self.assertFalse(isolation.is_live(isolation.Path(rel)), rel)
 
     def test_concurrent_compile_lock_changes_are_ignored_but_writes_are_guarded(self):

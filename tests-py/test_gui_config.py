@@ -273,14 +273,14 @@ class WindowTest(unittest.TestCase):
                 continue
             self.assertEqual(keys[key], default, key)
         texts = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
-        self.assertIn("Run the deploy", texts)
-        self.assertNotIn("deployEnabled", texts)
+        self.assertIn("Deploy command (empty: no deploy)", texts)
+        self.assertNotIn("deployCommand", texts)
         win.collect()
-        win.target()["file"].update({"deployEnabled": False, "remoteName": "upstream", "ownerTopics": ["pricing"]})
+        win.target()["file"].update({"deployCommand": "make deploy", "remoteName": "upstream", "ownerTopics": ["pricing"]})
         win.build_form()
         win.save()
         saved = tomllib.loads(win.apiaries[0]["path"].read_text(encoding="utf-8"))
-        self.assertIs(saved["deployEnabled"], False)
+        self.assertEqual(saved["deployCommand"], "make deploy")
         self.assertEqual(saved["remoteName"], "upstream")
         self.assertEqual(saved["ownerTopics"], ["pricing"])
 
@@ -304,17 +304,17 @@ class WindowTest(unittest.TestCase):
 
     # Every provider offers the Bee mode with the value that applies when the file has no entry.
     def test_provider_offers_the_bee_mode_with_its_default(self):
-        """A claude provider shows subagent and a codex provider shows process; a subagent set for codex is shown and saved as process."""
+        """A claude provider shows subagent and a codex provider shows process; a subagent set for codex is shown and saved as subagent."""
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.select(1)   # provider claude
         self.assertEqual({path: getter() for path, getter, _like in win.getters}[("beeMode",)], "subagent")
         win.select(2)   # provider codex
         getters = {path: getter for path, getter, _like in win.getters}
         self.assertEqual(getters[("beeMode",)](), "process")
-        win.target()["beeMode"] = "subagent"   # a stored subagent of codex: Codex has no embedded Bees
+        win.target()["beeMode"] = "subagent"   # a stored selection stays selected
         win.build_form()
         win.save()
-        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["providers"][1]["beeMode"], "process")
+        self.assertEqual(gui_config.load_raw(self.folder / "config.toml")["providers"][1]["beeMode"], "subagent")
 
     # The language of the free text to the owner.
     def test_general_offers_the_language_and_saves_it(self):
@@ -412,7 +412,7 @@ class WindowTest(unittest.TestCase):
 
     # every setting of an Apiary on one page, each once.
     def test_apiary_page_holds_all_its_settings_once(self):
-        """The page of a Project shows its name and workspace from config.toml and all settings of its project.toml, including the four switches; no key twice."""
+        """The page of a Project shows its name and workspace from config.toml and all settings of its project.toml, including the Build and Deploy command; no key twice."""
         with mock.patch("haivequeen.publish.github_repository", return_value="owner/name"):
             win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
             win.pick_tab("apiaries")
@@ -425,7 +425,7 @@ class WindowTest(unittest.TestCase):
         self.assertNotIn(("entry", "workspace"), paths)
         self.assertTrue({("file", "priority"), ("file", "plans")} <= set(paths))
         labels = [w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"]
-        for label in ("Compile check command (empty: no compile check)", "Run the build", "Run the deploy", "Publish release at integration"):
+        for label in ("Compile check command (empty: no compile check)", "Build command (empty: no build)", "Deploy command (empty: no deploy)", "Publish release at integration"):
             self.assertIn(label, labels)
         self.assertNotIn(("file", "name"), paths)   # the name of config.toml is the only one
         self.assertIsNone(win.build_vars)
@@ -471,13 +471,13 @@ class WindowTest(unittest.TestCase):
         self.type_into_entry(win, "new-project", "Fresh")
         self.type_into_entry(win, "", str(new))
         self.assertTrue(win.collect())
-        win.target()["file"]["buildEnabled"] = False
+        win.target()["file"]["buildCommand"] = "make"
         win.build_form()
         win.save()
         self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         listed = gui_config.load_raw(self.folder / "config.toml")["projects"]
         self.assertEqual(listed[-1], {"name": "Fresh", "workspace": str(new)})
-        self.assertEqual(gui_config.load_raw(new / ".haivequeen" / "project.toml"), {"buildEnabled": False, "worktreePrefix": "Fresh"})   # decision 741 (2): the prefix follows the name
+        self.assertEqual(gui_config.load_raw(new / ".haivequeen" / "project.toml"), {"buildCommand": "make", "worktreePrefix": "Fresh"})   # decision 741 (2): the prefix follows the name
         self.assertEqual(self.conn.execute("SELECT workspace FROM projects WHERE name='Fresh'").fetchone()[0], str(new.resolve()))
 
     # A new Apiary in a workspace that already has a project.toml (Vera-7 open point).
@@ -485,7 +485,7 @@ class WindowTest(unittest.TestCase):
         """A folder with a project.toml of its own (a comment, three settings) and the text of that file."""
         folder = self.folder / "known"
         (folder / ".haivequeen").mkdir(parents=True)
-        text = '# kept\npriority = 7\nplanGlobs = ["docs/*.md"]\ndeployEnabled = false\n'
+        text = '# kept\npriority = 7\nplanGlobs = ["docs/*.md"]\ndeployCommand = "make deploy"\n'
         (folder / ".haivequeen" / "project.toml").write_text(text, encoding="utf-8")
         return folder, text
 
@@ -510,7 +510,7 @@ class WindowTest(unittest.TestCase):
         win.workspace_entered()   # what both bindings call (hidden test windows get no focus events)
         self.assertEqual(win.node, node)
         shown = self.shown(win)
-        self.assertEqual((shown["priority"], shown["plans"], shown["deployEnabled"]), ("7", ["docs/*.md"], False))
+        self.assertEqual((shown["priority"], shown["plans"], shown["deployCommand"]), ("7", ["docs/*.md"], "make deploy"))
 
     def test_entered_workspace_keeps_the_unsaved_edits(self):
         """A setting changed before the workspace is entered stays as typed; the other values of the existing project.toml stay as they are."""
@@ -523,11 +523,11 @@ class WindowTest(unittest.TestCase):
         self.type_into_entry(win, "", str(folder))
         win.workspace_entered()
         shown = self.shown(win)
-        self.assertEqual((shown["priority"], shown["plans"], shown["deployEnabled"]), ("9", ["docs/*.md"], False))
+        self.assertEqual((shown["priority"], shown["plans"], shown["deployCommand"]), ("9", ["docs/*.md"], "make deploy"))
         win.save()
         self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         saved = (folder / ".haivequeen" / "project.toml").read_text(encoding="utf-8")
-        self.assertEqual(tomllib.loads(saved), {"priority": 9, "planGlobs": ["docs/*.md"], "deployEnabled": False})
+        self.assertEqual(tomllib.loads(saved), {"priority": 9, "planGlobs": ["docs/*.md"], "deployCommand": "make deploy"})
         self.assertIn("# kept", saved)
 
     def test_save_right_after_typing_the_workspace_keeps_the_existing_file(self):
@@ -536,13 +536,13 @@ class WindowTest(unittest.TestCase):
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.pick_tab("apiaries")
         win.add_entry()
-        win.target()["file"]["buildEnabled"] = False
+        win.target()["file"]["buildCommand"] = "make"
         win.build_form()
         self.type_into_entry(win, "", str(folder))
         win.save()
         self.assertEqual(win.bottom_note.cget("text"), "Saved.")
         self.assertEqual(gui_config.load_raw(folder / ".haivequeen" / "project.toml"),
-                         {"priority": 7, "planGlobs": ["docs/*.md"], "deployEnabled": False, "buildEnabled": False})
+                         {"priority": 7, "planGlobs": ["docs/*.md"], "deployCommand": "make deploy", "buildCommand": "make"})
 
     def test_entered_workspace_without_edits_leaves_the_file_untouched(self):
         """Entering the workspace and saving without a change writes no project.toml and no backup; the Project is registered."""
@@ -574,7 +574,7 @@ class WindowTest(unittest.TestCase):
         win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
         win.pick_tab("apiaries")
         win.add_entry()
-        win.target()["file"]["deployEnabled"] = True
+        win.target()["file"]["deployCommand"] = "make deploy"
         before = (self.folder / "config.toml").read_text(encoding="utf-8")
         win.save()
         self.assertIn("repository or plans folder does not exist", win.status.cget("text"))

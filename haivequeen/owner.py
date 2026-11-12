@@ -1,7 +1,6 @@
 """Explicit owner actions shared by the CLI, questions window and inbox."""
 from . import filetxn
 import re
-from types import SimpleNamespace
 
 from . import platform as osplat
 from . import agent_process, bees, config, db, hives, integration, runtime, servers
@@ -58,7 +57,6 @@ def validate(conn, action, project=None, plan=None, **fields):
         else:
             blockers = [str(q["item"] or q["id"]) for q in questions
                         if not is_check(q["item"]) and not incidental_question(q["item"])]
-            blockers += integration.open_steps(SimpleNamespace(conn=conn, name=project), plan)
             if blockers:
                 raise ValueError("still open: " + ", ".join(blockers))
     elif action == "pause":
@@ -95,8 +93,8 @@ def stoppable_agent(conn, project, name):
         raise ValueError("unknown Agent " + name)
     if row.get("phase") == "queen":
         raise ValueError("%s is a Queen; a Queen is ended only with bzz dequeen" % name)
-    if row.get("phase") not in ("bee", "verify"):
-        raise ValueError("%s is no package or ready-check Agent" % name)
+    if row.get("phase") not in ("bee", "verify", "fix"):
+        raise ValueError("%s is no package, fix or ready-check Agent" % name)
     if row.get("status") not in runtime.ACTIVE_STATUSES or not agent_process.counts(row):
         raise ValueError("Agent %s is not running" % name)
     return row
@@ -112,6 +110,9 @@ def stop_agent(conn, project, name, stop=None):
     stop = stop or osplat.kill_process_tree
     if row.get("pid") and stop(row["pid"]) is False:
         raise ValueError("could not end Agent " + row["name"])
+    if row.get("phase") == "fix":   # a fix agent of the Orchestrator: never restarted automatically, its plan waits for the owner (M-4)
+        from . import orchestrator
+        orchestrator.owner_stop(conn, project, row["name"])
     runtime.upsert_agent(conn, project, row["name"], {"status": "done", "pid": None, "ended_at": db.now(), "last_line": STOPPED_LINE})
     plan = row.get("plan_path") or None
     if row.get("phase") == "bee" and row.get("package") and plan:
@@ -183,6 +184,8 @@ def apply(conn, action, project=None, plan=None, **fields):
             if ready:
                 runtime.kv_set(conn, project, "hive-rejected-ready:" + plan, str(ready[0]))
             hives.reopen_after_owner_check(conn, project, plan)
+            from . import orchestrator
+            orchestrator.begin_owner_fix(conn, project, plan, fields.get("text") or "")   # a fix agent gets his answer; no Queen starts
             for package in fields.get("packages", []):
                 bees.set_package_state(conn, project, plan, package, "rejected", by)
             if paused:

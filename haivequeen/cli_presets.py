@@ -74,14 +74,15 @@ def labels_for_access(access) -> list:
 
 
 def apply(entry, key) -> None:
-    """Set the entry to the CLI `key`: protocol, command, arguments and Agent mode, and remove the custom-CLI fields (a built-in CLI brings its own).
+    """Set the entry to the CLI `key`: protocol, command, arguments and the default Agent mode when absent, and remove the custom-CLI fields (a built-in CLI brings its own).
     The custom key changes nothing. Provider name, slots, use, classes and capabilities stay as they are."""
     preset = PRESETS.get(key)
     if not preset:
         return
     for field in CUSTOM_KEYS:
         entry.pop(field, None)
-    entry.update(protocol=preset["protocol"], command=preset["command"], args=list(preset["args"]), beeMode=preset["beeMode"])
+    entry.update(protocol=preset["protocol"], command=preset["command"], args=list(preset["args"]))
+    entry.setdefault("beeMode", preset["beeMode"])
 
 
 # ---------------------------------------------------------------- models and effort values of each CLI (data file)

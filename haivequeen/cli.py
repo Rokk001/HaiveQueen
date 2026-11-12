@@ -1,5 +1,7 @@
 """HaiveQueen command line: python haivequeen/cli.py <command>. Machine-readable output is JSON on stdout."""
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -13,16 +15,8 @@ from haivequeen import export as export_mod, init as init_mod, views  # noqa: E4
 STUBS = ()
 
 
-_CONN = None   # the database of the running command; set by main()
-
-
 def out(obj) -> None:
-    """Print an object as JSON on stdout; a running Queen's answer carries her undelivered owner messages (key owner_messages), and only then."""
-    agent = os.environ.get("BZZ_AGENT")
-    if _CONN is not None and agent and isinstance(obj, dict):
-        messages = runtime.take_owner_messages(_CONN, agent)
-        if messages:
-            obj = {**obj, "owner_messages": messages}
+    """Print an object as JSON on stdout."""
     print(json.dumps(obj, ensure_ascii=False))
 
 
@@ -89,22 +83,13 @@ def cmd_ready(args, conn) -> int:
                     out({"ok": False, "error": message, "waiting": True})
                     return 1
                 from haivequeen import bees
-                from haivequeen import plans as plan_mod
                 for (package,) in conn.execute("SELECT id FROM packages WHERE project=? AND plan_path=?", (args.project, plan)).fetchall():
-                    if package not in plan_mod.STEP_PACKAGES.values():
-                        bees.set_package_state(conn, args.project, plan, package, 'done', agent)
+                    bees.set_package_state(conn, args.project, plan, package, 'done', agent)
                 hives.withdraw_integrated(conn, hives.nothing_to_integrate(conn, env, plan, row)[1])
                 out({"ok": True, "nothing_to_integrate": True})
                 return 0
             hives.set_completion(conn, args.project, plan, "")
-            from haivequeen import integration
-            integration.sync(env, plan, hives.get(conn, args.project, plan)["provider"])
-            held = integration.open_steps(env, plan, ("Build",))
-            if held:
-                return fail("ready refused: integration step package %s is not done; start an Agent for it, or wait for the answer of the owner" % ", ".join(held))
-            missing = integration.compile_check_missing(env, row, plan)
-            if missing:
-                return fail("ready refused: " + missing)
+            # no compile check result is needed: the Orchestrator runs the check, the build, the push and the deploy after an accepted ready
             accepted, message, waiting = readygate.gate(env, plan, row)   # requirement list first, then the fresh check agent
             if not accepted:
                 if waiting:
@@ -120,10 +105,7 @@ def cmd_ready(args, conn) -> int:
     if agent and row and row.get("phase") == "queen":
         conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (res["id"], args.project, args.plan))
         from haivequeen import bees
-        from haivequeen import plans as plan_mod
         for (package,) in conn.execute("SELECT id FROM packages WHERE project=? AND plan_path=?", (args.project, args.plan)).fetchall():
-            if package == plan_mod.STEP_PACKAGES["Deploy"]:
-                continue   # the Deploy step comes after the integration
             bees.set_package_state(conn, args.project, args.plan, package, 'done', agent)   # ready means the Queen answered Open requirements: 0, so every package is done
     out({"ok": True, **res})
     return 0
@@ -146,13 +128,15 @@ def _agent_worktree(conn, project, plan, path) -> bool:
 
 # Run the compile check of the project for a Queen or an Agent.
 def cmd_compile_check(args, conn) -> int:
-    """Run the configured compile check in the worktree of the caller (a Queen or a process Agent) or, with --worktree, in the worktree of an Agent of the plan, and wait for its end.
+    """Wait for the stored result of a detached compile check in the worktree of the caller (a Queen or a process Agent) or, with --worktree, in the worktree of an Agent of the plan, and wait for its end.
     Only the result of the Queen in her own worktree is stored for `bzz ready`; the result of an Agent is stored for that Agent. Exit 0 only when it is green."""
     from haivequeen import hives, integration, scheduler as sch
     agent = os.environ.get("BZZ_AGENT")
     row = runtime.get_agent(conn, args.project, agent) if agent else None
     if not row or row.get("phase") not in ("queen", "bee") or not _plan_matches(conn, args.project, row.get("plan_path"), args.plan) or hives.get(conn, args.project, row.get("plan_path")) is None:
         return fail("compile-check refused: not this Plan's Queen or Agent")
+    if row.get("phase") == "queen" and not getattr(args, "worktree", None):   # her subagent Agents call it with their worktree (F-9)
+        return fail("compile-check refused: the Queen runs no compile check; the Orchestrator runs it after bzz ready")
     env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == args.project), None)
     if env is None:
         return fail("compile-check refused: unknown project")
@@ -164,8 +148,8 @@ def cmd_compile_check(args, conn) -> int:
     else:
         cwd = row.get("cwd")
         key = None if row.get("phase") == "queen" else integration.COMPILE_AGENT_KEY + str(row.get("name"))
-    if not integration.switches(env.settings)["compileCheck"] or not str(env.settings.get("compileCheck") or "").strip():
-        out({"ok": True, "skipped": "no compile check is configured or it is switched off for this Project; run your tests directly"})
+    if not str(env.settings.get("compileCheck") or "").strip():
+        out({"ok": True, "skipped": "no compile check is configured for this Project; run your tests directly"})
         return 0
     if not integration.head_commit(cwd):
         return fail("compile-check refused: the commit of the worktree cannot be read")
@@ -306,11 +290,6 @@ def cmd_integration(args, conn):
     if args.action == "release":
         from haivequeen import scheduler, worktrees
         env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == args.project), None)
-        hive = hives.get(conn, args.project, args.plan)
-        if env and hive:
-            last = conn.execute("SELECT status FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (args.project, args.plan)).fetchone()
-            if last and last["status"] == "integrated" and integration.sync(env, args.plan, hive["provider"])["Deploy"] == "package" and integration.open_steps(env, args.plan, ("Deploy",)):
-                return fail("release refused: integration step package %s is not done; start an Agent for it first" % integration.DEPLOY)
         if env:
             from haivequeen import publish
             try:
@@ -335,22 +314,27 @@ def cmd_integration(args, conn):
             conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
         return fail("waiting for integration: " + reason)
     free_mb = float(osplat.free_ram_mb())
-    switches = integration.switches(env.settings) if env else {}
-    builds = bool(switches.get("build") or switches.get("deploy"))   # with both switched off the integration builds nothing, so it needs no RAM and no job count
+    builds = bool(env) and integration.builds(env.settings)   # without a Build and a Deploy command the integration builds nothing, so it needs no RAM and no job count
     low = buildjobs.waiting_for_ram(buildjobs.settings_from(env.settings.get("buildJobs")), free_mb) if builds else None
     if low:   # below the minimum free RAM before a build: wait like for an occupied place, without taking the place; the next round asks again
         if row:
             conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
         return fail("waiting for integration: " + low)
-    job = buildjobs.plan_build(env, free_mb=free_mb, exclude=agent) if builds else None   # the count of this moment replaces the one set at the Queen start
-    if not hives.take_integration(conn, args.project, args.plan, owner_pid=owner_pid, build_jobs=job["Jobs"] if job else None):
-        if row:
-            conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
-        return fail("waiting for integration")
+    with buildjobs.reservation_guard():
+        job = buildjobs.plan_build(env, free_mb=free_mb, exclude=agent or (args.project, args.plan)) if builds else None   # refresh an existing allocation without counting itself
+        if job is not None and job["Jobs"] == 0:
+            if row:
+                conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
+            return fail("waiting for integration: waiting for build cores")
+        if not hives.take_integration(conn, args.project, args.plan, owner_pid=owner_pid, build_jobs=job["Jobs"] if job else None):
+            if row:
+                conn.execute("UPDATE hives SET state='integration_wait' WHERE project=? AND plan_path=?", (args.project, args.plan))
+            return fail("waiting for integration")
     result = {"ok": True, "buildJobs": job}
     hive = hives.get(conn, args.project, args.plan)
     if env and hive:
-        result["integrationSteps"] = {"compileCheck": switches["compileCheck"], **integration.sync(env, args.plan, hive["provider"])}
+        result["integrationSteps"] = {"compileCheck": bool(str(env.settings.get("compileCheck") or "").strip()), "build": bool(str(env.settings.get("buildCommand") or "").strip()),
+                                      "deploy": bool(str(env.settings.get("deployCommand") or "").strip())}
     out(result)
     return 0
 
@@ -433,11 +417,7 @@ def cmd_plan(args, conn):
 
 
 # Record the progress state of one package of the calling Queen's Hive.
-def _build_switched_off(conn, project):
-    """True when the build switch of the Project is off."""
-    from haivequeen import scheduler
-    env = next((e for e in scheduler.load_projects(conn, config.load_config()) if e.name == project), None)
-    return bool(env) and not env.settings.get("buildEnabled", True)
+BUILD_WAIT_REFUSED = "the build is a step of the Orchestrator after bzz ready, the Queen never waits for it: close the package like a code package"
 
 
 def cmd_package(args, conn):
@@ -456,13 +436,8 @@ def cmd_package(args, conn):
         return fail("unknown package %s of this plan" % args.package)
     if args.state == "waiting" and not args.reason:
         return fail("waiting needs --reason (question:<id>, build, owner, package or provider)")
-    if args.state == "waiting" and args.reason == "build" and _build_switched_off(conn, args.project):
-        return fail("the build step is switched off for this Project: close the package like a code package")
-    if args.state == "done":
-        from haivequeen import integration
-        refused = integration.done_refusal(conn, args.project, plan, args.package)
-        if refused:
-            return fail(refused)
+    if args.state == "waiting" and args.reason == "build":
+        return fail(BUILD_WAIT_REFUSED)
     bees.set_package_state(conn, args.project, plan, args.package, args.state, agent, args.reason)
     out({"ok": True, "package": args.package, "state": args.state})
     return 0
@@ -528,8 +503,8 @@ def cmd_bee(args, conn):
             if args.outcome == "succeeded":
                 return fail("--blocked-by cannot go with the outcome succeeded")
             blocked = args.blocked_by
-            if blocked == "build" and not env.settings.get("buildEnabled", True):
-                return fail("the build step is switched off for this Project: close the package like a code package")
+            if blocked == "build":
+                return fail(BUILD_WAIT_REFUSED)
             if blocked == "question":
                 open_ids = [str(q["id"]) for q in runtime.list_questions(conn, args.project, status="open", plan=plan)]
                 if args.blocked_ref not in open_ids:
@@ -543,11 +518,6 @@ def cmd_bee(args, conn):
             args.outcome = 'failed'
             args.error = branchguard.failure_text(violation)
             blocked = ''
-        if args.outcome == "succeeded":
-            from haivequeen import integration
-            refused = integration.result_refusal(conn, args.project, plan, args.package)
-            if refused:
-                return fail(refused)
         refused = bees.release_refusal(conn, args.project, plan, args.package, queen, getattr(args, "ended_evidence", "") or "", args.outcome)
         if refused:   # only trustworthy evidence ends a subagent Bee of an earlier Queen
             return fail(refused)
@@ -564,7 +534,7 @@ def cmd_bee(args, conn):
         rules = json.loads(args.rules)
         if not all(isinstance(x, list) and all(isinstance(v, str) for v in x) for x in (steps, paths, rules)) or not steps:
             return fail("steps, paths and rules must be string lists and steps must not be empty")
-        started = bees.start_process(env, plan, args.package, args.name, args.cls, args.task, steps, paths, rules, cwd=args.cwd, no_subagents=args.no_subagents)
+        started = bees.start_process(env, plan, args.package, args.name, args.cls, args.task, steps, paths, rules, cwd=args.cwd, no_subagents=not args.subagents or args.no_subagents)
     except (ValueError, TypeError) as exc:
         return fail(str(exc))
     if isinstance(started, dict):
@@ -632,7 +602,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--blocked-by", choices=["question", "build", "owner", "package", "provider"], default="")
     p.add_argument("--blocked-ref", default="")
     p.add_argument("--ended-evidence", default="", help="existing Agent result file; release also requires its matching agent row to have ended or its known process to be absent")
-    p.add_argument("--no-subagents", action="store_true")
+    p.add_argument("--subagents", action="store_true", help="the Queen has a native subagent tool available")
+    p.add_argument("--no-subagents", action="store_true", help="force separate processes")
     p.set_defaults(fn=cmd_bee)
 
     p = sub.add_parser("package", help="record package progress; owner: unassign its stored provider")
@@ -682,7 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--result", required=True)
     p.set_defaults(fn=cmd_done)
 
-    p = sub.add_parser("ready", description="Report the plan branch ready for integration. A plan with nothing left to integrate (no plan branch, or every commit already in the integration branch) writes no queue row, needs no compile check, build or deploy, and closes after the fresh check and the owner check.")
+    p = sub.add_parser("ready", description="Report the plan branch ready for integration; the Queen ends after it. The Orchestrator then merges, checks, builds, pushes and deploys the plan (Compile check command, Build command, Deploy command); a red step starts a fix agent. A plan with nothing left to integrate (no plan branch, or every commit already in the integration branch) writes no queue row, needs no compile check, build or deploy, and closes after the fresh check and the owner check.")
     for a in ("project", "branch", "tip", "plan"):
         p.add_argument(f"--{a}", required=True)
     p.add_argument("--note", default="")
@@ -773,16 +744,33 @@ def main(argv=None) -> int:
     desktop = getattr(args, "desktop", False)
     try:
         conn = db.connect(config.db_path())
-        global _CONN
-        _CONN = conn
-        code = args.fn(args, conn)
+        agent = os.environ.get("BZZ_AGENT")
+        row = conn.execute("SELECT * FROM agents WHERE name=? ORDER BY id DESC LIMIT 1", (agent,)).fetchone() if agent else None
+        queen = row and dict(row).get("phase") == "queen" and not row["archived"] and row["status"] in ("running", "starting")
+        if queen:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = args.fn(args, conn)
+            raw = output.getvalue()
+            messages = runtime.take_owner_messages(conn, agent)
+            if messages:
+                try:
+                    result = json.loads(raw)
+                except ValueError:
+                    result = raw
+                result = {**result, "owner_messages": messages} if isinstance(result, dict) else {
+                    "result": result, "owner_messages": messages}
+                print(json.dumps(result, ensure_ascii=False))
+            else:
+                print(raw, end="")
+        else:
+            code = args.fn(args, conn)
     except Exception as exc:
         if not desktop:
             raise
         args.desktop_result = {"ok": False, "error": str(exc)}
         code = fail(str(exc))
     finally:
-        _CONN = None
         if conn is not None:
             conn.close()
     if desktop:

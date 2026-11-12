@@ -189,8 +189,11 @@ class RefusedStartTest(SelfUpdateBase):
     def test_bzz_start_prints_the_reason_and_exits_1(self):
         """`bzz start` prints the refusal reason and returns 1."""
         args = Namespace(foreground=True, rounds=1, round_minutes=None, keep_pause=True, json=True, desktop=False)
-        with mock.patch("haivequeen.updates.draining", return_value=True), mock.patch.object(selfupdate, "clear_stale_lock", return_value=""), \
+        with mock.patch.dict(os.environ, {"BZZ_UPDATE_RESTART": ""}), \
+                mock.patch.object(updates, "started_by_update_worker", return_value=False), \
+                mock.patch("haivequeen.updates.draining", return_value=True), mock.patch.object(selfupdate, "clear_stale_lock", return_value=""), \
                 mock.patch("builtins.print") as printed:
+            os.environ.pop(selfupdate.RESTART_VAR, None)
             code = loop.cmd_start(args, self.conn)
         self.assertEqual(code, 1)
         self.assertIn("waiting for running agents", json.loads(printed.call_args.args[0])["error"])

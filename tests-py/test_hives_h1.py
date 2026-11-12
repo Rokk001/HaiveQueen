@@ -1217,16 +1217,16 @@ class HiveRoundTests(RoundCase):
             else:
                 os.environ["BZZ_AGENT"] = saved
 
-    # A paused Beekeeper blocks new Bee processes but not in-session subagents.
-    def test_pause_blocks_only_new_bee_processes(self):
-        """A paused Orchestrator blocks new Agent processes but not in-session subagents."""
+    # A paused Orchestrator blocks every kind of Agent start, in-session subagents included.
+    def test_pause_blocks_every_kind_of_start(self):
+        """A paused Orchestrator blocks new Agent processes and in-session subagents alike."""
         from haivequeen import hives, runstate
         from bzztest import REL
         self.plan("READY", [{"id": "P1", "title": "First"}])
         self.round()
         runstate.pause(self.conn)
         self.assertFalse(hives.can_start_bee(self.conn, "testproj", REL, own_process=True))
-        self.assertTrue(hives.can_start_bee(self.conn, "testproj", REL, own_process=False))
+        self.assertFalse(hives.can_start_bee(self.conn, "testproj", REL, own_process=False))
 
     # The actual Queen prompt forbids new Bees and waits for running Bees at handoff.
     def test_queen_handoff_prompt_waits_for_bees(self):

@@ -31,13 +31,12 @@ BUILD_FIELDS = (
 
 
 # The settings of the Apiary page, each with the value that applies without an entry (for an Apiary from before the switches deploy stays on, see apiary_settings).
-APIARY_DEFAULTS = (("ownerTopics", []), ("ownerCheckText", ""), ("compileCheckEnabled", True), ("buildEnabled", True), ("deployEnabled", False),
+APIARY_DEFAULTS = (("ownerTopics", []), ("ownerCheckText", ""), 
                    ("integrationBranch", "main"), ("remoteName", "origin"), ("worktreeLocation", ""), ("deleteFinishedWorktrees", True), ("deleteIntegratedBranches", False),
                    ("publishReleases", False), ("nextVersion", ""))
 RELEASE_KEYS = ("publishReleases", "nextVersion")   # offered only for an Apiary whose remote is on GitHub
 SETTING_LABELS = {
     "ownerTopics": N_("Topics that always go to the owner (one per line)"), "ownerCheckText": N_("Owner-check question (empty: default text)"),
-    "compileCheckEnabled": N_("Run the compile check"), "buildEnabled": N_("Run the build"), "deployEnabled": N_("Run the deploy"),
     "integrationBranch": N_("Integration branch"), "remoteName": N_("Remote"), "worktreeLocation": N_("Worktree location (empty: beside the repository)"),
     "deleteFinishedWorktrees": N_("Delete finished worktrees automatically"), "deleteIntegratedBranches": N_("Delete integrated branches (local and remote)"),
     "publishReleases": N_("Publish release at integration"), "nextVersion": N_("Next version (empty: count the last digit up)"),
@@ -46,9 +45,9 @@ SETTING_LABELS = {
     "upstreamRules": N_("Use the rules of the upstream repository"),
     "colour": N_("Colour"), "priority": N_("Priority"), "owner": N_("Owner name"), "language": N_("Language of owner texts (empty: General language)"), "escalateAfter": N_("Failed attempts before a stronger model (empty: General value)"), "allowedTools": N_("Commands allowed without asking"),
     "planGlobs": N_("Plan files (patterns, one per line)"), "planExclude": N_("Files that are not plans (patterns, one per line)"),
-    "ignoredBuildOutput": N_("Build output to ignore (one per line)"), "buildFlowDoc": N_("Build instructions document"),
-    "integratorInstructions": N_("Extra instructions for the integration"), "buildProcessNames": N_("Build program names (one per line)"),
-    "compileCheck": N_("Compile check command (empty: no compile check)"), "claudeTools": N_("Tools available to Claude agents"), "protectedWorktrees": N_("Protected worktrees (one per line)"),
+    "ignoredBuildOutput": N_("Build output to ignore (one per line)"), "buildProcessNames": N_("Build program names (one per line)"),
+    "compileCheck": N_("Compile check command (empty: no compile check)"), "buildCommand": N_("Build command (empty: no build)"),
+    "deployCommand": N_("Deploy command (empty: no deploy)"), "claudeTools": N_("Tools available to Claude agents"), "protectedWorktrees": N_("Protected worktrees (one per line)"),
     "onEvent": N_("Command after each event"), "onEvent.command": N_("Command"), "onEvent.workDir": N_("Working folder"), "onEvent.timeoutSeconds": N_("Time limit (seconds)"),
     "views": N_("Generated overviews"), "views.queue": N_("Queue overview file"), "views.questions": N_("Open questions file"), "views.decisions": N_("Decisions file"),
     "prompts": N_("Own prompt texts"), "prompts.integrator": N_("Instructions of the integrating Queen"),
@@ -62,16 +61,16 @@ SETTING_HELP = {
     "colour": N_("The colour of the Project in the main window."), "priority": N_("Projects with a higher number get free places first."),
     "owner": N_("How the Queens and Agents call you in their texts."), "language": N_("The language of the texts HaiveQueen writes to you for this Project."),
     "ownerTopics": N_("Questions about these topics are never answered automatically."), "ownerCheckText": N_("The question HaiveQueen asks you when a plan is integrated."),
-    "compileCheckEnabled": N_("Check that the code compiles and the tests pass before integration."), "buildEnabled": N_("Build the product after integration."),
-    "deployEnabled": N_("Deploy the built product after integration."), "integrationBranch": N_("The branch finished plans are merged into; empty: the default branch of the remote, else main."),
+    "integrationBranch": N_("The branch finished plans are merged into; empty: the default branch of the remote, else main."),
     "remoteName": N_("The Git remote HaiveQueen pushes to and fetches from; choose it because the repository has several and none is named origin."), "worktreeLocation": N_("The folder that holds the worktrees of the Agents; a relative path counts from the repository."),
     "deleteFinishedWorktrees": N_("Remove a worktree once its work is integrated and nothing is lost."),
     "deleteIntegratedBranches": N_("Remove plan branches once they are integrated and nothing is lost."),
     "publishReleases": N_("Publish a GitHub release of the repository at each integration."), "nextVersion": N_("The version of the next release, for example 2.1.0."),
     "planGlobs": N_("Where the plans are found, relative to the folder with the settings."), "planExclude": N_("Files matching a plan pattern that are not plans."),
-    "ignoredBuildOutput": N_("Files the build writes that do not count as changes."), "buildFlowDoc": N_("A document that describes how the product is built."),
-    "integratorInstructions": N_("Text added to the instructions of the integrating Queen."), "buildProcessNames": N_("Running programs that show a build is still busy."),
-    "compileCheck": N_("The command that compiles the code and runs the tests before integration; empty: no compile check."), "claudeTools": N_("The tools available to a Claude agent, separated by commas."),
+    "ignoredBuildOutput": N_("Files the build writes that do not count as changes."), "buildProcessNames": N_("Running programs that show a build is still busy."),
+    "compileCheck": N_("The command that compiles the code and runs the tests before integration; empty: no compile check."),
+    "buildCommand": N_("The command that builds the product after the check, run in the worktree of the plan; empty: no build."),
+    "deployCommand": N_("The command that deploys the product after the push, run in the worktree of the plan; empty: no deploy."), "claudeTools": N_("The tools available to a Claude agent, separated by commas."),
     "protectedWorktrees": N_("Worktrees that are never removed automatically."),
     "onEvent.command": N_("A program started after each event, for example to sync files."), "onEvent.workDir": N_("The folder the command runs in."),
     "onEvent.timeoutSeconds": N_("The command is stopped after this many seconds."),
@@ -80,17 +79,19 @@ SETTING_HELP = {
     "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
 }
 GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model"),
-                  "owner": N_("Owner name"), "queenClass": N_("Queen class"), "beesPerQueen": N_("Agents per Queen")}
+                  "owner": N_("Owner name"), "queenClass": N_("Queen class"), "beesPerQueen": N_("Agents per Queen"),
+                  "maxConcurrentCompileChecks": N_("Max concurrent compile checks")}
 GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class."),
                 "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("The model class of the Queens (light, medium or heavy)."),
-                "beesPerQueen": N_("How many Agents a Queen may have running at the same time.")}
+                "beesPerQueen": N_("How many Agents a Queen may have running at the same time."),
+                "maxConcurrentCompileChecks": N_("The most compile checks that run at the same time on this computer, across all projects, Queens and Agents.")}
 SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Project."), "allowedTools": N_("Commands agents of this Project may run without asking.")})
 OTHER_HELP = N_("A further setting of this Project, as written in its settings file.")   # the explanation of a setting the page has no own text for
 GENERAL_OTHER_HELP = N_("A further HaiveQueen setting, as written in config.toml.")   # the same on the General page: these keys belong to HaiveQueen, not to a Project
 ADVANCED_LABELS = {"hives": N_("Plans")}   # labels of keys in General -> Advanced (the key in config.toml stays the same)
 # Owner decision 741: the main part of the Apiary page, the collapsed section Advanced and the keys the page never shows as fields of their own.
 MAIN_KEYS = ("colour", "priority", "owner", "language", "escalateAfter") + tuple(key for key, _default in APIARY_DEFAULTS)
-ADVANCED_DEFAULTS = (("planGlobs", ["docs/plans/*.md"]), ("planExclude", []), ("ignoredBuildOutput", []), ("buildFlowDoc", ""), ("integratorInstructions", ""),
+ADVANCED_DEFAULTS = (("planGlobs", ["docs/plans/*.md"]), ("planExclude", []), ("ignoredBuildOutput", []),
                      ("buildProcessNames", []), ("compileCheck", ""), ("claudeTools", ""), ("allowedTools", []))
 HIDDEN_KEYS = ("name", "workspace", "preferredProvider", "codeRepo", "repo", "worktreePrefix", "roundMinutes")   # name and folders are the fields Name, Repository and Plans folder; the prefix follows the name
 # Owner decision 742: a field is as wide as its kind of value needs, never the full window width.
@@ -138,10 +139,8 @@ def worktree_prefix(name) -> str:
 
 # The values the Apiary page shows.
 def apiary_settings(shown, legacy_deploy=False):
-    """A copy of the settings of a project file with every setting of the Project page present; legacy_deploy: a Project from before the switches, whose deploy stays on without an entry."""
-    out = dict(shown)
-    if legacy_deploy:
-        out.setdefault("deployEnabled", True)
+    """A copy of the settings of a project file with every setting of the Project page present."""
+    out = dict(shown)   # legacy_deploy has no effect any more: the switches are gone
     for key, default in APIARY_DEFAULTS:
         out.setdefault(key, list(default) if isinstance(default, list) else default)
     return out
@@ -340,6 +339,9 @@ def check(data, machine=True) -> list:
     for key, label in (("remoteName", "Remote name"), ("integrationBranch", "Integration branch")):
         if data.get(key) and not re.fullmatch(r"[\w][\w./-]*", str(data[key])):
             problems.append(tr("%s: letters, digits and . / - _ are expected, starting with a letter or digit", tr(label)))
+    limit = data.get("maxConcurrentCompileChecks")
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+        problems.append(tr("%s: a whole number from %d up is expected", tr(N_("Max concurrent compile checks")), 1))
     if str(data.get("nextVersion") or "").strip():
         from . import releases
         try:
@@ -875,7 +877,8 @@ class ConfigWindow(ProviderPages):
         shown.setdefault("owner", "")
         shown.setdefault("queenClass", "medium")
         shown.setdefault("beesPerQueen", 3)
-        main = {k: shown.pop(k) for k in ("language", "slots", "owner", "queenClass", "beesPerQueen", "roundMinutes", "escalateAfter") if k in shown}
+        shown.setdefault("maxConcurrentCompileChecks", 2)
+        main = {k: shown.pop(k) for k in ("language", "slots", "owner", "queenClass", "beesPerQueen", "maxConcurrentCompileChecks", "roundMinutes", "escalateAfter") if k in shown}
         self.fields(self.form, main, ())
         box = self.advanced_section()
         self.fields(box, shown, ())
@@ -903,7 +906,7 @@ class ConfigWindow(ProviderPages):
         return box
 
     def apiary_form(self):
-        """The page of one Project (P-8): the main part Repository, Name, Integration branch and Compile check command; the Knowledge base; and the collapsed
+        """The page of one Project (P-8): the main part Repository, Name, Integration branch, Compile check command, Build command and Deploy command; the Knowledge base; and the collapsed
         section Advanced with the fields of P-2. Each field has a label and one line of explanation; no other field, no free setting row."""
         from . import projsettings
         apiary = self.apiaries[self.node[1]]
@@ -922,7 +925,8 @@ class ConfigWindow(ProviderPages):
         known = bool(repository) and Path(repository).is_dir()
         remote, needed = projsettings.derive_remote(repository, data.get("remoteName")) if known else ("origin", False)
         branch = data.get("integrationBranch") or (projsettings.default_branch(repository, remote or "origin") if known else "main")
-        self.fields(self.form, {"integrationBranch": str(branch), "compileCheck": str(data.get("compileCheck") or "")}, ("file",))
+        self.fields(self.form, {"integrationBranch": str(branch), "compileCheck": str(data.get("compileCheck") or ""),
+                                  "buildCommand": str(data.get("buildCommand") or ""), "deployCommand": str(data.get("deployCommand") or "")}, ("file",))
         self.knowledge_section(data, repository if known else "")
         full = apiary_settings(dict(data), apiary["legacy"])
         box = self.advanced_section()
@@ -937,11 +941,10 @@ class ConfigWindow(ProviderPages):
         if self.github_repository({"remoteName": remote or "origin"}):
             release = {key: full[key] for key in RELEASE_KEYS}
         event = data.get("onEvent") if isinstance(data.get("onEvent"), dict) else {}
-        advanced = {"worktreeLocation": full["worktreeLocation"], "buildEnabled": full["buildEnabled"], "deployEnabled": full["deployEnabled"],
-                    "deleteFinishedWorktrees": full["deleteFinishedWorktrees"], "deleteIntegratedBranches": full["deleteIntegratedBranches"], **release,
+        advanced = {"worktreeLocation": full["worktreeLocation"], "deleteFinishedWorktrees": full["deleteFinishedWorktrees"], "deleteIntegratedBranches": full["deleteIntegratedBranches"], **release,
                     "onEvent": {"command": event.get("command", []), "workDir": event.get("workDir", ""), "timeoutSeconds": event.get("timeoutSeconds", 180)},
                     "colour": data.get("colour", ""), "priority": data.get("priority", 0), "buildProcessNames": data.get("buildProcessNames", []),
-                    "ownerTopics": full["ownerTopics"], "buildFlowDoc": data.get("buildFlowDoc", ""), "integratorInstructions": data.get("integratorInstructions", "")}
+                    "ownerTopics": full["ownerTopics"]}
         self.fields(box, advanced, ("file",), add=False)
         self.initial_values = {path: getter() for path, getter, _like in self.getters}
 

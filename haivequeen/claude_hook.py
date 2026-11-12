@@ -34,7 +34,7 @@ _BEE_OPTIONAL = {o: ANY for o in ("--name", "--provider", "--task", "--steps", "
 _BEE_OPTIONAL.update({"--outcome": ("failed", "interrupted", "succeeded"),
                       "--blocked-by": ("question", "build", "owner", "package", "provider")})
 _add("bee", ("start", "result", "wait"), {"--project": PROJECT, "--plan": PLAN, "--package": ANY, "--class": ANY},
-     _BEE_OPTIONAL, ("--no-subagents",))
+     _BEE_OPTIONAL, ("--subagents", "--no-subagents"))
 _add("package", (None,), {"--project": PROJECT, "--plan": PLAN, "--package": ANY,
                           "--state": ("working", "waiting", "implemented", "done", "rejected")}, {"--reason": ANY})
 _add("plan", ("check",), {"--project": PROJECT, "--plan": PLAN})

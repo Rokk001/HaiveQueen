@@ -308,15 +308,14 @@ class MigrationTest(Dirs):
         self.assertEqual(len(done), 2)
         self.assertEqual((self.example / ".haivequeen" / "project.toml.bak").read_text(encoding="utf-8"), old_example)
         new = self.project_toml(self.example)
-        self.assertEqual(set(new), {"name", "colour", "priority", "codeRepo", "integrationBranch", "worktreePrefix", "plans", "compileCheck", "buildFlowDoc",
-                                    "integratorInstructions", "buildProcessNames", "onEvent"})
+        self.assertEqual(set(new), {"name", "colour", "priority", "codeRepo", "integrationBranch", "worktreePrefix", "plans", "compileCheck", "buildProcessNames", "onEvent"})
         self.assertEqual(new["codeRepo"], str(self.example_repo))
         self.assertEqual(new["plans"], ["docs/**/*-PLAN.md", "docs/**/FEATURE-QS-[0-9].md", "!docs/orchestrator/**"])
         self.assertEqual(new["onEvent"]["timeoutSeconds"], 180)
         text = self.md(self.example)
         for key in ("owner", "language" if False else "roundMinutes", "escalateAfter", "ignoredBuildOutput", "protectedWorktrees", "claudeTools", "allowedTools", "views", "integrationStateFile",
                     "minClass", "bundle", "openMarker", "integratorSlots", "paneCloseDelaySeconds", "terminalProfile", "ruleSources", "phaseRules", "planStandaloneRegex",
-                    "planSuffixRegex", "somethingNew", "planGlobs", "planExclude", "repo"):
+                    "planSuffixRegex", "somethingNew", "planGlobs", "planExclude", "repo", "buildFlowDoc", "integratorInstructions"):
             self.assertIn("`%s`" % key, text, key)
         self.assertIn("'Alex'", text)
         self.assertIn("not used", text)
@@ -332,7 +331,10 @@ class MigrationTest(Dirs):
         text = self.md(self.hq)
         self.assertIn("python -m unittest", text)
         self.assertIn("prompts.integrator", text)
-        self.assertEqual(new["buildEnabled"], False)
+        self.assertNotIn("buildEnabled", new)
+        self.assertNotIn("deployEnabled", new)
+        self.assertIn("`buildEnabled` = False", text)
+        self.assertIn("`deployEnabled` = False", text)
 
     def test_values_move_to_general_and_providers(self):
         projsettings.migrate_all()

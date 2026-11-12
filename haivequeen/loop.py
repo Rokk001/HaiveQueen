@@ -418,11 +418,11 @@ def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
         _hive_schedule_guard.release()
 
 
-# Clean integrated worktrees and schedule one round of Hives across every registered project.
+# Start the worktree cleanup apart from the round and schedule one round of Hives across every registered project.
 # Refresh provider metadata outside the lock before scheduling real work.
 def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
               out_file=None, settle: float = 3.0, free_ram=None, alive=None) -> dict:
-    """Clean integrated worktrees and schedule one round across registered projects."""
+    """Start the worktree cleanup in a thread of its own (the round never waits for it) and schedule one round across registered projects."""
     from . import hives
     envs = envs if envs is not None else sch.load_projects(conn, machine)
     if not dry_run:
@@ -448,53 +448,29 @@ def run_round(conn, machine: dict, envs=None, dry_run=False, plan_files=None,
             workspace = getattr(env, 'workspace', None)
             if conn is not None and isinstance(workspace, (str, os.PathLike)):
                 runtime.sync_plans(conn, env.name, os.fspath(workspace))
-            worktrees.cleanup(env)
-    from . import worktrees
-    deadline = None
-    completed = {}
-    while True:
-        try:
-            with hive_schedule_lock(reason="scheduling round"):
-                if dry_run:
-                    import sqlite3
-                    snapshot = sqlite3.connect(":memory:", isolation_level=None)
-                    snapshot.row_factory = sqlite3.Row
-                    try:
-                        conn.backup(snapshot)
-                        copied = [sch.ProjectEnv(snapshot, e.name, e.workspace, e.settings, e.colour, e.priority, e.plan_globs, e.plan_exclude) for e in envs]
-                        result = hives.schedule_round(snapshot, machine, copied, dry_run=True, free_ram=free_ram, alive=alive,
-                                                      settle=settle, plan_files=plan_files)
-                    finally:
-                        snapshot.close()
-                    if out_file:
-                        Path(out_file).parent.mkdir(parents=True, exist_ok=True)
-                        Path(out_file).write_text(json.dumps(result, indent=2), encoding="utf-8")
-                        if envs:
-                            e = envs[-1]
-                            snapshot_view = {"project": e.name, "repo": str(e.code_repo), "workspace": str(e.workspace), "dryRun": True}
-                            Path(out_file).with_suffix(".snapshot.json").write_text(json.dumps(snapshot_view, indent=2), encoding="utf-8")
-                    return result
-                result = hives.schedule_round(conn, machine, envs, dry_run=False, free_ram=free_ram, alive=alive,
+            worktrees.cleanup_in_background(env)   # apart from the round: the round never waits for it
+    with hive_schedule_lock(reason="scheduling round"):
+        if dry_run:
+            import sqlite3
+            snapshot = sqlite3.connect(":memory:", isolation_level=None)
+            snapshot.row_factory = sqlite3.Row
+            try:
+                conn.backup(snapshot)
+                copied = [sch.ProjectEnv(snapshot, e.name, e.workspace, e.settings, e.colour, e.priority, e.plan_globs, e.plan_exclude) for e in envs]
+                result = hives.schedule_round(snapshot, machine, copied, dry_run=True, free_ram=free_ram, alive=alive,
                                               settle=settle, plan_files=plan_files)
-                for project, previous in completed.items():
-                    current = result['projects'][project]
-                    current['started'] += previous['started']
-                    current['actions'] += previous['actions']
-                    current['report'] = previous['report'] + current['report']
-                return result
-        except worktrees.RemovalBusy as exc:
-            # No start is left to another round. Wait without scheduling held,
-            # then select again from current agents, slots, plans and owner gates.
-            if deadline is None:
-                deadline = time.monotonic() + 30.0
-            for project, progress in exc.result['projects'].items():
-                previous = completed.setdefault(project, {'started': 0, 'actions': 0, 'report': []})
-                previous['started'] += progress['started']
-                previous['actions'] += progress['actions']
-                previous['report'].extend(progress['report'])
-            worktrees.wait_for_removal(*exc.target, timeout=max(0.0, deadline - time.monotonic()))
-            if time.monotonic() >= deadline:
-                raise worktrees.removal_timeout(*exc.target)
+            finally:
+                snapshot.close()
+            if out_file:
+                Path(out_file).parent.mkdir(parents=True, exist_ok=True)
+                Path(out_file).write_text(json.dumps(result, indent=2), encoding="utf-8")
+                if envs:
+                    e = envs[-1]
+                    snapshot_view = {"project": e.name, "repo": str(e.code_repo), "workspace": str(e.workspace), "dryRun": True}
+                    Path(out_file).with_suffix(".snapshot.json").write_text(json.dumps(snapshot_view, indent=2), encoding="utf-8")
+            return result
+        return hives.schedule_round(conn, machine, envs, dry_run=False, free_ram=free_ram, alive=alive,
+                                    settle=settle, plan_files=plan_files)
 
 
 def _min_ram(env) -> float:
@@ -531,6 +507,10 @@ def _do_start(c, a, forced_pick=None) -> int:
     if forced_pick is None:
         raise ValueError("a provider must be selected before starting an agent")
     pick = forced_pick
+    if not dry:   # every kind of start (Queen, Agent process, ready-check agent) is refused under stop, pause or a PAUSED plan
+        from . import hives
+        if hives.start_block_reason(env.conn, env.name, str(a["plan"])):
+            return 0
     protocol, prov = pick["protocol"], pick["name"]
     nm, k = str(a["name"]), 1
     while nm in st["names"]:
@@ -551,15 +531,14 @@ def _do_start(c, a, forced_pick=None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     pf = run_dir / "prompt.md"
     hf = run_dir / "HANDOFF"
-    if phase == "bee":
-        hdr = roles.role_text("bee-start", {"language": roles.language(env.settings)}) + "\n\n"
-    elif phase == "queen":
-        hdr = roles.role_text("queen-start", {"language": roles.language(env.settings)}) + "\n\n"
+    if phase == "fix":   # the fix agent has no role file of its own: its task is the whole prompt
+        hdr = "You are the fix agent %s. Language: write all free text for the owner in %s.\n\nTASK\n\n" % (nm, roles.language(env.settings))
+    elif phase in ("bee", "queen"):   # the role text (queen.md, bee.md) is the start of the prompt itself
+        hdr = ""
     elif protocol == "claude":
-        flow_doc = env.settings.get("buildFlowDoc", "")
         hdr = ("You are the agent %s (one task, then you end). The rules for your phase (section 1 of AGENT-RULES.md and the rule sections you need) are "
-               "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name%s only when your task "
-               "needs them. Update the plan's state. End when your task is finished.\n\nTASK\n\n" % (nm, " (e.g. %s)" % flow_doc if flow_doc else ""))
+               "already in your system prompt: do not read AGENT-RULES.md or CLAUDE.md again; read other files they name only when your task "
+               "needs them. Update the plan's state. End when your task is finished.\n\nTASK\n\n" % nm)
     else:
         rules_doc = (env.workspace / "AGENTS.md") if env.settings.get("codeRepo") else "CLAUDE.md"   # a project with a separate code repo keeps its rules in the workspace
         hdr = ("You are the agent %s (one task, then you end). Follow all rules in section 1 of %s and every rule of the repository (%s and the "
@@ -571,14 +550,14 @@ def _do_start(c, a, forced_pick=None) -> int:
                    "wait for running Agents, finish your current step, record the handoff in the plan state and end." % hf)
     predecessors = [x for x in runtime.list_agents(env.conn, env.name, 'all') if x.get('phase') == 'queen' and x.get('plan_path') == plan and x.get('person')]
     loaded = ""
-    if phase in ("bee", "queen"):   # what a Queen and a Bee load is defined in profile.py; the project rules are complete, never a selection
+    if phase in ("bee", "queen", "fix"):   # what a Queen and a Bee load is defined in profile.py; the project rules are complete, never a selection
         if protocol != "claude":   # Claude gets the rules in its system prompt file (rules.md); every other provider reads them from its prompt
             loaded = profile.rules_text(profile.project_rules(env.settings, env.code_repo, protocol, a["cwd"]))
         if phase == "queen":
             loaded += "\n" + profile.queen_load(env.conn, env.name, env.workspace, plan, predecessors[-1]["person"] if predecessors else None, nm)
     pf.write_text(hdr + str(a["prompt"]) + "\n\n" + handoff + ("\n\n" + loaded.strip() + "\n" if loaded.strip() else ""), encoding="utf-8")
     ident = agent_identity(env.conn, [predecessors[-1]['person']] if phase == 'queen' and predecessors else ())
-    if phase in ("bee", "queen"):   # a Bee and a Queen are named by their short female name (A2); the number of a repeated row key is not part of it
+    if phase in ("bee", "queen", "fix"):   # a Bee and a Queen are named by their short female name (A2); the number of a repeated row key is not part of it
         base = re.sub(r"-\d+$", "", nm)
         ident["Person"] = base if base in load_agent_names() else nm
     cls = routine.start_class(env, phase, plan, pkg, str(a.get("class") or ""))
@@ -755,6 +734,8 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
     """The loop body (see run_loop)."""
     close_obsolete_questions(conn)
     try:
+        from . import integration
+        integration.retire_legacy_steps(conn)   # open INTEGRATION-BUILD/INTEGRATION-DEPLOY packages and their questions block no plan
         from . import projsettings, proctree
         if projsettings.migrate_all(conn=conn):   # every known project.toml moves to the slim set once; the old files stay as .bak
             machine = config.load_config()
@@ -897,7 +878,8 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
         env.event("STOP file found: no new agents, waiting for running agents" if stopped else "Loop ending")
     state.update(next_at=None)
     write_state(conn, "idle", datetime.now(), None)
-    while active_count(conn) > 0:
+    from . import orchestrator
+    while active_count(conn) > 0 or orchestrator.running_jobs():   # a running pipeline command ends first
         sleep(wait_seconds)
         for env in envs:   # a row whose runner process is gone must not hold the stopped loop open
             routine.repair_stale_agents(env)
@@ -1073,6 +1055,6 @@ def register(sub) -> None:
     p.add_argument("--detach", action="store_true", help="open the window as a process of its own and return (default: run it in this process)")
     p.add_argument("--project", help="show one Project only")
     p.set_defaults(fn=cmd_gui)
-    p = sub.add_parser("stop")
+    p = sub.add_parser("stop", help="start no new Agent of any kind (Queen, separate Agent, subagent, ready-check agent); running agents finish", description="Create the STOP flag: no new Queen, separate Agent process, embedded subagent or ready-check agent starts, running ones finish their task and the loop ends. bzz start allows starts again.")
     p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")
     p.set_defaults(fn=cmd_stop)
