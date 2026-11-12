@@ -17,9 +17,9 @@ MIGRATION_FILE = "removed-settings.md"
 
 # Keys of a project.toml that stay. Fields of the project page (P-1, P-2) and the internal keys without a field of their own.
 KEPT_KEYS = (
-    "name", "codeRepo", "integrationBranch", "compileCheck",
-    "plans", "worktreeLocation", "buildEnabled", "deployEnabled", "deleteFinishedWorktrees", "deleteIntegratedBranches",
-    "publishReleases", "nextVersion", "onEvent", "colour", "priority", "buildProcessNames", "ownerTopics", "buildFlowDoc", "integratorInstructions",
+    "name", "codeRepo", "integrationBranch", "compileCheck", "buildCommand", "deployCommand",
+    "plans", "worktreeLocation", "deleteFinishedWorktrees", "deleteIntegratedBranches",
+    "publishReleases", "nextVersion", "onEvent", "colour", "priority", "buildProcessNames", "ownerTopics",
     "worktreePrefix", "upstreamRepo", "upstreamRules", "rulesOff",
     "prompts", "readyCheckClass", "readyCheckTimeoutSec", "agentStallSeconds", "rateLimitWaitMinutes", "retryWaitMinutes", "clockJumpSeconds",
 )
@@ -33,6 +33,10 @@ REMOVED_NOTES = {
     "claudeTools": "now the setting Tools available to Claude agents of each Claude provider",
     "allowedTools": "the push permission of the integrating Queen is given by HaiveQueen; other entries moved to the Claude providers",
     "compileCheckEnabled": "an empty compile check command means no compile check",
+    "buildEnabled": "an empty Build command means no build; the Orchestrator runs the Build command after the check",
+    "deployEnabled": "an empty Deploy command means no deploy; the Orchestrator runs the Deploy command after the push",
+    "buildFlowDoc": "no instruction text: the Orchestrator runs the Build command itself",
+    "integratorInstructions": "no instruction text: the Orchestrator integrates, no Queen does",
     "queenClass": "now the General field Queen class", "beesPerQueen": "now the General field Agents per Queen",
     "contextLimitTokens": "now the field Context limit of each provider; this project value does not apply any more",
     "capabilityRules": "the built-in capability rule applies", "preferredProvider": "dropped, the built-in rules apply",
@@ -48,7 +52,7 @@ REMOVED_NOTES = {
 UNKNOWN_NOTE = "not used"
 # Keys of a project that General or the providers now decide; build_settings ignores them in a project file (the migration has moved their effect).
 DROPPED_FROM_PROJECT = ("language", "escalateAfter", "roundMinutes", "owner", "ignoredBuildOutput", "protectedWorktrees", "claudeTools", "allowedTools",
-                        "compileCheckEnabled", "queenClass", "beesPerQueen", "contextLimitTokens", "capabilityRules", "preferredProvider", "ownerCheckText",
+                        "compileCheckEnabled", "buildEnabled", "deployEnabled", "buildFlowDoc", "integratorInstructions", "queenClass", "beesPerQueen", "contextLimitTokens", "capabilityRules", "preferredProvider", "ownerCheckText",
                         "views", "integrationStateFile", "planStandaloneRegex", "planSuffixRegex", "ruleSources", "phaseRules")
 PUSH_FORMS = ("Bash(git push {r} HEAD:{b})", "Bash(git -C * push {r} HEAD:{b})", "PowerShell(git push {r} HEAD:{b})", "PowerShell(git -C * push {r} HEAD:{b})")
 

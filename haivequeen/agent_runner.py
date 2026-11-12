@@ -12,6 +12,7 @@ Usage:
 import argparse
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -21,6 +22,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from . import buildjobs, config, db, interrupt, localtime, offline, overview, proctree, profile, roles, runtime, scheduler, servers, startctx
 from . import platform as osplat
@@ -330,6 +332,44 @@ def get_codex_tokens(thread_id, sessions=None, first=False):
         return None
 
 
+def codex_task_name(name):
+    """The portable task name used for an embedded Codex Agent."""
+    return re.sub(r"[^a-z0-9_]", "_", str(name).lower())
+
+
+def get_codex_children(parent, sessions, names):
+    """Read direct child sessions only when their task name uniquely identifies an Agent."""
+    if not parent:
+        return {}
+    root = Path(sessions) if sessions else codex_sessions_dir()
+    identities = {}
+    for name in names:
+        identities.setdefault(codex_task_name(name), []).append(name)
+    candidates = {}
+    for path in root.rglob("*.jsonl"):
+        try:
+            with path.open(encoding="utf-8") as handle:
+                meta = json.loads(handle.readline())
+            payload = meta.get("payload", {})
+            spawn = payload.get("source", {}).get("subagent", {}).get("thread_spawn", {})
+            task = str(spawn.get("agent_path") or "").removeprefix("/root/")
+            if meta.get("type") != "session_meta" or spawn.get("parent_thread_id") != parent or "/" in task:
+                continue
+            if len(identities.get(task, [])) != 1 or not payload.get("id"):
+                continue
+            candidates.setdefault(task, []).append(str(payload["id"]))
+        except (OSError, ValueError, AttributeError, TypeError):
+            continue
+    result = {}
+    for task, ids in candidates.items():
+        if len(ids) != 1:
+            continue
+        usage = get_codex_tokens(ids[0], root)
+        if usage:
+            result[ids[0]] = {"name": identities[task][0], "desc": identities[task][0], **usage}
+    return result
+
+
 # ---------------------------------------------------------------- build jobs
 
 def sample_once(path, process_names, root_pid=None):
@@ -369,7 +409,7 @@ def queen_build_monitor(project, plan, name, jobs, sample_file, process_names, s
                     started = datetime.now()
                     start_free = float(osplat.free_ram_mb())
                     Path(sample_file).write_text("", encoding="utf-8")
-                    runtime.upsert_agent(conn, project, name, {"buildJobs": jobs})
+                    runtime.upsert_agent(conn, project, name, {"buildJobs": jobs, "buildParallel": parallel})
                 sample_once(sample_file, process_names, root_pid)
             elif started is not None:
                 use = complete_build_measure(conn, project, name, jobs, start_free, sample_file, started, parallel, count)
@@ -599,14 +639,34 @@ class AgentRun:
                 if not self.start_ctx:
                     first = get_codex_tokens(self.thread, self.sessions, first=True)
                     self.note_start(first["ctx"] if first else cx["ctx"])
+        if self.type == "codex" and self.phase == "queen" and self.thread:
+            try:
+                names = [r[0] for r in self.conn.execute("SELECT name FROM embedded_bees WHERE project=? AND plan_path=? AND queen=?", (self.project, self.plan, self.name))]
+                self.sub_ctx = get_codex_children(self.thread, self.sessions, names)
+                for child, entry in self.sub_ctx.items():
+                    if child not in self.sub_started:
+                        first = get_codex_tokens(child, self.sessions, first=True)
+                        if first:
+                            self.note_start(first["ctx"], "subbee", entry["desc"])
+                            self.sub_started.add(child)
+            except Exception:
+                pass
+        tin, tout = self.report_tokens()
         try:
             runtime.upsert_agent(self.conn, self.project, self.name, {
-                "tokensIn": self.tin, "tokensOut": self.tout, "ctxTokens": self.ctx, "lastLine": self.last,
+                "tokensIn": tin, "tokensOut": tout, "ctxTokens": self.ctx, "lastLine": self.last,
                 **({"startCtx": self.start_ctx} if self.start_ctx else {}),
                 **({"cacheRead": self.cache_read, "cacheWrite": self.cache_write} if self.cache_read is not None else {}),
-                **({"subCtx": self.sub_ctx} if self.sub_ctx else {})})
+                **({"subCtx": self.sub_ctx} if self.sub_ctx or (self.type == "codex" and self.phase == "queen") else {})})
         except Exception:
             pass   # a failed write must not end the run
+
+    def report_tokens(self):
+        """Codex child sessions have separate totals; store their sum with the Queen."""
+        if self.type == "codex" and self.phase == "queen":
+            return ((self.tin or 0) + sum(x["tin"] for x in self.sub_ctx.values()),
+                    (self.tout or 0) + sum(x["tout"] for x in self.sub_ctx.values()))
+        return self.tin, self.tout
 
     # Remember the first model turn of this run.
     def note_start(self, tokens, kind=None, agent=None):
@@ -855,7 +915,7 @@ def report_prompt(prompt_file, project, agent_id, phase=None):
     """Return the CLI prompt with phase-specific reporting commands and no double quotes."""
     orch = "'%s' -I '%s'" % (osplat.python_executable(), TOOL_ROOT / "haivequeen" / "cli.py")
     text = ('Read the file "%s" completely and carry out exactly the task described there. Do nothing else.' % prompt_file)
-    if phase == "bee":
+    if phase in ("bee", "fix"):
         text += " Final report: %s done --agent %s --result <file>; step report: %s note --project %s --text <text>." % (orch, agent_id, orch, project)
         return text.replace('"', "")
     text += (" Report only with these commands, never by editing a queue file or state table by hand (the handoff text in the state file of the plan stays your own file): "
@@ -891,7 +951,7 @@ def approx_start_parts(a, pcfg, cfg, workspace, protocol, message=""):
     try:
         from . import roles
         settings = scheduler.build_settings(cfg, pcfg)
-        role = roles.role_text("queen-start" if a.phase == "queen" else "bee-start", {"language": roles.language(settings)})
+        role = roles.role_text("queen" if a.phase == "queen" else "bee", {"language": roles.language(settings)})
         rules = profile.project_rules(pcfg, pcfg.get("codeRepo") or workspace or a.cwd, protocol, a.cwd)
         return startctx.approx_parts(role, rules["inline"], message)   # the message the CLI starts with; the prompt file it reads afterwards is not in the first turn
     except Exception:
@@ -1092,9 +1152,16 @@ def run_agent(a, out=None):
         if guard:
             env.update(json.loads(guard).get('environment', {}))
     if bj:
-        bj_start_mb = float(osplat.free_ram_mb())
-        measured = buildjobs.stored_per_job(conn, a.project, count=bj["Measurements"])
-        calc = buildjobs.job_count(bj, osplat.logical_cores(), bj_start_mb, measured, concurrent=len(buildjobs.running_builds(conn, a.name)))
+        build_env = SimpleNamespace(conn=conn, name=a.project, settings={"buildJobs": bj_raw})
+        calc = (buildjobs.plan_build(build_env, exclude=a.name) if a.phase in ("queen", "bee")
+                else buildjobs.reserve_agent_build(build_env, a.name))
+        if calc["Jobs"] == 0:
+            run.say("Waiting for build cores", "Yellow")
+        while calc["Jobs"] == 0:
+            time.sleep(1)
+            calc = (buildjobs.plan_build(build_env, exclude=a.name) if a.phase in ("queen", "bee")
+                    else buildjobs.reserve_agent_build(build_env, a.name))
+        bj_start_mb = calc["FreeMB"]
         bj_jobs, why = calc["Jobs"], calc["Why"]
         env.update(buildjobs.build_environment(bj, bj_jobs))   # the job count (configured name), the parallel value and the minimum free RAM
         try:
@@ -1111,7 +1178,6 @@ def run_agent(a, out=None):
         else:
             sampler = threading.Thread(target=sampler_loop, daemon=True, args=(
                 samples, process_names, stop, float(os.environ.get("BZZ_SAMPLE_SEC") or buildjobs.SAMPLE_SEC), os.getpid()))
-            runtime.upsert_agent(conn, a.project, a.name, {"buildJobs": bj_jobs})
             run.event("build %s: starting with %d jobs (%s, free RAM %d MB)" % (a.name, bj_jobs, why, bj_start_mb), "build")
         if sampler:
             sampler.start()
@@ -1157,7 +1223,23 @@ def run_agent(a, out=None):
                 last_output, watch_stop = [time.monotonic()], threading.Event()
                 if stall_limit > 0:
                     threading.Thread(target=stall_watch, daemon=True, args=(last_output, stall_limit, mark_stalled, clear_stalled, watch_stop)).start()
-                for bline in proc.stdout:
+                lines = queue.Queue()
+                def read_output():
+                    try:
+                        for bline in proc.stdout:
+                            lines.put(bline)
+                    finally:
+                        lines.put(None)
+                threading.Thread(target=read_output, daemon=True).start()
+                while True:
+                    try:
+                        bline = lines.get(timeout=2)
+                    except queue.Empty:
+                        if run.type == "codex" and run.phase == "queen":
+                            run.push_state()
+                        continue
+                    if bline is None:
+                        break
                     last_output[0] = time.monotonic()
                     line = bline.decode("utf-8", errors="replace").rstrip("\r\n")
                     raw.write((line + "\n").encode("utf-8"))
@@ -1212,7 +1294,9 @@ def run_agent(a, out=None):
             offline.mark(conn, a.provider, run.last)
         except Exception:
             pass
-    run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": run.tin, "tokensOut": run.tout, "lastLine": run.last, "ctxTokens": run.ctx, "subCtx": run.sub_ctx,
+    run.push_state(True)
+    report_tin, report_tout = run.report_tokens()
+    run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": report_tin, "tokensOut": report_tout, "lastLine": run.last, "ctxTokens": run.ctx, "subCtx": run.sub_ctx,
                          **({"startCtx": run.start_ctx} if run.start_ctx else {}), **({"cacheRead": run.cache_read, "cacheWrite": run.cache_write} if run.cache_read is not None else {}),
                          "interrupted": kind, "retryAt": ""})
     if run.final and (a.phase == "queen" or short(run.final, 1500) != short(run.last_said, 1500)):

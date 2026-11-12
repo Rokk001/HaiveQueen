@@ -102,7 +102,7 @@ class CompletenessTests(ApiaryPageCase):
                         in_advanced = str(win.rows[path]).startswith(str(win.advanced_box))
                         if apiary and path in (('file', 'rulesOff'), ('file', 'upstreamRules')):
                             continue   # the Knowledge base has its own lines (tests of P2)
-                        expected_main = path in (('entry', 'name'), ('place', 'repository'), ('file', 'integrationBranch'), ('file', 'compileCheck')) if apiary else path[-1] in gui_config.GENERAL_LABELS
+                        expected_main = path in (('entry', 'name'), ('place', 'repository'), ('file', 'integrationBranch'), ('file', 'compileCheck'), ('file', 'buildCommand'), ('file', 'deployCommand')) if apiary else path[-1] in gui_config.GENERAL_LABELS
                         self.assertEqual(not in_advanced, expected_main, path)
                         if expected_main:
                             label = win.text_of(path)

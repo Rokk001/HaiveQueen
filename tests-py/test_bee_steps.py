@@ -191,7 +191,7 @@ class SubagentRulesTest(RoundCase):
         """Return the parsed answer of bzz agent start for package P1."""
         self.mock_agent_worktrees()
         args = cli.build_parser().parse_args(['bee', 'start', '--project', 'testproj', '--plan', REL, '--package', 'P1', '--class', 'medium', '--name', 'Ada',
-                                              '--task', 'build the thing', '--steps', '["read", "write", "test"]', '--cwd', str(self.wt)] + (['--no-subagents'] if no_subagents else []))
+                                              '--task', 'build the thing', '--steps', '["read", "write", "test"]', '--cwd', str(self.wt)] + (['--no-subagents'] if no_subagents else ['--subagents']))
         output = io.StringIO()
         with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), mock.patch.object(cli.config, 'load_config', return_value=self.machine), \
                 mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), mock.patch('haivequeen.bees.prepare_agent_worktree', return_value=(str(self.wt), 'plan-p1')), contextlib.redirect_stdout(output):
