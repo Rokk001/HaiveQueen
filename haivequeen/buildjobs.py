@@ -13,7 +13,7 @@ import sys
 import time
 from datetime import datetime
 
-from . import runtime
+from . import config, runtime
 from . import platform as osplat
 from .i18n import tr
 
@@ -184,16 +184,55 @@ def complete_measure(env, name: str, jobs: int, start_free_mb: float, sample_fil
 
 
 def running_builds(conn, exclude: str = None) -> list:
-    """Running build allocations, without `exclude`: [{name, jobs, parallel}]."""
+    """Agent and integration build allocations, without counting a Queen twice."""
     found = []
-    for r in conn.execute("SELECT name, extra_json FROM agents WHERE status='running' AND archived=0"):
+    agents = []
+    for row in conn.execute("SELECT name,extra_json,project,plan_path,pid FROM agents WHERE status='running' AND archived=0"):
         try:
-            extra = json.loads(r[1] or "{}")
+            extra = json.loads(row[1] or '{}')
         except ValueError:
             continue
-        if extra.get("buildJobs") and r[0] != exclude:
-            found.append({"name": r[0], "jobs": int(extra["buildJobs"]),
-                          "parallel": max(1, int(extra.get("buildParallel") or 1))})
+        agents.append({**extra, 'name': row[0], 'project': row[2], 'plan_path': row[3], 'pid': row[4]})
+    integrations = []
+    parallel = None
+    for row in conn.execute("SELECT project,plan_path,owner_pid,build_jobs FROM hive_integration WHERE acquired=1 AND build_jobs>0"):
+        project, plan, pid, jobs = row
+        if pid and not osplat.process_alive(pid):
+            continue
+        owner = next((a for a in agents if a['project'] == project and
+                      ((pid and a.get('pid') == pid) or a.get('plan_path') == plan)), None)
+        if owner and owner['name'] == exclude:
+            continue
+        if parallel is None:
+            parallel = settings_from(config.load_config().get('buildJobs') or 0)['Parallel']
+        integrations.append((project, plan, pid))
+        found.append({'name': owner['name'] if owner else plan, 'jobs': int(jobs),
+                      'parallel': max(1, int(owner.get('buildParallel') or parallel)) if owner else parallel})
+    for agent in agents:
+        if agent['name'] == exclude or any(
+                agent['project'] == project and ((pid and agent.get('pid') == pid) or agent.get('plan_path') == plan)
+                for project, plan, pid in integrations):
+            continue
+        if agent.get('buildJobs'):
+            found.append({'name': agent['name'], 'jobs': int(agent['buildJobs']),
+                          'parallel': max(1, int(agent.get('buildParallel') or 1))})
+    # The Orchestrator has no agent row. Publish its allocation before starting
+    # the worker so detached compile supervisors can see it in this database.
+    for row in conn.execute("SELECT project,key,value FROM kv WHERE key LIKE 'orch:%'"):
+        try:
+            job = (json.loads(row[2]) or {}).get('job') or {}
+        except (ValueError, AttributeError):
+            continue
+        if job.get('step') not in ('Build', 'Deploy') or not job.get('buildJobs'):
+            continue
+        if job.get('file') and os.path.isfile(job['file']):
+            continue
+        if not osplat.process_alive(job.get('pid') or job.get('owner_pid')):
+            continue
+        if any(row[0] == project and row[1][5:] == plan for project, plan, _pid in integrations):
+            continue
+        found.append({'name': row[1], 'jobs': int(job['buildJobs']),
+                      'parallel': max(1, int(job.get('buildParallel') or 1))})
     return found
 
 

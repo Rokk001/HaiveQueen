@@ -425,7 +425,7 @@ def _command(conn, env, plan, state, folder, step, free_mb):
         head = integration.head_commit(folder)
         if step == "Deploy" and head and state.get("deployed") == head:
             return _done(conn, env, plan, state, step, "already deployed")
-        extra = None
+        extra = planned = None
         if step in ("Build", "Deploy"):
             bj = buildjobs.settings_from(env.settings.get("buildJobs"))
             low = buildjobs.waiting_for_ram(bj, free_mb)
@@ -440,6 +440,8 @@ def _command(conn, env, plan, state, folder, step, free_mb):
         j = Job(token)
         JOBS[key] = j
         state["job"] = {"step": step, "token": token, "file": str(result_file), "pid": None, "head": head}
+        if planned:
+            state['job'].update(owner_pid=os.getpid(), buildJobs=planned['Jobs'], buildParallel=planned['Parallel'])
         state["steps"][step] = "running"
         save(conn, env.name, plan, state)
         _log(env, "%s: %s started %s" % (_short(plan), step, _counter(env, step)))
