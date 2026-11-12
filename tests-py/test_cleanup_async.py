@@ -32,15 +32,32 @@ class LongCleanupTests(RoundCase):
         box = inbox.inbox_dir(self.repo)
         box.mkdir(parents=True)
         (box / 'a.toml').write_text('[[answer]]\nquestion_id = %d\ntext = "seven"\nby = "owner"\n' % question, encoding='utf-8')
-        result = self.round()
+        real_start = loop._do_start
+        def start_during_cleanup(*args, **kwargs):
+            self.assertTrue(self.entered.wait(5))
+            self.assertFalse(self.release.is_set())
+            return real_start(*args, **kwargs)
+        with mock.patch.object(loop, '_do_start', side_effect=start_during_cleanup):
+            result = self.round()
         self.assertTrue(self.entered.wait(5))
         self.assertTrue(worktrees.cleanup_running('testproj'))
         self.assertFalse(self.release.is_set())
-        self.assertEqual(result['projects']['testproj']['started'], 1)   # the Queen got her start and orders during the cleanup
-        self.assertFalse((box / 'a.toml').exists())   # the inbox file was processed
-        # A Queen's Agent start for another worktree goes through at once.
-        with worktrees.start_with_removal_locks(lambda: [('worktree', self.base / 'unrelated')], timeout=1):
-            pass
+        self.assertEqual(result['projects']['testproj']['started'], 1)
+        queen = next(a for a in runtime.list_agents(self.conn, 'testproj', 'active') if a['phase'] == 'queen')
+        prompt = (self.env().run_dir(queen['name']) / 'prompt.md').read_text(encoding='utf-8')
+        self.assertIn('Work the entire plan', prompt)
+        self.assertIn('seven', prompt)
+        answered = runtime.list_questions(self.conn, 'testproj', status='answered', plan=REL)
+        self.assertEqual([(q['id'], q['answer']) for q in answered], [(question, 'seven')])
+        self.assertFalse((box / 'a.toml').exists())
+        self.mock_agent_worktrees()
+        with mock.patch.object(loop, 'ram_gb', return_value=16):
+            agent = bees.start_process(self.env(), REL, 'P1', loop.agent_identity(self.conn)['Person'], 'medium', 'task', ['do work'], [], [], no_subagents=True)
+        self.assertTrue(agent, bees.LAST_REFUSAL)
+        self.assertEqual(agent['kind'], 'process')
+        self.assertEqual(self.ag(agent['name'])['status'], 'running')
+        self.assertIn('do work', (self.env().run_dir(agent['name']) / 'prompt.md').read_text(encoding='utf-8'))
+        self.assertFalse(self.release.is_set())
         # A second round ends too, and no second cleanup of the project starts.
         self.round()
         self.assertEqual(self.calls, ['testproj'])
