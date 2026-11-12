@@ -111,6 +111,14 @@ def upsert_agent(conn, project, name, fields, create=True) -> dict:
             conn.execute(f"UPDATE agents SET {','.join(sets)} WHERE id=?",
                          list(cols.values()) + [json.dumps(merged) if merged else None, aid])
         result = _agent_out(conn.execute("SELECT * FROM agents WHERE id=?", (aid,)).fetchone())
+        if result.get("phase") == "queen" and (cols.get("status") == "starting" or
+                                                (row is None and cols.get("status") == "running")):
+            # Serialize the start boundary with decision inserts: timestamps alone can tie.
+            conn.execute(
+                "INSERT OR IGNORE INTO decision_deliveries (decision_id, agent, ts) "
+                "SELECT id, ?, ? FROM decisions WHERE project=? AND source='owner' "
+                "AND (plan_path IS NULL OR plan_path='' OR plan_path=?)",
+                (name, db.now(), project, result.get("plan_path")))
         if result.get('phase') == 'bee' and cols.get('status') and cols['status'] not in ACTIVE_STATUSES:
             from . import bees, branchguard
             foreign = bees.enforce_agent_end(conn, project, result)
@@ -704,7 +712,7 @@ def mark_decisions_delivered(conn, agent, decisions) -> None:
 
 
 def take_owner_messages(conn, agent) -> list:
-    """The owner decisions (source owner, active) stored for the plan or the whole Project of the running Queen `agent` since she started that she has not
+    """The owner decisions (source owner) stored for the plan or the whole Project of the running Queen `agent` since she started that she has not
     received yet, as [{id, text}]; each is marked delivered with her name in the same transaction and never returned again. Other callers get []."""
     row = conn.execute("SELECT project, plan_path, started_at FROM agents WHERE name=? AND phase='queen' AND archived=0 AND status IN ('running','starting') "
                        "ORDER BY id DESC LIMIT 1", (agent,)).fetchone()
@@ -712,7 +720,7 @@ def take_owner_messages(conn, agent) -> list:
         return []
     with db.transaction(conn):
         found = conn.execute(
-            "SELECT id, text FROM decisions d WHERE project=? AND source='owner' AND status='active' AND (plan_path IS NULL OR plan_path='' OR plan_path=?) "
+            "SELECT id, text FROM decisions d WHERE project=? AND source='owner' AND (plan_path IS NULL OR plan_path='' OR plan_path=?) "
             "AND ts>=? AND NOT EXISTS (SELECT 1 FROM decision_deliveries x WHERE x.decision_id=d.id AND x.agent=?) ORDER BY id",
             (row["project"], row["plan_path"], row["started_at"], agent)).fetchall()
         for d in found:
