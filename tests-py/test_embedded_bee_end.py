@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bzztest import REL, RoundCase, runtime  # noqa: E402
-from haivequeen import bees, cli, db, gui_data, hives, roles, scheduler  # noqa: E402
+from haivequeen import bees, cli, db, dashboard_data, hives, roles, scheduler  # noqa: E402
 
 
 def ago(minutes):
@@ -48,7 +48,7 @@ class EndCase(RoundCase):
         self.conn.execute("UPDATE embedded_bees SET started_at=? WHERE name=?", (ago(started), name))
 
     def open_names(self):
-        return sorted(r["name"] for r in gui_data.embedded_rows(self.conn))
+        return sorted(r["name"] for r in dashboard_data.embedded_rows(self.conn))
 
     def outcome(self, name):
         return self.conn.execute("SELECT outcome FROM embedded_bees WHERE name=?", (name,)).fetchone()[0]

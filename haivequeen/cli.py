@@ -386,6 +386,18 @@ def cmd_requeen(args, conn):
 # Check the plan the calling Queen has cut into packages.
 def cmd_plan(args, conn):
     """Check the header of the Queen's own plan (packages, unique ids, titles, dependencies without cycle, capabilities some provider offers, every requirement the Queen wrote in the state file belongs to a package). On success a SENT or PREPARING plan becomes QUEUED and the packages are read into the database; otherwise the problems are reported and nothing changes."""
+    if args.action == "force-stop":
+        if "BZZ_AGENT" in os.environ:
+            return fail("this command is only available to the owner; agents cannot use it")
+        from haivequeen import hives
+        try:
+            hives.stop_hive(conn, args.project, args.plan)
+            out({"ok": True})
+            return 0
+        except (ValueError, KeyError, runtime.CmdError) as exc:
+            return fail(str(exc))
+    if args.action == "stop-gracefully":
+        args.action = "pause"
     if args.action != "check":
         return cmd_owner(args, conn)
     from haivequeen import plans as plan_mod, scheduler
@@ -462,7 +474,7 @@ def cmd_agent_stop(args, conn):
 def cmd_bee(args, conn):
     """Route and start an Agent, or record an attempt for escalation."""
     from haivequeen import bees, scheduler
-    if args.action == "stop":
+    if args.action in ("force-stop", "stop"):
         return cmd_agent_stop(args, conn)
     missing = [f for f in ("plan", "package", "cls") if not getattr(args, f)]
     if missing:
@@ -583,13 +595,14 @@ def build_parser() -> argparse.ArgumentParser:
         "Names are based on plan and package, never after an Agent. A new branch starts from the current tip of the plan branch; "
         "a replacement Agent reuses the same worktree and branch. The answer gives cwd and branch, also for subagents. "
         "Agents must not create or commit on another branch. "
-        "Stop: 'bzz agent stop <name>' is for the owner only (also the dashboard button and an inbox [[stop_agent]] entry); it ends the one running Agent, "
+        "Force stop: 'bzz agent force-stop <name>' is for the owner only (also the dashboard button and an inbox [[stop_agent]] entry); it ends the one running Agent, "
         "refuses a subagent of the Queen with the reason, and refuses the Queen, who can only be ended by bzz dequeen. "
-        "The package stays stopped and waits for an explicit owner instruction. The Queen gets the stop as an owner message in owner_messages."))
-    p.add_argument("action", choices=["start", "result", "wait", "stop"])
-    p.add_argument("target", nargs="?", default="", help="stop: the name of the one running Agent to end (owner only; not the Queen, not a subagent)")
+        "The package stays stopped and waits for an explicit owner instruction. The Queen gets the stop as an owner message in owner_messages. "
+        "'bzz agent stop' remains a compatibility alias for force-stop."))
+    p.add_argument("action", choices=["start", "result", "wait", "force-stop", "stop"])
+    p.add_argument("target", nargs="?", default="", help="force-stop: the name of the one running Agent to end (owner only; not the Queen, not a subagent)")
     p.add_argument("--project", required=True)
-    for field in ("plan", "package", "class"):   # required by every action except stop
+    for field in ("plan", "package", "class"):   # required except for force-stop and its stop alias
         p.add_argument("--" + field, default="", dest="cls" if field == "class" else field)
     p.add_argument("--name", default="")
     p.add_argument("--provider", default="")
@@ -617,12 +630,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason", default="")
     p.set_defaults(fn=cmd_package)
 
-    p = sub.add_parser("plan", help="check a plan; owner: accept, reject, pause, resume or release", description=(
+    p = sub.add_parser("plan", help="check or control a plan", description=(
         "The TOML header requires branch (the plan branch) and worktree (the plan worktree folder). "
         "The Queen writes both at the cut; HaiveQueen reads them only from these header fields. "
         "Check refuses a missing branch or worktree, or a worktree that is the project's main checkout, and names the problem. "
-        "The plan stays SENT until the check passes and sets it to QUEUED; agent start is refused until then."))
-    p.add_argument("action", choices=["check", "accept", "reject", "pause", "resume", "release"])
+        "The plan stays SENT until the check passes and sets it to QUEUED; agent start is refused until then. "
+        "Owner controls: stop-gracefully prevents new starts while running work continues; force-stop ends the plan's running work; "
+        "resume restores a stopped plan. pause remains an alias for stop-gracefully."))
+    p.add_argument("action", choices=["check", "accept", "reject", "stop-gracefully", "force-stop", "pause", "resume", "release"])
     for field in ("project", "plan"):
         p.add_argument("--" + field, required=True)
     p.set_defaults(fn=cmd_plan)
@@ -721,6 +736,8 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_cli.register(sub)
     legacy.register(sub)
     loop.register(sub)
+    from haivequeen import web_cli
+    web_cli.register(sub)
     selfupdate.register(sub)
     updates.register(sub)
     from haivequeen import worktrees

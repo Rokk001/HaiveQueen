@@ -496,7 +496,7 @@ def _win_snapshot() -> list:
     """Windows: all (pid, parent pid, image name) triples from a Toolhelp snapshot.
 
     The Windows API is called directly: a helper program such as `tasklist` opens a console window each time when the caller
-    (the graphical dashboard, a detached process) has no console of its own. Raises OSError when the snapshot cannot be taken."""
+    (for example, a detached helper process) has no console of its own. Raises OSError when the snapshot cannot be taken."""
     kernel, ProcessEntry = _win_snapshot_api()
     snapshot = kernel.CreateToolhelp32Snapshot(0x2, 0)   # TH32CS_SNAPPROCESS
     if not snapshot or snapshot == ctypes.c_void_p(-1).value:

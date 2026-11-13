@@ -10,7 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import isolation  # noqa: E402,F401  (redirects the default data and settings folders to a temp folder before anything is imported)
-from haivequeen import db, gui_data, overview, scheduler as sch  # noqa: E402
+from haivequeen import db, dashboard_data, overview, scheduler as sch  # noqa: E402
 
 MINUS = "−"
 
@@ -73,9 +73,9 @@ def prow(**kw):
 
 # The limit rows of provider rows.
 def rows_of(*provider_rows, german=False):
-    """gui_data.limit_rows of the rows, in English or German."""
+    """dashboard_data.limit_rows of the rows, in English or German."""
     with mock.patch("haivequeen.i18n.machine_language", return_value="German" if german else "English"):
-        return gui_data.limit_rows({"provider_limits": list(provider_rows)})
+        return dashboard_data.limit_rows({"provider_limits": list(provider_rows)})
 
 
 class DataTest(unittest.TestCase):
@@ -195,7 +195,7 @@ class ProviderLinesTest(unittest.TestCase):
         self.file.write_text(json.dumps(readings), encoding="utf-8")
         with mock.patch.dict(os.environ, {"BZZ_PROVIDER_LIMITS_FILE": str(self.file)}):
             rows = overview.provider_lines(self.conn, {"providers": providers}, [])
-            return rows, gui_data.limit_rows({"provider_limits": rows})
+            return rows, dashboard_data.limit_rows({"provider_limits": rows})
 
     @staticmethod
     def provider(name, slots, limit, model="m"):
@@ -228,272 +228,20 @@ class ProviderLinesTest(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k not in ("BZZ_RUNTIME_OVERRIDE", "BZZ_PROVIDER_LIMITS_FILE")}
         with mock.patch.dict(os.environ, env, clear=True):
             rows = overview.provider_lines(self.conn, {"providers": [self.provider("codex", 2, "codex")]}, [])
-        self.assertTrue(gui_data.limit_rows({"provider_limits": rows})[0]["five"].startswith("5h 25 % · "))
+        self.assertTrue(dashboard_data.limit_rows({"provider_limits": rows})[0]["five"].startswith("5h 25 % · "))
 
     def test_snapshot_limits_are_the_rows(self):
         """The snapshot holds the rows; a slot that becomes used shows in the next snapshot."""
         cfg = {"slots": 2, "providers": [self.provider("claude", 3, "none")]}
-        before = gui_data.snapshot(self.conn, cfg=cfg, sysinfo={"cores": 8, "cpu": 1, "ram_used_gb": 1.0, "ram_total_gb": 8.0, "ram_pct": 10,
+        before = dashboard_data.snapshot(self.conn, cfg=cfg, sysinfo={"cores": 8, "cpu": 1, "ram_used_gb": 1.0, "ram_total_gb": 8.0, "ram_pct": 10,
                                                                     "disk_used_tb": 1.0, "disk_total_tb": 2.0, "disk_pct": 10, "host": "h"})
         self.assertEqual([r["slots"]["used"] for r in before["limits"]], [0])
         from haivequeen import runtime
         runtime.upsert_agent(self.conn, "ODP", "ODP__bee", {"plan": "docs/plans/X-PLAN.md", "phase": "bee", "provider": "claude", "status": "running",
                                                             "startedAt": db.now(), "person": "Sophia"})
-        after = gui_data.snapshot(self.conn, cfg=cfg, sysinfo={"cores": 8, "cpu": 1, "ram_used_gb": 1.0, "ram_total_gb": 8.0, "ram_pct": 10,
+        after = dashboard_data.snapshot(self.conn, cfg=cfg, sysinfo={"cores": 8, "cpu": 1, "ram_used_gb": 1.0, "ram_total_gb": 8.0, "ram_pct": 10,
                                                                    "disk_used_tb": 1.0, "disk_total_tb": 2.0, "disk_pct": 10, "host": "h"})
         self.assertEqual([r["slots"]["used"] for r in after["limits"]], [1])
-
-
-class CellSizeTest(unittest.TestCase):
-    """The size of the slot cells."""
-
-    def test_cells_shrink_to_half_then_become_a_number(self):
-        """Normal size when they fit, smaller down to half the normal size, else None."""
-        from haivequeen import gui
-        self.assertEqual(gui.slot_cell_size(3, 215), gui.CELL)
-        mid = gui.slot_cell_size(14, 215)
-        self.assertTrue(gui.CELL / 2 <= mid < gui.CELL)
-        self.assertIsNone(gui.slot_cell_size(40, 215))
-        self.assertAlmostEqual(gui.slot_cell_size(1, 12), 12)
-        self.assertIsNone(gui.slot_cell_size(1, 8))
-
-
-class PanelDrawTest(unittest.TestCase):
-    """The panel drawn in a window on invented rows."""
-
-    BOX = (1045, 395, 1662, 600)
-
-    def setUp(self):
-        import tkinter as tk
-        try:
-            self.root = tk.Tk()
-            self.root.attributes("-alpha", 0.0)
-        except tk.TclError:
-            self.skipTest("no display")
-        self.tmp = tempfile.TemporaryDirectory()
-        self.patch = mock.patch.dict(os.environ, {"BZZ_DATA_DIR": self.tmp.name, "BZZ_LOG_DIR": str(Path(self.tmp.name) / "logs")})
-        self.patch.start()
-        no_loop = mock.patch("haivequeen.loop.loop_running", return_value=0)
-        no_loop.start()
-        self.addCleanup(no_loop.stop)
-        self.conn = db.connect(Path(self.tmp.name) / "o.db")
-        from haivequeen import gui
-        gui.REFRESH_MS = 10 ** 9
-        self.gui = gui
-
-    def tearDown(self):
-        self.root.destroy()
-        self.conn.close()
-        self.patch.stop()
-        self.tmp.cleanup()
-
-    def open(self, rows, width=1672, height=901):
-        """Open the dashboard at a size (in a fresh root window after the first one) and draw the limit rows."""
-        import tkinter as tk
-        if getattr(self, "used", False):
-            self.root.destroy()
-            self.root = tk.Tk()
-            self.root.attributes("-alpha", 0.0)
-        self.used = True
-        self.root.geometry("%dx%d+0+0" % (width, height))
-        win = self.gui.Dashboard(self.root, self.conn)
-        self.root.update()
-        win.snap = {**win.snap, "limits": rows}
-        win.draw()
-        self.root.update()
-        return win
-
-    def texts(self, win):
-        """[(left, top, right, bottom, text)] of the text items inside the panel (design coordinates)."""
-        x0, y0, x1, y1 = self.BOX
-        out = []
-        for item in win.canvas.find_all():
-            if win.canvas.type(item) == "text":
-                l, t, r, b = (v / win.scale for v in win.canvas.bbox(item))
-                if x0 <= l and r <= x1 + 1 and y0 + 40 <= t and b <= y1 + 1 and t >= y0 + 40:
-                    out.append((l, t, r, b, win.canvas.itemcget(item, "text")))
-        return out
-
-    def test_r2_compact_rows_and_parallel_bars(self):
-        rows = rows_of(prow(five_hour={"pct": 42, "reset": ""}), prow(name="codex"), prow(name="local"))
-        win = self.open(rows, 1660, 947)
-        found = self.texts(win)
-        self.assertTrue(all(name in [t[4] for t in found] for name in ("Claude", "Codex", "Local")))
-        self.assertNotIn("limits", win.bars)
-        self.assertNotIn("Quota reserve", [t[4] for t in found])
-        week = next(t for t in found if t[4].startswith("7d "))
-        five = next(t for t in found if t[4].startswith("5h "))
-        self.assertAlmostEqual(week[1], five[1], delta=2)
-        self.assertGreater(five[0], week[0])
-        win = self.open(rows + rows_of(prow(name="four")), 1660, 947)
-        self.assertIn("limits", win.bars)
-
-    def test_r2_slot_boundaries_and_zero_reserve(self):
-        win = self.open(rows_of(prow(total_slots=16, used_slots=3)))
-        self.assertEqual(len(win.canvas.find_withtag("slot_full")) + len(win.canvas.find_withtag("slot_empty")), 16)
-        win = self.open(rows_of(prow(total_slots=30, used_slots=12)))
-        self.assertIn("12/30", [t[4] for t in self.texts(win)])
-        win = self.open(rows_of(prow(total_slots=3, used_slots=1, ratio=0)))
-        cells = win.canvas.find_withtag("slot_full") + win.canvas.find_withtag("slot_empty")
-        self.assertEqual(len(cells), 3)
-        self.assertTrue(all(win.canvas.itemcget(i, "outline") != self.gui.GOLD for i in cells))
-        self.assertIn("0 %", [t[4] for t in self.texts(win)])
-
-    def test_row_content_cells_and_badge(self):
-        """Name, model, one NEXT badge, filled and empty cells, no percent of slots and no old next text."""
-        rows = rows_of(prow(name="claude", next=True, used_slots=2, total_slots=5), prow(name="codex", model="gpt", used_slots=0, total_slots=0))
-        win = self.open(rows)
-        found = [t[4] for t in self.texts(win)]
-        for want in ("Claude", "claude-sonnet", "Codex", "gpt", "NEXT", "+27 %", "no slots"):
-            self.assertIn(want, found)
-        self.assertEqual(found.count("NEXT"), 1)
-        self.assertEqual(len(win.canvas.find_withtag("next_badge")), 1)
-        self.assertEqual((len(win.canvas.find_withtag("slot_full")), len(win.canvas.find_withtag("slot_empty"))), (2, 3))
-        self.assertFalse([t for t in found if "next" in t.lower() and t != "NEXT"] or [t for t in found if "◀" in t])
-
-    def test_honeycomb_geometry_and_screenshot(self):
-        """Regular hexagons share edges for free, full and mixed rows."""
-        import math
-        win = self.open(rows_of(prow(used_slots=0, total_slots=5), prow(name="codex", used_slots=3, total_slots=3),
-                                prow(name="local", used_slots=2, total_slots=5)))
-        cells = [i for i in win.canvas.find_all() if "slot_full" in win.canvas.gettags(i) or "slot_empty" in win.canvas.gettags(i)]
-        self.assertEqual(len(cells), 13)
-        for start, count in ((0, 5), (5, 3)):
-            polygons = [win.canvas.coords(i) for i in cells[start:start + count]]
-            for pts in polygons:
-                sides = [math.hypot(pts[2*k] - pts[2*((k+1)%6)], pts[2*k+1] - pts[2*((k+1)%6)+1]) for k in range(6)]
-                self.assertLess(max(sides) - min(sides), 0.01)
-            for a, b in zip(polygons, polygons[1:]):
-                edges = lambda p: {frozenset(((round(p[2*k], 3), round(p[2*k+1], 3)), (round(p[2*((k+1)%6)], 3), round(p[2*((k+1)%6)+1], 3)))) for k in range(6)}
-                self.assertTrue(edges(a) & edges(b), (a, b))
-        # Capture the rendered panel, including all three rows, from the window itself: it stays invisible and the screen does not matter.
-        try:
-            import PIL  # noqa: F401
-        except ImportError:
-            self.skipTest("Pillow is required for the window capture")
-        box = tuple(round(v * win.scale) for v in self.BOX)
-        image = capture(win.canvas)
-        if image is None:
-            self.skipTest("the window capture needs Windows PrintWindow")
-        honey = lambda shot: sum(1 for pixel in shot.getdata() if pixel == (246, 184, 0))
-        self.assertGreater(honey(image.crop(box)), 30)
-        win.scroll["limits"] = 2
-        win.draw()
-        self.root.update()
-        mixed = [i for i in win.canvas.find_all() if "slot_full" in win.canvas.gettags(i) or "slot_empty" in win.canvas.gettags(i)]
-        mixed = mixed[-5:]
-        self.assertEqual(["slot_full" in win.canvas.gettags(i) for i in mixed], [True, True, False, False, False])
-        self.assertGreater(honey(capture(win.canvas).crop(box)), 30)
-
-    def test_slot_hover_localized_and_current(self):
-        """Hovering cells explains the current counts in both languages."""
-        for german, expected in ((False, "Agent slots of Claude: 2 of 5 in use. A filled cell is a running agent, an empty cell a free slot."),
-                                 (True, "Agent-Slots von Claude: 2 von 5 belegt. Eine volle Wabe ist ein laufender Agent, eine leere ein freier Slot.")):
-            with self.subTest(german=german), mock.patch("haivequeen.i18n.machine_language", return_value="German" if german else "English"):
-                win = self.open(rows_of(prow(used_slots=2, total_slots=5), german=german))
-                cell = win.canvas.find_withtag("slot_full")[0]
-                pts = win.canvas.coords(cell)
-                win.hover(mock.Mock(x=sum(pts[::2])/6, y=sum(pts[1::2])/6))
-                self.assertEqual(win.tip_text, expected)
-
-    def test_no_badge_when_none_is_next(self):
-        """No NEXT badge when no row is next."""
-        win = self.open(rows_of(prow(), prow(name="codex")))
-        self.assertEqual(len(win.canvas.find_withtag("next_badge")), 0)
-
-    def test_extra_agents_and_running_without_slots(self):
-        """All cells filled plus +N; 0 slots with agents shows 'no slots' and 'N running'."""
-        win = self.open(rows_of(prow(used_slots=5, total_slots=3), prow(name="codex", used_slots=2, total_slots=0)))
-        found = [t[4] for t in self.texts(win)]
-        self.assertEqual((len(win.canvas.find_withtag("slot_full")), len(win.canvas.find_withtag("slot_empty"))), (3, 0))
-        self.assertIn("+2", found)
-        self.assertIn("no slots", found)
-        self.assertIn("2 running", found)
-
-    def test_many_slots_become_a_number(self):
-        """More than 16 slots use one cell and a used/total count."""
-        win = self.open(rows_of(prow(used_slots=7, total_slots=60)))
-        self.assertEqual(len(win.canvas.find_withtag("slot_full")) + len(win.canvas.find_withtag("slot_empty")), 1)
-        self.assertIn("7/60", [t[4] for t in self.texts(win)])
-
-    def test_weekly_and_five_hour_lines_with_equal_row_height(self):
-        """The weekly and 5h texts sit side by side, with equal row heights."""
-        rows = rows_of(prow(used_pct=60.0, five_hour={"pct": 12, "reset": ""}), prow(name="codex", used_pct=60.0))
-        win = self.open(rows)
-        found = self.texts(win)
-        weekly = sorted(t for t in found if t[4].startswith("7d 60 %"))
-        five = [t for t in found if t[4] == "5h 12 %"]
-        self.assertEqual((len(weekly), len(five)), (2, 1))
-        self.assertAlmostEqual(five[0][1], weekly[0][1], delta=2)
-        names = sorted(t for t in found if t[4] in ("Claude", "Codex"))
-        self.assertAlmostEqual(weekly[1][1] - weekly[0][1], names[1][1] - names[0][1], delta=2)
-
-    def test_hover_shows_the_sentence(self):
-        """Hovering over the reserve shows the one-sentence explanation."""
-        win = self.open(rows_of(prow(ratio=1.27)))
-        x0, y0, x1, y1, _tip = win.tip_boxes[0]
-        x, y = (x0 + x1) / 2, (y0 + y1) / 2
-        win.hover(mock.Mock(x=x, y=y))
-        shown = [win.canvas.itemcget(i, "text") for i in win.canvas.find_withtag("tip") if win.canvas.type(i) == "text"]
-        self.assertEqual(len(shown), 1)
-        self.assertTrue(shown[0].startswith("27 % more quota left than time until the reset ("))
-        win.hover_leave(None)
-        self.assertEqual(len(win.canvas.find_withtag("tip")), 0)
-
-    def test_panel_keeps_its_box_and_subtitle(self):
-        """The panel frame is where it was and the subtitle reads 'reserve, slots and limits'."""
-        win = self.open(rows_of(prow()))
-        self.assertTrue(any(t[4].startswith("| reserve, slots and limits") for t in
-                            [(0, 0, 0, 0, win.canvas.itemcget(i, "text")) for i in win.canvas.find_all() if win.canvas.type(i) == "text"]))
-        frames = [tuple(round(v / win.scale) for v in win.canvas.coords(i)) for i in win.canvas.find_all() if win.canvas.type(i) == "rectangle"]
-        self.assertIn((1045, 395, 1662, 600), frames)
-
-    def test_rows_inside_the_panel_without_overlap_at_every_size(self):
-        """At the default size and at the sizes of the size test every shown row is inside the panel and no text overlaps another."""
-        rows = rows_of(prow(next=True, five_hour={"pct": 12, "reset": ""}), prow(name="codex", model="gpt-5.5-codex", used_slots=2, total_slots=14),
-                       prow(name="local", has_limit=False, used_pct=None, ratio=None, hours=None, reset_at=None, total_slots=0))
-        for width, height in ((1672, 901), (800, 500), (1000, 600), (1200, 700), (1366, 768), (1600, 900), (1920, 1050), (2400, 1300)):
-            if width > self.root.winfo_screenwidth() or height > self.root.winfo_screenheight():
-                continue
-            with self.subTest(size=(width, height)):
-                win = self.open(rows, width, height)
-                found = self.texts(win)
-                self.assertTrue(any(t[4].startswith("Cl") for t in found))
-                if win.scale >= 1.0:   # smaller windows may shorten compact bar text
-                    self.assertFalse([t[4] for t in found if t[4].endswith("…")], (width, height))
-                for i, a in enumerate(found):
-                    for b in found[i + 1:]:
-                        overlap = a[0] < b[2] - 0.5 and b[0] < a[2] - 0.5 and a[1] < b[3] - 0.5 and b[1] < a[3] - 0.5
-                        self.assertFalse(overlap, "%r overlaps %r at %dx%d" % (a[4], b[4], width, height))
-                for item in win.canvas.find_all():   # nothing of the panel text is cut at the panel border
-                    if win.canvas.type(item) == "text":
-                        l, t, r, b = (v / win.scale for v in win.canvas.bbox(item))
-                        if 1045 <= l <= 1662 and 395 + 40 <= t <= 600 and t < 600 <= b:
-                            self.fail("%r is cut at the panel border at %dx%d" % (win.canvas.itemcget(item, "text"), width, height))
-
-    def test_scroll_bar_and_scrolling_with_many_providers(self):
-        """With more providers than fit the panel scrolls; the first row differs after scrolling and rows keep their height."""
-        rows = rows_of(*[prow(name="p%d" % n) for n in range(8)])
-        win = self.open(rows)
-        self.assertIn("limits", win.bars)
-        first = sorted(t for t in self.texts(win) if t[4].startswith("P"))
-        self.assertGreaterEqual(len(first), 1)
-        win.scroll["limits"] = 3
-        win.draw()
-        after = sorted(t for t in self.texts(win) if t[4].startswith("P"))
-        self.assertEqual(after[0][4], "P3")
-        self.assertEqual(len(after), len(first))
-
-    def test_weekly_bar_colours(self):
-        """The weekly bar is green, yellow or red by used share."""
-        fills = []
-        for used in (10.0, 70.0, 95.0):
-            win = self.open(rows_of(prow(used_pct=used)))
-            bars = [win.canvas.itemcget(i, "fill") for i in win.canvas.find_all() if win.canvas.type(i) == "rectangle"
-                    and abs((win.canvas.coords(i)[3] - win.canvas.coords(i)[1]) / win.scale - 5) < 0.2
-                    and win.canvas.coords(i)[0] / win.scale > 1045 + 150 and 395 < win.canvas.coords(i)[1] / win.scale < 600]
-            fills.append(bars[-1])
-        self.assertEqual(fills, [self.gui.COL[self.gui.LEVEL_FILL[level]] for level in ("ok", "warn", "bad")])
 
 
 if __name__ == "__main__":

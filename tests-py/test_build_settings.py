@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from bzztest import REL, RoundCase
-from haivequeen import agent_runner, buildjobs as bj, cli, config, db, gui_config, hives, loop, roles, routine, runtime
+from haivequeen import agent_runner, buildjobs as bj, cli, config, db, settings, hives, loop, roles, routine, runtime
 from haivequeen import platform as osplat
 from test_agent_runner import RunnerBase, claude_stream
 
@@ -42,12 +42,12 @@ class CoreSelectionTest(unittest.TestCase):
         """An existing coreShare is used as the core count it gives today (two thirds of 8 = 6)."""
         self.assertEqual(bj.core_limit(bj.settings_from({"coreShare": "2/3"}), 8), 6)
         self.assertEqual(bj.core_limit(bj.settings_from({"coreShare": "1/2"}), 12), 6)
-        self.assertEqual(gui_config.build_values({"buildJobs": {"coreShare": "2/3"}}, 8)["cores"], 6)
+        self.assertEqual(settings.build_values({"buildJobs": {"coreShare": "2/3"}}, 8)["cores"], 6)
 
     def test_stored_count_above_the_machine_is_capped(self):
         """A stored core count above the cores of the machine is used as the machine's core count."""
         self.assertEqual(bj.core_limit(bj.settings_from({"cores": 20}), 8), 8)
-        self.assertEqual(gui_config.build_values({"buildJobs": {"cores": 20}}, 8)["cores"], 8)
+        self.assertEqual(settings.build_values({"buildJobs": {"cores": 20}}, 8)["cores"], 8)
         self.assertEqual(bj.job_count(bj.settings_from({"cores": 20, "perJobMB": 1}), 8, 64000, None)["Jobs"], 8)
 
     def test_old_forms_map_to_the_core_selection(self):
@@ -105,14 +105,14 @@ class ParallelJobsTest(unittest.TestCase):
     def test_the_parallel_value_is_a_whole_number_from_1(self):
         """The settings window accepts whole numbers from 1 up and nothing else."""
         data = {}
-        gui_config.apply_build(data, "4", "3", "2", cores=8)
+        settings.apply_build(data, "4", "3", "2", cores=8)
         self.assertEqual(data["buildJobs"]["parallel"], 3)
         for bad in ("0", "-1", "1.5", "x", ""):
             with self.assertRaises(ValueError, msg=bad):
-                gui_config.apply_build({}, "4", bad, "2", cores=8)
+                settings.apply_build({}, "4", bad, "2", cores=8)
         for bad in ("0", "9", "x"):
             with self.assertRaises(ValueError, msg=bad):
-                gui_config.apply_build({}, bad, "1", "2", cores=8)
+                settings.apply_build({}, bad, "1", "2", cores=8)
 
 
 class MeasurementTest(RoundCase):
@@ -447,43 +447,6 @@ class InstructionsTest(RoundCase):
         text = (self.env().run_dir(queen["name"]) / "prompt.md").read_text(encoding="utf-8")
         for part in ("Parallel as the --parallel value", "bzz integration acquire"):
             self.assertNotIn(part, text)   # the Queen builds nothing (O-1); the Orchestrator applies the job values before Build and Deploy
-
-
-class IconTest(unittest.TestCase):
-    """B-8: the three icons of the System panel are a chip, a memory module and a drive, of the same size as the other icons."""
-
-    OLD = {"icon_cpu": "94bf359ef02bb59261ff501a0c6861de21c299b8f9714e5e6adc4b26fc553ad5",   # sha256 of the folded flag, the old pseudo memory and the padlock
-           "icon_ram": "9bd07c4a8f684d578688739a38d3824f8bdba63929abc28c621b6996e7f0c812",
-           "icon_disk": "17e7ececaac961482f637f9d21932f3d79b864b01caaeb42207377a8811ca5fc"}
-
-    @staticmethod
-    def size(name):
-        """(width, height) from the PNG header of assets/gui/<name>.png."""
-        data = (ROOT / "assets" / "gui" / (name + ".png")).read_bytes()
-        return struct.unpack(">II", data[16:24])
-
-    def test_same_size_as_the_other_icons_and_all_different(self):
-        """Same size as the other icons, three different pictures that are not the old folded flag and padlock."""
-        want = self.size("icon_system")
-        for name in ("icon_cpu", "icon_ram", "icon_disk", "icon_queue"):
-            self.assertEqual(self.size(name), want, name)
-        digests = {n: hashlib.sha256((ROOT / "assets" / "gui" / (n + ".png")).read_bytes()).hexdigest() for n in ("icon_cpu", "icon_ram", "icon_disk")}
-        self.assertEqual(len(set(digests.values())), 3)
-        for name, old in self.OLD.items():
-            self.assertNotEqual(old, digests[name], name)
-
-    def test_the_panel_loads_the_three_icons(self):
-        """The System panel of the window draws icon_cpu, icon_ram and icon_disk."""
-        text = (ROOT / "haivequeen" / "gui.py").read_text(encoding="utf-8")
-        for name in ("icon_cpu", "icon_ram", "icon_disk"):
-            self.assertIn('"%s"' % name, text)
-            self.assertTrue((ROOT / "assets" / "gui" / (name + ".png")).is_file())
-
-    def test_the_drawing_script_keeps_them(self):
-        """make_gui_assets.py draws the three icons itself (it no longer cuts the folded flag and the padlock out of the mockup)."""
-        text = (ROOT / "scripts" / "make_gui_assets.py").read_text(encoding="utf-8")
-        self.assertIn("def write_system_icons", text)
-        self.assertNotIn('"icon_cpu": (', text)
 
 
 if __name__ == "__main__":

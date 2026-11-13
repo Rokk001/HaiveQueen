@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from bzztest import REL, RoundCase
-from haivequeen import gui_config, publish, runtime, selfupdate
+from haivequeen import settings, publish, runtime, selfupdate
 
 WORKSPACE_REMOTE = "https://github.com/owner/workspace.git"
 CODE_REMOTE = "https://github.com/owner/tool.git"
@@ -156,17 +156,11 @@ class ReleaseRepositoryTests(CodeRepoCase):
 
 
 class SwitchCheckTests(CodeRepoCase):
-    """The switch is offered by the GitHub check of the code repository, not of the workspace."""
-
-    def window_class(self):
-        for value in vars(gui_config).values():
-            if isinstance(value, type) and "github_repository" in vars(value):
-                return value
-        self.fail("no settings window with github_repository")
+    """Release eligibility follows the code repository rather than the workspace."""
 
     def check(self, shown):
-        fake = SimpleNamespace(apiaries=[{"workspace": str(self.repo)}], node=("apiaries", 0))
-        return self.window_class().github_repository(fake, shown)
+        env = SimpleNamespace(workspace=str(self.repo), settings=shown)
+        return publish.github_repository(env)
 
     def test_the_code_repository_remote_decides(self):
         self.assertEqual(self.check({"remoteName": "origin", "codeRepo": str(self.code)}), "owner/tool")

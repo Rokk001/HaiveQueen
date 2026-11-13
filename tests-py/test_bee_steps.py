@@ -12,7 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import isolation  # noqa: E402,F401  (redirects the default data and settings folders to a temp folder before anything is imported)
 from bzztest import REL, RoundCase  # noqa: E402
-from haivequeen import bees, cli, db, gui_data, hives, runtime  # noqa: E402
+from haivequeen import bees, cli, db, dashboard_data, hives, runtime  # noqa: E402
 
 PLAN = "docs/plans/AI-LEVELS-PLAN.md"
 SYS = {"cores": 8, "cpu": 38, "ram_used_gb": 25.2, "ram_total_gb": 32.0, "ram_pct": 80, "disk_used_tb": 1.2, "disk_total_tb": 2.7, "disk_pct": 45}
@@ -58,7 +58,7 @@ class StepBarTest(unittest.TestCase):
     # The row of a Bee in the window's data.
     def row(self, name):
         """The Agents-table row of the Agent `name`."""
-        snap = gui_data.snapshot(self.conn, now=datetime.now(), cfg=CFG, sysinfo=SYS)
+        snap = dashboard_data.snapshot(self.conn, now=datetime.now(), cfg=CFG, sysinfo=SYS)
         return next(r for r in snap["bees"] if r["name"] == name)
 
     # U-5: a process Bee starts at 0/m.

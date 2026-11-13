@@ -12,7 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import isolation  # noqa: E402,F401
 from haivequeen import agent_runner as ar  # noqa: E402
-from haivequeen import bees, db, gui_data, hives, runtime, startctx  # noqa: E402
+from haivequeen import bees, db, dashboard_data, hives, runtime, startctx  # noqa: E402
 
 NOW = datetime(2026, 11, 1, 12, 0, 0)
 SYS = {"cores": 8, "cpu": 38, "ram_used_gb": 25.2, "ram_total_gb": 32.0, "ram_pct": 80, "disk_used_tb": 1.2, "disk_total_tb": 2.7, "disk_pct": 45}
@@ -72,7 +72,7 @@ class Base(unittest.TestCase):
 
     def snap(self):
         """A fresh snapshot."""
-        return gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        return dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
 
     def tearDown(self):
         """Release the temp database."""
@@ -274,10 +274,10 @@ class StartTileTest(Base):
 
     def test_overlay_text_has_no_lone_numbers_and_no_split(self):
         """The overlay lines carry the headline, the columns, no today averages, no Plan values, no split per file."""
-        from haivequeen import gui_overlays
+        from haivequeen import dashboard_overlays
         self.start("ODP", PLAN, "ODP__queen", "queen", "claude", 20000, {"role": 3000, "rules": {"CLAUDE.md": 5000}, "task": 1000})
         self.bench("claude", "ODP", 18000, 61000)
-        text = " | ".join(t for t, _c in gui_overlays.lines(self.snap(), "start"))
+        text = " | ".join(t for t, _c in dashboard_overlays.lines(self.snap(), "start"))
         self.assertIn("Start context per agent start", text)
         for word in ("WITHOUT HaiveQueen", "WITH HaiveQueen", "Saving", "All providers", "no benchmark yet - run it in the settings"):
             self.assertIn(word, text)
@@ -427,193 +427,6 @@ class ProgressTest(BenchmarkTest):
         seen = []
         startctx.benchmark(self.conn, self.cfg, "claude", measure=lambda *a: 5, progress=seen.append)
         self.assertEqual(seen, ["Measurement 1 of 4: ODP, HaiveQueen profile ...", "Measurement 2 of 4: ODP, own profile ...", "Measurement 3 of 4: ZED, HaiveQueen profile ...", "Measurement 4 of 4: ZED, own profile ..."])
-
-
-class ButtonTest(unittest.TestCase):
-    """U-8: the button on the provider page."""
-
-    def setUp(self):
-        """A settings window on a temp config."""
-        import tkinter as tk
-        try:
-            self.root = tk.Tk()
-            self.root.attributes("-alpha", 0.0)
-        except tk.TclError:
-            self.skipTest("no display")
-
-        class Quiet(tk.Toplevel):
-            """A Toplevel that is transparent from the start."""
-
-            def __init__(self, *args, **kw):
-                super().__init__(*args, **kw)
-                self.attributes("-alpha", 0.0)
-
-        quiet = mock.patch("tkinter.Toplevel", Quiet)
-        quiet.start()
-        self.addCleanup(quiet.stop)
-        self.tmp = tempfile.TemporaryDirectory()
-        self.folder = Path(self.tmp.name)
-        (self.folder / "config.toml").write_text('[[providers]]\nname = "claude"\nprotocol = "claude"\ncommand = "claude"\nargs = ["--output-format", "stream-json"]\nslots = 1\n', encoding="utf-8")
-        ws = self.folder / "ws"
-        ws.mkdir()
-        self.conn = db.connect(self.folder / "o.db")
-        db.upsert_project(self.conn, "ODP", str(ws), "cyan", 1)
-
-    def tearDown(self):
-        """Close the window."""
-        self.root.destroy()
-        gc.collect()   # Tk objects are freed in the main thread, never by the collector in a reading thread
-        self.conn.close()
-        self.tmp.cleanup()
-
-    def test_settings_opens_window_and_start_runs_benchmark(self):
-        from haivequeen import gui_config
-        with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
-            win.select(1)
-            result = {"excluded": False, "errors": ["ODP, own profile: not logged in"], "results": [], "completed": 2, "total": 2}
-            with mock.patch("haivequeen.gui_dialog.ask", return_value=True) as ask, mock.patch("haivequeen.startctx.benchmark", return_value=result) as bench:
-                win.benchmark_button.invoke()
-                bench.assert_not_called()
-                ask.assert_not_called()
-                win.benchmark_win.run(win.benchmark_win.cfg, wait=True)
-                self.assertEqual(bench.call_args[0][2], "claude")
-                self.assertRegex(win.benchmark_win.progress.cget("text"), r"Done: 2 of 2 measurements, .+")
-                self.assertIn("ODP, own profile: not logged in", win.benchmark_win.error.cget("text"))
-
-    def test_table_columns_fit_headers_and_values(self):
-        from tkinter import font
-        from haivequeen import gui_config
-        long_name = "A very long Project name that must remain visible"
-        startctx.store_benchmark(self.conn, "claude", long_name, "hq", 18000)
-        startctx.store_benchmark(self.conn, "claude", long_name, "own", 61000)
-        with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
-            win.select(1)
-            win.benchmark_click()
-            bench = win.benchmark_win
-            self.root.update()
-            normal = font.Font(root=self.root, font=bench.table_font)
-            bold = font.Font(root=self.root, font=bench.heading_font)
-            for column, value in zip(bench.table["columns"], bench.table.item(bench.table.get_children()[0], "values")):
-                width = bench.table.column(column, "width")
-                self.assertGreaterEqual(width, normal.measure(value))
-                self.assertGreaterEqual(width, bold.measure(bench.table.heading(column, "text")))
-            self.assertTrue(bench.table.cget("xscrollcommand"))
-
-
-class TileDrawTest(unittest.TestCase):
-    """U-7: the Start Context tile looks like the other five."""
-
-    def test_tile_has_icon_title_and_one_value(self):
-        import tkinter as tk
-        try:
-            root = tk.Tk()
-            root.attributes("-alpha", 0.0)
-        except tk.TclError:
-            self.skipTest("no display")
-        self.addCleanup(gc.collect)   # Tk objects are freed in the main thread, never by the collector in a reading thread
-        self.addCleanup(root.destroy)
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        conn = db.connect(Path(tmp.name) / "o.db")
-        self.addCleanup(conn.close)
-        db.upsert_project(conn, "ODP", None, "cyan", 1)
-        startctx.store_benchmark(conn, "claude", "ODP", "hq", 32000)
-        startctx.store_benchmark(conn, "claude", "ODP", "own", 100000)
-        from haivequeen import gui
-        gui.REFRESH_MS = 10 ** 9
-        root.geometry("1672x901")
-        win = gui.Dashboard(root, conn)
-        root.update()
-        box = next(b for b in win.tile_boxes if b[0] == "start")
-        x0, y0, x1, y1 = (win.px(v) for v in box[1:])
-        images = [i for i in win.canvas.find_all() if win.canvas.type(i) == "image" and x0 <= win.canvas.coords(i)[0] <= x1 and y0 <= win.canvas.coords(i)[1] <= y1]
-        self.assertEqual(len(images), 1)
-        texts = [win.canvas.itemcget(i, "text") for i in win.canvas.find_overlapping(x0 + 2, y0 + 2, x1 - 2, y1 - 2) if win.canvas.type(i) == "text"]
-        self.assertIn("START CONTEXT", texts)
-        self.assertIn("-68 %", texts)
-        self.assertNotIn("average today", texts)   # no second line
-
-
-class ProgressButtonTest(ButtonTest):
-    """U-8 / U2: the Benchmark window shows the progress while the benchmark runs."""
-
-    def test_progress_is_shown_in_the_window_until_the_result(self):
-        import threading
-        from haivequeen import gui_config
-        release = threading.Event()
-
-        def fake(conn, cfg, name, measure=None, progress=None):
-            progress("Measurement 2 of 4: ODP, own profile ...")
-            release.wait(20)
-            return {"excluded": False, "errors": [], "results": []}
-        with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": str(self.folder / "data")}):
-            win = gui_config.ConfigWindow(self.root, self.conn, self.folder, wait=True)
-            win.select(1)
-            with mock.patch("haivequeen.gui_dialog.ask", return_value=True), mock.patch("haivequeen.startctx.benchmark", side_effect=fake):
-                win.benchmark_click()
-                win.benchmark_win.start_button.invoke()
-                self.assertEqual(win.benchmark_win.start_button.cget("state"), "disabled")
-                import time
-                end = time.time() + 10
-                while time.time() < end and "Measurement 2 of 4" not in win.benchmark_win.progress.cget("text"):
-                    self.root.update()
-                    time.sleep(0.05)
-                self.assertIn("Measurement 2 of 4: ODP, own profile ...", win.benchmark_win.progress.cget("text"))
-                release.set()
-                end = time.time() + 10
-                while time.time() < end and win.benchmark_win.start_button.cget("state") != "normal":
-                    self.root.update()
-                    time.sleep(0.05)
-                self.assertEqual(win.benchmark_win.start_button.cget("state"), "normal")
-
-
-class HoverTest(unittest.TestCase):
-    """U-6/U-7: the overlay opens over a tile."""
-
-    def test_overlay_over_each_of_the_six_tiles(self):
-        """Moving the mouse over a tile draws its overlay; leaving the tiles removes it."""
-        import tkinter as tk
-        try:
-            root = tk.Tk()
-            root.attributes("-alpha", 0.0)
-        except tk.TclError:
-            self.skipTest("no display")
-        self.addCleanup(gc.collect)   # Tk objects are freed in the main thread, never by the collector in a reading thread
-        self.addCleanup(root.destroy)
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        conn = db.connect(Path(tmp.name) / "o.db")
-        self.addCleanup(conn.close)
-        db.upsert_project(conn, "ODP", None, "cyan", 1)
-        from haivequeen import gui
-        gui.REFRESH_MS = 10 ** 9
-        root.geometry("1672x901")
-        win = gui.Dashboard(root, conn)
-        root.update()
-        self.assertEqual([k for k, *_ in win.tile_boxes], ["apiaries", "hives", "queens", "bees", "io", "start"])
-        for key, x0, y0, x1, y1 in win.tile_boxes:
-            win.hover(type("E", (), {"x": int((x0 + x1) / 2 * win.scale), "y": int((y0 + y1) / 2 * win.scale)})())
-            self.assertEqual(win.overlay_key, key)
-            self.assertTrue(win.canvas.find_withtag("overlay"), key)
-        startctx.store_benchmark(conn, "claude", "ODP", "hq", 18000)
-        startctx.store_benchmark(conn, "claude", "ODP", "own", 61000)
-        win.refresh()
-        box = next(b for b in win.tile_boxes if b[0] == "start")
-        win.overlay_key = None
-        win.hover(type("E", (), {"x": int((box[1] + box[3]) / 2 * win.scale), "y": int((box[2] + box[4]) / 2 * win.scale)})())
-        texts = [win.canvas.itemcget(i, "text") for i in win.canvas.find_withtag("overlay") if win.canvas.type(i) == "text"]
-        self.assertIn("Start context per agent start", texts)
-        self.assertIn("-70 %", texts)
-        win.hover(type("E", (), {"x": 5, "y": 700})())
-        self.assertIsNone(win.overlay_key)
-        self.assertFalse(win.canvas.find_withtag("overlay"))
-        # the overlay survives a redraw while the mouse stays on the tile
-        key, x0, y0, x1, y1 = win.tile_boxes[0]
-        win.hover(type("E", (), {"x": int((x0 + x1) / 2 * win.scale), "y": int((y0 + y1) / 2 * win.scale)})())
-        win.draw()
-        self.assertTrue(win.canvas.find_withtag("overlay"))
 
 
 if __name__ == "__main__":

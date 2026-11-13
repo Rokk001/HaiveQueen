@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 from bzztest import REL, RoundCase
-from haivequeen import bees, cli, gui_data, hives
+from haivequeen import bees, cli, dashboard_data, hives
 
 
 class PackageProgressTest(RoundCase):
@@ -32,11 +32,11 @@ class PackageProgressTest(RoundCase):
     # The Hive row of the window.
     def hive(self):
         """Progress row of the Hive from the window's snapshot data."""
-        assigned, completed = gui_data.bee_tables(self.conn)
+        assigned, completed = dashboard_data.bee_tables(self.conn)
         agents = [a for a in cli.runtime.list_agents(self.conn, 'testproj', 'all')]
         packages = {('testproj', REL): 3}
         hive = next(h for h in hives.hive_data(self.conn, None, agents) if h['plan_path'] == REL)
-        return gui_data.hive_row(hive, agents, packages, gui_data.datetime.now(), assigned, completed, None, agents, gui_data.implemented_counts(self.conn))
+        return dashboard_data.hive_row(hive, agents, packages, dashboard_data.datetime.now(), assigned, completed, None, agents, dashboard_data.implemented_counts(self.conn))
 
     # Done packages count, implemented ones show separately.
     def test_queen_reports_drive_the_progress(self):
@@ -85,10 +85,10 @@ class PackageProgressTest(RoundCase):
             self.report(package, 'done')
         bees.record_attempt(self.conn, 'testproj', REL, 'P2', 'medium', 'succeeded', 'one')   # also a finished Bee attempt must not count it done
         bees.set_package_state(self.conn, 'testproj', REL, 'P2', 'rejected', 'owner')
-        assigned, completed = gui_data.bee_tables(self.conn)
+        assigned, completed = dashboard_data.bee_tables(self.conn)
         agents = [a for a in cli.runtime.list_agents(self.conn, 'testproj', 'all')]
         hive = next(h for h in hives.hive_data(self.conn, None, agents) if h['plan_path'] == REL)
-        row = gui_data.hive_row(hive, agents, {('testproj', REL): 3}, gui_data.datetime.now(), assigned, completed, None, agents, {}, None, gui_data.rejected_map(self.conn))
+        row = dashboard_data.hive_row(hive, agents, {('testproj', REL): 3}, dashboard_data.datetime.now(), assigned, completed, None, agents, {}, None, dashboard_data.rejected_map(self.conn))
         self.assertEqual((row['done'], row['rejected'], row['progress']), (2, 1, 67))
         self.assertEqual(bees.rejected_packages(self.conn, 'testproj', REL), ['P2'])
         args = argparse.Namespace(project='testproj', branch='branch', tip='abc', plan=REL, note='')
@@ -106,11 +106,11 @@ class PackageProgressTest(RoundCase):
         self.conn.commit()
         self.assertEqual(self.report('P1', 'working'), 0)
         self.assertEqual(self.report('P2', 'implemented'), 0)
-        assigned, completed = gui_data.bee_tables(self.conn)
+        assigned, completed = dashboard_data.bee_tables(self.conn)
         self.assertNotIn(('testproj', REL, 'P1'), completed)
         self.assertNotIn(('testproj', REL, 'P2'), completed)
         self.assertEqual(self.hive()['done'], 0)
-        self.assertEqual(gui_data.implemented_counts(self.conn)[('testproj', REL)], 1)
+        self.assertEqual(dashboard_data.implemented_counts(self.conn)[('testproj', REL)], 1)
 
     def test_historical_bee_without_progress_state_is_not_done(self):
         """An archived successful Bee does not prove current completion when no package progress row exists."""
@@ -118,7 +118,7 @@ class PackageProgressTest(RoundCase):
         self.agent('old-bee', phase='bee', status='done', provider='claude', pid=43, package='P1')
         self.conn.execute("INSERT INTO bee_completed(project,plan_path,package) VALUES ('testproj',?,'P1')", (REL,))
         self.conn.commit()
-        assigned, completed = gui_data.bee_tables(self.conn)
+        assigned, completed = dashboard_data.bee_tables(self.conn)
         self.assertNotIn(('testproj', REL, 'P1'), completed)
         self.assertEqual(self.hive()['done'], 0)
 

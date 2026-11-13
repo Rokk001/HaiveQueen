@@ -1,5 +1,4 @@
-"""Rework of the provider form: texts, the Saved message, the ready line after a test, no Custom CLI for a wrapper command,
-providers without limit first, the switch Enabled, offline providers and the mouse wheel over comboboxes."""
+"""Provider limits, disabled providers, offline detection and assignment."""
 import json
 import os
 import sys
@@ -13,11 +12,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_agent_runner as tar  # noqa: E402
 import test_hives_h2 as h2  # noqa: E402
-import test_k5_apiary_page as apiary_page  # noqa: E402
-import test_provider_form as pf  # noqa: E402
-import test_provider_page as base  # noqa: E402
 import test_servers as srv  # noqa: E402
-from haivequeen import bees, cli_presets, db, gui_config, gui_data, i18n, loop, offline, overview, runtime, servers  # noqa: E402
+from haivequeen import bees, cli_presets, db, settings, dashboard_data, i18n, loop, offline, overview, runtime, servers  # noqa: E402
 from haivequeen import scheduler as sch  # noqa: E402
 
 
@@ -33,102 +29,6 @@ def lim(entry, source):
 
 
 # ---------------------------------------------------------------- items 1 to 4
-
-
-class Texts(pf.FormCase):
-    def test_item1_name_explanation_says_access_type(self):
-        for language, wanted, unwanted in (("English", "access type", "model source"), ("German", "Zugangsart", "Modellquelle")):
-            with self.subTest(language=language), mock.patch("haivequeen.i18n.machine_language", return_value=language):
-                win = self.window()
-                self.provider(win, "claude")
-                self.assertIn(wanted, win.notes["name"])
-                self.assertNotIn(unwanted, win.notes["name"])
-                win.win.destroy()
-
-    def test_item2_general_escalate_after_texts(self):
-        for language in ("English", "German"):
-            with self.subTest(language=language), mock.patch("haivequeen.i18n.machine_language", return_value=language):
-                win = self.window()
-                label, help_ = ("Failed attempts before a stronger model", "After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class.")
-                if language == "German":
-                    label, help_ = ("Fehlversuche bis zum stärkeren Modell", "Nach so vielen Fehlversuchen eines Agenten nimmt HaiveQueen die nächste stärkere Modellklasse.")
-                texts = base.label_texts(win.form)
-                self.assertIn(label, texts)
-                self.assertIn(help_, texts)
-                self.assertNotIn("Default escalation delay", texts)
-                self.assertFalse([t for t in texts if "escalated to the owner" in t or "Eskalation" in t])
-                win.win.destroy()
-        for old in ("Default escalation delay", "Default delay before a question is escalated to the owner."):
-            self.assertNotIn(old, i18n.GERMAN)
-            self.assertNotIn(old, [str(v) for v in list(gui_config.GENERAL_LABELS.values()) + list(gui_config.GENERAL_HELP.values())])
-
-    def test_item3_saved_shows_beside_the_save_button(self):
-        win = self.window()
-        win.save()
-        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
-        self.assertEqual(str(win.bottom_note.cget("fg")), self.col_green())
-        self.assertEqual(win.status.cget("text"), "")
-        win.reload(wait=True)
-        self.assertIn("Changes apply", win.bottom_note.cget("text"))
-
-    def col_green(self):
-        from haivequeen.gui import COL
-        return str(COL["green"])
-
-    def test_item4_ready_line_refreshes_after_the_test_and_never_says_server(self):
-        self.only()
-        stub = srv.Stub(paths=srv.ALL)
-        self.addCleanup(stub.close)
-        win = self.window()
-        self.provider(win, "x")
-        win.choose_access("Local LLM")
-        win.target()["address"] = stub.address
-        win.reshow()
-        win.refresh_state(wait=True)
-        self.assertIn("has not been tested", win.ready_label.cget("text"))
-        win.test_button.invoke()
-        for _ in range(200):
-            win.win.update()
-            if win.ready_label.cget("text") == "":
-                break
-            time.sleep(0.05)
-        self.assertEqual(win.ready_label.cget("text"), "")
-        win.target()["address"] = "http://127.0.0.1:9"   # nothing answers there
-        win.reshow()
-        win.test_button.invoke()
-        for _ in range(200):
-            win.win.update()
-            if "does not answer" in win.ready_label.cget("text"):
-                break
-            time.sleep(0.05)
-        self.assertIn("does not answer", win.ready_label.cget("text"))
-        self.assertIn("Local LLM", win.ready_label.cget("text"))
-
-    def test_item4_no_ready_message_uses_the_word_server(self):
-        for language in ("English", "German"):
-            with mock.patch("haivequeen.i18n.machine_language", return_value=language):
-                entry = local(address="http://127.0.0.1:9")
-                texts = [sch.get_providers({"providers": [entry]})[0]["notReady"]]
-                servers._write_tests({"loc": {"time": "t", "fingerprint": servers.fingerprint(servers.server_of(entry)), "reachable": False, "status": None,
-                                              "models": [], "interfaces": {}, "lines": []}})
-                texts.append(sch.get_providers({"providers": [entry]})[0]["notReady"])
-                servers._write_tests({"loc": {"time": "t", "fingerprint": servers.fingerprint(servers.server_of(entry)), "reachable": True, "status": 200,
-                                              "models": [], "interfaces": {"claude": {"ok": False, "path": "/v1/messages"}}, "lines": []}})
-                texts.append(sch.get_providers({"providers": [entry]})[0]["notReady"])
-                for text in texts:
-                    self.assertTrue(text, language)
-                    self.assertNotIn("server", text.lower(), text)
-                    self.assertNotIn("Server", text, text)
-
-    def test_f7_dropped_a_wrapper_command_is_not_a_custom_cli(self):
-        self.assertEqual(cli_presets.key_for({"protocol": "claude", "command": "claude-local.cmd"}), "claude")
-        self.assertEqual(cli_presets.key_for({"protocol": "claude", "command": "claude", "outputFormat": "claude"}), cli_presets.CUSTOM)
-        win = self.window()
-        self.provider(win, "wrapped")
-        self.assertEqual(win.cli_var.get(), "Claude Code")
-        self.assertNotIn(("command",), self.paths(win))
-        win.save()   # nothing changed: the command stays as written
-        self.assertTrue([q for q in self.raw()["providers"] if q["name"] == "wrapped"][0]["command"].endswith("claude-local.cmd"))
 
 
 # ---------------------------------------------------------------- item 5
@@ -174,7 +74,7 @@ class PanelNoLimit(unittest.TestCase):
     def row(self, language="English"):
         import test_limits_panel as lp
         with mock.patch("haivequeen.i18n.machine_language", return_value=language):
-            return gui_data.limit_rows({"provider_limits": [lp.prow(has_limit=False, used_pct=None, ratio=None, hours=None, reset_at=None)]})[0]
+            return dashboard_data.limit_rows({"provider_limits": [lp.prow(has_limit=False, used_pct=None, ratio=None, hours=None, reset_at=None)]})[0]
 
     def test_reserve_is_plus_99_green_with_hover_and_weekly_line_keeps_text(self):
         row = self.row()
@@ -185,42 +85,6 @@ class PanelNoLimit(unittest.TestCase):
 
 
 # ---------------------------------------------------------------- item 6
-
-
-class Enabled(pf.FormCase):
-    def test_switch_at_the_top_default_on_and_saved(self):
-        for language, label in (("English", "Enabled"), ("German", "Aktiviert")):
-            with self.subTest(language=language), mock.patch("haivequeen.i18n.machine_language", return_value=language):
-                win = self.window()
-                self.provider(win, "claude")
-                texts = [t for t in base.label_texts(win.top) if t in (label, "Name", "Name")]
-                self.assertEqual(texts[0], label)
-                self.assertIn(("enabled",), self.paths(win))
-                getter = {p: g for p, g, _l in win.getters}[("enabled",)]
-                self.assertIs(getter(), True)
-                win.win.destroy()
-        for entry in sch.get_providers(gui_config.load_migrated(self.folder / "config.toml")):
-            self.assertTrue(entry["enabled"])
-        win = self.window()
-        self.provider(win, "claude")
-        win.target()["enabled"] = False
-        win.save()
-        self.assertIs(self.raw()["providers"][0]["enabled"], False)
-        self.assertEqual(self.raw()["providers"][0]["slots"], 5)   # all values kept
-        self.assertFalse(sch.get_providers(self.raw())[0]["enabled"])
-
-    def test_list_keeps_a_disabled_provider_dimmed(self):
-        text = (self.folder / "config.toml").read_text(encoding="utf-8").replace('name = "claude"', 'name = "claude"\nenabled = false', 1)
-        (self.folder / "config.toml").write_text(text, encoding="utf-8")
-        for language, mark in (("English", "(disabled)"), ("German", "(deaktiviert)")):
-            with self.subTest(language=language), mock.patch("haivequeen.i18n.machine_language", return_value=language):
-                win = self.window()
-                win.pick_tab("providers")
-                shown = list(win.nodes.get(0, "end"))
-                self.assertEqual(shown[0], "claude " + mark)
-                self.assertFalse(any(mark in s for s in shown[1:]))
-                self.assertEqual(str(win.nodes.itemcget(0, "fg")), str(win.col["dim"]))
-                win.win.destroy()
 
 
 class StateBase(unittest.TestCase):
@@ -264,7 +128,7 @@ class DisabledProvider(StateBase):
     def test_nowhere_in_the_dashboard(self):
         rows = overview.provider_lines(self.conn, self.settings(), [])
         self.assertEqual([r["name"] for r in rows], ["a"])
-        self.assertEqual([r["name"] for r in gui_data.limit_rows({"provider_limits": rows})], ["A"])
+        self.assertEqual([r["name"] for r in dashboard_data.limit_rows({"provider_limits": rows})], ["A"])
 
     def test_no_usage_check_for_a_disabled_provider(self):
         machine = {"providers": [lim(srv.Base.entry("c", "claude"), "claude"), lim(srv.Base.entry("d", "claude", enabled=False), "claude")]}
@@ -301,13 +165,13 @@ class OfflineState(StateBase):
         self.assertTrue(rows[0]["offline"])
         self.assertFalse(rows[1]["offline"])
         self.assertFalse(rows[0]["next"])
-        shown = gui_data.limit_rows({"provider_limits": rows})
+        shown = dashboard_data.limit_rows({"provider_limits": rows})
         self.assertEqual(shown[0]["slots"]["offline"], "offline")
         self.assertIn(rows[0]["offline"], shown[0]["slots"]["hover"])
         self.assertTrue(shown[0]["slots"]["hover"].startswith("Offline since"))
         self.assertFalse(shown[1]["slots"].get("offline"))
         with mock.patch("haivequeen.i18n.machine_language", return_value="German"):
-            self.assertEqual(gui_data.limit_rows({"provider_limits": rows})[0]["slots"]["offline"], "offline")
+            self.assertEqual(dashboard_data.limit_rows({"provider_limits": rows})[0]["slots"]["offline"], "offline")
 
     def test_recheck_interval_local_llm_and_cli(self):
         now = datetime(2026, 1, 2, 10, 0, 0)
@@ -400,84 +264,5 @@ class OfflineFromRunner(tar.RunnerBase):
 # ---------------------------------------------------------------- item 8
 
 
-class WheelOverComboboxes(pf.FormCase):
-    def combos(self, win):
-        return [w for w in base.descendants(win.form) if w.winfo_class() == "TCombobox"]
-
-    def check(self, win, where):
-        found = self.combos(win)
-        win.win.update()
-        for box in found:
-            before = box.get()
-            values = list(box.cget("values"))
-            if len(values) > 1:
-                box.set(values[1])
-                before = box.get()
-            with mock.patch.object(win.canvas, "yview_scroll") as scroll:
-                box.event_generate("<MouseWheel>", delta=-120, x=2, y=2)
-                box.event_generate("<MouseWheel>", delta=120, x=2, y=2)
-                win.win.update()
-            self.assertEqual(box.get(), before, where)
-            self.assertTrue(scroll.called, where)   # the page scrolls instead
-        return len(found)
-
-    def test_every_combobox_of_every_tab_leaves_its_value_and_scrolls_the_page(self):
-        win = self.window()
-        total = self.check(win, "general")
-        for tab in ("providers", "apiaries"):
-            win.pick_tab(tab)
-            for node in list(win.visible):
-                win.select(win.entries.index(node))
-                if node[0] == "providers":
-                    for access in ("Subscription", "API key", "Local LLM"):
-                        win.choose_access(access)
-                        total += self.check(win, (node, access))
-                else:
-                    total += self.check(win, node)
-        self.assertGreater(total, 0)
-
-
-class WheelOverApiaryComboboxes(apiary_page.ApiaryPageCase):
-    def test_apiary_pages(self):
-        win = self.window("Plain")
-        for box in [w for w in apiary_page.descendants(win.form) if w.winfo_class() == "TCombobox"]:
-            before = box.get()
-            box.event_generate("<MouseWheel>", delta=-120, x=2, y=2)
-            win.win.update()
-            self.assertEqual(box.get(), before)
-
-
-class ApiaryTexts(apiary_page.ApiaryPageCase):
-    def test_item2_general_field_and_help(self):
-        """The failed-attempts value is a General field only; the project page has no override."""
-        for language in ("English", "German"):
-            with mock.patch("haivequeen.i18n.machine_language", return_value=language):
-                win = self.window()
-                label, help_ = ("Failed attempts before a stronger model", "After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class.")
-                if language == "German":
-                    label = "Fehlversuche bis zum stärkeren Modell"
-                    help_ = apiary_page.gui_config.i18n.tr(help_) if hasattr(apiary_page.gui_config, "i18n") else help_
-                texts = [w.cget("text") for w in apiary_page.descendants(win.form) if w.winfo_class() == "Label"]
-                self.assertIn(label, texts)
-                self.assertTrue(any(text.startswith(help_[:20]) or help_ in text for text in texts) or language == "German")
-                win.win.destroy()
-                page = self.window("Plain")
-                self.assertNotIn(("file", "escalateAfter"), {path for path, _g, _l in page.getters})
-                page.win.destroy()
-
-
 if __name__ == "__main__":
     unittest.main()
-
-
-class FoldKeepsTestResult(unittest.TestCase):
-    def test_last_test_moves_to_provider_with_other_name(self):
-        from haivequeen import servers
-        entry = {"name": "lms", "address": "http://localhost:1234", "apiKey": ""}
-        stored = {}
-        stored["lms"] = {"fingerprint": servers.fingerprint(entry), "models": ["m1"], "reachable": True}
-        with mock.patch.object(servers, "_read_tests", side_effect=lambda: dict(stored)), \
-             mock.patch.object(servers, "_write_tests", side_effect=lambda d: stored.update(d)):
-            out = servers.fold_servers({"servers": [entry], "providers": [{"name": "local", "server": "lms"}]})
-        self.assertEqual(stored["local"]["models"], ["m1"])
-        self.assertEqual(out["providers"][0]["address"], "http://localhost:1234")

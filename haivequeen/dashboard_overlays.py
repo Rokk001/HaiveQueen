@@ -2,7 +2,7 @@
 
 Every overlay shows the state now: the units its tile counts, each with the numbers of today. `build()` returns {tile key: {"rows": [...]}}; a tile
 without units has no rows and the window writes "none". The tokens of an Agent that runs as a subagent of its Queen are shown at the Agent only
-(gui_data.hive_row takes them from the Queen's row), so every sum counts them once."""
+(dashboard_data.hive_row takes them from the Queen's row), so every sum counts them once."""
 from . import runtime, scheduler as sch, startctx
 from . import overview
 from .i18n import N_, tr
