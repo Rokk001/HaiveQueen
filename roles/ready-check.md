@@ -10,6 +10,7 @@ Steps:
 2. Compare that list with the requirement list of the Queen: every id appears exactly once, with status done and an evidence (file, commit or test).
 3. For each requirement open the evidence in the branch and check that the code, test or text really does what the requirement says. A requirement that is only partly done is not done.
 4. Run the checks the evidence names only when they are quick; never change files, never commit.
+After `bzz ready` the Orchestrator, not the Queen, merges the integration branch into the plan branch, runs the compile check, builds, pushes and deploys. Do not fail the plan because the merge of the integration branch, the compile check or the push were not done before ready, also when the plan text or the project rules (for example CLAUDE.md) demand them before ready; they are no missing points.
 End your final answer with exactly one of these verdict lines, as the last verdict of the answer:
 READY-CHECK: PASSED
 READY-CHECK: FAILED
