@@ -5,6 +5,28 @@ from haivequeen import cli
 
 
 class WebDocumentationTests(unittest.TestCase):
+    def test_readme_describes_browser_plan_menu_and_current_controls(self):
+        readme = Path('README.md').read_text(encoding='utf-8')
+        for obsolete in ('right click', 'right-click', 'Queen menu', 'Plans window',
+                         'window: `Space`', 'paused and resumed in the window',
+                         'End Queen and Agents'):
+            with self.subTest(obsolete=obsolete):
+                self.assertNotIn(obsolete, readme, msg='Obsolete README control: ' + obsolete)
+        self.assertIn('**Plan menu.**', readme, msg='Browser plan menu documentation is missing')
+        menu = readme.split('**Plan menu.**', 1)[1].split('\n\n', 1)[0]
+        for label in ('**Plan** button', '**Restart Queen on `<provider>`**',
+                      '**Stop gracefully**', '**Force stop**', '**Resume**',
+                      '**Cancel plan**', '**Start**', '**Back to draft**'):
+            with self.subTest(label=label):
+                self.assertIn(label, menu)
+        for phrase in ('Queen class', 'current provider is marked', 'stopped plan',
+                       'running integration step', 'keeps working'):
+            self.assertIn(phrase, menu)
+        dashboard = readme.split('## Dashboard', 1)[1].split('## Configuration', 1)[0]
+        for phrase in ('Orchestrator: **Start**, **Stop gracefully**, **Force stop**',
+                       'Web server: **Stop**, **Restart**', '**Resume package**'):
+            self.assertIn(phrase, dashboard)
+
     def test_web_help_and_guide_cover_lifecycle(self):
         help_text = cli.build_parser()._subparsers._group_actions[0].choices['web'].format_help()
         for word in ('setup', 'start', 'stop', 'restart', 'off'):
