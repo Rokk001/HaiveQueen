@@ -97,6 +97,12 @@ def _save_last(conn, project, plan, **fields):
     runtime.kv_set(conn, project, LAST_KEY + plan, json.dumps(info))
 
 
+def save_step_log(conn, project, plan, step, code, output):
+    """Keep the latest command result independently of disposable job files."""
+    runtime.kv_set(conn, project, "orch-log:" + plan + ":" + step,
+                   json.dumps({"step": step, "exit_code": code, "output": str(output)[-100000:]}))
+
+
 def commands(env):
     """{Check, Build, Deploy}: the command line of each step ('' = the step is skipped)."""
     return {step: str(env.settings.get(key) or "").strip() for step, key in SETTING.items()}
@@ -492,6 +498,7 @@ def _push(conn, env, plan, state, folder):
     if _git(folder, "merge-base", "--is-ancestor", "refs/remotes/%s/%s" % (remote, branch), "HEAD")[0] != 0:
         return _moved(conn, env, plan, state, "Push")
     code, out = _git(folder, "push", remote, "HEAD:refs/heads/%s" % branch)   # a normal push, never forced
+    save_step_log(conn, env.name, plan, "Push", code, out)
     if code != 0:
         _git(folder, "fetch", remote, branch)
         if _git(folder, "merge-base", "--is-ancestor", "refs/remotes/%s/%s" % (remote, branch), "HEAD")[0] != 0:
@@ -658,6 +665,7 @@ def _harvest(conn, env, plan, state):
         if result is None:
             return None
         JOBS.pop((env.name, plan), None)
+        save_step_log(conn, env.name, plan, job["step"], result["exit"], result.get("output", ""))
         return result["exit"], result.get("output", "")
     key = (env.name, plan)
     j = JOBS.get(key)
@@ -677,6 +685,7 @@ def _harvest(conn, env, plan, state):
         except OSError:
             pass
         JOBS.pop(key, None)
+        save_step_log(conn, env.name, plan, job["step"], int(data["code"]), data.get("output") or "")
         return int(data["code"]), str(data.get("output") or "")
     if j and j.token == job["token"]:
         JOBS.pop(key, None)

@@ -237,6 +237,10 @@ A `failed` result without evidence (`--open-requirements` or `--error`) is refus
 
 ## Dashboard
 
+![HaiveQueen web dashboard showing active plans, Queens and Agents, provider limits and system usage](assets/web-dashboard.png)
+
+*Web dashboard preview with example data.*
+
 `bzz start` starts the local web service and opens the dashboard in your default browser. For setup, network access, login, web server controls, the Windows tray and background services, see the [web guide](docs/WEB-API.md). `bzz gui` opens the same browser interface; `--detach` and `--project` remain accepted for existing shortcuts. Closing the browser leaves the loop and agents running.
 
 The dashboard shows plans, Queens and Agents, model limits, tokens, system load, questions and logs. Orchestrator: **Start**, **Stop gracefully**, **Force stop**. Web server: **Stop**, **Restart**. A single Agent has **Force stop**, and its stopped package has **Resume package**. Force stop of the Orchestrator requires confirmation and ends all running Queens, Agents, Builds and Deploys immediately; unfinished work is done again after Start, and the web server stays available. Use the plan menu to manage a plan, answer questions and inspect an agent's live output. Owner checks have explicit Accept and Not ok actions; a rejection needs a finding and can select individual packages for rework.

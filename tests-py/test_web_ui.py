@@ -39,6 +39,35 @@ class BrowserTests(unittest.TestCase):
         self.assertIn('web-client.js', text)
         self.assertIn('web-client.css', text)
 
+    def test_dashboard_branding_is_packaged_and_dialog_is_named(self):
+        import base64
+        page = web_ui.page('token', language='English')
+        banner = ROOT / 'haivequeen' / 'web-header.png'
+        self.assertIn(base64.b64encode(banner.read_bytes()).decode('ascii'), page)
+        self.assertIn('web-header.png', (ROOT / 'pyproject.toml').read_text())
+        self.assertIn('aria-labelledby="detail-title"', page)
+
+    def test_header_groups_navigation_and_exposes_decorative_animation(self):
+        from html.parser import HTMLParser
+        class HeaderParser(HTMLParser):
+            in_header = False
+            nav_in_header = False
+            decorative_canvas = False
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == 'header': self.in_header = True
+                if tag == 'nav': self.nav_in_header = self.in_header
+                if tag == 'canvas': self.decorative_canvas = attrs.get('aria-hidden') == 'true'
+            def handle_endtag(self, tag):
+                if tag == 'header': self.in_header = False
+        parser = HeaderParser()
+        page = web_ui.page('test', language='English')
+        parser.feed(page)
+        self.assertLess(page.index('id="version"'), page.index('class="brand-header"'))
+        self.assertLess(page.index('id="update-status"'), page.index('class="brand-header"'))
+        self.assertTrue(parser.nav_in_header)
+        self.assertTrue(parser.decorative_canvas)
+
     def test_browser_labels_share_desktop_language_and_defaults(self):
         from haivequeen import settings, scheduler
         import re
@@ -70,6 +99,13 @@ class BrowserTests(unittest.TestCase):
         state = {'version':'test', 'orchestrator':{'label':'RUNNING'}, 'controls':{'force_warning':'Force stop ends all running Queens, Agents, Builds and Deploys immediately. Unfinished work will be done again after Start.'},
                  'projects':[{'name':'demo'}], 'tiles':{'bees':1}, 'hives':[],
                  'bees':[{'name':'mock-agent','agent':'mock-agent','project':'demo','apiary':'demo','task':'P1','status':'running','model':'running'}]}
+        state['hives'] = [{'name':'Mock','apiary':'demo','plan_path':'mock.md','queen':'Test Queen','queen_agent':'queen-test','progress':50,'done':1,'total':2,'status':'Running'}]
+        state['queue'] = {'open': 2, 'queued': 0}
+        state['bees'][0].update(kind='bee', plan_path='mock.md')
+        state['bees'].insert(0, {'kind':'queen','name':'Test Queen','apiary':'demo','project':'demo','plan_path':'mock.md','hive':'Mock','task':'Queen'})
+        state['limits'] = [{'name': name, 'model': 'test-model', 'reserve': {'text': '+10 %', 'level': 'ok'},
+                            'slots': {'total': 8, 'used': 2}, 'weekly': {'pct': 32, 'text': '7d 32 % · 18.11. 11:10'},
+                            'five': '5h 12 % · 23:10'} for name in ('Claude', 'Codex', 'Local')]
         data = {'web':{'address':'127.0.0.1','port':8484,'certificate':'','key':''},
                 'providers':[{'name':'mock','protocol':'claude','command':'mock','classes':{'medium':{'model':'test'}}}]}
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -89,6 +125,8 @@ class BrowserTests(unittest.TestCase):
                     return self.send(Path(__file__).with_name('web_browser_test.js').read_text(encoding='utf-8'),'text/javascript')
                 if route in ('/web-client.js','/web-client.css'):
                     return self.send(web_ui.asset(route[1:]),'text/javascript' if route.endswith('.js') else 'text/css')
+                if route=='/api/plan/detail':
+                    return self.send({'text':'# Mock plan\n\n## Requirements\n\n- Keep existing actions\n\n<script>unsafe</script>', 'hive':{'packages':[]}})
                 if route=='/api/live':
                     live_reads.append(True)
                     return self.send({'lines':[['green','live milestone '+str(len(live_reads))]]})
@@ -115,6 +153,8 @@ class BrowserTests(unittest.TestCase):
                 actions.append({'action':action,'data':payload})
                 if self.headers.get('X-CSRF-Token')!='test-csrf':
                     return self.send({'error':'missing CSRF'},status=403)
+                if action in ('questions/answer', 'owner/accept'):
+                    state['queue']['open'] = max(0, state['queue']['open'] - 1)
                 if action=='settings/save':
                     if sum(row['action']==action for row in actions)==1:
                         return self.send({'error':'Settings changed since loading; reload before saving'},status=400)

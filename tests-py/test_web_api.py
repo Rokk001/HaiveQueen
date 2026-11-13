@@ -7,6 +7,39 @@ from haivequeen import bees, db, dashboard_data, hives, loop, owner, runtime, st
 
 
 class WebApiTests(RoundCase):
+    def test_step_logs_are_isolated_by_plan_and_step(self):
+        from haivequeen import orchestrator
+        self.plan()
+        orchestrator.save_step_log(self.conn, 'testproj', REL, 'Merge', 0, 'merge output')
+        orchestrator.save_step_log(self.conn, 'testproj', REL, 'Check', 1, 'check output')
+        orchestrator.save(self.conn, 'testproj', REL, {'phase':'fix','steps':{'Merge':'done','Check':'red'},'fix':{'step':'Check','error':'check failed'}})
+        args={'project':'testproj','plan':REL}
+        merge=web_api.execute(self.conn,'plan/step-log',{**args,'step':'Merge'})
+        check=web_api.execute(self.conn,'plan/step-log',{**args,'step':'Check'})
+        self.assertEqual(merge['output'],'merge output')
+        self.assertEqual(merge['error'],'')
+        self.assertEqual(check['output'],'check output')
+        self.assertEqual(check['error'],'check failed')
+        self.assertEqual(check['exit_code'],1)
+        self.assertEqual(web_api.execute(self.conn,'plan/step-log',{**args,'step':'Build'})['output'],'')
+        for change in ({'step':'unknown'},{'project':'other'},{'plan':'other.md'}):
+            with self.assertRaises(ValueError):
+                web_api.execute(self.conn,'plan/step-log',{**args,'step':'Merge',**change})
+
+
+    def test_plan_detail_reads_registered_plan_and_rejects_other_paths(self):
+        from pathlib import Path
+        self.plan()
+        workspace = Path(self.conn.execute("SELECT workspace FROM projects WHERE name='testproj'").fetchone()[0])
+        expected = (workspace / REL).read_text(encoding='utf-8-sig')
+        result = web_api.execute(self.conn, 'plan/detail', {'project':'testproj','plan':REL})
+        self.assertEqual(result['text'], expected)
+        self.assertEqual(result['plan']['plan_path'], REL)
+        for path in ('../private.txt', str(self.base / 'private.txt'), 'missing.md'):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                web_api.execute(self.conn, 'plan/detail', {'project':'testproj','plan':path})
+
+
     def test_snapshot_reports_when_paused_plan_has_fully_stopped(self):
         row = {'apiary': 'testproj', 'plan_path': REL, 'paused': True}
         with mock.patch.object(dashboard_data, 'snapshot', return_value={'hives': [row]}), \

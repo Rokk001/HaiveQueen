@@ -147,6 +147,38 @@ def execute(conn, action, data):
         for question in questions:
             question['packages'] = question_service.plan_packages(conn, question['project'], question['plan_path'])
         return questions
+    if action == 'plan/step-log':
+        import json
+        from . import orchestrator
+        step = data.get('step')
+        if step not in orchestrator.STEPS:
+            raise ValueError('Unknown integration step')
+        if not conn.execute('SELECT 1 FROM plans WHERE project=? AND path=?', (project, plan)).fetchone():
+            raise ValueError('Unknown plan')
+        state = orchestrator.load(conn, project, plan) or {}
+        raw = runtime.kv_get(conn, project, 'orch-log:' + plan + ':' + step)
+        record = json.loads(raw) if raw else {}
+        fix = state.get('fix') or {}
+        return {'step': step, 'status': (state.get('steps') or {}).get(step, 'todo'),
+                'phase': state.get('phase', ''), 'exit_code': record.get('exit_code'),
+                'output': record.get('output', ''),
+                'error': fix.get('error', '') if fix.get('step') == step else '',
+                'historical': (state.get('steps') or {}).get(step) in ('running', None) and bool(record)}
+    if action == 'plan/detail':
+        from pathlib import Path
+        row = next((row for row in plan_view.plan_rows(conn)
+                    if row['apiary'] == project and row['plan_path'] == plan), None)
+        if row is None:
+            raise ValueError('Unknown plan')
+        registered = conn.execute('SELECT workspace FROM projects WHERE name=?', (project,)).fetchone()
+        if not registered or not registered[0]:
+            raise ValueError('Unknown project workspace')
+        workspace = Path(registered[0]).resolve()
+        source = (workspace / plan).resolve()
+        if not source.is_relative_to(workspace):
+            raise ValueError('Plan is outside the project workspace')
+        return {'plan': row, 'text': source.read_text(encoding='utf-8-sig'),
+                'hive': hives.get(conn, project, plan)}
     if action == 'plans':
         return plan_view.plan_rows(conn)
     if action == 'questions/answer':
