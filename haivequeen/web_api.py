@@ -44,6 +44,21 @@ def settings_save(conn, data):
     if not isinstance(proposed, dict):
         raise ValueError('Settings must be an object')
     proposed = dict(proposed)
+    if project and data.get('place') is not None:
+        place = data['place']
+        if not isinstance(place, dict) or any(not isinstance(place.get(k, ''), str) for k in ('repository', 'plansFolder')):
+            raise ValueError('Repository and plans folder must be paths')
+        repository = place.get('repository', '').strip()
+        plans_folder = place.get('plansFolder', '').strip()
+        workspace = str(path.parent.parent)
+        if not repository or not gui_config.same_dir(plans_folder or repository, workspace):
+            from .i18n import tr
+            raise ValueError(tr('The settings of this Project are kept in %s: enter that folder as plans folder or, when the plans are in the repository, as repository', workspace))
+        if plans_folder and not gui_config.same_dir(repository, workspace):
+            proposed['codeRepo'] = repository
+        else:
+            proposed.pop('codeRepo', None)
+            proposed.pop('repo', None)
     if not project:
         current = web_auth.read(path)
         web = {**current, **proposed.get('web', {}), 'password': current['password']}
@@ -65,6 +80,37 @@ def settings_save(conn, data):
         init.register_listed(conn, proposed.get('projects'))
         gui_config.save_file(path, loaded)
     return {'ok': True, **settings_read(conn, project)}
+
+
+@filetxn.coordinated
+def settings_view(conn, project=None):
+    """The desktop's derived form information, kept separate from editable TOML."""
+    from . import cli_presets, projsettings
+    result = settings_read(conn, project)
+    if project:
+        workspace = str(settings_path(conn, project).parent.parent)
+        repository, plans_folder = gui_config.apiary_place(workspace, result['data'])
+        remote, _ = projsettings.derive_remote(repository, result['data'].get('remoteName'))
+        branch = result['data'].get('integrationBranch') or projsettings.default_branch(repository, remote or 'origin') or 'main'
+        result.update(workspace=workspace, repository=repository, place={'repository': repository, 'plansFolder': plans_folder},
+                      project_defaults={'integrationBranch': branch},
+                      rules=profile.rule_entries(result['data'], repository),
+                      upstream=profile.upstream_state(result['data'], repository))
+    else:
+        migrated = gui_config.load_migrated(settings_path(conn))
+        if 'web' in migrated:
+            migrated['web'] = {k: v for k, v in migrated['web'].items() if k != 'password'}
+        result['data'] = migrated
+        offered = {}
+        for provider in migrated.get('providers', []):
+            key = cli_presets.key_for(provider)
+            server = servers.server_of(provider)
+            kept = servers.kept(server) if server else None
+            offered[provider['name']] = {'models': list((kept or {}).get('models', [])) if server else cli_presets.model_list(key),
+                                         'efforts': cli_presets.effort_list(key)}
+        result.update(provider_models=offered, benchmark=startctx.pairs(conn),
+                      build=gui_config.build_values(migrated), cores=gui_config.machine_cores())
+    return result
 
 
 def queen_providers(conn, project, plan):
@@ -92,7 +138,10 @@ def execute(conn, action, data):
         state['projects'] = db.rows(conn, 'SELECT name,workspace,colour,priority FROM projects ORDER BY name')
         return state
     if action == 'questions':
-        return runtime.list_questions(conn, project, status='open')
+        questions = runtime.list_questions(conn, project, status='open')
+        for question in questions:
+            question['packages'] = gui_questions.plan_packages(conn, question['project'], question['plan_path'])
+        return questions
     if action == 'plans':
         return gui_hives.plan_rows(conn)
     if action == 'questions/answer':
@@ -103,6 +152,8 @@ def execute(conn, action, data):
         return owner.apply(conn, name, project, plan, **{k: v for k, v in data.items() if k not in ('project', 'plan')})
     if action == 'settings':
         return settings_read(conn, project)
+    if action == 'settings/view':
+        return settings_view(conn, project)
     if action == 'settings/save':
         return settings_save(conn, data)
     if action == 'providers':
@@ -124,6 +175,9 @@ def execute(conn, action, data):
         return web_jobs.start('benchmark:' + provider, measure)
     if action == 'jobs/status':
         return web_jobs.status(data['id'])
+    if action == 'tools/install':
+        from . import bzz_install
+        return web_jobs.start('tools:install', lambda _progress: bzz_install.install())
     if action == 'live':
         row = runtime.get_agent(conn, project, data['agent'])
         if not row:
@@ -141,7 +195,7 @@ def execute(conn, action, data):
         settled = updates.settle_install(db.last_self_update(conn))
         return {**updates.load_state(), 'restart_required': settled == 'ok'}
     if action == 'updates/check':
-        return updates.check(config.load_config(), manual=True)
+        return updates.check(config.load_config(), manual=data.get('automatic') is not True)
     if action == 'updates/install':
         if data.get('confirmed') is not True:
             raise ValueError(updates.TEXT_CONFIRM % data.get('version', ''))

@@ -101,6 +101,22 @@ class WebRoutesTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/start', {}, {'Cookie': headers['Cookie']})[0], 403)
         self.assertEqual(self.request('POST', '/api/start', {}, {**headers, 'Origin': 'http://other.test'})[0], 403)
 
+    def test_browser_shell_and_assets_require_login_and_reuse_session_csrf(self):
+        self.configure()
+        for path in ('/web-client.js', '/web-client.css'):
+            self.assertEqual(self.request('GET', path)[0], 401)
+        headers = self.login()
+        status, _, body = self.request('GET', '/', headers=headers)
+        self.assertEqual(status, 200)
+        self.assertIn(headers['X-CSRF-Token'], body)
+        self.assertIn('bootstrap', body)
+        for path, mime in (('/web-client.js','text/javascript'),('/web-client.css','text/css')):
+            status, response_headers, body = self.request('GET', path, headers=headers)
+            self.assertEqual(status, 200)
+            self.assertTrue(response_headers['Content-Type'].startswith(mime))
+            self.assertTrue(body)
+        self.assertEqual(self.request('GET', '/api/settings/view', headers=headers)[0], 200)
+
     def test_credential_change_revokes_sessions_and_setup_cannot_replace_user(self):
         self.configure()
         headers = self.login()
