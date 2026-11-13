@@ -1,4 +1,5 @@
 """GitLab.com REST provider. Operations return GitLab's decoded JSON objects."""
+import os
 import json
 import mimetypes
 from pathlib import Path
@@ -236,3 +237,30 @@ def release_state(repo, name, commit, token=None):
     rows = [r for r in rows if r.get('sha') == commit and r.get('ref') == name and r.get('source') == 'push']
     value = rows[0].get('status') if rows else None
     return 'success' if value == 'success' else 'failure' if value in ('failed', 'canceled') else 'pending'
+
+
+# Normalized operations own provider-specific integration behavior.
+from . import _integration as _normalized
+CAPABILITIES |= {'open_pr', 'find_pr', 'pr_state', 'pr_commit', 'pipeline_state', 'credential'}
+
+def pr_state(repo, identifier, token=None):
+    return _normalized.state(pr_status(repo, identifier, token))
+
+def pr_commit(repo, identifier, token=None):
+    return _normalized.merge_commit(pr_status(repo, identifier, token))
+
+def credential(repo):
+    return os.environ.get("GITLAB_TOKEN")
+
+def open_pr(repo, title, source, target, token=None):
+    return pull_request(repo, source, target, title, token)["iid"]
+
+def find_pr(repo, source, target, token=None, commit=None):
+    rows = _request(repo, "GET", "/merge_requests", token, query={"state": "all" if commit else "opened", "source_branch": source, "target_branch": target})[0]
+    return next((r["iid"] for r in rows if r.get("source_branch") == source and r.get("target_branch") == target and r.get("source_project_id") == r.get("target_project_id") and _normalized.reusable(r, r.get("sha"), commit)), None)
+
+def pipeline_state(repo, commit, token=None):
+    rows = _request(repo, "GET", "/pipelines", token, query={"sha": commit, "per_page": 1, "order_by": "id", "sort": "desc"})[0]
+    result = rows[0] if rows else None
+    values = [str(result.get("state", result.get("status", ""))).lower()] if result and result.get("sha") == commit else []
+    return _normalized.pipeline(values)

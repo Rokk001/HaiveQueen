@@ -1,4 +1,5 @@
 """Azure DevOps Services REST adapter; see azure.md for the public interface."""
+import os
 import base64
 import json
 import re
@@ -196,3 +197,28 @@ def release_state(repo, name, commit, token=None):
     if latest and all(r.get('status') == 'completed' and r.get('result') == 'succeeded' for r in latest.values()):
         return 'success'
     return 'pending'
+
+
+# Normalized operations own provider-specific integration behavior.
+from . import _integration as _normalized
+CAPABILITIES |= {'open_pr', 'find_pr', 'pr_state', 'pr_commit', 'pipeline_state', 'credential'}
+
+def pr_state(repo, identifier, token=None):
+    return _normalized.state(pr_status(repo, identifier, token))
+
+def pr_commit(repo, identifier, token=None):
+    return _normalized.merge_commit(pr_status(repo, identifier, token))
+
+def credential(repo):
+    return os.environ.get("AZURE_DEVOPS_TOKEN")
+
+def open_pr(repo, title, source, target, token=None):
+    return pull_request(repo, source, target, title, token)["pullRequestId"]
+
+def find_pr(repo, source, target, token=None, commit=None):
+    rows = _request(repo, "git/repositories/{repo}/pullrequests", token, query={"searchCriteria.status": "all" if commit else "active", "searchCriteria.sourceRefName": "refs/heads/" + source, "searchCriteria.targetRefName": "refs/heads/" + target}).get("value", [])
+    return next((r["pullRequestId"] for r in rows if r.get("sourceRefName") == "refs/heads/" + source and r.get("targetRefName") == "refs/heads/" + target and _normalized.reusable(r, r.get("lastMergeSourceCommit", {}).get("commitId"), commit)), None)
+
+def pipeline_state(repo, commit, token=None):
+    values = [str(item.get("result") or item.get("status") or "").lower() for item in pipeline_for_commit(repo, commit, token) if item.get("sourceVersion") == commit]
+    return _normalized.pipeline(values)

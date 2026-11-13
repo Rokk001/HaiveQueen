@@ -93,3 +93,28 @@ def pr_status(repo, number):
 
 def pipeline_for_commit(repo, commit):
     return _list(_repo(repo) + '/commit/' + quote(commit, safe='') + '/statuses/build')
+
+
+# Normalized operations own provider-specific integration behavior.
+from . import _integration as _normalized
+CAPABILITIES |= {'open_pr', 'find_pr', 'pr_state', 'pr_commit', 'pipeline_state', 'credential'}
+
+def pr_state(repo, identifier, token=None):
+    return _normalized.state(pr_status(repo, identifier))
+
+def pr_commit(repo, identifier, token=None):
+    return _normalized.merge_commit(pr_status(repo, identifier))
+
+def credential(repo):
+    return os.environ.get("BITBUCKET_TOKEN")
+
+def open_pr(repo, title, source, target, token=None):
+    return pull_request(repo, title, source, target)["id"]
+
+def find_pr(repo, source, target, token=None, commit=None):
+    rows = _list(_repo(repo) + "/pullrequests?state=OPEN" + ("&state=MERGED" if commit else ""))
+    return next((r["id"] for r in rows if r.get("source", {}).get("branch", {}).get("name") == source and r.get("destination", {}).get("branch", {}).get("name") == target and r.get("source", {}).get("repository", {}).get("uuid") == r.get("destination", {}).get("repository", {}).get("uuid") and _normalized.reusable(r, r.get("source", {}).get("commit", {}).get("hash"), commit)), None)
+
+def pipeline_state(repo, commit, token=None):
+    values = [str(item.get("state", "")).lower() for item in pipeline_for_commit(repo, commit)]
+    return _normalized.pipeline(values)

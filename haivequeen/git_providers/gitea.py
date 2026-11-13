@@ -225,3 +225,42 @@ def release_state(repo, name, commit, token=None):
         if len(batch) < 100:
             return workflows(rows)
         page += 1
+
+
+# Normalized operations own provider-specific integration behavior.
+from . import _integration as _normalized
+CAPABILITIES |= {'open_pr', 'find_pr', 'pr_state', 'pr_commit', 'pipeline_state', 'credential'}
+
+def pr_state(repo, identifier, token=None):
+    return _normalized.state(pr_status(repo, identifier, token))
+
+def pr_commit(repo, identifier, token=None):
+    return _normalized.merge_commit(pr_status(repo, identifier, token))
+
+def credential(repo):
+    return os.environ.get("GITEA_TOKEN")
+
+def open_pr(repo, title, source, target, token=None):
+    return pull_request(repo, title, source, target, token=token)["number"]
+
+def find_pr(repo, source, target, token=None, commit=None):
+    from urllib.parse import urlencode
+    page = 1
+    while True:
+        rows = _request(repo, "/pulls?" + urlencode({"state": "all" if commit else "open", "page": page, "per_page": 100, "limit": 100}), token)
+        for row in rows:
+            if row.get("head", {}).get("ref") == source and row.get("base", {}).get("ref") == target:
+                head_repo = (row.get("head", {}).get("repo") or {}).get("full_name")
+                base_repo = (row.get("base", {}).get("repo") or {}).get("full_name")
+                if base_repo and head_repo != base_repo:
+                    continue
+                if _normalized.reusable(row, row.get("head", {}).get("sha"), commit):
+                    return row["number"]
+        if len(rows) < 100:
+            return None
+        page += 1
+
+def pipeline_state(repo, commit, token=None):
+    result = pipeline(repo, commit, token)
+    values = [str(result.get("state", result.get("status", ""))).lower()] if result and result.get("statuses") else []
+    return _normalized.pipeline(values)

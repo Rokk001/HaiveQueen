@@ -1,13 +1,33 @@
 import unittest
-from types import SimpleNamespace
+from types import FunctionType
+import importlib
 from unittest.mock import Mock, patch
 
 from haivequeen.git_provider import Provider, ProviderError
 
 
+class ProviderFixture:
+    def __init__(self, name, operations):
+        original = importlib.import_module('haivequeen.git_providers.' + name)
+        self.__dict__['_globals'] = dict(vars(original))
+        namespace = self.__dict__['_globals']
+        for key, value in list(namespace.items()):
+            if isinstance(value, FunctionType) and value.__module__ == original.__name__:
+                namespace[key] = FunctionType(value.__code__, namespace, value.__name__, value.__defaults__, value.__closure__)
+                namespace[key].__kwdefaults__ = value.__kwdefaults__
+        namespace.update(operations)
+        namespace['CAPABILITIES'] = set(original.CAPABILITIES) | set(operations)
+
+    def __getattr__(self, name):
+        return self._globals[name]
+
+    def __setattr__(self, name, value):
+        self._globals[name] = value
+
+
 class PrRecovery(unittest.TestCase):
     def provider(self, name="github", **operations):
-        return Provider(name, SimpleNamespace(CAPABILITIES=set(operations), **operations), "team/repo")
+        return Provider(name, ProviderFixture(name, operations), "team/repo")
 
     def test_shared_profile_keeps_authentication_method_in_provider_module(self):
         from haivequeen import config

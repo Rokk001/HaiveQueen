@@ -37,6 +37,14 @@ merge a pull request or enable auto-merge. Provider errors are reported as
 `ProviderError`. Bitbucket uses its existing `BITBUCKET_TOKEN` environment
 credential; callers must provide tokens for providers requiring them.
 
+Modules implementing integration advertise `open_pr`, `find_pr`, `pr_state`,
+`pr_commit`, and `pipeline_state`. Each takes the repository first and a token
+last (with optional `commit` for `find_pr`). `find_pr` returns an identifier or
+None; `open_pr` returns an identifier; `pr_commit` returns the exact merge
+commit or an empty string. Modules may advertise `credential(repo)` for legacy
+credential fallback. Profile credentials remain in the module's authentication
+path. A new module supplies these operations without changes to the adapter.
+
 ## Normalized release operations
 
 All operations take the repository first and an optional token last.

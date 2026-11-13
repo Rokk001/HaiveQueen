@@ -40,6 +40,30 @@ class ProviderDiscoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(git_provider.ProviderError, 'does not support pipeline'):
             provider.call('pipeline')
 
+    def test_new_provider_owns_normalized_integration_operations(self):
+        self.module('example', """
+CAPABILITIES = {'open_pr', 'find_pr', 'pr_state', 'pr_commit', 'pipeline_state', 'credential'}
+def detect(remote): return 'repo' if remote == 'example:repo' else None
+def credential(repo): return 'example-token'
+def open_pr(repo, title, source, target, token): return 42
+def find_pr(repo, source, target, token, commit=None): return 7 if commit == 'saved' else None
+def pr_state(repo, identifier, token): return 'merged'
+def pr_commit(repo, identifier, token): return 'merge-sha'
+def pipeline_state(repo, commit, token): return 'success' if commit == 'merge-sha' else 'pending'
+""")
+        provider, errors = git_provider.discover('example:repo', self.package)
+        self.assertEqual(errors, [])
+        with mock.patch('haivequeen.config.git_credential', return_value=None):
+            self.assertEqual(provider.credential(), 'example-token')
+        self.assertTrue(provider.supports_step('Merge'))
+        self.assertTrue(provider.supports_step('Check'))
+        self.assertEqual(provider.ensure_pr('title', 'feature', 'main', commit='saved'), '7')
+        self.assertEqual(provider.ensure_pr('title', 'feature', 'main'), '42')
+        self.assertEqual(provider.pr_state('42'), 'merged')
+        self.assertEqual(provider.pr_commit('42'), 'merge-sha')
+        self.assertEqual(provider.pipeline_state('merge-sha'), 'success')
+        self.assertEqual(provider.pipeline_state('other'), 'pending')
+
     def test_faulty_modules_report_errors_and_others_still_work(self):
         self.module('broken_import', "raise RuntimeError('bad import')\n")
         self.module('broken_contract', "CAPABILITIES = {'missing'}\ndef detect(remote): return None\n")
