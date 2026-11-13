@@ -67,3 +67,50 @@ gate.render();
 assert.equal(renders, 2, 'live state must render while an action is pending');
 gate.end(firstButton);
 assert.equal(redrawnButton.disabled, false);
+
+// Exercise the mounted provider editor with DOM-like controls and the real handlers.
+async function providerThresholdUI() {
+  class Element {
+    constructor(tag) { this.tagName=tag.toUpperCase(); this.children=[]; this.dataset={}; this.className=''; this.attributes={}; this._text=''; this._value=''; this.classList={contains:name=>this.className.split(' ').includes(name)}; }
+    set textContent(value) { this._text=String(value); this.children=[]; }
+    get textContent() { return this._text+this.children.map(child=>child.textContent).join(''); }
+    set value(value) { this._value=String(value); } get value() { return this._value; }
+    append(...nodes) { for(const node of nodes) { node.parentNode=this; this.children.push(node); } }
+    replaceChildren(...nodes) { this.children=[]; this._text=''; this.append(...nodes); }
+    remove() { if(this.parentNode)this.parentNode.children=this.parentNode.children.filter(child=>child!==this); }
+    setAttribute(key,value) { this.attributes[key]=value; } removeAttribute(key) { delete this.attributes[key]; }
+    addEventListener() {}
+    get lastChild() { return this.children.at(-1); }
+    querySelectorAll(selector) {
+      const all=[]; const walk=node=>{for(const child of node.children){all.push(child);walk(child);}}; walk(this);
+      if(selector==='[data-saved-only]')return all.filter(node=>'savedOnly' in node.dataset);
+      if(selector==='.capability-threshold input[type="number"]')return all.filter(node=>node.tagName==='INPUT' && node.type==='number' && node.parentNode?.className==='capability-threshold');
+      return [];
+    }
+    reportValidity() { const n=Number(this.value); return this.value.trim()!=='' && Number.isInteger(n) && n>=Number(this.min) && n<=Number(this.max); }
+  }
+  const ids={}; for(const id of ['app','tabs','notice','detail','detail-body','close-detail','version','controls','live','dirty-marker'])ids[id]=new Element('div');
+  const document={getElementById:id=>ids[id] || null,createElement:tag=>new Element(tag)};
+  const saved=[]; const provider={name:'sample',protocol:'test',args:[],capabilities:['Coding'],capabilitiesVersion:1,capabilityThresholds:{Coding:72,Queen:38}};
+  const settings={revision:'r1',data:{providers:[provider]}};
+  global.window={addEventListener(){}}; global.setInterval=()=>0; global.confirm=()=>true;
+  global.fetch=async (url,options={})=>{let value={}; if(url.includes('settings/view'))value=settings; else if(url.includes('settings/save')){saved.push(JSON.parse(options.body));value={revision:'r2',data:saved.at(-1).data};} else if(url.endsWith('/providers'))value=[]; return {ok:true,json:async()=>value};};
+  require('../haivequeen/web-client.js').mount(document,{translations:{},labels:{},choices:{},help:{},general:{providers:[]},presets:{},capabilities:['Coding','Queen','Build']});
+  const flush=()=>new Promise(resolve=>setImmediate(resolve));
+  ids.tabs.children.find(node=>node.dataset.tab==='Providers').onclick(); await flush(); await flush();
+  const descendants=node=>node.children.flatMap(child=>[child,...descendants(child)]);
+  const row=name=>descendants(ids.app).find(node=>node.className==='capability-threshold' && node.children[1]?.textContent===name);
+  const number=name=>row(name).children.find(node=>node.tagName==='INPUT' && node.type==='number');
+  const toggle=(name,checked)=>{const check=row(name).children[0];check.checked=checked;check.onchange();};
+  const save=async()=>{descendants(ids.app).find(node=>node.tagName==='BUTTON' && node.textContent==='Save').onclick();await flush();};
+  assert.equal(number('Coding').value,'72');
+  assert.equal(number('Queen'),undefined,'disabled capability has no threshold field');
+  toggle('Queen',true); assert.equal(number('Queen').value,'38','retained value returns');
+  toggle('Queen',false); assert.equal(number('Queen'),undefined);
+  toggle('Queen',true); assert.equal(number('Queen').value,'38');
+  toggle('Build',true); assert.equal(number('Build').value,'100','new threshold defaults to 100');
+  for(const invalid of ['','0','101','1.5']){const input=number('Coding');input.value=invalid;input.oninput();await save();assert.equal(saved.length,0,`invalid ${invalid} must not save`);}
+  const input=number('Coding');input.value='85';input.oninput();toggle('Queen',false);await save();
+  assert.equal(saved.length,1);assert.deepEqual(saved[0].data.providers[0].capabilityThresholds,{Coding:85,Queen:38});
+}
+providerThresholdUI().catch(error=>{console.error(error);process.exitCode=1});

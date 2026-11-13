@@ -372,10 +372,12 @@ function mount(document, bootstrap) {
         const capabilities=el('fieldset');capabilities.append(el('legend',t('Capabilities')));
         for(const row of capabilityRows(provider,bootstrap.capabilities)){
           const line=el('label',undefined,'capability-threshold'),check=el('input'),number=el('input');
-          check.type='checkbox';check.checked=row.enabled;number.type='number';number.min='1';number.max='100';number.step='1';number.value=row.threshold;number.disabled=!row.enabled;number.required=true;
-          check.onchange=()=>{const selected=new Set(provider.capabilities || []);if(check.checked)selected.add(row.name);else selected.delete(row.name);provider.capabilities=[...selected];provider.capabilitiesVersion=1;number.disabled=!check.checked;changed();};
+          check.type='checkbox';check.checked=row.enabled;number.type='number';number.min='1';number.max='100';number.step='1';number.value=row.threshold;number.required=true;
+          const name=el('span',t(row.name)), unit=el('span',t('% usage limit'));
+          const draw=()=>line.replaceChildren(check,name,...(check.checked?[number,unit]:[]));
+          check.onchange=()=>{const selected=new Set(provider.capabilities || []);if(check.checked)selected.add(row.name);else selected.delete(row.name);provider.capabilities=[...selected];provider.capabilitiesVersion=1;draw();changed();};
           number.oninput=()=>{provider.capabilityThresholds ||= {};provider.capabilityThresholds[row.name]=number.value.trim()===''?'':Number(number.value);changed();};
-          line.append(check,el('span',t(row.name)),number,el('span',t('% usage limit')));capabilities.append(line);
+          draw();capabilities.append(line);
         }
         capabilities.append(button('Add own',()=>{const name=prompt(t('Capability name'));if(name?.trim()){provider.capabilities ||= [];if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));card.append(capabilities);
         card.append(button('Remove entry',()=>{if(confirm(t('Remove entry')+'?')){data.providers.splice(index,1);editor.dirty=true;render();}}));
