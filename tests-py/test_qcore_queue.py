@@ -421,11 +421,12 @@ class LiveQueue(OrchCase):
         (self.base / "Check.release").touch()
         self.wait_for(lambda: all((folder / "Check.started").exists() for folder in (self.pwt, self.second)))
 
-    def live_failure_and_replay(self, failure, running):
+    def live_failure_and_replay(self, failure, running, reuse_pid=False):
         """Q-5: kill a real successor, replay it, then integrate both plans."""
         self.script.write_text(
-            "from pathlib import Path\nimport os, sys, time\n"
+            "from pathlib import Path\nimport os, sys, time, uuid\n"
             "kind, root = sys.argv[1], Path(sys.argv[2])\n"
+            "(root / (kind + '.instance')).write_text(uuid.uuid4().hex)\n"
             "(root / (kind + '.pid')).write_text(str(os.getpid()))\n"
             "while not (root / (kind + '.release')).exists(): time.sleep(.02)\n"
             "(root / (kind + '.completed')).touch()\n", encoding="utf-8")
@@ -435,6 +436,7 @@ class LiveQueue(OrchCase):
         self.failed = set()
         real_command = orchestrator._command
         real_git = orchestrator._git
+        real_process_alive = orchestrator.osplat.process_alive
         resets = []
         old_job = old_pid = None
 
@@ -462,8 +464,14 @@ class LiveQueue(OrchCase):
                 return condition()
             self.wait_for(round_until)
 
+        def process_alive(pid):
+            if reuse_pid and resets and pid == old_pid:
+                return True  # The operating system assigned this PID to another process.
+            return real_process_alive(pid)
+
         with mock.patch.object(orchestrator, "_command", side_effect=command), \
-                mock.patch.object(orchestrator, "_git", side_effect=git):
+                mock.patch.object(orchestrator, "_git", side_effect=git), \
+                mock.patch.object(orchestrator.osplat, "process_alive", side_effect=process_alive):
             self.start_merges()
             self.wait_for(lambda: (self.base / "Check.pid").exists())
             if running == "Build":
@@ -471,6 +479,7 @@ class LiveQueue(OrchCase):
                 drive(lambda: (self.base / "Build.pid").exists())
             old_job = orchestrator.JOBS["testproj", OTHER]
             old_pid = int((self.base / (running + ".pid")).read_text())
+            old_instance = (self.base / (running + ".instance")).read_text()
             self.assertTrue(orchestrator.osplat.process_alive(old_pid))
             self.assertTrue(old_job.alive())
             self.assertTrue((self.second / "first.txt").exists())
@@ -497,12 +506,11 @@ class LiveQueue(OrchCase):
             self.assertEqual(self.state()["steps"][failure], "red")
             self.assertEqual(self.remote_head(), original_remote)
             drive(lambda: bool(resets) and self.state(OTHER).get("step") != "Merge")
-            self.assertFalse(orchestrator.osplat.process_alive(old_pid))
             self.assertFalse(old_job.alive())
             self.assertFalse((self.second / "first.txt").exists())
             self.assertTrue((self.second / "second.txt").exists())
             self.assertFalse(self.state(OTHER).get("replay", False))
-            drive(lambda: int((self.base / (running + ".pid")).read_text()) != old_pid)
+            drive(lambda: (self.base / (running + ".instance")).read_text() not in ("", old_instance))
             drive(lambda: bool(self.fixers()))
             self.assertEqual(len(self.fixers()), 1)
             self.commit(self.pwt, "fixed.txt")
@@ -530,6 +538,9 @@ class LiveQueue(OrchCase):
 
     def test_red_build_stops_live_successor_build_and_integrates(self):
         self.live_failure_and_replay("Build", "Build")
+
+    def test_red_build_replays_when_stopped_worker_pid_is_reused(self):
+        self.live_failure_and_replay("Build", "Build", reuse_pid=True)
 
     def test_red_push_stops_live_successor_build_and_integrates(self):
         self.live_failure_and_replay("Push", "Build")
