@@ -8,6 +8,9 @@ plan's worktree; after its fix the pipeline starts again at step 1. The state of
 goes on after a pause, a fix, an owner answer and a restart of HaiveQueen.
 
 Check runs in a detached supervisor and publishes its result in the database. Merge, Build and Deploy run in threads and store their results in files. Push and the fix agent start run in the round itself.
+
+Each step follows its Local or Git provider setting. Provider Merge pushes the plan branch and waits for an external PR merge; it never merges or enables auto-merge.
+Provider command steps poll the exact commit's pipeline through the adapter. Their state survives restarts, and a failed pipeline enters the same fix-agent flow as a local failure.
 """
 import json
 import os
@@ -19,7 +22,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import agent_process, buildjobs, db, hives, integration, platform as osplat, roles, runtime, scheduler as sch
+from . import agent_process, buildjobs, db, git_provider, hives, integration, platform as osplat, roles, runtime, scheduler as sch
 from . import plans as plan_mod
 
 KEY = "orch:"              # + plan: the state of the pipeline of a plan while the Orchestrator integrates it
@@ -93,14 +96,20 @@ def _save_last(conn, project, plan, **fields):
 
 
 def commands(env):
-    """{Check, Build, Deploy}: the command line of each step ('' = the step is skipped)."""
-    return {step: str(env.settings.get(key) or "").strip() for step, key in SETTING.items()}
+    """Local command lines; disabled and provider steps have no local command."""
+    from . import projsettings
+    settings = projsettings.working_settings(env.settings)
+    return {step: str(settings.get(key) or "").strip() if settings[step.lower() + "Enabled"] and settings[step.lower() + "Mode"] == "local" else ""
+            for step, key in SETTING.items()}
 
 
 def chain(env):
     """The steps that run for this project, in order (a step without a command is not part of the chain)."""
+    from . import projsettings
+    settings = projsettings.working_settings(env.settings)
     cmds = commands(env)
-    return [step for step in STEPS if step not in COMMAND_STEPS or cmds[step]]
+    return [step for step in STEPS if step not in COMMAND_STEPS or cmds[step] or
+            (settings[step.lower() + "Enabled"] and settings[step.lower() + "Mode"] == "git")]
 
 
 def _short(plan):
@@ -334,6 +343,13 @@ def _replay_followers(conn, env, plan):
 
 
 def _advance_pipeline(conn, env, plan, state, free_mb):
+    from . import projsettings
+    settings = projsettings.working_settings(env.settings)
+    if settings["mergeMode"] == "git" or any(settings[s.lower() + "Enabled"] and settings[s.lower() + "Mode"] == "git" for s in COMMAND_STEPS):
+        provider, errors = git_provider.for_project(env)
+        if provider is None:
+            return _provider_wait(conn, env, plan, state, state["step"],
+                                  "; ".join(errors) or "Git provider is not supported; choose Local in project settings")
     folder = _worktree(env, plan)
     if folder is None:
         _blocker(conn, env, plan, "the worktree of the plan is missing and could not be prepared")
@@ -376,11 +392,14 @@ def _advance_pipeline(conn, env, plan, state, free_mb):
             _set_status(conn, env, plan, "WAITING")
             return None
         if step == "Merge":
-            outcome = _merge(conn, env, plan, state, folder)
+            outcome = (_provider_step(conn, env, plan, state, folder, step) if settings["mergeMode"] == "git"
+                       else _merge(conn, env, plan, state, folder))
         elif step == "Push":
-            outcome = _push(conn, env, plan, state, folder)
+            outcome = (_done(conn, env, plan, state, step, "integrated through pull request") if settings["mergeMode"] == "git"
+                       else _push(conn, env, plan, state, folder))
         elif step in COMMAND_STEPS:
-            outcome = _command(conn, env, plan, state, folder, step, free_mb)
+            outcome = (_provider_step(conn, env, plan, state, folder, step) if settings[step.lower() + "Mode"] == "git"
+                       else _command(conn, env, plan, state, folder, step, free_mb))
         else:
             return "closed" if _close(conn, env, plan, state, folder) else None
         if outcome != "next":
@@ -403,6 +422,113 @@ def _done(conn, env, plan, state, step, text=""):
     _next_step(env, state, step)
     save(conn, env.name, plan, state)
     return "next"
+
+
+def _provider_wait(conn, env, plan, state, step, reason):
+    state["steps"][step] = "running"
+    save(conn, env.name, plan, state)
+    _blocker(conn, env, plan, reason)
+    _set_status(conn, env, plan, "WAITING")
+
+
+def _provider_token(provider):
+    return provider.credential()
+
+
+def _provider_push(conn, env, plan, state, folder):
+    """Push only the plan branch, persisting the exact revision for restart and retry."""
+    from . import bees
+    named = bees.plan_worktree(env, plan)
+    remote, target = _remote(env)
+    source = named[0] if named else ""
+    if not source or source == target:
+        raise git_provider.ProviderError("provider integration needs a separate plan branch")
+    head = integration.head_commit(folder)
+    if not head:
+        raise git_provider.ProviderError("the commit of the plan worktree cannot be read")
+    record = state.setdefault("provider", {})
+    if record.get("commit") == head:
+        return record
+    if record.get("pushed") != head:
+        code, out = _git(folder, "push", remote, "HEAD:refs/heads/" + source)
+        if code:
+            raise git_provider.ProviderError("plan branch push failed: " + out)
+        if record.get("pr_state") in ("merged", "closed"):
+            record.pop("pr", None)
+            record.pop("pr_state", None)
+        record.pop("commit", None)
+        record.pop("pipeline", None)
+        record.update(pushed=head, source=source, target=target)
+        save(conn, env.name, plan, state)
+    return record
+
+
+def _provider_step(conn, env, plan, state, folder, step):
+    """Provider work uses durable identifiers and read-only polling, never a merge API."""
+    try:
+        provider, errors = git_provider.for_project(env)
+        if provider is None:
+            return _provider_wait(conn, env, plan, state, step,
+                                  "; ".join(errors) or "Git provider is not supported; choose Local in project settings")
+        if not provider.supports_step(step):
+            reason = "provider %s does not support %s; skipped" % (provider.name, step)
+            _log(env, "%s: %s" % (_short(plan), reason))
+            state["steps"][step] = "skipped"
+            state.setdefault("skipped", {})[step] = reason
+            _next_step(env, state, step)
+            save(conn, env.name, plan, state)
+            return "next"
+        token = _provider_token(provider)
+        record = _provider_push(conn, env, plan, state, folder)
+        record["name"] = provider.name
+        state["steps"][step] = "running"
+        save(conn, env.name, plan, state)
+        if step == "Merge":
+            if not record.get("pr"):
+                record["pr"] = provider.ensure_pr(_short(plan), record["source"], record["target"], token, commit=record["pushed"])
+                save(conn, env.name, plan, state)
+            # Detect a red branch pipeline even while a maintainer has not merged yet.
+            from . import projsettings
+            settings = projsettings.working_settings(env.settings)
+            monitor = any(settings[s.lower() + "Enabled"] and settings[s.lower() + "Mode"] == "git" for s in COMMAND_STEPS)
+            if monitor and provider.supports_step("Check") and provider.pipeline_state(record["pushed"], token) == "failure":
+                return _red(conn, env, plan, state, step, "provider %s pipeline failed for commit %s (PR %s)" %
+                            (provider.name, record["pushed"], record["pr"]))
+            status = provider.pr_state(record["pr"], token)
+            record["pr_state"] = status
+            if status == "closed":
+                return _provider_wait(conn, env, plan, state, step, "pull request %s closed without merge; waiting for owner" % record["pr"])
+            if status != "merged":
+                return _provider_wait(conn, env, plan, state, step, "waiting for external merge of pull request %s" % record["pr"])
+            commit = provider.pr_commit(record["pr"], token)
+            if not commit:
+                return _provider_wait(conn, env, plan, state, step, "waiting for the pull request merge commit")
+            if integration.head_commit(folder) != commit:
+                # A squash or merge commit is what subsequent local commands must check.
+                code, out = _git(folder, "status", "--porcelain")
+                if code or out:
+                    return _red(conn, env, plan, state, step, "cannot prepare merged commit: plan worktree is not clean")
+                remote, target = _remote(env)
+                code, out = _git(folder, "fetch", remote, target)
+                if code:
+                    raise git_provider.ProviderError("cannot fetch merged pull request: " + out)
+                code, out = _git(folder, "reset", "--hard", commit)
+                if code:
+                    raise git_provider.ProviderError("cannot prepare merged pull request commit: " + out)
+            record["commit"] = commit
+            state["merged"] = commit
+            return _done(conn, env, plan, state, step, "pull request merged externally")
+        commit = record.get("commit") or record["pushed"]
+        status = provider.pipeline_state(commit, token)
+        record.update(pipeline=status, pipeline_commit=commit)
+        if status == "failure":
+            return _red(conn, env, plan, state, step, "provider %s pipeline failed for commit %s" % (provider.name, commit))
+        if status != "success":
+            return _provider_wait(conn, env, plan, state, step, "waiting for provider %s %s pipeline at %s" % (provider.name, step, commit))
+        return _done(conn, env, plan, state, step, "provider pipeline green")
+    except git_provider.ProviderError as exc:
+        # Network/authentication failures are retried without spending model tokens.
+        return _provider_wait(conn, env, plan, state, step, str(exc))
 
 
 def _merge(conn, env, plan, state, folder):
@@ -708,7 +834,7 @@ def _red(conn, env, plan, state, step, error):
 
 
 def _close(conn, env, plan, state, folder):
-    head = integration.head_commit(folder)
+    head = (state.get("provider") or {}).get("commit") or integration.head_commit(folder)
     row = conn.execute("SELECT * FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (env.name, plan)).fetchone()
     branch = row["branch"] if row else (__import__("haivequeen.bees", fromlist=["x"]).plan_worktree(env, plan) or ("", ""))[0]
     if row is None:

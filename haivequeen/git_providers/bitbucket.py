@@ -5,7 +5,7 @@ import re
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-CAPABILITIES = {'pull_request', 'tag', 'asset_upload', 'asset_list', 'pipeline', 'login'}
+CAPABILITIES = {'pull_request', 'tag', 'asset_upload', 'asset_list', 'pipeline', 'login'} | {'pr_status', 'pipeline_for_commit'}
 _API = 'https://api.bitbucket.org/2.0/'
 _PART = re.compile(r'^[A-Za-z0-9_.-]+$')
 
@@ -86,3 +86,9 @@ def asset_upload(repo, file_path):
 
 def pipeline(repo, pipeline_id):
     return _request(_repo(repo) + '/pipelines/' + quote(str(pipeline_id), safe=''))
+
+def pr_status(repo, number):
+    return _request(_repo(repo) + '/pullrequests/' + quote(str(number), safe=''))
+
+def pipeline_for_commit(repo, commit):
+    return _list(_repo(repo) + '/commit/' + quote(commit, safe='') + '/statuses/build')

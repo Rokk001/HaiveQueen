@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from ..releases import NoRelease, next_version
 
-CAPABILITIES = frozenset({"pull_request", "tag", "publish_release", "release_list", "release_asset", "pipeline", "login", "latest_version", "check_latest", "device_sign_in", "auth_status", "login_methods"})
+CAPABILITIES = frozenset({"pull_request", "tag", "publish_release", "release_list", "release_asset", "pipeline", "login", "latest_version", "check_latest", "device_sign_in", "auth_status", "login_methods", "pr_status"})
 
 def login_methods(repository):
     return ("personal_access_token", "device")
@@ -236,3 +236,7 @@ def device_sign_in(repository=None, run=None):
 def auth_status(repository=None):
     """Report whether a credential is available, without exposing it."""
     return bool(login(repository))
+
+
+def pr_status(repository, number, token=None):
+    return _request(repository, "/pulls/" + quote(str(number), safe=""), token)

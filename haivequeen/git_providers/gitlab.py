@@ -7,7 +7,7 @@ from uuid import uuid4
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-CAPABILITIES = frozenset({'pull_request', 'tag', 'release', 'asset', 'release_list', 'pipeline', 'login_methods'})
+CAPABILITIES = frozenset({'pull_request', 'tag', 'release', 'asset', 'release_list', 'pipeline', 'login_methods'}) | {'pr_status'}
 
 
 def detect(remote):
@@ -120,3 +120,6 @@ def pipeline(repo, ref, token=None):
 
 def login_methods(repo):
     return ('personal_access_token', 'device')
+
+def pr_status(repo, number, token=None):
+    return _request(repo, 'GET', '/merge_requests/' + quote(str(number), safe=''), token)[0]

@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-CAPABILITIES = frozenset({'pull_request', 'tag', 'release', 'asset_upload', 'release_list', 'pipeline', 'login'})
+CAPABILITIES = frozenset({'pull_request', 'tag', 'release', 'asset_upload', 'release_list', 'pipeline', 'login'}) | {'pr_status'}
 
 
 def detect(remote):
@@ -106,3 +106,6 @@ def login(repo, token):
     request = Request(origin + '/api/v1/user', headers={'Accept': 'application/json', 'Authorization': 'token ' + token})
     with urlopen(request, timeout=30) as response:
         return json.loads(response.read())
+
+def pr_status(repo, number, token=None):
+    return _request(repo, '/pulls/' + quote(str(number), safe=''), token)

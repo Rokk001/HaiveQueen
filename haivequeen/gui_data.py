@@ -330,7 +330,7 @@ def orch_info(conn, env, hive, now=None) -> dict:
         return None
     steps = orchestrator.chain(env) if env is not None else list(orchestrator.STEPS)
     done = state.get("steps") or {}
-    chain = [(s, done.get(s) if done.get(s) in ("done", "running", "red") else "todo") for s in steps]
+    chain = [(s, done.get(s) if done.get(s) in ("done", "running", "red", "skipped") else "todo") for s in steps]
     fix = state.get("fix") or {}
     step = fix.get("step") if state["phase"] == "fix" and fix.get("reason") == "step" else state.get("step")
     n = steps.index(step) + 1 if step in steps else len(steps)
@@ -341,7 +341,8 @@ def orch_info(conn, env, hive, now=None) -> dict:
     running = state["phase"] == "pipeline" and not hive.get("blocker")
     reason = "owner rejection" if fix.get("reason") == "owner" else "%s red" % fix.get("step")
     return {"phase": state["phase"], "step": step, "chain": chain, "n": n, "m": len(steps), "task": task, "status": "running" if running else "waiting",
-            "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started")}
+            "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started"),
+            "provider": state.get("provider") or {}, "skipped": state.get("skipped") or {}}
 
 
 # Build the Orchestrator row and the fix agent row of a plan.
