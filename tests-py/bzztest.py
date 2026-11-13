@@ -95,6 +95,10 @@ class RoundCase(unittest.TestCase):
     def setUp(self):
         """Create the temp runtime, the database and the dummy project."""
         from unittest import mock
+        # Round tests mock process launches; web service lifecycle has its own real-process tests.
+        patcher = mock.patch('haivequeen.web_service.start', return_value={'ok': True, 'url': 'http://127.0.0.1:8484'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         patcher = mock.patch("haivequeen.platform.process_inaccessible", return_value=False)   # the tests use made-up PIDs that may belong to real system processes
         patcher.start()
         self.addCleanup(patcher.stop)

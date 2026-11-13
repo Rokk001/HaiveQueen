@@ -14,9 +14,9 @@ class TerminologyTests(unittest.TestCase):
                       parser.parse_args(['bee', *options]).fn)
         self.assertIn('agent', parser.format_help())
 
-    def test_plan_list_uses_started(self):
-        source = Path('haivequeen/gui_hives.py').read_text(encoding='utf-8')
-        self.assertIn('tr("Started")', source)
+    def test_plan_list_uses_standard_terms(self):
+        source = Path('haivequeen/web-client.js').read_text(encoding='utf-8')
+        self.assertIn("section('Plans')", source)
         self.assertNotIn('tr("Has Hive")', source)
 
     def test_public_docs_use_standard_terms(self):
@@ -25,6 +25,7 @@ class TerminologyTests(unittest.TestCase):
             text = path.read_text(encoding='utf-8')
             text = text.replace('bzz bee', '')
             text = text.replace('`hives`', '')  # Existing config key.
+            text = text.replace('`apiary`', '')  # Existing web API field.
             text = re.sub(r'`[^`]*\.(?:py|md|json|toml)`', '', text)  # Existing file names remain compatible.
             with self.subTest(path=str(path)):
                 self.assertIsNone(re.search(r'\b(?:Apiar(?:y|ies)|Hives?|Beekeepers?|Bees?)\b', text, re.I))

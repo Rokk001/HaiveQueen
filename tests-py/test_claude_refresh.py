@@ -7,7 +7,7 @@ from unittest import mock
 from bzztest import RoundCase
 import os
 from haivequeen import overview, runtime, usage
-from haivequeen import gui_data
+from haivequeen import dashboard_data
 
 
 # Exercise metadata without real provider processes or authentication access.
@@ -310,7 +310,7 @@ class ClaudeRefreshTests(RoundCase):
             self.assertEqual(row['used_pct'], 90)
             self.assertTrue(row['stale'])
             self.assertAlmostEqual(row['stale_hours'], 2, delta=0.1)
-            shown = gui_data.limit_rows({'provider_limits': [row]})[0]
+            shown = dashboard_data.limit_rows({'provider_limits': [row]})[0]
             self.assertEqual(shown['weekly']['pct'], 90)
             self.assertEqual(shown['reserve']['age'], '2h')
             old = (datetime.now(timezone.utc) - timedelta(hours=usage.RETAIN_HOURS + 1)).isoformat()
@@ -343,7 +343,7 @@ class ClaudeReadingDisplayTests(ClaudeRefreshTests):
 
     def test_retained_five_hour_window_stays_in_panel(self):
         self.store(2)
-        shown = gui_data.limit_rows({'provider_limits': [self.row()]})[0]
+        shown = dashboard_data.limit_rows({'provider_limits': [self.row()]})[0]
         self.assertEqual(shown['five'][:5], '5h 40')
         self.assertNotEqual(shown['reserve']['level'], 'bad')
         self.assertFalse(shown['slots']['blocked'])
@@ -352,7 +352,7 @@ class ClaudeReadingDisplayTests(ClaudeRefreshTests):
         from haivequeen import scheduler
         self.store(usage.RETAIN_HOURS + 1)
         row = self.row()
-        shown = gui_data.limit_rows({'provider_limits': [row]})[0]
+        shown = dashboard_data.limit_rows({'provider_limits': [row]})[0]
         self.assertEqual((shown['reserve']['text'], shown['reserve']['level']), ('unknown', 'bad'))
         self.assertTrue(shown['slots']['blocked'])
         self.assertEqual(shown['five'], '')
@@ -393,6 +393,6 @@ class ClaudeReadingDisplayTests(ClaudeRefreshTests):
         runtime.kv_set(self.conn, '*', 'usage-claude:claude', json.dumps({
             'saved': now.isoformat(),
             'sevenDay': {'utilization': 0.9, 'resetsAt': int((now - timedelta(hours=1)).timestamp())}}))
-        shown = gui_data.limit_rows({'provider_limits': [self.row()]})[0]
+        shown = dashboard_data.limit_rows({'provider_limits': [self.row()]})[0]
         self.assertIn('reset now', shown['weekly']['text'])
         self.assertNotEqual(shown['reserve']['text'], 'unknown')

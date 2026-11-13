@@ -1,4 +1,4 @@
-"""Overview data of the orchestrator (no drawing): everything the graphical dashboard (haivequeen/gui.py, through haivequeen/gui_data.py) shows.
+"""Overview data of the orchestrator (no drawing): everything the browser dashboard (through haivequeen/dashboard_data.py) shows.
 
 collect(conn, ...) reads agents, limits, usage, system values, plans and questions from the database in one plain dict; the helpers around it
 format token counts, model names and reset times. Nothing here prints or opens a window.

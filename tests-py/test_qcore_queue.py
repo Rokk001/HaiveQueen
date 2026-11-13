@@ -157,6 +157,43 @@ class SpeculativeQueue(OrchCase):
     def test_red_check_replays_running_check(self):
         self.fail_and_replay("Check", "Check")
 
+    def test_repaired_plan_joins_behind_all_current_queue_members(self):
+        self.tick()
+        self.failed.add((REL, "Check"))
+        self.tick()
+        self.assertEqual(len(self.fixers()), 1)
+        self.assertEqual(self.state()["phase"], "fix")
+        self.assertEqual(self.started[OTHER, "Check"], 2)
+
+        # A new plan joins while the first plan is being repaired.
+        self.third = self.make_worktree("third-br", "thirdwt")
+        self.ready_plan(THIRD, "third-br", self.third, "third.txt")
+        self.tick()
+        self.assertEqual(orchestrator._ahead(self.conn, "testproj", THIRD), [OTHER])
+        self.assert_contains(self.third, "second.txt", "third.txt")
+        self.assertFalse((self.third / "first.txt").exists())
+
+        self.commit(self.pwt, "fixed.txt")
+        self.end_fixer(self.fixers()[0])
+        self.failed.clear()
+        self.tick()
+        self.assertEqual(orchestrator._ahead(self.conn, "testproj", REL), [OTHER, THIRD])
+        self.assert_contains(self.pwt, "first.txt", "second.txt", "third.txt", "fixed.txt")
+        self.assertEqual(self.state()["steps"]["Check"], "running")
+
+        # Complete the checks and builds out of order; pushes still follow the row.
+        for plan in (REL, THIRD, OTHER):
+            self.finish_step(plan, "Check")
+            self.finish_step(plan, "Build")
+        self.assertEqual(self.remote_head(), self.git("rev-parse", "HEAD", cwd=self.second))
+        self.finish_step(OTHER, "Deploy")
+        self.assertEqual(self.remote_head(), self.git("rev-parse", "HEAD", cwd=self.third))
+        self.finish_step(THIRD, "Deploy")
+        self.tick()
+        self.assertEqual(self.remote_head(), self.git("rev-parse", "HEAD", cwd=self.pwt))
+        self.finish_step(REL, "Deploy")
+        self.assertIsNone(self.state())
+
     def test_red_check_cancels_active_successor_merge_before_replay(self):
         # Hold a real Git post-merge hook after the predecessor has been applied.
         script = self.base / "hold_merge.py"
@@ -384,11 +421,12 @@ class LiveQueue(OrchCase):
         (self.base / "Check.release").touch()
         self.wait_for(lambda: all((folder / "Check.started").exists() for folder in (self.pwt, self.second)))
 
-    def live_failure_and_replay(self, failure, running):
+    def live_failure_and_replay(self, failure, running, reuse_pid=False):
         """Q-5: kill a real successor, replay it, then integrate both plans."""
         self.script.write_text(
-            "from pathlib import Path\nimport os, sys, time\n"
+            "from pathlib import Path\nimport os, sys, time, uuid\n"
             "kind, root = sys.argv[1], Path(sys.argv[2])\n"
+            "(root / (kind + '.instance')).write_text(uuid.uuid4().hex)\n"
             "(root / (kind + '.pid')).write_text(str(os.getpid()))\n"
             "while not (root / (kind + '.release')).exists(): time.sleep(.02)\n"
             "(root / (kind + '.completed')).touch()\n", encoding="utf-8")
@@ -398,6 +436,7 @@ class LiveQueue(OrchCase):
         self.failed = set()
         real_command = orchestrator._command
         real_git = orchestrator._git
+        real_process_alive = orchestrator.osplat.process_alive
         resets = []
         old_job = old_pid = None
 
@@ -425,8 +464,14 @@ class LiveQueue(OrchCase):
                 return condition()
             self.wait_for(round_until)
 
+        def process_alive(pid):
+            if reuse_pid and resets and pid == old_pid:
+                return True  # The operating system assigned this PID to another process.
+            return real_process_alive(pid)
+
         with mock.patch.object(orchestrator, "_command", side_effect=command), \
-                mock.patch.object(orchestrator, "_git", side_effect=git):
+                mock.patch.object(orchestrator, "_git", side_effect=git), \
+                mock.patch.object(orchestrator.osplat, "process_alive", side_effect=process_alive):
             self.start_merges()
             self.wait_for(lambda: (self.base / "Check.pid").exists())
             if running == "Build":
@@ -434,6 +479,7 @@ class LiveQueue(OrchCase):
                 drive(lambda: (self.base / "Build.pid").exists())
             old_job = orchestrator.JOBS["testproj", OTHER]
             old_pid = int((self.base / (running + ".pid")).read_text())
+            old_instance = (self.base / (running + ".instance")).read_text()
             self.assertTrue(orchestrator.osplat.process_alive(old_pid))
             self.assertTrue(old_job.alive())
             self.assertTrue((self.second / "first.txt").exists())
@@ -460,12 +506,11 @@ class LiveQueue(OrchCase):
             self.assertEqual(self.state()["steps"][failure], "red")
             self.assertEqual(self.remote_head(), original_remote)
             drive(lambda: bool(resets) and self.state(OTHER).get("step") != "Merge")
-            self.assertFalse(orchestrator.osplat.process_alive(old_pid))
             self.assertFalse(old_job.alive())
             self.assertFalse((self.second / "first.txt").exists())
             self.assertTrue((self.second / "second.txt").exists())
             self.assertFalse(self.state(OTHER).get("replay", False))
-            drive(lambda: int((self.base / (running + ".pid")).read_text()) != old_pid)
+            drive(lambda: (self.base / (running + ".instance")).read_text() not in ("", old_instance))
             drive(lambda: bool(self.fixers()))
             self.assertEqual(len(self.fixers()), 1)
             self.commit(self.pwt, "fixed.txt")
@@ -493,6 +538,9 @@ class LiveQueue(OrchCase):
 
     def test_red_build_stops_live_successor_build_and_integrates(self):
         self.live_failure_and_replay("Build", "Build")
+
+    def test_red_build_replays_when_stopped_worker_pid_is_reused(self):
+        self.live_failure_and_replay("Build", "Build", reuse_pid=True)
 
     def test_red_push_stops_live_successor_build_and_integrates(self):
         self.live_failure_and_replay("Push", "Build")

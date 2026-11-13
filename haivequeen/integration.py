@@ -388,6 +388,9 @@ def compile_supervisor(database, project, token):
     slot = None
     try:
         request = json.loads(runtime.kv_get(conn, project, COMPILE_REQUEST_KEY + token))
+        request['supervisor_pid'] = os.getpid()
+        request['supervisor_identity'] = osplat.process_identity(os.getpid())
+        runtime.kv_set(conn, project, COMPILE_REQUEST_KEY + token, json.dumps(request))
         env = SimpleNamespace(name=project, conn=conn, settings=request["settings"],
                               run_dir=lambda name: Path(request["milestones"]))
 
@@ -397,11 +400,18 @@ def compile_supervisor(database, project, token):
             runtime.kv_set(conn, project, COMPILE_REQUEST_KEY + token, json.dumps(request))
 
         try:
-            slot = _acquire_compile_slot(env.settings, request["poll"],
-                                         owner={"database": database, "project": project, "run_token": token})
-            result = _execute_compile_check(env, {"name": request["name"]}, cwd=request["cwd"],
-                                            key=COMPILE_RUN_KEY + token, poll=request["poll"], milestones=bool(request["milestones"]), store=False,
-                                            acquired_slot=slot, on_start=started)
+            from . import force_stop
+            if force_stop.requested():
+                result = _aborted_result(request, 'Force stopped by the owner')
+            else:
+                slot = _acquire_compile_slot(env.settings, request["poll"],
+                                             owner={"database": database, "project": project, "run_token": token})
+                if force_stop.requested():
+                    result = _aborted_result(request, 'Force stopped by the owner')
+                else:
+                    result = _execute_compile_check(env, {"name": request["name"]}, cwd=request["cwd"],
+                                                    key=COMPILE_RUN_KEY + token, poll=request["poll"], milestones=bool(request["milestones"]), store=False,
+                                                    acquired_slot=slot, on_start=started)
         except Exception as exc:
             if not _end_orphan(request):
                 return   # leave the holder discoverable until recovery can end the command

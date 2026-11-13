@@ -1,0 +1,234 @@
+"""Browser contract and executable client regressions, without browser packages."""
+import shutil
+import subprocess
+import unittest
+import http.server
+import json
+import os
+import tempfile
+import threading
+from pathlib import Path
+
+from bzztest import ROOT, RoundCase
+from haivequeen import web_api, web_ui
+
+
+class BrowserTests(unittest.TestCase):
+    def test_page_bootstraps_csrf_and_shared_translations_safely(self):
+        page = web_ui.page('session-token', language='German')
+        self.assertIn('session-token', page)
+        self.assertIn('Allgemein', page)
+        self.assertIn('web-client.js', page)
+        self.assertNotIn('</script><attack>', web_ui.page('</script><attack>'))
+
+    def test_german_dashboard_labels(self):
+        from haivequeen import i18n
+        for label in ('Questions', 'Limits', 'Queue', 'Clear', 'Resume', 'Update', 'Live'):
+            self.assertNotEqual(i18n.tr(label, language='German'), label, label)
+
+    def test_client_behaviour(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required to execute browser regression tests')
+        result = subprocess.run([node, str(Path(__file__).with_name('web_client_test.cjs'))],
+                                cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_assets_are_packaged(self):
+        text = (ROOT / 'pyproject.toml').read_text(encoding='utf-8')
+        self.assertIn('web-client.js', text)
+        self.assertIn('web-client.css', text)
+
+    def test_browser_labels_share_desktop_language_and_defaults(self):
+        from haivequeen import settings, scheduler
+        import re
+        page=web_ui.page('token',language='German')
+        data=json.loads(re.search(r'<script id="bootstrap" type="application/json">(.*?)</script>',page).group(1))
+        for name in ('General','Providers','Projects','Stop gracefully','Force stop','Restart Queen on %s'):
+            self.assertIn(name,data['translations'])
+        self.assertEqual(data['general']['maxConcurrentCompileChecks'],scheduler.DEFAULT_SETTINGS['maxConcurrentCompileChecks'])
+        for key in settings.SETTING_LABELS:
+            self.assertIn(key,data['labels'])
+        self.assertNotIn('password',data['general']['web'])
+        self.assertEqual(data['fieldLabels']['General']['language'],'Interface language')
+        self.assertEqual(data['fieldLabels']['Providers']['slots'],'Simultaneous agents')
+        for group in ('labels', 'help'):
+            for text in data[group].values():
+                self.assertIn(text, data['translations'], (group, text))
+
+    def test_real_browser_controls_settings_conflict_login_questions_updates_and_live(self):
+        candidates = [shutil.which(name) for name in ('msedge', 'chromium', 'google-chrome')]
+        for variable in ('PROGRAMFILES(X86)', 'PROGRAMFILES'):
+            if os.environ.get(variable):
+                candidates.append(str(Path(os.environ[variable]) / 'Microsoft/Edge/Application/msedge.exe'))
+        browser = next((candidate for candidate in candidates if candidate and Path(candidate).is_file()), None)
+        if not browser:
+            self.skipTest('A Chromium browser is required for the DOM smoke test')
+        actions = []
+        live_reads = []
+        browser_language = ['English']
+        state = {'version':'test', 'orchestrator':{'label':'RUNNING'}, 'controls':{'force_warning':'Force stop ends all running Queens, Agents, Builds and Deploys immediately. Unfinished work will be done again after Start.'},
+                 'projects':[{'name':'demo'}], 'tiles':{'bees':1}, 'hives':[],
+                 'bees':[{'name':'mock-agent','agent':'mock-agent','project':'demo','apiary':'demo','task':'P1','status':'running','model':'running'}]}
+        data = {'web':{'address':'127.0.0.1','port':8484,'certificate':'','key':''},
+                'providers':[{'name':'mock','protocol':'claude','command':'mock','classes':{'medium':{'model':'test'}}}]}
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def send(self, value, mime='application/json', status=200):
+                body=(value if isinstance(value,str) else json.dumps(value)).encode()
+                self.send_response(status)
+                self.send_header('Content-Type',mime)
+                self.send_header('Content-Length',str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def do_GET(self):
+                route=self.path.split('?')[0]
+                if route=='/':
+                    html=web_ui.page('test-csrf',language=browser_language[0])
+                    return self.send(html.replace('</body>', '<script src="/test.js"></script></body>'),'text/html')
+                if route=='/test.js':
+                    return self.send(Path(__file__).with_name('web_browser_test.js').read_text(encoding='utf-8'),'text/javascript')
+                if route in ('/web-client.js','/web-client.css'):
+                    return self.send(web_ui.asset(route[1:]),'text/javascript' if route.endswith('.js') else 'text/css')
+                if route=='/api/live':
+                    live_reads.append(True)
+                    return self.send({'lines':[['green','live milestone '+str(len(live_reads))]]})
+                if route=='/api/settings/view' and 'project=' in self.path:
+                    return self.send({'data':{'name':'demo','compileCheck':'check'},'revision':'project-revision',
+                                      'place':{'repository':'demo-repository','plansFolder':'demo-plans'},
+                                      'workspace':'demo-plans','project_defaults':{'integrationBranch':'develop'},'rules':[{'label':'AGENTS.md','path':'AGENTS.md','tokens':12,'native_clis':['Codex CLI']}],
+                                      'upstream':{'on':False,'usable':False,'note':''}})
+                value={'/api/state':state, '/api/providers':[{'name':'mock','logged_in':True}],
+                       '/api/settings/view':{'data':data,'revision':'revision-1','provider_models':{'mock':{'models':['test'],'efforts':['medium']}}},
+                       '/api/updates':{'available':{'version':'v9.0.0'}},
+                       '/api/plans':[{'name':'Mock','apiary':'demo','plan_path':'mock.md','status':'RUNNING','has_hive':True}],
+                       '/api/plan/providers':[{'name':'mock','current':True,'selectable':False},
+                                              {'name':'excluded','current':False,'selectable':False},
+                                              {'name':'available','current':False,'selectable':True}],
+                       '/api/questions':[{'id':1,'project':'demo','plan_path':'mock.md','text':'Proceed?','item':'question'},
+                                         {'id':2,'project':'demo','plan_path':'mock.md','text':'Review?','item':'owner-check','packages':['P1']}],
+                       '/api/live':{'lines':[['green','live milestone']]},
+                       '/test-actions':actions}.get(route,{})
+                self.send(value)
+            def do_POST(self):
+                action=self.path.removeprefix('/api/')
+                payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                actions.append({'action':action,'data':payload})
+                if self.headers.get('X-CSRF-Token')!='test-csrf':
+                    return self.send({'error':'missing CSRF'},status=403)
+                if action=='settings/save':
+                    if sum(row['action']==action for row in actions)==1:
+                        return self.send({'error':'Settings changed since loading; reload before saving'},status=400)
+                    import time
+                    time.sleep(0.15)
+                    if not payload.get('project'):
+                        browser_language[0]=payload['data'].get('language','English')
+                    return self.send({'data':payload['data'],'revision':'revision-2'})
+                if action=='login/start':
+                    return self.send({'id':'login-1','provider':'mock','running':True,'output':'ABCD-EFGH','links':['https://example.invalid/device']})
+                if action=='updates/check':
+                    return self.send({'available':{'version':'v9.0.0'}})
+                self.send({'ok':True})
+            def log_message(self, *_args):
+                pass
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        thread=threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as profile:
+                command=[browser,'--headless','--disable-gpu','--no-first-run','--no-default-browser-check',
+                         '--disable-extensions','--disable-background-networking','--user-data-dir='+profile,
+                         '--dump-dom','--virtual-time-budget=15000','http://127.0.0.1:'+str(server.server_port)]
+                result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45,
+                                      **({'creationflags':subprocess.CREATE_NO_WINDOW} if os.name=='nt' else {}))
+                failure=result.stdout.split('BROWSER TEST:')[-1][-1500:]
+                self.assertTrue('data-test-result="passed"' in result.stdout, failure+result.stderr[-300:])
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+
+class SettingsViewTests(RoundCase):
+    def test_project_rules_explain_native_cli_loading(self):
+        from unittest.mock import patch
+        rules = [{'label':'AGENTS.md','name':'AGENTS.md','upstream':False},
+                 {'label':'upstream AGENTS.md','name':'AGENTS.md','upstream':True}]
+        with patch('haivequeen.profile.rule_entries', return_value=rules):
+            result = web_api.execute(self.conn, 'settings/view', {'project':'testproj'})
+        self.assertIn('Codex', result['rules'][0]['native_clis'])
+        self.assertEqual(result['rules'][1]['native_clis'], [])
+
+    def test_project_form_keeps_the_repository_default_branch(self):
+        from unittest.mock import patch
+        with patch('haivequeen.projsettings.derive_remote',return_value=('origin',False)), \
+             patch('haivequeen.projsettings.default_branch',return_value='develop'):
+            result=web_api.execute(self.conn,'settings/view',{'project':'testproj'})
+        self.assertEqual(result['project_defaults']['integrationBranch'],'develop')
+
+    def test_automatic_update_check_obeys_the_existing_interval(self):
+        from unittest.mock import patch
+        with patch('haivequeen.updates.check',return_value=None) as check:
+            web_api.execute(self.conn,'updates/check',{'automatic':True})
+        self.assertFalse(check.call_args.kwargs['manual'])
+
+    def test_project_place_refuses_moving_registered_settings(self):
+        loaded=web_api.execute(self.conn, 'settings', {'project':'testproj'})
+        with self.assertRaisesRegex(ValueError, 'settings of this Project are kept'):
+            web_api.execute(self.conn, 'settings/save', {**loaded,'project':'testproj','place':{'repository':'other-repository','plansFolder':''}})
+
+    def test_project_view_includes_knowledge_base_and_workspace(self):
+        from unittest.mock import patch
+        with patch('haivequeen.profile.rule_entries', return_value=[{'label':'AGENTS.md','path':'AGENTS.md','tokens':12,'on':True}]), \
+             patch('haivequeen.profile.upstream_state', return_value={'usable':False,'on':False,'note':''}):
+            result = web_api.execute(self.conn, 'settings/view', {'project':'testproj'})
+        self.assertIn('revision', result)
+        self.assertEqual(result['rules'][0]['tokens'], 12)
+        self.assertTrue(result['workspace'])
+        self.assertNotIn('password', result['data'].get('web', {}))
+
+    def test_machine_view_has_saved_provider_models_and_benchmarks(self):
+        result = web_api.execute(self.conn, 'settings/view', {})
+        self.assertIn('provider_models', result)
+        self.assertIn('benchmark', result)
+        self.assertIn('data', result)
+        self.assertEqual(result['build']['minFreeRamGB'], 2)
+        self.assertGreater(result['cores'], 0)
+
+    def test_profile_install_uses_existing_installer_as_a_job(self):
+        from unittest.mock import patch
+        with patch('haivequeen.web_jobs.start', return_value={'id':'install'}) as start:
+            result = web_api.execute(self.conn, 'tools/install', {})
+        self.assertEqual(result['id'], 'install')
+        with patch('haivequeen.bzz_install.install', return_value={'mock':'installed'}) as install:
+            self.assertEqual(start.call_args.args[1](lambda _text: None), {'mock':'installed'})
+        install.assert_called_once_with()
+
+
+class ProviderBrowserLoginTests(unittest.TestCase):
+    def test_builtin_logins_stream_in_browser_and_accept_returned_code(self):
+        import sys
+        import time
+        from unittest.mock import patch
+        from haivequeen import web_login
+        for protocol in ('codex','claude'):
+            with self.subTest(protocol=protocol), tempfile.TemporaryDirectory() as folder:
+                script=Path(folder)/'standin.py'
+                script.write_text('import sys\nprint("https://example.invalid/device CODE-567 " + " ".join(sys.argv[1:]), flush=True)\nprint("received:"+input(),flush=True)\n',encoding='utf-8')
+                provider={'name':'mock-'+protocol,'protocol':protocol,'command':'"%s" -u "%s"' % (sys.executable,script)}
+                with patch('haivequeen.profile.prepare',return_value=True), patch('haivequeen.profile.environment',return_value=dict(os.environ)):
+                    run=web_login.start(provider)
+                token=run['id']
+                try:
+                    deadline=time.monotonic()+5
+                    while 'CODE-567' not in web_login.status(token)['output'] and time.monotonic()<deadline:
+                        time.sleep(.01)
+                    self.assertIn('https://example.invalid/device',web_login.status(token)['links'])
+                    if protocol=='codex':
+                        self.assertIn('login --device-auth',web_login.status(token)['output'])
+                    web_login.send(token,'returned-code')
+                    while web_login.status(token)['running'] and time.monotonic()<deadline:
+                        time.sleep(.01)
+                    self.assertFalse(web_login.status(token)['running'])
+                    self.assertIn('received:returned-code',web_login.status(token)['output'])
+                finally:
+                    web_login.close()

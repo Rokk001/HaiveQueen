@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 from bzztest import REL, RoundCase
-from haivequeen import db, gui_config, publish, releases, runtime, scheduler, selfupdate
+from haivequeen import db, settings, publish, releases, runtime, scheduler, selfupdate
 
 SHA = "c" * 40
 SHA2 = "d" * 40
@@ -59,7 +59,7 @@ class SwitchTests(PublishCase):
     def test_defaults_off_and_empty(self):
         self.assertIs(scheduler.DEFAULT_SETTINGS["publishReleases"], False)
         self.assertEqual(scheduler.DEFAULT_SETTINGS["nextVersion"], "")
-        keys = dict(gui_config.APIARY_DEFAULTS)
+        keys = dict(settings.APIARY_DEFAULTS)
         self.assertIs(keys["publishReleases"], False)
         self.assertEqual(keys["nextVersion"], "")
 
@@ -75,15 +75,15 @@ class SwitchTests(PublishCase):
 
     def test_the_switch_is_offered_only_for_a_github_remote(self):
         shown = {"publishReleases": False, "nextVersion": "", "remoteName": "origin"}
-        self.assertIn("publishReleases", gui_config.release_fields(dict(shown), "owner/tool"))
-        hidden = gui_config.release_fields(dict(shown), None)
+        self.assertIn("publishReleases", settings.release_fields(dict(shown), "owner/tool"))
+        hidden = settings.release_fields(dict(shown), None)
         self.assertNotIn("publishReleases", hidden)
         self.assertNotIn("nextVersion", hidden)
 
     def test_next_version_is_validated_at_save(self):
-        self.assertTrue(gui_config.check({"nextVersion": "2.1"}, False))
-        self.assertFalse(gui_config.check({"nextVersion": "2.1.0"}, False))
-        self.assertFalse(gui_config.check({"nextVersion": ""}, False))
+        self.assertTrue(settings.check({"nextVersion": "2.1"}, False))
+        self.assertFalse(settings.check({"nextVersion": "2.1.0"}, False))
+        self.assertFalse(settings.check({"nextVersion": ""}, False))
 
 
 class CountUpTests(PublishCase):
@@ -395,7 +395,7 @@ class IntegrationPointTests(PublishCase):
             old = runtime.queue_upsert(self.conn, "testproj", "old", tip=self.tip, plan="old.md", status="integrated")
         data["publishReleases"] = True
         with mock.patch("haivequeen.db.now", return_value="2002-01-01T00:00:00"):
-            gui_config.save_project_file(self.conn, path, data)
+            settings.save_project_file(self.conn, path, data)
         with mock.patch("haivequeen.db.now", return_value="2003-01-01T00:00:00"):
             runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
         with mock.patch("haivequeen.db.now", return_value="2004-01-01T00:00:00"):
@@ -453,14 +453,14 @@ class IntegrationPointTests(PublishCase):
             eligible = runtime.queue_upsert(self.conn, "testproj", "feature", tip=self.tip, plan=REL, status="integrated")
         data = config._load_toml(path)
         data["publishReleases"] = False
-        gui_config.save_project_file(self.conn, path, data)
+        settings.save_project_file(self.conn, path, data)
         with mock.patch("haivequeen.db.now", return_value="2002-01-01T00:00:00"):
             excluded = runtime.queue_upsert(self.conn, "testproj", "disabled", tip=self.tip, plan="disabled.md", status="integrated")
         self.assertIsNone(self.after())
         self.assertEqual(self.retry(), [])
         data["publishReleases"] = True
         with mock.patch("haivequeen.db.now", return_value="2003-01-01T00:00:00"):
-            gui_config.save_project_file(self.conn, path, data)
+            settings.save_project_file(self.conn, path, data)
         self.retry()
         self.assertEqual([p[2] for p in self.published], [self.merge])
         self.assertTrue(runtime.kv_get(self.conn, "testproj", publish.DONE_PREFIX + str(eligible["id"])))

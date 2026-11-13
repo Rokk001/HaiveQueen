@@ -13,7 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import isolation  # noqa: E402,F401  (redirects the default data and settings folders to a temp folder before anything is imported)
-from haivequeen import db, gui, loop, overview, selfupdate, updates  # noqa: E402
+from haivequeen import db, loop, overview, selfupdate, updates  # noqa: E402
 from test_selfupdate import NEW, OLD, FakeGit, SelfUpdateBase  # noqa: E402
 
 WORKER_LINE = "python -m haivequeen self-update --worker"
@@ -197,34 +197,6 @@ class RefusedStartTest(SelfUpdateBase):
             code = loop.cmd_start(args, self.conn)
         self.assertEqual(code, 1)
         self.assertIn("waiting for running agents", json.loads(printed.call_args.args[0])["error"])
-
-    def test_start_refusal_text_from_the_output(self):
-        """The reason is the error of the last JSON line, or the last error line of a crash."""
-        out = 'noise\n{"ok": false, "updating": true, "error": "An update is waiting for running agents; HaiveQueen starts again after it."}\n'
-        self.assertIn("waiting for running agents", gui.start_refusal(1, out, ""))
-        self.assertEqual(gui.start_refusal(0, '{"ok": true}', ""), "")
-        self.assertIn("boom", gui.start_refusal(1, "", "Traceback\nTimeoutError: boom"))
-
-    def test_dashboard_start_shows_a_refusal_in_a_message(self):
-        """Start clicked, start refused: the dashboard opens a message with the reason."""
-        shown = []
-        stub = mock.Mock()
-        stub.inform.side_effect = lambda text, *a, **k: shown.append(text)
-        done = Namespace(returncode=1, stdout='{"ok": false, "error": "Waiting for the previous stop to finish."}\n', stderr="")
-        with mock.patch.object(gui.subprocess, "run", return_value=done), \
-                mock.patch.object(gui.gui_async, "run_async", side_effect=lambda widget, work, done_cb, failed=None, **k: done_cb(work())):
-            gui.Dashboard.start(stub)
-        self.assertEqual(len(shown), 1)
-        self.assertIn("previous stop", shown[0])
-
-    def test_dashboard_start_without_refusal_shows_nothing(self):
-        """A start that went through shows no message."""
-        stub = mock.Mock()
-        done = Namespace(returncode=0, stdout='{"ok": true}\n', stderr="")
-        with mock.patch.object(gui.subprocess, "run", return_value=done), \
-                mock.patch.object(gui.gui_async, "run_async", side_effect=lambda widget, work, done_cb, failed=None, **k: done_cb(work())):
-            gui.Dashboard.start(stub)
-        stub.inform.assert_not_called()
 
 
 if __name__ == "__main__":

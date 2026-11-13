@@ -90,16 +90,16 @@ class AttemptCountingTest(RoundCase):
     # The window shows waiting packages with their reason.
     def test_window_row_shows_waiting_packages(self):
         """hive_row counts the waiting packages and names each with its reason; without any the count is zero."""
-        from haivequeen import gui_data
+        from haivequeen import dashboard_data
         hive = {'project': 'testproj', 'plan_path': REL, 'name': 'Hive', 'status': 'active', 'bees': []}
-        self.assertEqual(gui_data.waiting_map(self.conn), {})
+        self.assertEqual(dashboard_data.waiting_map(self.conn), {})
         bees.set_package_state(self.conn, 'testproj', REL, 'B1', 'waiting', 'queen', 'build')
         bees.set_package_state(self.conn, 'testproj', REL, 'C1', 'waiting', 'queen', 'question:7')
-        waiting = gui_data.waiting_map(self.conn)
+        waiting = dashboard_data.waiting_map(self.conn)
         self.assertEqual(waiting[('testproj', REL)], [('B1', 'build'), ('C1', 'question:7')])
-        row = gui_data.hive_row(hive, [], {('testproj', REL): 3}, gui_data.datetime.now(), waiting=waiting)
+        row = dashboard_data.hive_row(hive, [], {('testproj', REL): 3}, dashboard_data.datetime.now(), waiting=waiting)
         self.assertEqual((row['waiting'], row['waiting_reasons']), (2, 'B1 build, C1 question:7'))
-        self.assertEqual(gui_data.hive_row(hive, [], {('testproj', REL): 3}, gui_data.datetime.now())['waiting'], 0)
+        self.assertEqual(dashboard_data.hive_row(hive, [], {('testproj', REL): 3}, dashboard_data.datetime.now())['waiting'], 0)
 
     # The verify count of the second counter ignores packages closed by build or owner.
     def test_open_verify_items_count_only_for_code_packages(self):

@@ -2,14 +2,14 @@
 from unittest import mock
 
 from bzztest import REL, RoundCase
-from haivequeen import db, gui_data, hives, plans, runtime
+from haivequeen import db, dashboard_data, hives, plans, runtime
 
 
 # German state text of the Hive as the dashboard shows it without a running Queen.
 def hive_text(conn):
     """"Queen: <state>" of the Plan of the dummy plan: the state label, or "No active Queen" when it has none."""
     data = next(iter(hives.hive_data(conn, 'testproj', runtime.list_agents(conn, 'testproj', 'active'), REL)), None) or {"queen": None, "bees": [], **(hives.get(conn, 'testproj', REL) or {})}
-    return "Queen: " + (gui_data.status_text(data) or "No active Queen")
+    return "Queen: " + (dashboard_data.status_text(data) or "No active Queen")
 
 
 # Exercise completion evidence and preserve unresolved owner decisions.
@@ -204,7 +204,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
         self.round(free_ram=lambda: 0.0)
         data = hives.hive_data(self.conn, 'testproj', [], REL)[0]
         self.assertTrue(data['blocker'].startswith('free RAM '))
-        self.assertIn('Not enough free RAM', gui_data.status_text(data))
+        self.assertIn('Not enough free RAM', dashboard_data.status_text(data))
         self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'waiting')
 
     # Stop and pause gates must replace a prior Hive-limit blocker.
@@ -222,7 +222,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
                     self.round()
                 data = hives.hive_data(self.conn, 'testproj', [], REL)[0]
                 self.assertEqual(data['blocker'], state)
-                self.assertEqual(gui_data.status_text(data), label)
+                self.assertEqual(dashboard_data.status_text(data), label)
                 self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'waiting')
 
     # A blocker written while HaiveQueen was paused or stopped disappears once the gates are open.
@@ -246,7 +246,7 @@ class HiveLifecycleRecoveryTests(RoundCase):
              mock.patch('haivequeen.runstate.get_state', return_value={'state': 'PAUSED'}):
             self.round()
         data = hives.hive_data(self.conn, 'testproj', [], REL)[0]
-        self.assertEqual(gui_data.status_text(data), 'Waiting for answer (#%s)' % qid)
+        self.assertEqual(dashboard_data.status_text(data), 'Waiting for answer (#%s)' % qid)
         self.conn.execute("UPDATE hives SET state='running'")
         self.agent('active', phase='queen', status='starting', pid=None)
         runtime.kv_set(self.conn, 'testproj', 'hive-blocker:' + REL, 'existing')
