@@ -1,4 +1,5 @@
 """Browser shell and shared settings labels; no separate settings store."""
+import base64
 import json
 from pathlib import Path
 
@@ -35,13 +36,17 @@ def page(csrf, language=None):
                              if k in projsettings.KEPT_KEYS},
                  'presets': cli_presets.PRESETS,
                  'updateConfirm': updates.TEXT_CONFIRM}
+    favicon = 'data:image/png;base64,' + base64.b64encode(Path(__file__).with_name('web-icon.png').read_bytes()).decode('ascii')
+    banner = Path(__file__).with_name('web-header.png')
+    branding = ('<img class="brand-banner" alt="HaiveQueen — AI Agent Orchestrator" src="data:image/png;base64,'
+                + base64.b64encode(banner.read_bytes()).decode('ascii') + '">') if banner.is_file() else '<h1>HaiveQueen</h1>'
     data = json.dumps(bootstrap, ensure_ascii=False).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     return ('<!doctype html><html lang="' + ('de' if i18n.is_german_language(language) else 'en') + '">'
             '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<title>HaiveQueen</title><link rel="stylesheet" href="/web-client.css"></head><body>'
-            '<header><h1>HaiveQueen <small id="version"></small></h1><div id="controls"></div></header>'
-            '<nav id="tabs" aria-label="Navigation"></nav><p id="notice" role="status" aria-live="polite"></p>'
-            '<main id="app"></main><aside id="live"></aside><dialog id="detail"><button id="close-detail">×</button>'
+            '<title>HaiveQueen</title><link rel="icon" type="image/png" href="' + favicon + '"><link rel="stylesheet" href="/web-client.css"></head><body>'
+            '<header class="app-header"><div class="environment-bar"><span id="environment-label">HaiveQueen</span><div class="version-group"><span id="version"></span><span id="update-status"></span></div></div><div class="brand-header"><canvas id="honeycomb" aria-hidden="true"></canvas>' + branding + '</div><div class="command-bar"><div id="controls"></div></div>'
+            '<nav id="tabs" aria-label="Navigation"></nav></header><p id="notice" role="status" aria-live="polite"></p>'
+            '<main id="app"></main><aside id="live"></aside><dialog id="detail" aria-labelledby="detail-title"><button id="close-detail" aria-label="Close">×</button>'
             '<div id="detail-body"></div></dialog><script id="bootstrap" type="application/json">' + data +
             '</script><script src="/web-client.js" defer></script></body></html>')
 
