@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const {Client, planActions, setValue, safeLinks, toolsFromArgs, withTools} = require('../haivequeen/web-client.js');
+const {Client, planActions, setValue, safeLinks, toolsFromArgs, withTools, orchestratorDisabled} = require('../haivequeen/web-client.js');
 
 (async () => {
   const calls = [], notices = [];
@@ -21,6 +21,9 @@ const {Client, planActions, setValue, safeLinks, toolsFromArgs, withTools} = req
   assert(planActions({status:'PAUSED',stopped:true}).includes('resume'));
   assert(!planActions({status:'DONE'}).includes('resume'));
   assert(!planActions({status:'RUNNING'}).includes('resume'));
+  assert.equal(orchestratorDisabled('force-stop','STOPPED'),false,'Force stop remains available for orphaned work');
+  assert.equal(orchestratorDisabled('start','RUNNING'),true);
+  assert.equal(orchestratorDisabled('stop-gracefully','STOPPING'),true);
   const data={classes:{medium:{model:'old'}}, slots:2};
   setValue(data,['classes','medium','model'],'new');
   assert.equal(data.classes.medium.model,'new');

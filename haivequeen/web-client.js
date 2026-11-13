@@ -7,6 +7,11 @@ function setValue(object, path, value) {
   target[path[path.length - 1]] = value;
 }
 function safeLinks(links) { return links.filter(link => /^https?:\/\//i.test(link)); }
+function orchestratorDisabled(action, label) {
+  if(action==='start')return label!=='STOPPED';
+  if(action==='stop-gracefully')return label==='STOPPED'||label==='STOPPING';
+  return false;
+}
 function toolsFromArgs(args) {
   const index=args.indexOf('--allowedTools');if(index<0 || index+1>=args.length)return [];
   const result=[];let depth=0,current='';
@@ -153,10 +158,9 @@ function mount(document, bootstrap) {
   function renderControls() {
     const state=client.state || {}, toolbar=el('div',undefined,'toolbar');
     toolbar.append(el('span',t('Orchestrator')+': '+(state.orchestrator?.label || '…')));
-    const stopped=state.orchestrator?.label==='STOPPED',stopping=state.orchestrator?.label==='STOPPING';
     for(const action of ['start','stop-gracefully','force-stop']){
       const node=button(actions[action],()=>act(action,{},action==='force-stop'?state.controls?.force_warning:t(actions[action]+' HaiveQueen?')));
-      node.disabled=action==='start'?!stopped:stopped||(action==='stop-gracefully'&&stopping);toolbar.append(node);
+      node.disabled=orchestratorDisabled(action,state.orchestrator?.label);toolbar.append(node);
     }
     toolbar.append(el('span',t('Web server')),
       button('Stop',async()=>{if(await client.action('web/stop',{},t('Stop the web server? The browser will disconnect.')))client.notice(t('Web server stopped.'));}),
@@ -512,5 +516,5 @@ function mount(document, bootstrap) {
   render();void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={Client,planActions,setValue,safeLinks,toolsFromArgs,withTools,mount};
+if(typeof module!=='undefined')module.exports={Client,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));
