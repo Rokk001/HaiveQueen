@@ -21,6 +21,11 @@ class BrowserTests(unittest.TestCase):
         self.assertIn('web-client.js', page)
         self.assertNotIn('</script><attack>', web_ui.page('</script><attack>'))
 
+    def test_german_dashboard_labels(self):
+        from haivequeen import i18n
+        for label in ('Questions', 'Limits', 'Queue', 'Clear', 'Resume', 'Update'):
+            self.assertNotEqual(i18n.tr(label, language='German'), label, label)
+
     def test_client_behaviour(self):
         node = shutil.which('node')
         if not node:

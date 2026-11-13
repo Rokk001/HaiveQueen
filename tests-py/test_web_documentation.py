@@ -17,3 +17,10 @@ class WebDocumentationTests(unittest.TestCase):
             self.assertIn(phrase.lower(), guide.lower())
         readme = Path('README.md').read_text(encoding='utf-8')
         self.assertIn('docs/WEB-API.md', readme)
+
+    def test_provider_login_is_documented_in_the_web_interface(self):
+        profile = Path('docs/PROFILE.md').read_text(encoding='utf-8')
+        self.assertNotIn('visible terminal window', profile)
+        self.assertIn('web interface', profile)
+        self.assertIn('device login', profile)
+        self.assertIn('code', profile)

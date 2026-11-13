@@ -399,6 +399,8 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
 
 
 GERMAN = {
+    "Questions": "Fragen", "Limits": "Grenzen", "Queue": "Warteschlange",
+    "Clear": "Leeren", "Resume": "Fortsetzen", "Update": "Aktualisieren",
     "Coding (including tests, docs and review)": "Programmierung (einschließlich Tests, Dokumentation und Prüfung)",
     "Queen (plan cutting and coordination)": "Queen (Planaufteilung und Koordination)",
     "Build (with this machine’s tools)": "Build (mit den Werkzeugen dieses Rechners)",
