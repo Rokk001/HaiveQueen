@@ -93,11 +93,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(15)
 
-    def reply(self, status, value, cookie=None):
+    def reply(self, status, value, cookie=None, content_type=None):
         html = isinstance(value, str)
         body = value.encode('utf-8') if html else json.dumps(value, ensure_ascii=False, default=json_value).encode('utf-8')
         self.send_response(status)
-        self.send_header('Content-Type', 'text/html; charset=utf-8' if html else 'application/json; charset=utf-8')
+        self.send_header('Content-Type', content_type or ('text/html; charset=utf-8' if html else 'application/json; charset=utf-8'))
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
@@ -158,12 +158,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return self.reply(200, self.page(setup=True))
         if configured and path == '/login':
             return self.reply(200, self.page())
-        if not configured or not self.session(settings):
+        entry = self.session(settings) if configured else None
+        if not configured or not entry:
             return self.reply(401, self.page() if path == '/' else {'error': 'Login required'})
         if path == '/':
-            # The dashboard package supplies the full interface at this boundary.
-            return self.reply(200, '<!doctype html><meta charset="utf-8"><title>HaiveQueen</title><h1>HaiveQueen</h1><div id="app"></div>')
-        if path not in ('/api/state', '/api/plans', '/api/plan/providers', '/api/questions', '/api/settings', '/api/providers', '/api/live', '/api/login/status', '/api/updates', '/api/benchmark', '/api/jobs/status'):
+            from . import web_ui
+            return self.reply(200, web_ui.page(entry['csrf']))
+        if path in ('/web-client.js', '/web-client.css'):
+            from . import web_ui
+            return self.reply(200, web_ui.asset(path[1:]), content_type='text/javascript; charset=utf-8' if path.endswith('.js') else 'text/css; charset=utf-8')
+        if path not in ('/api/state', '/api/plans', '/api/plan/providers', '/api/questions', '/api/settings', '/api/settings/view', '/api/providers', '/api/live', '/api/login/status', '/api/updates', '/api/benchmark', '/api/jobs/status'):
             return self.reply(404, {'error': 'Unknown route'})
         from urllib.parse import parse_qs
         data = {k: v[-1] for k, v in parse_qs(urlsplit(self.path).query).items()}
