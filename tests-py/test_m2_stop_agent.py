@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from bzztest import REL, RoundCase, db, runtime
-from haivequeen import bees, cli, faults, gui_data, hives, inbox, owner, readygate
+from haivequeen import bees, cli, faults, dashboard_data, hives, inbox, owner, readygate
 
 
 class StopAgentTest(RoundCase):
@@ -164,42 +164,11 @@ class StopAgentTest(RoundCase):
     def test_dashboard_rows_carry_the_stop_state(self):
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Sub", "medium", "claude", queen="Queen-A")
         agents = [dict(a) for a in runtime.list_agents(self.conn, "testproj", "active")]
-        rows = gui_data.bee_list(agents, {}, set(), datetime.now(), embedded=gui_data.embedded_rows(self.conn))
+        rows = dashboard_data.bee_list(agents, {}, set(), datetime.now(), embedded=dashboard_data.embedded_rows(self.conn))
         by = {r["name"]: r for r in rows}
         self.assertEqual(by["Cleo"]["stop_agent"], "Cleo")
         self.assertEqual(by["Cleo"]["stop_disabled"], "")
         self.assertEqual(by["Sub"]["stop_disabled"], owner.EMBEDDED_REASON % "Sub")
-
-    def test_dashboard_button_uses_the_shared_function(self):
-        self.seed_fault_detection()
-        from haivequeen import gui
-        cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "stop_agent_button"))
-        app = mock.Mock(conn=self.conn, confirm=lambda text: True)
-        row = {"kind": "bee", "name": "Bea", "agent": "Bea", "project": "testproj", "stop_agent": "Bea", "stop_disabled": ""}
-        with mock.patch("haivequeen.platform.kill_process_tree", return_value=True) as kill:
-            cls.stop_agent_button(app, row)
-        self.assert_only_stopped("Bea", kill)
-        self.assert_no_missing_result_fault()
-        with mock.patch("haivequeen.platform.kill_process_tree", return_value=True) as kill:
-            cls.stop_agent_button(app, {**row, "name": "Cleo", "agent": "Cleo", "stop_agent": "Cleo", "stop_disabled": "reason text"})
-        kill.assert_not_called()
-        app.inform.assert_called_with("reason text")
-
-    def test_dashboard_lists_and_stops_running_ready_check(self):
-        from haivequeen import gui
-        cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "stop_agent_button"))
-        agents = [dict(a) for a in runtime.list_agents(self.conn, "testproj", "active")]
-        rows = gui_data.bee_list(agents, {}, set(), datetime.now())
-        row = next(r for r in rows if r.get("agent") == "Queen-A-ready-check")
-        self.assertEqual(row["stop_agent"], "Queen-A-ready-check")
-        self.assertEqual(row["stop_disabled"], "")
-        app = mock.Mock(conn=self.conn, confirm=lambda text: True)
-        with mock.patch("haivequeen.platform.kill_process_tree", return_value=True) as kill:
-            cls.stop_agent_button(app, row)
-        self.assert_only_stopped("Queen-A-ready-check", kill)
-        agents = [dict(a) for a in runtime.list_agents(self.conn, "testproj", "active")]
-        self.assertFalse(any(r.get("agent") == "Queen-A-ready-check"
-                             for r in gui_data.bee_list(agents, {}, set(), datetime.now())))
 
 
 class QueenRoleTextTest(unittest.TestCase):

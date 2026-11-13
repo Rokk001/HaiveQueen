@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from bzztest import REL, RoundCase
-from haivequeen import config, db, filetxn, gui_config, inbox, owner, runtime, servers
+from haivequeen import config, db, filetxn, settings, inbox, owner, runtime, servers
 
 
 CHILD = r'''
@@ -80,7 +80,7 @@ class InboxRecovery(RoundCase):
     def check_recovered(self):
         self.assertEqual(inbox.process_inbox(self.env()), {'done': [], 'failed': []})
         self.assertFalse(self.source.exists())
-        self.assertFalse(gui_config.load_migrated(self.settings_path)['providers'][0]['enabled'])
+        self.assertFalse(settings.load_migrated(self.settings_path)['providers'][0]['enabled'])
         self.assertEqual(self.settings_path.with_suffix('.toml.bak').read_bytes(), self.original)
         self.assertIn('PAUSED', (self.repo / REL).read_text())
         self.assertEqual(runtime.list_plans(self.conn, 'testproj')[0]['status'], 'PAUSED')
@@ -200,12 +200,12 @@ class InboxRecovery(RoundCase):
         self.assertEqual(texts.count('Concurrent message'), 1)
 
     def test_stale_settings_page_cannot_overwrite_owner_command(self):
-        page = gui_config.load_migrated(self.settings_path)
+        page = settings.load_migrated(self.settings_path)
         owner.apply(self.conn, 'provider', provider='account', provider_action='disable')
         page['slots'] = 9
         with self.assertRaisesRegex(ValueError, 'reload'):
-            gui_config.save_file(self.settings_path, page)
-        self.assertFalse(gui_config.load_migrated(self.settings_path)['providers'][0]['enabled'])
+            settings.save_file(self.settings_path, page)
+        self.assertFalse(settings.load_migrated(self.settings_path)['providers'][0]['enabled'])
 
     def test_other_thread_writer_waits_and_keeps_committed_changes(self):
         attempted, completed = threading.Event(), threading.Event()
@@ -213,9 +213,9 @@ class InboxRecovery(RoundCase):
         def writer():
             attempted.set()
             try:
-                data = gui_config.load_migrated(self.settings_path)
+                data = settings.load_migrated(self.settings_path)
                 data['slots'] = 9
-                gui_config.save_file(self.settings_path, data)
+                settings.save_file(self.settings_path, data)
             except BaseException as exc:
                 errors.append(exc)
             finally:
@@ -229,7 +229,7 @@ class InboxRecovery(RoundCase):
         thread.join(10)
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
-        data = gui_config.load_migrated(self.settings_path)
+        data = settings.load_migrated(self.settings_path)
         self.assertEqual(data['slots'], 9)
         self.assertFalse(data['providers'][0]['enabled'])
 

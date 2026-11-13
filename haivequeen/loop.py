@@ -241,7 +241,7 @@ def runner_argv(env, spec: dict) -> list:
 def launch_headless(env, spec: dict) -> None:
     """Start the runner of an agent as its own hidden process; its stdout and stderr go to runner.log in the run folder and the runner sets the pid in the agent row.
 
-    The live text of the agent (what the graphical dashboard shows) is written by the runner itself to milestones.txt in the same folder."""
+    The live text of the agent (what the browser dashboard shows) is written by the runner itself to milestones.txt in the same folder."""
     log = open(env.run_dir(spec["name"]) / "runner.log", "ab")
     flags = {"creationflags": 0x08000000 | 0x00000200} if osplat.is_windows() else {"start_new_session": True}   # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP (hidden console: its children open no windows)
     try:
@@ -971,10 +971,10 @@ def start_boot_command(args) -> list:
     return cmd
 
 
-# Start a session: the loop as a hidden process and the graphical window.
+# Start a session: the loop as a hidden process and the browser dashboard.
 def cmd_start(args, conn) -> int:
-    """`bzz start`: run the loop in this process (--foreground), or start it as a hidden background process (no terminal window) and open the graphical dashboard once."""
-    from . import config, gui, i18n, web_service
+    """`bzz start`: run the loop in this process (--foreground), or start it as a hidden background process (no terminal window) and open the browser dashboard once."""
+    from . import config, i18n, web_service
     if args.foreground and getattr(args, "desktop", False):
         raise ValueError(i18n.tr("The desktop message supports only the background start."))
     restart_allowance = os.environ.pop("BZZ_UPDATE_RESTART", None)   # consumed here; loop children must not inherit it
@@ -995,11 +995,20 @@ def cmd_start(args, conn) -> int:
             web_service.start()
         except (OSError, ValueError) as exc:
             return command_result(args, {'ok': False, 'error': str(exc)}) or 1
+    def browser_result():
+        try:
+            return web_service.open_browser(), None
+        except (OSError, ValueError) as exc:
+            return {}, str(exc)
+
     if pid:
         if stop_flag().exists():
             return refuse_start(args, conn, {"running": True, "stopping": True, "pid": pid, "running_agents": active_count(conn)},
                                 "Waiting for the previous stop to finish.")
-        return command_result(args, {"ok": True, "running": True, "pid": pid, **({} if args.foreground or getattr(args, 'no_browser', False) else gui.launch_detached()),
+        browser, error = ({}, None) if args.foreground or getattr(args, 'no_browser', False) else browser_result()
+        if error:
+            return command_result(args, {'ok': False, 'running': True, 'pid': pid, 'error': error}) or 1
+        return command_result(args, {"ok": True, "running": True, "pid": pid, **browser,
                                      "note": "The orchestrator is already running."})
     try:
         if "(self-update)" in stop_flag().read_text(encoding="utf-8", errors="replace"):   # an older self-update restarts without --keep-pause
@@ -1018,30 +1027,33 @@ def cmd_start(args, conn) -> int:
     with start_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first
         pid = loop_running()
         if pid:
-            return command_result(args, {"ok": True, "running": True, "pid": pid, **({} if getattr(args, 'no_browser', False) else gui.launch_detached()), "note": "The orchestrator is already running."})
+            browser, error = ({}, None) if getattr(args, 'no_browser', False) else browser_result()
+            if error:
+                return command_result(args, {'ok': False, 'running': True, 'pid': pid, 'error': error}) or 1
+            return command_result(args, {"ok": True, "running": True, "pid": pid, **browser, "note": "The orchestrator is already running."})
         if start_pending():
             return refuse_start(args, conn, {"running": False, "starting": True}, "The orchestrator is just starting.")
         start_pending_file().parent.mkdir(parents=True, exist_ok=True)
         start_pending_file().write_text(str(os.getpid()), encoding="ascii")
         try:
             spawn_detached(boot, osplat.runs_dir() / "beekeeper.log", env={"BZZ_UPDATE_RESTART": "1"} if by_worker or restart_allowance else None)   # the loop process is no child of the worker   # the loop has no window: its output goes to this file, round errors show in the dashboard
-            return command_result(args, {"ok": True, **({} if getattr(args, 'no_browser', False) else gui.launch_detached())})
         except Exception:
             start_pending_file().unlink()
             raise
+        browser, error = ({}, None) if getattr(args, 'no_browser', False) else browser_result()
+        if error:
+            return command_result(args, {'ok': False, 'starting': True, 'error': error}) or 1
+        return command_result(args, {"ok": True, **browser})
 
 
-# Open the graphical dashboard.
+# Open the browser dashboard.
 def cmd_gui(args, conn) -> int:
-    """`bzz gui`: show the graphical dashboard window (blocks until it is closed); --detach opens it as a process of its own and returns."""
-    from . import gui, web_service
+    """Open the web interface in the default browser."""
+    from . import web_service
     try:
-        web_service.start()
+        return command_result(args, {"ok": True, **web_service.open_browser()})
     except (OSError, ValueError) as exc:
         return command_result(args, {'ok': False, 'error': str(exc)}) or 1
-    if args.detach:
-        return command_result(args, {"ok": True, **gui.launch_detached()})
-    return gui.main(["--project", args.project] if args.project else [])
 
 
 # Request a graceful stop and report how many agents may finish first.
@@ -1070,8 +1082,8 @@ def register(sub) -> None:
     p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")
     p.set_defaults(fn=cmd_start)
     p = sub.add_parser("gui")
-    p.add_argument("--detach", action="store_true", help="open the window as a process of its own and return (default: run it in this process)")
-    p.add_argument("--project", help="show one Project only")
+    p.add_argument("--detach", action="store_true", help="compatibility option; the browser opens independently")
+    p.add_argument("--project", help="compatibility option for existing dashboard shortcuts")
     p.set_defaults(fn=cmd_gui)
     p = sub.add_parser("stop", help="start no new Agent of any kind (Queen, separate Agent, subagent, ready-check agent); running agents finish", description="Create the STOP flag: no new Queen, separate Agent process, embedded subagent or ready-check agent starts, running ones finish their task and the loop ends. bzz start allows starts again.")
     p.add_argument('--force', action='store_true', help='Force stop: stop everything immediately; unfinished work will be done again after Start')

@@ -36,7 +36,7 @@ Provided by S13 for S14, S15 and S16: `scheduler.model_label/model_short/model_l
 `buildjobs.jobs_line(env, agents)` (dashboard text), `loop.read_state(conn)` (loop-state: status brain, round or idle, since, nextAt), `brain.totals(conn)`,
 `runstate` (S6b), `loop.stop_flag()`. Provided by S14 (`agent_runner.py`): phase rule files (`write_phase_rules`), `Update-AgentRetry` (`AgentRun.set_agent_retry`), milestones.
 
-The dashboard is the graphical window `haivequeen.gui`, which `bzz start` opens once.
+The dashboard is served by `haivequeen.web_service` and shown in the default browser by `bzz start` or `bzz gui`. Shared data and actions live in `dashboard_data`, `settings`, `provider_labels`, `plan_view` and `question_service`; these modules have no desktop UI dependencies.
 
 
 ---
@@ -82,7 +82,7 @@ Environment: `BZZ_DATA_DIR` / `BZZ_CONFIG_DIR` as for every haivequeen process.
 
 ## Build jobs
 
-The settings window shows one block "Build" with three fields: "CPU cores per build" (a choice from 1 to the logical cores, default two thirds rounded up), "Parallel builds" (the number after `--parallel` of the build command, default 1) and "Minimum free RAM before a build" (GB, default 2). They are stored in the `[buildJobs]` table of `config.toml` as `cores`, `parallel` and `minFreeRamGB`; saving the window removes the old keys `coreShare` and `fixed` and a plain number `buildJobs = N`. When read, the core count is `cores`, else `fixed`, else the number N (`buildJobs = 0` and no table mean the default), else `coreShare`; a count above the cores of the machine is the machine's core count.
+The browser settings page shows one block "Build" with three fields: "CPU cores per build" (a choice from 1 to the logical cores, default two thirds rounded up), "Parallel builds" (the number after `--parallel` of the build command, default 1) and "Minimum free RAM before a build" (GB, default 2). They are stored in the `[buildJobs]` table of `config.toml` as `cores`, `parallel` and `minFreeRamGB`; saving the page removes the old keys `coreShare` and `fixed` and a plain number `buildJobs = N`. When read, the core count is `cores`, else `fixed`, else the number N (`buildJobs = 0` and no table mean the default), else `coreShare`; a count above the cores of the machine is the machine's core count.
 
 Other keys of the table are settable in `config.toml` only: `envVar` (variable of the job count, default `BUILD_JOBS`; a configured name such as `BUILD_MP_JOBS` wins), `parallelEnvVar` (default `BUILD_PARALLEL`), `minFreeRamEnvVar` (default `BUILD_MIN_FREE_RAM_GB`), `reserveMB` (RAM that stays free during a build, default 1024), `perJobMB` (a number, or `auto` = the measured median), `firstJobs` (jobs without a valid measurement, default 2) and `measurements` (how many of the last measurements the median is taken from, default 10).
 

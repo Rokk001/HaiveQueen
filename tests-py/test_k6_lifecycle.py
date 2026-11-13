@@ -10,7 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bzztest import REL, RoundCase, runtime  # noqa: E402
-from haivequeen import bees, db, faults, gui_data, gui_hives, hives, plans, scheduler  # noqa: E402
+from haivequeen import bees, db, faults, dashboard_data, plan_view, hives, plans, scheduler  # noqa: E402
 
 NEW = ("DRAFT", "SENT", "PREPARING", "QUEUED", "RUNNING", "WAITING", "REVIEW", "DONE", "PAUSED", "CANCELLED")
 
@@ -76,8 +76,8 @@ class StatusNameTests(RoundCase):
         hives.update_waiting(self.conn, env)
         self.assertEqual(self.status(), "WAITING")
         self.assertIn('status = "WAITING"', self.file_text())
-        row = next(r for r in gui_hives.plan_rows(self.conn) if r["plan_path"] == REL)
-        self.assertIn("answer", gui_hives.status_text(row))
+        row = next(r for r in plan_view.plan_rows(self.conn) if r["plan_path"] == REL)
+        self.assertIn("answer", plan_view.status_text(row))
         self.agent("Ada", phase="queen", status="running", pid=__import__("os").getpid())
         hives.update_waiting(self.conn, env)
         self.assertEqual(self.status(), "RUNNING")
@@ -87,8 +87,8 @@ class StatusNameTests(RoundCase):
         hives.cancel_plan(self.conn, "testproj", REL)
         self.assertEqual(self.status(), "CANCELLED")
         self.assertIn('status = "CANCELLED"', self.file_text())
-        row = next(r for r in gui_hives.plan_rows(self.conn) if r["plan_path"] == REL)
-        self.assertEqual([a for _, a in gui_hives.actions(row)], ["start", "draft"])
+        row = next(r for r in plan_view.plan_rows(self.conn) if r["plan_path"] == REL)
+        self.assertEqual([a for _, a in plan_view.actions(row)], ["start", "draft"])
         hives.start_again(self.conn, "testproj", REL)
         self.assertEqual(self.status(), "DRAFT")
 
@@ -113,8 +113,8 @@ class StartDraftTests(RoundCase):
 
     def test_start_on_a_draft_sets_sent_and_gets_a_queen_that_cuts_it(self):
         self.plan("DRAFT", [{"id": "P1", "title": "First"}])
-        row = next(r for r in gui_hives.plan_rows(self.conn) if r["plan_path"] == REL)
-        gui_hives.run_action(self.conn, row, "start", lambda text: True)
+        row = next(r for r in plan_view.plan_rows(self.conn) if r["plan_path"] == REL)
+        plan_view.run_action(self.conn, row, "start", lambda text: True)
         self.assertEqual(self.conn.execute("SELECT status FROM plans WHERE project='testproj' AND path=?", (REL,)).fetchone()[0], "SENT")
         self.assertIn('status = "SENT"', (self.repo / REL).read_text(encoding="utf-8"))
         self.assertIsNone(runtime.cut_assignments(self.conn, "testproj", REL, (self.repo / REL).read_text(encoding="utf-8")))   # the cut is recorded by the plan check, not by Start
@@ -213,12 +213,12 @@ class HeaderErrorTests(RoundCase):
 
     def test_the_hives_window_shows_the_error(self):
         self.write('+++\nstatus = "STARTED"\n+++\n# T\n')
-        row = next(r for r in gui_hives.plan_rows(self.conn) if r["plan_path"] == REL)
+        row = next(r for r in plan_view.plan_rows(self.conn) if r["plan_path"] == REL)
         self.assertIn("STARTED", row["error"])
-        self.assertIn("STARTED", gui_hives.status_text(row))
+        self.assertIn("STARTED", plan_view.status_text(row))
         self.write('+++\nstatus = "QUEUED"\n[[packages]]\nid = "P1"\ntitle = "x"\nclass = "huge"\n+++\n# T\n')
-        row = next(r for r in gui_hives.plan_rows(self.conn) if r["plan_path"] == REL)
-        self.assertIn("huge", gui_hives.status_text(row))
+        row = next(r for r in plan_view.plan_rows(self.conn) if r["plan_path"] == REL)
+        self.assertIn("huge", plan_view.status_text(row))
 
 
 class GlobalFaultTests(RoundCase):
@@ -234,7 +234,7 @@ class GlobalFaultTests(RoundCase):
         self.assertEqual(len(shown), 1)
         self.assertIn("loop_vanished", shown[0])
         self.assertEqual([f["kind"] for f in faults.global_faults(self.conn)], ["loop_vanished"])
-        sections = dict(gui_data.info_sections({**self.fake_overview(), "global_faults": faults.global_faults(self.conn)}))
+        sections = dict(dashboard_data.info_sections({**self.fake_overview(), "global_faults": faults.global_faults(self.conn)}))
         self.assertTrue(any("loop_vanished" in text for text, _ in sections["FAULTS"]))
 
     def test_loop_vanished_resolves_after_a_long_run(self):
@@ -283,71 +283,11 @@ class StoppedPackageTests(RoundCase):
         with self.assertRaises(ValueError):
             bees.resume_package(self.conn, "testproj", REL, "P1")
 
-    def test_the_dashboard_offers_resume_for_a_stopped_package(self):
-        bees.stop_package(self.conn, "testproj", REL, "P2")
-        rows = gui_data.bee_list([], {}, set(), datetime.now(), stopped=bees.stopped_packages(self.conn))
-        row = next(r for r in rows if r["task"] == "P2")
-        self.assertEqual(row["status"], "stopped")
-        self.assertTrue(row["stopped"])
-        from haivequeen import gui
-        app = mock.Mock(conn=self.conn, confirm=lambda text: True)
-        gui.Dashboard.resume_package(app, row) if hasattr(gui, "Dashboard") else self.resume_with_class(gui, app, row)
-        self.assertFalse(bees.package_stopped(self.conn, "testproj", REL, "P2"))
-
-    def resume_with_class(self, gui, app, row):
-        cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "resume_package"))
-        cls.resume_package(app, row)
-
-    def test_stop_bee_marks_the_package_stopped(self):
-        from haivequeen import gui
-        self.agent("Bea", phase="bee", package="P1", status="running", pid=999999)
-        bee = {"kind": "bee", "agent": "Bea", "project": "testproj", "plan_path": REL, "name": "Bea", "task": "P1"}
-        cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "stop_bee"))
-        app = mock.Mock(conn=self.conn, confirm=lambda text: True, selected=lambda table: bee)
-        app.lookup = lambda read, then: then(read(self.conn))   # the agents-row read runs in a thread in the window; here it runs at once
-        app.stop_process_agent = lambda b, found: cls.stop_process_agent(app, b, found)
-        with mock.patch("haivequeen.platform.kill_process_tree") as kill:
-            cls.stop_bee(app)
-        kill.assert_called_once_with(999999)
-        self.assertTrue(bees.package_stopped(self.conn, "testproj", REL, "P1"))
 
     def stop_notice(self):
         f = self.env().run_dir("Queen-A") / bees.STOP_NOTICE_FILE
         return f.read_text(encoding="utf-8") if f.is_file() else ""
 
-    def test_stop_bee_on_an_embedded_bee_stays_pending_until_its_end_is_confirmed(self):
-        """A stopped package with an embedded (subagent) Agent tells the Queen to end it, but the row stays open and keeps its Agent place
-        until the Queen confirms its end; only her result for the package closes it with the outcome stopped."""
-        from haivequeen import gui
-        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
-        queen = dict(runtime.list_agents(self.conn, "testproj", "active")[0])
-        row = next(r for r in gui_data.bee_list([queen], {}, set(), datetime.now(), embedded=gui_data.embedded_rows(self.conn)) if r["name"] == "Cia")
-        cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "stop_bee"))
-        bees.stop_package(self.conn, "testproj", REL, "P1")
-        self.assertTrue(bees.package_stopped(self.conn, "testproj", REL, "P1"))
-        open_rows = gui_data.embedded_rows(self.conn)
-        self.assertEqual([(r["name"], r["outcome"]) for r in open_rows], [("Cia", "stopping")])   # not closed, not ended
-        self.assertEqual(bees.free_bee_places(self.env(), REL, 5), 2)   # still holds its place
-        shown = next(r for r in gui_data.bee_list([queen], {}, set(), datetime.now(), embedded=open_rows, stopped=bees.stopped_packages(self.conn)) if r["task"] == "P1")
-        self.assertEqual((shown["status"], shown["stopping"], shown.get("stopped")), ("stopping", True, None))
-        app2 = mock.Mock(conn=self.conn, confirm=lambda text: True, selected=lambda table: shown)
-        cls.stop_bee(app2)   # X again only explains that the stop is pending
-        app2.inform.assert_called_once()
-        self.assertIn("pending", app2.inform.call_args[0][0])
-        notice = self.stop_notice()
-        self.assertIn("P1", notice)
-        self.assertIn("Cia (P1)", notice)
-        self.assertIn("bzz agent result --outcome interrupted", notice)
-        bees.resume_package(self.conn, "testproj", REL, "P1")   # resuming does not end the subagent either
-        self.assertEqual(len(gui_data.embedded_rows(self.conn)), 1)
-        self.assertFalse(self.start("P1"))   # no second Bee for the package while the first may still run
-        self.assertIn("has not confirmed its end", bees.LAST_REFUSAL)
-        self.assertIn("Cia (P1)", self.stop_notice())
-        bees.report_attempt(self.env(), REL, "P1", "medium", "interrupted", "Cia")   # the Queen confirms the end
-        self.assertEqual(gui_data.embedded_rows(self.conn), [])
-        self.assertEqual(self.conn.execute("SELECT outcome FROM embedded_bees WHERE name='Cia'").fetchone()[0], "stopped")
-        self.assertEqual(bees.free_bee_places(self.env(), REL, 5), 3)
-        self.assertEqual(self.stop_notice(), "")
 
     def test_a_pending_stop_survives_a_replacement_and_a_queen_restart(self):
         """Neither a new Agent start for the package nor a Queen restart proves that the stopped subagent ended: its row stays open."""
@@ -377,7 +317,7 @@ class StoppedPackageTests(RoundCase):
         bees.record_embedded_start(self.conn, "testproj", REL, "P2", "Dia", "medium", "claude", queen="Queen-A")
         bees.stop_package(self.conn, "testproj", REL, "P1")
         self.restart_queen()
-        rows = {r["name"]: r["outcome"] for r in gui_data.embedded_rows(self.conn)}
+        rows = {r["name"]: r["outcome"] for r in dashboard_data.embedded_rows(self.conn)}
         self.assertEqual(rows, {"Cia": "stopping", "Dia": ""})
         self.assertEqual(bees.free_bee_places(self.env(), REL, 5), 1)
         self.assertNotIn("P2", bees.startable_not_started(self.env(), REL))
@@ -392,9 +332,9 @@ class StoppedPackageTests(RoundCase):
         self.assertFalse(self.start("P1"))
         self.assertIn("Cia", bees.LAST_REFUSAL)
         self.assertIn("not confirmed", bees.LAST_REFUSAL)
-        self.assertEqual([r["name"] for r in gui_data.embedded_rows(self.conn)], ["Cia"])
+        self.assertEqual([r["name"] for r in dashboard_data.embedded_rows(self.conn)], ["Cia"])
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Eva", "medium", "claude", queen="Queen-A")
-        self.assertEqual(sorted(r["name"] for r in gui_data.embedded_rows(self.conn)), ["Cia", "Eva"])   # recording never closes an older row
+        self.assertEqual(sorted(r["name"] for r in dashboard_data.embedded_rows(self.conn)), ["Cia", "Eva"])   # recording never closes an older row
 
     def test_the_own_queen_also_needs_end_proof_and_result(self):
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
@@ -408,7 +348,7 @@ class StoppedPackageTests(RoundCase):
         __import__('os').utime(report, (stamp, stamp))
         self.assertEqual(bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(report)), "")
         bees.report_attempt(self.env(), REL, "P1", "medium", "interrupted", "Cia")
-        self.assertEqual(gui_data.embedded_rows(self.conn), [])
+        self.assertEqual(dashboard_data.embedded_rows(self.conn), [])
 
     def test_a_later_queen_requires_end_proof_besides_a_new_result(self):
         bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude", queen="Queen-A")
@@ -429,7 +369,7 @@ class StoppedPackageTests(RoundCase):
         self.assertIn('no matching agent', bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(report)))
         self.agent('Cia', phase='bee', package='P1', status='done', started_at=db.now(), ended_at=db.now())
         self.assertEqual(bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(report)), "")
-        self.assertEqual(len(gui_data.embedded_rows(self.conn)), 1)   # checking alone releases nothing
+        self.assertEqual(len(dashboard_data.embedded_rows(self.conn)), 1)   # checking alone releases nothing
 
     def test_bee_result_without_evidence_for_an_orphaned_bee_is_refused_by_the_cli(self):
         from haivequeen import cli
@@ -441,37 +381,23 @@ class StoppedPackageTests(RoundCase):
         with mock.patch.dict("os.environ", {"BZZ_AGENT": "Queen-B"}), mock.patch.object(scheduler, "load_projects", return_value=[env]), \
                 mock.patch("haivequeen.config.load_config", return_value={}), mock.patch.object(cli, "fail", side_effect=lambda text: text) as fail:
             self.assertIn("--ended-evidence", cli.cmd_bee(args, self.conn))
-        self.assertEqual(len(gui_data.embedded_rows(self.conn)), 1)
+        self.assertEqual(len(dashboard_data.embedded_rows(self.conn)), 1)
         report = self.wt / "result.md"
         report.write_text("done", encoding="utf-8")
         args.ended_evidence = str(report)
         with mock.patch.dict("os.environ", {"BZZ_AGENT": "Queen-B"}), mock.patch.object(scheduler, "load_projects", return_value=[env]), \
                 mock.patch("haivequeen.config.load_config", return_value={}), mock.patch.object(cli, "fail", side_effect=lambda text: text):
             self.assertIn('no matching agent', cli.cmd_bee(args, self.conn))
-        self.assertEqual(len(gui_data.embedded_rows(self.conn)), 1)
+        self.assertEqual(len(dashboard_data.embedded_rows(self.conn)), 1)
         self.assertEqual(bees.free_bee_places(env, REL, 5), 2)
         self.agent('Cia', phase='bee', package='P1', status='done', started_at=db.now(), ended_at=db.now())
         with mock.patch.dict("os.environ", {"BZZ_AGENT": "Queen-B"}), mock.patch.object(scheduler, "load_projects", return_value=[env]), \
                 mock.patch("haivequeen.config.load_config", return_value={}), mock.patch.object(cli, "out"):
             self.assertEqual(cli.cmd_bee(args, self.conn), 0)
-        self.assertEqual(gui_data.embedded_rows(self.conn), [])
+        self.assertEqual(dashboard_data.embedded_rows(self.conn), [])
         self.assertEqual(bees.free_bee_places(env, REL, 5), 3)
         self.assertEqual(self.queen_notice("Queen-B"), "")
 
-    def test_stop_bee_on_an_embedded_bee_is_refused_with_the_reason(self):
-        """An embedded (subagent) Agent has no process of its own: X refuses with the reason and stops nothing (M-4)."""
-        from haivequeen import gui
-        bees.record_embedded_start(self.conn, "testproj", REL, "P1", "Cia", "medium", "claude")
-        queen = dict(runtime.list_agents(self.conn, "testproj", "active")[0])
-        row = next(r for r in gui_data.bee_list([queen], {}, set(), datetime.now(), embedded=gui_data.embedded_rows(self.conn)) if r["name"] == "Cia")
-        self.assertTrue(row.get("embedded"))
-        cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "stop_bee"))
-        app = mock.Mock(conn=self.conn, confirm=lambda text: True, selected=lambda table: row)
-        with mock.patch("haivequeen.platform.kill_process_tree") as kill:
-            cls.stop_bee(app)
-        kill.assert_not_called()
-        app.inform.assert_called_once_with(row["stop_disabled"])
-        self.assertFalse(bees.package_stopped(self.conn, "testproj", REL, "P1"))
 
     def test_the_stop_notice_names_every_stopped_package_of_the_plan(self):
         bees.stop_package(self.conn, "testproj", REL, "P1")
@@ -507,7 +433,7 @@ class StartableNoticeTests(RoundCase):
         self.assertIn("P2", text)
         self.assertNotIn("P3", text)   # its dependency is not done
         self.assertEqual(bees.startable_map(self.conn)[("testproj", REL)], ["P1", "P2"])
-        rows = gui_data.bee_list([], {}, set(), datetime.now(), startable=bees.startable_map(self.conn))
+        rows = dashboard_data.bee_list([], {}, set(), datetime.now(), startable=bees.startable_map(self.conn))
         self.assertEqual([(r["task"], r["status"]) for r in rows], [("P1", "startable, not started"), ("P2", "startable, not started")])
 
     def test_started_and_stopped_packages_and_free_places_count(self):

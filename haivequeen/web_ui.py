@@ -1,34 +1,34 @@
-"""Browser shell and shared desktop settings labels; no separate settings store."""
+"""Browser shell and shared settings labels; no separate settings store."""
 import json
 from pathlib import Path
 
-from . import cli_presets, config, gui_config, gui_provider, i18n, projsettings, updates
+from . import cli_presets, config, settings, provider_labels, i18n, projsettings, updates
 from . import scheduler as sch
 
 
 def page(csrf, language=None):
     language = language or i18n.machine_language()
-    labels = {**{k: v[0] for k, v in gui_provider.TEXT.items()},
-              **gui_config.GENERAL_LABELS, **gui_config.SETTING_LABELS,
+    labels = {**{k: v[0] for k, v in provider_labels.TEXT.items()},
+              **settings.GENERAL_LABELS, **settings.SETTING_LABELS,
               'web': 'Web server', 'certificate': 'Certificate file', 'key': 'Key file',
               'port': 'Port', 'address': 'Address',
-              **{k: label for k, label, _ in gui_config.BUILD_FIELDS}}
-    help_text = {**gui_config.GENERAL_HELP, **gui_config.SETTING_HELP,
-                 **{k: v[1] for k, v in gui_provider.TEXT.items()},
-                 **{k: text for k, _, text in gui_config.BUILD_FIELDS}}
+              **{k: label for k, label, _ in settings.BUILD_FIELDS}}
+    help_text = {**settings.GENERAL_HELP, **settings.SETTING_HELP,
+                 **{k: v[1] for k, v in provider_labels.TEXT.items()},
+                 **{k: text for k, _, text in settings.BUILD_FIELDS}}
     bootstrap = {'csrf': csrf, 'language': language,
                  'translations': i18n.GERMAN if i18n.is_german_language(language) else {},
-                 'labels': labels, 'help': help_text, 'choices': gui_config.CHOICES,
-                 'fieldLabels': {'General': gui_config.GENERAL_LABELS, 'Projects': gui_config.SETTING_LABELS,
-                                 'Providers': {k: v[0] for k, v in gui_provider.TEXT.items()}},
-                 'fieldHelp': {'General': gui_config.GENERAL_HELP, 'Projects': gui_config.SETTING_HELP,
-                               'Providers': {k: v[1] for k, v in gui_provider.TEXT.items()}},
-                 'capabilities': gui_config.CAPABILITIES,
-                 'general': {**config.DEFAULT_CONFIG, **{k: sch.DEFAULT_SETTINGS[k] for k in gui_config.GENERAL_LABELS if k in sch.DEFAULT_SETTINGS},
+                 'labels': labels, 'help': help_text, 'choices': settings.CHOICES,
+                 'fieldLabels': {'General': settings.GENERAL_LABELS, 'Projects': settings.SETTING_LABELS,
+                                 'Providers': {k: v[0] for k, v in provider_labels.TEXT.items()}},
+                 'fieldHelp': {'General': settings.GENERAL_HELP, 'Projects': settings.SETTING_HELP,
+                               'Providers': {k: v[1] for k, v in provider_labels.TEXT.items()}},
+                 'capabilities': settings.CAPABILITIES,
+                 'general': {**config.DEFAULT_CONFIG, **{k: sch.DEFAULT_SETTINGS[k] for k in settings.GENERAL_LABELS if k in sch.DEFAULT_SETTINGS},
                              'language': 'English',
                              'web': {'address': '0.0.0.0', 'port': 8484, 'certificate': '', 'key': '', 'network': False, 'username': ''}},
-                 'project': {k: v for k, v in {**config.DEFAULT_PROJECT, **dict(gui_config.APIARY_DEFAULTS),
-                             **dict(gui_config.ADVANCED_DEFAULTS), 'codeRepo': '', 'compileCheck': '',
+                 'project': {k: v for k, v in {**config.DEFAULT_PROJECT, **dict(settings.APIARY_DEFAULTS),
+                             **dict(settings.ADVANCED_DEFAULTS), 'codeRepo': '', 'compileCheck': '',
                              'buildCommand': '', 'deployCommand': '', 'plans': [], 'upstreamRules': True, 'rulesOff': [],
                              'onEvent': {'command': [], 'workDir': '', 'timeoutSeconds': 180}}.items()
                              if k in projsettings.KEPT_KEYS},

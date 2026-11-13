@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from haivequeen import agent_runner as ar, gui_data, db, runtime, bees
+from haivequeen import agent_runner as ar, dashboard_data, db, runtime, bees
 from unittest import mock
 
 
@@ -40,7 +40,7 @@ class CodexChildTest(unittest.TestCase):
                 run.push_state(True)
                 queen = runtime.get_agent(conn, 'P', 'queen')
                 self.assertEqual((queen['tokens_in'], queen['tokens_out'], queen['ctxTokens']), (300, 19, 80))
-                sub = gui_data.match_sub(queen, 'Agent-13')
+                sub = dashboard_data.match_sub(queen, 'Agent-13')
                 self.assertEqual((sub['ctx'], sub['tin'], sub['tout']), (40, 100, 9))
                 starts = conn.execute("SELECT tokens FROM start_contexts WHERE kind='subbee'").fetchall()
                 self.assertEqual([r[0] for r in starts], [20])

@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import bzztest  # noqa: F401  (puts this checkout first on the import path, isolates the data folders)
-from haivequeen import bees, config, gui_config, loop, profile, scheduler as sch, servers
+from haivequeen import bees, config, settings, loop, profile, scheduler as sch, servers
 from haivequeen import platform as osplat
 
 
@@ -103,7 +103,7 @@ class ServerEntries(Base):
         """A Local LLM provider holds name, address, key and context window itself; an old [[servers]] entry is read into the providers that use it."""
         path = Path(config.config_dir()) / "config.toml"
         entry = self.entry("lms", "claude", access="llm", address="http://192.168.1.20:1234", apiKey="secret-key", contextWindow=120000)
-        gui_config.save_file(path, {"slots": 2, "providers": [entry]})
+        settings.save_file(path, {"slots": 2, "providers": [entry]})
         self.assertNotIn("[[servers]]", path.read_text(encoding="utf-8"))
         want = [{"name": "lms", "address": "http://192.168.1.20:1234", "apiKey": "secret-key", "contextWindow": 120000}]
         self.assertEqual(servers.get_servers(config.load_config()), want)
@@ -528,15 +528,15 @@ class Migration(Base):
     def test_config_toml_stays_unchanged_until_the_owner_saves(self):
         path = Path(config.config_dir()) / "config.toml"
         path.parent.mkdir(parents=True, exist_ok=True)
-        gui_config.save_file(path, {"providers": [self.old()]})
+        settings.save_file(path, {"providers": [self.old()]})
         before = path.read_bytes()
         loaded = config.load_config()
         self.assertEqual(loaded["providers"][0]["address"], "http://192.168.1.20:1234")
         self.assertNotIn("endpoint", loaded["providers"][0])
-        self.assertEqual(gui_config.load_migrated(path)["providers"], loaded["providers"])
+        self.assertEqual(settings.load_migrated(path)["providers"], loaded["providers"])
         sch.get_providers(loaded)
         self.assertEqual(path.read_bytes(), before)
-        gui_config.save_file(path, gui_config.load_migrated(path))   # the owner saves: the new form is written
+        settings.save_file(path, settings.load_migrated(path))   # the owner saves: the new form is written
         text = path.read_text(encoding="utf-8")
         self.assertIn('access = "llm"', text)
         self.assertNotIn("[[servers]]", text)

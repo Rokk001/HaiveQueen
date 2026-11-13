@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from bzztest import RoundCase
-from haivequeen import bees, config, desktop, gui_config, i18n, loop, selfupdate, updates
+from haivequeen import bees, config, desktop, settings, i18n, loop, selfupdate, updates
 from haivequeen import platform as osplat
 
 
@@ -143,10 +143,10 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(updates.installed_version(self.dir), "2.0.3")
 
     def test_header_shows_the_installed_version(self):
-        from haivequeen import gui_data
-        gui_data._VERSION_CACHE.clear()
+        from haivequeen import dashboard_data
+        dashboard_data._VERSION_CACHE.clear()
         with mock.patch("haivequeen.updates.installed_version", return_value="2.0.7"):
-            self.assertEqual(gui_data._version(), "2.0.7")
+            self.assertEqual(dashboard_data._version(), "2.0.7")
 
 
 class InstallTests(RoundCase):
@@ -422,7 +422,7 @@ with mock.patch('haivequeen.config.load_config', return_value={}), mock.patch('h
                 mock.patch("os.getppid", return_value=999), \
                 mock.patch.object(loop, "loop_running", return_value=None), \
                 mock.patch.object(loop, "spawn_detached") as spawn, \
-                mock.patch("haivequeen.gui.launch_detached", side_effect=lambda: seen.append(os.environ.get(selfupdate.RESTART_VAR)) or {}), \
+                mock.patch("haivequeen.web_service.open_browser", side_effect=lambda: seen.append(os.environ.get(selfupdate.RESTART_VAR)) or {}), \
                 mock.patch("builtins.print"):
             self.assertEqual(loop.cmd_start(args, self.conn), 0)
         self.assertEqual(spawn.call_args.kwargs.get("env"), {selfupdate.RESTART_VAR: "1"})
@@ -440,7 +440,7 @@ with mock.patch('haivequeen.config.load_config', return_value={}), mock.patch('h
         """The detached `start --foreground` of the loop is no child of the worker: it gets BZZ_UPDATE_RESTART from the start the worker called."""
         self.hold_lock(4242)
         args = Namespace(foreground=False, rounds=0, round_minutes=0, keep_pause=True, json=True, desktop=False)
-        with mock.patch("haivequeen.updates.draining", return_value=True), mock.patch.object(loop, "loop_running", return_value=None),                 mock.patch.object(loop, "spawn_detached") as spawn, mock.patch("haivequeen.gui.launch_detached", return_value={}),                 mock.patch("os.getppid", return_value=4242), mock.patch("builtins.print"):
+        with mock.patch("haivequeen.updates.draining", return_value=True), mock.patch.object(loop, "loop_running", return_value=None),                 mock.patch.object(loop, "spawn_detached") as spawn, mock.patch("haivequeen.web_service.open_browser", return_value={}),                 mock.patch("os.getppid", return_value=4242), mock.patch("builtins.print"):
             loop.cmd_start(args, self.conn)
         self.assertEqual(spawn.call_args.kwargs.get("env"), {selfupdate.RESTART_VAR: "1"})
 
@@ -499,8 +499,8 @@ with mock.patch('haivequeen.config.load_config', return_value={}), mock.patch('h
         self.assertIn(events[0], log)
 
     def test_start_with_a_running_loop_still_exits_with_0(self):
-        """Not a refusal: the loop runs, the call only opens the window."""
-        with mock.patch.object(loop, "loop_running", return_value=4711), mock.patch("haivequeen.gui.launch_detached", return_value={}):
+        """Not a refusal: the loop runs, the call only opens the browser."""
+        with mock.patch.object(loop, "loop_running", return_value=4711), mock.patch("haivequeen.web_service.open_browser", return_value={}):
             code, payload = self.refused()
         self.assertEqual((code, payload["ok"], payload["running"]), (0, True, True))
         self.assertEqual(self.reasons()[0], [])
@@ -548,9 +548,9 @@ class TextTests(unittest.TestCase):
                 self.assertNotEqual(i18n.tr(text, "2.0.2") if "%s" in text else i18n.tr(text), text % "2.0.2" if "%s" in text else text, text)
 
     def test_check_hours_are_validated_in_the_settings(self):
-        self.assertTrue(gui_config.check({"update": {"checkHours": -1}}, True))
-        self.assertTrue(gui_config.check({"update": {"checkHours": "x"}}, True))
-        self.assertFalse(gui_config.check({"update": {"checkHours": 12}}, True))
+        self.assertTrue(settings.check({"update": {"checkHours": -1}}, True))
+        self.assertTrue(settings.check({"update": {"checkHours": "x"}}, True))
+        self.assertFalse(settings.check({"update": {"checkHours": 12}}, True))
 
 
 class ReadmeTests(unittest.TestCase):

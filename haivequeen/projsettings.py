@@ -230,7 +230,7 @@ def migrate_data(data: dict, workspace, general: dict) -> tuple:
                 provider["claudeTools"] = merge_tools(provider.get("claudeTools") or general.get("claudeTools") or DEFAULT_CLAUDE_TOOLS, old["claudeTools"])
     extra = extra_allowed(old.get("allowedTools"), new.get("integrationBranch") or old.get("integrationBranch") or "main", old.get("remoteName"))
     if extra:
-        from .gui_config import split_args, join_args
+        from .settings import split_args, join_args
         for provider in general.get("providers") or []:
             if is_claude(provider):
                 rest, tools, position = split_args(provider.get("args"))
@@ -307,7 +307,7 @@ def migrate_all(workspaces=None, now=None, conn=None) -> list:
     A file already in the new form is not touched. For each changed file the old one is kept as project.toml.bak and removed-settings.md gets a
     dated section; config.toml changes (Owner name, Queen class, Agents per Queen, provider Context limit and tools) are written first with config.toml.bak.
     """
-    from .gui_config import save_file
+    from .settings import save_file
     cfg_path = config.config_dir() / "config.toml"
     raw = config._load_toml(cfg_path)
     general = copy.deepcopy(raw)

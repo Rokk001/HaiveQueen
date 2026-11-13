@@ -72,18 +72,19 @@ class DesktopCommandsTest(RoundCase):
         run.assert_not_called()
         show.assert_called_once_with('start', result)
 
-    # Start opens the window without starting another loop.
+    # Start opens the browser without starting another loop.
     def test_existing_loop_opens_the_window_without_spawning(self):
-        """Start opens the dashboard window once without starting another loop."""
+        """Start opens the web dashboard without starting another loop."""
         with mock.patch.object(loop, 'loop_running', return_value=4321), \
-                mock.patch('haivequeen.gui.launch_detached', return_value={'ok': True, 'gui': 77, 'already': False}) as window, \
+                mock.patch('haivequeen.web_service.start'), \
+                mock.patch('haivequeen.web_service.open_browser', return_value={'web': 'http://localhost:8484'}) as browser, \
                 mock.patch.object(loop, 'spawn_detached') as spawn, \
                 mock.patch.object(loop, 'run_loop') as run, \
                 mock.patch.object(desktop, 'show_result') as show:
             code, result = self.invoke('start', '--desktop')
         self.assertEqual(code, 0)
-        self.assertEqual(result['gui'], 77)
-        window.assert_called_once()
+        self.assertEqual(result['web'], 'http://localhost:8484')
+        browser.assert_called_once_with()
         spawn.assert_not_called()
         run.assert_not_called()
         show.assert_called_once_with('start', result)

@@ -36,14 +36,14 @@ class BrowserTests(unittest.TestCase):
         self.assertIn('web-client.css', text)
 
     def test_browser_labels_share_desktop_language_and_defaults(self):
-        from haivequeen import gui_config, scheduler
+        from haivequeen import settings, scheduler
         import re
         page=web_ui.page('token',language='German')
         data=json.loads(re.search(r'<script id="bootstrap" type="application/json">(.*?)</script>',page).group(1))
         for name in ('General','Providers','Projects','Stop gracefully','Force stop','Restart Queen on %s'):
             self.assertIn(name,data['translations'])
         self.assertEqual(data['general']['maxConcurrentCompileChecks'],scheduler.DEFAULT_SETTINGS['maxConcurrentCompileChecks'])
-        for key in gui_config.SETTING_LABELS:
+        for key in settings.SETTING_LABELS:
             self.assertIn(key,data['labels'])
         self.assertNotIn('password',data['general']['web'])
         self.assertEqual(data['fieldLabels']['General']['language'],'Interface language')

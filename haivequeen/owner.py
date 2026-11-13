@@ -1,4 +1,4 @@
-"""Explicit owner actions shared by the CLI, questions window and inbox."""
+"""Explicit owner actions shared by the CLI, Questions page and inbox."""
 from . import filetxn
 import re
 
@@ -123,9 +123,9 @@ def stop_agent(conn, project, name, stop=None):
 
 def provider_settings(name):
     """Load the same migrated settings edited by the provider page."""
-    from . import gui_config
+    from . import settings
     path = config.config_dir() / "config.toml"
-    data = gui_config.load_migrated(path)
+    data = settings.load_migrated(path)
     provider = next((p for p in data.get("providers", []) if p.get("name") == name), None)
     if provider is None:
         raise ValueError("unknown provider " + str(name))
@@ -138,7 +138,7 @@ def apply(conn, action, project=None, plan=None, **fields):
     validate(conn, action, project, plan, **fields)
     by = fields.get("by", "owner")
     if action == "provider":
-        from . import gui_config
+        from . import settings
         path, data, provider = provider_settings(fields["provider"])
         operation = fields["provider_action"]
         if operation == "test":
@@ -148,7 +148,7 @@ def apply(conn, action, project=None, plan=None, **fields):
             result = servers.run_test(server)
             return {"ok": True, "result": result, "message": servers.summary(server)}
         provider["enabled"] = operation == "enable"
-        gui_config.save_file(path, data)
+        settings.save_file(path, data)
         return {"ok": True, "provider": provider["name"], "enabled": provider["enabled"]}
     if action == "stop_agent":
         return stop_agent(conn, project, fields["name"])
