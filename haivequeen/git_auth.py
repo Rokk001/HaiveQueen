@@ -21,7 +21,7 @@ _PROVIDERS = {
                'https://gitlab.com/oauth/token', 'api', 'device'),
     'azure': ('https://login.microsoftonline.com/organizations/oauth2/v2.0/devicecode',
               'https://login.microsoftonline.com/organizations/oauth2/v2.0/token',
-              '499b84ac-1321-427f-aa17-267ca6975798/.default', 'bearer'),
+              '499b84ac-1321-427f-aa17-267ca6975798/.default offline_access', 'bearer'),
 }
 _sessions = {}
 _lock = threading.RLock()
@@ -119,7 +119,11 @@ def poll_device_login(session_id):
                                      'device_code': session['device_code'], 'grant_type': _GRANT})
         token = response.get('access_token')
         if isinstance(token, str) and token:
-            config.save_git_credential(session['provider'], token, method)
+            oauth = _oauth_metadata(response, session['client_id'])
+            if oauth:
+                config.save_git_credential(session['provider'], token, method, oauth=oauth)
+            else:
+                config.save_git_credential(session['provider'], token, method)
             session['status'] = 'success'
             session.pop('device_code', None)
         else:
@@ -131,3 +135,50 @@ def poll_device_login(session_id):
                 session.update(status='failed', error=str(error))
                 session.pop('device_code', None)
         return _public(session)
+
+
+def _oauth_metadata(response, client_id, previous_refresh=None):
+    """Validate optional expiry and refresh data before persisting it."""
+    refresh = response.get('refresh_token', previous_refresh)
+    if refresh is not None and (not isinstance(refresh, str) or not refresh or any(c.isspace() for c in refresh)):
+        raise ValueError('invalid OAuth response')
+    expires = response.get('expires_in')
+    if expires is None:
+        return {}
+    try:
+        seconds = int(expires)
+        if isinstance(expires, bool) or seconds <= 0:
+            raise ValueError
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError('invalid OAuth response') from error
+    result = {'client_id': client_id, 'expires_at': time.time() + seconds}
+    if refresh is not None:
+        result['refresh_token'] = refresh
+    return result
+
+
+def refresh_credential(provider, credential):
+    """Refresh an expired profile credential, serializing rotation across processes."""
+    if time.time() < credential['expires_at']:
+        return credential
+    from . import filetxn
+    import json
+    with filetxn.locked():
+        contents = filetxn.read(config.config_dir() / 'git-credentials.json')
+        current = json.loads(contents.decode('utf-8')).get(provider) if contents else None
+        if not current or 'expires_at' not in current or time.time() < current['expires_at']:
+            return current
+        refresh = current.get('refresh_token')
+        client_id = current.get('client_id')
+        if provider not in _PROVIDERS or not refresh or not client_id:
+            raise ValueError('expired OAuth credential requires sign-in')
+        response = _post(_PROVIDERS[provider][1], {'client_id': client_id,
+                         'grant_type': 'refresh_token', 'refresh_token': refresh})
+        token = response.get('access_token')
+        if not isinstance(token, str) or not token or any(c.isspace() for c in token):
+            raise ValueError('OAuth credential refresh failed')
+        oauth = _oauth_metadata(response, client_id, refresh)
+        if not oauth:
+            raise ValueError('invalid OAuth refresh response')
+        config.save_git_credential(provider, token, current['method'], origin=current.get('origin'), oauth=oauth)
+        return {**current, 'token': token, **oauth}

@@ -41,7 +41,7 @@ def detect(remote):
 
 def login_methods(repo):
     """Credentials are supplied by the caller, never read during discovery."""
-    return ('pat', 'bearer')
+    return ('pat', 'bearer', 'device')
 
 
 def _request(repo, path, token, auth='pat', method='GET', body=None, query=None, release_service=False, include_continuation=False):
@@ -50,7 +50,7 @@ def _request(repo, path, token, auth='pat', method='GET', body=None, query=None,
         credential = git_credential('azure') or {}
         token = credential.get('token')
         auth = credential.get('method', auth)
-    if auth not in login_methods(repo) or not isinstance(token, str) or not token:
+    if auth not in ('pat', 'bearer') or not isinstance(token, str) or not token:
         raise ValueError('a token and supported auth method are required')
     org, project, repository = repo
     host = 'vsrm.dev.azure.com' if release_service else 'dev.azure.com'

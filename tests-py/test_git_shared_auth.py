@@ -23,6 +23,10 @@ class SharedCredentials(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
 
+    def test_github_advertises_device_login(self):
+        self.assertEqual(github.login_methods("a/b"), ("personal_access_token", "device"))
+        self.assertIn("login_methods", github.CAPABILITIES)
+
     def test_profile_storage_is_shared_and_outside_repository(self):
         repo = Path(self.tmp.name) / 'repo'
         repo.mkdir()

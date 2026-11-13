@@ -94,11 +94,15 @@ def git_credential(provider):
     except RuntimeError:
         return None
     contents = filetxn.read(path)
-    return json.loads(contents.decode('utf-8')).get(provider) if contents else None
+    credential = json.loads(contents.decode('utf-8')).get(provider) if contents else None
+    if credential and 'expires_at' in credential:
+        from .git_auth import refresh_credential
+        return refresh_credential(provider, credential)
+    return credential
 
 
 @filetxn.coordinated
-def save_git_credential(provider, token, method='token', origin=None):
+def save_git_credential(provider, token, method='token', origin=None, oauth=None):
     """Store or remove a provider credential without touching a repository."""
     import json
     if provider not in ('github', 'gitlab', 'gitea', 'bitbucket', 'azure'):
@@ -114,6 +118,8 @@ def save_git_credential(provider, token, method='token', origin=None):
         credentials.pop(provider, None)
     else:
         credentials[provider] = {'token': token, 'method': method}
+        if oauth is not None:
+            credentials[provider].update(oauth)
         if origin is not None:
             credentials[provider]['origin'] = origin.rstrip('/')
     filetxn.atomic_write(path, json.dumps(credentials).encode('utf-8'))

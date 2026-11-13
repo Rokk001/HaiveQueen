@@ -55,7 +55,7 @@ class GitLabTests(unittest.TestCase):
             provider, errors = git_provider.discover(remote)
             self.assertEqual(errors, [])
             self.assertEqual(provider.repository, 'group/sub/repo')
-            self.assertEqual(provider.call('login_methods'), ('personal_access_token',))
+            self.assertEqual(provider.call('login_methods'), ('personal_access_token', 'device'))
         for remote in ('https://gitlab.com.evil/group/repo', 'https://gitlab.com/group', 'https://user:secret@gitlab.com/group/repo', 'https://gitlab.com/group/../repo'):
             self.assertIsNone(gitlab.detect(remote))
 

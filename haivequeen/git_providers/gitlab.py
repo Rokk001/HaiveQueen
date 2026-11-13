@@ -119,4 +119,4 @@ def pipeline(repo, ref, token=None):
 
 
 def login_methods(repo):
-    return ('personal_access_token',)
+    return ('personal_access_token', 'device')

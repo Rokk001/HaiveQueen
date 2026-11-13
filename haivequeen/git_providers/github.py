@@ -7,7 +7,10 @@ from urllib.parse import quote
 
 from ..releases import NoRelease, next_version
 
-CAPABILITIES = frozenset({"pull_request", "tag", "publish_release", "release_list", "release_asset", "pipeline", "login", "latest_version", "check_latest", "device_sign_in", "auth_status"})
+CAPABILITIES = frozenset({"pull_request", "tag", "publish_release", "release_list", "release_asset", "pipeline", "login", "latest_version", "check_latest", "device_sign_in", "auth_status", "login_methods"})
+
+def login_methods(repository):
+    return ("personal_access_token", "device")
 
 def detect(remote):
     try:

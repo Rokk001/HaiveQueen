@@ -47,7 +47,7 @@ class AzureTests(unittest.TestCase):
         self.assertEqual(calls[2].get_header('Authorization'), 'Bearer secret')
         self.assertIn('continuationToken=next', calls[3].full_url)
         self.assertIn('/build/builds/7?', calls[5].full_url)
-        self.assertEqual(azure.login_methods(self.repo), ('pat', 'bearer'))
+        self.assertEqual(azure.login_methods(self.repo), ('pat', 'bearer', 'device'))
 
     def test_rejected_tag_and_bad_credentials_fail(self):
         with patch.object(azure, 'urlopen', return_value=io.BytesIO(b'{"value":[{"success":false}]}')):
