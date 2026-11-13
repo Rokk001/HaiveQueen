@@ -55,6 +55,11 @@ def register(sub):
     parser = sub.add_parser('web', help='configure and control the web server',
         description='Web server: setup enables network access; off returns it to loopback. '
                     'Start, stop and restart control the listener independently of the Orchestrator. '
-                    'Serve runs the listener in the foreground for a background service.')
+                    'Serve runs the listener in the foreground for a background service. '
+                    'Setup configures login, address, port, certificate and key; General settings can also change these. '
+                    'The tray offers web and Orchestrator controls. Orchestrator: Start, Stop gracefully, Force stop; '
+                    'plans: Restart Queen on provider, Stop gracefully, Force stop, Resume, Cancel plan; '
+                    'agents: Force stop and Resume package. See docs/WEB-API.md for Linux systemd and '
+                    'background service guidance for other systems.')
     parser.add_argument('action', choices=['setup', 'off', 'start', 'stop', 'restart', 'serve'])
     parser.set_defaults(fn=cmd_web)

@@ -10,6 +10,8 @@ class WebDocumentationTests(unittest.TestCase):
         for word in ('setup', 'start', 'stop', 'restart', 'off'):
             self.assertIn(word, help_text)
         self.assertIn('loopback', help_text)
+        for phrase in ('address', 'port', 'certificate', 'key', 'login', 'tray', 'Force stop', 'Stop gracefully', 'Restart Queen', 'Resume package', 'systemd', 'other systems', 'docs/WEB-API.md'):
+            self.assertIn(phrase.lower(), ' '.join(help_text.lower().split()))
         guide = Path('docs/WEB-API.md').read_text(encoding='utf-8')
         for phrase in ('systemd', 'bzz web setup', 'bzz web restart', 'Force stop', 'tray', 'background service'):
             self.assertIn(phrase.lower(), guide.lower())

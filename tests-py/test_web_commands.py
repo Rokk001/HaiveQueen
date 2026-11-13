@@ -10,14 +10,14 @@ class WebCommandTests(unittest.TestCase):
     def test_setup_and_off_use_config_and_hide_password(self):
         with tempfile.TemporaryDirectory() as folder, \
              patch('haivequeen.config.config_dir', return_value=Path(folder)), \
-             patch('builtins.input', side_effect=['alice', '', '', '', '']), \
+             patch('builtins.input', side_effect=['user', '', '', '', '']), \
              patch('getpass.getpass', side_effect=['secret', 'secret']), \
              patch('haivequeen.web_service.control', return_value=None) as control:
             args = cli.build_parser().parse_args(['web', 'setup'])
             self.assertEqual(args.fn(args, None), 0)
             path = Path(folder) / 'config.toml'
             settings = web_auth.read(path)
-            self.assertTrue(web_auth.verify(settings, 'alice', 'secret'))
+            self.assertTrue(web_auth.verify(settings, 'user', 'secret'))
             self.assertNotIn('secret', path.read_text())
             args = cli.build_parser().parse_args(['web', 'off'])
             self.assertEqual(args.fn(args, None), 0)
@@ -27,7 +27,7 @@ class WebCommandTests(unittest.TestCase):
     def test_password_mismatch_does_not_write(self):
         with tempfile.TemporaryDirectory() as folder, \
              patch('haivequeen.config.config_dir', return_value=Path(folder)), \
-             patch('builtins.input', side_effect=['alice']), \
+             patch('builtins.input', side_effect=['user']), \
              patch('getpass.getpass', side_effect=['secret', 'different']), \
              patch('haivequeen.web_service.control') as control:
             args = cli.build_parser().parse_args(['web', 'setup'])

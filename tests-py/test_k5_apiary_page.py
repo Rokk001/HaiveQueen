@@ -18,7 +18,7 @@ class PlaceTests(unittest.TestCase):
         self.assertEqual(settings.apiary_place("", {}), ("", ""))
 
     def test_worktree_prefix_follows_the_name(self):
-        self.assertEqual(settings.worktree_prefix("HaiveQueen"), "HaiveQueen")
+        self.assertEqual(settings.worktree_prefix("Example"), "Example")
         self.assertEqual(settings.worktree_prefix("My game!"), "My-game")
         self.assertEqual(settings.worktree_prefix("???"), "wt")
 

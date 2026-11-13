@@ -36,10 +36,22 @@ function planActions(row) {
   return out;
 }
 class RenderGate {
-  constructor(render) { this.draw=render; this.busy=0; this.wanted=false; }
-  begin() { this.busy++; }
-  end() { if (--this.busy===0 && this.wanted) { this.wanted=false; this.draw(); } }
-  render() { if (this.busy) this.wanted=true; else this.draw(); }
+  constructor(render) { this.draw=render; this.pending=new Map(); }
+  begin(node) {
+    const key=node.textContent; let group=this.pending.get(key);
+    if(!group){group={count:0,nodes:new Map()};this.pending.set(key,group);}
+    group.count++; this.prepare(node);
+  }
+  prepare(node) {
+    const group=this.pending.get(node.textContent);
+    if(group){if(!group.nodes.has(node))group.nodes.set(node,node.disabled);node.disabled=true;node.setAttribute('aria-busy','true');}
+  }
+  end(node) {
+    const group=this.pending.get(node.textContent); if(!group || --group.count)return;
+    this.pending.delete(node.textContent);
+    for(const [item,disabled] of group.nodes){item.disabled=disabled;item.removeAttribute('aria-busy');}
+  }
+  render() { this.draw(); }
 }
 class Client {
   constructor(options = {}) {
@@ -89,13 +101,12 @@ function mount(document, bootstrap) {
   const t = text => bootstrap.translations[text] || text;
   const pretty = key => t(bootstrap.labels[key] || ({apiaries:'Projects',hives:'Plans',bees:'Agents',tin:'Tokens in',tout:'Tokens out',ctx:'Context',ctx_limit:'Context limit',start_ctx:'START CONTEXT',tokens_in:'TOTAL IN',tokens_out:'TOTAL OUT',bee_capacity:'Agent slots'}[key]) || key.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/_/g,' '));
   const el = (tag, text, cls) => {const node=document.createElement(tag); if(text!==undefined) node.textContent=String(text); if(cls)node.className=cls; return node;};
-  const button = (text, action) => {const node=el('button',t(text)); node.type='button'; node.onclick=()=>runButton(node,action); return node;};
+  const button = (text, action) => {const node=el('button',t(text)); node.type='button'; renderGate.prepare(node); node.onclick=()=>runButton(node,action); return node;};
   async function runButton(node, action) {
-    renderGate.begin();
-    node.disabled=true; node.setAttribute('aria-busy','true');
+    renderGate.begin(node);
     client.notice('Working…');
     try { await action(); } catch(error) {client.notice(error.message,true);}
-    finally {node.disabled=false;node.removeAttribute('aria-busy');renderGate.end();}
+    finally {renderGate.end(node);if(client.state)renderStateNow(client.state);}
   }
   const client=new Client({csrf:bootstrap.csrf, confirm:text=>confirm(t(text)), notice:(text,bad=false)=>{ $('notice').textContent=t(text);$('notice').className=bad?'bad':'';},
     onUnauthorized:()=>{location.href='/login';}, onError:error=>client.notice(error.message,true),onState:renderState});
@@ -171,7 +182,7 @@ function mount(document, bootstrap) {
     toolbar.append(el('span',t('Orchestrator')+': '+(state.orchestrator?.label || '…')));
     for(const action of ['start','stop-gracefully','force-stop']){
       const node=button(actions[action],()=>act(action,{},action==='force-stop'?state.controls?.force_warning:t(actions[action]+' HaiveQueen?')));
-      node.disabled=orchestratorDisabled(action,state.orchestrator?.label);toolbar.append(node);
+      node.disabled=node.disabled || orchestratorDisabled(action,state.orchestrator?.label);toolbar.append(node);
     }
     toolbar.append(el('span',t('Web server')),
       button('Stop',async()=>{if(await client.action('web/stop',{},t('Stop the web server? The browser will disconnect.')))client.notice(t('Web server stopped.'));}),
@@ -209,7 +220,7 @@ function mount(document, bootstrap) {
     }));
     const agents=section('QUEENS AND AGENTS');agents.append(table(state.bees || [],['name','apiary','hive','task','model','ctx','ctx_limit','tin','tout','status','runtime'],(cell,row)=>{
       if(row.agent)cell.append(button('Live',()=>openLive(row)));
-      if(row.stop_agent){const stop=button('Force stop',()=>act('agent/force-stop',{project:row.project,agent:row.stop_agent},t('Stop agent %s (%s)? The package stays stopped until you resume it.').replace('%s',row.name).replace('%s',row.task)));stop.disabled=!!row.stop_disabled;stop.title=row.stop_disabled||'';cell.append(stop);}
+      if(row.stop_agent){const stop=button('Force stop',()=>act('agent/force-stop',{project:row.project,agent:row.stop_agent},t('Stop agent %s (%s)? The package stays stopped until you resume it.').replace('%s',row.name).replace('%s',row.task)));stop.disabled=stop.disabled || !!row.stop_disabled;stop.title=row.stop_disabled||'';cell.append(stop);}
       if(row.stopped)cell.append(button('Resume package',()=>act('package/resume',{...key(row),package:row.package || row.task},t('Resume package')+'?')));
       cell.append(button('Details',()=>detail(row.name,row)),button('Filter log',()=>{selectedAgent=row.agent || row.name;selectedPlan='';render();}));
     }));
@@ -350,11 +361,11 @@ function mount(document, bootstrap) {
         const models=editor.provider_models?.[provider.name];if(models)card.append(valueView(models));
         card.append(valueView((editor.benchmark || []).filter(row=>row.provider===provider.name)));
         const saved=!editor.dirty;
-        for(const operation of ['enable','disable','test']){const node=button({enable:'Enable',disable:'Disable',test:'Test connection'}[operation],async()=>{const current=editor;await act('provider',{provider:provider.name,provider_action:operation});if(current===editor&&!editor.dirty)await loadEditor('');});node.disabled=!saved;node.dataset.savedOnly='true';card.append(node);}
+        for(const operation of ['enable','disable','test']){const node=button({enable:'Enable',disable:'Disable',test:'Test connection'}[operation],async()=>{const current=editor;await act('provider',{provider:provider.name,provider_action:operation});if(current===editor&&!editor.dirty)await loadEditor('');});node.disabled=node.disabled || !saved;node.dataset.savedOnly='true';card.append(node);}
         const login=button('Login',async()=>{
           const run=await client.action('login/start',{provider:provider.name});loginRuns.set(run.id,run);renderLogin(run);
-        });login.disabled=!saved;login.dataset.savedOnly='true';card.append(login);
-        const benchmark=button('Benchmark Start Context',async()=>{const job=await client.action('benchmark/start',{provider:provider.name},t('This starts the provider CLI twice per Project and uses login tokens. Confirm to continue.'));if(job){jobs.set(job.id,job);renderJob(job);}});benchmark.disabled=!saved;benchmark.dataset.savedOnly='true';card.append(benchmark);
+        });login.disabled=login.disabled || !saved;login.dataset.savedOnly='true';card.append(login);
+        const benchmark=button('Benchmark Start Context',async()=>{const job=await client.action('benchmark/start',{provider:provider.name},t('This starts the provider CLI twice per Project and uses login tokens. Confirm to continue.'));if(job){jobs.set(job.id,job);renderJob(job);}});benchmark.disabled=benchmark.disabled || !saved;benchmark.dataset.savedOnly='true';card.append(benchmark);
         form.append(card);
       });
     } else {

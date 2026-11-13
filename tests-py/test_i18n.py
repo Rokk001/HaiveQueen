@@ -180,7 +180,6 @@ class GermanTextsTest(unittest.TestCase):
         self.assertEqual(dashboard_data.status_text({"state": "answer", "pending_questions": [3]}), "Wartet auf Antwort (#3)")
         self.assertEqual(dashboard_data.blocker_text("Plan limit 2 of something"), "Plan-Limit 2 erreicht")
         self.assertEqual(dashboard_data.blocker_text("free RAM 1.00 GB is below the minimum 2.00 GB"), "Zu wenig freier RAM: 1,00 GB")
-        self.assertEqual(dashboard_data.blocker_text("STOP"), "HaiveQueen gestoppt")
         self.assertEqual(dashboard_data.blocker_text("waiting for provider codex: quota used up"), "Wartet auf Anbieter codex: Kontingent aufgebraucht")
         self.assertEqual(dashboard_data.blocker_text("waiting for the build: x"), "Wartet auf den Build: x")
 

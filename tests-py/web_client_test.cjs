@@ -52,9 +52,14 @@ const {Client, planActions, setValue, safeLinks, toolsFromArgs, withTools, orche
 const {RenderGate} = require('../haivequeen/web-client.js');
 let renders = 0;
 const gate = new RenderGate(() => renders++);
-gate.begin();
+const firstButton = {textContent:'Start', disabled:false, setAttribute(k,v){this[k]=v;}, removeAttribute(k){delete this[k];}};
+gate.begin(firstButton);
+const redrawnButton = {textContent:'Start', disabled:false, setAttribute(k,v){this[k]=v;}, removeAttribute(k){delete this[k];}};
+gate.prepare(redrawnButton);
+assert.equal(redrawnButton.disabled, true, 'pending feedback survives a redraw');
+assert.equal(redrawnButton['aria-busy'], 'true');
 gate.render();
 gate.render();
-assert.equal(renders, 0, 'refresh must preserve pending button feedback');
-gate.end();
-assert.equal(renders, 1, 'latest state must render after the action');
+assert.equal(renders, 2, 'live state must render while an action is pending');
+gate.end(firstButton);
+assert.equal(redrawnButton.disabled, false);

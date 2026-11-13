@@ -17,7 +17,7 @@ CONTEXT_FALLBACK = 300000   # context limit in tokens when the provider's own li
 ACTIVITY_DAYS = 7       # window of the token usage panel
 LIVE_LINES = 300        # newest lines shown in the live view of an agent
 LIVE_FILE = "milestones.txt"   # live text file of an agent, in its run folder (written by agent_runner.AgentRun.say)
-LIVE_COLOURS = {"White": "text", "Green": "green", "Red": "red", "Cyan": "cyan", "Yellow": "yellow", "Gray": "dim"}   # colour word of a live line -> gui.COL name
+LIVE_COLOURS = {"White": "text", "Green": "green", "Red": "red", "Cyan": "cyan", "Yellow": "yellow", "Gray": "dim"}
 
 
 # Strip the plan suffix so a plan file name reads as a Hive name.
