@@ -71,6 +71,33 @@ class StopAgentTest(RoundCase):
         self.assert_only_stopped("Cleo", kill)
         self.assert_no_missing_result_fault()
 
+    def test_force_stop_cli_entry_preserves_single_agent_rules(self):
+        self.agent('worker-control', phase='bee', package='P2', status='running', started=3, pid=999994)
+        self.seed_fault_detection()
+        with mock.patch('haivequeen.platform.kill_process_tree', return_value=True) as kill:
+            code, res = self.bzz('agent', 'force-stop', 'worker-control', '--project', 'testproj')
+        self.assertEqual(code, 0)
+        self.assertTrue(res['ok'])
+        self.assert_only_stopped('worker-control', kill)
+        self.assertTrue(bees.package_stopped(self.conn, 'testproj', REL, 'P2'))
+        self.assert_no_missing_result_fault()
+
+    def test_force_stop_cli_keeps_owner_queen_and_subagent_restrictions(self):
+        bees.record_embedded_start(self.conn, 'testproj', REL, 'P1', 'Sub', 'medium', 'claude', queen='Queen-A')
+        with mock.patch('haivequeen.platform.kill_process_tree') as kill:
+            for name, caller in (('worker-control', 'Queen-A'), ('Queen-A', None), ('Sub', None)):
+                with self.subTest(name=name, caller=caller):
+                    code, res = self.bzz('agent', 'force-stop', name, '--project', 'testproj', agent=caller)
+                    self.assertNotEqual(code, 0)
+                    self.assertFalse(res['ok'])
+        kill.assert_not_called()
+
+    def test_agent_help_names_force_stop_and_compatibility_alias(self):
+        parser = cli.build_parser()._subparsers._group_actions[0].choices['agent']
+        help_text = ' '.join(parser.format_help().split())
+        self.assertIn('bzz agent force-stop <name>', help_text)
+        self.assertIn('compatibility alias', help_text)
+
     def test_cli_is_owner_only_and_refuses_the_queen(self):
         with mock.patch("haivequeen.platform.kill_process_tree", return_value=True) as kill:
             code, res = self.bzz("agent", "stop", "Bea", "--project", "testproj", agent="Queen-A")

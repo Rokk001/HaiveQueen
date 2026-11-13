@@ -471,7 +471,7 @@ def cmd_agent_stop(args, conn):
 def cmd_bee(args, conn):
     """Route and start an Agent, or record an attempt for escalation."""
     from haivequeen import bees, scheduler
-    if args.action == "stop":
+    if args.action in ("force-stop", "stop"):
         return cmd_agent_stop(args, conn)
     missing = [f for f in ("plan", "package", "cls") if not getattr(args, f)]
     if missing:
@@ -592,13 +592,14 @@ def build_parser() -> argparse.ArgumentParser:
         "Names are based on plan and package, never after an Agent. A new branch starts from the current tip of the plan branch; "
         "a replacement Agent reuses the same worktree and branch. The answer gives cwd and branch, also for subagents. "
         "Agents must not create or commit on another branch. "
-        "Stop: 'bzz agent stop <name>' is for the owner only (also the dashboard button and an inbox [[stop_agent]] entry); it ends the one running Agent, "
+        "Force stop: 'bzz agent force-stop <name>' is for the owner only (also the dashboard button and an inbox [[stop_agent]] entry); it ends the one running Agent, "
         "refuses a subagent of the Queen with the reason, and refuses the Queen, who can only be ended by bzz dequeen. "
-        "The package stays stopped and waits for an explicit owner instruction. The Queen gets the stop as an owner message in owner_messages."))
-    p.add_argument("action", choices=["start", "result", "wait", "stop"])
-    p.add_argument("target", nargs="?", default="", help="stop: the name of the one running Agent to end (owner only; not the Queen, not a subagent)")
+        "The package stays stopped and waits for an explicit owner instruction. The Queen gets the stop as an owner message in owner_messages. "
+        "'bzz agent stop' remains a compatibility alias for force-stop."))
+    p.add_argument("action", choices=["start", "result", "wait", "force-stop", "stop"])
+    p.add_argument("target", nargs="?", default="", help="force-stop: the name of the one running Agent to end (owner only; not the Queen, not a subagent)")
     p.add_argument("--project", required=True)
-    for field in ("plan", "package", "class"):   # required by every action except stop
+    for field in ("plan", "package", "class"):   # required except for force-stop and its stop alias
         p.add_argument("--" + field, default="", dest="cls" if field == "class" else field)
     p.add_argument("--name", default="")
     p.add_argument("--provider", default="")

@@ -5,6 +5,19 @@ from haivequeen import cli
 
 
 class WebDocumentationTests(unittest.TestCase):
+    def test_service_requires_explicit_start_after_force_stop(self):
+        guide = Path('docs/WEB-API.md').read_text(encoding='utf-8')
+        service = guide.split('```ini', 1)[1].split('```', 1)[0]
+        self.assertIn('Restart=no', service)
+        self.assertIn('KillMode=process', service)
+        self.assertIn('disable automatic restart', guide)
+        self.assertIn('systemctl --user start haivequeen.service', guide)
+
+    def test_agent_force_stop_is_the_documented_command(self):
+        for path in ('README.md', 'docs/RUNTIME-API.md', 'docs/WEB-API.md'):
+            with self.subTest(path=path):
+                self.assertIn('bzz agent force-stop', Path(path).read_text(encoding='utf-8'))
+
     def test_documentation_does_not_reference_removed_desktop_modules(self):
         root = Path(__file__).resolve().parents[1]
         documents = [*root.glob('README*'), *(root / 'docs').rglob('*')]

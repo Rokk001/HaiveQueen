@@ -13,6 +13,20 @@ from . import platform as osplat
 WARNING = 'Force stop ends all running Queens, Agents, Builds and Deploys immediately. Unfinished work will be done again after Start.'
 
 
+def has_work(conn):
+    """Include orphaned agents, pipeline jobs and unfinished detached checks."""
+    if any(agent_process.counts(row) for row in runtime.list_agents(conn)):
+        return True
+    for row in db.rows(conn, "SELECT value FROM kv WHERE key LIKE 'orch:%'"):
+        if (json.loads(row['value']).get('job') or {}).get('pid'):
+            return True
+    for row in db.rows(conn, "SELECT project,key FROM kv WHERE key LIKE 'compile-request:%'"):
+        token = row['key'][len(integration.COMPILE_REQUEST_KEY):]
+        if not runtime.kv_get(conn, row['project'], integration.COMPILE_RUN_KEY + token):
+            return True
+    return False
+
+
 def requested():
     try:
         return loop.stop_flag().read_text(encoding='utf-8').startswith('force stop requested ')

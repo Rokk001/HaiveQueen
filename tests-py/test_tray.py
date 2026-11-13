@@ -6,12 +6,15 @@ from haivequeen import tray
 
 class TrayTests(unittest.TestCase):
     def test_states_and_menu(self):
-        for state, expected in [('Running', (False, True, True)), ('Stopping', (False, False, True)), ('Stopped', (True, False, True))]:
+        for state, expected in [('Running', (False, True, True)), ('Stopping', (False, False, True)), ('Stopped', (True, False, False))]:
             menu = tray.menu(state, True)
             self.assertEqual(tuple(item[2] for item in menu[1:4]), expected)
             self.assertEqual([item[1] for item in menu], ['Open web interface', 'Start', 'Stop gracefully', 'Force stop', 'Start', 'Stop', 'Restart'])
             self.assertEqual(tuple(item[2] for item in menu[4:]), (False, True, True))
         self.assertEqual(tuple(item[2] for item in tray.menu('Stopped', False)[4:]), (True, False, False))
+
+    def test_stopped_orchestrator_can_force_stop_orphaned_work(self):
+        self.assertTrue(tray.menu('Stopped', True, work_running=True)[3][2])
 
     def test_confirmation_precedes_force(self):
         with patch.object(tray, 'run_command') as run, patch.object(tray, 'confirm', return_value=False):

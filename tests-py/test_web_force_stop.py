@@ -8,6 +8,22 @@ from haivequeen import cli, force_stop, integration, interrupt, loop, orchestrat
 
 
 class ForceStopTests(RoundCase):
+    def test_tray_detects_work_left_after_the_loop_stops(self):
+        from haivequeen import tray
+        self.assertFalse(tray.work_running())
+        self.agent('worker', status='running', pid=910005)
+        with mock.patch.object(force_stop.agent_process, 'pid_reused', return_value=False):
+            self.assertTrue(tray.work_running())
+        runtime.upsert_agent(self.conn, 'testproj', 'worker', {'status': 'done', 'pid': None})
+        self.assertFalse(tray.work_running())
+        orchestrator.save(self.conn, 'testproj', REL, {'job': {'pid': 910006}})
+        self.assertTrue(tray.work_running())
+        orchestrator.save(self.conn, 'testproj', REL, {})
+        runtime.kv_set(self.conn, 'testproj', integration.COMPILE_REQUEST_KEY + 'tray-check', json.dumps({'check_pid': 910007}))
+        self.assertTrue(tray.work_running())
+        runtime.kv_set(self.conn, 'testproj', integration.COMPILE_RUN_KEY + 'tray-check', json.dumps({'ok': True}))
+        self.assertFalse(tray.work_running())
+
     def test_foreground_console_entry_point_can_be_force_stopped(self):
         commands = (
             ('/opt/tools/bin/python /opt/tools/bin/bzz start --foreground', False),

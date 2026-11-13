@@ -24,6 +24,8 @@ Orchestrator controls, web Stop and Restart, plan Stop gracefully, Force stop,
 Resume, Cancel plan and Restart Queen on provider, and single Agent Force stop
 and Resume package. Unavailable actions are disabled. Linux and other systems
 have no tray; use `bzz status` and the browser.
+The single-Agent command is `bzz agent force-stop <name> --project <project>`;
+`bzz agent stop` remains a compatibility alias with the same owner-only rules.
 
 ## Background service
 
@@ -37,7 +39,8 @@ Description=HaiveQueen
 
 [Service]
 ExecStart=/absolute/path/to/bzz start --foreground
-Restart=on-failure
+Restart=no
+KillMode=process
 
 [Install]
 WantedBy=default.target
@@ -47,10 +50,17 @@ Save this as `~/.config/systemd/user/haivequeen.service`, then run
 `systemctl --user daemon-reload` and `systemctl --user enable --now haivequeen.service`.
 Manage it with `systemctl --user stop` or `restart`; inspect it with
 `systemctl --user status haivequeen.service` and `journalctl --user -u haivequeen.service`.
+`Restart=no` keeps Force stop stopped until the user explicitly starts again,
+including when the Orchestrator exits by a signal. `KillMode=process` keeps
+the detached web server available after the Orchestrator ends. This service
+does not automatically recover from crashes. Start again from the web interface
+or with `systemctl --user start haivequeen.service` (or `bzz start`).
 The user manager must be running for the service to run. On other systems,
 configure the local service manager to supervise `bzz start --foreground` as
 the intended user, with the installed executable and its environment. Use the
-service manager to control its lifecycle; it may restart a stopped process.
+service manager to control its lifecycle; disable automatic restart so Force stop
+leaves HaiveQueen stopped until an explicit Start. Keep the independent web
+listener outside any automatic process-tree cleanup of the Orchestrator.
 `bzz web serve` can instead be supervised separately when only the independent
 web listener is needed.
 The web service is independent of the Orchestrator. `bzz web start`, `stop`

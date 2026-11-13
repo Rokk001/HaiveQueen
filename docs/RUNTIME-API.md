@@ -53,7 +53,7 @@ On a failure it prints `{"ok": false, "error": "..."}` and exits with 1 (usage e
 ## Owner messages and stopping an Agent
 
 - `owner_messages`: the next JSON answer of any `bzz` command run by a running Queen carries an `owner_messages` list with her undelivered owner-source decisions, once; without any, the key is absent.
-- `bzz agent stop <name>` (owner only; also the dashboard button and an inbox `[[stop_agent]]` entry): ends one running Agent. A subagent is refused with the reason, the Queen can only be ended by `bzz dequeen`. The package stays stopped and waits for an explicit owner instruction; the Queen receives an owner message.
+- `bzz agent force-stop <name>` (owner only; `bzz agent stop` is a compatibility alias; also the dashboard button and an inbox `[[stop_agent]]` entry): ends one running Agent. A subagent is refused with the reason, the Queen can only be ended by `bzz dequeen`. The package stays stopped and waits for an explicit owner instruction; the Queen receives an owner message.
 
 ## Run state and restart (D8)
 

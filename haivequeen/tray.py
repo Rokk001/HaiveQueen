@@ -2,20 +2,26 @@
 import os
 import subprocess
 import threading
+from contextlib import closing
 from pathlib import Path
 
-from . import force_stop, loop, web_service
+from . import config, db, force_stop, loop, web_service
 from . import platform as osplat
 
 
-def menu(state, web_running):
+def menu(state, web_running, work_running=False):
     return [(1, 'Open web interface', True),
             (2, 'Start', state == 'Stopped'),
             (3, 'Stop gracefully', state == 'Running'),
-            (4, 'Force stop', True),
+            (4, 'Force stop', state != 'Stopped' or work_running),
             (5, 'Start', not web_running),
             (6, 'Stop', web_running),
             (7, 'Restart', web_running)]
+
+
+def work_running():
+    with closing(db.connect(config.db_path())) as conn:
+        return force_stop.has_work(conn)
 
 
 def state():
@@ -104,7 +110,7 @@ def main():
     user.DispatchMessageW.argtypes = [ctypes.POINTER(w.MSG)]
     user.DefWindowProcW.restype = LRESULT
     user.TrackPopupMenu.restype = w.UINT
-    current = {'state': '', 'web': False}
+    current = {'state': '', 'web': False, 'work': False}
     icon = NID()
     icon.size = ctypes.sizeof(NID)
     icon.id = 1
@@ -117,6 +123,7 @@ def main():
             current['state'] = state()
             status = web_service.control('status')
             current['web'] = bool(status and status.get('running'))
+            current['work'] = current['state'] == 'Stopped' and work_running()
         except (OSError, ValueError, KeyError):
             return
         icon.tip = 'HaiveQueen - ' + current['state']
@@ -131,7 +138,7 @@ def main():
             return 0
         if msg == 0x8001 and lp in (0x205, 0x202):
             popup = user.CreatePopupMenu()
-            entries = menu(current['state'], current['web'])
+            entries = menu(current['state'], current['web'], current['work'])
             for index, (number, label, enabled) in enumerate(entries):
                 if index in (1, 4):
                     user.AppendMenuW(popup, 0x800, 0, None)
