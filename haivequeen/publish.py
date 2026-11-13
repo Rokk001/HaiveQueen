@@ -423,7 +423,7 @@ def _drain(conn, env, repository, run, latest, publisher, token_fn) -> list:
                 tip = entry.get("tip") or _queue_tip(conn, env.name, entry.get("queue_id"))
                 entry["commit"] = integrated_commit(env, run, tip, exact=True)
             if not entry.get("version"):
-                entry["version"] = choose_version(env, _current(conn, env, repository, latest))
+                entry["version"] = _release_tag(conn, env, entry, repository, run)
         except Exception as exc:
             _report(conn, env, "release of %s not prepared: %s" % (repository, str(exc)[:300]))
             return done

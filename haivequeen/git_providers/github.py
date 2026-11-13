@@ -96,7 +96,9 @@ def publish_release(repository: str, version: str, commit: str, token: str, _url
         part in (".", "..") for part in repository.split("/")
     ):
         raise ValueError("repository must be an owner/name pair")
-    next_version(version)
+    prerelease = bool(re.fullmatch(r"v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\.\d+", version))
+    if not prerelease:
+        next_version(version)
     if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
         raise ValueError("commit must be a full Git object ID")
     if token is None:
@@ -104,7 +106,7 @@ def publish_release(repository: str, version: str, commit: str, token: str, _url
     if not token or "\n" in token or "\r" in token:
         raise ValueError("a GitHub token is required")
     base = "https://api.github.com/repos/" + repository
-    tag = "v" + version
+    tag = version if prerelease else "v" + version
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "HaiveQueen",
                "Authorization": "Bearer " + token, "X-GitHub-Api-Version": "2022-11-28"}
 
@@ -135,14 +137,14 @@ def publish_release(repository: str, version: str, commit: str, token: str, _url
             raise ValueError("release tag already exists at a different or unverifiable commit")
         try:
             existing = request("/releases/tags/" + tag)
-            if existing.get("tag_name") != tag or existing.get("draft") or existing.get("prerelease"):
-                raise ValueError("existing release is not a published stable release")
+            if existing.get("tag_name") != tag or existing.get("draft") or bool(existing.get("prerelease")) != prerelease:
+                raise ValueError("existing release has the wrong publication status")
             return existing
         except HTTPError as exc:
             if exc.code != 404:
                 raise
     return request("/releases", {"tag_name": tag, "target_commitish": commit,
-                                  "name": tag, "draft": False, "prerelease": False})
+                                  "name": tag, "draft": False, "prerelease": prerelease})
 
 
 def login(repository, run=None):
