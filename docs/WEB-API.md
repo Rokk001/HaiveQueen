@@ -27,30 +27,32 @@ have no tray; use `bzz status` and the browser.
 
 ## Background service
 
-On Linux, a user systemd service can supervise the foreground listener. Replace
-the executable path with the absolute path to your installed `bzz`:
+On Linux, a user systemd service can supervise HaiveQueen itself, including
+its Orchestrator and web server. Replace the executable path with the absolute
+path to your installed `bzz`:
 
 ```ini
 [Unit]
-Description=HaiveQueen web server
+Description=HaiveQueen
 
 [Service]
-ExecStart=/absolute/path/to/bzz web serve
+ExecStart=/absolute/path/to/bzz start --foreground
 Restart=on-failure
 
 [Install]
 WantedBy=default.target
 ```
 
-Save this as `~/.config/systemd/user/haivequeen-web.service`, then run
-`systemctl --user daemon-reload` and `systemctl --user enable --now haivequeen-web.service`. Manage it with `systemctl --user stop` or `restart`
-and inspect it with `systemctl --user status` and `journalctl --user -u haivequeen-web.service`. The user manager must be running for the service to
-run. On other systems use the local service manager to supervise `bzz web serve` as the intended user, with the installed executable and its environment.
-The listener is independent of the Orchestrator: start the latter separately
-with `bzz start`, and stop it with `bzz stop` before stopping the service.
-Avoid simultaneously supervising the listener and using web Stop/Restart as
-service managers may restart it; use the service manager for its lifecycle.
-
+Save this as `~/.config/systemd/user/haivequeen.service`, then run
+`systemctl --user daemon-reload` and `systemctl --user enable --now haivequeen.service`.
+Manage it with `systemctl --user stop` or `restart`; inspect it with
+`systemctl --user status haivequeen.service` and `journalctl --user -u haivequeen.service`.
+The user manager must be running for the service to run. On other systems,
+configure the local service manager to supervise `bzz start --foreground` as
+the intended user, with the installed executable and its environment. Use the
+service manager to control its lifecycle; it may restart a stopped process.
+`bzz web serve` can instead be supervised separately when only the independent
+web listener is needed.
 The web service is independent of the Orchestrator. `bzz web start`, `stop`
 and `restart` control the web listener; `bzz stop` keeps it available.
 `bzz web setup` configures one account and enables network access.

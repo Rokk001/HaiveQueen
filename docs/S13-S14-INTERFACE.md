@@ -36,7 +36,7 @@ Provided by S13 for S14, S15 and S16: `scheduler.model_label/model_short/model_l
 `buildjobs.jobs_line(env, agents)` (dashboard text), `loop.read_state(conn)` (loop-state: status brain, round or idle, since, nextAt), `brain.totals(conn)`,
 `runstate` (S6b), `loop.stop_flag()`. Provided by S14 (`agent_runner.py`): phase rule files (`write_phase_rules`), `Update-AgentRetry` (`AgentRun.set_agent_retry`), milestones.
 
-The dashboard is served by `haivequeen.web_service` and shown in the default browser by `bzz start` or `bzz gui`. Shared data and actions live in `dashboard_data`, `settings`, `provider_labels`, `plan_view` and `question_service`; these modules have no desktop UI dependencies.
+The dashboard is served by `haivequeen.web_service` and shown in the default browser by `bzz start` or `bzz gui`. Shared data and actions live in `dashboard_data`, `settings`, `provider_labels`, `plan_view` and `question_service`.
 
 
 ---

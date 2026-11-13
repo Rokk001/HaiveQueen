@@ -134,6 +134,8 @@ def execute(conn, action, data):
     project, plan = data.get('project'), data.get('plan')
     if action == 'state':
         state = dashboard_data.snapshot(conn, project)
+        for row in state.get('hives', []):
+            row['stopped'] = bool(row.get('paused')) and hives.is_stopped(conn, row['apiary'], row['plan_path'])
         state['controls'] = {'orchestrator': ['Start', 'Stop gracefully', 'Force stop'], 'web': ['Stop', 'Restart'], 'force_warning': FORCE_WARNING}
         state['projects'] = db.rows(conn, 'SELECT name,workspace,colour,priority FROM projects ORDER BY name')
         return state

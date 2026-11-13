@@ -19,6 +19,7 @@ const {Client, planActions, setValue, safeLinks, toolsFromArgs, withTools, orche
   assert.equal(await client.action('start'),null,'A redraw must not allow the same action twice');
   completeAction();await pending;
   assert(planActions({status:'PAUSED',stopped:true}).includes('resume'));
+  assert(!planActions({status:'PAUSED',stopped:false}).includes('resume'), 'running work must finish before Resume');
   assert(!planActions({status:'DONE'}).includes('resume'));
   assert(!planActions({status:'RUNNING'}).includes('resume'));
   assert.equal(orchestratorDisabled('force-stop','STOPPED'),false,'Force stop remains available for orphaned work');
@@ -48,3 +49,12 @@ const {Client, planActions, setValue, safeLinks, toolsFromArgs, withTools, orche
   await assert.rejects(client.request('settings/save',{revision:'old',data:{}}),/changed since loading/);
   console.log('Browser client regressions passed');
 })().catch(error=>{console.error(error);process.exitCode=1});
+const {RenderGate} = require('../haivequeen/web-client.js');
+let renders = 0;
+const gate = new RenderGate(() => renders++);
+gate.begin();
+gate.render();
+gate.render();
+assert.equal(renders, 0, 'refresh must preserve pending button feedback');
+gate.end();
+assert.equal(renders, 1, 'latest state must render after the action');

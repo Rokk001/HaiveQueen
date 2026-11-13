@@ -7,6 +7,13 @@ from haivequeen import bees, db, dashboard_data, hives, loop, owner, runtime, st
 
 
 class WebApiTests(RoundCase):
+    def test_snapshot_reports_when_paused_plan_has_fully_stopped(self):
+        row = {'apiary': 'testproj', 'plan_path': REL, 'paused': True}
+        with mock.patch.object(dashboard_data, 'snapshot', return_value={'hives': [row]}), \
+             mock.patch.object(hives, 'is_stopped', side_effect=[False, True]):
+            self.assertFalse(web_api.execute(self.conn, 'state', {})['hives'][0]['stopped'])
+            self.assertTrue(web_api.execute(self.conn, 'state', {})['hives'][0]['stopped'])
+
     def test_snapshot_uses_shared_dashboard_and_only_named_controls(self):
         with mock.patch.object(dashboard_data, 'snapshot', return_value={'hives': []}) as snapshot:
             result = web_api.execute(self.conn, 'state', {})

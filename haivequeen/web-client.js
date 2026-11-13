@@ -27,13 +27,19 @@ function withTools(args, tools) {
 function planActions(row) {
   if (row.status === 'DONE') return [];
   const out = [];
-  if (row.status === 'PAUSED') out.push('resume');
+  if (row.status === 'PAUSED' && row.stopped) out.push('resume');
   if (['DRAFT', 'CANCELLED'].includes(row.status)) out.push('start');
   if (['SENT','PREPARING','QUEUED','RUNNING','WAITING','REVIEW'].includes(row.status)) out.push('stop-gracefully');
   if (row.has_hive && !row.stopped) out.push('force-stop');
   if (row.status === 'DRAFT' || row.stopped) out.push('cancel');
   if (row.status === 'CANCELLED' || row.stopped) out.push('back-to-draft');
   return out;
+}
+class RenderGate {
+  constructor(render) { this.draw=render; this.busy=0; this.wanted=false; }
+  begin() { this.busy++; }
+  end() { if (--this.busy===0 && this.wanted) { this.wanted=false; this.draw(); } }
+  render() { if (this.busy) this.wanted=true; else this.draw(); }
 }
 class Client {
   constructor(options = {}) {
@@ -85,13 +91,15 @@ function mount(document, bootstrap) {
   const el = (tag, text, cls) => {const node=document.createElement(tag); if(text!==undefined) node.textContent=String(text); if(cls)node.className=cls; return node;};
   const button = (text, action) => {const node=el('button',t(text)); node.type='button'; node.onclick=()=>runButton(node,action); return node;};
   async function runButton(node, action) {
+    renderGate.begin();
     node.disabled=true; node.setAttribute('aria-busy','true');
     client.notice('Working…');
     try { await action(); } catch(error) {client.notice(error.message,true);}
-    finally {node.disabled=false;node.removeAttribute('aria-busy');}
+    finally {node.disabled=false;node.removeAttribute('aria-busy');renderGate.end();}
   }
   const client=new Client({csrf:bootstrap.csrf, confirm:text=>confirm(t(text)), notice:(text,bad=false)=>{ $('notice').textContent=t(text);$('notice').className=bad?'bad':'';},
     onUnauthorized:()=>{location.href='/login';}, onError:error=>client.notice(error.message,true),onState:renderState});
+  const renderGate=new RenderGate(()=>renderStateNow(client.state));
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
   let lastAutomaticCheck=0, automaticChecking=false;
@@ -143,6 +151,9 @@ function mount(document, bootstrap) {
   for(const name of ['Dashboard','Plans','Questions','General','Providers','Projects']){const node=button(name,()=>selectTab(name));node.dataset.tab=name;node.setAttribute('role','tab');node.setAttribute('aria-selected',String(name===tab));$('tabs').append(node);}
   $('tabs').setAttribute('role','tablist');
   function renderState(state) {
+    renderGate.render();
+  }
+  function renderStateNow(state) {
     $('version').textContent=state.version || '';
     renderControls();
     if(tab==='Dashboard'){
@@ -239,7 +250,7 @@ function mount(document, bootstrap) {
     if(!row.status || !/^[A-Z]+$/.test(row.status)){
       bar.append(button('Stop gracefully',()=>act('plan/stop-gracefully',key(row),t('Stop gracefully')+'?')),
         button('Force stop',()=>act('plan/force-stop',key(row),t('Force stop')+'?')));
-      if(row.paused)bar.append(button('Resume',()=>act('plan/resume',key(row),t('Resume')+'?')));
+      if(row.stopped)bar.append(button('Resume',()=>act('plan/resume',key(row),t('Resume')+'?')));
       bar.append(button('Cancel plan',()=>act('plan/cancel',key(row),t('Cancel plan')+'?')));
     }
     if(row.status!=='DONE')bar.append(button('Release',()=>act('owner/release',key(row),t('Release')+'?')));
@@ -516,5 +527,5 @@ function mount(document, bootstrap) {
   render();void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={Client,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,mount};
+if(typeof module!=='undefined')module.exports={Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

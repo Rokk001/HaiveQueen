@@ -237,7 +237,7 @@ A `failed` result without evidence (`--open-requirements` or `--error`) is refus
 
 ## Dashboard
 
-`bzz start` starts the local web service and opens the dashboard in your default browser. For setup, network access, login, web server controls, the Windows tray and background services, see the [web guide](docs/WEB-API.md). `bzz gui` opens the same browser interface; `--detach` and `--project` remain accepted for existing shortcuts. No desktop window or Tk installation is required. Closing the browser leaves the loop and agents running.
+`bzz start` starts the local web service and opens the dashboard in your default browser. For setup, network access, login, web server controls, the Windows tray and background services, see the [web guide](docs/WEB-API.md). `bzz gui` opens the same browser interface; `--detach` and `--project` remain accepted for existing shortcuts. Closing the browser leaves the loop and agents running.
 
 The dashboard shows plans, Queens and Agents, model limits, tokens, system load, questions and logs. Use the controls to start, stop gracefully or force stop orchestration, manage plans, answer questions and inspect an agent's live output. Owner checks have explicit Accept and Not ok actions; a rejection needs a finding and can select individual packages for rework.
 

@@ -19,7 +19,6 @@ class BrowserTests(unittest.TestCase):
         self.assertIn('session-token', page)
         self.assertIn('Allgemein', page)
         self.assertIn('web-client.js', page)
-        self.assertNotIn('tkinter', page)
         self.assertNotIn('</script><attack>', web_ui.page('</script><attack>'))
 
     def test_client_behaviour(self):
