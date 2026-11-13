@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from bzztest import REL, RoundCase, db, runtime
-from haivequeen import bees, cli, gui_data, hives, inbox, owner, readygate
+from haivequeen import bees, cli, faults, gui_data, hives, inbox, owner, readygate
 
 
 class StopAgentTest(RoundCase):
@@ -47,6 +47,13 @@ class StopAgentTest(RoundCase):
             self.assertEqual(self.status(other), "running", other)
         self.assertEqual(self.failures(), (0, 0))
 
+    def seed_fault_detection(self):
+        faults._check_agents(self.env())
+
+    def assert_no_missing_result_fault(self):
+        faults._check_agents(self.env())
+        self.assertEqual(db.rows(self.conn, "SELECT * FROM questions WHERE item='agent_no_result'"), [])
+
     def test_shared_function_stops_a_package_agent(self):
         with mock.patch("haivequeen.platform.kill_process_tree", return_value=True) as kill:
             owner.stop_agent(self.conn, "testproj", "Bea")
@@ -56,11 +63,13 @@ class StopAgentTest(RoundCase):
         self.assertFalse(bees.package_stopped(self.conn, "testproj", REL, "P2"))
 
     def test_cli_entry_stops_a_package_agent(self):
+        self.seed_fault_detection()
         with mock.patch("haivequeen.platform.kill_process_tree", return_value=True) as kill:
             code, res = self.bzz("agent", "stop", "Cleo", "--project", "testproj")
         self.assertEqual(code, 0)
         self.assertTrue(res["ok"])
         self.assert_only_stopped("Cleo", kill)
+        self.assert_no_missing_result_fault()
 
     def test_cli_is_owner_only_and_refuses_the_queen(self):
         with mock.patch("haivequeen.platform.kill_process_tree", return_value=True) as kill:
@@ -77,6 +86,7 @@ class StopAgentTest(RoundCase):
         self.assertEqual(self.status("Bea"), "running")
 
     def test_inbox_entry_stops_a_ready_check_agent(self):
+        self.seed_fault_detection()
         box = inbox.inbox_dir(self.repo)
         box.mkdir(parents=True)
         (box / "s.toml").write_text('[[stop_agent]]\nname = "Queen-A-ready-check"\n', encoding="utf-8")
@@ -84,6 +94,7 @@ class StopAgentTest(RoundCase):
             res = inbox.process_inbox(self.env())
         self.assertEqual(res["failed"], [])
         self.assert_only_stopped("Queen-A-ready-check", kill)
+        self.assert_no_missing_result_fault()
 
     def test_queen_gets_the_owner_message_once(self):
         with mock.patch("haivequeen.platform.kill_process_tree", return_value=True):
@@ -160,6 +171,7 @@ class StopAgentTest(RoundCase):
         self.assertEqual(by["Sub"]["stop_disabled"], owner.EMBEDDED_REASON % "Sub")
 
     def test_dashboard_button_uses_the_shared_function(self):
+        self.seed_fault_detection()
         from haivequeen import gui
         cls = next(c for c in vars(gui).values() if isinstance(c, type) and hasattr(c, "stop_agent_button"))
         app = mock.Mock(conn=self.conn, confirm=lambda text: True)
@@ -167,6 +179,7 @@ class StopAgentTest(RoundCase):
         with mock.patch("haivequeen.platform.kill_process_tree", return_value=True) as kill:
             cls.stop_agent_button(app, row)
         self.assert_only_stopped("Bea", kill)
+        self.assert_no_missing_result_fault()
         with mock.patch("haivequeen.platform.kill_process_tree", return_value=True) as kill:
             cls.stop_agent_button(app, {**row, "name": "Cleo", "agent": "Cleo", "stop_agent": "Cleo", "stop_disabled": "reason text"})
         kill.assert_not_called()

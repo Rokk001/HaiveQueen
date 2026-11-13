@@ -85,6 +85,13 @@ class FaultsTest(RoundCase):
         self.assertEqual(len(q), 1)
         self.assertIn("DUMMY-B-work", q[0]["question"])
 
+    def test_done_agent_without_result_is_filed(self):
+        """A normal done row without a result is still a fault, even near the stop marker."""
+        self.check()
+        self.agent("DUMMY-C-work", status="done", started=5, ended=1, last_line=runtime.STOPPED_LINE + " unexpectedly")
+        self.check()
+        self.assertIn("DUMMY-C-work", self.faults_of("agent_no_result")[0]["question"])
+
     # Verify non-interrupted faults remain detected by a real round.
     def test_round_runs_the_detection(self):
         """A real round files a new non-interrupted agent with no result."""

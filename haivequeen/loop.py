@@ -976,16 +976,17 @@ def cmd_start(args, conn) -> int:
     from . import config, gui, i18n
     if args.foreground and getattr(args, "desktop", False):
         raise ValueError(i18n.tr("The desktop message supports only the background start."))
+    restart_allowance = os.environ.pop("BZZ_UPDATE_RESTART", None)   # consumed here; loop children must not inherit it
     machine = config.load_config()
     from . import updates
     by_worker = updates.started_by_update_worker()   # the worker's own restart; a worker of an older version sets no BZZ_UPDATE_RESTART
-    if not by_worker and not os.environ.get("BZZ_UPDATE_RESTART"):
+    if not by_worker and not restart_allowance:
         try:
             from . import selfupdate
             selfupdate.clear_stale_lock(conn)   # a lock of a process that is gone, another program or a worker past its limit must not refuse every start
         except Exception:   # the check must not keep HaiveQueen from starting
             pass
-    if updates.draining() and not os.environ.get("BZZ_UPDATE_RESTART") and not by_worker:   # The update waits for running agents, nothing starts meanwhile
+    if updates.draining() and not restart_allowance and not by_worker:   # The update waits for running agents, nothing starts meanwhile
         return refuse_start(args, conn, {"updating": True}, "An update is waiting for running agents; HaiveQueen starts again after it.")
     pid = loop_running()
     if pid:
@@ -1017,7 +1018,7 @@ def cmd_start(args, conn) -> int:
         start_pending_file().parent.mkdir(parents=True, exist_ok=True)
         start_pending_file().write_text(str(os.getpid()), encoding="ascii")
         try:
-            spawn_detached(boot, osplat.runs_dir() / "beekeeper.log", env={"BZZ_UPDATE_RESTART": "1"} if by_worker else None)   # the loop process is no child of the worker   # the loop has no window: its output goes to this file, round errors show in the dashboard
+            spawn_detached(boot, osplat.runs_dir() / "beekeeper.log", env={"BZZ_UPDATE_RESTART": "1"} if by_worker or restart_allowance else None)   # the loop process is no child of the worker   # the loop has no window: its output goes to this file, round errors show in the dashboard
             return command_result(args, {"ok": True, **gui.launch_detached()})
         except Exception:
             start_pending_file().unlink()

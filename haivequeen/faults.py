@@ -107,6 +107,8 @@ def _check_agents(env) -> None:
             continue
         seen.add(key)
         last = str(a.get("last_line") or "")
+        if last == runtime.STOPPED_LINE:
+            continue
         if last.startswith("runner process vanished"):
             kind, what = "runner_vanished", "its runner process vanished"
         elif last.startswith("pane never started") or (env.run_dir(a["name"]) / "final.txt").is_file() and (env.run_dir(a["name"]) / "final.txt").stat().st_size > 0:

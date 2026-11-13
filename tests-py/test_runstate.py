@@ -1,5 +1,7 @@
 """Tests of the run state (pause, resume) against a temporary database."""
 import json
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -10,7 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from haivequeen import db, runstate  # noqa: E402
+from haivequeen import cli, db, runstate  # noqa: E402
 
 
 class RunStateTest(unittest.TestCase):
@@ -63,6 +65,27 @@ class RunStateTest(unittest.TestCase):
             self.assertFalse(runstate.starts_allowed(self.conn), old)
             self.assertEqual(runstate.resume(self.conn)["state"], "RUNNING", old)
 
+    def test_starts_allowed_command_scheduler_states(self):
+        """The command reports the scheduler state and permits starts only while running."""
+        args = cli.build_parser().parse_args(["starts-allowed"])
+        flag = Path(self.tmp.name) / "STOP"
+        for pid, stopped, paused, expected in (
+                (0, False, False, (False, "STOPPED")),
+                (0, True, False, (False, "STOPPED")),
+                (123, True, False, (False, "STOPPING")),
+                (123, False, True, (False, "PAUSED")),
+                (123, False, False, (True, "RUNNING"))):
+            with self.subTest(pid=pid, stopped=stopped, paused=paused):
+                runstate.pause(self.conn) if paused else runstate.resume(self.conn)
+                flag.write_text("stop", encoding="utf-8") if stopped else flag.unlink(missing_ok=True)
+                output = io.StringIO()
+                with mock.patch("haivequeen.loop.loop_running", return_value=pid), \
+                     mock.patch("haivequeen.loop.stop_flag", return_value=flag), \
+                     contextlib.redirect_stdout(output):
+                    self.assertEqual(args.fn(args, self.conn), 0)
+                result = json.loads(output.getvalue())
+                self.assertEqual((result["allowed"], result["state"]), expected)
+
     def test_survives_restart(self):
         """The state is read back through a new connection."""
         db.add_agent(self.conn, "p", name="A", status="running", pid=1)
@@ -84,9 +107,9 @@ class RunStateTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             return json.loads(r.stdout)
 
-        self.assertEqual(orch("starts-allowed"), {"allowed": True, "state": "RUNNING"})
+        self.assertEqual(orch("starts-allowed"), {"allowed": False, "state": "STOPPED"})
         self.assertEqual(orch("pause")["state"], "PAUSED")
-        self.assertEqual(orch("starts-allowed"), {"allowed": False, "state": "PAUSED"})
+        self.assertEqual(orch("starts-allowed"), {"allowed": False, "state": "STOPPED"})
         self.assertEqual(orch("run-state")["running_agents"], 0)
         self.assertEqual(orch("resume")["state"], "RUNNING")
 
