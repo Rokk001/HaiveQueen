@@ -1,4 +1,4 @@
-"""The terminal interface is gone: no terminal modules, no terminal options, `bzz start` always starts the loop hidden and opens the window,
+"""The terminal interface is gone: no terminal modules, no terminal options, `bzz start` always starts the loop hidden and opens the browser,
 and every agent starts through the one hidden-process path."""
 import argparse
 import os
@@ -65,7 +65,7 @@ class StartOptionsTest(unittest.TestCase):
 
 # bzz start with a temp runtime.
 class StartTest(RoundCase):
-    """cmd_start spawns the loop detached and opens the window once; nothing else is opened."""
+    """cmd_start spawns the loop detached and opens the browser once; nothing else is opened."""
 
     def args(self, **kw):
         """Parsed arguments of `bzz start`."""
@@ -73,11 +73,11 @@ class StartTest(RoundCase):
         base.update(kw)
         return argparse.Namespace(**base)
 
-    def test_start_is_always_headless_and_opens_the_window(self):
-        """One hidden loop process and one window; the call uses no terminal program."""
+    def test_start_is_always_headless_and_opens_the_browser(self):
+        """One hidden loop process and one browser; the call uses no terminal program."""
         out = {}
         with mock.patch.object(loop, "spawn_detached") as spawn, \
-                mock.patch("haivequeen.gui.launch_detached", return_value={"ok": True, "gui": 4242, "already": False}) as gui, \
+                mock.patch("haivequeen.web_service.open_browser", return_value={"ok": True, "web": "http://127.0.0.1:8484", "already": False}) as gui, \
                 mock.patch("subprocess.Popen") as popen, mock.patch("builtins.print"):
             args = self.args()
             self.assertEqual(loop.cmd_start(args, self.conn), 0)
@@ -88,14 +88,14 @@ class StartTest(RoundCase):
         argv = spawn.call_args[0][0]
         self.assertIn("--foreground", argv)
         self.assertNotIn("--terminal", argv)
-        self.assertEqual((out["ok"], out["gui"]), (True, 4242))
+        self.assertEqual((out["ok"], out["web"]), (True, "http://127.0.0.1:8484"))
         self.assertNotIn("panes", out)
         self.assertNotIn("window", out)
 
-    def test_running_loop_only_opens_the_window(self):
-        """With a loop already running the call starts no second loop but still opens the window once."""
+    def test_running_loop_only_opens_the_browser(self):
+        """With a loop already running the call starts no second loop but still opens the browser once."""
         with mock.patch.object(loop, "loop_running", return_value=4711), mock.patch.object(loop, "spawn_detached") as spawn, \
-                mock.patch("haivequeen.gui.launch_detached", return_value={"ok": True, "gui": 1, "already": True}) as gui, mock.patch("builtins.print"):
+                mock.patch("haivequeen.web_service.open_browser", return_value={"ok": True, "web": "http://127.0.0.1:8484", "already": True}) as gui, mock.patch("builtins.print"):
             args = self.args()
             loop.cmd_start(args, self.conn)
         spawn.assert_not_called()

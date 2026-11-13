@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import secrets
 
-from . import filetxn, gui_config
+from . import filetxn, settings
 
 _DEFAULTS = {'address': '0.0.0.0', 'port': 8484, 'certificate': '', 'key': '',
              'network': False, 'username': '', 'password': ''}
@@ -12,7 +12,7 @@ _ITERATIONS = 600_000
 
 @filetxn.coordinated
 def read(path):
-    data = gui_config.load_raw(path)
+    data = settings.load_raw(path)
     return {**_DEFAULTS, **data.get('web', {})}
 
 
@@ -43,16 +43,16 @@ def setup(path, username, password, address, port, certificate, key):
         raise ValueError('Both certificate and key are required for HTTPS')
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, _ITERATIONS).hex()
-    data = gui_config.load_raw(path)
+    data = settings.load_raw(path)
     data['web'] = {'username': username, 'password': f'pbkdf2_sha256${_ITERATIONS}${salt.hex()}${digest}',
                    'address': address, 'port': port, 'certificate': certificate, 'key': key, 'network': True}
-    gui_config.save_file(path, data)
+    settings.save_file(path, data)
 
 
 @filetxn.coordinated
 def off(path):
-    data = gui_config.load_raw(path)
-    settings = dict(data.get('web', {}))
-    settings['network'] = False
-    data['web'] = settings
-    gui_config.save_file(path, data)
+    data = settings.load_raw(path)
+    web = dict(data.get('web', {}))
+    web['network'] = False
+    data['web'] = web
+    settings.save_file(path, data)

@@ -113,14 +113,6 @@ class OwnerCommands(RoundCase):
         self.assertEqual(self.conn.execute("SELECT status FROM questions WHERE id=?", (qid,)).fetchone()[0], "open")
         self.assertIn('REVIEW', (self.repo / REL).read_text(encoding="utf-8"))
 
-    def test_new_project_default_uses_current_terminology(self):
-        from haivequeen import gui_config
-        window = mock.Mock()
-        window.collect.return_value = True
-        window.data = {"projects": []}
-        window.entries = [("apiaries", 0)]
-        gui_config.ConfigWindow.add_apiary(window)
-        self.assertEqual(window.data["projects"][0]["name"], "new-project")
 
     def test_every_owner_command_refuses_agents(self):
         common = ("--project", "testproj", "--plan", REL)
@@ -256,14 +248,14 @@ class OwnerCommands(RoundCase):
         self.assertEqual(findings[-1]["answer"], "Fix the output")
 
     def test_provider_commands_save_switch_and_test_local_connection(self):
-        from haivequeen import gui_config
+        from haivequeen import settings
         path = config.config_dir() / "config.toml"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('[[providers]]\nname="local"\nprotocol="codex"\naccess="llm"\naddress="http://localhost:1234"\n', encoding="utf-8")
         self.assertEqual(self.invoke("provider", "disable", "--provider", "local")[0], 0)
-        self.assertFalse(gui_config.load_migrated(path)["providers"][0]["enabled"])
+        self.assertFalse(settings.load_migrated(path)["providers"][0]["enabled"])
         self.assertEqual(self.invoke("provider", "enable", "--provider", "local")[0], 0)
-        self.assertTrue(gui_config.load_migrated(path)["providers"][0]["enabled"])
+        self.assertTrue(settings.load_migrated(path)["providers"][0]["enabled"])
         with mock.patch.object(servers, "run_test", return_value={"reachable": True}) as probe, mock.patch.object(servers, "summary", return_value="Connection usable"):
             self.assertEqual(self.invoke("provider", "test", "--provider", "local")[0], 0)
             probe.assert_called_once()
@@ -324,7 +316,7 @@ class OwnerCommands(RoundCase):
         self.assertEqual([d["text"] for d in active], ["abcdef1234567"])
 
     def test_inbox_provider_and_nonlocal_test(self):
-        from haivequeen import gui_config
+        from haivequeen import settings
         path = config.config_dir() / "config.toml"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('[[providers]]\nname="account"\nprotocol="codex"\naccess="subscription"\n', encoding="utf-8")
@@ -333,7 +325,7 @@ class OwnerCommands(RoundCase):
         for operation in ("disable", "enable", "test"):
             (folder / "provider.toml").write_text('[[provider]]\nprovider="account"\naction="%s"\n' % operation, encoding="utf-8")
             self.assertFalse(inbox.process_inbox(self.env())["failed"])
-        self.assertTrue(gui_config.load_migrated(path)["providers"][0]["enabled"])
+        self.assertTrue(settings.load_migrated(path)["providers"][0]["enabled"])
         with mock.patch.object(servers, "run_test") as probe:
             code, result = self.invoke("provider", "test", "--provider", "account")
             self.assertEqual(code, 0)

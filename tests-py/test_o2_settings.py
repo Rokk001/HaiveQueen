@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from bzztest import REL, RoundCase
-from haivequeen import bees, cli, db, gui_config, hives, integration, orchestrator, owner, plans, projsettings, runtime, scheduler
+from haivequeen import bees, cli, db, settings, hives, integration, orchestrator, owner, plans, projsettings, runtime, scheduler
 from haivequeen.i18n import tr
 
 REMOVED = ("buildEnabled", "deployEnabled", "buildFlowDoc", "integratorInstructions")
@@ -21,23 +21,23 @@ class ProjectPageFields(unittest.TestCase):
 
     def test_labels_and_help_exist_and_are_translated(self):
         for key in ("buildCommand", "deployCommand"):
-            self.assertIn(key, gui_config.SETTING_LABELS)
-            self.assertIn(key, gui_config.SETTING_HELP)
-            self.assertNotEqual(tr(gui_config.SETTING_LABELS[key], language="de"), gui_config.SETTING_LABELS[key])
-            self.assertNotEqual(tr(gui_config.SETTING_HELP[key], language="de"), gui_config.SETTING_HELP[key])
-        self.assertEqual(gui_config.SETTING_LABELS["buildCommand"], "Build command (empty: no build)")
-        self.assertEqual(gui_config.SETTING_LABELS["deployCommand"], "Deploy command (empty: no deploy)")
+            self.assertIn(key, settings.SETTING_LABELS)
+            self.assertIn(key, settings.SETTING_HELP)
+            self.assertNotEqual(tr(settings.SETTING_LABELS[key], language="de"), settings.SETTING_LABELS[key])
+            self.assertNotEqual(tr(settings.SETTING_HELP[key], language="de"), settings.SETTING_HELP[key])
+        self.assertEqual(settings.SETTING_LABELS["buildCommand"], "Build command (empty: no build)")
+        self.assertEqual(settings.SETTING_LABELS["deployCommand"], "Deploy command (empty: no deploy)")
 
     def test_removed_settings_have_no_field_label_or_default(self):
-        defaults = {key for key, _value in gui_config.APIARY_DEFAULTS} | {key for key, _value in gui_config.ADVANCED_DEFAULTS}
+        defaults = {key for key, _value in settings.APIARY_DEFAULTS} | {key for key, _value in settings.ADVANCED_DEFAULTS}
         for key in REMOVED:
-            self.assertNotIn(key, gui_config.SETTING_LABELS)
-            self.assertNotIn(key, gui_config.SETTING_HELP)
+            self.assertNotIn(key, settings.SETTING_LABELS)
+            self.assertNotIn(key, settings.SETTING_HELP)
             self.assertNotIn(key, defaults)
 
     def test_command_width_is_that_of_a_path(self):
-        self.assertEqual(gui_config.field_width("buildCommand", ""), gui_config.PATH_WIDTH)
-        self.assertEqual(gui_config.field_width("deployCommand", ""), gui_config.PATH_WIDTH)
+        self.assertEqual(settings.field_width("buildCommand", ""), settings.PATH_WIDTH)
+        self.assertEqual(settings.field_width("deployCommand", ""), settings.PATH_WIDTH)
 
 
 class SettingsGone(unittest.TestCase):

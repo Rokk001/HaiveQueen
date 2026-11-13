@@ -581,7 +581,7 @@ def rename_result(old, new) -> None:
 
 
 def test_after_save(old, new, timeout=TIMEOUT_S) -> list:
-    """After the settings window saved: test every Local LLM provider of the saved settings that is new, whose address or key changed, or that changed.
+    """After the settings page saved: test every Local LLM provider of the saved settings that is new, whose address or key changed, or that changed.
     Returns the names tested."""
     old_servers = {s["name"]: s for s in get_servers(old or {})}
     old_providers = {p.get("name"): p for p in (migrate(old or {})).get("providers") or []}

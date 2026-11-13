@@ -6,13 +6,12 @@ import json
 import os
 import sqlite3
 import tempfile
-import tkinter
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from haivequeen import config, db, gui_config, init, scheduler
+from haivequeen import config, db, settings, init, scheduler
 
 
 class ApiaryCase(unittest.TestCase):
@@ -85,56 +84,3 @@ class NewApiaryTests(ApiaryCase):
         other.mkdir()
         self.assertEqual(init.register_listed(conn, [{"name": "known", "workspace": str(other)}, {"name": "twin", "workspace": str(self.workspace)}]), [])
         self.assertEqual(tuple(conn.execute("SELECT name, workspace, priority FROM projects").fetchone()), ("known", str(self.workspace), 3))
-
-    def test_apiary_without_a_project_file_gets_a_settings_page(self):
-        conn = self.open_db()
-        db.upsert_project(conn, "bare", str(self.workspace), "white", 0)
-        db.upsert_project(conn, "nofolder", str(self.base / "missing"), "white", 0)
-        (self.base / "config.toml").write_text("slots = 2\n", encoding="utf-8")
-        try:
-            root = tkinter.Tk()
-        except tkinter.TclError as exc:
-            self.skipTest("no display: %s" % exc)
-        root.withdraw()
-        self.addCleanup(gc.collect)   # Tk objects are freed in the main thread, never by the collector in a reading thread
-        self.addCleanup(root.destroy)
-        win = gui_config.ConfigWindow(root, conn, self.base, wait=True)
-        self.assertEqual([a["path"] for a in win.apiaries], [self.workspace / ".haivequeen" / "project.toml"])
-
-
-class SettingsWindowTests(ApiaryCase):
-    """The settings window registers a project added on its page and writes the commands of a Project without a file."""
-
-    def setUp(self):
-        super().setUp()
-        try:
-            self.root = tkinter.Tk()
-        except tkinter.TclError as exc:
-            self.skipTest("no display: %s" % exc)
-        self.root.withdraw()
-        self.addCleanup(gc.collect)   # Tk objects are freed in the main thread, never by the collector in a reading thread
-        self.addCleanup(self.root.destroy)
-        (self.base / "config.toml").write_text('slots = 2\n', encoding="utf-8")
-
-    def test_save_of_the_machine_file_registers_the_project(self):
-        conn = self.open_db()
-        win = gui_config.ConfigWindow(self.root, conn, self.base, wait=True)
-        win.collect()
-        win.data.setdefault("projects", []).append({"name": "paged", "workspace": str(self.workspace)})
-        win.fill_nodes()
-        win.save()
-        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
-        self.assertFalse(self.deploy(conn, "paged"))
-
-    def test_deploy_command_can_be_set_for_an_apiary_without_a_file(self):
-        conn = self.open_db()
-        db.upsert_project(conn, "bare", str(self.workspace), "white", 0)
-        win = gui_config.ConfigWindow(self.root, conn, self.base, wait=True)
-        win.select(win.entries.index(("apiaries", 0)))
-        self.assertEqual({path[-1]: like for path, _getter, like in win.getters}["deployCommand"], "")
-        win.collect()
-        win.target()["file"].update({"deployCommand": "make deploy"})
-        win.build_form()
-        win.save()
-        self.assertEqual(win.bottom_note.cget("text"), "Saved.")
-        self.assertTrue(self.deploy(conn, "bare"))

@@ -3,7 +3,7 @@ import hashlib
 from contextlib import closing
 from types import SimpleNamespace
 
-from . import bees, config, db, filetxn, gui_config, gui_data, gui_hives, gui_questions, hives, init, loop, owner, profile, runtime, servers, startctx, updates, web_auth, web_jobs, web_login, web_server
+from . import bees, config, db, filetxn, settings, dashboard_data, plan_view, question_service, hives, init, loop, owner, profile, runtime, servers, startctx, updates, web_auth, web_jobs, web_login, web_server
 from . import scheduler as sch
 from .force_stop import WARNING as FORCE_WARNING
 
@@ -27,7 +27,7 @@ def revision(source):
 @filetxn.coordinated
 def settings_read(conn, project=None):
     path = settings_path(conn, project)
-    data = gui_config.load_raw(path)
+    data = settings.load_raw(path)
     if not project and 'web' in data:
         data['web'] = {k: v for k, v in data['web'].items() if k != 'password'}
     return {'data': data, 'revision': revision(data.source)}
@@ -37,7 +37,7 @@ def settings_read(conn, project=None):
 def settings_save(conn, data):
     project = data.get('project')
     path = settings_path(conn, project)
-    loaded = gui_config.load_raw(path)
+    loaded = settings.load_raw(path)
     if data.get('revision') != revision(loaded.source):
         raise ValueError('Settings changed since loading; reload before saving')
     proposed = data['data']
@@ -51,10 +51,10 @@ def settings_save(conn, data):
         repository = place.get('repository', '').strip()
         plans_folder = place.get('plansFolder', '').strip()
         workspace = str(path.parent.parent)
-        if not repository or not gui_config.same_dir(plans_folder or repository, workspace):
+        if not repository or not settings.same_dir(plans_folder or repository, workspace):
             from .i18n import tr
             raise ValueError(tr('The settings of this Project are kept in %s: enter that folder as plans folder or, when the plans are in the repository, as repository', workspace))
-        if plans_folder and not gui_config.same_dir(repository, workspace):
+        if plans_folder and not settings.same_dir(repository, workspace):
             proposed['codeRepo'] = repository
         else:
             proposed.pop('codeRepo', None)
@@ -67,29 +67,29 @@ def settings_save(conn, data):
             raise ValueError('A valid web address and port are required')
         if 'web' in proposed or current['password']:
             proposed['web'] = web
-    errors = gui_config.check(proposed, machine=not bool(project))
+    errors = settings.check(proposed, machine=not bool(project))
     if errors:
         raise ValueError('; '.join(errors))
     loaded.clear()
     loaded.update(proposed)
     if project:
-        gui_config.save_project_file(conn, path, loaded)
+        settings.save_project_file(conn, path, loaded)
     else:
         for provider in proposed.get('providers') or []:
             servers.settle(provider)
         init.register_listed(conn, proposed.get('projects'))
-        gui_config.save_file(path, loaded)
+        settings.save_file(path, loaded)
     return {'ok': True, **settings_read(conn, project)}
 
 
 @filetxn.coordinated
 def settings_view(conn, project=None):
-    """The desktop's derived form information, kept separate from editable TOML."""
+    """Derived browser form information, kept separate from editable TOML."""
     from . import cli_presets, projsettings
     result = settings_read(conn, project)
     if project:
         workspace = str(settings_path(conn, project).parent.parent)
-        repository, plans_folder = gui_config.apiary_place(workspace, result['data'])
+        repository, plans_folder = settings.apiary_place(workspace, result['data'])
         remote, _ = projsettings.derive_remote(repository, result['data'].get('remoteName'))
         branch = result['data'].get('integrationBranch') or projsettings.default_branch(repository, remote or 'origin') or 'main'
         result.update(workspace=workspace, repository=repository, place={'repository': repository, 'plansFolder': plans_folder},
@@ -97,7 +97,7 @@ def settings_view(conn, project=None):
                       rules=profile.rule_entries(result['data'], repository),
                       upstream=profile.upstream_state(result['data'], repository))
     else:
-        migrated = gui_config.load_migrated(settings_path(conn))
+        migrated = settings.load_migrated(settings_path(conn))
         if 'web' in migrated:
             migrated['web'] = {k: v for k, v in migrated['web'].items() if k != 'password'}
         result['data'] = migrated
@@ -109,7 +109,7 @@ def settings_view(conn, project=None):
             offered[provider['name']] = {'models': list((kept or {}).get('models', [])) if server else cli_presets.model_list(key),
                                          'efforts': cli_presets.effort_list(key)}
         result.update(provider_models=offered, benchmark=startctx.pairs(conn),
-                      build=gui_config.build_values(migrated), cores=gui_config.machine_cores())
+                      build=settings.build_values(migrated), cores=settings.machine_cores())
     return result
 
 
@@ -133,19 +133,19 @@ def dispatch(action, data):
 def execute(conn, action, data):
     project, plan = data.get('project'), data.get('plan')
     if action == 'state':
-        state = gui_data.snapshot(conn, project)
+        state = dashboard_data.snapshot(conn, project)
         state['controls'] = {'orchestrator': ['Start', 'Stop gracefully', 'Force stop'], 'web': ['Stop', 'Restart'], 'force_warning': FORCE_WARNING}
         state['projects'] = db.rows(conn, 'SELECT name,workspace,colour,priority FROM projects ORDER BY name')
         return state
     if action == 'questions':
         questions = runtime.list_questions(conn, project, status='open')
         for question in questions:
-            question['packages'] = gui_questions.plan_packages(conn, question['project'], question['plan_path'])
+            question['packages'] = question_service.plan_packages(conn, question['project'], question['plan_path'])
         return questions
     if action == 'plans':
-        return gui_hives.plan_rows(conn)
+        return plan_view.plan_rows(conn)
     if action == 'questions/answer':
-        gui_questions.answer(conn, data['id'], data['text'], data.get('rejected', []), data.get('apiary', False))
+        question_service.answer(conn, data['id'], data['text'], data.get('rejected', []), data.get('apiary', False))
         return {'ok': True}
     if action in ('owner/accept', 'owner/reject', 'owner/release', 'provider'):
         name = action.split('/')[-1]
@@ -182,7 +182,7 @@ def execute(conn, action, data):
         row = runtime.get_agent(conn, project, data['agent'])
         if not row:
             raise ValueError('Unknown Agent')
-        return {'lines': gui_data.live_lines(gui_data.live_path(row['project'], row['name']))}
+        return {'lines': dashboard_data.live_lines(dashboard_data.live_path(row['project'], row['name']))}
     if action == 'login/start':
         _, machine, _ = owner.provider_settings(data['provider'])
         provider = next(p for p in sch.get_providers(machine) if p['name'] == data['provider'])

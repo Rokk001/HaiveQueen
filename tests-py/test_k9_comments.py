@@ -4,7 +4,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from haivequeen import gui_config
+from haivequeen import settings
 
 
 class SettingsCommentsTest(unittest.TestCase):
@@ -15,7 +15,7 @@ class SettingsCommentsTest(unittest.TestCase):
                 with self.subTest(quote=quote, count=count), tempfile.TemporaryDirectory() as folder:
                     path = Path(folder) / "config.toml"
                     path.write_text(source, encoding="utf-8")
-                    gui_config.save_file(path, {"keep": 2})
+                    settings.save_file(path, {"keep": 2})
                     saved = path.read_text(encoding="utf-8")
                     self.assertEqual(tomllib.loads(saved), {"keep": 2})
                     self.assertIn("# real comment", saved)
@@ -32,7 +32,7 @@ class SettingsCommentsTest(unittest.TestCase):
                 data["providers"].reverse()
                 if remove:
                     data["providers"].pop()
-                gui_config.save_file(path, data)
+                settings.save_file(path, data)
                 saved = path.read_text(encoding="utf-8")
                 self.assertEqual(tomllib.loads(saved), data)
                 self.assertIn('name = "beta" # beta name', saved)
@@ -46,7 +46,7 @@ class SettingsCommentsTest(unittest.TestCase):
             path = Path(folder) / "config.toml"
             path.write_text(source, encoding="utf-8")
             data = {"values": [3]}
-            gui_config.save_file(path, data)
+            settings.save_file(path, data)
             saved = path.read_text(encoding="utf-8")
             self.assertEqual(tomllib.loads(saved), data)
             self.assertIn("# removed comment", saved)
@@ -66,7 +66,7 @@ count = 1
             path.write_text(source, encoding="utf-8")
             data = tomllib.loads(source)
             data["count"] = 2
-            gui_config.save_file(path, data)
+            settings.save_file(path, data)
             saved = path.read_text(encoding="utf-8")
             self.assertEqual(tomllib.loads(saved), data)
             self.assertIn("# title comment", saved)
@@ -89,7 +89,7 @@ medium = { model = "test#model" } # model comment
             data = tomllib.loads(source)
             data["slots"] = 4
             data["providers"][0]["classes"]["medium"]["model"] = "changed"
-            gui_config.save_file(path, data)
+            settings.save_file(path, data)
             saved = path.read_text(encoding="utf-8")
             self.assertEqual(tomllib.loads(saved), data)
             for comment in ("# top comment", "# slot comment", "# provider comment", "# provider header comment", "# name comment", "# classes comment", "# nested comment", "# model comment"):

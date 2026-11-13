@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from bzztest import REL, RoundCase, integrated_tip
-from haivequeen import agent_runner, bees, cli, db, gui_config, hives, inbox, integration, plans, routine, runtime, scheduler, worktrees
+from haivequeen import agent_runner, bees, cli, db, settings, hives, inbox, integration, plans, routine, runtime, scheduler, worktrees
 
 
 def provider(name, *capabilities, **extra):
@@ -422,16 +422,16 @@ class RemoteAndLocationTests(unittest.TestCase):
         self.assertEqual(inbox.integration_ref({}), "origin/main")
 
     def test_project_page_refuses_a_remote_git_would_read_as_an_option(self):
-        self.assertTrue(gui_config.check({"remoteName": "--upload-pack=x"}, machine=False))
-        self.assertTrue(gui_config.check({"integrationBranch": "a b"}, machine=False))
-        self.assertEqual(gui_config.check({"remoteName": "upstream", "integrationBranch": "release/1.0"}, machine=False), [])
+        self.assertTrue(settings.check({"remoteName": "--upload-pack=x"}, machine=False))
+        self.assertTrue(settings.check({"integrationBranch": "a b"}, machine=False))
+        self.assertEqual(settings.check({"remoteName": "upstream", "integrationBranch": "release/1.0"}, machine=False), [])
 
 
 class SettingsPageTests(unittest.TestCase):
     """The Project page shows every setting with its default and a translated label."""
 
     def test_defaults_of_the_apiary_page(self):
-        shown = gui_config.apiary_settings({})
+        shown = settings.apiary_settings({})
         self.assertEqual(shown["integrationBranch"], "main")
         self.assertEqual(shown["remoteName"], "origin")
         self.assertEqual(shown["worktreeLocation"], "")
@@ -443,13 +443,13 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIs(shown["deleteIntegratedBranches"], False)
 
     def test_saved_values_stay(self):
-        shown = gui_config.apiary_settings({"deployCommand": "make deploy", "remoteName": "upstream"})
+        shown = settings.apiary_settings({"deployCommand": "make deploy", "remoteName": "upstream"})
         self.assertEqual(shown["deployCommand"], "make deploy")
         self.assertEqual(shown["remoteName"], "upstream")
 
     def test_labels_are_translated(self):
         from haivequeen import i18n
-        for label in gui_config.SETTING_LABELS.values():
+        for label in settings.SETTING_LABELS.values():
             self.assertIn(label, i18n.GERMAN, label)
 
 

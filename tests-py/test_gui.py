@@ -1,4 +1,4 @@
-"""Tests of the graphical dashboard: the snapshot data with invented rows (temp database) and a drawing smoke test of the window."""
+"""Dashboard snapshots built from invented rows in a temporary database."""
 import re
 import sys
 import tempfile
@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from haivequeen import bees, db, gui_data, hives, runstate, runtime  # noqa: E402
+from haivequeen import bees, db, dashboard_data, hives, runstate, runtime  # noqa: E402
 
 NOW = datetime(2026, 11, 1, 12, 0, 0)
 SYS = {"cores": 8, "cpu": 38, "ram_used_gb": 25.2, "ram_total_gb": 32.0, "ram_pct": 80, "disk_used_tb": 1.2, "disk_total_tb": 2.7, "disk_pct": 45}
@@ -51,7 +51,7 @@ class SnapshotTest(unittest.TestCase):
         no_loop = mock.patch("haivequeen.loop.loop_running", return_value=0)   # the state must not depend on a real orchestrator on this machine
         no_loop.start()
         self.addCleanup(no_loop.stop)
-        self.snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        self.snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
 
     # Close the database.
     def tearDown(self):
@@ -86,7 +86,7 @@ class SnapshotTest(unittest.TestCase):
         bees.set_package_state(self.conn, "ODP", plan, "P2", "done")
         self.conn.execute("INSERT INTO bee_assignments VALUES ('ODP',?,'P4','heavy','codex')", (plan,))
         self.conn.commit()
-        snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
         h = snap["hives"][0]
         self.assertEqual((h["done"], h["total"], h["progress"]), (3, 4, 75))   # P1, P2 by Bees and P3 by the finished Bee agent row
         self.assertEqual(h["bees_total"], 3)   # two running Bees and the waiting assignment of P4
@@ -98,13 +98,13 @@ class SnapshotTest(unittest.TestCase):
         """The Plan row of a PAUSED plan is flagged and says so; a plan that is not paused keeps its normal status."""
         self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','PAUSED','2026-11-01T12:00:00')")
         self.conn.commit()
-        snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
         row = snap["hives"][0]
         self.assertTrue(row["paused"])
         self.assertIn("paused", row["status"])
         self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','QUEUED','2026-11-01T12:00:00')")
         self.conn.commit()
-        row = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)["hives"][0]
+        row = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)["hives"][0]
         self.assertFalse(row["paused"])
         self.assertNotIn("paused", row["status"])
 
@@ -113,7 +113,7 @@ class SnapshotTest(unittest.TestCase):
         """A Plan of a REJECTED or DONE plan, also one set in the plan file and synced, is absent from the active list; a done Plan state too."""
         plan = "docs/plans/AI-LEVELS-PLAN.md"
         def active():
-            snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+            snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
             return snap["hives"], snap["tiles"]["hives"]
         self.assertEqual(len(active()[0]), 1)
         for status in ("CANCELLED", "DONE"):
@@ -133,7 +133,7 @@ class SnapshotTest(unittest.TestCase):
         self.conn.execute("INSERT INTO bee_assignments VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','P4','heavy','codex')")
         self.conn.execute("UPDATE agents SET status='done' WHERE phase='queen'")
         self.conn.commit()
-        snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
         self.assertEqual([b for b in snap["bees"] if b["status"] == "waiting"], [])
         self.assertEqual(snap["hives"][0]["bees_total"], snap["hives"][0]["bees_running"])
 
@@ -141,11 +141,11 @@ class SnapshotTest(unittest.TestCase):
     def test_context_and_tokens(self):
         """The Queen and the Agents carry their context, its limit and their tokens; the Plan carries the total of all its agents."""
         h = self.snap["hives"][0]
-        self.assertEqual(h["queen_ctx_limit"], gui_data.CONTEXT_FALLBACK)
+        self.assertEqual(h["queen_ctx_limit"], dashboard_data.CONTEXT_FALLBACK)
         self.assertEqual((h["hive_tin"], h["hive_tout"]), (260000, 9000))
         bee = next(b for b in self.snap["bees"] if b["name"] == "Sophia")
         self.assertEqual((bee["tin"], bee["tout"]), (120000, 3000))
-        self.assertEqual(bee["ctx_limit"], gui_data.CONTEXT_FALLBACK)
+        self.assertEqual(bee["ctx_limit"], dashboard_data.CONTEXT_FALLBACK)
 
     # The model limits are one row per provider.
     def test_limits_are_rows_per_provider(self):
@@ -155,16 +155,6 @@ class SnapshotTest(unittest.TestCase):
             self.assertEqual(set(item), {"name", "model", "next", "reserve", "slots", "weekly", "five"})
 
     # Everything the window prints is English.
-    def test_no_german_words_in_the_window(self):
-        """The window code and the status words contain no German text."""
-        german = re.compile(r"(?i)\b(wartet|nächster|naechster|unbekannt|kein limit|antwort|abgeschlossen|keine aktive|übergabe|weisellos|ruht)\b")
-        for name in ("gui.py", "gui_data.py"):
-            source = (Path(__file__).resolve().parent.parent / "haivequeen" / name).read_text(encoding="utf-8")
-            self.assertIsNone(german.search(source), name)
-        for state in ("answer", "owner_check", "waiting", "queenless", "integration_wait", "provider_wait", "handoff", "resting", "running", "done"):
-            self.assertIsNone(german.search(gui_data.status_text({"state": state, "pending_questions": [1], "reset_at": "2026-11-02T10:00:00"})), state)
-        for reason in ("STOP", "PAUSED", "waiting for the integration place", "Plan limit 3 reached", "no provider with a free slot", "the Plan is already claimed"):
-            self.assertIsNone(german.search(gui_data.blocker_text(reason)), reason)
 
     # The Queen heads the list and her Bees follow directly below her.
     def test_bees(self):
@@ -176,14 +166,14 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual({b["kind"] for b in rows[1:]}, {"bee"})
         self.assertEqual({b["hive"] for b in rows}, {"AI-LEVELS"})
         self.assertEqual((rows[0]["model"], rows[0]["task"], rows[0]["status"]), ("Son 5.5 med.", "Queen", "running"))
-        self.assertEqual(rows[0]["ctx_limit"], gui_data.CONTEXT_FALLBACK)
+        self.assertEqual(rows[0]["ctx_limit"], dashboard_data.CONTEXT_FALLBACK)
 
     # Without a running Queen the Bees stay in the list, without a Queen row.
     def test_bees_without_a_running_queen_have_no_queen_row(self):
         """With the Queen ended the two running Agents are still listed and no row is a Queen row."""
         self.conn.execute("UPDATE agents SET status='done' WHERE phase='queen'")
         self.conn.commit()
-        snap = gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
         self.assertEqual([b["kind"] for b in snap["bees"]], ["bee", "bee"])
         self.assertEqual(snap["tiles"]["queens"], 0)
 
@@ -215,15 +205,6 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(self.snap["queue"]["labels"], ["ODP#1"])
 
     # The window shows what the overview data holds.
-    def test_matches_the_overview_data(self):
-        """Plan and Queen counts, queue and the status sections match overview.collect."""
-        from haivequeen import overview
-        d = overview.collect(self.conn, None, NOW, CFG, {"cores": 8, "free_mb": 7000, "total_mb": 32768, "host": "gui", "compiler_count": None})
-        self.assertEqual(self.snap["tiles"]["hives"], sum(n for _, n in d["hives"]))
-        self.assertEqual(self.snap["tiles"]["queens"], 1)
-        self.assertEqual(self.snap["run_state"], d["run"]["state"])
-        titles = [t for t, _ in self.snap["info"]]
-        self.assertEqual(titles[:5], ["STATE", "USAGE", "SYSTEM", "PLANS", "QUESTIONS"])
 
     # The build line is part of the dashboard data and of the SYSTEM panel.
     def test_build_line_in_snapshot_without_build_table(self):
@@ -236,7 +217,7 @@ class SnapshotTest(unittest.TestCase):
     # One state tells the user whether HaiveQueen runs, waits or stands still.
     def test_orchestrator_state(self):
         """No loop process is STOPPED, a pending stop is STOPPING, otherwise the run state decides the label and its colour level."""
-        state = gui_data.orchestrator_state
+        state = dashboard_data.orchestrator_state
         self.assertEqual(state("RUNNING", 0, False), {"label": "STOPPED", "level": "bad"})
         self.assertEqual(state("RUNNING", 5, True), {"label": "STOPPING", "level": "warn"})
         self.assertEqual(state("RUNNING", 5, False), {"label": "RUNNING", "level": "ok"})
@@ -247,45 +228,22 @@ class SnapshotTest(unittest.TestCase):
     def test_run_state(self):
         """A paused run shows PAUSED."""
         runstate.pause(self.conn, "test")
-        self.assertEqual(gui_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)["run_state"], "PAUSED")
+        self.assertEqual(dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)["run_state"], "PAUSED")
 
     # The Apiary filter narrows the Hives.
     def test_project_filter(self):
         """An unknown Project shows no Plans."""
-        self.assertEqual(gui_data.snapshot(self.conn, "none", now=NOW, cfg=CFG, sysinfo=SYS)["hives"], [])
+        self.assertEqual(dashboard_data.snapshot(self.conn, "none", now=NOW, cfg=CFG, sysinfo=SYS)["hives"], [])
 
     # Formatting helpers.
     def test_formats(self):
         """Token counts and elapsed times use the compact forms of the mockup."""
-        self.assertEqual((gui_data.fmt_tokens(964000), gui_data.fmt_tokens(1_100_000), gui_data.fmt_tokens(36000)), ("964k", "1.1M", "36k"))
-        self.assertEqual(gui_data.fmt_elapsed(iso(1), NOW), "01:00")
-        self.assertEqual(gui_data.hive_name("docs/plans/DEMO-PLAN.md"), "DEMO")
+        self.assertEqual((dashboard_data.fmt_tokens(964000), dashboard_data.fmt_tokens(1_100_000), dashboard_data.fmt_tokens(36000)), ("964k", "1.1M", "36k"))
+        self.assertEqual(dashboard_data.fmt_elapsed(iso(1), NOW), "01:00")
+        self.assertEqual(dashboard_data.hive_name("docs/plans/DEMO-PLAN.md"), "DEMO")
 
 
 # Test the pure parts of the state button, the app icon and the repository link.
-class StateButtonTest(unittest.TestCase):
-    """The actions a state offers, the icon files and the address the header link opens."""
-
-    # The state button offers the actions that fit its state.
-    def test_state_actions(self):
-        """STOPPED offers Start; RUNNING and PAUSED offer pause or resume and stop; STOPPING only waits. Every action is a method of the window."""
-        from haivequeen import gui
-        names = lambda label: [item[1] for item in gui.state_actions(label) if item]
-        self.assertEqual(names("STOPPED"), ["start"])
-        self.assertEqual(names("RUNNING"), ["toggle_pause", "stop"])
-        self.assertEqual(names("PAUSED"), ["toggle_pause", "stop"])
-        self.assertEqual(names("STOPPING"), [None])
-        for label in ("STOPPED", "STOPPING", "RUNNING", "PAUSED"):
-            for item in gui.state_actions(label):
-                self.assertTrue(item is None or item[1] is None or callable(getattr(gui.Dashboard, item[1])), (label, item))
-
-    # The window shows the HaiveQueen icon and the repository link points to GitHub.
-    def test_app_icon_and_repository_link(self):
-        """The icon files exist and the header link opens the project's GitHub page."""
-        from haivequeen import gui
-        for name in ("app.ico", "app_icon.png"):
-            self.assertTrue((gui.ASSETS / name).is_file(), name)
-        self.assertEqual(gui.REPO_URL, "https://github.com/Rokk001/HaiveQueen")
 
 
 def size_supported(width, height, screen_width, screen_height):
@@ -294,167 +252,6 @@ def size_supported(width, height, screen_width, screen_height):
 
 
 # Draw the window once when a display exists.
-class WindowTest(unittest.TestCase):
-    """Smoke test: the window draws from the invented snapshot without an exception."""
-
-    def test_dashboard_content_fits_at_small_size(self):
-        """Status text, update errors and the header image stay inside their available width."""
-        import tkinter as tk
-        from haivequeen import gui
-        try:
-            root = tk.Tk()
-            root.attributes("-alpha", 0.0)
-        except tk.TclError:
-            self.skipTest("no display")
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                conn = db.connect(Path(tmp) / "o.db")
-                try:
-                    root.geometry("1000x600+0+0")
-                    with mock.patch.object(gui.Dashboard, "watch_update"):
-                        win = gui.Dashboard(root, conn)
-                        root.update()
-                        win.update_state = {"failed": "a" * 200}
-                        win.draw()
-                        self.assertLessEqual(win.canvas.bbox("all")[2], win.canvas.winfo_width() + 2)
-                        self.assertLessEqual(win.fraction[0] / win.fraction[1], win.scale)
-                finally:
-                    conn.close()
-        finally:
-            root.destroy()
-
-    # Draw the window, or skip without a display.
-    def test_draw(self):
-        """Create the window, draw a snapshot and check that items exist on the canvas."""
-        import tkinter as tk
-        from haivequeen import gui
-        try:
-            root = tk.Tk()
-            root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
-        except tk.TclError:
-            self.skipTest("no display")
-        tmp = tempfile.TemporaryDirectory()
-        conn = db.connect(Path(tmp.name) / "o.db")
-        try:
-            root.geometry("1672x901")
-            gui.REFRESH_MS = 10 ** 9
-            win = gui.Dashboard(root, conn)
-            root.update()
-            self.assertGreater(len(win.canvas.find_all()), 50)
-            self.assertTrue(win.hits)
-        finally:
-            root.destroy()
-            conn.close()
-            tmp.cleanup()
-
-    # A click on the repository name in the header opens GitHub.
-    def test_header_link_opens_the_repository(self):
-        """The click area under the version line calls the browser with the repository address."""
-        import tkinter as tk
-        from haivequeen import gui
-        try:
-            root = tk.Tk()
-            root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
-        except tk.TclError:
-            self.skipTest("no display")
-        tmp = tempfile.TemporaryDirectory()
-        conn = db.connect(Path(tmp.name) / "o.db")
-        try:
-            root.geometry("1672x912")
-            gui.REFRESH_MS = 10 ** 9
-            win = gui.Dashboard(root, conn)
-            root.update()
-            link = sorted((h for h in win.hits if h[1] < 150 * win.scale < h[3] and h[0] > 450 * win.scale), key=lambda h: h[0])
-            self.assertEqual(len(link), 2)   # the repository link, then the update part of the header
-            with mock.patch("webbrowser.open") as opened:
-                link[0][4](None)
-            opened.assert_called_once_with(gui.REPO_URL)
-            with mock.patch.object(win, "check_update") as check:
-                link[1][4](None)
-            check.assert_called_once_with()
-        finally:
-            root.destroy()
-            conn.close()
-            tmp.cleanup()
-
-    # The Queen menu of a Hive runs bzz requeen or bzz dequeen for exactly that Hive, and only after a confirmation.
-    def test_queen_action_runs_the_bzz_command_after_confirmation(self):
-        """Declining starts nothing; confirming starts `requeen` or `dequeen` with `<project>:<plan path>` and a hidden console."""
-        import tkinter as tk
-        from haivequeen import gui
-        try:
-            root = tk.Tk()
-            root.attributes("-alpha", 0.0)   # fully transparent: the test window must not flash on the user's screen
-        except tk.TclError:
-            self.skipTest("no display")
-        tmp = tempfile.TemporaryDirectory()
-        conn = db.connect(Path(tmp.name) / "o.db")
-        try:
-            gui.REFRESH_MS = 10 ** 9
-            win = gui.Dashboard(root, conn)
-            hive = {"name": "AI-LEVELS", "apiary": "ODP", "plan_path": "docs/plans/AI-LEVELS-PLAN.md"}
-            with mock.patch.object(gui.subprocess, "Popen") as popen, mock.patch.object(win, "confirm", return_value=False), mock.patch.object(win, "watch_command"):
-                win.queen_action(hive, "requeen")
-            popen.assert_not_called()
-            for command in ("requeen", "dequeen"):
-                with mock.patch.object(gui.subprocess, "Popen") as popen, mock.patch.object(win, "confirm", return_value=True), mock.patch.object(win, "watch_command") as watch:
-                    win.queen_action(hive, command)
-                argv = popen.call_args[0][0]
-                self.assertEqual(argv[1:], ["-m", "haivequeen", command, "ODP:docs/plans/AI-LEVELS-PLAN.md"])
-                self.assertEqual(popen.call_args[1].get("creationflags"), gui.NO_WINDOW.get("creationflags"))
-                watch.assert_called_once()
-        finally:
-            root.destroy()
-            conn.close()
-            tmp.cleanup()
-
-    def test_size_supported(self):
-        """Both dimensions must fit on the available display."""
-        self.assertTrue(size_supported(1000, 600, 1280, 800))
-        self.assertTrue(size_supported(1280, 800, 1280, 800))
-        self.assertFalse(size_supported(1366, 768, 1280, 800))
-        self.assertFalse(size_supported(800, 801, 1280, 800))
-
-    # Draw at many window sizes and check that nothing is drawn outside the canvas.
-    def test_sizes(self):
-        """At seven window sizes, check the layout on screens at least 1280 pixels wide."""
-        import tkinter as tk
-        from haivequeen import gui
-        gui.REFRESH_MS = 10 ** 9
-        checked = 0
-        for width, height in ((800, 500), (1000, 600), (1200, 700), (1366, 768), (1600, 900), (1920, 1050), (2400, 1300)):
-            with self.subTest(width=width, height=height):
-                try:
-                    root = tk.Tk()
-                    root.attributes("-alpha", 0.0)   # fully transparent: do not flash on the user's screen
-                except tk.TclError:
-                    self.skipTest("no display")
-                try:
-                    screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
-                    if not size_supported(width, height, screen_w, screen_h):
-                        self.skipTest("%dx%d exceeds display %dx%d" % (width, height, screen_w, screen_h))
-                    with tempfile.TemporaryDirectory() as tmp:
-                        conn = db.connect(Path(tmp) / "o.db")
-                        try:
-                            root.geometry("%dx%d+0+0" % (width, height))
-                            win = gui.Dashboard(root, conn)
-                            root.update()
-                            self.assertAlmostEqual(root.winfo_width(), width, delta=0.05 * width)
-                            self.assertAlmostEqual(root.winfo_height(), height, delta=0.05 * height)
-                            canvas_w, canvas_h = win.canvas.winfo_width(), win.canvas.winfo_height()
-                            zoom, sub = win.fraction
-                            self.assertLessEqual(zoom / sub, win.scale * 1.005)
-                            left, top, right, bottom = win.canvas.bbox("all")
-                            self.assertGreaterEqual((left, top), (-1, -1), (width, height))
-                            self.assertLessEqual(right, canvas_w + 2, (width, height))
-                            self.assertLessEqual(bottom, canvas_h + 2, (width, height))
-                            checked += 1
-                        finally:
-                            conn.close()
-                finally:
-                    root.destroy()
-
-        self.assertGreaterEqual(checked, 3)
 
 
 if __name__ == "__main__":

@@ -3,12 +3,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 from bzztest import REL, RoundCase
-from haivequeen import bees, db, gui_data, hives, loop, owner, runtime, startctx, updates, web_api, web_jobs, web_login
+from haivequeen import bees, db, dashboard_data, hives, loop, owner, runtime, startctx, updates, web_api, web_jobs, web_login
 
 
 class WebApiTests(RoundCase):
     def test_snapshot_uses_shared_dashboard_and_only_named_controls(self):
-        with mock.patch.object(gui_data, 'snapshot', return_value={'hives': []}) as snapshot:
+        with mock.patch.object(dashboard_data, 'snapshot', return_value={'hives': []}) as snapshot:
             result = web_api.execute(self.conn, 'state', {})
         snapshot.assert_called_once_with(self.conn, None)
         self.assertEqual(result['controls']['web'], ['Stop', 'Restart'])
@@ -24,7 +24,7 @@ class WebApiTests(RoundCase):
             apply.assert_called_once_with(self.conn, 'provider', None, None, provider='codex', provider_action='enable')
 
     def test_answer_uses_same_question_function(self):
-        with mock.patch('haivequeen.gui_questions.answer') as answer:
+        with mock.patch('haivequeen.question_service.answer') as answer:
             web_api.execute(self.conn, 'questions/answer', {'id': 3, 'text': 'Proceed', 'rejected': ['P1']})
         answer.assert_called_once_with(self.conn, 3, 'Proceed', ['P1'], False)
 

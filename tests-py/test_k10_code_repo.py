@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from bzztest import REL, RoundCase
-from haivequeen import gui_config, publish, runtime, selfupdate
+from haivequeen import settings, publish, runtime, selfupdate
 
 WORKSPACE_REMOTE = "https://github.com/owner/workspace.git"
 CODE_REMOTE = "https://github.com/owner/tool.git"
@@ -159,7 +159,7 @@ class SwitchCheckTests(CodeRepoCase):
     """The switch is offered by the GitHub check of the code repository, not of the workspace."""
 
     def window_class(self):
-        for value in vars(gui_config).values():
+        for value in vars(settings).values():
             if isinstance(value, type) and "github_repository" in vars(value):
                 return value
         self.fail("no settings window with github_repository")

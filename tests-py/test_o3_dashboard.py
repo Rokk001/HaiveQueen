@@ -4,7 +4,7 @@ import sys
 from datetime import datetime
 
 import test_o1_orchestrator as o1
-from haivequeen import gui_data, orchestrator, runtime
+from haivequeen import dashboard_data, orchestrator, runtime
 
 SYS = {"cores": 8, "cpu": 38, "ram_used_gb": 25.2, "ram_total_gb": 32.0, "ram_pct": 80, "disk_used_tb": 1.2, "disk_total_tb": 2.7, "disk_pct": 45}
 
@@ -17,7 +17,7 @@ class DashboardCase(o1.OrchCase):
         super().setUp()
 
     def snap(self):
-        return gui_data.snapshot(self.conn, now=datetime.now(), sysinfo=SYS)
+        return dashboard_data.snapshot(self.conn, now=datetime.now(), sysinfo=SYS)
 
     def hive(self, rel=o1.REL):
         return next(h for h in self.snap()["hives"] if h["plan_path"] == rel)

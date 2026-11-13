@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 import isolation  # noqa: F401  (keeps the suite away from the real folders)
-from haivequeen import agent_runner, config, db, gui_config, platform as osplat, profile, projsettings, proctree, routine, runtime, scheduler
+from haivequeen import agent_runner, config, db, settings, platform as osplat, profile, projsettings, proctree, routine, runtime, scheduler
 
 
 def git(folder, *args):
