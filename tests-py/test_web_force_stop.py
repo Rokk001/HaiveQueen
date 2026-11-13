@@ -8,6 +8,69 @@ from haivequeen import cli, force_stop, integration, interrupt, loop, orchestrat
 
 
 class ForceStopTests(RoundCase):
+    def test_held_scheduling_lock_does_not_delay_process_termination(self):
+        self.plan('RUNNING')
+        self.agent('worker', phase='bee', status='running', pid=910002, started=1)
+        orchestrator.save(self.conn, 'testproj', REL, {
+            'steps': {'Merge': 'done', 'Build': 'running'}, 'job': {'pid': 910003}})
+        held = threading.Event()
+        release = threading.Event()
+        def hold_lock():
+            with loop.hive_schedule_lock():
+                held.set()
+                release.wait(5)
+        holder = threading.Thread(target=hold_lock)
+        holder.start()
+        events = []
+        acquire = loop.hive_schedule_lock
+        def cleanup_lock(*args, **kwargs):
+            self.assertTrue(force_stop.requested())
+            self.assertEqual(events[:1], [('loop', 910004)])
+            self.assertEqual(set(events[1:]), {('work', 910002), ('work', 910003)})
+            return acquire(timeout=0)
+        try:
+            self.assertTrue(held.wait(5))
+            with mock.patch.object(loop, 'loop_running', return_value=910004), mock.patch.object(force_stop.agent_process, 'pid_reused', return_value=False), mock.patch.object(loop, 'hive_schedule_lock', side_effect=cleanup_lock):
+                result = force_stop.stop(self.conn,
+                                         kill=lambda pid: events.append(('work', pid)) or True,
+                                         end_loop=lambda pid: events.append(('loop', pid)) or True)
+            self.assertFalse(result['ok'])
+            self.assertIn('cleanup', result['error'].lower())
+            self.assertEqual(runtime.get_agent(self.conn, 'testproj', 'worker')['status'], 'running')
+            self.assertIn('job', orchestrator.load(self.conn, 'testproj', REL))
+        finally:
+            release.set()
+            holder.join(5)
+        # Retrying cleanup preserves completed steps and permits a later restart.
+        with mock.patch.object(loop, 'loop_running', return_value=0), mock.patch.object(force_stop.agent_process, 'pid_reused', return_value=False):
+            self.assertTrue(force_stop.stop(self.conn, kill=lambda pid: True)['ok'])
+        self.assertEqual(orchestrator.load(self.conn, 'testproj', REL)['steps'], {'Merge': 'done'})
+        self.assertTrue(interrupt.is_interrupted(runtime.get_agent(self.conn, 'testproj', 'worker')))
+
+    def test_work_registered_before_cleanup_is_stopped_once(self):
+        self.agent('worker', phase='bee', status='running', pid=910002, started=1)
+        killed = []
+        # Keep database writes on this thread rather than in the kill worker.
+        acquire = loop.hive_schedule_lock
+        def cleanup_lock(*args, **kwargs):
+            orchestrator.save(self.conn, 'testproj', REL, {
+                'steps': {'Deploy': 'running'}, 'job': {'pid': 910003}})
+            return acquire(*args, **kwargs)
+        with mock.patch.object(loop, 'loop_running', return_value=0), mock.patch.object(force_stop.agent_process, 'pid_reused', return_value=False), mock.patch.object(loop, 'hive_schedule_lock', side_effect=cleanup_lock):
+            self.assertTrue(force_stop.stop(self.conn, kill=lambda pid: killed.append(pid) or True)['ok'])
+        self.assertEqual(killed, [910002, 910003])
+        self.assertNotIn('job', orchestrator.load(self.conn, 'testproj', REL))
+
+    def test_reused_work_pids_are_refused_in_both_snapshots(self):
+        self.agent('worker', phase='bee', status='running', pid=910002, started=1)
+        request = {'supervisor_pid': 910005, 'supervisor_identity': 'old-supervisor',
+                   'check_pid': 910006, 'check_identity': 'old-check',
+                   'key': 'compile-check:queen', 'commit': 'abc1234', 'settings': {}}
+        runtime.kv_set(self.conn, 'testproj', integration.COMPILE_REQUEST_KEY + 'run', json.dumps(request))
+        with mock.patch.object(loop, 'loop_running', return_value=0), mock.patch.object(force_stop.agent_process, 'pid_reused', return_value=True), mock.patch.object(force_stop.osplat, 'process_identity', return_value='new-process'), mock.patch.object(force_stop.osplat, 'kill_process_tree') as kill:
+            self.assertTrue(force_stop.stop(self.conn)['ok'])
+        kill.assert_not_called()
+
     def test_tray_detects_work_left_after_the_loop_stops(self):
         from haivequeen import tray
         self.assertFalse(tray.work_running())
