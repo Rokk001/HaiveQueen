@@ -28,7 +28,7 @@ from . import plans as plan_mod
 KEY = "orch:"              # + plan: the state of the pipeline of a plan while the Orchestrator integrates it
 LAST_KEY = "orch-last:"    # + plan: what the last pipeline did (commit, steps, last fix agent, push and deploy done for a commit)
 ATTEMPTS_KEY = "orch-fix:"  # + plan: {cls, n}: the fix attempts of the plan in the current class (the escalation as for Agents)
-STEPS = ("Merge", "Check", "Build", "Push", "Deploy")   # the chain shown to the owner; Close follows the last one
+STEPS = ("Merge", "Check", "Build", "Push", "Deploy", "Release")   # the chain shown to the owner; Close follows the last one
 COMMAND_STEPS = ("Check", "Build", "Deploy")
 SETTING = {"Check": "compileCheck", "Build": "buildCommand", "Deploy": "deployCommand"}
 MOVED_LIMIT = 3            # how often a moved remote sends the pipeline back to step 1 before a fix agent looks at it
@@ -108,8 +108,9 @@ def chain(env):
     from . import projsettings
     settings = projsettings.working_settings(env.settings)
     cmds = commands(env)
-    return [step for step in STEPS if step not in COMMAND_STEPS or cmds[step] or
-            (settings[step.lower() + "Enabled"] and settings[step.lower() + "Mode"] == "git")]
+    return [step for step in STEPS if (settings["releaseEnabled"] if step == "Release" else
+            step not in COMMAND_STEPS or cmds[step] or
+            (settings[step.lower() + "Enabled"] and settings[step.lower() + "Mode"] == "git"))]
 
 
 def _short(plan):
@@ -386,7 +387,7 @@ def _advance_pipeline(conn, env, plan, state, free_mb):
     for _ in range(4 * (len(STEPS) + 2)):   # inline steps follow each other in one round (also after a moved remote); a running command ends the round
         step = state["step"]
         ahead = _ahead(conn, env.name, plan)
-        if step in ("Push", "Deploy", "Close") and ahead:
+        if step in ("Push", "Deploy", "Release", "Close") and ahead:
             # Waiting through Close also serializes Deploy and release publication.
             _blocker(conn, env, plan, "waiting for earlier plans to push and deploy")
             _set_status(conn, env, plan, "WAITING")
@@ -400,6 +401,8 @@ def _advance_pipeline(conn, env, plan, state, free_mb):
         elif step in COMMAND_STEPS:
             outcome = (_provider_step(conn, env, plan, state, folder, step) if settings[step.lower() + "Mode"] == "git"
                        else _command(conn, env, plan, state, folder, step, free_mb))
+        elif step == "Release":
+            outcome = _release(conn, env, plan, state, folder)
         else:
             return "closed" if _close(conn, env, plan, state, folder) else None
         if outcome != "next":
@@ -833,6 +836,19 @@ def _red(conn, env, plan, state, step, error):
     return "red"
 
 
+def _release(conn, env, plan, state, folder):
+    """Hold the integration place until publication has completed."""
+    from . import publish, projsettings
+    try:
+        result = publish.pipeline_release(conn, env, plan, state, folder,
+                                          projsettings.working_settings(env.settings))
+        if result is None:
+            return _provider_wait(conn, env, plan, state, "Release", "waiting for release publication")
+        return _done(conn, env, plan, state, "Release", result)
+    except Exception as exc:
+        return _provider_wait(conn, env, plan, state, "Release", "release publication: " + str(exc))
+
+
 def _close(conn, env, plan, state, folder):
     head = (state.get("provider") or {}).get("commit") or integration.head_commit(folder)
     row = conn.execute("SELECT * FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (env.name, plan)).fetchone()
@@ -844,11 +860,6 @@ def _close(conn, env, plan, state, folder):
     if newest:
         conn.execute("UPDATE hives SET ready_id=? WHERE project=? AND plan_path=?", (newest[0], env.name, plan))
     state["steps"]["Close"] = "done"
-    try:
-        from . import publish
-        publish.after_integration(conn, env, plan)   # HaiveQueen publishes the release itself; a failure is retried by the loop
-    except Exception as exc:
-        db.add_event(conn, env.name, "release", "release step failed: %s" % exc)
     hives.release_integration(conn, env.name, plan)
     # the worktree cleanup runs at the start of the next round (it takes the scheduling lock, which this round holds)
     bees = __import__("haivequeen.bees", fromlist=["x"])

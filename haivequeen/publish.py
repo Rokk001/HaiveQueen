@@ -485,3 +485,101 @@ def retry_pending(conn, envs, run=None, latest=None, publisher=None, token=None)
             discover(conn, env, run)
             done.extend(_drain(conn, env, repository, run, latest, publisher, token_fn))
     return done
+
+
+def pipeline_release(conn, env, plan, state, folder, settings):
+    """Publish after Deploy, retaining the chosen tag and upload manifest across retries."""
+    import hashlib
+    from . import git_provider, orchestrator
+
+    local = settings["releaseMode"] == "local"
+    record = state.setdefault("release", {})
+    directory = Path(settings.get("releaseFolder") or "")
+    if not directory.is_absolute():
+        directory = Path(folder) / directory
+    if local and not record.get("files"):
+        if not settings.get("releaseFolder") or not directory.is_dir():
+            return "release folder is empty or not set; no release made"
+        files = sorted(p for p in directory.iterdir() if p.is_file())
+        if not files:
+            return "release folder is empty; no release made"
+        record["files"] = [{"name": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in files]
+        orchestrator.save(conn, env.name, plan, state)
+    provider, errors = git_provider.for_project(env)
+    if not provider:
+        raise ValueError("; ".join(errors) or "Git provider is not supported")
+    if local and provider.name != "github":
+        raise ValueError("local release upload is not supported for provider " + provider.name)
+    commit = (state.get("provider") or {}).get("commit") or state.get("merged")
+    if not commit:
+        from . import integration
+        commit = integration.head_commit(folder)
+    if not commit:
+        raise ValueError("release commit cannot be read")
+    if not record.get("tag"):
+        record["tag"] = _release_tag(conn, env, {"plan": plan}, provider.repository, _run)
+        record["commit"] = commit
+        orchestrator.save(conn, env.name, plan, state)
+    if record.get("commit") != commit:
+        raise ValueError("release commit changed after tag selection")
+    secret = provider.credential()
+    tag = record["tag"]
+    if local:
+        release = provider.call("publish_release", tag, commit, secret) if not record.get("uploaded") else {"assets": [], "id": "completed"}
+        assets = release.get("assets")
+        if not isinstance(assets, list) or not release.get("id"):
+            raise ValueError("release response has no asset list or identifier")
+        existing = {a.get("name"): a for a in assets}
+        for item in ([] if record.get("uploaded") else record["files"]):
+            path = directory / item["name"]
+            asset = existing.get(item["name"])
+            if asset:
+                if asset.get("digest") != "sha256:" + item["sha256"]:
+                    raise ValueError("existing release asset cannot be verified: " + item["name"])
+                continue
+            content = path.read_bytes()
+            if hashlib.sha256(content).hexdigest() != item["sha256"]:
+                raise ValueError("release file changed: " + item["name"])
+            provider.call("release_asset", release["id"], item["name"], content, secret)
+        # Persist completion before cleanup so interrupted cleanup is safe to retry.
+        record["uploaded"] = True
+        orchestrator.save(conn, env.name, plan, state)
+        for item in record["files"]:
+            path = directory / item["name"]
+            if path.exists():
+                if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+                    raise ValueError("release file changed before cleanup: " + item["name"])
+                path.unlink()
+        return "published " + tag
+    if not record.get("tagged"):
+        remote = str(env.settings.get("remoteName") or "origin")
+        code, output = _git(env, _run, "ls-remote", "--tags", "--refs", remote, "refs/tags/" + tag)
+        if code:
+            raise ValueError("cannot inspect release tag: " + output)
+        existing = _sha(output)
+        if existing and existing != commit.lower():
+            raise ValueError("release tag points at a different commit")
+        if not existing:
+            if provider.name == "bitbucket":
+                provider.call("tag", tag, commit)
+            else:
+                provider.call("tag", tag, commit, token=secret)
+        record["tagged"] = True
+        orchestrator.save(conn, env.name, plan, state)
+    if provider.name != "github":
+        raise ValueError("tag-triggered release completion polling is unavailable for " + provider.name)
+    from urllib.parse import urlencode
+    page = 1
+    runs = []
+    while True:
+        query = urlencode({"event": "push", "head_sha": commit, "per_page": 100, "page": page})
+        batch = provider.module._request(provider.repository, "/actions/runs?" + query, secret).get("workflow_runs", [])
+        runs.extend(r for r in batch if r.get("head_sha") == commit and r.get("head_branch") == tag and r.get("event") == "push")
+        if len(batch) < 100:
+            break
+        page += 1
+    if not runs or any(r.get("status") != "completed" for r in runs):
+        return None
+    if any(r.get("conclusion") != "success" for r in runs):
+        raise ValueError("tag-triggered release workflow failed")
+    return "provider release completed for " + tag
