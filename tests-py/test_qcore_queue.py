@@ -383,3 +383,116 @@ class LiveQueue(OrchCase):
         self.assertEqual(sum((folder / "Check.started").exists() for folder in (self.pwt, self.second)), 1)
         (self.base / "Check.release").touch()
         self.wait_for(lambda: all((folder / "Check.started").exists() for folder in (self.pwt, self.second)))
+
+    def live_failure_and_replay(self, failure, running):
+        """Q-5: kill a real successor, replay it, then integrate both plans."""
+        self.script.write_text(
+            "from pathlib import Path\nimport os, sys, time\n"
+            "kind, root = sys.argv[1], Path(sys.argv[2])\n"
+            "(root / (kind + '.pid')).write_text(str(os.getpid()))\n"
+            "while not (root / (kind + '.release')).exists(): time.sleep(.02)\n"
+            "(root / (kind + '.completed')).touch()\n", encoding="utf-8")
+        self.machine["maxConcurrentCompileChecks"] = 3
+        self.started = Counter()
+        self.finished = set()
+        self.failed = set()
+        real_command = orchestrator._command
+        real_git = orchestrator._git
+        resets = []
+        old_job = old_pid = None
+
+        def command(conn, env, plan, state, folder, step, free_mb):
+            if plan == REL:
+                return SpeculativeQueue.command(self, conn, env, plan, state, folder, step, free_mb)
+            return real_command(conn, env, plan, state, folder, step, free_mb)
+
+        def git(folder, *args, **kwargs):
+            if folder == self.second and args[0] == "reset":
+                # Observe the actual reset boundary, even if cancellation and
+                # replay complete within a single orchestrator round.
+                self.assertFalse(orchestrator.osplat.process_alive(old_pid))
+                self.assertFalse(old_job.alive())
+                self.assertFalse((self.base / (running + ".completed")).exists())
+                resets.append(args)
+            return real_git(folder, *args, **kwargs)
+
+        def drive(condition):
+            def round_until():
+                # Let assertions at the reset boundary reach the test instead
+                # of the round's per-plan exception logger.
+                for plan in (REL, OTHER):
+                    orchestrator.advance(self.conn, self.env(), plan, 16384, alive=lambda pid: False)
+                return condition()
+            self.wait_for(round_until)
+
+        with mock.patch.object(orchestrator, "_command", side_effect=command), \
+                mock.patch.object(orchestrator, "_git", side_effect=git):
+            self.start_merges()
+            self.wait_for(lambda: (self.base / "Check.pid").exists())
+            if running == "Build":
+                (self.base / "Check.release").touch()
+                drive(lambda: (self.base / "Build.pid").exists())
+            old_job = orchestrator.JOBS["testproj", OTHER]
+            old_pid = int((self.base / (running + ".pid")).read_text())
+            self.assertTrue(orchestrator.osplat.process_alive(old_pid))
+            self.assertTrue(old_job.alive())
+            self.assertTrue((self.second / "first.txt").exists())
+            original_remote = self.remote_head()
+
+            if failure in ("Build", "Push"):
+                self.finished.add((REL, "Check"))
+            if failure == "Push":
+                self.finished.add((REL, "Build"))
+            if failure == "Merge":
+                state = self.state()
+                state["step"] = "Merge"
+                orchestrator.save(self.conn, "testproj", REL, state)
+            self.failed.add((REL, failure))
+
+            def fail_git(folder, *args, **kwargs):
+                if folder == self.pwt and args[0] == failure.lower():
+                    return 1, "controlled failure"
+                return git(folder, *args, **kwargs)
+
+            with mock.patch.object(orchestrator, "_git", side_effect=fail_git):
+                drive(lambda: self.state()["phase"] == "fix")
+            self.assertTrue(old_job.cancelled)
+            self.assertEqual(self.state()["steps"][failure], "red")
+            self.assertEqual(self.remote_head(), original_remote)
+            drive(lambda: bool(resets) and self.state(OTHER).get("step") != "Merge")
+            self.assertFalse(orchestrator.osplat.process_alive(old_pid))
+            self.assertFalse(old_job.alive())
+            self.assertFalse((self.second / "first.txt").exists())
+            self.assertTrue((self.second / "second.txt").exists())
+            self.assertFalse(self.state(OTHER).get("replay", False))
+            drive(lambda: int((self.base / (running + ".pid")).read_text()) != old_pid)
+            drive(lambda: bool(self.fixers()))
+            self.assertEqual(len(self.fixers()), 1)
+            self.commit(self.pwt, "fixed.txt")
+            self.end_fixer(self.fixers()[0])
+            self.failed.clear()
+            self.finished.update((REL, step) for step in ("Check", "Build", "Deploy"))
+            drive(lambda: self.state()["step"] == "Push")
+            self.assertEqual(orchestrator._ahead(self.conn, "testproj", REL), [OTHER])
+            self.release_workers()
+            drive(lambda: self.state() is None and self.state(OTHER) is None)
+            for plan in (REL, OTHER):
+                row = self.conn.execute(
+                    "SELECT status FROM queue WHERE project='testproj' AND plan_path=? "
+                    "ORDER BY id DESC LIMIT 1", (plan,)).fetchone()
+                self.assertEqual(row["status"], "integrated")
+            self.assertEqual(self.remote_head(), self.git("rev-parse", "HEAD", cwd=self.pwt))
+            for feature in ("first.txt", "second.txt", "fixed.txt"):
+                self.assertTrue((self.pwt / feature).exists())
+
+    def test_red_merge_stops_live_successor_check_and_integrates(self):
+        self.live_failure_and_replay("Merge", "Check")
+
+    def test_red_check_stops_live_successor_check_and_integrates(self):
+        self.live_failure_and_replay("Check", "Check")
+
+    def test_red_build_stops_live_successor_build_and_integrates(self):
+        self.live_failure_and_replay("Build", "Build")
+
+    def test_red_push_stops_live_successor_build_and_integrates(self):
+        self.live_failure_and_replay("Push", "Build")
