@@ -155,7 +155,7 @@ p="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/opencode"; OPENCODE_C
 p="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/kilo"; KILO_CONFIG_DIR="$p/config" XDG_CONFIG_HOME="$p/config" XDG_DATA_HOME="$p/data" XDG_STATE_HOME="$p/state" XDG_CACHE_HOME="$p/cache" kilo auth login
 ```
 
-Without a login a provider counts as not available and its packages wait; all others go on. You can also do this from the dashboard: the settings page shows "Login present" or "Login missing" on every provider's page, and its **Login** button opens a terminal window with the variables set and the login command running. For a CLI HaiveQueen does not know, set `outputFormat` (the format it writes: `claude`, `codex` or `opencode`; without one of them the provider is rejected with a clear message), `profileEnv`, `loginCommand` and `loginFiles` in its provider entry (see [`examples/config.example.toml`](examples/config.example.toml)); the same status, profile and button then work for it.
+Without a login a provider counts as not available and its packages wait; all others go on. You can also do this from the dashboard: the settings page shows "Login present" or "Login missing" on every provider's page, and its **Login** button shows the login output and links in the browser; enter any requested input there. For a CLI HaiveQueen does not know, set `outputFormat` (the format it writes: `claude`, `codex` or `opencode`; without one of them the provider is rejected with a clear message), `profileEnv`, `loginCommand` and `loginFiles` in its provider entry (see [`examples/config.example.toml`](examples/config.example.toml)); the same status, profile and button then work for it.
 
 ```bash
 bzz start                             # starts the loop in the background and opens the browser dashboard
@@ -237,9 +237,9 @@ A `failed` result without evidence (`--open-requirements` or `--error`) is refus
 
 ## Dashboard
 
-`bzz start` starts the local web service and opens the dashboard in your default browser. `bzz gui` opens the same browser interface; `--detach` and `--project` remain accepted for existing shortcuts. No desktop window or Tk installation is required. Closing the browser leaves the loop and agents running.
+`bzz start` starts the local web service and opens the dashboard in your default browser. For setup, network access, login, web server controls, the Windows tray and background services, see the [web guide](docs/WEB-API.md). `bzz gui` opens the same browser interface; `--detach` and `--project` remain accepted for existing shortcuts. No desktop window or Tk installation is required. Closing the browser leaves the loop and agents running.
 
-The dashboard shows plans, Queens and Agents, model limits, tokens, system load, questions and logs. Use the controls to start, pause, resume or stop orchestration, manage plans, answer questions and inspect an agent's live output. Owner checks have explicit Accept and Not ok actions; a rejection needs a finding and can select individual packages for rework.
+The dashboard shows plans, Queens and Agents, model limits, tokens, system load, questions and logs. Use the controls to start, stop gracefully or force stop orchestration, manage plans, answer questions and inspect an agent's live output. Owner checks have explicit Accept and Not ok actions; a rejection needs a finding and can select individual packages for rework.
 
 General, Providers and Projects settings use the existing TOML files. Browser settings changes use revisions to detect concurrent edits. Provider login, connection tests, benchmarks, updates and profile installation run through the same backend services as the CLI.
 
@@ -314,7 +314,8 @@ Existing `[[decision]]` entries with `item = "owner-release"` continue to work.
 |---|---|---|
 | `bzz start` / `bzz stop` | owner | start the loop in the background and open the dashboard (`--foreground`, `--rounds N`, `--round-minutes M`), or stop starting new agents |
 | `bzz gui [--detach] [--project p]` | owner | open the browser dashboard |
-| `bzz pause` / `bzz resume` | owner | pause the start of every kind of Agent (Queen, separate Agent, embedded subagent, ready-check agent), or resume; running agents are not ended; `bzz pause --now` also asks every running agent to hand off after its current step, so you do not have to wait for them to run out |
+| `bzz web setup` / `off` / `start` / `stop` / `restart` | owner | configure network access or control the independent web listener; see the [web guide](docs/WEB-API.md) |
+| `bzz stop --force` | owner | show the warning and immediately stop running work and the Orchestrator; the web server remains available |
 | `bzz status [--project p] [--json]` | owner | "X / Y integrated (%)" and a task / agent / status table per project |
 | `bzz questions [--open]`, `bzz answer <id> "<text>" --by owner` | owner | read and answer questions of the agents |
 | `bzz queue [upsert]` | owner, Queen | the integration queue |
@@ -337,7 +338,7 @@ Existing `[[decision]]` entries with `item = "owner-release"` continue to work.
 - A Plan without a Queen shows its recorded start blocker or the numbers of its pending questions instead of a generic waiting label.
 - Automatic worktree cleanup requires confirmation that the branch's current commit was integrated; a missing or superseded confirmation keeps the worktree. The cleanup runs in parallel to the round and never holds it.
 - Round totals count actual Queen launches, independent of earlier run timestamps.
-- Pause and stop prevent every new start of every kind of Agent: Queens, separate Agent processes, embedded subagents and the check agent of `bzz ready`. Pause lasts until you resume; stop lets running agents finish, then ends HaiveQueen, and `bzz start` allows starts again. Running Queens and Agents are not ended; a refused start gives the reason.
+- Stop prevents every new start of every kind of Agent: Queens, separate Agent processes, embedded subagents and the check agent of `bzz ready`. Stop lets running agents finish, then ends HaiveQueen, and `bzz start` allows starts again. Running Queens and Agents are not ended; a refused start gives the reason.
 
 ## Documentation
 

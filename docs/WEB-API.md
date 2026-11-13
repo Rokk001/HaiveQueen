@@ -1,5 +1,56 @@
 # Web engine API
 
+## Using the web server
+
+Run `bzz start` to start the Orchestrator and open the browser. The web server
+can run independently: `bzz web start`, `bzz web stop`, and `bzz web restart`
+control only the listener. `bzz stop` stops scheduling and lets running work
+finish; `bzz stop --force` prints a warning and immediately stops running work.
+The explicit flag confirms the force stop. The web server stays available.
+
+Open the local setup page on first use, or run `bzz web setup` interactively to
+set the account, address, port and optional TLS certificate and key. Setup enables
+network access. Log in with that account; provider login in Settings is separate
+and displays output and links in the browser. `bzz web off` disables network
+access and rebinds a running listener to loopback. Use HTTPS for network access;
+the server does not create certificates. Settings are stored in the machine
+config file and can be changed with setup.
+
+On Windows the tray icon appears while the Orchestrator or web server runs.
+Its tooltip shows Running, Stopping or Stopped. Its menu opens the interface and
+offers Orchestrator Start, Stop gracefully and Force stop, plus web Start, Stop
+and Restart. Force stop requires confirmation. The browser offers the same
+Orchestrator controls, web Stop and Restart, plan Stop gracefully, Force stop,
+Resume, Cancel plan and Restart Queen on provider, and single Agent Force stop
+and Resume package. Unavailable actions are disabled. Linux and other systems
+have no tray; use `bzz status` and the browser.
+
+## Background service
+
+On Linux, a user systemd service can supervise the foreground listener. Replace
+the executable path with the absolute path to your installed `bzz`:
+
+```ini
+[Unit]
+Description=HaiveQueen web server
+
+[Service]
+ExecStart=/absolute/path/to/bzz web serve
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Save this as `~/.config/systemd/user/haivequeen-web.service`, then run
+`systemctl --user daemon-reload` and `systemctl --user enable --now haivequeen-web.service`. Manage it with `systemctl --user stop` or `restart`
+and inspect it with `systemctl --user status` and `journalctl --user -u haivequeen-web.service`. The user manager must be running for the service to
+run. On other systems use the local service manager to supervise `bzz web serve` as the intended user, with the installed executable and its environment.
+The listener is independent of the Orchestrator: start the latter separately
+with `bzz start`, and stop it with `bzz stop` before stopping the service.
+Avoid simultaneously supervising the listener and using web Stop/Restart as
+service managers may restart it; use the service manager for its lifecycle.
+
 The web service is independent of the Orchestrator. `bzz web start`, `stop`
 and `restart` control the web listener; `bzz stop` keeps it available.
 `bzz web setup` configures one account and enables network access.
@@ -44,7 +95,7 @@ with `/api/`. Project and plan identify a registered project and its plan path.
 
 | POST route | JSON fields |
 | --- | --- |
-| questions/answer | id, text, optional rejected packages and apiary |
+| questions/answer | id, text, optional rejected packages and `apiary` (legacy project selector) |
 | owner/accept, owner/reject, owner/release | project, plan; shared owner action fields (text, packages, commit) |
 | provider | provider, provider_action (enable, disable, test) |
 | provider/test | server object; test edited connection settings |
