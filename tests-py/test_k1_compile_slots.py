@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import bzztest  # noqa: F401  (puts this checkout first on the path)
-from haivequeen import buildjobs, settings, integration, scheduler
+from haivequeen import buildjobs, settings, i18n, integration, scheduler
 
 KEY = "maxConcurrentCompileChecks"
 LABEL = "Max concurrent compile checks"
@@ -29,8 +29,9 @@ class SettingTests(unittest.TestCase):
         data = json.loads(re.search(r'<script id="bootstrap" type="application/json">(.*?)</script>', page).group(1))
         self.assertEqual(data['general'][KEY], 2)
         self.assertEqual(data['fieldLabels']['General'][KEY], LABEL)
-        for word in ('same time', 'computer'):
-            self.assertIn(word, data['fieldHelp']['General'][KEY])
+        explanation = 'The most compile checks that run at the same time on this computer, across all projects and Queens, also for several plans of one project.'
+        self.assertEqual(data['fieldHelp']['General'][KEY], explanation)
+        self.assertEqual(i18n.tr(explanation, language='German'), 'Die höchste Zahl von Kompilierprüfungen, die gleichzeitig auf diesem Rechner laufen, für alle Projekte und Queens, auch für mehrere Pläne eines Projekts.')
 
     def test_only_whole_numbers_from_1_are_accepted(self):
         for problem in (0, -3, 1.5, '2', True):

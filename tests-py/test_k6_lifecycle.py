@@ -172,6 +172,36 @@ class BranchTests(RoundCase):
         self.assertEqual(bees.resolve_existing_branch(env, self.rel), "take over")
         self.assertFalse(bees.foreign_plan_branch(env, self.rel))
 
+    def test_own_branch_with_a_queue_row_of_the_plan_is_not_foreign(self):
+        """K-5: a ready, blocked or in-run queue row of the plan's own branch (the plan is in integration) causes no branch question."""
+        git(self.repo, "branch", "feature-x")
+        env = self.env()
+        self.assertTrue(bees.foreign_plan_branch(env, self.rel))   # without any row the existing branch is still foreign
+        for status in ("ready", "in_run", "blocked"):
+            self.conn.execute("DELETE FROM queue WHERE project='testproj'")
+            self.conn.execute("INSERT INTO queue (project, branch, tip, plan_path, status) VALUES ('testproj', 'feature-x', 'abc', ?, ?)", (self.rel, status))
+            self.assertFalse(bees.foreign_plan_branch(env, self.rel), status)
+
+    def test_plan_in_integration_or_running_gets_no_branch_question(self):
+        """K-5: a plan whose Hive runs or is in integration owns its branch."""
+        git(self.repo, "branch", "feature-x")
+        env = self.env()
+        hives.create(self.conn, "testproj", self.rel, "claude", "123456")
+        for state in ("running", "integrating"):
+            self.conn.execute("UPDATE hives SET state=? WHERE project='testproj' AND plan_path=?", (state, self.rel))
+            self.assertFalse(bees.foreign_plan_branch(env, self.rel), state)
+        self.conn.execute("UPDATE hives SET state='queenless' WHERE project='testproj' AND plan_path=?", (self.rel,))
+        self.assertTrue(bees.foreign_plan_branch(env, self.rel))
+
+    def test_branch_of_another_plan_or_without_plan_in_the_queue_is_still_foreign(self):
+        """K-5: a queue row of the same branch that does not belong to this plan keeps the question."""
+        git(self.repo, "branch", "feature-x")
+        env = self.env()
+        for owner in (None, "docs/plans/dummy/Other-PLAN.md"):
+            self.conn.execute("DELETE FROM queue WHERE project='testproj'")
+            self.conn.execute("INSERT INTO queue (project, branch, tip, plan_path, status) VALUES ('testproj', 'feature-x', 'abc', ?, 'ready')", (owner,))
+            self.assertTrue(bees.foreign_plan_branch(env, self.rel), owner)
+
     def test_owner_chooses_a_new_branch(self):
         git(self.repo, "branch", "feature-x")
         env = self.env()

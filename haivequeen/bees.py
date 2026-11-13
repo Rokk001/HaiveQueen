@@ -1287,8 +1287,14 @@ def foreign_plan_branch(env, plan):
     branch, _ = resolved
     if runtime.kv_get(env.conn, env.name, TAKEOVER_KEY + plan) == branch:   # the owner said: take over the existing branch
         return False
-    if env.conn.execute("SELECT 1 FROM queue WHERE project=? AND branch=? AND status IN ('ready','blocked','in_run') LIMIT 1", (env.name, branch)).fetchone():
+    hive = env.conn.execute("SELECT state FROM hives WHERE project=? AND plan_path=?", (env.name, plan)).fetchone()
+    if hive and hive[0] in ('running', 'integrating'):   # the plan's own work: it runs or is in integration
+        return False
+    # a queue row of the branch belongs to this plan's own work when it names this plan; a row of another plan or without a plan is foreign work
+    if env.conn.execute("SELECT 1 FROM queue WHERE project=? AND branch=? AND status IN ('ready','blocked','in_run') AND COALESCE(plan_path,'')<>? LIMIT 1", (env.name, branch, plan)).fetchone():
         return True
+    if env.conn.execute("SELECT 1 FROM queue WHERE project=? AND branch=? AND status IN ('ready','blocked','in_run') AND plan_path=? LIMIT 1", (env.name, branch, plan)).fetchone():
+        return False
     history = [a for a in runtime.list_agents(env.conn, env.name, 'all') if a.get('plan_path') == plan]
     text = (env.workspace / plan).read_text(encoding='utf-8-sig')
     record = runtime._cut_record(runtime.kv_get(env.conn, env.name, runtime.CUT_KEY + plan))

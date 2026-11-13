@@ -231,12 +231,9 @@ class SettingTests(unittest.TestCase):
 
 
 class RoleTextTests(unittest.TestCase):
-    def test_agent_and_queen_texts_name_the_command_and_waiting_without_polling(self):
-        text = (roles.ROLES_DIR / "bee.md").read_text(encoding="utf-8")
-        self.assertIn("bzz compile-check", text)
-        self.assertIn("without polling", text)
+    def test_queen_text_names_no_compile_check_and_agent_text_names_no_full_check(self):
         self.assertNotIn("bzz compile-check", (roles.ROLES_DIR / "queen.md").read_text(encoding="utf-8"))   # O-1: the Queen runs no compile check
-        self.assertIn("--worktree", (roles.ROLES_DIR / "bee.md").read_text(encoding="utf-8"))
+        self.assertNotIn("bzz compile-check", (roles.ROLES_DIR / "bee.md").read_text(encoding="utf-8"))   # K-2: an Agent runs focused tests only
 
 
 if __name__ == "__main__":
