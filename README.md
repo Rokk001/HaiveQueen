@@ -290,7 +290,8 @@ The following commands are for the owner. Every one refuses calls with `BZZ_AGEN
 | --- | --- |
 | `bzz plan accept --project p --plan f [--text "note"]` | Accept an integrated plan waiting for its owner check; close all owner checks and set DONE. Other open questions and integration steps block acceptance; queen-ended and stall questions are closed automatically. |
 | `bzz plan reject --project p --plan f --text "finding" [--package P1 --package P2]` | Reopen a plan waiting for its owner check and pass the required finding to a fix agent. Selected packages become rejected. Accept and reject also work while paused; rejection preserves the pause until resume. |
-| `bzz plan pause --project p --plan f` | Pause one plan in SENT through REVIEW, preserving its prior status and running agents. DRAFT, DONE, PAUSED and CANCELLED are refused. |
+| `bzz plan stop-gracefully --project p --plan f` | Stop new starts for one plan in SENT through REVIEW, preserving its prior status and running agents. DRAFT, DONE, PAUSED and CANCELLED are refused. `bzz plan pause` remains an alias. |
+| `bzz plan force-stop --project p --plan f` | Stop the plan's Queen, agents and running integration step immediately; the plan remains stopped until resumed. |
 | `bzz plan resume --project p --plan f` | Restore the prior status of a PAUSED plan. Other statuses are refused. |
 | `bzz plan release --project p --plan f [--commit C]` | Release the branch without a check agent, for the specified commit or any commit when omitted. Refused for DONE/CANCELLED. Replaces older releases, including legacy inbox decisions; rejection ends the release. |
 | `bzz provider enable --provider N` / `bzz provider disable --provider N` | Save the same Enabled setting as the provider page. |

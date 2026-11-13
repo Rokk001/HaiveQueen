@@ -383,6 +383,18 @@ def cmd_requeen(args, conn):
 # Check the plan the calling Queen has cut into packages.
 def cmd_plan(args, conn):
     """Check the header of the Queen's own plan (packages, unique ids, titles, dependencies without cycle, capabilities some provider offers, every requirement the Queen wrote in the state file belongs to a package). On success a SENT or PREPARING plan becomes QUEUED and the packages are read into the database; otherwise the problems are reported and nothing changes."""
+    if args.action == "force-stop":
+        if "BZZ_AGENT" in os.environ:
+            return fail("this command is only available to the owner; agents cannot use it")
+        from haivequeen import hives
+        try:
+            hives.stop_hive(conn, args.project, args.plan)
+            out({"ok": True})
+            return 0
+        except (ValueError, KeyError, runtime.CmdError) as exc:
+            return fail(str(exc))
+    if args.action == "stop-gracefully":
+        args.action = "pause"
     if args.action != "check":
         return cmd_owner(args, conn)
     from haivequeen import plans as plan_mod, scheduler
@@ -614,12 +626,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason", default="")
     p.set_defaults(fn=cmd_package)
 
-    p = sub.add_parser("plan", help="check a plan; owner: accept, reject, pause, resume or release", description=(
+    p = sub.add_parser("plan", help="check or control a plan", description=(
         "The TOML header requires branch (the plan branch) and worktree (the plan worktree folder). "
         "The Queen writes both at the cut; HaiveQueen reads them only from these header fields. "
         "Check refuses a missing branch or worktree, or a worktree that is the project's main checkout, and names the problem. "
-        "The plan stays SENT until the check passes and sets it to QUEUED; agent start is refused until then."))
-    p.add_argument("action", choices=["check", "accept", "reject", "pause", "resume", "release"])
+        "The plan stays SENT until the check passes and sets it to QUEUED; agent start is refused until then. "
+        "Owner controls: stop-gracefully prevents new starts while running work continues; force-stop ends the plan's running work; "
+        "resume restores a stopped plan. pause remains an alias for stop-gracefully."))
+    p.add_argument("action", choices=["check", "accept", "reject", "stop-gracefully", "force-stop", "pause", "resume", "release"])
     for field in ("project", "plan"):
         p.add_argument("--" + field, required=True)
     p.set_defaults(fn=cmd_plan)
