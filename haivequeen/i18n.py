@@ -593,6 +593,8 @@ GERMAN = {
     "The arguments HaiveQueen gives to the CLI, one per line; {model}, {effort} and the like are filled in at the start.": "Die Argumente, die HaiveQueen der CLI mitgibt, eines pro Zeile; {model}, {effort} und Ähnliches werden beim Start eingesetzt.",
     "Other settings of this provider exactly as they stand in config.toml; a new setting is written as typed.": "Weitere Einstellungen dieses Anbieters genau wie in config.toml; eine neue Einstellung wird so geschrieben, wie sie getippt wird.",
     "Checks the address, reads the model list and tests the interface each CLI needs; the result is kept.": "Prüft die Adresse, liest die Modellliste und testet die Schnittstelle, die jede CLI braucht; das Ergebnis bleibt erhalten.",
+    "provider %s: capability thresholds must be a table": "Anbieter %s: Fähigkeitsschwellen müssen eine Tabelle sein",
+    "provider %s: capability threshold must be a whole percent from 1 to 100": "Anbieter %s: Die Fähigkeitsschwelle muss eine ganze Prozentzahl von 1 bis 100 sein",
     "provider %s: server %s does not exist": "Anbieter %s: der Server %s existiert nicht",
     "The server does not answer at %s": "Der Server antwortet nicht unter %s", "The server answers but refuses the API key": "Der Server antwortet, lehnt aber den API-Schlüssel ab",
     "%s: usable (%s)": "%s: nutzbar (%s)", "%s: not usable, the server does not offer %s": "%s: nicht nutzbar, der Server bietet %s nicht an",

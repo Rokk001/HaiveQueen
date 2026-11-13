@@ -72,10 +72,16 @@ class SlotCase(unittest.TestCase):
         self.addCleanup(self.release_all)
 
     def release_all(self):
-        for slot in self.slots:
-            integration._release_compile_slot(slot, 0.01)
+        self.free, self.cores, self.builds = BIG, 8, 0
+        path = integration._compile_lock_path()
+        with integration._compile_lock_guard(path, 0.01):
+            path.write_text(json.dumps({"holders": []}), encoding="utf-8")
         for thread in self.threads:
             thread.join(5)
+            if thread.is_alive():
+                raise AssertionError("slot waiter did not finish during cleanup")
+        for slot in self.slots:
+            integration._release_compile_slot(slot, 0.01)
 
     def take(self, **settings):
         """Take a slot now (it must be free)."""
@@ -134,6 +140,15 @@ class LimitTests(SlotCase):
         granted, _ = self.try_take()
         self.assertTrue(granted.is_set())
         self.assertEqual(len(integration._compile_holders()), 1)
+
+    def test_cleanup_finishes_a_waiter_blocked_by_live_holders(self):
+        path = integration._compile_lock_path()
+        path.write_text(json.dumps({"holders": [{"token": "a", "pid": os.getpid()}, {"token": "b", "pid": os.getpid()}]}), encoding="utf-8")
+        granted, _ = self.try_take()
+        self.assertFalse(granted.is_set())
+        self.release_all()
+        self.assertTrue(granted.is_set())
+        self.assertFalse(self.threads[0].is_alive())
 
     def test_a_slot_of_a_living_process_counts(self):
         path = integration._compile_lock_path()
