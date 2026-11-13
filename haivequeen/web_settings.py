@@ -2,7 +2,7 @@
 import hashlib
 from pathlib import Path
 
-from . import filetxn, settings as settings_store
+from . import filetxn, scheduler, settings as settings_store
 
 
 def _revision(source):
@@ -26,6 +26,9 @@ def save(path, settings, revision, *, project=False, conn=None):
     data = settings_store.load_raw(path)
     if not isinstance(revision, str) or revision != _revision(data.source):
         raise ValueError('settings changed since loading; reload before saving')
+    if not project:
+        for provider in settings.get('providers', []):
+            scheduler.capability_thresholds(provider)
     data.clear()
     data.update(settings)
     if project and conn is not None:
