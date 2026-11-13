@@ -918,12 +918,13 @@ def report_prompt(prompt_file, project, agent_id, phase=None):
     if phase in ("bee", "fix"):
         text += " Final report: %s done --agent %s --result <file>; step report: %s note --project %s --text <text>." % (orch, agent_id, orch, project)
         return text.replace('"', "")
-    text += (" Report only with these commands, never by editing a queue file or state table by hand (the handoff text in the state file of the plan stays your own file): "
+    text += (" Report with the commands below and with the bzz commands your role file names; never edit a queue file or state table by hand (the handoff text in the state file of the plan stays your own file): "
              "final report: %s done --agent %s --result <file with your final report>; "
              "branch ready for integration: %s ready --project %s --branch <branch> --tip <commit> --plan <plan path> --note <text>; "
              "question for the owner: %s ask --project %s --plan <plan path> --item <item> --question <question> --recommendation <recommendation>; "
-             "integration place: %s integration acquire|release --project %s --plan <plan path>; "
-             "note: %s note --project %s --text <text>.") % (orch, agent_id, orch, project, orch, project, orch, project, orch, project)
+             "note: %s note --project %s --text <text>.") % (orch, agent_id, orch, project, orch, project, orch, project)
+    if phase == "queen":
+        text += (" The Queen also uses, as her role file describes: %s package, %s agent start|wait|result, %s agent and %s decisions list|add." % (orch, orch, orch, orch))
     return text.replace('"', "")
 
 
