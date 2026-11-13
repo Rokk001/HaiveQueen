@@ -157,6 +157,43 @@ class SpeculativeQueue(OrchCase):
     def test_red_check_replays_running_check(self):
         self.fail_and_replay("Check", "Check")
 
+    def test_repaired_plan_joins_behind_all_current_queue_members(self):
+        self.tick()
+        self.failed.add((REL, "Check"))
+        self.tick()
+        self.assertEqual(len(self.fixers()), 1)
+        self.assertEqual(self.state()["phase"], "fix")
+        self.assertEqual(self.started[OTHER, "Check"], 2)
+
+        # A new plan joins while the first plan is being repaired.
+        self.third = self.make_worktree("third-br", "thirdwt")
+        self.ready_plan(THIRD, "third-br", self.third, "third.txt")
+        self.tick()
+        self.assertEqual(orchestrator._ahead(self.conn, "testproj", THIRD), [OTHER])
+        self.assert_contains(self.third, "second.txt", "third.txt")
+        self.assertFalse((self.third / "first.txt").exists())
+
+        self.commit(self.pwt, "fixed.txt")
+        self.end_fixer(self.fixers()[0])
+        self.failed.clear()
+        self.tick()
+        self.assertEqual(orchestrator._ahead(self.conn, "testproj", REL), [OTHER, THIRD])
+        self.assert_contains(self.pwt, "first.txt", "second.txt", "third.txt", "fixed.txt")
+        self.assertEqual(self.state()["steps"]["Check"], "running")
+
+        # Complete the checks and builds out of order; pushes still follow the row.
+        for plan in (REL, THIRD, OTHER):
+            self.finish_step(plan, "Check")
+            self.finish_step(plan, "Build")
+        self.assertEqual(self.remote_head(), self.git("rev-parse", "HEAD", cwd=self.second))
+        self.finish_step(OTHER, "Deploy")
+        self.assertEqual(self.remote_head(), self.git("rev-parse", "HEAD", cwd=self.third))
+        self.finish_step(THIRD, "Deploy")
+        self.tick()
+        self.assertEqual(self.remote_head(), self.git("rev-parse", "HEAD", cwd=self.pwt))
+        self.finish_step(REL, "Deploy")
+        self.assertIsNone(self.state())
+
     def test_red_check_cancels_active_successor_merge_before_replay(self):
         # Hold a real Git post-merge hook after the predecessor has been applied.
         script = self.base / "hold_merge.py"
