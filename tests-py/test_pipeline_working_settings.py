@@ -28,3 +28,10 @@ class LocalWorkingSettingsTest(unittest.TestCase):
         env = SimpleNamespace(settings={"compileCheck": "check"})
         self.assertIn("Check", orchestrator.chain(env))
         self.assertEqual(orchestrator.commands(env)["Check"], "check")
+
+    def test_enabled_git_step_is_in_chain_without_local_command(self):
+        env = SimpleNamespace(settings={"wayOfWorking": "custom", "checkMode": "git",
+                                        "checkEnabled": True, "compileCheck": ""})
+        self.assertIn("Check", orchestrator.chain(env))
+        env.settings["checkEnabled"] = False
+        self.assertNotIn("Check", orchestrator.chain(env))

@@ -102,8 +102,11 @@ def commands(env):
 
 def chain(env):
     """The steps that run for this project, in order (a step without a command is not part of the chain)."""
+    from . import projsettings
+    settings = projsettings.working_settings(env.settings)
     cmds = commands(env)
-    return [step for step in STEPS if step not in COMMAND_STEPS or cmds[step]]
+    return [step for step in STEPS if step not in COMMAND_STEPS or cmds[step] or
+            (settings[step.lower() + "Enabled"] and settings[step.lower() + "Mode"] == "git")]
 
 
 def _short(plan):
