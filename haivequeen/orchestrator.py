@@ -337,6 +337,13 @@ def _replay_followers(conn, env, plan):
 
 
 def _advance_pipeline(conn, env, plan, state, free_mb):
+    from . import projsettings
+    settings = projsettings.working_settings(env.settings)
+    if any(settings[step + "Mode"] == "git" and (step == "merge" or settings[step + "Enabled"])
+           for step in projsettings.STEPS):
+        _blocker(conn, env, plan, "waiting for Git provider pipeline support")
+        _set_status(conn, env, plan, "WAITING")
+        return None
     folder = _worktree(env, plan)
     if folder is None:
         _blocker(conn, env, plan, "the worktree of the plan is missing and could not be prepared")
