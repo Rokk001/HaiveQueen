@@ -15,4 +15,3 @@ class WebDocumentationTests(unittest.TestCase):
             self.assertIn(phrase.lower(), guide.lower())
         readme = Path('README.md').read_text(encoding='utf-8')
         self.assertIn('docs/WEB-API.md', readme)
-
