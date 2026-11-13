@@ -84,7 +84,7 @@ GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots
 GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class."),
                 "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("The model class of the Queens (light, medium or heavy)."),
                 "beesPerQueen": N_("How many Agents a Queen may have running at the same time."),
-                "maxConcurrentCompileChecks": N_("The most compile checks that run at the same time on this computer, across all projects, Queens and Agents.")}
+                "maxConcurrentCompileChecks": N_("The most compile checks that run at the same time on this computer, across all projects and Queens, also for several plans of one project.")}
 SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Project."), "allowedTools": N_("Commands agents of this Project may run without asking.")})
 OTHER_HELP = N_("A further setting of this Project, as written in its settings file.")   # the explanation of a setting the page has no own text for
 GENERAL_OTHER_HELP = N_("A further HaiveQueen setting, as written in config.toml.")   # the same on the General page: these keys belong to HaiveQueen, not to a Project

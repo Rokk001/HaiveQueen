@@ -396,13 +396,19 @@ class AsyncCommands(OrchCase):
             time.sleep(0.05)
         self.assertFalse(orchestrator.running_jobs())
 
+    def start_check(self):
+        self.round()
+        self.wait_job()   # Merge runs in its own worker before Check can start.
+        self.round()
+        self.assertEqual(self.state()["step"], "Check")
+
     def test_pause_lets_the_command_end_then_halts_and_the_resume_goes_on(self):
         orchestrator.ASYNC = True
         self.check = self.sleeper(1) + " && " + self.echo("Check")
         self.build = self.echo("Build")
         self.project_toml()
         self.ready_plan()
-        self.round()
+        self.start_check()
         self.assertTrue(orchestrator.running_jobs())
         hives.pause_plan(self.conn, "testproj", REL)
         self.wait_job()
@@ -421,13 +427,31 @@ class AsyncCommands(OrchCase):
         self.check = self.sleeper(60)
         self.project_toml()
         self.ready_plan()
-        self.round()
+        self.start_check()
         self.assertTrue(orchestrator.running_jobs())
         started = time.time()
         hives.stop_hive(self.conn, "testproj", REL)
         self.wait_job()
         self.assertLess(time.time() - started, 30)
+        self.round()
         self.assertNotIn("job", self.state())
+
+    def test_cancel_keeps_job_until_running_thread_has_stopped(self):
+        self.ready_plan()
+        state = orchestrator._new_state(self.conn, self.env(), REL, hives.get(self.conn, "testproj", REL))
+        state.update(step="Build", steps={"Build": "running"},
+                     job={"step": "Build", "token": "cancel-test", "pid": None})
+        job = orchestrator.Job("cancel-test")
+        job.thread = mock.Mock()
+        job.thread.is_alive.side_effect = [True, False]
+        orchestrator.JOBS[("testproj", REL)] = job
+        self.addCleanup(orchestrator.JOBS.pop, ("testproj", REL), None)
+        self.assertFalse(orchestrator._cancel_pipeline_job(self.conn, "testproj", REL, state))
+        self.assertTrue(orchestrator.load(self.conn, "testproj", REL)["job"]["cancelling"])
+        self.assertTrue(job.cancelled)
+        self.assertTrue(orchestrator._cancel_pipeline_job(self.conn, "testproj", REL, state))
+        self.assertNotIn("job", orchestrator.load(self.conn, "testproj", REL))
+        self.assertEqual(state["step"], "Build")
 
     def test_restart_with_a_lost_command_runs_the_step_again(self):
         self.check = self.echo("Check")
@@ -452,7 +476,7 @@ class AsyncCommands(OrchCase):
         self.assertEqual(integration.compile_limit(settings), 2)
         other = integration._acquire_compile_slot(settings, 0.05)   # another check of the machine runs
         try:
-            self.round()
+            self.start_check()
             self.wait_job()
             self.round()
             self.assertEqual(self.run_order(), ["Check"])   # not held back by one other check
@@ -468,7 +492,7 @@ class AsyncCommands(OrchCase):
         settings = self.env().settings
         held = [integration._acquire_compile_slot(settings, 0.05) for _ in range(integration.compile_limit(settings))]
         try:
-            self.round()
+            self.start_check()
             time.sleep(1.5)
             self.assertEqual(self.run_order(), [])
         finally:
