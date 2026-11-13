@@ -31,7 +31,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         script = '\n'.join(line[10:] for line in block.splitlines())
         for tag, expected in [('v2.3.4', '2.3.4'), ('v2.3.5-rc.1', '2.3.5-rc.1'),
                               ('v2.3.5-beta.2', '2.3.5-beta.2'), ('v2.3.5-alpha.1', '2.3.5-alpha.1'),
-                              ('v2.3', None), ('v2.3.5-other.1', None)]:
+                              ('v2.3.5-dev.1', '2.3.5-dev.1'),
+                              ('v2.3.5-nightly.2', '2.3.5.dev2+nightly'),
+                              ('v2.3', None), ('v2.3.5-!.1', None)]:
             with self.subTest(tag=tag), tempfile.TemporaryDirectory() as folder:
                 project = Path(folder) / 'pyproject.toml'
                 project.write_text('[project]\nversion = "2.0.0"\n', encoding='utf-8')
