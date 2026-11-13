@@ -537,6 +537,32 @@ class GateTests(RoundCase):
         self.assertEqual(verdict, ("failed", "- G-2 missing"))
         self.assertEqual(len(calls), 2)
 
+    def _run_check_with_files(self, files):
+        """Run start_check_agent against an agent that ended after writing the given files (name -> text) into its run folder."""
+        env = self.env()
+
+        def start(ctx, action, forced_pick):
+            ctx["state"]["names"].append("check")
+            folder = env.run_dir("check")
+            folder.mkdir(parents=True, exist_ok=True)
+            for name, text in files.items():
+                (folder / name).write_text(text, encoding="utf-8")
+            return 1
+        with mock.patch("haivequeen.loop._do_start", side_effect=start), mock.patch.object(runtime, "get_agent", return_value={"status": "done"}), mock.patch("haivequeen.agent_process.is_live", return_value=False):
+            return readygate.start_check_agent(env, self.queen, {"prompt": "x", "plan": REL, "cwd": str(self.wt)}, sleep=lambda _: None)
+
+    def test_verdict_only_in_report_txt_is_taken(self):
+        """K-4: a check agent that left its verdict in report.txt (final.txt empty) gives that verdict."""
+        self.assertEqual(self._run_check_with_files({"final.txt": "", "report.txt": "Checked.\n\nREADY-CHECK: PASSED\n"}), ("passed", ""))
+        self.assertEqual(self._run_check_with_files({"report.txt": "READY-CHECK: FAILED\n- G-2 missing\n"}), ("failed", "- G-2 missing"))
+
+    def test_verdict_of_final_txt_wins_and_no_verdict_stays_unavailable(self):
+        """K-4: final.txt decides when it holds a verdict; an agent without any verdict still gives no verdict."""
+        self.assertEqual(self._run_check_with_files({"final.txt": "READY-CHECK: PASSED\n", "report.txt": "READY-CHECK: FAILED\n- x\n"}), ("passed", ""))
+        verdict, text = self._run_check_with_files({"final.txt": "", "report.txt": "Looks fine, no verdict line.\n"})
+        self.assertEqual(verdict, "unavailable")
+        self.assertIn("no READY-CHECK verdict", text)
+
     def test_default_runner_without_start_is_unavailable(self):
         """The real runner reports unavailable when no agent can be started."""
         self.state(*FULL)

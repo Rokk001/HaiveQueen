@@ -111,6 +111,24 @@ ABORTED_TEXT = ("the check agent was stopped by the owner, so the check counts a
                 "call bzz ready again only after an explicit instruction of the owner")
 
 
+ANSWER_FILES = ("final.txt", "report.txt", "result.txt")   # where an agent may have left its final answer, in the order they are read
+
+
+def answer_text(folder):
+    """The final answer of the check agent in its run folder: final.txt, else the first other answer file that holds a verdict line; final.txt (or '') when none does."""
+    first = None
+    for name in ANSWER_FILES:
+        try:
+            text = (folder / name).read_text(encoding="utf-8-sig")
+        except OSError:
+            continue
+        if first is None:
+            first = text
+        if VERDICT_LINE.search(text):
+            return text
+    return first or ""
+
+
 def ended_verdict(row, text):
     """(verdict, text) of an ended check agent: `aborted` when the owner stopped it, else the verdict of its answer."""
     if str((row or {}).get("last_line") or "") == runtime.STOPPED_LINE:
@@ -223,10 +241,6 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
         # bzz done can set a terminal status before the runner writes final.txt.
         row = runtime.get_agent(env.conn, env.name, name)
         if row is not None and row.get("status") not in scheduler.ACTIVE and not agent_process.is_live(row):
-            try:
-                text = (env.run_dir(name) / "final.txt").read_text(encoding="utf-8-sig")
-            except OSError:
-                text = ""
-            return ended_verdict(row, text)
+            return ended_verdict(row, answer_text(env.run_dir(name)))
         sleep(5)
     return "unavailable", "the check agent did not end in time"
