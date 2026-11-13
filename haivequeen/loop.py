@@ -907,7 +907,8 @@ def spawn_detached(argv: list, log: Path, env: dict = None) -> None:
 def command_result(args, payload) -> int:
     """Emit the existing JSON protocol and expose its result to the launcher."""
     args.desktop_result = payload
-    print(json.dumps(payload))
+    if not getattr(args, 'quiet', False):
+        print(json.dumps(payload))
     return 0
 
 
@@ -973,7 +974,7 @@ def start_boot_command(args) -> list:
 # Start a session: the loop as a hidden process and the graphical window.
 def cmd_start(args, conn) -> int:
     """`bzz start`: run the loop in this process (--foreground), or start it as a hidden background process (no terminal window) and open the graphical dashboard once."""
-    from . import config, gui, i18n
+    from . import config, gui, i18n, web_service
     if args.foreground and getattr(args, "desktop", False):
         raise ValueError(i18n.tr("The desktop message supports only the background start."))
     restart_allowance = os.environ.pop("BZZ_UPDATE_RESTART", None)   # consumed here; loop children must not inherit it
@@ -989,11 +990,16 @@ def cmd_start(args, conn) -> int:
     if updates.draining() and not restart_allowance and not by_worker:   # The update waits for running agents, nothing starts meanwhile
         return refuse_start(args, conn, {"updating": True}, "An update is waiting for running agents; HaiveQueen starts again after it.")
     pid = loop_running()
+    if not (pid and stop_flag().exists()):
+        try:
+            web_service.start()
+        except (OSError, ValueError) as exc:
+            return command_result(args, {'ok': False, 'error': str(exc)}) or 1
     if pid:
         if stop_flag().exists():
             return refuse_start(args, conn, {"running": True, "stopping": True, "pid": pid, "running_agents": active_count(conn)},
                                 "Waiting for the previous stop to finish.")
-        return command_result(args, {"ok": True, "running": True, "pid": pid, **({} if args.foreground else gui.launch_detached()),
+        return command_result(args, {"ok": True, "running": True, "pid": pid, **({} if args.foreground or getattr(args, 'no_browser', False) else gui.launch_detached()),
                                      "note": "The orchestrator is already running."})
     try:
         if "(self-update)" in stop_flag().read_text(encoding="utf-8", errors="replace"):   # an older self-update restarts without --keep-pause
@@ -1012,14 +1018,14 @@ def cmd_start(args, conn) -> int:
     with start_lock():   # a second `bzz start` waits here and then finds the loop (or the pending start) of the first
         pid = loop_running()
         if pid:
-            return command_result(args, {"ok": True, "running": True, "pid": pid, **gui.launch_detached(), "note": "The orchestrator is already running."})
+            return command_result(args, {"ok": True, "running": True, "pid": pid, **({} if getattr(args, 'no_browser', False) else gui.launch_detached()), "note": "The orchestrator is already running."})
         if start_pending():
             return refuse_start(args, conn, {"running": False, "starting": True}, "The orchestrator is just starting.")
         start_pending_file().parent.mkdir(parents=True, exist_ok=True)
         start_pending_file().write_text(str(os.getpid()), encoding="ascii")
         try:
             spawn_detached(boot, osplat.runs_dir() / "beekeeper.log", env={"BZZ_UPDATE_RESTART": "1"} if by_worker or restart_allowance else None)   # the loop process is no child of the worker   # the loop has no window: its output goes to this file, round errors show in the dashboard
-            return command_result(args, {"ok": True, **gui.launch_detached()})
+            return command_result(args, {"ok": True, **({} if getattr(args, 'no_browser', False) else gui.launch_detached())})
         except Exception:
             start_pending_file().unlink()
             raise
@@ -1028,7 +1034,11 @@ def cmd_start(args, conn) -> int:
 # Open the graphical dashboard.
 def cmd_gui(args, conn) -> int:
     """`bzz gui`: show the graphical dashboard window (blocks until it is closed); --detach opens it as a process of its own and returns."""
-    from . import gui
+    from . import gui, web_service
+    try:
+        web_service.start()
+    except (OSError, ValueError) as exc:
+        return command_result(args, {'ok': False, 'error': str(exc)}) or 1
     if args.detach:
         return command_result(args, {"ok": True, **gui.launch_detached()})
     return gui.main(["--project", args.project] if args.project else [])
@@ -1037,6 +1047,13 @@ def cmd_gui(args, conn) -> int:
 # Request a graceful stop and report how many agents may finish first.
 def cmd_stop(args, conn) -> int:
     """`bzz stop`: create the STOP flag; running agents finish their task, no new agent starts, the loop ends."""
+    if getattr(args, 'force', False):
+        from . import force_stop
+        if not getattr(args, 'quiet', False):
+            print(force_stop.WARNING)
+        result = force_stop.stop(conn)
+        command_result(args, result)
+        return 0 if result['ok'] else 1
     stop_flag().parent.mkdir(parents=True, exist_ok=True)
     stop_flag().write_text("stop requested %s\n" % datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
     return command_result(args, {"ok": True, "running_agents": active_count(conn)})
@@ -1057,5 +1074,6 @@ def register(sub) -> None:
     p.add_argument("--project", help="show one Project only")
     p.set_defaults(fn=cmd_gui)
     p = sub.add_parser("stop", help="start no new Agent of any kind (Queen, separate Agent, subagent, ready-check agent); running agents finish", description="Create the STOP flag: no new Queen, separate Agent process, embedded subagent or ready-check agent starts, running ones finish their task and the loop ends. bzz start allows starts again.")
+    p.add_argument('--force', action='store_true', help='Force stop: stop everything immediately; unfinished work will be done again after Start')
     p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")
     p.set_defaults(fn=cmd_stop)

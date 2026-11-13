@@ -35,7 +35,9 @@ def bind_address(settings):
 
 @filetxn.coordinated
 def setup(path, username, password, address, port, certificate, key):
-    if not username or not password or not address or not isinstance(port, int) or not 1 <= port <= 65535:
+    if (any(not isinstance(value, str) for value in (username, password, address, certificate, key))
+            or not username.strip() or not password or not address.strip()
+            or isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535):
         raise ValueError('Username, password, address and a valid port are required')
     if bool(certificate) != bool(key):
         raise ValueError('Both certificate and key are required for HTTPS')
