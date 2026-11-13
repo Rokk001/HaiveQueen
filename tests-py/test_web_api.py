@@ -7,6 +7,23 @@ from haivequeen import bees, db, dashboard_data, hives, loop, owner, runtime, st
 
 
 class WebApiTests(RoundCase):
+    def test_project_workflow_view_migrates_legacy_and_reports_capabilities(self):
+        from haivequeen import git_provider, projsettings
+        provider = SimpleNamespace(name='example', capabilities={'release_tag', 'release_state'},
+                                   supports_step=lambda step: step != 'Build')
+        with mock.patch.object(projsettings, '_git', return_value='https://example.invalid/owner/repo'), \
+             mock.patch.object(git_provider, 'discover', return_value=(provider, [])):
+            view = web_api.settings_view(self.conn, 'testproj')
+        self.assertEqual(view['data']['wayOfWorking'], 'local')
+        self.assertNotIn('publishReleases', view['data'])
+        self.assertEqual(view['git_workflow']['provider'], 'example')
+        self.assertFalse(view['git_workflow']['supported']['build'])
+        self.assertTrue(view['git_workflow']['supported']['release'])
+        with mock.patch.object(git_provider, 'discover', return_value=(None, [])):
+            view = web_api.settings_view(self.conn, 'testproj')
+        self.assertEqual(view['git_workflow']['provider'], '')
+        self.assertFalse(any(view['git_workflow']['supported'].values()))
+
     def test_snapshot_reports_when_paused_plan_has_fully_stopped(self):
         row = {'apiary': 'testproj', 'plan_path': REL, 'paused': True}
         with mock.patch.object(dashboard_data, 'snapshot', return_value={'hives': [row]}), \

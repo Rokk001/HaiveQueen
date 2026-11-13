@@ -69,6 +69,18 @@ window.addEventListener('load', async () => {
     assert(provider.args.includes(''),'Empty CLI argument was removed');
     assert(!Object.hasOwn(provider,'allowedTools'),'Synthetic tools field leaked into settings');
     await click('Projects');await wait(()=>field(['compileCheck']));
+    const way=document.querySelector('[aria-label="Way of working"]');
+    assert(way && way.options.length===3,'Workflow choices missing');
+    assert([...document.querySelectorAll('legend')].filter(node=>['Merge','Check','Build','Deploy','Release'].includes(node.textContent)).length===5,'Workflow rows missing');
+    assert(!field(['compileCheck']).disabled && field(['compileCheck']).required,'Enabled local check must require its command');
+    assert(field(['buildCommand']).disabled,'Disabled build command must be greyed');
+    way.value='git';way.dispatchEvent(new Event('change'));
+    assert(field(['compileCheck']).disabled,'Provider check command must be greyed');
+    assert(document.querySelector('[aria-label="Release location"]').disabled,'Unsupported provider release must be greyed');
+    assert(document.querySelector('[aria-label="Way of working"]').value==='git','Unsupported step must not change the choice');
+    const checkMode=document.querySelector('[aria-label="Check location"]');checkMode.value='local';checkMode.dispatchEvent(new Event('change'));
+    assert(document.querySelector('[aria-label="Way of working"]').value==='custom','Manual change must select Custom');
+    document.querySelector('[aria-label="Way of working"]').value='local';document.querySelector('[aria-label="Way of working"]').dispatchEvent(new Event('change'));
     assert(field(['integrationBranch']).value==='develop','Repository default branch was replaced');
     const rule=[...document.querySelectorAll('label')].find(node=>node.textContent.includes('AGENTS.md, 12 tokens'));
     assert(rule,'Knowledge-base file and token count missing');rule.querySelector('input').click();

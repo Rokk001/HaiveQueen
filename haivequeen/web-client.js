@@ -382,7 +382,8 @@ function mount(document, bootstrap) {
       if(data.upstreamRules===undefined && editor.upstream)editor.data.upstreamRules=editor.upstream.on;
       editor.place ||= {repository:editor.repository || '',plansFolder:''};
       fields(form,editor.place,[],editor.place);
-      fields(form,editor.data,[],editor.data,new Set(['codeRepo','repo','rulesOff','upstreamRules']));
+      workflowFields(form,editor.data,editor.git_workflow);
+      fields(form,editor.data,[],editor.data,new Set(['codeRepo','repo','rulesOff','upstreamRules','publishReleases','wayOfWorking','mergeMode','checkMode','buildMode','deployMode','releaseMode','checkEnabled','buildEnabled','deployEnabled','releaseEnabled','compileCheck','buildCommand','deployCommand','releaseFolder']));
       const knowledge=el('fieldset');knowledge.append(el('legend',t('Knowledge base')));
       knowledge.append(el('p',t('The rule files every agent of this Project gets. A switched-off file is given to no agent.')));
       for(const rule of editor.rules || []){
@@ -402,6 +403,27 @@ function mount(document, bootstrap) {
     }
     // The unsaved marker survives live dashboard reads.
     const marker=el('span',editor.dirty?t('Unsaved changes'):'');marker.id='dirty-marker';toolbar.append(marker);
+  }
+  function workflowFields(parent,data,capabilities) {
+    const steps=[['merge','Merge'],['check','Check','compileCheck','Compile check command'],['build','Build','buildCommand','Build command'],['deploy','Deploy','deployCommand','Deploy command'],['release','Release','releaseFolder','Release folder']];
+    const group=el('fieldset');group.append(el('legend',t('Way of working')));
+    const supported=!!capabilities?.provider;
+    if(!supported)group.append(el('p',t('Git provider is not supported for this remote. Only Local is available.')));
+    const select=el('select');select.setAttribute('aria-label',t('Way of working'));
+    for(const [value,label] of [['local','Local'],['git','Git provider'],['custom','Custom']]){const option=el('option',t(label));option.value=value;if(value==='git'&&!supported)option.disabled=true;select.append(option);}
+    select.value=data.wayOfWorking;select.onchange=()=>{data.wayOfWorking=select.value;if(select.value!=='custom')for(const [step] of steps)data[step+'Mode']=select.value;changed();render();};group.append(select);
+    for(const [step,label,field,fieldLabel] of steps){
+      const row=el('fieldset');row.append(el('legend',t(label)));
+      if(field){const switchLabel=el('label',undefined,'field'),toggle=el('input');toggle.type='checkbox';toggle.checked=!!data[step+'Enabled'];toggle.setAttribute('aria-label',t(label+' on'));toggle.onchange=()=>{data[step+'Enabled']=toggle.checked;changed();render();};switchLabel.append(el('span',t('On')),toggle);row.append(switchLabel);}
+      const mode=el('select');mode.setAttribute('aria-label',t(label+' location'));
+      for(const [value,text] of [['local','Local'],['git','Git provider']]){const option=el('option',t(text));option.value=value;if(value==='git'&&!supported)option.disabled=true;mode.append(option);}
+      mode.value=data[step+'Mode'];const unavailable=supported&&data[step+'Mode']==='git'&&!capabilities.supported[step];mode.disabled=(!supported && data[step+'Mode']==='local')||unavailable;
+      mode.onchange=()=>{data[step+'Mode']=mode.value;const modes=new Set(steps.map(([name])=>data[name+'Mode']));data.wayOfWorking=modes.size===1?[...modes][0]:'custom';changed();render();};row.append(mode);
+      if(unavailable)row.append(el('p',t('This provider does not support this step; it will be skipped.')));
+      if(field){const inputLabel=el('label',undefined,'field'),input=el('input');input.value=data[field]||'';input.dataset.path=JSON.stringify([field]);input.disabled=!data[step+'Enabled']||data[step+'Mode']==='git';input.required=!input.disabled;input.oninput=()=>{data[field]=input.value;changed();};inputLabel.append(el('span',t(fieldLabel)),input);row.append(inputLabel);}
+      group.append(row);
+    }
+    parent.append(group);
   }
   async function addProject() {
     if(editor?.dirty&&!confirm(t('Discard unsaved changes?')))return;
@@ -491,7 +513,7 @@ function mount(document, bootstrap) {
     if(!loaded)return;
     if(current!==editor)return;
     if(JSON.stringify([current.data,current.place])!==sent){current.revision=loaded.revision;current.dirty=true;client.notice(t('Saved. Newer edits are still unsaved.'));return;}
-    editor={...loaded,project:current.project,dirty:false,rules:current.rules,upstream:current.upstream,workspace:current.workspace,place:current.place,project_defaults:current.project_defaults,provider_models:current.provider_models,benchmark:current.benchmark,build:current.build,cores:current.cores};
+    editor={...loaded,project:current.project,dirty:false,rules:current.rules,upstream:current.upstream,workspace:current.workspace,place:current.place,project_defaults:current.project_defaults,git_workflow:current.git_workflow,provider_models:current.provider_models,benchmark:current.benchmark,build:current.build,cores:current.cores};
     if(!current.project && current.data.language && current.data.language!==bootstrap.language){location.reload();return;}
     render();void client.refresh();
     if(current.data.web)client.notice(t('Saved. Restart the web server to apply changed web settings.'));

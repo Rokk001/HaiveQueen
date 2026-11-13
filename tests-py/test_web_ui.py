@@ -93,7 +93,8 @@ class BrowserTests(unittest.TestCase):
                     live_reads.append(True)
                     return self.send({'lines':[['green','live milestone '+str(len(live_reads))]]})
                 if route=='/api/settings/view' and 'project=' in self.path:
-                    return self.send({'data':{'name':'demo','compileCheck':'check'},'revision':'project-revision',
+                    return self.send({'data':{'name':'demo','compileCheck':'check','wayOfWorking':'local', 'mergeMode':'local', 'checkMode':'local', 'buildMode':'local', 'deployMode':'local', 'releaseMode':'local', 'checkEnabled':True, 'buildEnabled':False, 'deployEnabled':False, 'releaseEnabled':False},'revision':'project-revision',
+                                      'git_workflow':{'provider':'example','supported':{'merge':True,'check':True,'build':True,'deploy':True,'release':False}},
                                       'place':{'repository':'demo-repository','plansFolder':'demo-plans'},
                                       'workspace':'demo-plans','project_defaults':{'integrationBranch':'develop'},'rules':[{'label':'AGENTS.md','path':'AGENTS.md','tokens':12,'native_clis':['Codex CLI']}],
                                       'upstream':{'on':False,'usable':False,'note':''}})

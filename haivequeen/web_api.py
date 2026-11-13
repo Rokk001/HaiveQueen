@@ -85,12 +85,18 @@ def settings_save(conn, data):
 @filetxn.coordinated
 def settings_view(conn, project=None):
     """Derived browser form information, kept separate from editable TOML."""
-    from . import cli_presets, projsettings
+    from . import cli_presets, projsettings, git_provider
     result = settings_read(conn, project)
     if project:
         workspace = str(settings_path(conn, project).parent.parent)
         repository, plans_folder = settings.apiary_place(workspace, result['data'])
         remote, _ = projsettings.derive_remote(repository, result['data'].get('remoteName'))
+        result['data'] = projsettings.working_settings(result['data'])
+        result['data'].pop('publishReleases', None)
+        remote_url = projsettings._git(repository, 'remote', 'get-url', remote or 'origin')
+        provider, errors = git_provider.discover((remote_url or '').strip())
+        supported = {step: bool(provider and (provider.supports_step(step.title()) if step != 'release' else {'release_tag', 'release_state'} <= provider.capabilities)) for step in projsettings.STEPS}
+        result['git_workflow'] = {'provider': provider.name if provider else '', 'supported': supported, 'errors': errors}
         branch = result['data'].get('integrationBranch') or projsettings.default_branch(repository, remote or 'origin') or 'main'
         result.update(workspace=workspace, repository=repository, place={'repository': repository, 'plansFolder': plans_folder},
                       project_defaults={'integrationBranch': branch},
