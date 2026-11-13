@@ -2,13 +2,12 @@ import os
 import sys
 import unittest
 import tempfile
-from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import isolation
-from haivequeen import bees, gui_config, scheduler
+from haivequeen import bees, scheduler, web_settings
 
 
 class CapabilityThresholdTest(unittest.TestCase):
@@ -30,11 +29,6 @@ class CapabilityThresholdTest(unittest.TestCase):
         legacy = scheduler.get_providers({'providers': [{'name': 'codex', 'protocol': 'codex'}]})[0]
         self.assertEqual(legacy['capabilityThresholds']['Coding'], 100)
         self.assertEqual(legacy['capabilityThresholds']['Queen'], 100)
-        for invalid in (0, 101, 1.5, True, '90'):
-            data = {'providers': [{**self.raw, 'capabilityThresholds': {'Coding': invalid}}]}
-            self.assertTrue(gui_config.check(data), invalid)
-        for valid in (1, 100):
-            self.assertFalse(gui_config.check({'providers': [{**self.raw, 'capabilityThresholds': {'Coding': valid}}]}))
         off = {**self.raw, 'capabilities': ['Queen']}
         self.assertEqual(scheduler.get_providers({'providers': [off]})[0]['capabilityThresholds']['Coding'], 90)
 
@@ -67,22 +61,24 @@ class CapabilityThresholdTest(unittest.TestCase):
     def test_invalid_save_preserves_file_and_valid_values_round_trip(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'config.toml'
-            gui_config.save_file(path, {'providers': [self.raw]})
+            initial = web_settings.load(path)
+            saved = web_settings.save(path, {'providers': [self.raw]}, initial['revision'])
             original = path.read_bytes()
-            data = gui_config.load_migrated(path)
-            data['providers'][0]['capabilityThresholds']['Coding'] = 0
-            window = SimpleNamespace(loading=False, collect=lambda: True, data=data,
-                                     apiaries=[], apiary_writes=lambda: ([], []),
-                                     status=mock.Mock(), col={'red': 'red'})
-            gui_config.ConfigWindow.save(window)
-            self.assertEqual(path.read_bytes(), original)
-            self.assertTrue(window.status.config.called)
-            data['providers'][0]['capabilityThresholds']['Coding'] = 75
-            gui_config.save_file(path, data)
-            loaded = gui_config.load_migrated(path)
-            self.assertEqual(loaded['providers'][0]['capabilityThresholds'],
-                             {'Coding': 75, 'Queen': 80, 'Image generation': 100})
-            self.assertEqual(scheduler.get_providers(loaded)[0]['capabilityThresholds']['Coding'], 75)
+            for invalid in (0, 101, 1.5, True, '90'):
+                data = web_settings.load(path)['settings']
+                data['providers'][0]['capabilityThresholds']['Coding'] = invalid
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    web_settings.save(path, data, saved['revision'])
+                self.assertEqual(path.read_bytes(), original)
+            for valid in (1, 100, 75):
+                loaded = web_settings.load(path)
+                loaded['settings']['providers'][0]['capabilityThresholds']['Coding'] = valid
+                web_settings.save(path, loaded['settings'], loaded['revision'])
+                result = web_settings.load(path)['settings']
+                self.assertEqual(result['providers'][0]['capabilityThresholds'],
+                                 {'Coding': valid, 'Queen': 80, 'Image generation': 100})
+                self.assertEqual(scheduler.get_providers(result)[0]['capabilityThresholds']['Coding'], valid)
+
 
 
 from test_live_config import LiveConfigTest
