@@ -68,6 +68,16 @@ def ensure_started():
     threading.Thread(target=process.wait, daemon=True).start()
 
 
+def load_icon(user):
+    """Load our packaged ICO at the Windows notification-area icon size."""
+    import ctypes
+    from ctypes import wintypes as w
+    user.LoadImageW.argtypes = [w.HINSTANCE, w.LPCWSTR, w.UINT, ctypes.c_int, ctypes.c_int, w.UINT]
+    user.LoadImageW.restype = w.HANDLE
+    return user.LoadImageW(None, str(Path(__file__).with_name('app.ico')), 1,
+                           user.GetSystemMetrics(49), user.GetSystemMetrics(50), 0x10)
+
+
 def main():
     if os.name != 'nt':
         return
@@ -94,7 +104,7 @@ def main():
                     ('state', w.DWORD), ('state_mask', w.DWORD), ('info', w.WCHAR * 256),
                     ('version', w.UINT), ('title', w.WCHAR * 64), ('info_flags', w.DWORD),
                     ('guid', ctypes.c_byte * 16), ('balloon_icon', w.HICON)]
-    for fn in ('CreateWindowExW', 'LoadIconW', 'CreatePopupMenu'):
+    for fn in ('CreateWindowExW', 'CreatePopupMenu'):
         getattr(user, fn).restype = w.HANDLE
     kernel.GetModuleHandleW.restype = w.HMODULE
     user.CreateWindowExW.argtypes = [w.DWORD, w.LPCWSTR, w.LPCWSTR, w.DWORD, ctypes.c_int, ctypes.c_int,
@@ -116,7 +126,8 @@ def main():
     icon.id = 1
     icon.flags = 1 | 2 | 4
     icon.callback = 0x8001
-    icon.icon = user.LoadIconW(None, ctypes.cast(ctypes.c_void_p(32512), w.LPCWSTR))
+    icon.icon = load_icon(user)
+    user.DestroyIcon.argtypes = [w.HICON]
 
     def refresh(hwnd):
         try:
@@ -175,6 +186,8 @@ def main():
         while user.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
             user.TranslateMessage(ctypes.byref(message))
             user.DispatchMessageW(ctypes.byref(message))
+    if icon.icon:
+        user.DestroyIcon(icon.icon)
     kernel.CloseHandle(mutex)
 
 
