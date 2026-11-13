@@ -6,10 +6,12 @@ from haivequeen import orchestrator
 
 
 class LocalWorkingSettingsTest(unittest.TestCase):
-    def test_provider_work_waits_before_local_integration(self):
+    def test_unsupported_provider_waits_before_local_integration(self):
         env = SimpleNamespace(name="test", settings={"wayOfWorking": "git", "mergeMode": "git"})
         state = {"placed": False, "step": "Merge", "steps": {}, "ran": []}
         with mock.patch.object(orchestrator, "_worktree", return_value="worktree"), \
+             mock.patch.object(orchestrator.git_provider, "for_project", return_value=(None, [])), \
+             mock.patch.object(orchestrator, "save"), \
              mock.patch.object(orchestrator, "_blocker") as blocker, \
              mock.patch.object(orchestrator, "_set_status") as status, \
              mock.patch.object(orchestrator.hives, "take_integration") as take:
@@ -17,6 +19,7 @@ class LocalWorkingSettingsTest(unittest.TestCase):
         take.assert_not_called()
         status.assert_called_with(None, env, "plan", "WAITING")
         self.assertIn("provider", blocker.call_args.args[3].lower())
+        self.assertIn("not supported", blocker.call_args.args[3].lower())
 
     def test_disabled_local_command_is_not_run(self):
         env = SimpleNamespace(settings={"wayOfWorking": "local", "checkMode": "local",

@@ -26,10 +26,12 @@ class NormalizedProviderTests(unittest.TestCase):
 
     def test_pipeline_requires_evidence_for_exact_commit(self):
         github = self.provider('github', pipeline=Mock(return_value={'state': 'success', 'statuses': []}))
+        github.module._request = Mock(return_value={'check_runs': []})
         self.assertEqual(github.pipeline_state('abc'), 'pending')
         github.module.pipeline.return_value['statuses'] = [{'state': 'success'}]
         self.assertEqual(github.pipeline_state('abc'), 'success')
         gitlab = self.provider('gitlab', pipeline=Mock(return_value={'sha': 'other', 'status': 'success'}))
+        gitlab.module._request = Mock(return_value=([{'sha': 'other', 'status': 'success'}], ''))
         self.assertEqual(gitlab.pipeline_state('abc'), 'pending')
         azure = self.provider('azure', pipeline_for_commit=Mock(return_value=[{'sourceVersion': 'other', 'result': 'succeeded'}]))
         self.assertEqual(azure.pipeline_state('abc'), 'pending')
