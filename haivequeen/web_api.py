@@ -121,9 +121,10 @@ def queen_providers(conn, project, plan):
         raise ValueError('Unknown project')
     cls = env.settings.get('queenClass', 'medium')
     current = (hives.get(conn, project, plan) or {}).get('provider')
-    names = [{'name': p['name'], 'current': p['name'] == current} for p in env.providers
-             if p['name'] not in env.settings.get('excludedProviders', []) and not p.get('unavailable')
-             and 'Queen' in p.get('capabilities', []) and (p.get('classes', {}).get(cls) or {}).get('model')]
+    names = [{'name': p['name'], 'current': p['name'] == current,
+              'selectable': p['name'] not in env.settings.get('excludedProviders', []) and not p.get('unavailable')}
+             for p in env.providers
+             if 'Queen' in p.get('capabilities', []) and (p.get('classes', {}).get(cls) or {}).get('model')]
     return env, names
 
 
@@ -212,7 +213,7 @@ def execute(conn, action, data):
                 runtime.sync_plans(conn, project)
             if action == 'plan/restart-queen':
                 env, names = queen_providers(conn, project, plan)
-                if data.get('provider') not in [p['name'] for p in names]:
+                if data.get('provider') not in [p['name'] for p in names if p['selectable']]:
                     raise ValueError('Select a provider offering the Queen class')
                 hives.requeen(conn, project, plan, data['provider'], providers=env.providers, queen_class=env.settings.get('queenClass', 'medium'), excluded=env.settings.get('excludedProviders', []))
             else:

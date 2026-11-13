@@ -104,12 +104,43 @@ class WebApiTests(RoundCase):
         env = SimpleNamespace(name='testproj', settings={}, providers=providers)
         with mock.patch.object(web_api.sch, 'load_projects', return_value=[env]), mock.patch.object(hives, 'get', return_value={'provider': 'current'}), mock.patch.object(hives, 'requeen') as restart:
             choices = web_api.execute(self.conn, 'plan/providers', {'project': 'testproj', 'plan': REL})
-            self.assertEqual(choices, [{'name': 'current', 'current': True}, {'name': 'alternate', 'current': False}])
+            self.assertEqual(choices, [{'name': 'current', 'current': True, 'selectable': True}, {'name': 'alternate', 'current': False, 'selectable': True}])
             with self.assertRaisesRegex(ValueError, 'Select a provider'):
                 web_api.execute(self.conn, 'plan/restart-queen', {'project': 'testproj', 'plan': REL})
             restart.assert_not_called()
             web_api.execute(self.conn, 'plan/restart-queen', {'project': 'testproj', 'plan': REL, 'provider': 'alternate'})
             self.assertEqual(restart.call_args.args[:4], (self.conn, 'testproj', REL, 'alternate'))
+
+    def test_queen_menu_includes_blocked_providers_and_rejects_their_selection(self):
+        self.plan('RUNNING')
+        providers = [
+            {'name': name, 'capabilities': ['Queen'], 'classes': {'heavy': {'model': 'model'}},
+             'unavailable': name in ('offline', 'both')}
+            for name in ('allowed', 'excluded', 'offline', 'both')
+        ] + [
+            {'name': 'worker', 'capabilities': [], 'classes': {'heavy': {'model': 'model'}}},
+            {'name': 'wrong-class', 'capabilities': ['Queen'], 'classes': {'medium': {'model': 'model'}}},
+            {'name': 'empty-model', 'capabilities': ['Queen'], 'classes': {'heavy': {'model': ''}}},
+        ]
+        env = SimpleNamespace(name='testproj', settings={'queenClass': 'heavy',
+                              'excludedProviders': ['excluded', 'both']}, providers=providers)
+        data = {'project': 'testproj', 'plan': REL}
+        for current in ('excluded', 'offline', 'both'):
+            with self.subTest(current=current), \
+                 mock.patch.object(web_api.sch, 'load_projects', return_value=[env]), \
+                 mock.patch.object(hives, 'get', return_value={'provider': current}), \
+                 mock.patch.object(hives, 'requeen') as restart:
+                choices = web_api.execute(self.conn, 'plan/providers', data)
+                self.assertEqual(choices, [
+                    {'name': name, 'current': name == current, 'selectable': name == 'allowed'}
+                    for name in ('allowed', 'excluded', 'offline', 'both')
+                ])
+                for name in ('excluded', 'offline', 'both', 'worker', 'wrong-class', 'empty-model', 'unknown'):
+                    with self.subTest(selection=name), self.assertRaisesRegex(ValueError, 'Select a provider'):
+                        web_api.execute(self.conn, 'plan/restart-queen', {**data, 'provider': name})
+                restart.assert_not_called()
+                web_api.execute(self.conn, 'plan/restart-queen', {**data, 'provider': 'allowed'})
+                self.assertEqual(restart.call_args.args[:4], (self.conn, 'testproj', REL, 'allowed'))
 
     def test_benchmark_requires_confirmation_and_exposes_progress_job(self):
         with mock.patch.object(web_jobs, 'start', return_value={'id': 'job'}) as start, mock.patch.object(owner, 'provider_settings'):

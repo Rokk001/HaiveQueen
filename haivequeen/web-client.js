@@ -272,7 +272,11 @@ function mount(document, bootstrap) {
     if(row.status!=='DONE')bar.append(button('Release',()=>act('owner/release',key(row),t('Release')+'?')));
     const providers=await client.request('plan/providers?'+new URLSearchParams(key(row)));
     if(target!==$('detail-body') || !target.contains(bar))return;
-    for(const provider of providers)bar.append(button(t('Restart Queen on %s').replace('%s',provider.name)+(provider.current?' ✓':''),()=>act('plan/restart-queen',{...key(row),provider:provider.name},t('Restart Queen on %s').replace('%s',provider.name)+'?')));
+    for(const provider of providers){
+      const node=button(t('Restart Queen on %s').replace('%s',provider.name)+(provider.current?' ✓':''),()=>act('plan/restart-queen',{...key(row),provider:provider.name},t('Restart Queen on %s').replace('%s',provider.name)+'?'));
+      node.disabled=provider.selectable===false || node.disabled;
+      bar.append(node);
+    }
   }
   function renderPlans() {
     const box=section('Plans');box.append(table(plans.map(row=>({...row,started:t(row.has_hive?'yes':'no')})),['apiary','name','status','started','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));

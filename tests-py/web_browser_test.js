@@ -85,6 +85,9 @@ window.addEventListener('load', async () => {
     assert([...document.querySelectorAll('th')].some(node=>node.textContent==='Started'),'Desktop plan Started column missing');
     await click('Plan');
     await wait(()=>buttons('Restart Queen on mock ✓').length);
+    assert(buttons('Restart Queen on mock ✓')[0].disabled,'Unavailable current provider must be marked and disabled');
+    assert(buttons('Restart Queen on excluded')[0]?.disabled,'Excluded provider must be visible and disabled');
+    assert(buttons('Restart Queen on available').some(node=>!node.disabled),'Available provider must remain selectable');
     assert(buttons('Stop gracefully').length>0,'Plan stop missing');
     document.getElementById('close-detail').click();
     await click('Dashboard');await wait(()=>buttons('Live').length);await click('Live');
