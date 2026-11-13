@@ -6,6 +6,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 CAPABILITIES = {'pull_request', 'tag', 'asset_upload', 'asset_list', 'pipeline', 'login'} | {'pr_status', 'pipeline_for_commit'}
+LOGIN_OPTIONS = {'device': False, 'token_env': ('BITBUCKET_TOKEN',)}
 _API = 'https://api.bitbucket.org/2.0/'
 _PART = re.compile(r'^[A-Za-z0-9_.-]+$')
 

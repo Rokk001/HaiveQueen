@@ -8,6 +8,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 CAPABILITIES = frozenset({'pull_request', 'tag', 'release', 'asset_upload', 'release_list', 'pipeline', 'login'}) | {'pr_status'}
+LOGIN_OPTIONS = {'device': False, 'origin_required': True, 'token_env': ('GITEA_TOKEN',)}
 
 
 def detect(remote):
@@ -123,8 +124,8 @@ def release_prepare(repo, name, commit, token=None):
     except HTTPError as exc:
         if exc.code != 404:
             raise
-        result = release(repo, name, name=name, target_commitish=commit, prerelease=True, token=token)
-    if result.get('tag_name') != name or result.get('draft') or result.get('prerelease') is not True:
+        result = release(repo, name, name=name, target_commitish=commit, prerelease='-' in name, token=token)
+    if result.get('tag_name') != name or result.get('draft') or bool(result.get('prerelease')) != ('-' in name):
         raise ValueError('existing release has the wrong publication status')
     assets = []
     page = 1
@@ -149,6 +150,41 @@ def release_upload(repo, release, name, content, token=None):
 
 def release_asset_digest(repo, release, asset, token=None):
     import hashlib
+    return hashlib.sha256(release_download(repo, release, asset, token)).hexdigest()
+
+
+CAPABILITIES |= {'release_history', 'release_download', 'release_snapshot'}
+
+
+def release_snapshot(repo, name, commit, token=None):
+    tag = _request(repo, '/tags/' + quote(name, safe=''), token)
+    if tag['commit']['sha'] != commit:
+        raise ValueError('pre-release tag points at a different commit')
+    result = _request(repo, '/releases/tags/' + quote(name, safe=''), token)
+    if result.get('tag_name') != name or result.get('draft') or not result.get('prerelease'):
+        raise ValueError('selected release is no longer a pre-release')
+    assets, page = [], 1
+    while True:
+        batch = _request(repo, '/releases/%s/assets?limit=100&page=%s' % (result['id'], page), token)
+        assets.extend(batch)
+        if len(batch) < 100:
+            return dict(result, assets=assets)
+        page += 1
+
+
+def release_history(repo, token=None):
+    from ._release import metadata
+    rows = []
+    for row in release_list(repo, token):
+        if row.get('draft'):
+            continue
+        tag = _request(repo, '/tags/' + quote(row['tag_name'], safe=''), token)
+        rows.append(metadata(row['tag_name'], row.get('published_at') or row.get('created_at', ''),
+                             tag['commit']['sha'], row.get('prerelease', False)))
+    return rows
+
+
+def release_download(repo, release, asset, token=None):
     # Download through this configured origin only; never send credentials to a
     # URL supplied by release metadata on another host.
     url = asset.get('browser_download_url', '')
@@ -162,7 +198,7 @@ def release_asset_digest(repo, release, asset, token=None):
             token = credential.get('token')
     headers = {'Authorization': 'token ' + token} if token else {}
     with urlopen(Request(url, headers=headers), timeout=30) as response:
-        return hashlib.sha256(response.read()).hexdigest()
+        return response.read()
 
 
 def release_tag(repo, name, commit, token=None):

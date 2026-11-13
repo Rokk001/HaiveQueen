@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from haivequeen import config, gui_config, projsettings
+from haivequeen import config, settings, projsettings
 
 
 class WorkingSettingsTest(unittest.TestCase):
@@ -17,7 +17,7 @@ class WorkingSettingsTest(unittest.TestCase):
         self.assertIn("publishReleases", [entry[0] for entry in removed])
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "project.toml"
-            gui_config.save_file(path, new)
+            settings.save_file(path, new)
             loaded = config._load_toml(path)
             self.assertEqual(loaded, new)
             self.assertEqual(projsettings.migrate_data(loaded, ".", {}), (loaded, []))

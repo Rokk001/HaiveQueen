@@ -1,4 +1,15 @@
 """Shared release response validation; provider endpoints stay in their modules."""
+import re
+
+
+def metadata(tag, date, commit, prerelease=None):
+    """The web contract uses resolved object IDs, never target branch names."""
+    match = re.fullmatch(r'v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?:-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\.\d+)?', tag)
+    pre = bool(match and '-' in tag) if prerelease is None else bool(prerelease)
+    if not re.fullmatch(r'[0-9a-fA-F]{40,64}', commit):
+        raise ValueError('release tag has no verifiable commit')
+    return {'tag': tag, 'version': tag, 'date': date, 'commit': commit,
+            'prerelease': pre, 'full_tag': 'v' + match[1] if match and pre and '-' in tag else ''}
 
 
 def workflows(rows):

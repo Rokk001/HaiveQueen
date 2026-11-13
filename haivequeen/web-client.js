@@ -117,6 +117,7 @@ function mount(document, bootstrap) {
     onUnauthorized:()=>{location.href='/login';}, onError:error=>client.notice(error.message,true),onState:renderState});
   const renderGate=new RenderGate(()=>renderStateNow(client.state));
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
+  let releaseProject='', releaseData=null;
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
   let lastAutomaticCheck=0, automaticChecking=false;
   let generation=0, logCleared=0, logFilter='', showNoise=false, logFollow=true, selectedPlan='', selectedAgent='';
@@ -162,9 +163,10 @@ function mount(document, bootstrap) {
     generation++;editor=null;tab=name;
     for(const node of $('tabs').children)node.setAttribute('aria-selected',String(node.dataset.tab===tab));
     render();void refreshLists();
+    if(tab==='Releases'){releaseProject ||= client.state?.projects?.[0]?.name || '';void loadReleases();}
     if(['General','Providers','Projects'].includes(tab))void loadEditor(tab==='Projects' ? client.state?.projects?.[0]?.name : '');
   }
-  for(const name of ['Dashboard','Plans','Questions','General','Providers','Projects']){const node=button(name,()=>selectTab(name));node.dataset.tab=name;node.setAttribute('role','tab');node.setAttribute('aria-selected',String(name===tab));$('tabs').append(node);}
+  for(const name of ['Dashboard','Plans','Questions','Releases','General','Providers','Projects']){const node=button(name,()=>selectTab(name));node.dataset.tab=name;node.setAttribute('role','tab');node.setAttribute('aria-selected',String(name===tab));$('tabs').append(node);}
   $('tabs').setAttribute('role','tablist');
   function renderState(state) {
     renderGate.render();
@@ -200,6 +202,7 @@ function mount(document, bootstrap) {
     if(tab==='Dashboard')renderDashboard();
     if(tab==='Plans')renderPlans();
     if(tab==='Questions')renderQuestions();
+    if(tab==='Releases')renderReleases();
     if(['General','Providers','Projects'].includes(tab))renderEditor();
   }
   function projectSelect(onchange, selected, all=true) {
@@ -207,6 +210,23 @@ function mount(document, bootstrap) {
     if(all){const option=el('option',t('all'));option.value='';select.append(option);}
     for(const project of client.state?.projects || []){const option=el('option',project.name);option.value=project.name;select.append(option);}
     select.value=selected || '';select.onchange=()=>onchange(select.value);return select;
+  }
+  async function loadReleases() {
+    const project=releaseProject;releaseData=null;
+    if(!project){render();return;}
+    try{const data=await client.request('releases?'+new URLSearchParams({project}));if(project===releaseProject){releaseData=data;if(tab==='Releases')render();}}
+    catch(error){client.notice(error.message,true);}
+  }
+  function renderReleases() {
+    const box=section('Releases');box.append(projectSelect(value=>{releaseProject=value;void loadReleases();},releaseProject,false),button('Reload',loadReleases));
+    if(!releaseData){box.append(el('p',t('Loading…')));return;}
+    if(releaseData.reason)box.append(el('p',t(releaseData.reason)));
+    box.append(table(releaseData.releases,['version','date','commit','prerelease'],(cell,row)=>{
+      if(row.prerelease && row.full_tag)cell.append(button('Publish as full release',async()=>{
+        const job=await client.action('releases/promote',{project:releaseProject,tag:row.tag,confirmed:true},t('Publish as full release')+' '+row.full_tag+'?');
+        if(job){job.title='Publish as full release';jobs.set(job.id,job);renderJob(job);}
+      }));
+    }));
   }
   function renderDashboard() {
     const state=client.state;
@@ -357,17 +377,32 @@ function mount(document, bootstrap) {
         el('p',t('One login is shared by all projects for each provider. Sign in or enter an access token; one is enough.')));form.append(git);
       client.request('git-login/providers').then(providers=>{
         for(const provider of providers){
-          const card=el('fieldset');card.append(el('legend',provider.name),el('p',t('Current method')+': '+(provider.method || t('None'))));
+          const method={device:'Browser sign-in',bearer:'Browser sign-in',token:'Access token',pat:'Access token','existing access':'Existing access'}[provider.method] || provider.method || 'None';
+          const card=el('fieldset');card.append(el('legend',provider.name),el('p',t('Current method')+': '+t(method)));
+          if(provider.error){card.append(el('p',provider.error,'bad'));git.append(card);continue;}
+          if(provider.status_error)card.append(el('p',provider.status_error,'bad'));
           const token=el('input');token.type='password';token.autocomplete='off';token.setAttribute('aria-label',t('Access token'));
-          const origin=el('input');origin.placeholder=t('HTTPS server origin');origin.setAttribute('aria-label',t('HTTPS server origin'));if(provider.name==='gitea')card.append(origin);
-          card.append(token,button('Save access token',async()=>{await client.action('git-login/token',{provider:provider.name,token:token.value,...(provider.name==='gitea'?{origin:origin.value}:{})});token.value='';render();}));
+          const origin=el('input');origin.placeholder=t('HTTPS server origin');origin.setAttribute('aria-label',t('HTTPS server origin'));if(provider.origin_required)card.append(origin);
+          card.append(token,button('Save access token',async()=>{await client.action('git-login/token',{provider:provider.name,token:token.value,...(provider.origin_required?{origin:origin.value}:{})});token.value='';render();}));
           if(provider.device){
             const id=el('input');id.placeholder=t('Registered public OAuth client ID');id.setAttribute('aria-label',t('Registered public OAuth client ID'));
+            id.value=provider.client_id || '';
+            card.append(el('p',t(provider.registration_help || 'Enter a registered public OAuth client ID.')));
+            if(/^https:\/\//i.test(provider.registration_url || '')){const link=el('a',t('Register OAuth application'));link.href=provider.registration_url;link.target='_blank';link.rel='noopener noreferrer';card.append(link);}
             const status=el('p');card.append(id,button('Sign in in browser',async()=>{
+              if(!id.value.trim())throw new Error(t('Enter a registered public OAuth client ID.'));
               let run=await client.action('git-login/start',{provider:provider.name,client_id:id.value});const sessionId=run.session_id;
               if(!/^https:\/\//i.test(run.verification_uri))throw new Error('Invalid sign-in address');
               status.replaceChildren(document.createTextNode(t('Open ')));const link=el('a',run.verification_uri);link.href=run.verification_uri;link.target='_blank';link.rel='noopener noreferrer';status.append(link,document.createTextNode(' — '+run.user_code));
-              const poll=button('Check sign-in',async()=>{run=await client.action('git-login/poll',{id:sessionId});status.append(document.createTextNode(' '+run.status));if(run.status==='success')render();});card.append(poll);
+              const result=el('span');status.append(result);
+              const poll=async()=>{
+                if(!card.isConnected)return;
+                try{run=await client.request('git-login/poll',{id:sessionId});result.textContent=' '+t(run.status)+(run.error?' '+run.error:'');
+                  if(run.status==='success'){render();client.notice(t('Sign-in complete'));}
+                  else if(run.status==='pending')setTimeout(poll,Math.max(1,run.interval || 5)*1000);
+                }catch(error){result.textContent=error.message;}
+              };
+              setTimeout(poll,Math.max(1,run.interval || 5)*1000);
             }),status);
           }
           git.append(card);
@@ -430,14 +465,14 @@ function mount(document, bootstrap) {
     const supported=!!capabilities?.provider;
     if(!supported)group.append(el('p',t('Git provider is not supported for this remote. Only Local is available.')));
     const select=el('select');select.setAttribute('aria-label',t('Way of working'));
-    for(const [value,label] of [['local','Local'],['git','Git provider'],['custom','Custom']]){const option=el('option',t(label));option.value=value;if(value==='git'&&!supported)option.disabled=true;select.append(option);}
+    for(const [value,label] of [['local','Local'],['git','Git provider'],['custom','Custom']]){const option=el('option',t(label));option.value=value;if(value!=='local'&&!supported)option.disabled=true;select.append(option);}
     select.value=data.wayOfWorking;select.onchange=()=>{data.wayOfWorking=select.value;if(select.value!=='custom')for(const [step] of steps)data[step+'Mode']=select.value;changed();render();};group.append(select);
     for(const [step,label,field,fieldLabel] of steps){
       const row=el('fieldset');row.append(el('legend',t(label)));
       if(field){const switchLabel=el('label',undefined,'field'),toggle=el('input');toggle.type='checkbox';toggle.checked=!!data[step+'Enabled'];toggle.setAttribute('aria-label',t(label+' on'));toggle.onchange=()=>{data[step+'Enabled']=toggle.checked;changed();render();};switchLabel.append(el('span',t('On')),toggle);row.append(switchLabel);}
       const mode=el('select');mode.setAttribute('aria-label',t(label+' location'));
       for(const [value,text] of [['local','Local'],['git','Git provider']]){const option=el('option',t(text));option.value=value;if(value==='git'&&!supported)option.disabled=true;mode.append(option);}
-      mode.value=data[step+'Mode'];const unavailable=supported&&data[step+'Mode']==='git'&&!capabilities.supported[step];mode.disabled=(!supported && data[step+'Mode']==='local')||unavailable;
+      mode.value=data[step+'Mode'];const unavailable=supported&&data[step+'Mode']==='git'&&!capabilities.supported[step];mode.disabled=!supported||unavailable;
       mode.onchange=()=>{data[step+'Mode']=mode.value;const modes=new Set(steps.map(([name])=>data[name+'Mode']));data.wayOfWorking=modes.size===1?[...modes][0]:'custom';changed();render();};row.append(mode);
       if(unavailable)row.append(el('p',t('This provider does not support this step; it will be skipped.')));
       if(field){const inputLabel=el('label',undefined,'field'),input=el('input');input.value=data[field]||'';input.dataset.path=JSON.stringify([field]);input.disabled=!data[step+'Enabled']||data[step+'Mode']==='git';input.required=!input.disabled;input.oninput=()=>{data[field]=input.value;changed();};inputLabel.append(el('span',t(fieldLabel)),input);row.append(inputLabel);}
@@ -536,7 +571,7 @@ function mount(document, bootstrap) {
     editor={...loaded,project:current.project,dirty:false,rules:current.rules,upstream:current.upstream,workspace:current.workspace,place:current.place,project_defaults:current.project_defaults,git_workflow:current.git_workflow,provider_models:current.provider_models,benchmark:current.benchmark,build:current.build,cores:current.cores};
     if(!current.project && current.data.language && current.data.language!==bootstrap.language){location.reload();return;}
     render();void client.refresh();
-    if(current.data.web)client.notice(t('Saved. Restart the web server to apply changed web settings.'));
+    client.notice(t(current.data.web?'Saved. Restart the web server to apply changed web settings.':'Saved.'));
   }
   async function openLive(row) {
     const project=row.project || row.apiary,agent=row.agent || row.name,id=JSON.stringify([project,agent]);

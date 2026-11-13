@@ -8,6 +8,9 @@ from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 CAPABILITIES = frozenset({'pull_request', 'tag', 'release', 'asset', 'release_list', 'pipeline', 'login_methods'}) | {'pr_status'}
+LOGIN_OPTIONS = {'device': True, 'client_id_env': 'HAIVEQUEEN_GITLAB_CLIENT_ID', 'token_env': ('GITLAB_TOKEN',),
+                 'registration_url': 'https://gitlab.com/-/user_settings/applications',
+                 'registration_help': 'Register a public OAuth application with the api scope and device authorization enabled. Enter its application ID. An access token is also sufficient.'}
 
 
 def detect(remote):
@@ -142,7 +145,8 @@ def release_prepare(repo, name, commit, token=None):
             raise
         # GitLab represents prereleases by their semantic-version tag and name;
         # unlike GitHub/Gitea its release API has no prerelease boolean.
-        result = release(repo, name, 'Pre-release ' + name, 'Pre-release ' + name, token, ref=commit)
+        label = ('Pre-release ' if '-' in name else 'Release ') + name
+        result = release(repo, name, label, label, token, ref=commit)
     if result.get('tag_name') != name or result.get('commit', {}).get('id') != commit:
         raise ValueError('existing release has the wrong tag or commit')
     links = []
@@ -181,6 +185,36 @@ def release_asset_digest(repo, release, asset, token=None):
     if asset.get('url') != expected:
         raise ValueError('existing release asset has an unexpected download URL')
     return hashlib.sha256(_request(repo, 'GET', path, token, raw=True)[0]).hexdigest()
+
+
+CAPABILITIES |= {'release_history', 'release_download', 'release_snapshot'}
+
+
+def release_snapshot(repo, name, commit, token=None):
+    result = _request(repo, 'GET', '/releases/' + quote(name, safe=''), token)[0]
+    if result.get('tag_name') != name or result.get('commit', {}).get('id') != commit or '-' not in name:
+        raise ValueError('selected pre-release has a different tag or commit')
+    assets, page = [], '1'
+    while page:
+        batch, page = _request(repo, 'GET', '/releases/' + quote(name, safe='') + '/assets/links', token,
+                               query={'per_page': 100, 'page': page})
+        assets.extend(batch)
+    return dict(result, id=name, assets=assets)
+
+
+def release_history(repo, token=None):
+    from ._release import metadata
+    return [metadata(row['tag_name'], row.get('released_at') or row.get('created_at', ''), row['commit']['id'])
+            for row in release_list(repo, token)]
+
+
+def release_download(repo, release, asset, token=None):
+    # Only this repository's package endpoint receives its credential.
+    path = _package_path(release, asset['name'])
+    expected = 'https://gitlab.com/api/v4/projects/' + quote(repo, safe='') + path
+    if asset.get('url') != expected:
+        raise ValueError('release asset has an unexpected download URL')
+    return _request(repo, 'GET', path, token, raw=True)[0]
 
 
 def release_tag(repo, name, commit, token=None):

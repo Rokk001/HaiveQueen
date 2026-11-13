@@ -13,6 +13,16 @@ from haivequeen import web_auth, web_server
 
 
 class WebRoutesTests(unittest.TestCase):
+    def test_release_history_and_promotion_require_owner_session_and_csrf(self):
+        self.configure()
+        self.assertEqual(self.request('GET', '/api/releases?project=demo')[0], 401)
+        self.assertEqual(self.request('POST', '/api/releases/promote', {})[0], 401)
+        headers = self.login()
+        self.assertEqual(self.request('GET', '/api/releases?project=demo', headers=headers)[0], 200)
+        self.assertEqual(self.request('GET', '/api/releases/promote', headers=headers)[0], 404)
+        self.assertEqual(self.request('POST', '/api/releases/promote', {}, {'Cookie': headers['Cookie']})[0], 403)
+        self.assertEqual(self.request('POST', '/api/releases/promote', {'tag': 'v1.0.0-dev.1', 'confirmed': True}, headers)[0], 200)
+
     def test_disconnected_client_does_not_report_server_failure(self):
         handler = object.__new__(web_server._Handler)
         with patch.object(handler, 'handle_one_request', side_effect=BrokenPipeError('peer closed')):

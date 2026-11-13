@@ -67,8 +67,10 @@ class BrowserTests(unittest.TestCase):
         actions = []
         live_reads = []
         browser_language = ['English']
+        git_method = ['']
+        saved_projects = {}
         state = {'version':'test', 'orchestrator':{'label':'RUNNING'}, 'controls':{'force_warning':'Force stop ends all running Queens, Agents, Builds and Deploys immediately. Unfinished work will be done again after Start.'},
-                 'projects':[{'name':'demo'}], 'tiles':{'bees':1}, 'hives':[],
+                 'projects':[{'name':'demo'}, {'name':'local-only'}], 'tiles':{'bees':1}, 'hives':[],
                  'bees':[{'name':'mock-agent','agent':'mock-agent','project':'demo','apiary':'demo','task':'P1','status':'running','model':'running'}]}
         data = {'web':{'address':'127.0.0.1','port':8484,'certificate':'','key':''},
                 'providers':[{'name':'mock','protocol':'claude','command':'mock','classes':{'medium':{'model':'test'}}}]}
@@ -93,12 +95,16 @@ class BrowserTests(unittest.TestCase):
                     live_reads.append(True)
                     return self.send({'lines':[['green','live milestone '+str(len(live_reads))]]})
                 if route=='/api/settings/view' and 'project=' in self.path:
-                    return self.send({'data':{'name':'demo','compileCheck':'check','wayOfWorking':'local', 'mergeMode':'local', 'checkMode':'local', 'buildMode':'local', 'deployMode':'local', 'releaseMode':'local', 'checkEnabled':True, 'buildEnabled':False, 'deployEnabled':False, 'releaseEnabled':False},'revision':'project-revision',
-                                      'git_workflow':{'provider':'example','supported':{'merge':True,'check':True,'build':True,'deploy':True,'release':False}},
+                    project = 'local-only' if 'local-only' in self.path else 'demo'
+                    return self.send({'data':saved_projects.get(project, {'name':project,'compileCheck':'check','wayOfWorking':'local', 'mergeMode':'local', 'checkMode':'local', 'buildMode':'local', 'deployMode':'local', 'releaseMode':'local', 'checkEnabled':True, 'buildEnabled':False, 'deployEnabled':False, 'releaseEnabled':False}),'revision':'project-revision',
+                                      'git_workflow':{'provider':'example' if project == 'demo' else '', 'supported':{'merge':True,'check':True,'build':True,'deploy':True,'release':False}},
                                       'place':{'repository':'demo-repository','plansFolder':'demo-plans'},
                                       'workspace':'demo-plans','project_defaults':{'integrationBranch':'develop'},'rules':[{'label':'AGENTS.md','path':'AGENTS.md','tokens':12,'native_clis':['Codex CLI']}],
                                       'upstream':{'on':False,'usable':False,'note':''}})
                 value={'/api/state':state, '/api/providers':[{'name':'mock','logged_in':True}],
+                       '/api/git-login/providers':[{'name':'example','method':git_method[0],'device':True,'registration_url':'https://example.invalid/register','registration_help':'Register a public client or enter an access token.'}],
+                       '/api/releases':{'releases':[{'tag':'v2.0.1-dev.3','version':'v2.0.1-dev.3','date':'2026-01-02','commit':'a'*40,'prerelease':True,'full_tag':'v2.0.1'},
+                                                    {'tag':'v2.0.0','version':'v2.0.0','date':'2026-01-01','commit':'b'*40,'prerelease':False,'full_tag':''}]},
                        '/api/settings/view':{'data':data,'revision':'revision-1','provider_models':{'mock':{'models':['test'],'efforts':['medium']}}},
                        '/api/updates':{'available':{'version':'v9.0.0'}},
                        '/api/plans':[{'name':'Mock','apiary':'demo','plan_path':'mock.md','status':'RUNNING','has_hive':True}],
@@ -123,7 +129,16 @@ class BrowserTests(unittest.TestCase):
                     time.sleep(0.15)
                     if not payload.get('project'):
                         browser_language[0]=payload['data'].get('language','English')
+                    else:
+                        saved_projects[payload['project']] = payload['data']
                     return self.send({'data':payload['data'],'revision':'revision-2'})
+                if action=='git-login/start':
+                    return self.send({'session_id':'git-session', 'status':'pending', 'verification_uri':'https://example.invalid/device', 'user_code':'GIT-CODE', 'interval':1})
+                if action=='git-login/poll':
+                    git_method[0] = 'device'
+                    return self.send({'status':'success'})
+                if action=='releases/promote':
+                    return self.send({'id':'release-job', 'running':False, 'result':{'tag':'v2.0.1'}, 'error':''})
                 if action=='login/start':
                     return self.send({'id':'login-1','provider':'mock','running':True,'output':'ABCD-EFGH','links':['https://example.invalid/device']})
                 if action=='updates/check':

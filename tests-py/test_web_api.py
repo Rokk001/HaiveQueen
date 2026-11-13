@@ -7,6 +7,22 @@ from haivequeen import bees, db, dashboard_data, hives, loop, owner, runtime, st
 
 
 class WebApiTests(RoundCase):
+    def test_workflow_saved_reloaded_and_empty_field_does_not_disable_step(self):
+        from haivequeen import projsettings
+        view = web_api.settings_view(self.conn, 'testproj')
+        data = projsettings.select_working_way(view['data'], 'git')
+        data = projsettings.select_step_mode(data, 'check', 'local')
+        data.update(checkEnabled=True, compileCheck='check')
+        web_api.settings_save(self.conn, {'project': 'testproj', 'revision': view['revision'], 'data': data})
+        loaded = web_api.settings_view(self.conn, 'testproj')
+        self.assertEqual(loaded['data']['wayOfWorking'], 'custom')
+        self.assertTrue(loaded['data']['checkEnabled'])
+        self.assertEqual(loaded['data']['checkMode'], 'local')
+        loaded['data']['compileCheck'] = ''
+        with self.assertRaisesRegex(ValueError, 'compileCheck is required'):
+            web_api.settings_save(self.conn, {'project': 'testproj', 'revision': loaded['revision'], 'data': loaded['data']})
+        self.assertTrue(web_api.settings_read(self.conn, 'testproj')['data']['checkEnabled'])
+
     def test_project_workflow_view_migrates_legacy_and_reports_capabilities(self):
         from haivequeen import git_provider, projsettings
         provider = SimpleNamespace(name='example', capabilities={'release_tag', 'release_state'},

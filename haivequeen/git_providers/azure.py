@@ -6,6 +6,9 @@ from urllib.parse import quote, unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 CAPABILITIES = frozenset({'pull_request', 'tag', 'release', 'release_assets', 'release_list', 'pipeline', 'login_methods'}) | {'pr_status', 'pipeline_for_commit'}
+LOGIN_OPTIONS = {'device': True, 'client_id_env': 'HAIVEQUEEN_AZURE_CLIENT_ID', 'token_method': 'pat', 'token_env': ('AZURE_DEVOPS_TOKEN',),
+                 'registration_url': 'https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade',
+                 'registration_help': 'Register a public client application in Microsoft Entra with Azure DevOps delegated access and public client flows enabled. Enter its application client ID. A personal access token is also sufficient.'}
 
 
 def detect(remote):
@@ -50,6 +53,8 @@ def _request(repo, path, token, auth='pat', method='GET', body=None, query=None,
         credential = git_credential('azure') or {}
         token = credential.get('token')
         auth = credential.get('method', auth)
+    if auth == 'token':  # Credentials saved by the first web token form are PATs.
+        auth = 'pat'
     if auth not in ('pat', 'bearer') or not isinstance(token, str) or not token:
         raise ValueError('a token and supported auth method are required')
     org, project, repository = repo
@@ -127,7 +132,30 @@ def pipeline_for_commit(repo, commit, token, auth='pat'):
     return _request(repo, 'build/builds', token, auth, query={'repositoryId': repo[2], 'repositoryType': 'TfsGit', 'queryOrder': 'finishTimeDescending', '$top': 100}).get('value', [])
 
 
-CAPABILITIES |= {'release_tag', 'release_state'}
+CAPABILITIES |= {'release_tag', 'release_state', 'release_history'}
+
+
+def release_history(repo, token=None):
+    """Azure tag workflows identify versions by Git refs, not classic release IDs."""
+    from ._release import metadata
+    rows = []
+    continuation = None
+    while True:
+        query = {'filter': 'tags/v', 'peelTags': 'true', '$top': 100}
+        if continuation:
+            query['continuationToken'] = continuation
+        result, continuation = _request(repo, 'git/repositories/{repo}/refs', token,
+                                        query=query, include_continuation=True)
+        for ref in result.get('value', []):
+            name = ref['name'].removeprefix('refs/tags/')
+            if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\.\d+)?', name):
+                continue
+            commit = ref.get('peeledObjectId') or ref['objectId']
+            builds = _release_builds(repo, name, commit, token)
+            date = max((r.get('finishTime') or r.get('queueTime', '') for r in builds), default='')
+            rows.append(metadata(name, date, commit))
+        if not continuation:
+            return rows
 
 
 def release_tag(repo, name, commit, token=None):
@@ -141,7 +169,7 @@ def release_tag(repo, name, commit, token=None):
         tag(repo, name, commit, token)
 
 
-def release_state(repo, name, commit, token=None):
+def _release_builds(repo, name, commit, token):
     rows = []
     continuation = None
     while True:
@@ -153,7 +181,11 @@ def release_state(repo, name, commit, token=None):
         rows.extend(r for r in result.get('value', []) if r.get('sourceVersion') == commit and
                     r.get('sourceBranch') == 'refs/tags/' + name)
         if not continuation:
-            break
+            return rows
+
+
+def release_state(repo, name, commit, token=None):
+    rows = _release_builds(repo, name, commit, token)
     latest = {}
     for row in rows:
         key = row['definition']['id']

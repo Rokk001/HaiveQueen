@@ -242,6 +242,45 @@ def discover(remote, package=git_providers):
     return found, errors
 
 
+def login_options():
+    """Provider modules own login choices and registration instructions."""
+    rows = []
+    for info in sorted(pkgutil.iter_modules(git_providers.__path__), key=lambda item: item.name):
+        if info.name.startswith('_'):
+            continue
+        try:
+            options = _login_options(info.name)
+            if options is not None:
+                rows.append(options)
+        except Exception as exc:
+            rows.append({'name': info.name, 'device': False, 'method': '',
+                         'error': 'provider %s: %s' % (info.name, exc)})
+    return rows
+
+
+def _login_options(name):
+    from . import config
+    module = importlib.import_module(git_providers.__name__ + '.' + name)
+    options = getattr(module, 'LOGIN_OPTIONS', None)
+    if options is None:
+        return None
+    status_error = ''
+    try:
+        credential = config.git_credential(name) or {}
+    except ValueError as exc:
+        # Keep recovery controls available when an expired credential cannot refresh.
+        credential = {}
+        status_error = str(exc)
+    method = credential.get('method', '')
+    if (not method or options.get('environment_first')) and any(os.environ.get(key) for key in options.get('token_env', ())):
+        method = 'existing access'
+    if not method and not status_error and callable(getattr(module, 'auth_status', None)) and module.auth_status():
+        method = 'existing access'
+    return {'name': name, **{k: v for k, v in options.items() if k != 'token_env'},
+            'client_id': os.environ.get(options.get('client_id_env', ''), ''), 'method': method,
+            'status_error': status_error}
+
+
 def for_project(env, run=None):
     """Discover the provider of the configured Git remote of the code repository."""
     from . import publish

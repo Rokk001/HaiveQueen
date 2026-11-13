@@ -68,6 +68,9 @@ def settings_save(conn, data):
         if 'web' in proposed or current['password']:
             proposed['web'] = web
     errors = settings.check(proposed, machine=not bool(project))
+    if project:
+        from . import projsettings
+        errors.extend(projsettings.validate_working_settings(proposed))
     if errors:
         raise ValueError('; '.join(errors))
     loaded.clear()
@@ -141,21 +144,35 @@ def dispatch(action, data):
 
 def execute(conn, action, data):
     project, plan = data.get('project'), data.get('plan')
+    if action == 'releases':
+        from . import web_releases
+        return web_releases.listing(conn, project)
+    if action == 'releases/promote':
+        from . import web_releases
+        if data.get('confirmed') is not True:
+            raise ValueError('Confirm publication of the selected pre-release as a full release')
+        provider, working = web_releases.context(conn, project)
+        return web_jobs.start('release-promotion:' + project,
+                              lambda _progress: web_releases.promote(provider, working['releaseMode'], data['tag']))
     if action == 'git-login/providers':
-        from . import git_auth
-        names = ('github', 'gitlab', 'azure', 'bitbucket', 'gitea')
-        return [{'name': name, 'method': (config.git_credential(name) or {}).get('method', ''),
-                 'device': name in git_auth._PROVIDERS} for name in names]
+        from . import git_provider
+        return git_provider.login_options()
     if action == 'git-login/token':
-        if data['provider'] == 'gitea':
+        from . import git_provider
+        options = next((row for row in git_provider.login_options() if row['name'] == data['provider']), None)
+        if not options:
+            raise ValueError('Unknown Git provider')
+        if options.get('error'):
+            raise ValueError(options['error'])
+        if options.get('origin_required'):
             from urllib.parse import urlsplit
             origin = data.get('origin', '').rstrip('/')
             parsed = urlsplit(origin)
             if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
                 raise ValueError('Gitea requires an HTTPS origin')
-            config.save_git_credential('gitea', data['token'], 'token', origin=origin)
+            config.save_git_credential(data['provider'], data['token'], options.get('token_method', 'token'), origin=origin)
         else:
-            config.save_git_credential(data['provider'], data['token'], 'token')
+            config.save_git_credential(data['provider'], data['token'], options.get('token_method', 'token'))
         return {'ok': True}
     if action == 'git-login/start':
         from . import git_auth

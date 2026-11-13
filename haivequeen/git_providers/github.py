@@ -8,6 +8,9 @@ from urllib.parse import quote
 from ..releases import NoRelease, next_version
 
 CAPABILITIES = frozenset({"pull_request", "tag", "publish_release", "release_list", "release_asset", "pipeline", "login", "latest_version", "check_latest", "device_sign_in", "auth_status", "login_methods", "pr_status"})
+LOGIN_OPTIONS = {'device': True, 'client_id_env': 'HAIVEQUEEN_GITHUB_CLIENT_ID', 'environment_first': True, 'token_env': ('GITHUB_TOKEN', 'GH_TOKEN'),
+                 'registration_url': 'https://github.com/settings/applications/new',
+                 'registration_help': 'Register an OAuth app and enable Device Flow. Enter its public client ID. An access token is also sufficient.'}
 
 def login_methods(repository):
     return ("personal_access_token", "device")
@@ -283,7 +286,11 @@ def release_state(repository, name, commit, token=None):
 
 
 def release_prepare(repository, name, commit, token=None):
-    result = publish_release(repository, name, commit, token)
+    result = publish_release(repository, name[1:] if re.fullmatch(r'v\d+\.\d+\.\d+', name) else name, commit, token)
+    return _release_assets(repository, result, token)
+
+
+def _release_assets(repository, result, token, cleanup=True):
     # The release response embeds only a bounded asset list. List every page.
     assets = []
     page = 1
@@ -296,6 +303,8 @@ def release_prepare(repository, name, commit, token=None):
     # List every page before deleting placeholders so pagination cannot shift.
     for asset in assets:
         if asset.get('state') == 'starter':
+            if not cleanup:
+                raise ValueError('pre-release asset upload is incomplete')
             _request(repository, '/releases/assets/' + quote(str(asset['id']), safe=''), token, method='DELETE')
     return dict(result, assets=[a for a in assets if a.get('state') != 'starter'])
 
@@ -312,3 +321,43 @@ def release_asset_digest(repository, release, asset, token=None):
         return hashlib.sha256(_request(repository, '/releases/assets/' + quote(str(asset['id']), safe=''),
                                        token, raw=True)).hexdigest()
     return asset['digest'][7:]
+
+
+CAPABILITIES |= {'release_history', 'release_download', 'release_snapshot'}
+
+
+def release_snapshot(repository, name, commit, token=None):
+    if release_commit(repository, name, token) != commit:
+        raise ValueError('pre-release tag points at a different commit')
+    result = _request(repository, '/releases/tags/' + quote(name, safe=''), token)
+    if result.get('tag_name') != name or result.get('draft') or not result.get('prerelease'):
+        raise ValueError('selected release is no longer a pre-release')
+    return _release_assets(repository, result, token, cleanup=False)
+
+
+def release_commit(repository, name, token=None):
+    obj = _request(repository, '/git/ref/tags/' + quote(name, safe=''), token)['object']
+    seen = set()
+    while obj.get('type') == 'tag':
+        if obj['sha'] in seen:
+            raise ValueError('cyclic annotated release tag')
+        seen.add(obj['sha'])
+        obj = _request(repository, '/git/tags/' + obj['sha'], token)['object']
+    if obj.get('type') != 'commit':
+        raise ValueError('release tag does not identify a commit')
+    return obj['sha']
+
+
+def release_history(repository, token=None):
+    from ._release import metadata
+    rows = []
+    for row in release_list(repository, token):
+        if row.get('draft'):
+            continue
+        rows.append(metadata(row['tag_name'], row.get('published_at') or row.get('created_at', ''),
+                             release_commit(repository, row['tag_name'], token), row.get('prerelease', False)))
+    return rows
+
+
+def release_download(repository, release, asset, token=None):
+    return _request(repository, '/releases/assets/' + quote(str(asset['id']), safe=''), token, raw=True)
