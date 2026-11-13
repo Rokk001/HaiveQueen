@@ -353,6 +353,26 @@ function mount(document, bootstrap) {
       fields(form,data,[],data,new Set(['providers','projects','buildJobs']));
       form.append(button('Install /bzz',async()=>{const job=await client.action('tools/install');if(job){job.title='Install /bzz';jobs.set(job.id,job);renderJob(job);}}));
     } else if(tab==='Providers') {
+      const git=el('fieldset');git.append(el('legend',t('Git provider login')),
+        el('p',t('One login is shared by all projects for each provider. Sign in or enter an access token; one is enough.')));form.append(git);
+      client.request('git-login/providers').then(providers=>{
+        for(const provider of providers){
+          const card=el('fieldset');card.append(el('legend',provider.name),el('p',t('Current method')+': '+(provider.method || t('None'))));
+          const token=el('input');token.type='password';token.autocomplete='off';token.setAttribute('aria-label',t('Access token'));
+          const origin=el('input');origin.placeholder=t('HTTPS server origin');origin.setAttribute('aria-label',t('HTTPS server origin'));if(provider.name==='gitea')card.append(origin);
+          card.append(token,button('Save access token',async()=>{await client.action('git-login/token',{provider:provider.name,token:token.value,...(provider.name==='gitea'?{origin:origin.value}:{})});token.value='';render();}));
+          if(provider.device){
+            const id=el('input');id.placeholder=t('Registered public OAuth client ID');id.setAttribute('aria-label',t('Registered public OAuth client ID'));
+            const status=el('p');card.append(id,button('Sign in in browser',async()=>{
+              let run=await client.action('git-login/start',{provider:provider.name,client_id:id.value});const sessionId=run.session_id;
+              if(!/^https:\/\//i.test(run.verification_uri))throw new Error('Invalid sign-in address');
+              status.replaceChildren(document.createTextNode(t('Open ')));const link=el('a',run.verification_uri);link.href=run.verification_uri;link.target='_blank';link.rel='noopener noreferrer';status.append(link,document.createTextNode(' — '+run.user_code));
+              const poll=button('Check sign-in',async()=>{run=await client.action('git-login/poll',{id:sessionId});status.append(document.createTextNode(' '+run.status));if(run.status==='success')render();});card.append(poll);
+            }),status);
+          }
+          git.append(card);
+        }
+      }).catch(error=>client.notice(error.message,true));
       data.providers ||= [];
       form.append(button('Add provider',()=>{data.providers.push(newProvider());editor.dirty=true;render();}));
       data.providers.forEach((provider,index)=>{

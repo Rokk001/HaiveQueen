@@ -141,6 +141,28 @@ def dispatch(action, data):
 
 def execute(conn, action, data):
     project, plan = data.get('project'), data.get('plan')
+    if action == 'git-login/providers':
+        from . import git_auth
+        names = ('github', 'gitlab', 'azure', 'bitbucket', 'gitea')
+        return [{'name': name, 'method': (config.git_credential(name) or {}).get('method', ''),
+                 'device': name in git_auth._PROVIDERS} for name in names]
+    if action == 'git-login/token':
+        if data['provider'] == 'gitea':
+            from urllib.parse import urlsplit
+            origin = data.get('origin', '').rstrip('/')
+            parsed = urlsplit(origin)
+            if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+                raise ValueError('Gitea requires an HTTPS origin')
+            config.save_git_credential('gitea', data['token'], 'token', origin=origin)
+        else:
+            config.save_git_credential(data['provider'], data['token'], 'token')
+        return {'ok': True}
+    if action == 'git-login/start':
+        from . import git_auth
+        return git_auth.start_device_login(data['provider'], data.get('client_id', ''))
+    if action == 'git-login/poll':
+        from . import git_auth
+        return git_auth.poll_device_login(data['id'])
     if action == 'state':
         state = dashboard_data.snapshot(conn, project)
         for row in state.get('hives', []):
