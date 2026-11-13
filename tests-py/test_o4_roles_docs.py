@@ -42,8 +42,8 @@ class MergedRoleFiles(unittest.TestCase):
         self.assertIn("write the completeness answer, call `bzz ready` and end", text)
         self.assertIn("you do not merge the integration branch", text)
 
-    def test_bee_text_keeps_the_compile_check_rule(self):
-        self.assertIn("bzz compile-check", role("bee"))
+    def test_bee_text_asks_for_focused_tests_not_the_compile_check(self):
+        self.assertNotIn("bzz compile-check", role("bee"))   # K-2: an Agent runs focused tests of its own change only
 
     def test_queen_recovers_requirements_missing_from_the_cut(self):
         text = role("queen")
