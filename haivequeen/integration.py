@@ -217,18 +217,19 @@ def _release_compile_slot(token, poll):
 
 
 # Run the compile command and watch its progress.
-def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, label="compile check", on_start=None):
+def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, label="compile check", on_start=None, log_file=None):
     """Run `command` in `cwd` until it ends; returns (exit code, output text). The check ends red (124) after max_seconds of running and red (125,
     "stalled") when for stall_seconds neither a new output line appeared nor the CPU time of its process tree grew. `env` adds environment variables,
     `label` names the command in the messages and `on_start(pid)` is called once the process runs (the Orchestrator keeps it to end the command)."""
     import tempfile
     with tempfile.TemporaryDirectory(prefix="compile-completion-") as folder:
         return _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll,
-                                  Path(folder) / "exit", env, label, on_start)
+                                  Path(folder) / "exit", env, label, on_start, log_file)
 
 
-def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completion, env, label, on_start):
+def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completion, env, label, on_start, log_file=None):
     """Watch a launcher whose completion record distinguishes an exit from an interrupted run."""
+    from . import action_logs
     import collections
     import threading
     lines = collections.deque(maxlen=400)
@@ -236,6 +237,7 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
 
     def read(stream):
         for line in iter(stream.readline, ""):
+            action_logs.append(log_file, line)
             lines.append(line.rstrip("\r\n"))
             state["lines"] += 1
 
@@ -275,21 +277,26 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
         reader.join(timeout=5)
     finally:
         proctree.exempt_clear(proc.pid)
-    text = "\n".join(lines)
+    text = action_logs.output(log_file) if log_file else "\n".join(lines)
     if ended:
+        if log_file:
+            action_logs.append(log_file, "\n" + ended[1] + "\n")
+            return ended[0], action_logs.output(log_file)
         return ended[0], ended[1] + ("; last output lines:\n" + "\n".join(list(lines)[-20:]) if lines else "; no output at all")
     try:
         code = int(completion.read_text(encoding="ascii"))
     except (OSError, ValueError):
         code = None
     if proc.returncode != 0 or code is None:
-        return -1, text + ("\n" if text else "") + "the command launcher ended without completing the run"
+        message = "the command launcher ended without completing the run"
+        action_logs.append(log_file, "\n" + message + "\n")
+        return -1, text + ("\n" if text else "") + message
     return code, text
 
 
 # Run the compile check of the project for a Queen or an Agent.
 def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, store=True, owner=None,
-                           acquired_slot=None, on_start=None):
+                           acquired_slot=None, on_start=None, log_file=None):
     """Run the setting compileCheck in the worktree `cwd` (default: that of `queen`, the row of the caller), store {ok, exit, commit, time, seconds, command} under
     `key` (default: the result of the Queen's run that `bzz ready` reads), add the live line to the milestones of the caller and return the result with the end of the
     output under "output". At most the setting maxConcurrentCompileChecks checks run at the same time per machine, and only while RAM and cores are free: waiting counts for neither limit. The settings compileStallMinutes (10) and
@@ -306,6 +313,8 @@ def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones
         started = time.time()   # after the wait for a slot
         try:
             options = {"on_start": on_start} if on_start else {}
+            if log_file:
+                options["log_file"] = log_file
             code, output = _watch_compile(command, cwd, stall, longest, poll, **options)
         except OSError as exc:
             code, output = 127, "the compile check could not start: %s" % exc
@@ -315,7 +324,7 @@ def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones
         # A missing launcher completion record returns a negative code; an ordinary exit 1 is a failure.
         if code is not None and (code < 0 or code >= 0xC0000000):
             result["aborted"] = True
-        result["output"] = "\n".join(output.strip().splitlines()[-40:])[-4000:]
+        result["output"] = output if log_file else "\n".join(output.strip().splitlines()[-40:])[-4000:]
         if store:
             runtime.kv_set(env.conn, env.name, key or COMPILE_KEY + queen["name"], json.dumps(result))
     finally:
@@ -332,7 +341,7 @@ def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones
             handle.write(live.encode("utf-8"))
     except OSError:
         pass
-    return {**result, "output": "\n".join(output.strip().splitlines()[-40:])[-4000:]}
+    return result
 
 
 # Each detached supervisor owns its slot and writes a result before exiting.
@@ -346,7 +355,7 @@ def _database_path(conn):
     return str(conn.execute("PRAGMA database_list").fetchone()[2]) if conn is not None else str(config.db_path())
 
 
-def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True):
+def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, log_file=None):
     """Start an independent supervisor and return its durable result address and PID."""
     import uuid
     token = uuid.uuid4().hex
@@ -357,6 +366,7 @@ def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=Tr
                    "name": queen["name"], "key": key or COMPILE_KEY + queen["name"],
                    "poll": POLL_SECONDS if poll is None else poll,
                    "milestones": str(env.run_dir(queen["name"])) if milestones else ""}
+        request["log_file"] = log_file
         request["commit"] = head_commit(request["cwd"])
         runtime.kv_set(conn, env.name, COMPILE_REQUEST_KEY + token, json.dumps(request))
     finally:
@@ -411,11 +421,12 @@ def compile_supervisor(database, project, token):
                 else:
                     result = _execute_compile_check(env, {"name": request["name"]}, cwd=request["cwd"],
                                                     key=COMPILE_RUN_KEY + token, poll=request["poll"], milestones=bool(request["milestones"]), store=False,
-                                                    acquired_slot=slot, on_start=started)
+                                                    acquired_slot=slot, on_start=started, log_file=request.get("log_file"))
         except Exception as exc:
             if not _end_orphan(request):
                 return   # leave the holder discoverable until recovery can end the command
             result = _aborted_result(request, "the compile supervisor failed: %s" % exc)
+        _finish_action_log(request, result)
         with db.transaction(conn):
             runtime.kv_set(conn, project, COMPILE_RUN_KEY + token, json.dumps(result))
             runtime.kv_set(conn, project, request["key"], json.dumps(result))
@@ -426,7 +437,21 @@ def compile_supervisor(database, project, token):
         conn.close()
 
 
+def _finish_action_log(request, result):
+    from . import action_logs
+    path = request.get("log_file")
+    if path:
+        if not action_logs.output(path):
+            action_logs.append(path, result.get("output", ""))
+        action_logs.finish(path, result["exit"], message=result.get("output", "") if result.get("aborted") else "")
+
+
 def _aborted_result(request, output):
+    from . import action_logs
+    if request.get("log_file"):
+        action_logs.append(request["log_file"], "\n" + output + "\n")
+        output = action_logs.output(request["log_file"])
+        action_logs.finish(request["log_file"], 143, "aborted")
     return {"ok": False, "exit": 143, "aborted": True, "commit": request["commit"], "time": db.now(),
             "seconds": 0, "command": request["settings"].get("compileCheck", ""), "output": output}
 

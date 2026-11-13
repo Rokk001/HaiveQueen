@@ -147,7 +147,7 @@ class CheckRecoveryTests(DetachedCompileCase):
     def test_restart_harvests_the_original_stored_check_result(self):
         env, state = self.check_job("import pathlib,time\npathlib.Path('started').touch()\ntime.sleep(0.5)\nprint('finished')\n")
         result = self.wait_for(lambda: orchestrator._harvest(self.conn, env, 'plan', state))
-        self.assertEqual(result, (0, 'finished'))
+        self.assertEqual(result, (0, 'finished\n'))  # the action output is now preserved without stripping
         stored = json.loads(runtime.kv_get(self.conn, 'project', 'orch-check:plan'))
         self.assertTrue(stored['ok'])
 
