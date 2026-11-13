@@ -44,6 +44,20 @@ class SharedCredentials(unittest.TestCase):
                 operation()
                 self.assertEqual(request.call_args.args[0].get_header(header), expected)
 
+    def test_gitlab_device_and_pat_credentials(self):
+        cases = [({'token': 'device-secret', 'method': 'device'}, None, 'Bearer device-secret', None),
+                 ({'token': 'pat-secret', 'method': 'token'}, None, None, 'pat-secret'),
+                 ({'token': 'device-secret', 'method': 'device'}, 'explicit-pat', None, 'explicit-pat')]
+        for credential, explicit, authorization, private_token in cases:
+            with self.subTest(credential=credential, explicit=explicit), \
+                    patch('haivequeen.config.git_credential', return_value=credential), \
+                    patch.object(gitlab, 'urlopen', return_value=Response()) as request:
+                gitlab.tag('a/b', 'v1', 'main', explicit)
+                sent = request.call_args.args[0]
+                self.assertEqual(sent.get_method(), 'POST')
+                self.assertEqual(sent.get_header('Authorization'), authorization)
+                self.assertEqual(sent.get_header('Private-token'), private_token)
+
     def test_github_fallbacks_and_status(self):
         with patch('haivequeen.config.git_credential', return_value=None), patch.dict(os.environ, {'GITHUB_TOKEN': 'env', 'GH_TOKEN': ''}):
             self.assertEqual(github.login('a/b'), 'env')

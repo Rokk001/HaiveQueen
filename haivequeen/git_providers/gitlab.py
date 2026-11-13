@@ -43,11 +43,17 @@ def _request(repo, method, path, token=None, data=None, query=None, multipart=No
     if query:
         url += '?' + urlencode(query)
     headers = {'Accept': 'application/json'}
+    auth_method = None
     if token is None:
         from ..config import git_credential
-        token = (git_credential('gitlab') or {}).get('token')
+        credential = git_credential('gitlab') or {}
+        token = credential.get('token')
+        auth_method = credential.get('method')
     if token:
-        headers['PRIVATE-TOKEN'] = token
+        if auth_method == 'device':
+            headers['Authorization'] = 'Bearer ' + token
+        else:
+            headers['PRIVATE-TOKEN'] = token
     body = None
     if multipart is not None:
         filename, content = multipart
