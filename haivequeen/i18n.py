@@ -789,3 +789,10 @@ GERMAN.update({
 })
 
 GERMAN.update({"Overview": "Übersicht", "Technical information": "Technische Angaben", "Agent ID": "Agent-ID", "Plan file": "Plandatei", "Role": "Rolle", "Context used": "Genutzter Kontext", "Stop target": "Stop-Ziel"})
+
+GERMAN.update({
+    "7d %d %% used · %d %% left · %s": "7T %d %% verbraucht · %d %% übrig · %s",
+    "5h %d %% used": "5h %d %% verbraucht",
+    "Ready": "Bereit", "Not ready": "Nicht bereit",
+    "Last recorded quota; live quota unavailable": "Letzter gespeicherter Verbrauch; Live-Abfrage nicht verfügbar",
+})

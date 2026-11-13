@@ -103,14 +103,17 @@ def settings_view(conn, project=None):
         if 'web' in migrated:
             migrated['web'] = {k: v for k, v in migrated['web'].items() if k != 'password'}
         result['data'] = migrated
-        offered = {}
+        offered, connections = {}, {}
         for provider in migrated.get('providers', []):
             key = cli_presets.key_for(provider)
             server = servers.server_of(provider)
             kept = servers.kept(server) if server else None
+            if kept:
+                connections[provider['name']] = kept
             offered[provider['name']] = {'models': list((kept or {}).get('models', [])) if server else cli_presets.model_list(key),
-                                         'efforts': cli_presets.effort_list(key)}
-        result.update(provider_models=offered, benchmark=startctx.pairs(conn),
+                                         'efforts': cli_presets.effort_list(key), 'access': servers.access_of(provider),
+                                         'address': provider.get('address', ''), 'protocol': provider.get('protocol', '')}
+        result.update(provider_models=offered, provider_connections=connections, benchmark=startctx.pairs(conn),
                       build=settings.build_values(migrated), cores=settings.machine_cores())
     return result
 

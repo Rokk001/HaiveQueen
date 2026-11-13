@@ -35,6 +35,8 @@ def page(csrf, language=None):
                              'onEvent': {'command': [], 'workDir': '', 'timeoutSeconds': 180}}.items()
                              if k in projsettings.KEPT_KEYS},
                  'presets': cli_presets.PRESETS,
+                 'accessClis': {access: cli_presets.keys_for_access(access) for access in ('subscription', 'api', 'llm')},
+                 'cliModels': {key: {'models': cli_presets.model_list(key), 'efforts': cli_presets.effort_list(key)} for key in cli_presets.PRESETS},
                  'updateConfirm': updates.TEXT_CONFIRM}
     favicon = 'data:image/png;base64,' + base64.b64encode(Path(__file__).with_name('web-icon.png').read_bytes()).decode('ascii')
     banner = Path(__file__).with_name('web-header.png')

@@ -124,10 +124,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return entry
         return None
 
+    def external_scheme(self):
+        # Forwarded scheme may upgrade transport metadata only. It never changes
+        # the authority used for CSRF checks or grants access to local setup.
+        if isinstance(self.connection, ssl.SSLSocket):
+            return 'https'
+        forwarded = self.headers.get_all('X-Forwarded-Proto', [])
+        return 'https' if len(forwarded) == 1 and forwarded[0].strip().lower() == 'https' else 'http'
+
     def same_origin(self):
         origin = self.headers.get('Origin')
-        scheme = 'https' if isinstance(self.connection, ssl.SSLSocket) else 'http'
-        return not origin or origin == scheme + '://' + self.headers.get('Host', '')
+        return not origin or origin == self.external_scheme() + '://' + self.headers.get('Host', '')
 
     def local_host(self):
         try:
@@ -136,17 +143,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return False
 
     def page(self, setup=False):
-        warning = '' if isinstance(self.connection, ssl.SSLSocket) else '<p>Warning: HTTP sends the password unencrypted over the network.</p>'
-        fields = '<input name="username" placeholder="Username" required autocomplete="username"><input name="password" type="password" placeholder="Password" required autocomplete="current-password">'
-        if setup:
-            fields += '<input name="address" value="0.0.0.0" required><input name="port" type="number" value="8484" required><input name="certificate" placeholder="Certificate file (optional)"><input name="key" placeholder="Key file (optional)">'
-        title = 'Setup' if setup else 'Login'
-        token = json.dumps(self.server.setup_token if setup else '')
-        return ('<!doctype html><meta charset="utf-8"><title>HaiveQueen ' + title + '</title><h1>' + title + '</h1>' + warning +
-                '<form>' + fields + '<button>' + title + '</button></form><p id="result"></p><script>' +
-                'document.querySelector("form").onsubmit=async e=>{e.preventDefault();let d=Object.fromEntries(new FormData(e.target));if(d.port)d.port=Number(d.port);' +
-                'let r=await fetch(location.pathname==="/setup"||' + str(setup).lower() + '?"/setup":"/login",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":' + token + '},body:JSON.stringify(d)});let v=await r.json();' +
-                'if(r.ok){if(v.csrf)sessionStorage.setItem("hq_csrf",v.csrf);if(v.url){let a=document.createElement("a");a.href=v.url;a.textContent="Setup saved. Open login";document.getElementById("result").replaceChildren(a);setTimeout(()=>location.href=v.url,750)}else location.href="/"}else document.getElementById("result").textContent=v.error;};</script>')
+        from . import web_access
+        return web_access.page(setup, self.server.setup_token if setup else '', self.external_scheme() == 'https')
 
     def do_GET(self):
         settings = self.settings()
@@ -234,7 +232,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     self.server.sessions.pop(next(iter(self.server.sessions)))
                 self.server.sessions[token] = {'csrf': csrf, 'expires': now + 12 * 3600, 'password': settings['password']}
             cookie = 'hq_session=' + token + '; HttpOnly; SameSite=Strict; Path=/'
-            if isinstance(self.connection, ssl.SSLSocket):
+            if self.external_scheme() == 'https':
                 cookie += '; Secure'
             return self.reply(200, {'ok': True, 'csrf': csrf}, cookie)
         if path == '/logout':

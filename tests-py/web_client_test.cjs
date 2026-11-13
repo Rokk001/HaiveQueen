@@ -56,6 +56,23 @@ const {Client, planActions, setValue, safeLinks, toolsFromArgs, withTools, orche
   console.log('Browser client regressions passed');
 })().catch(error=>{console.error(error);process.exitCode=1});
 const {RenderGate} = require('../haivequeen/web-client.js');
+const {switchProviderAccess,providerCli} = require('../haivequeen/web-client.js');
+{
+  const presets={claude:{protocol:'claude',command:'claude',args:[],label:'Claude Code'},codex:{protocol:'codex',command:'codex',args:[],label:'Codex CLI'}};
+  const provider={name:'existing',protocol:'codex',access:'subscription',classes:{medium:{model:'cloud-model',effort:'high',contextLimitTokens:1000}},capabilityThresholds:{Coding:90}};
+  const stash={};
+  switchProviderAccess(provider,'llm',stash,presets,['claude','codex']);
+  assert.equal(provider.classes.medium.model,undefined);
+  provider.address='http://localhost:1234';provider.apiKey='local-key';provider.classes.medium.model='local-model';
+  switchProviderAccess(provider,'subscription',stash,presets,['claude','codex','custom']);
+  assert.equal(provider.address,undefined);assert.equal(provider.apiKey,undefined);assert.equal(provider.classes.medium.model,'cloud-model');
+  assert.equal(provider.classes.medium.effort,'high');assert.equal(provider.limit.source,'codex');
+  switchProviderAccess(provider,'llm',stash,presets,['claude','codex']);
+  assert.equal(provider.address,'http://localhost:1234');assert.equal(provider.apiKey,'local-key');assert.equal(provider.classes.medium.model,'local-model');assert.equal(provider.limit.source,'none');
+  assert.deepEqual(provider.capabilityThresholds,{Coding:90});assert.equal(provider.name,'existing');
+  provider.outputFormat='codex';switchProviderAccess(provider,'api',stash,presets,['claude','codex']);
+  assert.equal(providerCli(provider,presets),'claude');assert.equal(provider.classes.medium.model,undefined);
+}
 let renders = 0;
 const gate = new RenderGate(() => renders++);
 const firstButton = {textContent:'Start', disabled:false, setAttribute(k,v){this[k]=v;}, removeAttribute(k){delete this[k];}};
@@ -94,6 +111,7 @@ async function providerThresholdUI(legacy=false) {
       if(selector==='[data-tab="Questions"]')return all.filter(node=>node.dataset.tab==='Questions');
       if(selector.startsWith('[data-panel=')){const name=selector.match(/data-panel=["']([^"']+)/)?.[1];return all.filter(node=>node.dataset.panel===name);}
       if(selector==='[data-saved-only]')return all.filter(node=>'savedOnly' in node.dataset);
+      if(selector==='[data-path]')return all.filter(node=>'path' in node.dataset);
       if(selector==='.capability-threshold input[type="number"]')return all.filter(node=>node.tagName==='INPUT' && node.type==='number' && node.parentNode?.className==='capability-threshold');
       return [];
     }
@@ -107,12 +125,17 @@ async function providerThresholdUI(legacy=false) {
   const settings={revision:'r1',data:{providers:[provider]}};
   global.window={addEventListener(){},scrollTo(){},scrollX:0,scrollY:0,innerHeight:900}; global.ResizeObserver=class {observe(){}}; global.setInterval=()=>0; global.confirm=()=>true;
   global.fetch=async (url,options={})=>{let value={}; if(url.endsWith('/state'))return new Promise(()=>{}); if(url.includes('settings/view'))value=settings; else if(url.includes('settings/save')){saved.push(JSON.parse(options.body));value={revision:'r2',data:saved.at(-1).data};} else if(url.endsWith('/providers'))value=[]; return {ok:true,json:async()=>value};};
-  require('../haivequeen/web-client.js').mount(document,{translations:{},labels:{},choices:{},help:{},general:{providers:[]},presets:{},capabilities:['Coding','Queen','Build']});
+  require('../haivequeen/web-client.js').mount(document,{translations:{},labels:{},choices:{},help:{},general:{providers:[]},presets:{claude:{label:'Claude Code',protocol:'claude',command:'claude',args:[],beeMode:'subagent'}},accessClis:{subscription:['claude','custom'],api:['claude'],llm:['claude']},capabilities:['Coding','Queen','Build']});
   const flush=()=>new Promise(resolve=>setImmediate(resolve));
   descendantsFor(ids.tabs).find(node=>node.dataset.tab==='Providers').onclick(); await flush(); await flush();
   const descendants=node=>node.children.flatMap(child=>[child,...descendants(child)]);
   const row=name=>descendants(ids.app).find(node=>node.className==='capability-threshold' && node.children[1]?.textContent===name);
   const number=name=>row(name).children.find(node=>node.tagName==='INPUT' && node.type==='number');
+  const nodes=descendants(ids.app);
+  const advanced=nodes.find(node=>node.tagName==='DETAILS' && node.children[0]?.textContent==='Advanced');
+  assert(advanced && !advanced.open,'provider advanced fields must start collapsed');
+  assert(nodes.some(node=>node.className==='provider-models'),'models need three dedicated class rows');
+  assert(!nodes.some(node=>node.dataset.path===JSON.stringify(['providers',0,'address'])),'subscription must not show local server fields');
   const toggle=(name,checked)=>{const check=row(name).children[0];check.checked=checked;check.onchange();};
   const save=async()=>{descendants(ids.app).find(node=>node.tagName==='BUTTON' && node.textContent==='Save').onclick();await flush();};
   if(legacy){
@@ -123,6 +146,16 @@ async function providerThresholdUI(legacy=false) {
     assert.deepEqual(saved[0].data.providers[0].capabilities.sort(),['Coding','Queen']);
     assert.equal(saved[0].data.providers[0].capabilitiesVersion,1);return;
   }
+  const field=key=>descendants(ids.app).find(node=>node.dataset.path===JSON.stringify(['providers',0,key]));
+  field('access').value='llm';field('access').onchange();await flush();
+  assert(field('address'),'existing provider exposes address immediately after choosing Local LLM');
+  assert(field('apiKey'),'Local LLM offers a masked key');assert.equal(field('apiKey').type,'password');
+  assert(!descendants(ids.app).some(node=>node.tagName==='BUTTON'&&node.textContent==='Login'));
+  field('address').value='http://localhost:1234';field('address').oninput();
+  field('access').value='subscription';field('access').onchange();await flush();
+  assert(!field('address'));assert(!field('apiKey'));
+  field('access').value='llm';field('access').onchange();await flush();assert.equal(field('address').value,'http://localhost:1234');
+  field('access').value='subscription';field('access').onchange();await flush();
   assert.equal(number('Coding').value,'72');
   assert.equal(number('Queen'),undefined,'disabled capability has no threshold field');
   toggle('Queen',true); assert.equal(number('Queen').value,'38','retained value returns');

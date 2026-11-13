@@ -79,7 +79,7 @@ class OverviewTest(unittest.TestCase):
 
     # Check that Codex usage is read from the session logs.
     def test_codex_limits_from_session_logs(self):
-        """Invented Codex session logs in a temp profile: collect writes kv usage-codex and returns the 5 hour percent."""
+        """The dashboard displays cached session quota and schedules a nonblocking refresh."""
         home = Path(self.tmp.name) / "home"
         day = home / "codex" / "sessions" / "2026" / "10" / "28"
         day.mkdir(parents=True)
@@ -88,10 +88,10 @@ class OverviewTest(unittest.TestCase):
               "secondary": {"used_percent": 64.0, "window_minutes": 10080, "resets_at": t + 86400 * 3}}
         line = json.dumps({"payload": {"rate_limits": rl}}, separators=(",", ":"))
         (day / "rollout-a.jsonl").write_text('{"x":1}\n' + line + "\n", encoding="utf-8")
-        env = {k: v for k, v in os.environ.items() if k != "BZZ_DATA_DIR"}
-        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(usage, "home_dir", return_value=home):
-            usage._codex_refresh.clear()
+        usage.refresh_codex_usage(self.conn, codex_dir=home / 'codex' / 'sessions', force=True)
+        with mock.patch.object(usage, 'schedule_dashboard_refresh') as refresh:
             d = overview.collect(self.conn, None, datetime.now(), {"providers": [{"name": "codex", "protocol": "codex", "limit": {"source": "codex"}}]}, dict(SYS))
+        refresh.assert_called_once()
         self.assertIsNotNone(runtime.kv_get(self.conn, "*", "usage-codex"))
         self.assertEqual(d["xu"]["FiveHour"]["pct"], 37)
 

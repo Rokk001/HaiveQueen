@@ -12,6 +12,31 @@ function orchestrationFor(row,hives=[]) {
 
 const copy = value => JSON.parse(JSON.stringify(value));
 
+function providerCli(provider,presets) {
+  return ['loginCommand','loginFiles','profileEnv','outputFormat'].some(key=>Object.hasOwn(provider,key))?'custom':Object.keys(presets).find(key=>presets[key].protocol===provider.protocol)||'custom';
+}
+function applyProviderCli(provider,key,presets) {
+  const preset=presets[key];
+  if(preset){const {label,beeMode,...values}=preset;Object.assign(provider,copy(values));provider.beeMode ||= beeMode;for(const field of ['loginCommand','loginFiles','profileEnv','outputFormat'])delete provider[field];}
+  else provider.outputFormat ??= '';
+  provider.limit={...(typeof provider.limit==='object'?provider.limit:{}),source:(provider.access||'subscription')==='subscription'&&['claude','codex'].includes(key)?key:'none'};
+}
+function switchProviderAccess(provider,access,stash,presets,offered) {
+  const old=provider.access||'subscription';
+  if(old===access)return;
+  const models=()=>Object.fromEntries(Object.entries(provider.classes||{}).map(([key,value])=>[key,Object.fromEntries(Object.entries(value).filter(([name])=>['model','customModel'].includes(name)))]));
+  stash[old]={values:Object.fromEntries(['apiKey','address','contextWindow'].filter(key=>Object.hasOwn(provider,key)).map(key=>[key,provider[key]])),models:models()};
+  for(const key of ['apiKey','address','contextWindow','server'])delete provider[key];
+  provider.access=access;
+  const held=stash[access] || (old!=='llm'&&access!=='llm'?{models:stash[old].models}:{});
+  Object.assign(provider,copy(held.values||{}));
+  let selectedModels=held.models||{},key=providerCli(provider,presets);
+  if(!offered.includes(key)){key=offered[0];selectedModels={};}
+  if(key!==providerCli(provider,presets))applyProviderCli(provider,key,presets);
+  provider.limit={...(typeof provider.limit==='object'?provider.limit:{}),source:access==='subscription'&&['claude','codex'].includes(key)?key:'none'};
+  for(const [name,entry] of Object.entries(provider.classes||{})){delete entry.model;delete entry.customModel;Object.assign(entry,copy(selectedModels[name]||{}));}
+}
+
 function setValue(object, path, value) {
 
   let target = object;
@@ -1449,30 +1474,61 @@ function mount(document, bootstrap) {
 
     } else if(tab==='Providers') {
 
+
       data.providers ||= [];
-
-      form.append(button('Add provider',()=>{data.providers.push(newProvider());editor.dirty=true;render();}));
-
-      data.providers.forEach((provider,index)=>{
-
-        const card=el('fieldset');card.append(el('legend',provider.name || t('Providers')));
-
-        const preset=el('select');preset.setAttribute('aria-label',t('CLI'));
-
-        for(const [key,value] of Object.entries(bootstrap.presets)){const option=el('option',value.label);option.value=key;preset.append(option);}const custom=el('option',t('Custom CLI'));custom.value='custom';preset.append(custom);
-
-        preset.value=['loginCommand','loginFiles','profileEnv','outputFormat'].some(name=>Object.hasOwn(provider,name))?'custom':Object.keys(bootstrap.presets).find(key=>bootstrap.presets[key].protocol===provider.protocol)||'custom';
-
-        preset.onchange=()=>{const values=bootstrap.presets[preset.value];if(values){const {label,...rest}=values;Object.assign(provider,copy(rest));for(const name of ['loginCommand','loginFiles','profileEnv','outputFormat'])delete provider[name];}else Object.assign(provider,{loginCommand:'',loginFiles:[],profileEnv:{},outputFormat:provider.protocol});editor.dirty=true;render();};card.append(preset);
-
-        const defaults=newProvider(provider.protocol);defaults.slots=data.slots || 2;
-
-        const selectedCapabilities=effectiveCapabilities(provider);
-        provider=mergeDefaults(defaults,provider);provider.capabilities=selectedCapabilities;data.providers[index]=provider;
-
-        provider.allowedTools=toolsFromArgs(provider.args);
-
-        fields(card,provider,['providers',index],data,new Set(['capabilities','capabilityThresholds']));
+      editor.providerIndex=Math.min(editor.providerIndex||0,Math.max(0,data.providers.length-1));
+      const layout=el('div',undefined,'provider-layout'),list=el('div',undefined,'provider-list');
+      const propose=provider=>{if(provider.nameEdited!==false)return;const key=providerCli(provider,bootstrap.presets),base=key+({api:'-api',llm:'-llm'}[provider.access]||'');let name=base,n=1;while(data.providers.some(p=>p!==provider&&p.name===name))name=base+'-'+(++n);provider.name=name;};
+      list.append(button('Add provider',()=>{const provider=newProvider();provider.nameEdited=false;provider.capabilitiesVersion=1;provider.slots=1;provider.use='fallback';data.providers.push(provider);propose(provider);editor.providerIndex=data.providers.length-1;changed();render();}));
+      data.providers.forEach((provider,index)=>{const item=button(provider.name||t('Providers'),()=>{editor.providerIndex=index;render();});item.className='provider-choice';item.setAttribute('aria-pressed',String(index===editor.providerIndex));item.append(el('small',t(bootstrap.choiceLabels?.access?.[provider.access||'subscription']||'Subscription')));list.append(item);});
+      layout.append(list);form.append(layout);
+      if(!data.providers.length){layout.append(el('p',t('Add provider')));}
+      else {
+        const index=editor.providerIndex,provider=data.providers[index],card=el('div',undefined,'provider-form');layout.append(card);
+        const path=['providers',index],customFields=['protocol','command','outputFormat','loginCommand','loginFiles','profileEnv'];
+        const defaults=newProvider(provider.protocol);
+        provider.capabilities=effectiveCapabilities(provider);
+        for(const key of ['enabled','name','slots','use','beeMode','args','contextLimit','claudeTools'])if(provider[key]===undefined)provider[key]=copy(defaults[key]);
+        provider.access ||= 'subscription';provider.classes ||= {};
+        const cliKey=providerCli(provider,bootstrap.presets),access=provider.access,status=providerStates.find(p=>p.name===provider.name);
+        const ready=Array.isArray(status?.ready)?status.ready[0]:!!status?.ready,reason=Array.isArray(status?.ready)?status.ready[1]:status?.reason;
+        const group=(title,parent=card)=>{const box=el('div',undefined,'provider-section');box.append(el('h3',t(title)));parent.append(box);return box;};
+        const selected=(parent,keys,object=provider,base=path)=>{for(const key of keys)if(object[key]===undefined)object[key]=copy(defaults[key]??'');fields(parent,object,base,data,new Set(Object.keys(object).filter(key=>!keys.includes(key))),false);};
+        const top=group('Providers');selected(top,['enabled','name','access']);
+        const inputFor=(parent,key)=>[...parent.querySelectorAll('[data-path]')].find(node=>node.dataset.path===JSON.stringify([...path,key]));
+        const nameInput=inputFor(top,'name');if(nameInput){const change=nameInput.oninput;nameInput.oninput=nameInput.onchange=()=>{change();provider.nameEdited=true;};}
+        const accessInput=inputFor(top,'access');if(accessInput){accessInput.oninput=null;accessInput.onchange=()=>{editor.typeStash ||= {};const offered=bootstrap.accessClis?.[accessInput.value]||Object.keys(bootstrap.presets);switchProviderAccess(provider,accessInput.value,editor.typeStash[index]||=( {}),bootstrap.presets,offered);propose(provider);changed();render();};}
+        if(status)top.append(el('p',t(ready?'Ready':'Not ready')+(reason?' · '+reason:''),ready?'provider-ready':'provider-not-ready'));
+        const cli=group('CLI'),label=el('label',undefined,'field'),preset=el('select');label.append(el('span',t('CLI')),preset,el('small',t(bootstrap.help.cli||'The program HaiveQueen starts for the agents of this provider.')));cli.append(label);preset.setAttribute('aria-label',t('CLI'));
+        const choices=bootstrap.accessClis?.[access]||[...Object.keys(bootstrap.presets),'custom'];
+        for(const key of choices){const option=el('option',bootstrap.presets[key]?.label||t('Custom CLI'));option.value=key;preset.append(option);}preset.value=cliKey;
+        preset.onchange=()=>{applyProviderCli(provider,preset.value,bootstrap.presets);propose(provider);changed();render();};
+        if(cliKey==='custom')selected(cli,customFields);
+        const source=group(access==='subscription'?'Login':access==='api'?'API key':'Local LLM');
+        const saved=!editor.dirty;
+        const savedAction=(title,fn,parent=source,ready=true)=>{const node=button(title,fn);node.disabled=node.disabled||!saved||!ready;node.dataset.savedOnly='true';parent.append(node);return node;};
+        if(access==='subscription'){
+          source.append(el('p',t(status?.logged_in?'Login present':'Login missing')));
+          savedAction('Login',async()=>{const run=await client.action('login/start',{provider:provider.name});if(run){loginRuns.set(run.id,run);renderLogin(run);}});
+          source.append(el('small',t('This login is shared by all providers with this CLI.')));
+        }else{
+          selected(source,access==='api'?['apiKey']:['address','apiKey','contextWindow']);
+          if(access==='llm'){
+            savedAction('Test connection',async()=>{const current=editor;await act('provider',{provider:provider.name,provider_action:'test'});if(current===editor&&!editor.dirty)await loadEditor('');});
+            const result=editor.provider_connections?.[provider.name];
+            if(result&&!editor.dirty){if(result.time)source.append(el('small',String(result.time)));for(const line of result.lines||[])source.append(el('p',line));}
+          }
+        }
+        const models=group('Models'),modelRows=el('div',undefined,'provider-models');models.append(modelRows);
+        const cachedModels=editor.provider_models?.[provider.name];
+        const localModels=cachedModels?.access==='llm'&&cachedModels.address===provider.address&&cachedModels.protocol===provider.protocol?cachedModels:{};
+        const offered=cliKey==='custom'?{}:access==='llm'?{...localModels,efforts:bootstrap.cliModels?.[cliKey]?.efforts||[]}:(bootstrap.cliModels?.[cliKey]||cachedModels||{});
+        for(const cls of ['light','medium','heavy']){
+          const line=el('div',undefined,'provider-model-row');line.append(el('h4',t(bootstrap.labels[cls]||pretty(cls))),el('small',t(bootstrap.help[cls]||'')));
+          const entry=provider.classes[cls] ||= {};entry.model ??= '';entry.effort ??= '';
+          fields(line,entry,[...path,'classes',cls],data,new Set(Object.keys(entry).filter(key=>!['model','effort'].includes(key))),false,offered);modelRows.append(line);
+        }
+        const use=group('Use');selected(use,['slots','use']);
         const capabilities=el('fieldset');capabilities.append(el('legend',t('Capabilities')));
         for(const row of capabilityRows(provider,bootstrap.capabilities)){
           const line=el('label',undefined,'capability-threshold'),check=el('input'),number=el('input');
@@ -1483,31 +1539,22 @@ function mount(document, bootstrap) {
           number.oninput=()=>{provider.capabilityThresholds ||= {};provider.capabilityThresholds[row.name]=number.value.trim()===''?'':Number(number.value);changed();};
           draw();capabilities.append(line);
         }
-        capabilities.append(button('Add own',()=>{const name=prompt(t('Capability name'));if(name?.trim()){provider.capabilities=effectiveCapabilities(provider);if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));card.append(capabilities);
+        capabilities.append(button('Add own',()=>{const name=prompt(t('Capability name'));if(name?.trim()){provider.capabilities=effectiveCapabilities(provider);if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));use.append(capabilities);
 
-        card.append(button('Remove entry',async()=>{if(await requestConfirm(t('Remove entry')+'?')){data.providers.splice(index,1);editor.dirty=true;render();}}));
 
-        const status=providerStates.find(p=>p.name===provider.name);if(status){card.append(el('p',t(status.logged_in?'Login present':'Login missing')));card.append(valueView(status));}
-
-        const models=editor.provider_models?.[provider.name];if(models)card.append(valueView(models));
-
-        card.append(valueView((editor.benchmark || []).filter(row=>row.provider===provider.name)));
-
-        const saved=!editor.dirty;
-
-        for(const operation of ['enable','disable','test']){const node=button({enable:'Enable',disable:'Disable',test:'Test connection'}[operation],async()=>{const current=editor;await act('provider',{provider:provider.name,provider_action:operation});if(current===editor&&!editor.dirty)await loadEditor('');});node.disabled=node.disabled || !saved;node.dataset.savedOnly='true';card.append(node);}
-
-        const login=button('Login',async()=>{
-
-          const run=await client.action('login/start',{provider:provider.name});loginRuns.set(run.id,run);renderLogin(run);
-
-        });login.disabled=login.disabled || !saved;login.dataset.savedOnly='true';card.append(login);
-
-        const benchmark=button('Benchmark Start Context',async()=>{const job=await client.action('benchmark/start',{provider:provider.name},t('This starts the provider CLI twice per Project and uses login tokens. Confirm to continue.'));if(job){jobs.set(job.id,job);renderJob(job);}});benchmark.disabled=benchmark.disabled || !saved;benchmark.dataset.savedOnly='true';card.append(benchmark);
-
-        form.append(card);
-
-      });
+        const advanced=el('details',undefined,'provider-advanced');advanced.append(el('summary',t('Advanced')));card.append(advanced);
+        provider.allowedTools=toolsFromArgs(provider.args);
+        selected(use,['contextLimit','beeMode']);
+        selected(advanced,['allowedTools','args',...(provider.protocol==='claude'?['claudeTools']:[])]);
+        const handled=new Set(['enabled','name','nameEdited','access','apiKey','address','contextWindow','slots','use','classes','limit','capabilities','capabilityThresholds','capabilitiesVersion','beeMode','contextLimit','allowedTools','args','claudeTools',...customFields]);
+        fields(advanced,provider,path,data,handled);
+        if(provider.limit&&typeof provider.limit==='object'){const limits=el('details');limits.append(el('summary',t('Usage check')));fields(limits,provider.limit,[...path,'limit'],data,new Set(['source']));advanced.append(limits);}
+        for(const [cls,entry] of Object.entries(provider.classes)){const extra=el('details');extra.append(el('summary',t(pretty(cls))+' · '+t('Own settings')));fields(extra,entry,[...path,'classes',cls],data,new Set(['model','effort','customModel']));advanced.append(extra);}
+        savedAction('Benchmark Start Context',async()=>{const job=await client.action('benchmark/start',{provider:provider.name},t('This starts the provider CLI twice per Project and uses login tokens. Confirm to continue.'));if(job){jobs.set(job.id,job);renderJob(job);}},models,ready);
+        const measurements=(editor.benchmark||[]).filter(row=>row.provider===provider.name).map(row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,typeof value==='number'&&!Number.isInteger(value)?Math.round(value*10)/10:value])));
+        if(measurements.length)advanced.append(valueView(measurements));
+        const footer=el('div',undefined,'provider-footer');footer.append(button('Remove entry',async()=>{if(await requestConfirm(t('Remove entry')+'?')){data.providers.splice(index,1);editor.typeStash={};changed();render();}}));card.append(footer);
+      }
 
     } else {
 
@@ -1615,7 +1662,7 @@ function mount(document, bootstrap) {
 
   function changed() {editor.dirty=true;const marker=$('dirty-marker');if(marker)marker.textContent=t('Unsaved changes');for(const node of view.querySelectorAll('[data-saved-only]'))node.disabled=true;}
 
-  function fields(parent, object, path, root, omit=new Set()) {
+  function fields(parent, object, path, root, omit=new Set(), allowAdd=true, modelChoices=null) {
 
     for(const [name,value] of Object.entries(object)){
 
@@ -1665,9 +1712,9 @@ function mount(document, bootstrap) {
 
           if(name==='model'){
 
-            const offered=editor.provider_models?.[provider.name]?.models;
+            const offered=modelChoices?.models || editor.provider_models?.[provider.name]?.models;
 
-            if(offered?.length){const entry=provider.classes[path[3]];if(offered.includes(next))delete entry.customModel;else entry.customModel=true;}
+            if(Array.isArray(offered)){const entry=provider.classes[path[3]];if(offered.includes(next))delete entry.customModel;else entry.customModel=true;}
 
           }
 
@@ -1681,7 +1728,7 @@ function mount(document, bootstrap) {
 
         const provider=path[0]==='providers'?root.providers[path[1]]:null;
 
-        const offered=provider?(editor.provider_models?.[provider.name] || {}):{};
+        const offered=modelChoices || (provider?(editor.provider_models?.[provider.name] || {}):{});
 
         const items=name==='model'?offered.models:offered.efforts;
 
@@ -1693,6 +1740,7 @@ function mount(document, bootstrap) {
 
     }
 
+    if(!allowAdd)return;
     const add=button('Add setting',()=>{
 
       const name=prompt(t('Setting name'));if(!name || ['__proto__','constructor','prototype','password'].includes(name) || Object.hasOwn(object,name))return;
@@ -1728,7 +1776,11 @@ function mount(document, bootstrap) {
 
     const data=copy(current.data);
 
-    if(!current.project)for(const provider of data.providers || [])delete provider.allowedTools;
+    if(!current.project)for(const provider of data.providers || []){
+      delete provider.allowedTools;
+      if((provider.access||'subscription')!=='llm'){delete provider.address;delete provider.contextWindow;delete provider.server;}
+      if((provider.access||'subscription')==='subscription')delete provider.apiKey;
+    }
 
     const loaded=await client.action('settings/save',{project:current.project || undefined,revision:current.revision,data,...(current.project?{place:current.place}:{})});
 
@@ -1854,6 +1906,6 @@ function mount(document, bootstrap) {
 
 }
 
-if(typeof module!=='undefined')module.exports={orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,mount};
+if(typeof module!=='undefined')module.exports={orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

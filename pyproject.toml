@@ -18,4 +18,4 @@ bzz = "haivequeen.cli:main"
 include = ["haivequeen*"]
 
 [tool.setuptools.package-data]
-haivequeen = ["bee_names.txt", "cli-models.json", "web-client.js", "web-client.css", "web-header.png", "web-icon.png", "app.ico"]
+haivequeen = ["bee_names.txt", "cli-models.json", "web-client.js", "web-client.css", "web-header.png", "web-icon.png", "app.ico", "web-access.css", "web-access.js"]

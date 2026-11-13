@@ -153,3 +153,17 @@ Restart replaces the web process so newly installed Python code is loaded;
 sessions then require login again. Settings reload and network-off rebind the
 listener inside its existing process. After `updates.restart_required` becomes
 true, the dashboard should POST `web/restart` and reconnect to the login page.
+# HTTPS reverse proxies
+
+When TLS terminates at nginx, preserve the public request host and set the external scheme explicitly:
+
+```nginx
+proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+The upstream connection can use HTTP. HaiveQueen uses a single `X-Forwarded-Proto: https` header for the secure session cookie and HTTPS indicator. Origin validation still requires the request's actual Host; `X-Forwarded-Host` cannot override it. Duplicate or comma-separated scheme headers do not enable HTTPS. The proxy must replace client-supplied forwarding headers. Local setup restrictions and session CSRF tokens still apply.
+
+Provider settings use the same access-aware form for adding and editing: Subscription shows shared login, API key shows the masked key, and Local LLM shows address, optional key, context window and connection test. Models, Use and a closed Advanced section follow. Switching access type retains type-specific drafts until save/reload; only the selected type is saved. Each enabled capability has its own 1–100 percent used-quota threshold beside its switch.
+
+Codex quota refresh reads account metadata using `account/rateLimits/read` without creating a model turn. A fallback session reading retains its observation time rather than appearing freshly measured. Dashboard usage labels distinguish used and remaining quota from the time-adjusted quota reserve. The metadata refresh runs in the background even when the orchestration loop is stopped.

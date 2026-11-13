@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
+from contextlib import closing
 import zlib
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -389,43 +391,59 @@ def get_claude_usage(conn, project: str = GLOBAL_PROJECT, provider=None) -> dict
     return res
 
 
-def get_codex_usage(codex_dir=None) -> dict:
-    """Return Codex's 5h/7d usage {five_hour, seven_day} each {pct, reset, at} or None.
-
-    Read from the last rate_limits block of the newest session logs; the windows are told apart by
-    window_minutes (300 = 5h, 10080 = week).
-    """
+def get_codex_usage(codex_dir=None, metadata=False) -> dict:
+    """Read the latest valid session quota, retaining its actual observation time."""
     res = {"five_hour": None, "seven_day": None}
     root = Path(codex_dir) if codex_dir else codex_root()
     try:
-        files = sorted((p for p in root.rglob("*.jsonl") if p.is_file()), key=lambda p: p.stat().st_mtime,
-                       reverse=True)[:3]
+        files = sorted((p for p in root.rglob("*.jsonl") if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)[:3]
         for f in files:
-            with open(f, "rb") as fh:
-                size = os.fstat(fh.fileno()).st_size
-                n = min(size, 400 * 1024)
-                fh.seek(size - n)
-                buf = fh.read(n)
-            lines = [ln for ln in buf.decode("utf-8", errors="replace").split("\n") if '"rate_limits":{' in ln]
-            if not lines:
-                continue
-            rl = json.loads(lines[-1]).get("payload", {}).get("rate_limits")
-            if not rl:
-                continue
-            now = int(datetime.now(timezone.utc).timestamp())
-            for w in (rl.get("primary"), rl.get("secondary")):
-                if not w or int(w["resets_at"]) <= now:
+            with f.open("rb") as stream:
+                size = f.stat().st_size
+                stream.seek(max(0, size - 400 * 1024))
+                lines = stream.read().decode("utf-8", errors="replace").splitlines()
+            for line in reversed(lines):
+                if '"rate_limits"' not in line:
                     continue
-                v = {"pct": round(float(w["used_percent"])), "reset": format_reset_time(w["resets_at"]),
-                     "at": int(w["resets_at"])}
-                if int(w.get("window_minutes") or 0) <= 400:
-                    res["five_hour"] = v
-                else:
-                    res["seven_day"] = v
-            break
-    except (ValueError, KeyError, TypeError, OSError, AttributeError):
+                try:
+                    event = json.loads(line)
+                    limits = (event.get("payload") or {}).get("rate_limits")
+                    if not isinstance(limits, dict):
+                        continue
+                    candidate = _codex_windows(limits)
+                    if not any(candidate.values()):
+                        continue
+                    if metadata:
+                        candidate["saved"] = event.get("timestamp") or datetime.fromtimestamp(f.stat().st_mtime, timezone.utc).isoformat()
+                    return candidate
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    continue
+    except OSError:
         pass
     return res
+
+
+def _codex_windows(limits):
+    result = {"five_hour": None, "seven_day": None}
+    now = time.time()
+    for window in (limits.get('primary'), limits.get('secondary')):
+        if not isinstance(window, dict):
+            continue
+        reset = window.get('resetsAt', window.get('resets_at'))
+        pct = window.get('usedPercent', window.get('used_percent'))
+        minutes = window.get('windowDurationMins', window.get('window_minutes'))
+        if reset is None or pct is None or isinstance(pct, bool) or not 0 <= float(pct) <= 100 or float(reset) <= now:
+            continue
+        # Do not silently present a different quota bucket as a seven-day limit.
+        name = 'five_hour' if minutes is not None and 0 < int(minutes) <= 400 else 'seven_day' if minutes is not None and int(minutes) == 10080 else None
+        if name:
+            result[name] = {'pct': round(float(pct)), 'reset': format_reset_time(reset), 'at': int(reset)}
+    return result
+
+
+def read_codex_rate_limits(provider=None):
+    from . import codex_quota
+    return codex_quota.read(provider)
 
 
 CODEX_USAGE_KEY = "usage-codex"
@@ -434,13 +452,11 @@ _codex_unreachable = {}   # codex folder -> whether the last read found no usage
 
 
 def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min_interval: float = None, force: bool = False, provider=None) -> bool:
-    """Write Codex's 5h/7d windows from the session logs into kv (key usage-codex, same form as usage-claude); True when written.
+    """Read live account quota, falling back to dated session metadata; never start a model turn.
 
-    Cheap: the logs are read at most once per `min_interval` seconds per folder; by default usage_interval decides (one minute,
-    ten minutes after a read that found no window: Codex not reachable). Nothing is written when no window is known
-    (the old value stays). Without an explicit folder it does nothing in a test runtime (BZZ_DATA_DIR set). Only reads the profile.
+    Throttled per provider. Explicit session directories and isolated test runtimes never contact the live CLI.
     """
-    if codex_dir is None and os.environ.get("BZZ_DATA_DIR"):
+    if codex_dir is None and (os.environ.get("BZZ_DATA_DIR") or os.environ.get("BZZ_RUNTIME_OVERRIDE")):
         return False
     root = str(Path(codex_dir) if codex_dir else codex_root())
     if provider:
@@ -452,8 +468,21 @@ def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min
     if not force and last is not None and nowt - last < min_interval:
         return False
     _codex_refresh[root] = nowt
-    u = get_codex_usage(codex_dir)
-    value = {"saved": datetime.now().astimezone().isoformat()}
+    u = None
+    if codex_dir is None:
+        try:
+            reply = read_codex_rate_limits(provider)
+            limits = (reply.get('rateLimitsByLimitId') or {}).get('codex') or reply.get('rateLimits') or {}
+            live = _codex_windows(limits)
+            if any(live.values()):
+                u = live
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
+            pass
+    if u is not None:
+        value = {"saved": datetime.now(timezone.utc).isoformat(), "source": "codex:account/rateLimits/read"}
+    else:
+        u = get_codex_usage(codex_dir, metadata=True)
+        value = {"saved": u.get("saved"), "source": "codex:session-log"}
     found = False
     for key, name in (("fiveHour", "five_hour"), ("sevenDay", "seven_day")):
         w = u[name]
@@ -467,6 +496,38 @@ def refresh_codex_usage(conn, codex_dir=None, project: str = GLOBAL_PROJECT, min
     if provider and provider.get("name"):
         runtime.kv_set(conn, project, CODEX_USAGE_KEY + ":" + str(provider["name"]), json.dumps(value))
     return True
+
+
+_dashboard_refresh_lock = threading.Lock()
+_dashboard_refresh_at = 0.0
+
+
+def schedule_dashboard_refresh(conn, providers):
+    """Refresh cached metadata off the dashboard request thread, including while the loop is stopped."""
+    global _dashboard_refresh_at
+    if os.environ.get('BZZ_DATA_DIR') or os.environ.get('BZZ_RUNTIME_OVERRIDE') or os.environ.get('BZZ_PROVIDER_LIMITS_FILE'):
+        return
+    if time.monotonic() - _dashboard_refresh_at < 60 or not _dashboard_refresh_lock.acquire(blocking=False):
+        return
+    path = conn.execute('PRAGMA database_list').fetchone()[2]
+    if not path:
+        _dashboard_refresh_lock.release()
+        return
+    _dashboard_refresh_at = time.monotonic()
+    def refresh():
+        try:
+            with closing(db.connect(path)) as connection:
+                for provider in providers:
+                    try:
+                        if provider.get('limit') == 'codex':
+                            refresh_codex_usage(connection, provider=provider)
+                        elif provider.get('limit') == 'claude':
+                            refresh_claude_usage(connection, [provider])
+                    except Exception:
+                        pass  # keep the last dated reading when a provider is unavailable
+        finally:
+            _dashboard_refresh_lock.release()
+    threading.Thread(target=refresh, name='quota-metadata', daemon=True).start()
 
 
 def format_usage(u) -> str:
