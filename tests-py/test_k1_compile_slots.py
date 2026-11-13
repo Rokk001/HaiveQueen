@@ -273,14 +273,19 @@ class CheckStepTests(unittest.TestCase):
                     for index, hold in enumerate((0, 1)):
                         extra = [integration._acquire_compile_slot(settings, 0.01) for _ in range(hold)]
                         result = Path(folder) / ("r%d.json" % index)
+                        marker = Path(folder) / ("started%d" % index)
                         job = orchestrator.Job("t%d" % index)
-                        thread = threading.Thread(target=orchestrator._work, args=(settings, job, "Check", '"%s" -c "pass"' % sys.executable, folder, None, str(result)), daemon=True)
+                        command = '"%s" -c "import pathlib,time; pathlib.Path(\'%s\').touch(); time.sleep(1.1)"' % (sys.executable, marker.name)
+                        thread = threading.Thread(target=orchestrator._work, args=(settings, job, "Check", command, folder, None, str(result)), daemon=True)
                         thread.start()
-                        thread.join(1.0 if hold == 0 else 0.5)
-                        ran.append(not thread.is_alive())
+                        deadline = time.monotonic() + (10 if hold == 0 else 0.5)
+                        while not marker.exists() and time.monotonic() < deadline:
+                            time.sleep(0.05)
+                        ran.append(marker.exists())
                         for slot in extra:
                             integration._release_compile_slot(slot, 0.01)
-                        thread.join(10)
+                        thread.join(30)
+                        self.assertFalse(thread.is_alive(), "the Check step did not finish")
                         self.assertEqual(json.loads(result.read_text(encoding="utf-8"))["code"], 0)
                     self.assertEqual(ran, [True, False], "the Check step must run with one other check and wait with two")
             finally:
