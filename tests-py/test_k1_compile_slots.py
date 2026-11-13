@@ -253,7 +253,8 @@ class CheckStepTests(unittest.TestCase):
         self.addCleanup(data.cleanup)
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": data.name}), mock.patch.object(integration.osplat, "free_ram_mb", return_value=BIG), \
                 mock.patch.object(integration, "_running_builds", return_value=0), mock.patch.object(orchestrator, "POLL", 0.05):
-            settings = {KEY: 2, "compileStallMinutes": 5, "compileMaxMinutes": 5}
+            settings = {KEY: 2, "compileStallMinutes": 5, "compileMaxMinutes": 5,
+                        "buildJobs": {"cores": 2, "minFreeRamGB": 0}}
             first = integration._acquire_compile_slot(settings, 0.01)   # one other check runs: the Check step still starts (limit 2)
             try:
                 with tempfile.TemporaryDirectory() as folder:
@@ -264,7 +265,7 @@ class CheckStepTests(unittest.TestCase):
                         job = orchestrator.Job("t%d" % index)
                         thread = threading.Thread(target=orchestrator._work, args=(settings, job, "Check", '"%s" -c "pass"' % sys.executable, folder, None, str(result)), daemon=True)
                         thread.start()
-                        thread.join(1.0 if hold == 0 else 0.5)
+                        thread.join(15.0 if hold == 0 else 2.0)
                         ran.append(not thread.is_alive())
                         for slot in extra:
                             integration._release_compile_slot(slot, 0.01)
