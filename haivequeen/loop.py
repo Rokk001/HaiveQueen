@@ -1010,6 +1010,13 @@ def cmd_start(args, conn) -> int:
             return command_result(args, {'ok': False, 'running': True, 'pid': pid, 'error': error}) or 1
         return command_result(args, {"ok": True, "running": True, "pid": pid, **browser,
                                      "note": "The orchestrator is already running."})
+    # Recover cleanup interrupted with the stopping client before allowing any
+    # scheduling or clearing the durable force-stop request.
+    from . import force_stop
+    if force_stop.requested():
+        result = force_stop.stop(conn)
+        if not result['ok']:
+            return command_result(args, result) or 1
     try:
         if "(self-update)" in stop_flag().read_text(encoding="utf-8", errors="replace"):   # an older self-update restarts without --keep-pause
             args.keep_pause = True

@@ -144,42 +144,50 @@ def stop(conn, kill=None, end_loop=None):
             errors.append(str(exc))
     _, _, victims, _ = _snapshot(conn)
     _end_work(victims, kill, errors)
-    try:
-        with loop.hive_schedule_lock(timeout=0):
-            # Re-read under the lock to catch work registered during termination.
-            rows, states, current, checks = _snapshot(conn)
-            _end_work(current - victims, kill, errors)
-            victims.update(current)
+    # A live owner command may still be registering work. Keep stopping new
+    # registrations while waiting, then take the final snapshot under its lock.
+    # Never steal a live holder's lock or require another owner confirmation.
+    while True:
+        try:
+            with loop.hive_schedule_lock(timeout=0.1, reason="force-stop cleanup"):
+                # Re-read under the lock to catch work registered during termination.
+                rows, states, current, checks = _snapshot(conn)
+                _end_work(current - victims, kill, errors)
+                victims.update(current)
+                if errors:
+                    return {'ok': False, 'error': '; '.join(errors), 'warning': WARNING}
+                for row in rows:
+                    runtime.upsert_agent(conn, row['project'], row['name'], {'status': 'done', 'pid': None, 'ended_at': db.now(), 'last_line': runtime.STOPPED_LINE, 'interrupted': interrupt.VANISHED, 'retryAt': ''})
+                bees.ensure_attempts(conn)
+                conn.execute("UPDATE embedded_bees SET ended_at=?,outcome='interrupted' WHERE ended_at IS NULL", (db.now(),))
+                # Clear only unfinished pipeline steps; completed steps and plan status stay.
+                for project, plan, state in states:
+                    state.pop('job', None)
+                    state['steps'] = {k: v for k, v in state.get('steps', {}).items() if v != 'running'}
+                    state['placed'] = False
+                    if state.get('fix'):
+                        if state['fix'].get('agent'):
+                            key = orchestrator.ATTEMPTS_KEY + plan
+                            attempts = json.loads(runtime.kv_get(conn, project, key) or '{}')
+                            if attempts.get('n'):
+                                attempts['n'] = max(0, int(attempts['n']) - 1)
+                                runtime.kv_set(conn, project, key, json.dumps(attempts))
+                        state['fix']['agent'] = None
+                    orchestrator.save(conn, project, plan, state)
+                for project, token, request in checks:
+                    result = integration._aborted_result(request, 'Force stopped by the owner')
+                    runtime.kv_set(conn, project, integration.COMPILE_RUN_KEY + token, json.dumps(result))
+                    runtime.kv_set(conn, project, request['key'], json.dumps(result))
+                conn.execute('DELETE FROM hive_integration')
+                for victim in victims:
+                    proctree.exempt_clear(victim)
+            break
+        except TimeoutError:
             if errors:
                 return {'ok': False, 'error': '; '.join(errors), 'warning': WARNING}
-            for row in rows:
-                runtime.upsert_agent(conn, row['project'], row['name'], {'status': 'done', 'pid': None, 'ended_at': db.now(), 'last_line': runtime.STOPPED_LINE, 'interrupted': interrupt.VANISHED, 'retryAt': ''})
-            bees.ensure_attempts(conn)
-            conn.execute("UPDATE embedded_bees SET ended_at=?,outcome='interrupted' WHERE ended_at IS NULL", (db.now(),))
-            # Clear only unfinished pipeline steps; completed steps and plan status stay.
-            for project, plan, state in states:
-                state.pop('job', None)
-                state['steps'] = {k: v for k, v in state.get('steps', {}).items() if v != 'running'}
-                state['placed'] = False
-                if state.get('fix'):
-                    if state['fix'].get('agent'):
-                        key = orchestrator.ATTEMPTS_KEY + plan
-                        attempts = json.loads(runtime.kv_get(conn, project, key) or '{}')
-                        if attempts.get('n'):
-                            attempts['n'] = max(0, int(attempts['n']) - 1)
-                            runtime.kv_set(conn, project, key, json.dumps(attempts))
-                    state['fix']['agent'] = None
-                orchestrator.save(conn, project, plan, state)
-            for project, token, request in checks:
-                result = integration._aborted_result(request, 'Force stopped by the owner')
-                runtime.kv_set(conn, project, integration.COMPILE_RUN_KEY + token, json.dumps(result))
-                runtime.kv_set(conn, project, request['key'], json.dumps(result))
-            conn.execute('DELETE FROM hive_integration')
-            for victim in victims:
-                proctree.exempt_clear(victim)
-    except TimeoutError as exc:
-        errors.append('Force-stop cleanup is pending: %s' % exc)
-        return {'ok': False, 'error': '; '.join(errors), 'warning': WARNING}
+            _, _, current, _ = _snapshot(conn)
+            _end_work(current - victims, kill, errors)
+            victims.update(current)
     return {'ok': True, 'running_agents': 0, 'warning': WARNING}
 
 

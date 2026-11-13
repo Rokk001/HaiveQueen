@@ -23,29 +23,71 @@ class ForceStopTests(RoundCase):
         holder.start()
         events = []
         acquire = loop.hive_schedule_lock
+        attempts = []
         def cleanup_lock(*args, **kwargs):
             self.assertTrue(force_stop.requested())
-            self.assertEqual(events[:1], [('loop', 910004)])
-            self.assertEqual(set(events[1:]), {('work', 910002), ('work', 910003)})
-            return acquire(timeout=0)
+            if not attempts:
+                self.assertEqual(events[:1], [('loop', 910004)])
+                self.assertEqual(set(events[1:]), {('work', 910002), ('work', 910003)})
+                self.agent('late-worker', phase='bee', status='running', pid=910005, started=1)
+                orchestrator.save(self.conn, 'testproj', REL + '-late', {
+                    'steps': {'Deploy': 'running'}, 'job': {'pid': 910006}})
+                self.agent('reused-worker', phase='bee', status='running', pid=910007, started=1)
+                runtime.kv_set(self.conn, 'testproj', integration.COMPILE_REQUEST_KEY + 'late', json.dumps({
+                    'supervisor_pid': 910008, 'supervisor_identity': 'supervisor',
+                    'check_pid': 910009, 'check_identity': 'old-check',
+                    'key': 'compile-check:late', 'commit': 'abc1234', 'settings': {}}))
+            attempts.append(True)
+            return acquire(*args, **kwargs)
+        def kill(pid):
+            events.append(('work', pid))
+            if {('work', 910005), ('work', 910006), ('work', 910008)} <= set(events):
+                release.set()
+            return True
         try:
             self.assertTrue(held.wait(5))
-            with mock.patch.object(loop, 'loop_running', return_value=910004), mock.patch.object(force_stop.agent_process, 'pid_reused', return_value=False), mock.patch.object(loop, 'hive_schedule_lock', side_effect=cleanup_lock):
-                result = force_stop.stop(self.conn,
-                                         kill=lambda pid: events.append(('work', pid)) or True,
+            with mock.patch.object(loop, 'loop_running', return_value=910004), mock.patch.object(force_stop.agent_process, 'pid_reused', side_effect=lambda row: row.get('pid') == 910007), mock.patch.object(force_stop.osplat, 'process_identity', side_effect=lambda pid: {910008: 'supervisor', 910009: 'new-check'}[pid]), mock.patch.object(loop, 'hive_schedule_lock', side_effect=cleanup_lock):
+                result = force_stop.stop(self.conn, kill=kill,
                                          end_loop=lambda pid: events.append(('loop', pid)) or True)
-            self.assertFalse(result['ok'])
-            self.assertIn('cleanup', result['error'].lower())
-            self.assertEqual(runtime.get_agent(self.conn, 'testproj', 'worker')['status'], 'running')
-            self.assertIn('job', orchestrator.load(self.conn, 'testproj', REL))
+            self.assertTrue(result['ok'], result)
+            self.assertTrue(release.is_set(), 'Late work must stop before the lock is released')
+            self.assertGreater(len(attempts), 1)
+            self.assertEqual(len(events), 6)
         finally:
             release.set()
             holder.join(5)
-        # Retrying cleanup preserves completed steps and permits a later restart.
-        with mock.patch.object(loop, 'loop_running', return_value=0), mock.patch.object(force_stop.agent_process, 'pid_reused', return_value=False):
-            self.assertTrue(force_stop.stop(self.conn, kill=lambda pid: True)['ok'])
         self.assertEqual(orchestrator.load(self.conn, 'testproj', REL)['steps'], {'Merge': 'done'})
-        self.assertTrue(interrupt.is_interrupted(runtime.get_agent(self.conn, 'testproj', 'worker')))
+        self.assertNotIn('job', orchestrator.load(self.conn, 'testproj', REL + '-late'))
+        self.assertTrue(json.loads(runtime.kv_get(self.conn, 'testproj', integration.COMPILE_RUN_KEY + 'late'))['aborted'])
+        self.assertTrue(all(interrupt.is_interrupted(runtime.get_agent(self.conn, 'testproj', name))
+                            for name in ('worker', 'late-worker')))
+        self.assertEqual(runtime.get_agent(self.conn, 'testproj', 'reused-worker')['status'], 'running')
+
+    def test_start_recovers_interrupted_force_stop_before_resuming(self):
+        self.agent('worker', phase='bee', status='running', pid=910002, started=1)
+        orchestrator.save(self.conn, 'testproj', REL, {
+            'steps': {'Merge': 'done', 'Build': 'running'}, 'job': {'pid': 910003}})
+        loop.stop_flag().parent.mkdir(parents=True, exist_ok=True)
+        loop.stop_flag().write_text('force stop requested before crash\n', encoding='utf-8')
+        args = cli.build_parser().parse_args(['start', '--foreground'])
+        killed = []
+        def run(*args):
+            self.assertFalse(loop.stop_flag().exists())
+            self.assertEqual(set(killed), {910002, 910003})
+            self.assertTrue(interrupt.is_interrupted(runtime.get_agent(self.conn, 'testproj', 'worker')))
+            self.assertEqual(orchestrator.load(self.conn, 'testproj', REL)['steps'], {'Merge': 'done'})
+            return 0
+        with mock.patch.object(loop, 'loop_running', return_value=0), mock.patch.object(force_stop.agent_process, 'pid_reused', return_value=False), mock.patch.object(force_stop.osplat, 'kill_process_tree', side_effect=lambda pid: killed.append(pid) or True), mock.patch.object(loop, 'run_loop', side_effect=run):
+            self.assertEqual(loop.cmd_start(args, self.conn), 0)
+
+    def test_start_keeps_stop_marker_when_recovery_fails(self):
+        loop.stop_flag().parent.mkdir(parents=True, exist_ok=True)
+        loop.stop_flag().write_text('force stop requested before crash\n', encoding='utf-8')
+        args = cli.build_parser().parse_args(['start', '--foreground'])
+        with mock.patch.object(loop, 'loop_running', return_value=0), mock.patch.object(force_stop, 'stop', return_value={'ok': False, 'error': 'termination failed'}), mock.patch.object(loop, 'run_loop') as run:
+            self.assertNotEqual(loop.cmd_start(args, self.conn), 0)
+        run.assert_not_called()
+        self.assertTrue(force_stop.requested())
 
     def test_work_registered_before_cleanup_is_stopped_once(self):
         self.agent('worker', phase='bee', status='running', pid=910002, started=1)
