@@ -1,5 +1,9 @@
 import io
 import json
+from email.parser import BytesParser
+from email.policy import default
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -14,6 +18,38 @@ class Response(io.BytesIO):
 
 
 class GitLabTests(unittest.TestCase):
+    @mock.patch.object(gitlab, 'urlopen')
+    def test_local_asset_upload_and_attachment(self, urlopen):
+        urlopen.side_effect = [Response({'url': '/uploads/abc/build_file.zip'}), Response({'id': 42})]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'build file.zip'
+            path.write_bytes(b'\x00binary\xff\r\n')
+            result = gitlab.asset('group/sub/repo', 'v1/a', path.name, path, 'secret')
+
+        self.assertEqual(result, {'id': 42})
+        upload, link = [call.args[0] for call in urlopen.call_args_list]
+        self.assertEqual(upload.full_url, 'https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo/uploads')
+        self.assertEqual(upload.get_method(), 'POST')
+        self.assertEqual(upload.get_header('Private-token'), 'secret')
+        message = BytesParser(policy=default).parsebytes(
+            ('Content-Type: ' + upload.get_header('Content-type') + '\r\nMIME-Version: 1.0\r\n\r\n').encode() + upload.data)
+        part = list(message.iter_parts())[0]
+        self.assertEqual(part.get_param('name', header='content-disposition'), 'file')
+        self.assertEqual(part.get_filename(), 'build file.zip')
+        self.assertEqual(part.get_payload(decode=True), b'\x00binary\xff\r\n')
+        self.assertTrue(link.full_url.endswith('/releases/v1%2Fa/assets/links'))
+        self.assertEqual(json.loads(link.data), {'name': 'build file.zip', 'url': 'https://gitlab.com/group/sub/repo/uploads/abc/build_file.zip'})
+
+    @mock.patch.object(gitlab, 'urlopen')
+    def test_failed_upload_does_not_attach(self, urlopen):
+        urlopen.side_effect = OSError('upload failed')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'file.bin'
+            path.write_bytes(b'data')
+            with self.assertRaisesRegex(OSError, 'upload failed'):
+                gitlab.asset('group/repo', 'v1', path.name, path, 'secret')
+        self.assertEqual(urlopen.call_count, 1)
+
     def test_detection_and_dispatch(self):
         for remote in ('https://gitlab.com/group/sub/repo.git', 'git@gitlab.com:group/sub/repo.git', 'ssh://git@gitlab.com/group/sub/repo.git'):
             provider, errors = git_provider.discover(remote)

@@ -1,6 +1,9 @@
 """GitLab.com REST provider. Operations return GitLab's decoded JSON objects."""
 import json
+import mimetypes
+from pathlib import Path
 import re
+from uuid import uuid4
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
@@ -33,7 +36,7 @@ def detect(remote):
     return '/'.join(parts)
 
 
-def _request(repo, method, path, token=None, data=None, query=None):
+def _request(repo, method, path, token=None, data=None, query=None, multipart=None):
     if detect('https://gitlab.com/' + str(repo)) != repo:
         raise ValueError('invalid GitLab repository')
     url = 'https://gitlab.com/api/v4/projects/' + quote(repo, safe='') + path
@@ -43,7 +46,17 @@ def _request(repo, method, path, token=None, data=None, query=None):
     if token:
         headers['PRIVATE-TOKEN'] = token
     body = None
-    if data is not None:
+    if multipart is not None:
+        filename, content = multipart
+        if any(ord(char) < 32 or ord(char) == 127 for char in filename):
+            raise ValueError('invalid upload filename')
+        boundary = uuid4().hex
+        filename = filename.replace('\\', '\\\\').replace('"', '\\"')
+        content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+        body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                f'Content-Type: {content_type}\r\n\r\n').encode('utf-8') + content + f'\r\n--{boundary}--\r\n'.encode('ascii')
+        headers['Content-Type'] = 'multipart/form-data; boundary=' + boundary
+    elif data is not None:
         body = json.dumps(data).encode('utf-8')
         headers['Content-Type'] = 'application/json'
     with urlopen(Request(url, data=body, headers=headers, method=method), timeout=30) as response:
@@ -66,6 +79,13 @@ def release(repo, tag_name, name, description, token, ref=None):
 
 
 def asset(repo, tag_name, name, url, token):
+    if not isinstance(url, str) or urlsplit(url).scheme.lower() not in ('http', 'https', 'ftp'):
+        path = Path(url)
+        upload, _ = _request(repo, 'POST', '/uploads', token, multipart=(path.name, path.read_bytes()))
+        relative_url = upload['url']
+        if not isinstance(relative_url, str) or not relative_url.startswith('/uploads/'):
+            raise ValueError('invalid GitLab upload URL')
+        url = 'https://gitlab.com/' + quote(repo, safe='/') + quote(relative_url, safe='/%')
     return _request(repo, 'POST', '/releases/' + quote(tag_name, safe='') + '/assets/links', token, {'name': name, 'url': url})[0]
 
 
