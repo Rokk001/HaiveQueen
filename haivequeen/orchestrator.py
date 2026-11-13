@@ -94,7 +94,10 @@ def _save_last(conn, project, plan, **fields):
 
 def commands(env):
     """{Check, Build, Deploy}: the command line of each step ('' = the step is skipped)."""
-    return {step: str(env.settings.get(key) or "").strip() for step, key in SETTING.items()}
+    from . import projsettings
+    settings = projsettings.working_settings(env.settings)
+    return {step: str(settings.get(key) or "").strip() if settings[step.lower() + "Enabled"] else ""
+            for step, key in SETTING.items()}
 
 
 def chain(env):
