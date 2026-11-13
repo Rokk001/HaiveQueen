@@ -10,6 +10,19 @@ from haivequeen import config, web_settings
 
 
 class WebSettingsTest(unittest.TestCase):
+    def test_thresholds_validate_and_round_trip_including_disabled(self):
+        path = self.base / 'config.toml'
+        loaded = web_settings.load(path)
+        provider = {'name': 'sample', 'capabilities': ['Coding'], 'capabilitiesVersion': 1,
+                    'capabilityThresholds': {'Coding': 72, 'Queen': 38}}
+        saved = web_settings.save(path, {'providers': [provider]}, loaded['revision'])
+        self.assertEqual(web_settings.load(path)['settings']['providers'][0]['capabilityThresholds'],
+                         {'Coding': 72, 'Queen': 38})
+        for invalid in (0, 101, 1.5, True, '40'):
+            provider['capabilityThresholds']['Coding'] = invalid
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                web_settings.save(path, {'providers': [provider]}, saved['revision'])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

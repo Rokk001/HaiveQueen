@@ -1,4 +1,8 @@
 const assert = require('node:assert/strict');
+const {capabilityRows} = require('../haivequeen/web-client.js');
+const rows = capabilityRows({capabilities:['Coding'], capabilityThresholds:{Queen:42}}, ['Coding','Queen','Build']);
+assert.deepEqual(rows, [{name:'Coding', enabled:true, threshold:100}, {name:'Queen', enabled:false, threshold:42}, {name:'Build', enabled:false, threshold:100}]);
+assert.equal(capabilityRows({capabilities:['Queen'],capabilityThresholds:{Queen:42}}, ['Queen'])[0].threshold, 42);
 const {Client, planActions, setValue, safeLinks, toolsFromArgs, withTools, orchestratorDisabled} = require('../haivequeen/web-client.js');
 
 (async () => {

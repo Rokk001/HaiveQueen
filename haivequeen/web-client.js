@@ -7,6 +7,10 @@ function setValue(object, path, value) {
   target[path[path.length - 1]] = value;
 }
 function safeLinks(links) { return links.filter(link => /^https?:\/\//i.test(link)); }
+function capabilityRows(provider, names=[]) {
+  const selected=provider.capabilities || [], thresholds=provider.capabilityThresholds || {};
+  return [...new Set([...names,...selected,...Object.keys(thresholds)])].map(name=>({name,enabled:selected.includes(name),threshold:thresholds[name] ?? 100}));
+}
 function orchestratorDisabled(action, label) {
   if(action==='start')return label!=='STOPPED';
   if(action==='stop-gracefully')return label==='STOPPED'||label==='STOPPING';
@@ -364,7 +368,16 @@ function mount(document, bootstrap) {
         const defaults=newProvider(provider.protocol);defaults.slots=data.slots || 2;
         provider=mergeDefaults(defaults,provider);data.providers[index]=provider;
         provider.allowedTools=toolsFromArgs(provider.args);
-        fields(card,provider,['providers',index],data);
+        fields(card,provider,['providers',index],data,new Set(['capabilities','capabilityThresholds']));
+        const capabilities=el('fieldset');capabilities.append(el('legend',t('Capabilities')));
+        for(const row of capabilityRows(provider,bootstrap.capabilities)){
+          const line=el('label',undefined,'capability-threshold'),check=el('input'),number=el('input');
+          check.type='checkbox';check.checked=row.enabled;number.type='number';number.min='1';number.max='100';number.step='1';number.value=row.threshold;number.disabled=!row.enabled;number.required=true;
+          check.onchange=()=>{const selected=new Set(provider.capabilities || []);if(check.checked)selected.add(row.name);else selected.delete(row.name);provider.capabilities=[...selected];provider.capabilitiesVersion=1;number.disabled=!check.checked;changed();};
+          number.oninput=()=>{provider.capabilityThresholds ||= {};provider.capabilityThresholds[row.name]=number.value.trim()===''?'':Number(number.value);changed();};
+          line.append(check,el('span',t(row.name)),number,el('span',t('% usage limit')));capabilities.append(line);
+        }
+        capabilities.append(button('Add own',()=>{const name=prompt(t('Capability name'));if(name?.trim()){provider.capabilities ||= [];if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));card.append(capabilities);
         card.append(button('Remove entry',()=>{if(confirm(t('Remove entry')+'?')){data.providers.splice(index,1);editor.dirty=true;render();}}));
         const status=providerStates.find(p=>p.name===provider.name);if(status){card.append(el('p',t(status.logged_in?'Login present':'Login missing')));card.append(valueView(status));}
         const models=editor.provider_models?.[provider.name];if(models)card.append(valueView(models));
@@ -484,6 +497,7 @@ function mount(document, bootstrap) {
   }
   async function saveEditor() {
     const current=editor;
+    for(const input of view.querySelectorAll('.capability-threshold input[type="number"]'))if(!input.disabled && !input.reportValidity())return;
     const sent=JSON.stringify([current.data,current.place]);
     const data=copy(current.data);
     if(!current.project)for(const provider of data.providers || [])delete provider.allowedTools;
@@ -549,5 +563,5 @@ function mount(document, bootstrap) {
   render();void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,mount};
+if(typeof module!=='undefined')module.exports={Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));
