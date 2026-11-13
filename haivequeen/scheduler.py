@@ -154,6 +154,21 @@ def provider_capabilities(p):
     return list(dict.fromkeys(capabilities))
 
 
+def capability_thresholds(p):
+    """Validate stored thresholds and fill defaults, including legacy capabilities."""
+    values = p.get("capabilityThresholds", {})
+    if not isinstance(values, dict):
+        raise ValueError(tr("provider %s: capability thresholds must be a table", p.get("name", "")))
+    result = {}
+    for capability, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
+            raise ValueError(tr("provider %s: capability threshold must be a whole percent from 1 to 100", p.get("name", "")))
+        result[canonical_capability(capability)] = value
+    for capability in provider_capabilities(p):
+        result.setdefault(capability, 100)
+    return result
+
+
 def get_providers(settings: dict) -> list:
     """Return the provider entries as dicts (name, protocol, command, args, slots, use, capabilities, classes, limit, endpoint).
 
@@ -186,7 +201,7 @@ def get_providers(settings: dict) -> list:
             "name": name, "enabled": p.get("enabled", True) is not False, "protocol": proto, "format": fmt, "command": str(p.get("command") or proto), "beeMode": bee_mode,
             "args": [str(a) for a in (p.get("args") or [])],
             "slots": int(p.get("slots", settings.get("slots", 0)) or 0), "use": use,
-            "capabilities": capabilities, "capabilitiesVersion": 1,
+            "capabilities": capabilities, "capabilitiesVersion": 1, "capabilityThresholds": capability_thresholds(p),
             "classes": p.get("classes") or {},
             "limit": servers.limit_source(p),   # derived from the CLI and the access type, a stored source is not used
             "usageInterval": float(limit.get("interval", 60)) if isinstance(limit, dict) else 60,
@@ -424,6 +439,21 @@ def reserve_zero(provider: dict, conn=None):
     return resv is not None and resv <= 0
 
 
+def threshold_reached(provider, needs, conn=None, limits=None, now=None):
+    """Whether either active usage window reached a required capability threshold."""
+    if without_limit(provider):
+        return False
+    now = time.time() if now is None else now
+    thresholds = provider.get("capabilityThresholds") or {}
+    threshold = min((thresholds.get(canonical_capability(n), 100) for n in (needs or ["Coding"])), default=100)
+    weekly = provider_limit(provider, conn, limits)
+    if weekly["Hours"] > 0 and 100.0 - weekly["FreePct"] >= threshold:
+        return True
+    five = _five_hour_window(provider, conn, limits, now)
+    return bool(five and (five["reset_epoch"] is None or five["reset_epoch"] > now)
+                and 100.0 - five["free_pct"] >= threshold)
+
+
 # ---- capabilities and selection ----
 
 CAPABILITY_ALIASES = {"images": "Image generation", "blender": "3D modelling", "build": "Build"}
@@ -494,6 +524,8 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
         if any(n not in p["capabilities"] for n in needs):
             continue
         if "Coding" not in p["capabilities"] and not needs:
+            continue
+        if threshold_reached(p, needs, conn, limits, now):
             continue
         resv = provider_reserve(p, conn, limits, now)   # the quota reserve from both usage windows; None without limit (+99 %)
         if resv is not None and resv <= 0:
