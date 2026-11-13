@@ -89,3 +89,14 @@ class WebServiceTests(unittest.TestCase):
                 self.assertTrue(web_service.start()['running'])
         finally:
             conn.close()
+
+    def test_restart_closes_idle_connections_before_rebinding(self):
+        path = self.configure()
+        web_service.start()
+        with socket.create_connection(('127.0.0.1', web_auth.read(path)['port']), timeout=3) as idle:
+            # Wait for acceptance without sending a complete HTTP request.
+            idle.sendall(b'GET / HTTP/1.1\r\n')
+            time.sleep(0.1)
+            result = web_service.restart()
+            self.assertTrue(result['ok'], result)
+            self.assertEqual(idle.recv(1), b'')

@@ -33,6 +33,9 @@ class _Server(http.server.ThreadingHTTPServer):
         super().server_bind()
 
     def __init__(self, *args, **kwargs):
+        self.tls_context = None
+        self.connections = set()
+        self.connection_lock = threading.Lock()
         self.config_path = config.config_dir() / 'config.toml'
         self.sessions = {}
         self.session_lock = threading.Lock()
@@ -40,6 +43,38 @@ class _Server(http.server.ThreadingHTTPServer):
         self.api = self.engine_api
         self.lifecycle = lambda action: None
         super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        connection, address = super().get_request()
+        try:
+            connection.settimeout(15)
+            if self.tls_context:
+                # An incomplete handshake must occupy only this client's thread.
+                connection = self.tls_context.wrap_socket(connection, server_side=True, do_handshake_on_connect=False)
+            with self.connection_lock:
+                self.connections.add(connection)
+            return connection, address
+        except Exception:
+            connection.close()
+            raise
+
+    def shutdown_request(self, request):
+        try:
+            super().shutdown_request(request)
+        finally:
+            with self.connection_lock:
+                self.connections.discard(request)
+
+    def server_close(self):
+        with self.connection_lock:
+            connections = list(self.connections)
+        for connection in connections:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            connection.close()
+        super().server_close()
 
     @staticmethod
     def engine_api(action, data):
@@ -230,10 +265,5 @@ def make_server(settings, handler=_Handler):
     """Bind a listener, validating TLS files before opening the socket."""
     context = validate_tls(settings)
     server = _Server((web_auth.bind_address(settings), settings['port']), handler)
-    try:
-        if context:
-            server.socket = context.wrap_socket(server.socket, server_side=True)
-    except Exception:
-        server.server_close()
-        raise
+    server.tls_context = context
     return server

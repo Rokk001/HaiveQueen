@@ -1,6 +1,7 @@
 import http.client
 import json
 import os
+import socket
 import ssl
 import tempfile
 import threading
@@ -124,3 +125,28 @@ class WebRoutesTests(unittest.TestCase):
             server.shutdown()
             worker.join()
             server.server_close()
+
+    def test_idle_tls_client_cannot_block_listener_shutdown(self):
+        fixtures = Path(__file__).parent / 'fixtures' / 'web-tls'
+        server = web_server.make_server({**web_auth.read(self.path), 'port': 0,
+                                        'certificate': str(fixtures / 'cert.pem'), 'key': str(fixtures / 'key.pem')})
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        idle = socket.create_connection(server.server_address, timeout=3)
+        finished = threading.Event()
+        def close():
+            server.shutdown()
+            finished.set()
+        closer = threading.Thread(target=close, daemon=True)
+        try:
+            # TCP connects, but the peer never sends its TLS ClientHello.
+            import time
+            time.sleep(0.1)
+            closer.start()
+            responsive = finished.wait(timeout=2)
+        finally:
+            idle.close()
+            closer.join(timeout=3)
+            worker.join(timeout=3)
+            server.server_close()
+        self.assertTrue(responsive, 'TLS handshake blocked shutdown')
