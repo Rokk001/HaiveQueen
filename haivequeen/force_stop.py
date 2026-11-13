@@ -2,6 +2,7 @@
 import json
 import os
 import signal
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import agent_process, bees, db, integration, interrupt, loop, orchestrator, proctree, runtime
@@ -26,7 +27,10 @@ def terminate_loop(pid):
         osplat._win_terminate(pid)
     else:
         os.kill(pid, signal.SIGKILL)
-    return True
+    deadline = time.monotonic() + 5
+    while osplat.process_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return not osplat.process_alive(pid)
 
 
 def stop(conn, kill=None, end_loop=None):
@@ -66,7 +70,8 @@ def stop(conn, kill=None, end_loop=None):
         pid = loop.loop_running()
         if pid:
             try:
-                end_loop(pid)
+                if end_loop(pid) is False:
+                    errors.append('Could not end the Orchestrator')
             except (OSError, ValueError) as exc:
                 errors.append(str(exc))
         # Work is ended in parallel, so one slow process tree cannot hold up the rest.

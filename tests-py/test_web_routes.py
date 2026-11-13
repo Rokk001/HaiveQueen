@@ -13,6 +13,11 @@ from haivequeen import web_auth, web_server
 
 
 class WebRoutesTests(unittest.TestCase):
+    def test_disconnected_client_does_not_report_server_failure(self):
+        handler = object.__new__(web_server._Handler)
+        with patch.object(handler, 'handle_one_request', side_effect=BrokenPipeError('peer closed')):
+            handler.handle()
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)

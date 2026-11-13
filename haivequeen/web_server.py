@@ -83,6 +83,12 @@ class _Server(http.server.ThreadingHTTPServer):
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
+    def handle(self):
+        try:
+            super().handle()
+        except (ConnectionError, ssl.SSLError):
+            pass  # Peer disconnects and interrupted TLS handshakes are expected during reload.
+
     def setup(self):
         super().setup()
         self.connection.settimeout(15)
@@ -233,7 +239,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return self.reply(200, {'ok': True}, 'hq_session=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/')
         if path in ('/api/web/stop', '/api/web/restart'):
             self.reply(200, {'ok': True})
-            self.server.lifecycle('stop' if path.endswith('/stop') else 'reload')
+            self.server.lifecycle('stop' if path.endswith('/stop') else 'restart')
             return
         if path.startswith('/api/'):
             return self.call_api(path[5:], data)

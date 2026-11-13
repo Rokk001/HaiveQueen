@@ -138,8 +138,8 @@ def execute(conn, action, data):
     if action == 'login/input':
         return web_login.send(data['id'], data['text'])
     if action == 'updates':
-        updates.settle_install(db.last_self_update(conn))
-        return updates.load_state()
+        settled = updates.settle_install(db.last_self_update(conn))
+        return {**updates.load_state(), 'restart_required': settled == 'ok'}
     if action == 'updates/check':
         return updates.check(config.load_config(), manual=True)
     if action == 'updates/install':

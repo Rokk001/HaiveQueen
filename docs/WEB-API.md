@@ -38,7 +38,7 @@ with `/api/`. Project and plan identify a registered project and its plan path.
 | plan/providers | project, plan; eligible Queen providers with `current` marker |
 | live | project, agent; bounded live output lines from the registered agent |
 | login/status | id; captured output, clickable HTTP(S) links, running state and exit code |
-| updates | update check state |
+| updates | update check state; restart_required after a finished installation |
 | benchmark | optional provider; stored context measurements |
 | jobs/status | id; progress, running state, result and error of a long action |
 
@@ -85,3 +85,8 @@ The root page is the dashboard package's rendering boundary. The local control
 listener and service state file are private lifecycle implementation details;
 they are separate from browser sessions. No external Python or browser package
 is required.
+
+Restart replaces the web process so newly installed Python code is loaded;
+sessions then require login again. Settings reload and network-off rebind the
+listener inside its existing process. After `updates.restart_required` becomes
+true, the dashboard should POST `web/restart` and reconnect to the login page.

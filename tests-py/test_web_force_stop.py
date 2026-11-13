@@ -96,3 +96,9 @@ class ForceStopTests(RoundCase):
             with self.assertRaisesRegex(ValueError, 'verify'):
                 force_stop.terminate_loop(910004)
         end.assert_not_called()
+
+    def test_failed_loop_termination_is_reported(self):
+        with mock.patch.object(loop, 'loop_running', return_value=910004):
+            result = force_stop.stop(self.conn, kill=lambda pid: True, end_loop=lambda pid: False)
+        self.assertFalse(result['ok'])
+        self.assertIn('Could not end the Orchestrator', result['error'])

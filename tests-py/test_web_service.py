@@ -42,7 +42,7 @@ class WebServiceTests(unittest.TestCase):
         self.assertNotEqual(started['pid'], os.getpid())
         self.assertEqual(web_service.start()['pid'], started['pid'])
         web_auth.off(path)
-        reloaded = web_service.restart()
+        reloaded = web_service.control('reload')
         self.assertTrue(reloaded['ok'])
         self.assertEqual(reloaded['pid'], started['pid'])
         connection = http.client.HTTPConnection('127.0.0.1', web_auth.read(path)['port'], timeout=3)
@@ -100,3 +100,38 @@ class WebServiceTests(unittest.TestCase):
             result = web_service.restart()
             self.assertTrue(result['ok'], result)
             self.assertEqual(idle.recv(1), b'')
+
+    def test_restart_replaces_service_process_to_load_updated_code(self):
+        self.configure()
+        first = web_service.start()
+        restarted = web_service.restart()
+        self.assertTrue(restarted['running'])
+        self.assertNotEqual(restarted['pid'], first['pid'])
+
+    def test_browser_restart_replaces_process_after_reply(self):
+        path = self.configure()
+        first = web_service.start()
+        connection = http.client.HTTPConnection('127.0.0.1', web_auth.read(path)['port'], timeout=3)
+        try:
+            connection.request('POST', '/login', json.dumps({'username': 'operator', 'password': 'secret'}))
+            response = connection.getresponse()
+            cookie = response.getheader('Set-Cookie').split(';')[0]
+            csrf = json.loads(response.read())['csrf']
+            connection.request('POST', '/api/web/restart', '{}', {'Cookie': cookie, 'X-CSRF-Token': csrf})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+            deadline = time.monotonic() + 12
+            result = first
+            while time.monotonic() < deadline:
+                try:
+                    result = web_service.control('status')
+                except OSError:
+                    result = None
+                if result and result['running'] and result['pid'] != first['pid']:
+                    break
+                time.sleep(0.05)
+            self.assertTrue(result and result['running'], result)
+            self.assertNotEqual(result['pid'], first['pid'])
+        finally:
+            connection.close()

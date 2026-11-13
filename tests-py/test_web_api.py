@@ -132,6 +132,6 @@ class WebApiTests(RoundCase):
             web_api.execute(self.conn, 'settings/save', loaded)
 
     def test_update_status_settles_finished_install(self):
-        with mock.patch.object(updates, 'settle_install') as settle, mock.patch.object(db, 'last_self_update', return_value={'result': 'ok'}), mock.patch.object(updates, 'load_state', return_value={}):
-            web_api.execute(self.conn, 'updates', {})
+        with mock.patch.object(updates, 'settle_install', return_value='ok') as settle, mock.patch.object(db, 'last_self_update', return_value={'result': 'ok'}), mock.patch.object(updates, 'load_state', return_value={}):
+            self.assertTrue(web_api.execute(self.conn, 'updates', {})['restart_required'])
         settle.assert_called_once_with({'result': 'ok'})

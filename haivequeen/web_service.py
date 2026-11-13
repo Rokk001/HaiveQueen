@@ -46,6 +46,7 @@ class Service:
         self.worker = None
         self.error = ''
         self.stopping = False
+        self.restarting = False
         self.actions = queue.Queue()
         self.token = secrets.token_urlsafe(32)
         service = self
@@ -125,12 +126,14 @@ class Service:
                     action = self.actions.get_nowait()
                     if action == 'stop':
                         self.stopping = True
+                    elif action == 'restart':
+                        self.restarting = True
+                        self.stopping = True
                     elif action == 'reload':
                         self.reload()
                 # Settings remain the only source of truth, including edits from W2.
                 if not self.stopping and web_auth.read(self.path) != self.settings:
                     self.reload()
-            return 0
         finally:
             self.close_listener()
             from . import web_login
@@ -139,6 +142,9 @@ class Service:
             state_path().unlink(missing_ok=True)
             lock.unlink(missing_ok=True)
             proctree.exempt_clear()
+        if self.restarting:
+            start()
+        return 0
 
 
 def start():
@@ -203,16 +209,28 @@ def stop():
             child.wait(timeout=20)
         else:
             deadline = time.monotonic() + 20
-            while state_path().exists() and time.monotonic() < deadline:
-                time.sleep(0.05)
-            if state_path().exists():
-                raise OSError('Web server has not finished stopping')
+            if os.name == 'nt':
+                import ctypes
+                kernel = ctypes.windll.kernel32
+                kernel.OpenProcess.restype = ctypes.c_void_p
+                handle = kernel.OpenProcess(0x00100000, False, result['pid'])  # SYNCHRONIZE; never terminate a process
+                if handle:
+                    try:
+                        if kernel.WaitForSingleObject(ctypes.c_void_p(handle), 20_000) != 0:
+                            raise OSError('Web server has not finished stopping')
+                    finally:
+                        kernel.CloseHandle(ctypes.c_void_p(handle))
+            else:
+                while osplat.process_alive(result['pid']) and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                if osplat.process_alive(result['pid']):
+                    raise OSError('Web server has not finished stopping')
     return result or {'ok': True, 'running': False}
 
 
 def restart():
-    result = control('reload')
-    return result if result is not None else start()
+    stop()
+    return start()
 
 
 def open_browser():
