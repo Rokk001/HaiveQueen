@@ -6,6 +6,7 @@ Claude agents, allowed commands), from the repository (remote, default branch, .
 project.toml once, keeps the old file as project.toml.bak and lists every removed key with its old value in removed-settings.md beside it.
 """
 import copy
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +20,9 @@ MIGRATION_FILE = "removed-settings.md"
 KEPT_KEYS = (
     "name", "codeRepo", "integrationBranch", "compileCheck", "buildCommand", "deployCommand",
     "plans", "worktreeLocation", "deleteFinishedWorktrees", "deleteIntegratedBranches",
-    "publishReleases", "nextVersion", "onEvent", "colour", "priority", "buildProcessNames", "ownerTopics",
+    "nextVersion", "onEvent", "colour", "priority", "buildProcessNames", "ownerTopics",
+    "wayOfWorking", "mergeMode", "checkMode", "buildMode", "deployMode", "releaseMode",
+    "checkEnabled", "buildEnabled", "deployEnabled", "releaseEnabled", "releaseFolder", "releasePostfix",
     "worktreePrefix", "upstreamRepo", "upstreamRules", "rulesOff",
     "prompts", "readyCheckClass", "readyCheckTimeoutSec", "agentStallSeconds", "rateLimitWaitMinutes", "retryWaitMinutes", "clockJumpSeconds",
 )
@@ -52,9 +55,80 @@ REMOVED_NOTES = {
 UNKNOWN_NOTE = "not used"
 # Keys of a project that General or the providers now decide; build_settings ignores them in a project file (the migration has moved their effect).
 DROPPED_FROM_PROJECT = ("language", "escalateAfter", "roundMinutes", "owner", "ignoredBuildOutput", "protectedWorktrees", "claudeTools", "allowedTools",
-                        "compileCheckEnabled", "buildEnabled", "deployEnabled", "buildFlowDoc", "integratorInstructions", "queenClass", "beesPerQueen", "contextLimitTokens", "capabilityRules", "preferredProvider", "ownerCheckText",
+                        "compileCheckEnabled", "buildFlowDoc", "integratorInstructions", "queenClass", "beesPerQueen", "contextLimitTokens", "capabilityRules", "preferredProvider", "ownerCheckText",
                         "views", "integrationStateFile", "planStandaloneRegex", "planSuffixRegex", "ruleSources", "phaseRules")
 PUSH_FORMS = ("Bash(git push {r} HEAD:{b})", "Bash(git -C * push {r} HEAD:{b})", "PowerShell(git push {r} HEAD:{b})", "PowerShell(git -C * push {r} HEAD:{b})")
+
+STEP_FIELDS = {"check": "compileCheck", "build": "buildCommand", "deploy": "deployCommand", "release": "releaseFolder"}
+STEPS = ("merge", *STEP_FIELDS)
+
+
+def working_settings(data: dict) -> dict:
+    """Return the working-way settings, including defaults for legacy project files."""
+    result = copy.deepcopy(data)
+    legacy = "wayOfWorking" not in data
+    result.setdefault("wayOfWorking", "local")
+    for step in STEPS:
+        result.setdefault(step + "Mode", "local")
+    for step, field in STEP_FIELDS.items():
+        if step == "release":
+            enabled = bool(data.get("publishReleases"))
+        else:
+            enabled = bool(str(data.get(field) or "").strip())
+            if legacy and step == "check" and data.get("compileCheckEnabled") is False:
+                enabled = False
+        if legacy:
+            result[step + "Enabled"] = enabled
+        else:
+            result.setdefault(step + "Enabled", False)
+    result.setdefault("releaseFolder", "")
+    result.setdefault("releasePostfix", "dev")
+    return result
+
+
+def select_working_way(data: dict, way: str) -> dict:
+    """Select a preset, or retain the individual modes for custom."""
+    if way not in ("local", "git", "custom"):
+        raise ValueError("Unknown way of working")
+    result = working_settings(data)
+    result["wayOfWorking"] = way
+    if way != "custom":
+        for step in STEPS:
+            result[step + "Mode"] = way
+    return result
+
+
+def select_step_mode(data: dict, step: str, mode: str) -> dict:
+    """Change one mode and keep the overall choice consistent."""
+    if step not in STEPS or mode not in ("local", "git"):
+        raise ValueError("Unknown step or mode")
+    result = working_settings(data)
+    result[step + "Mode"] = mode
+    modes = {result[name + "Mode"] for name in STEPS}
+    result["wayOfWorking"] = modes.pop() if len(modes) == 1 else "custom"
+    return result
+
+
+def validate_working_settings(data: dict) -> list:
+    """Return validation errors for the working-way model."""
+    s = working_settings(data)
+    errors = []
+    if s["wayOfWorking"] not in ("local", "git", "custom"):
+        errors.append("Unknown way of working")
+    for step in STEPS:
+        if s[step + "Mode"] not in ("local", "git"):
+            errors.append("Unknown mode for " + step)
+    modes = {s[step + "Mode"] for step in STEPS}
+    if s["wayOfWorking"] in ("local", "git") and modes != {s["wayOfWorking"]}:
+        errors.append("Working way does not match step modes")
+    for step, field in STEP_FIELDS.items():
+        if not isinstance(s[step + "Enabled"], bool):
+            errors.append(step + " switch must be on or off")
+        elif s[step + "Enabled"] and s[step + "Mode"] == "local" and not str(s.get(field) or "").strip():
+            errors.append(field + " is required")
+    if not re.fullmatch(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", str(s["releasePostfix"])):
+        errors.append("Invalid release postfix")
+    return errors
 
 
 # ---------------------------------------------------------------- git facts
@@ -210,14 +284,15 @@ def migrate_data(data: dict, workspace, general: dict) -> tuple:
             new["remoteName"] = old["remoteName"]
         else:
             removed.append(("remoteName", old["remoteName"], "derived from the Git remotes of the repository"))
-    # switch of the compile check
-    if old.get("compileCheckEnabled") is False:
-        removed.append(("compileCheckEnabled", False, REMOVED_NOTES["compileCheckEnabled"]))
-        if new.get("compileCheck"):
-            removed.append(("compileCheck (command before the switch was off)", new["compileCheck"], "the project has no compile check now"))
-        new["compileCheck"] = ""
-    elif "compileCheckEnabled" in old:
-        removed.append(("compileCheckEnabled", old["compileCheckEnabled"], REMOVED_NOTES["compileCheckEnabled"]))
+    # Preserve commands and turn the legacy implicit switches into explicit settings.
+    working = working_settings(old)
+    for key in ("wayOfWorking", *(step + "Mode" for step in STEPS),
+                *(step + "Enabled" for step in STEP_FIELDS), "releaseFolder", "releasePostfix"):
+        new[key] = working[key]
+    if "compileCheckEnabled" in old:
+        removed.append(("compileCheckEnabled", old["compileCheckEnabled"], "moved to checkEnabled"))
+    if "publishReleases" in old:
+        removed.append(("publishReleases", old["publishReleases"], "moved to releaseEnabled"))
     # settings that move to General and the providers
     if old.get("owner") and not str(general.get("owner") or "").strip():
         general["owner"] = old["owner"]
@@ -235,10 +310,10 @@ def migrate_data(data: dict, workspace, general: dict) -> tuple:
             if is_claude(provider):
                 rest, tools, position = split_args(provider.get("args"))
                 provider["args"] = join_args(rest, tools + [t for t in extra if t not in tools], position)
-    known = set(KEPT_KEYS) | set(REMOVED_NOTES) | {"repo", "remoteName", "prompts"}
+    known = set(KEPT_KEYS) | set(REMOVED_NOTES) | {"repo", "remoteName", "prompts", "publishReleases"}
     handled = {r[0] for r in removed}
     for key, value in old.items():
-        if key in REMOVED_NOTES and key not in handled and key not in ("planGlobs", "planExclude"):
+        if key in REMOVED_NOTES and key not in KEPT_KEYS and key not in handled and key not in ("planGlobs", "planExclude"):
             removed.append((key, value, REMOVED_NOTES[key]))
         elif key not in known:
             removed.append((key, value, UNKNOWN_NOTE))
