@@ -196,18 +196,20 @@ class ReleasePipeline(OrchCase):
             self.round()
         self.assertEqual(self.state()['release']['tag'], 'v5.0.0-preview.1')
 
-    def test_three_integration_tags_count_up_before_next_full_release(self):
+    def test_integration_tags_count_across_postfix_changes_before_next_full_release(self):
         self.configure(mode='git', postfix='dev')
         commit = self.ready_plan()
         self.git('push', '-q', 'origin', 'HEAD:main', cwd=self.pwt)
         self.workflow = 'success'
         tags = []
         env = self.env()
-        for index in range(3):
+        for index, postfix in enumerate(('dev', 'release-candidate', 'dev')):
+            self.configure(mode='git', postfix=postfix)
+            env = self.env()
             state = {'merged': commit}
             publish.pipeline_release(self.conn, env, 'integration-%s' % index, state, self.pwt, env.settings)
             tags.append(state['release']['tag'])
-        self.assertEqual(tags, ['v1.4.1-dev.1', 'v1.4.1-dev.2', 'v1.4.1-dev.3'])
+        self.assertEqual(tags, ['v1.4.1-dev.1', 'v1.4.1-release-candidate.2', 'v1.4.1-dev.3'])
         self.git('update-ref', 'refs/tags/v1.4.1', commit, cwd=self.remote)
         state = {'merged': commit}
         publish.pipeline_release(self.conn, env, 'after-full-release', state, self.pwt, env.settings)

@@ -22,7 +22,8 @@ def prerelease_tag(tags, postfix, requested="", start=""):
             raise ValueError("start version required")
         next_version(start)  # validate without incrementing the owner's start version
         version = start
-    pattern = re.compile(r"v" + re.escape(version + "-" + postfix) + r"\.(\d+)$")
+    # The sequence belongs to the version, even when the configured postfix changes.
+    pattern = re.compile(r"v" + re.escape(version) + r"-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\.(\d+)$")
     numbers = [int(match.group(1)) for tag in tags if (match := pattern.fullmatch(tag))]
     return "v%s-%s.%d" % (version, postfix, max(numbers, default=0) + 1)
 
