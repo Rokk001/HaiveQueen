@@ -323,11 +323,8 @@ def register(sub) -> None:
     register_runstate(sub)
 
 
-HELP = {"pause": "block the start of every kind of Agent (Queen, separate Agent, subagent, ready-check agent); running ones continue", "resume": "allow starts of every kind of Agent again"}
-
-
 def register_runstate(sub) -> None:
-    """Add pause, resume, run-state, starts-allowed and reattach (run state and restart, D8)."""
+    """Add run-state, starts-allowed and reattach (run state and restart, D8)."""
     from . import loop, reattach, runstate
 
     def allowed(a, c):
@@ -340,23 +337,16 @@ def register_runstate(sub) -> None:
             state = runstate.get_state(c)["state"]
         return {"allowed": state == "RUNNING", "state": state}
 
-    def pause_now(a, c):
-        """pause: stop new starts; with --now every running agent also gets the HANDOFF flag and ends after its current step."""
-        out = runstate.pause(c)
-        return {**out, "handoff": runstate.request_handoff(c)} if a.now else out
-
     def re_attach(a, c):
         """reattach: fail running agents whose PID is not in the given list."""
         alive = {int(x) for x in (a.alive_pids or "").split(",") if x.strip()}
         return reattach.reattach(c, a.project, lambda pid: pid in alive)
 
     for name, fn, flags in (
-            ("pause", pause_now, [("--now", {"action": "store_true", "help": "also ask every running agent to hand off after its current step"})]),
-            ("resume", lambda a, c: runstate.resume(c), []),
             ("run-state", lambda a, c: runstate.get_state(c), []),
             ("starts-allowed", allowed, []),
             ("reattach", re_attach, [P, ("--alive-pids", {"default": ""})])):
-        p = sub.add_parser(name, help=HELP.get(name))
+        p = sub.add_parser(name)
         for flag, kw in flags:
             p.add_argument(flag, **kw)
         p.set_defaults(fn=run(fn))
