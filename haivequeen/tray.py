@@ -12,7 +12,7 @@ def menu(state, web_running):
     return [(1, 'Open web interface', True),
             (2, 'Start', state == 'Stopped'),
             (3, 'Stop gracefully', state == 'Running'),
-            (4, 'Force stop', state != 'Stopped'),
+            (4, 'Force stop', True),
             (5, 'Start', not web_running),
             (6, 'Stop', web_running),
             (7, 'Restart', web_running)]

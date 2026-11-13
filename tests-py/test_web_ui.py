@@ -23,7 +23,7 @@ class BrowserTests(unittest.TestCase):
 
     def test_german_dashboard_labels(self):
         from haivequeen import i18n
-        for label in ('Questions', 'Limits', 'Queue', 'Clear', 'Resume', 'Update'):
+        for label in ('Questions', 'Limits', 'Queue', 'Clear', 'Resume', 'Update', 'Live'):
             self.assertNotEqual(i18n.tr(label, language='German'), label, label)
 
     def test_client_behaviour(self):

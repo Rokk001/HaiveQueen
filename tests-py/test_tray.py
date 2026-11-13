@@ -6,7 +6,7 @@ from haivequeen import tray
 
 class TrayTests(unittest.TestCase):
     def test_states_and_menu(self):
-        for state, expected in [('Running', (False, True, True)), ('Stopping', (False, False, True)), ('Stopped', (True, False, False))]:
+        for state, expected in [('Running', (False, True, True)), ('Stopping', (False, False, True)), ('Stopped', (True, False, True))]:
             menu = tray.menu(state, True)
             self.assertEqual(tuple(item[2] for item in menu[1:4]), expected)
             self.assertEqual([item[1] for item in menu], ['Open web interface', 'Start', 'Stop gracefully', 'Force stop', 'Start', 'Stop', 'Restart'])

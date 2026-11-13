@@ -748,7 +748,7 @@ GERMAN = {
     "Instructions of the integrating Queen": "Anweisungen der integrierenden Queen",
     "Replaces the built-in instructions of the Queen that integrates a plan.": "Ersetzt die eingebauten Anweisungen der Queen, die einen Plan integriert.",
     "A further setting of this Project, as written in its settings file.": "Eine weitere Einstellung dieses Projekts, wie sie in seiner Einstellungsdatei steht.",
-    "Dashboard": "Übersicht", "Actions": "Aktionen", "Details": "Details", "Activity": "Aktivität",
+    "Live": "Live-Ausgabe", "Dashboard": "Übersicht", "Actions": "Aktionen", "Details": "Details", "Activity": "Aktivität",
     "Web server": "Webserver", "Certificate file": "Zertifikatdatei", "Key file": "Schlüsseldatei", "Port": "Port", "Address": "Adresse",
     "Stop gracefully": "Geordnet stoppen", "Force stop": "Sofort stoppen", "Restart": "Neu starten",
     "Restart Queen on %s": "Queen auf %s neu starten", "Release": "Freigeben", "Logout": "Abmelden", "Logout failed": "Abmelden fehlgeschlagen",
