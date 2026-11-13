@@ -7,7 +7,7 @@ integration place released, worktree cleanup). A step whose command is empty is 
 plan's worktree; after its fix the pipeline starts again at step 1. The state of a plan is stored in the kv table (key orch:<plan>), so the pipeline
 goes on after a pause, a fix, an owner answer and a restart of HaiveQueen.
 
-Check runs in a detached supervisor and publishes its result in the database. Build and Deploy run in threads and store their results in files. Merge, Push and the fix agent start are quick and run in the round itself.
+Check runs in a detached supervisor and publishes its result in the database. Merge, Build and Deploy run in threads and store their results in files. Push and the fix agent start run in the round itself.
 """
 import json
 import os
@@ -134,10 +134,30 @@ def _hive_state(conn, project, plan, state):
 
 # ---------------------------------------------------------------- git
 
-def _git(cwd, *args, timeout=600):
+def _git(cwd, *args, timeout=600, job=None):
     """(exit code, output) of a git command in the folder."""
     try:
-        done = subprocess.run(["git", "-C", str(cwd)] + list(args), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        argv = ["git", "-C", str(cwd)] + list(args)
+        if job is not None:
+            if job.cancelled:
+                return 143, "Merge cancelled"
+            kwargs = {} if osplat.is_windows() else {"start_new_session": True}
+            with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, encoding="utf-8", errors="replace", **kwargs) as proc:
+                job.pid = proc.pid
+                # Cancellation can arrive between the check above and process creation.
+                if job.cancelled:
+                    osplat.kill_process_tree(proc.pid)
+                try:
+                    out, err = proc.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    osplat.kill_process_tree(proc.pid)
+                    proc.communicate()
+                    raise
+                finally:
+                    job.pid = None
+                return proc.returncode, (out + err).strip()
+        done = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
         return 127, "git could not run: %s" % exc
     return done.returncode, (done.stdout + done.stderr).strip()
@@ -386,6 +406,23 @@ def _done(conn, env, plan, state, step, text=""):
 
 
 def _merge(conn, env, plan, state, folder):
+    key = (env.name, plan)
+    if state.get("job"):
+        result = _harvest(conn, env, plan, state)
+        if result is None:
+            return None
+        state.pop("job", None)
+        JOBS.pop(key, None)
+        if result == "lost":
+            # A lost worker may have left a partially applied merge behind.
+            state["replay"] = True
+            save(conn, env.name, plan, state)
+            return None
+        code, out = result
+        if code:
+            return _red(conn, env, plan, state, "Merge", out)
+        state["merged"] = integration.head_commit(folder)
+        return _done(conn, env, plan, state, "Merge")
     remote, branch = _remote(env)
     ahead = _ahead(conn, env.name, plan)
     target = "%s/%s" % (remote, branch)
@@ -399,18 +436,39 @@ def _merge(conn, env, plan, state, folder):
     if not state.get("source"):
         state["source"] = integration.head_commit(folder)
     state["steps"]["Merge"] = "running"
+    job = Job(uuid.uuid4().hex)
+    result_file = _result_file(env.name, plan, job.token)
+    JOBS[key] = job
+    state["job"] = {"step": "Merge", "token": job.token, "file": str(result_file), "pid": None}
     save(conn, env.name, plan, state)
     _log(env, "%s: Merge started %s" % (_short(plan), _counter(env, "Merge")))
-    code, out = _git(folder, "fetch", remote, branch)
+    job.thread = threading.Thread(target=_merge_work, args=(job, folder, remote, branch, target, result_file), daemon=False)
+    job.thread.start()
+    if not _async():
+        job.thread.join()
+        return _merge(conn, env, plan, state, folder)
+    if job.pid:
+        state["job"]["pid"] = job.pid
+        save(conn, env.name, plan, state)
+    return None
+
+
+def _merge_work(job, folder, remote, branch, target, result_file):
+    """Run cancellable Git commands without holding up other plans in the round."""
+    code, out = _merge_git(job, folder, remote, branch, target)
+    Path(result_file).write_text(json.dumps({"token": job.token, "code": code, "output": out}), encoding="utf-8")
+
+
+def _merge_git(job, folder, remote, branch, target):
+    code, out = _git(folder, "fetch", remote, branch, job=job)
     if code != 0:
-        return _red(conn, env, plan, state, "Merge", "git fetch %s %s failed:\n%s" % (remote, branch, out))
-    if _git(folder, "rev-parse", "-q", "--verify", "MERGE_HEAD")[0] == 0:
-        return _red(conn, env, plan, state, "Merge", "an earlier merge is not finished in the worktree of the plan (merge conflict):\n" + _git(folder, "status", "--short")[1])
-    code, out = _git(folder, "merge", "--no-edit", target)
+        return code, "git fetch %s %s failed:\n%s" % (remote, branch, out)
+    if _git(folder, "rev-parse", "-q", "--verify", "MERGE_HEAD", job=job)[0] == 0:
+        return 1, "an earlier merge is not finished in the worktree of the plan (merge conflict):\n" + _git(folder, "status", "--short", job=job)[1]
+    code, out = _git(folder, "merge", "--no-edit", target, job=job)
     if code != 0:
-        return _red(conn, env, plan, state, "Merge", "merge of %s/%s into the plan branch failed (merge conflict; the merge is left open in the worktree):\n%s" % (remote, branch, out))
-    state["merged"] = integration.head_commit(folder)
-    return _done(conn, env, plan, state, "Merge")
+        return code, "merge of %s/%s into the plan branch failed (merge conflict; the merge is left open in the worktree):\n%s" % (remote, branch, out)
+    return 0, out
 
 
 def _push(conn, env, plan, state, folder):
@@ -588,7 +646,7 @@ def _harvest(conn, env, plan, state):
     key = (env.name, plan)
     j = JOBS.get(key)
     if j and j.token == job["token"]:
-        if j.pid and j.pid != job.get("pid"):
+        if j.pid != job.get("pid"):
             job["pid"] = j.pid
             save(conn, env.name, plan, state)
         if j.alive():
@@ -629,6 +687,8 @@ def _harvest_only(conn, env, plan, state):
         state["ran"].append(step)
         if step == "Deploy":
             state["deployed"] = job.get("head") or state.get("deployed", "")
+        if step == "Merge":
+            state["merged"] = integration.head_commit(_worktree(env, plan))
         _next_step(env, state, step)
     save(conn, env.name, plan, state)
 
@@ -849,7 +909,9 @@ def _cancel_pipeline_job(conn, project, plan, state, stop=None):
         job = None
     if job:
         job.cancelled = True
-    pid = (job.pid if job else None) or record.get("pid")
+    pid = job.pid if job else record.get("pid")
+    if pid:
+        record["pid"] = pid
     if pid and record.get("cancel_pid") != pid:
         stop(pid)
         record["cancel_pid"] = pid

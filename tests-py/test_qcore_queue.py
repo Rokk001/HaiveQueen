@@ -1,6 +1,8 @@
 """Q-1 through Q-5: real Git queue states with deliberately held command results."""
 from collections import Counter
+import shlex
 import sys
+import threading
 import time
 from unittest import mock
 
@@ -155,6 +157,85 @@ class SpeculativeQueue(OrchCase):
     def test_red_check_replays_running_check(self):
         self.fail_and_replay("Check", "Check")
 
+    def test_red_check_cancels_active_successor_merge_before_replay(self):
+        # Hold a real Git post-merge hook after the predecessor has been applied.
+        script = self.base / "hold_merge.py"
+        started = self.base / "merge.started"
+        script.write_text(
+            "from pathlib import Path\nimport sys, time\n"
+            "Path(sys.argv[1]).touch()\nend = time.monotonic() + 15\n"
+            "while time.monotonic() < end: time.sleep(.02)\n",
+            encoding="utf-8")
+        hooks = self.base / "hooks"
+        hooks.mkdir()
+        hook = hooks / "post-merge"
+        hook.write_text("#!/bin/sh\nexec %s %s %s\n" % tuple(
+            shlex.quote(str(path).replace("\\", "/")) for path in (sys.executable, script, started)),
+            encoding="utf-8")
+        hook.chmod(0o755)
+        orchestrator.advance(self.conn, self.env(), REL, 16384, alive=lambda pid: False)
+        finished = threading.Event()
+        release = threading.Event()
+        real_work = orchestrator._merge_work
+        real_git = orchestrator._git
+
+        def hooked_git(folder, *args, **kwargs):
+            if folder == self.second and args[0] == "merge":
+                args = ("-c", "core.hooksPath=" + str(hooks), *args)
+            return real_git(folder, *args, **kwargs)
+
+        def held_work(*args):
+            try:
+                real_work(*args)
+            finally:
+                finished.set()
+                release.wait(60)
+
+        def cleanup():
+            release.set()
+            job = orchestrator.JOBS.pop(("testproj", OTHER), None)
+            if job and job.thread:
+                job.cancelled = True
+                if job.pid:
+                    orchestrator.osplat.kill_process_tree(job.pid)
+                job.thread.join(10)
+
+        self.addCleanup(cleanup)
+        with mock.patch.object(orchestrator, "ASYNC", True), \
+                mock.patch.object(orchestrator, "_git", side_effect=hooked_git), \
+                mock.patch.object(orchestrator, "_merge_work", side_effect=held_work):
+            # This call must return while Git is still running.
+            before = time.monotonic()
+            orchestrator.advance(self.conn, self.env(), OTHER, 16384, alive=lambda pid: False)
+            self.assertLess(time.monotonic() - before, 5, "active Merge blocked the orchestrator")
+            end = time.monotonic() + 10
+            while not started.exists() and time.monotonic() < end:
+                time.sleep(.02)
+            self.assertTrue(started.exists(), "successor Merge did not start")
+            job = orchestrator.JOBS["testproj", OTHER]
+            self.assertTrue(job.alive())
+            merge_pid = job.pid
+            self.assertIsNotNone(merge_pid)
+            self.assert_contains(self.second, "first.txt", "second.txt")
+            self.failed.add((REL, "Check"))
+            self.tick()
+            self.assertTrue(job.cancelled)
+            self.assertEqual(self.state(OTHER)["job"]["pid"], merge_pid)
+            self.assertTrue(finished.wait(10), "cancelled Git process did not exit")
+            self.assertEqual(len(self.fixers()), 1)
+            self.assertTrue(self.state(OTHER)["replay"])
+            self.tick()
+            self.assert_contains(self.second, "first.txt")
+            self.assertEqual(self.started[OTHER, "Check"], 0)
+            release.set()
+            job.thread.join(10)
+            self.assertFalse(job.alive())
+        self.tick()
+        self.assertFalse((self.second / "first.txt").exists())
+        self.assert_contains(self.second, "second.txt")
+        self.assertEqual(self.started[OTHER, "Check"], 1)
+        self.assertEqual(self.state()["phase"], "fix")
+
     def test_red_build_replays_running_build(self):
         self.fail_and_replay("Build", "Build")
 
@@ -268,9 +349,18 @@ class LiveQueue(OrchCase):
     def tick(self):
         orchestrator.run_round(self.conn, self.env(), 16384, alive=lambda pid: False)
 
+    def start_merges(self):
+        end = time.monotonic() + 30
+        while time.monotonic() < end:
+            self.tick()
+            if all(self.state(plan).get("step") != "Merge" for plan in (REL, OTHER)):
+                return
+            time.sleep(.05)
+        self.fail("queue merges did not finish")
+
     def test_two_checks_and_builds_overlap_inside_one_project(self):
         self.machine["maxConcurrentCompileChecks"] = 3
-        self.tick()
+        self.start_merges()
         self.wait_for(lambda: all((folder / "Check.started").exists() for folder in (self.pwt, self.second)))
         self.assert_contains_both()
         (self.base / "Check.release").touch()
@@ -287,7 +377,7 @@ class LiveQueue(OrchCase):
 
     def test_limit_one_runs_only_one_check_and_next_waits(self):
         self.machine["maxConcurrentCompileChecks"] = 1
-        self.tick()
+        self.start_merges()
         self.wait_for(lambda: any((folder / "Check.started").exists() for folder in (self.pwt, self.second)))
         time.sleep(.3)
         self.assertEqual(sum((folder / "Check.started").exists() for folder in (self.pwt, self.second)), 1)
