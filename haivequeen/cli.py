@@ -718,6 +718,8 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_cli.register(sub)
     legacy.register(sub)
     loop.register(sub)
+    from haivequeen import web_cli
+    web_cli.register(sub)
     selfupdate.register(sub)
     updates.register(sub)
     from haivequeen import worktrees

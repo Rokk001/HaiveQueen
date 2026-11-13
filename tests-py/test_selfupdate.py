@@ -71,6 +71,9 @@ class SelfUpdateBase(unittest.TestCase):
 
     def setUp(self):
         """Point BZZ_DATA_DIR at a temp folder and open a database there."""
+        service = mock.patch('haivequeen.web_service.start', return_value={'ok': True, 'url': 'http://127.0.0.1:8484'})
+        service.start()
+        self.addCleanup(service.stop)
         self.tmp = tempfile.TemporaryDirectory()
         patcher = mock.patch.dict(os.environ, {"BZZ_DATA_DIR": self.tmp.name})
         patcher.start()
