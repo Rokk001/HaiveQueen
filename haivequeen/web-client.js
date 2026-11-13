@@ -12,6 +12,16 @@ function orchestrationFor(row,hives=[]) {
 
 const copy = value => JSON.parse(JSON.stringify(value));
 
+function isPackagePlaceholder(row) {
+  return row.kind==='bee' && !row.agent && !row.embedded && (!row.name || row.name==='–');
+}
+
+function hiveCounts(rows) {
+  return {queens:rows.filter(row=>row.kind==='queen').length,
+    agents:rows.filter(row=>!['queen','orch'].includes(row.kind)&&!isPackagePlaceholder(row)).length,
+    packages:rows.filter(isPackagePlaceholder).length};
+}
+
 function providerCli(provider,presets) {
   return ['loginCommand','loginFiles','profileEnv','outputFormat'].some(key=>Object.hasOwn(provider,key))?'custom':Object.keys(presets).find(key=>presets[key].protocol===provider.protocol)||'custom';
 }
@@ -674,6 +684,12 @@ function mount(document, bootstrap) {
 
       if(key==='number')td.append(el('span',index+1));
 
+      else if(options.hierarchy && isPackagePlaceholder(row) && key==='name'){
+        const label=filterLink(t('Package'),'plan',row);label.prepend(el('span','└ ','tree-branch'));
+        td.append(label);tr.classList.add('child-agent');
+      }
+      else if(options.hierarchy && isPackagePlaceholder(row) && ['ctx','tokens','runtime','model'].includes(key))td.append(el('span','–','dim'));
+
       else if(key==='name' && options.compact){
 
         const label=filterLink(row.name,options.hierarchy?(['queen','orch'].includes(row.kind)?'queen':'agent'):'plan',row);
@@ -999,7 +1015,7 @@ function mount(document, bootstrap) {
 
     },{compact:true,labels:{number:'#',name:'PLAN',bees_running:'AGENTS'}}));
 
-    const agents=section('QUEENS AND AGENTS');agents.querySelector('h2').append(el('small',' · '+filtered.bees.filter(row=>row.kind==='queen').length+' '+t('QUEENS')+' · '+filtered.bees.filter(row=>!['queen','orch'].includes(row.kind)).length+' '+t('Agents')));agents.append(table(filtered.bees,['number','name','model','hive','task','ctx','tokens','status','runtime'],(cell,row)=>{
+    const counts=hiveCounts(filtered.bees);const agents=section('QUEENS AND AGENTS');agents.querySelector('h2').append(el('small',' · '+counts.queens+' '+t('QUEENS')+' · '+counts.agents+' '+t('Agents')+(counts.packages?' · '+counts.packages+' '+t('Packages'):'')));agents.append(table(filtered.bees,['number','name','model','hive','task','ctx','tokens','status','runtime'],(cell,row)=>{
 
       if(row.agent)cell.append(button('Live',()=>openLive(row)));
 
@@ -1906,6 +1922,6 @@ function mount(document, bootstrap) {
 
 }
 
-if(typeof module!=='undefined')module.exports={orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,providerCli,applyProviderCli,switchProviderAccess,mount};
 
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

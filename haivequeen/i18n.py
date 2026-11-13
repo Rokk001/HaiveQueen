@@ -793,6 +793,6 @@ GERMAN.update({"Overview": "Übersicht", "Technical information": "Technische An
 GERMAN.update({
     "7d %d %% used · %d %% left · %s": "7T %d %% verbraucht · %d %% übrig · %s",
     "5h %d %% used": "5h %d %% verbraucht",
-    "Ready": "Bereit", "Not ready": "Nicht bereit",
+    "Ready": "Bereit", "Not ready": "Nicht bereit", "Package": "Paket",
     "Last recorded quota; live quota unavailable": "Letzter gespeicherter Verbrauch; Live-Abfrage nicht verfügbar",
 })

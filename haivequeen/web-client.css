@@ -80,7 +80,7 @@ section { background: #060d10; }
 
 section > h2 { border-bottom: 1px solid #302b17; padding-bottom: 10px; }
 
-.dashboard { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(300px, 1fr); gap: 10px; align-items: start; }
+.dashboard { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; width: 100%; min-width: 0; }
 
 .dashboard > .toolbar, .tiles { grid-column: 1 / -1; }
 
@@ -94,13 +94,13 @@ section > h2 { border-bottom: 1px solid #302b17; padding-bottom: 10px; }
 
 .dashboard section { margin: 0; }
 
- .dashboard-columns { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0,1.9fr) minmax(300px,1fr); gap: 10px; align-items: start; }
+ .dashboard-columns { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0,1.9fr) minmax(0,1fr); gap: 10px; align-items: start; width: 100%; min-width: 0; }
 
 .dashboard-primary, .dashboard-secondary { display: grid; gap: 10px; min-width: 0; }
 
 .dashboard-lower { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; align-items: start; }
 
-.table-scroll { overflow: auto; max-height: 360px; scrollbar-color: var(--edge) #080e10; }
+.table-scroll { overflow: auto; max-height: 360px; max-width: 100%; min-width: 0; scrollbar-color: var(--edge) #080e10; }
 
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 
@@ -474,7 +474,7 @@ tr[data-kind='queen'] .row-name, tr[data-kind='orch'] .row-name { color: var(--g
 
 :root { font-family: 'Segoe UI',system-ui,sans-serif; --edge: #2b393f; --muted: #a6b5bc; }
 
-.app-header { display: grid; grid-template-columns: minmax(0,1fr) auto; border-bottom-color: var(--edge); }
+.app-header { display: grid; grid-template-columns: minmax(0,1fr) auto; border-bottom-color: var(--edge); width: 100%; min-width: 0; }
 
 .brand-header { grid-column: 1 / -1; height: 104px; }
 

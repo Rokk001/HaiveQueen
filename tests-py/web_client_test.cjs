@@ -1,4 +1,11 @@
 const assert = require('node:assert/strict');
+const {hiveCounts,isPackagePlaceholder}=require('../haivequeen/web-client.js');
+const hiveExample=[{kind:'queen',name:'Queen'},{kind:'bee',name:'–',agent:null,status:'waiting'},
+  {kind:'bee',name:'Embedded',agent:null,embedded:true},{kind:'bee',name:'Worker',agent:'worker',status:'waiting'},
+  {kind:'fix',name:'Fix',agent:'fix'},{kind:'orch',name:'HQ'}];
+assert.deepEqual(hiveCounts(hiveExample),{queens:1,agents:3,packages:1});
+assert.equal(isPackagePlaceholder(hiveExample[2]),false,'embedded agents are real agents without process IDs');
+assert.equal(isPackagePlaceholder(hiveExample[3]),false,'a real waiting agent remains an agent');
 const {capabilityRows} = require('../haivequeen/web-client.js');
 const rows = capabilityRows({capabilitiesVersion:1,capabilities:['Coding'], capabilityThresholds:{Queen:42}}, ['Coding','Queen','Build']);
 assert.deepEqual(rows, [{name:'Coding', enabled:true, threshold:100}, {name:'Queen', enabled:false, threshold:42}, {name:'Build', enabled:false, threshold:100}]);
