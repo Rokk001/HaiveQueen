@@ -1,9 +1,10 @@
 """W-3 through W-6: simulate provider responses around real plan/remote state."""
+import json
 from unittest import mock
 
 from bzztest import REL
 from test_o1_orchestrator import OrchCase
-from haivequeen import git_provider, gui_data, hives, orchestrator, runtime
+from haivequeen import git_provider, orchestrator, runtime, web_api, web_server
 
 
 class ProviderPipeline(OrchCase):
@@ -26,6 +27,15 @@ class ProviderPipeline(OrchCase):
                           ''.join('%sMode = "%s"\n' % (key, value) for key, value in
                                   (("merge", merge), ("check", check), ("build", build), ("deploy", deploy))) +
                           ''.join('%sEnabled = %s\n' % (s, str(enabled).lower()) for s in ("check", "build", "deploy")))
+
+    def dashboard_info(self):
+        # Exercise the browser's state action and JSON representation with real data.
+        state = web_api.execute(self.conn, "state", {"project": "testproj"})
+        state = json.loads(json.dumps(state, default=web_server.json_value))
+        rows = [h for h in state["hives"]
+                if h["apiary"] == "testproj" and h["plan_path"] == REL]
+        self.assertEqual(len(rows), 1)
+        return rows[0]["orch"]
 
     def external_merge(self, squash=False):
         # The simulated maintainer, not the Orchestrator, moves the integration branch.
@@ -126,15 +136,14 @@ class ProviderPipeline(OrchCase):
         self.configure()
         tip = self.ready_plan()
         self.round()
-        hive = hives.get(self.conn, "testproj", REL)
-        info = gui_data.orch_info(self.conn, self.env(), hive)
-        self.assertIn(("Merge", "running"), info["chain"])
+        info = self.dashboard_info()
+        self.assertIn(["Merge", "running"], info["chain"])
         self.assertEqual(info["provider"]["pr"], "17")
         self.service.pipeline_state.return_value = "failure"
         self.round()
         fixer = self.fixers()[0]
-        info = gui_data.orch_info(self.conn, self.env(), hives.get(self.conn, "testproj", REL))
-        self.assertIn(("Merge", "red"), info["chain"])
+        info = self.dashboard_info()
+        self.assertIn(["Merge", "red"], info["chain"])
         self.assertEqual(info["fix_agent"], fixer["name"])
         fixed = self.commit(self.pwt, "fixed.txt")
         self.end_fixer(fixer)
@@ -143,6 +152,10 @@ class ProviderPipeline(OrchCase):
         self.assertNotEqual(tip, fixed)
         self.assertEqual(self.git("rev-parse", "plan-br", cwd=self.remote), fixed)
         self.assertEqual(self.state()["provider"]["pushed"], fixed)
+        info = self.dashboard_info()
+        self.assertIn(["Merge", "running"], info["chain"])
+        self.assertEqual(info["fix_agent"], "")
+        self.assertEqual(info["provider"]["pushed"], fixed)
         self.assertEqual(len(self.fixers()), 1)
         # An open PR is reused for the fix commit.
         self.service.ensure_pr.assert_called_once()
@@ -150,6 +163,7 @@ class ProviderPipeline(OrchCase):
         self.service.pipeline_state.return_value = "success"
         self.round()
         self.assertEqual(self.plan_status(), "REVIEW")
+        self.assertIsNone(self.dashboard_info())
 
     def test_red_after_merge_opens_new_pr_for_fixed_commit(self):
         self.configure()
@@ -157,14 +171,15 @@ class ProviderPipeline(OrchCase):
         self.round()
         self.external_merge()
         self.round()
-        info = gui_data.orch_info(self.conn, self.env(), hives.get(self.conn, "testproj", REL))
-        self.assertIn(("Check", "running"), info["chain"])
+        info = self.dashboard_info()
+        self.assertIn(["Check", "running"], info["chain"])
         self.assertEqual(info["provider"]["pipeline"], "pending")
         self.service.pipeline_state.return_value = "failure"
         self.round()
         self.assertEqual(self.state()["fix"]["step"], "Check")
-        info = gui_data.orch_info(self.conn, self.env(), hives.get(self.conn, "testproj", REL))
-        self.assertIn(("Check", "red"), info["chain"])
+        info = self.dashboard_info()
+        self.assertIn(["Check", "red"], info["chain"])
+        self.assertEqual(info["fix_agent"], self.fixers()[0]["name"])
         fixed = self.commit(self.pwt, "fixed.txt")
         self.end_fixer(self.fixers()[0])
         self.service.pr_state.return_value = "open"
@@ -174,6 +189,11 @@ class ProviderPipeline(OrchCase):
         self.assertEqual(self.state()["provider"]["pr"], "18")
         self.assertEqual(self.state()["provider"]["pushed"], fixed)
         self.assertNotIn("commit", self.state()["provider"])
+        info = self.dashboard_info()
+        self.assertIn(["Merge", "running"], info["chain"])
+        self.assertEqual(info["provider"]["pr"], "18")
+        self.assertEqual(info["provider"]["pushed"], fixed)
+        self.assertEqual(info["fix_agent"], "")
 
     def test_api_failure_retries_without_agent_or_duplicate_push(self):
         self.configure()
