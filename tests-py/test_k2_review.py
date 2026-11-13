@@ -57,7 +57,8 @@ class CoreAccountingTests(DetachedCompileCase):
                      mock.patch.object(orchestrator, '_harvest', return_value=None), \
                      mock.patch.object(orchestrator, '_async', return_value=True), \
                      mock.patch.object(orchestrator, '_result_file', return_value=self.base / 'result'), \
-                     mock.patch.object(orchestrator.threading.Thread, 'start', autospec=True) as start:
+                     mock.patch.object(orchestrator.threading.Thread, 'start', autospec=True,
+                                       side_effect=lambda thread: orchestrator.JOBS[('project', 'plan')].started.set()) as start:
                     # Keep the real Thread.start for the competing acquisition.
                     thread = threading.Thread(target=acquire_check)
                     real_thread_start(thread)
@@ -168,8 +169,9 @@ class CoreAccountingTests(DetachedCompileCase):
              mock.patch.object(orchestrator, '_harvest', return_value=None), \
              mock.patch.object(orchestrator, '_async', return_value=True), \
              mock.patch.object(orchestrator, '_result_file', return_value=self.base / 'result'), \
-             mock.patch.object(orchestrator.threading.Thread, 'start', side_effect=lambda: self.assertEqual(
-                 buildjobs.allocated_cores(buildjobs.running_builds(self.conn)), 6)):
+             mock.patch.object(orchestrator.threading.Thread, 'start', side_effect=lambda: (
+                 self.assertEqual(buildjobs.allocated_cores(buildjobs.running_builds(self.conn)), 6),
+                 orchestrator.JOBS[('project', 'plan')].started.set())):
             self.addCleanup(orchestrator.JOBS.pop, ('project', 'plan'), None)
             orchestrator._command(self.conn, env, 'plan', state, self.base, 'Build', 64000)
 
