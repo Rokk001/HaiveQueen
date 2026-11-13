@@ -174,12 +174,8 @@ def execute(conn, action, data):
         else:
             config.save_git_credential(data['provider'], data['token'], options.get('token_method', 'token'))
         return {'ok': True}
-    if action == 'git-login/start':
-        from . import git_auth
-        return git_auth.start_device_login(data['provider'], data.get('client_id', ''))
-    if action == 'git-login/poll':
-        from . import git_auth
-        return git_auth.poll_device_login(data['id'])
+    if action in ('git-login/start', 'git-login/poll'):
+        raise ValueError('Git provider device sign-in is deferred; use an access token')
     if action == 'state':
         state = dashboard_data.snapshot(conn, project)
         for row in state.get('hives', []):

@@ -132,11 +132,9 @@ class BrowserTests(unittest.TestCase):
                     else:
                         saved_projects[payload['project']] = payload['data']
                     return self.send({'data':payload['data'],'revision':'revision-2'})
-                if action=='git-login/start':
-                    return self.send({'session_id':'git-session', 'status':'pending', 'verification_uri':'https://example.invalid/device', 'user_code':'GIT-CODE', 'interval':1})
-                if action=='git-login/poll':
-                    git_method[0] = 'device'
-                    return self.send({'status':'success'})
+                if action=='git-login/token':
+                    git_method[0] = 'token'
+                    return self.send({'ok':True})
                 if action=='releases/promote':
                     return self.send({'id':'release-job', 'running':False, 'result':{'tag':'v2.0.1'}, 'error':''})
                 if action=='login/start':

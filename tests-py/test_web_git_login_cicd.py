@@ -46,10 +46,14 @@ class GitLoginWebTest(unittest.TestCase):
             rows = web_api.execute(None, 'git-login/providers', {})
         self.assertEqual(next(row for row in rows if row['name'] == 'github')['method'], 'existing access')
 
-    def test_registered_public_client_can_be_provided_for_all_projects(self):
-        with patch.dict(os.environ, {'HAIVEQUEEN_GITHUB_CLIENT_ID': 'registered-public-client'}):
+    def test_only_token_controls_are_advertised_even_with_client_ids(self):
+        with patch.dict(os.environ, {'HAIVEQUEEN_GITHUB_CLIENT_ID': 'registered'}):
             rows = web_api.execute(None, 'git-login/providers', {})
-        self.assertEqual(next(row for row in rows if row['name'] == 'github')['client_id'], 'registered-public-client')
+        self.assertEqual({row['name'] for row in rows}, {'github', 'gitlab', 'azure', 'bitbucket', 'gitea'})
+        for row in rows:
+            self.assertFalse(row['device'])
+            for key in ('client_id', 'client_id_env', 'registration_url', 'registration_help'):
+                self.assertNotIn(key, row)
 
     def test_broken_module_does_not_hide_other_login_controls(self):
         from types import SimpleNamespace
@@ -64,39 +68,31 @@ class GitLoginWebTest(unittest.TestCase):
         with patch('haivequeen.config.git_credential', side_effect=ValueError('expired access requires sign-in')), \
              patch('haivequeen.config.save_git_credential') as save:
             rows = web_api.execute(None, 'git-login/providers', {})
-            self.assertTrue(next(row for row in rows if row['name'] == 'github')['device'])
+            self.assertFalse(next(row for row in rows if row['name'] == 'github')['device'])
             self.assertIn('expired access', rows[0]['status_error'])
             web_api.execute(None, 'git-login/token', {'provider': 'github', 'token': 'replacement'})
         save.assert_called_once_with('github', 'replacement', 'token')
 
-    def test_device_flow_web_transport_for_each_provider_never_exposes_secrets(self):
-        from haivequeen import git_auth
-        for provider in ('github', 'gitlab', 'azure'):
-            with self.subTest(provider=provider), \
-                 patch('haivequeen.git_auth._post', side_effect=[
-                     {'device_code': 'private-device', 'user_code': 'VISIBLE', 'verification_uri': 'https://example.invalid/device', 'interval': 1, 'expires_in': 600},
-                     {'error': 'authorization_pending'}, {'access_token': 'private-token'}]), \
-                 patch('haivequeen.git_auth.time.monotonic', side_effect=[0, 2, 2, 2, 4, 4, 4]), \
-                 patch('haivequeen.config.save_git_credential') as save:
-                started = web_api.execute(None, 'git-login/start', {'provider': provider, 'client_id': 'registered-public-client'})
-                self.assertEqual(started['user_code'], 'VISIBLE')
-                self.assertNotIn('private-device', repr(started))
-                pending = web_api.execute(None, 'git-login/poll', {'id': started['session_id']})
-                self.assertEqual(pending['status'], 'pending')
-                complete = web_api.execute(None, 'git-login/poll', {'id': started['session_id']})
-                self.assertEqual(complete['status'], 'success')
-                self.assertNotIn('private-token', repr(complete))
-                self.assertEqual(save.call_args.args[:2], (provider, 'private-token'))
-                git_auth._sessions.pop(started['session_id'])
+    def test_deferred_device_endpoints_have_no_side_effects(self):
+        with patch('haivequeen.git_auth.start_device_login') as start, \
+             patch('haivequeen.git_auth.poll_device_login') as poll, \
+             patch('haivequeen.config.save_git_credential') as save:
+            for action in ('git-login/start', 'git-login/poll'):
+                with self.subTest(action=action), self.assertRaisesRegex(ValueError, 'access token'):
+                    web_api.execute(None, action, {'provider': 'github', 'client_id': 'registered', 'id': 'session'})
+        start.assert_not_called()
+        poll.assert_not_called()
+        save.assert_not_called()
 
-    def test_provider_modules_offer_registration_instructions_and_both_choices(self):
-        with patch('haivequeen.config.git_credential', return_value=None):
-            rows = web_api.execute(None, 'git-login/providers', {})
-        self.assertEqual(len(rows), 5)
-        for row in rows:
-            if row['device']:
-                self.assertTrue(row['registration_url'].startswith('https://'))
-                self.assertIn('token', row['registration_help'])
+    def test_each_provider_saves_token_without_returning_it(self):
+        for provider in ('github', 'gitlab', 'azure', 'bitbucket', 'gitea'):
+            with self.subTest(provider=provider), patch('haivequeen.config.save_git_credential') as save:
+                data = {'provider': provider, 'token': 'private-token'}
+                if provider == 'gitea':
+                    data['origin'] = 'https://git.example'
+                self.assertEqual(web_api.execute(None, 'git-login/token', data), {'ok': True})
+                save.assert_called_once_with(provider, 'private-token', 'pat' if provider == 'azure' else 'token',
+                                            **({'origin': data['origin']} if provider == 'gitea' else {}))
 
     def test_token_is_provider_wide_and_never_returned(self):
         with patch('haivequeen.config.save_git_credential') as save, \
@@ -107,13 +103,6 @@ class GitLoginWebTest(unittest.TestCase):
             github = next(p for p in result if p['name'] == 'github')
             self.assertEqual(github['method'], 'token')
             self.assertNotIn('secret', repr(result))
-
-    def test_device_login_requires_explicit_client_id(self):
-        with self.assertRaisesRegex(ValueError, 'client ID'):
-            web_api.execute(None, 'git-login/start', {'provider': 'github'})
-        with patch('haivequeen.git_auth.start_device_login', return_value={'session_id': 'session'}) as start:
-            web_api.execute(None, 'git-login/start', {'provider': 'github', 'client_id': 'registered'})
-            start.assert_called_once_with('github', 'registered')
 
     def test_gitea_requires_https_origin_for_credential_scope(self):
         with patch('haivequeen.config.save_git_credential') as save:

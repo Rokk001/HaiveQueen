@@ -243,7 +243,7 @@ def discover(remote, package=git_providers):
 
 
 def login_options():
-    """Provider modules own login choices and registration instructions."""
+    """List provider-wide access token controls; device sign-in is deferred."""
     rows = []
     for info in sorted(pkgutil.iter_modules(git_providers.__path__), key=lambda item: item.name):
         if info.name.startswith('_'):
@@ -276,8 +276,9 @@ def _login_options(name):
         method = 'existing access'
     if not method and not status_error and callable(getattr(module, 'auth_status', None)) and module.auth_status():
         method = 'existing access'
-    return {'name': name, **{k: v for k, v in options.items() if k != 'token_env'},
-            'client_id': os.environ.get(options.get('client_id_env', ''), ''), 'method': method,
+    return {'name': name, **{k: v for k, v in options.items()
+                               if k in ('token_method', 'origin_required')},
+            'device': False, 'method': method,
             'status_error': status_error}
 
 
