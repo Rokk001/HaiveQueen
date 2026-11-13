@@ -1,8 +1,10 @@
 const assert = require('node:assert/strict');
 const {capabilityRows} = require('../haivequeen/web-client.js');
-const rows = capabilityRows({capabilities:['Coding'], capabilityThresholds:{Queen:42}}, ['Coding','Queen','Build']);
+const rows = capabilityRows({capabilitiesVersion:1,capabilities:['Coding'], capabilityThresholds:{Queen:42}}, ['Coding','Queen','Build']);
 assert.deepEqual(rows, [{name:'Coding', enabled:true, threshold:100}, {name:'Queen', enabled:false, threshold:42}, {name:'Build', enabled:false, threshold:100}]);
 assert.equal(capabilityRows({capabilities:['Queen'],capabilityThresholds:{Queen:42}}, ['Queen'])[0].threshold, 42);
+assert.deepEqual(capabilityRows({use:'capability-only',capabilities:['Build']},['Coding','Queen','Build']).map(row=>row.enabled),[false,true,true]);
+assert.deepEqual(capabilityRows({access:'llm',capabilities:['Build']},['Coding','Queen','Build']).map(row=>row.enabled),[true,false,true]);
 const {Client, planActions, setValue, safeLinks, toolsFromArgs, withTools, orchestratorDisabled} = require('../haivequeen/web-client.js');
 
 (async () => {
@@ -69,7 +71,7 @@ gate.end(firstButton);
 assert.equal(redrawnButton.disabled, false);
 
 // Exercise the mounted provider editor with DOM-like controls and the real handlers.
-async function providerThresholdUI() {
+async function providerThresholdUI(legacy=false) {
   class Element {
     constructor(tag) { this.tagName=tag.toUpperCase(); this.children=[]; this.dataset={}; this.className=''; this.attributes={}; this._text=''; this._value=''; this.classList={contains:name=>this.className.split(' ').includes(name)}; }
     set textContent(value) { this._text=String(value); this.children=[]; }
@@ -92,6 +94,7 @@ async function providerThresholdUI() {
   const ids={}; for(const id of ['app','tabs','notice','detail','detail-body','close-detail','version','controls','live','dirty-marker'])ids[id]=new Element('div');
   const document={getElementById:id=>ids[id] || null,createElement:tag=>new Element(tag)};
   const saved=[]; const provider={name:'sample',protocol:'test',args:[],capabilities:['Coding'],capabilitiesVersion:1,capabilityThresholds:{Coding:72,Queen:38}};
+  if(legacy){provider.capabilities=['Build'];delete provider.capabilitiesVersion;provider.capabilityThresholds={Queen:38};}
   const settings={revision:'r1',data:{providers:[provider]}};
   global.window={addEventListener(){}}; global.setInterval=()=>0; global.confirm=()=>true;
   global.fetch=async (url,options={})=>{let value={}; if(url.includes('settings/view'))value=settings; else if(url.includes('settings/save')){saved.push(JSON.parse(options.body));value={revision:'r2',data:saved.at(-1).data};} else if(url.endsWith('/providers'))value=[]; return {ok:true,json:async()=>value};};
@@ -103,6 +106,14 @@ async function providerThresholdUI() {
   const number=name=>row(name).children.find(node=>node.tagName==='INPUT' && node.type==='number');
   const toggle=(name,checked)=>{const check=row(name).children[0];check.checked=checked;check.onchange();};
   const save=async()=>{descendants(ids.app).find(node=>node.tagName==='BUTTON' && node.textContent==='Save').onclick();await flush();};
+  if(legacy){
+    assert.equal(row('Coding').children[0].checked,true,'legacy Coding is enabled');
+    assert.equal(row('Queen').children[0].checked,true,'legacy Queen is enabled');
+    assert.equal(number('Coding').value,'100');assert.equal(number('Queen').value,'38');
+    toggle('Build',false);await save();
+    assert.deepEqual(saved[0].data.providers[0].capabilities.sort(),['Coding','Queen']);
+    assert.equal(saved[0].data.providers[0].capabilitiesVersion,1);return;
+  }
   assert.equal(number('Coding').value,'72');
   assert.equal(number('Queen'),undefined,'disabled capability has no threshold field');
   toggle('Queen',true); assert.equal(number('Queen').value,'38','retained value returns');
@@ -113,4 +124,4 @@ async function providerThresholdUI() {
   const input=number('Coding');input.value='85';input.oninput();toggle('Queen',false);await save();
   assert.equal(saved.length,1);assert.deepEqual(saved[0].data.providers[0].capabilityThresholds,{Coding:85,Queen:38});
 }
-providerThresholdUI().catch(error=>{console.error(error);process.exitCode=1});
+providerThresholdUI().then(()=>providerThresholdUI(true)).catch(error=>{console.error(error);process.exitCode=1});

@@ -7,8 +7,18 @@ function setValue(object, path, value) {
   target[path[path.length - 1]] = value;
 }
 function safeLinks(links) { return links.filter(link => /^https?:\/\//i.test(link)); }
+function effectiveCapabilities(provider) {
+  const aliases={images:'Image generation',blender:'3D modelling',build:'Build'};
+  const selected=(provider.capabilities || []).map(value=>{const name=String(value).trim();return aliases[name.toLowerCase()] || name;});
+  if(!provider.capabilitiesVersion){
+    if(provider.use!=='capability-only')selected.push('Coding');
+    const access=String(provider.access || '').toLowerCase();
+    if(!(provider.server || provider.endpoint || provider.local || access==='llm'))selected.push('Queen');
+  }
+  return [...new Set(selected)];
+}
 function capabilityRows(provider, names=[]) {
-  const selected=provider.capabilities || [], thresholds=provider.capabilityThresholds || {};
+  const selected=effectiveCapabilities(provider), thresholds=provider.capabilityThresholds || {};
   return [...new Set([...names,...selected,...Object.keys(thresholds)])].map(name=>({name,enabled:selected.includes(name),threshold:thresholds[name] ?? 100}));
 }
 function orchestratorDisabled(action, label) {
@@ -366,7 +376,8 @@ function mount(document, bootstrap) {
         preset.value=['loginCommand','loginFiles','profileEnv','outputFormat'].some(name=>Object.hasOwn(provider,name))?'custom':Object.keys(bootstrap.presets).find(key=>bootstrap.presets[key].protocol===provider.protocol)||'custom';
         preset.onchange=()=>{const values=bootstrap.presets[preset.value];if(values){const {label,...rest}=values;Object.assign(provider,copy(rest));for(const name of ['loginCommand','loginFiles','profileEnv','outputFormat'])delete provider[name];}else Object.assign(provider,{loginCommand:'',loginFiles:[],profileEnv:{},outputFormat:provider.protocol});editor.dirty=true;render();};card.append(preset);
         const defaults=newProvider(provider.protocol);defaults.slots=data.slots || 2;
-        provider=mergeDefaults(defaults,provider);data.providers[index]=provider;
+        const selectedCapabilities=effectiveCapabilities(provider);
+        provider=mergeDefaults(defaults,provider);provider.capabilities=selectedCapabilities;data.providers[index]=provider;
         provider.allowedTools=toolsFromArgs(provider.args);
         fields(card,provider,['providers',index],data,new Set(['capabilities','capabilityThresholds']));
         const capabilities=el('fieldset');capabilities.append(el('legend',t('Capabilities')));
@@ -375,11 +386,11 @@ function mount(document, bootstrap) {
           check.type='checkbox';check.checked=row.enabled;number.type='number';number.min='1';number.max='100';number.step='1';number.value=row.threshold;number.required=true;
           const name=el('span',t(row.name)), unit=el('span',t('% usage limit'));
           const draw=()=>line.replaceChildren(check,name,...(check.checked?[number,unit]:[]));
-          check.onchange=()=>{const selected=new Set(provider.capabilities || []);if(check.checked)selected.add(row.name);else selected.delete(row.name);provider.capabilities=[...selected];provider.capabilitiesVersion=1;draw();changed();};
+          check.onchange=()=>{const selected=new Set(effectiveCapabilities(provider));if(check.checked)selected.add(row.name);else selected.delete(row.name);provider.capabilities=[...selected];provider.capabilitiesVersion=1;draw();changed();};
           number.oninput=()=>{provider.capabilityThresholds ||= {};provider.capabilityThresholds[row.name]=number.value.trim()===''?'':Number(number.value);changed();};
           draw();capabilities.append(line);
         }
-        capabilities.append(button('Add own',()=>{const name=prompt(t('Capability name'));if(name?.trim()){provider.capabilities ||= [];if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));card.append(capabilities);
+        capabilities.append(button('Add own',()=>{const name=prompt(t('Capability name'));if(name?.trim()){provider.capabilities=effectiveCapabilities(provider);if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));card.append(capabilities);
         card.append(button('Remove entry',()=>{if(confirm(t('Remove entry')+'?')){data.providers.splice(index,1);editor.dirty=true;render();}}));
         const status=providerStates.find(p=>p.name===provider.name);if(status){card.append(el('p',t(status.logged_in?'Login present':'Login missing')));card.append(valueView(status));}
         const models=editor.provider_models?.[provider.name];if(models)card.append(valueView(models));
