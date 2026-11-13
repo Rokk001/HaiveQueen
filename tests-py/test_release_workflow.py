@@ -33,6 +33,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
                               ('v2.3.5-beta.2', '2.3.5-beta.2'), ('v2.3.5-alpha.1', '2.3.5-alpha.1'),
                               ('v2.3.5-dev.1', '2.3.5-dev.1'),
                               ('v2.3.5-nightly.2', '2.3.5.dev2+nightly'),
+                              ('v2.3.5-1preview.3', '2.3.5.dev3+1preview'),
+                              ('v2.3.5-pre-release.4', '2.3.5.dev4+pre-release'),
+                              ('v2.3.5-1-preview.5', '2.3.5.dev5+1-preview'),
+                              ('v2.3.5-pre--release.1', None), ('v2.3.5-pre-.1', None),
                               ('v2.3', None), ('v2.3.5-!.1', None)]:
             with self.subTest(tag=tag), tempfile.TemporaryDirectory() as folder:
                 project = Path(folder) / 'pyproject.toml'
