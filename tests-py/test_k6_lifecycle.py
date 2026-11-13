@@ -403,6 +403,9 @@ class StoppedPackageTests(RoundCase):
         self.agent('Cia', phase='bee', package='P1', status='done', started_at=db.now(), ended_at=db.now())
         report = self.wt / 'result.md'
         report.write_text('done', encoding='utf-8')
+        started = db.parse_time(bees.unconfirmed_embedded(self.conn, "testproj", REL, "P1")[0]['started_at'])
+        stamp = started.timestamp() + 1
+        __import__('os').utime(report, (stamp, stamp))
         self.assertEqual(bees.release_refusal(self.conn, "testproj", REL, "P1", queen, str(report)), "")
         bees.report_attempt(self.env(), REL, "P1", "medium", "interrupted", "Cia")
         self.assertEqual(gui_data.embedded_rows(self.conn), [])
