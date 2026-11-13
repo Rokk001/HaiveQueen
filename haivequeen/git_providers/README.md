@@ -26,3 +26,13 @@ retries an existing matching tag and release. `release_list` returns all pages;
 commit status. `login` finds credentials in GITHUB_TOKEN, GH_TOKEN, then
 `gh auth token` without interactive login. `latest_version` and `check_latest`
 support existing release selection. API failures propagate through ProviderError.
+
+## Normalized integration operations
+
+`Provider.open_pr(title, source, target, token=None)` returns a stable string
+identifier. `Provider.pr_state(id, token=None)` returns `open`, `merged`, or
+`closed`. `Provider.pipeline_state(commit, token=None)` returns `pending`,
+`success`, or `failure`; missing evidence is pending. These operations never
+merge a pull request or enable auto-merge. Provider errors are reported as
+`ProviderError`. Bitbucket uses its existing `BITBUCKET_TOKEN` environment
+credential; callers must provide tokens for providers requiring them.

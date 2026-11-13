@@ -5,7 +5,7 @@ import re
 from urllib.parse import quote, unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-CAPABILITIES = frozenset({'pull_request', 'tag', 'release', 'release_assets', 'release_list', 'pipeline', 'login_methods'})
+CAPABILITIES = frozenset({'pull_request', 'tag', 'release', 'release_assets', 'release_list', 'pipeline', 'login_methods'}) | {'pr_status', 'pipeline_for_commit'}
 
 
 def detect(remote):
@@ -114,3 +114,9 @@ def pipeline(repo, build_id, token, auth='pat'):
     if not isinstance(build_id, int) or isinstance(build_id, bool) or build_id <= 0:
         raise ValueError('a positive build ID is required')
     return _request(repo, 'build/builds/%d' % build_id, token, auth)
+
+def pr_status(repo, number, token, auth='pat'):
+    return _request(repo, 'git/repositories/{repo}/pullrequests/' + quote(str(number), safe=''), token, auth)
+
+def pipeline_for_commit(repo, commit, token, auth='pat'):
+    return _request(repo, 'build/builds', token, auth, query={'repositoryId': repo[2], 'repositoryType': 'TfsGit', 'queryOrder': 'finishTimeDescending', '$top': 100}).get('value', [])

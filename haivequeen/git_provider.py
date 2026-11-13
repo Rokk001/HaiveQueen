@@ -35,6 +35,64 @@ class Provider:
             raise ProviderError("provider %s: %s failed: %s" % (self.name, operation, exc)) from exc
 
 
+    def open_pr(self, title, source, target, token=None):
+        """Create a PR and return its provider-specific stable identifier."""
+        if self.name in ("github", "gitea"):
+            result = self.call("pull_request", title, source, target, token=token)
+        elif self.name == "gitlab":
+            result = self.call("pull_request", source, target, title, token)
+        elif self.name == "azure":
+            result = self.call("pull_request", source, target, title, token)
+        elif self.name == "bitbucket":
+            result = self.call("pull_request", title, source, target)
+        else:
+            raise ProviderError("provider %s does not support normalized PRs" % self.name)
+        identifier = result.get({"github": "number", "gitea": "number", "gitlab": "iid", "azure": "pullRequestId", "bitbucket": "id"}[self.name])
+        if identifier is None:
+            raise ProviderError("provider %s returned a PR without an identifier" % self.name)
+        return str(identifier)
+
+    def pr_state(self, identifier, token=None):
+        """Return open, merged or closed; unknown responses are errors."""
+        if self.name == "bitbucket":
+            result = self.call("pr_status", identifier)
+        else:
+            result = self.call("pr_status", identifier, token)
+        value = str(result.get("state", result.get("status", ""))).lower()
+        if result.get("merged") is True or result.get("merged_at") or value in ("merged", "completed"):
+            return "merged"
+        if value in ("open", "opened", "active"):
+            return "open"
+        if value in ("closed", "declined", "abandoned"):
+            return "closed"
+        raise ProviderError("provider %s returned unknown PR state %r" % (self.name, value))
+
+    def pipeline_state(self, commit, token=None):
+        """Return pending, success or failure for a specific commit."""
+        if self.name in ("github", "gitea", "gitlab"):
+            result = self.call("pipeline", commit, token)
+            if self.name == "gitlab" and result and result.get("sha") != commit:
+                return "pending"
+            value = str((result or {}).get("state", (result or {}).get("status", ""))).lower()
+            # Combined status with zero contexts is not evidence of a successful pipeline.
+            if self.name in ("github", "gitea") and not (result or {}).get("statuses"):
+                return "pending"
+            values = [value]
+        elif self.name == "bitbucket":
+            values = [str(item.get("state", "")).lower() for item in self.call("pipeline_for_commit", commit)]
+        elif self.name == "azure":
+            builds = self.call("pipeline_for_commit", commit, token)
+            values = [str(item.get("result") or item.get("status") or "").lower()
+                      for item in builds if item.get("sourceVersion") == commit]
+        else:
+            raise ProviderError("provider %s does not support normalized pipeline state" % self.name)
+        if any(v in ("failure", "failed", "error", "canceled", "cancelled", "stopped") for v in values):
+            return "failure"
+        if values and all(v in ("success", "successful", "succeeded", "passed") for v in values):
+            return "success"
+        return "pending"
+
+
 def discover(remote, package=git_providers):
     """Return (matching Provider or None, errors); one broken module cannot stop others.
 

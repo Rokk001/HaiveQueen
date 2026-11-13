@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from ..releases import NoRelease, next_version
 
-CAPABILITIES = frozenset({"pull_request", "tag", "publish_release", "release_list", "release_asset", "pipeline", "login", "latest_version", "check_latest"})
+CAPABILITIES = frozenset({"pull_request", "tag", "publish_release", "release_list", "release_asset", "pipeline", "login", "latest_version", "check_latest"}) | {'pr_status'}
 
 def detect(remote):
     try:
@@ -201,3 +201,6 @@ def release_asset(repository, release_id, name, content, token, content_type="ap
 
 def pipeline(repository, ref, token=None):
     return _request(repository, "/commits/" + quote(ref, safe="") + "/status", token)
+
+def pr_status(repository, number, token=None):
+    return _request(repository, "/pulls/" + quote(str(number), safe=""), token)
