@@ -240,5 +240,6 @@ def restart():
 def open_browser():
     import webbrowser
     status = start()
-    webbrowser.open(status['url'])
+    if not webbrowser.open(status['url']):
+        raise OSError('Could not open the web interface in a browser')
     return {'web': status['url']}
