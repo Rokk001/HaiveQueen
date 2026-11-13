@@ -8,6 +8,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Started as a script, the folder of this file lies on sys.path and its platform.py would hide the standard module platform.
+_here = os.path.normcase(str(Path(__file__).resolve().parent))
+sys.path[:] = [entry for entry in sys.path if os.path.normcase(os.path.abspath(entry or os.getcwd())) != _here]
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from haivequeen import config, db, legacy, loop, runtime, runtime_cli, selfupdate, updates  # noqa: E402
 from haivequeen import export as export_mod, init as init_mod, views  # noqa: E402
