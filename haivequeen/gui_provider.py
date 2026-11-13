@@ -45,7 +45,7 @@ TEXT = {
     "test": (N_("Test connection"), N_("Checks the address, reads the model list and tests the interface each CLI needs; the result is kept.")),
 }
 SHARED_LOGIN = N_("This login is shared by all providers with this CLI.")
-HANDLED = {"claudeTools", "contextLimit", "enabled", "name", "nameEdited", "access", "apiKey", "address", "contextWindow", "protocol", "command", "server", "slots", "use", "capabilities", "capabilitiesVersion", "beeMode", "allowedTools", "args",
+HANDLED = {"claudeTools", "contextLimit", "enabled", "name", "nameEdited", "access", "apiKey", "address", "contextWindow", "protocol", "command", "server", "slots", "use", "capabilities", "capabilitiesVersion", "capabilityThresholds", "beeMode", "allowedTools", "args",
            "limit", "classes", "profileEnv", "loginCommand", "loginFiles", "outputFormat"}
 
 

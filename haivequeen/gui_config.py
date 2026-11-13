@@ -1253,11 +1253,28 @@ class ConfigWindow(ProviderPages):
         if key == "capabilities" and self.node[0] == "providers":
             box = tk.Frame(parent)
             box.pack(side="left", anchor="w")
-            choices = list(dict.fromkeys(CAPABILITIES + tuple(value)))
+            thresholds = self.target().get("capabilityThresholds") or {}
+            choices = list(dict.fromkeys(CAPABILITIES + tuple(value) + tuple(thresholds)))
             variables = [(name, tk.BooleanVar(value=name in value)) for name in choices]
+            self.capability_vars = dict(variables)
+            self.threshold_vars, self.threshold_entries = {}, {}
             labels = {"Coding": "Coding (including tests, docs and review)", "Queen": "Queen (plan cutting and coordination)", "Build": "Build (with this machine’s tools)", "Vision": "Vision (understand images and screenshots)", "Confidential data": "Confidential data (local models only)"}
             for name, var in variables:
-                tk.Checkbutton(box, text=tr(labels.get(name, name)), variable=var, anchor="w").pack(anchor="w")
+                line = tk.Frame(box)
+                line.pack(fill="x", anchor="w")
+                tk.Checkbutton(line, text=tr(labels.get(name, name)), variable=var, anchor="w").pack(side="left")
+                threshold = tk.StringVar(value=str(thresholds.get(name, 100)))
+                entry = tk.Entry(line, textvariable=threshold, width=4, font=(self.mono, 10))
+                entry.pack(side="left", padx=(8, 0))
+                tk.Label(line, text=tr("% usage limit")).pack(side="left")
+                def update_state(*_args, variable=var, widget=entry):
+                    widget.configure(state="normal" if variable.get() else "disabled")
+                var.trace_add("write", update_state)
+                update_state()
+                self.threshold_vars[name], self.threshold_entries[name] = threshold, entry
+                path = ("capabilityThresholds", name)
+                self.getters.append((path, threshold.get, 100))
+                self.frame_of[path] = self.use_frame
             custom = tk.StringVar()
             row = tk.Frame(box)
             row.pack(anchor="w")
