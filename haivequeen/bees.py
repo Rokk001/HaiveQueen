@@ -57,7 +57,7 @@ def select_route(providers, free, hive_provider, package_class, capability, excl
         for p in matching:   # with a needed capability every capable provider is a candidate: only the Queen's own one and a local one are taken directly
             if capability and p['name'] != hive_provider and not (p.get('endpoint') or p.get('server')):
                 continue
-            if free.get(p['name'], 0) > 0 and p['name'] not in limited:
+            if free.get(p['name'], 0) > 0 and p['name'] not in limited and not scheduler.threshold_reached(p, capability, conn):
                 return p['name'], cls
         others = [{**p, 'slots': p.get('slots', 1), 'use': p.get('use', 'preferred'), 'limit': p.get('limit', ''), 'protocol': p.get('protocol', ''),
                    'capabilities': scheduler.provider_capabilities(p)} for p in providers if p['name'] not in limited]
