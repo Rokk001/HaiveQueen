@@ -399,6 +399,8 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
 
 
 GERMAN = {
+    "Questions": "Fragen", "Limits": "Grenzen", "Queue": "Warteschlange",
+    "Clear": "Leeren", "Resume": "Fortsetzen", "Update": "Aktualisieren",
     "Coding (including tests, docs and review)": "Programmierung (einschließlich Tests, Dokumentation und Prüfung)",
     "Queen (plan cutting and coordination)": "Queen (Planaufteilung und Koordination)",
     "Build (with this machine’s tools)": "Build (mit den Werkzeugen dieses Rechners)",
@@ -745,5 +747,30 @@ GERMAN = {
     "%s: the repository or plans folder does not exist": "%s: der Ordner des Repositorys oder der Pläne existiert nicht",
     "Instructions of the integrating Queen": "Anweisungen der integrierenden Queen",
     "Replaces the built-in instructions of the Queen that integrates a plan.": "Ersetzt die eingebauten Anweisungen der Queen, die einen Plan integriert.",
-    "A further setting of this Project, as written in its settings file.": "Eine weitere Einstellung dieses Projekts, wie sie in seiner Einstellungsdatei steht."
+    "A further setting of this Project, as written in its settings file.": "Eine weitere Einstellung dieses Projekts, wie sie in seiner Einstellungsdatei steht.",
+    "Live": "Live-Ausgabe", "Dashboard": "Übersicht", "Actions": "Aktionen", "Details": "Details", "Activity": "Aktivität",
+    "Web server": "Webserver", "Certificate file": "Zertifikatdatei", "Key file": "Schlüsseldatei", "Port": "Port", "Address": "Adresse",
+    "Stop gracefully": "Geordnet stoppen", "Force stop": "Sofort stoppen", "Restart": "Neu starten",
+    "Restart Queen on %s": "Queen auf %s neu starten", "Release": "Freigeben", "Logout": "Abmelden", "Logout failed": "Abmelden fehlgeschlagen",
+    "Working…": "Wird ausgeführt…", "Loading…": "Wird geladen…", "Discard unsaved changes?": "Ungespeicherte Änderungen verwerfen?",
+    "Unsaved changes": "Ungespeicherte Änderungen", "Reload": "Neu laden", "Filter": "Filter", "Filter log": "Protokoll filtern",
+    "Show routine lines": "Routinemeldungen anzeigen", "Auto-scroll": "Automatisch scrollen", "Save log": "Protokoll speichern",
+    "Recommendation": "Empfehlung", "Use recommendation": "Empfehlung übernehmen", "Save note": "Notiz speichern",
+    "Apply to Project": "Für das Projekt anwenden", "Rejected packages (comma separated)": "Abgelehnte Pakete (kommagetrennt)",
+    "Updates": "Updates", "Enable": "Aktivieren", "Disable": "Deaktivieren", "Code or input": "Code oder Eingabe", "Send": "Senden",
+    "Login finished": "Anmeldung beendet", "No live output yet.": "Noch keine Live-Ausgabe.", "Add entry": "Eintrag hinzufügen",
+    "Implemented": "Implementiert", "Rejected": "Abgelehnt", "Waiting": "Wartend", "Total": "Gesamt",
+    "Waiting for": "Wartet auf", "Error": "Fehler",
+    "Tokens in": "Tokens eingehend", "Tokens out": "Tokens ausgehend", "TOTAL IN": "GESAMT EINGANG", "TOTAL OUT": "GESAMT AUSGANG",
+    "Add setting": "Einstellung hinzufügen", "Setting name": "Name der Einstellung", "Value (JSON, or plain text)": "Wert (JSON oder einfacher Text)",
+    "Invalid build settings": "Ungültige Build-Einstellungen", "Cancelled": "Abgebrochen",
+    "Saved. Newer edits are still unsaved.": "Gespeichert. Neuere Änderungen sind noch ungespeichert.",
+    "Saved. Restart the web server to apply changed web settings.": "Gespeichert. Den Webserver neu starten, um geänderte Webeinstellungen anzuwenden.",
+    "Stop the web server? The browser will disconnect.": "Webserver stoppen? Die Browserverbindung wird getrennt.",
+    "Restart the web server? The browser will reconnect.": "Webserver neu starten? Der Browser verbindet sich erneut.",
+    "Web server stopped.": "Webserver gestoppt.", "Start HaiveQueen?": "HaiveQueen starten?",
+    "Stop gracefully HaiveQueen?": "HaiveQueen geordnet stoppen?",
+    "This starts the provider CLI twice per Project and uses login tokens. Confirm to continue.": "Dies startet die Anbieter-CLI zweimal pro Projekt und verwendet Anmeldetokens. Zum Fortfahren bestätigen.",
+    "HaiveQueen's own role texts are always added.": "HaiveQueens eigene Rollentexte werden immer hinzugefügt.",
+    "Force stop ends all running Queens, Agents, Builds and Deploys immediately. Unfinished work will be done again after Start.": "Sofort stoppen beendet alle laufenden Queens, Agenten, Builds und Deploys sofort. Unfertige Arbeit wird nach Start erneut ausgeführt."
 }

@@ -120,40 +120,5 @@ class PlanControlTests(RoundCase):
         self.assertEqual(self.live(), [])
 
 
-class PlanControlWindowTests(unittest.TestCase):
-    """The menu entries and the confirmation of the window."""
-
-    HIVE = {"name": "X", "apiary": "A", "plan_path": "p.md"}
-
-    def test_entries_by_state(self):
-        """Running: pause and stop. Paused with a Queen: start again and stop. Stopped: start again and reject. Rejected: start again only."""
-        from haivequeen.gui import Dashboard
-
-        def actions(**f):
-            """The actions offered for a Hive row with these fields."""
-            return [a for _, a in Dashboard.control_items(dict({"paused": False, "live": False, "plan_rejected": False}, **f))]
-
-        self.assertEqual(actions(live=True), ["pause", "stop"])
-        self.assertEqual(actions(paused=True, live=True), ["start", "stop"])
-        self.assertEqual(actions(paused=True), ["start", "reject"])
-        self.assertEqual(actions(plan_rejected=True), ["start"])
-
-    def test_every_action_asks_first_and_calls_its_function(self):
-        """Declining changes nothing; confirming calls exactly the matching function for the Hive."""
-        from haivequeen import gui
-        win = mock.Mock(spec=gui.Dashboard)
-        win.conn = object()
-        for action, name in (("pause", "pause_plan"), ("stop", "stop_hive"), ("reject", "reject_plan"), ("start", "start_again")):
-            with mock.patch.object(hives, name) as fn:
-                win.confirm.return_value = False
-                gui.Dashboard.plan_control(win, self.HIVE, action)
-                fn.assert_not_called()
-                win.confirm.assert_called()
-                win.confirm.return_value = True
-                gui.Dashboard.plan_control(win, self.HIVE, action)
-                fn.assert_called_once_with(win.conn, "A", "p.md")
-            win.confirm.reset_mock()
-
-
 if __name__ == "__main__":
     unittest.main()

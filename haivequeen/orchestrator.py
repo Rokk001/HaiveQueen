@@ -43,9 +43,14 @@ class Job:
     def __init__(self, token):
         self.token = token
         self.pid = None
+        self.started = threading.Event()
         self.cancelled = False
         self.thread = None
         self.compile_job = None
+
+    def record_pid(self, pid):
+        self.pid = pid
+        self.started.set()
 
     def alive(self):
         """True while the thread of the command runs."""
@@ -666,7 +671,7 @@ def _work(env_settings, job, step, command, folder, extra_env, result_file):
         else:
             try:
                 code, output = integration._watch_compile(command, str(folder), stall, longest, poll, env=extra_env, label=step.lower() + " command",
-                                                          on_start=lambda pid: setattr(job, "pid", pid))
+                                                          on_start=job.record_pid)
             except OSError as exc:
                 code, output = 127, "the %s command could not start: %s" % (step, exc)
     finally:
@@ -740,8 +745,19 @@ def _command(conn, env, plan, state, folder, step, free_mb):
                 while integration.poll_compile_check(conn, env.name, compile_job) is None:
                     time.sleep(POLL)
         else:
-            j.thread = threading.Thread(target=_work, args=(env.settings, j, step, command, folder, extra, result_file), daemon=False)
+            def launch():
+                try:
+                    _work(env.settings, j, step, command, folder, extra, result_file)
+                finally:
+                    j.started.set()  # A failed launch must release the scheduling round too.
+            j.thread = threading.Thread(target=launch, daemon=False)
             j.thread.start()
+            # Publish the PID before releasing the scheduling lock. Force stop may
+            # arrive before another round has a chance to harvest this command.
+            j.started.wait()
+            if j.pid:
+                state['job']['pid'] = j.pid
+                save(conn, env.name, plan, state)
             if not _async():
                 j.thread.join()
     result = _harvest(conn, env, plan, state)

@@ -8,7 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from bzztest import REL, RoundCase, write_plan  # noqa: E402
-from haivequeen import gui, gui_hives, hives  # noqa: E402
+from haivequeen import plan_view, hives  # noqa: E402
 
 PKG = [{"id": "P1", "title": "First"}]
 OTHER = "docs/plans/dummy/OTHER.md"
@@ -29,7 +29,7 @@ class ListTests(RoundCase):
         self.plan("DONE", PKG, project="second")
         write_plan(self.repo / OTHER, "DRAFT", [], "Never read")
         write_plan(ws2 / OTHER, "REJECTED", [], "Rejected one")
-        rows = {(r["apiary"], r["plan_path"]): r["status"] for r in gui_hives.plan_rows(self.conn)}
+        rows = {(r["apiary"], r["plan_path"]): r["status"] for r in plan_view.plan_rows(self.conn)}
         self.assertEqual(rows, {("testproj", REL): "QUEUED", ("testproj", OTHER): "DRAFT", ("second", REL): "DONE", ("second", OTHER): "CANCELLED"})
 
     def test_a_plan_with_a_hive_is_marked(self):
@@ -37,7 +37,7 @@ class ListTests(RoundCase):
         self.plan("READY", PKG)
         write_plan(self.repo / OTHER, "DRAFT", [], "No plan")
         self.round()
-        rows = {r["plan_path"]: r["has_hive"] for r in gui_hives.plan_rows(self.conn)}
+        rows = {r["plan_path"]: r["has_hive"] for r in plan_view.plan_rows(self.conn)}
         self.assertTrue(rows[REL])
         self.assertFalse(rows[OTHER])
 
@@ -47,12 +47,12 @@ class ActionTests(RoundCase):
 
     def row(self):
         """The list row of the dummy plan."""
-        return next(r for r in gui_hives.plan_rows(self.conn) if r["plan_path"] == REL)
+        return next(r for r in plan_view.plan_rows(self.conn) if r["plan_path"] == REL)
 
     def offered(self, status):
         """Action names offered for the dummy plan in this status."""
         self.plan(status, PKG)
-        return [a for _, a in gui_hives.actions(self.row())]
+        return [a for _, a in plan_view.actions(self.row())]
 
     def status(self):
         """Status of the dummy plan in the table."""
@@ -71,35 +71,35 @@ class ActionTests(RoundCase):
         """PAUSED without a live Queen is a stopped Hive."""
         self.plan("READY", PKG)
         hives.pause_plan(self.conn, "testproj", REL)
-        self.assertEqual([a for _, a in gui_hives.actions(self.row())], ["start", "reject", "draft"])
+        self.assertEqual([a for _, a in plan_view.actions(self.row())], ["start", "reject", "draft"])
 
     def test_every_action_asks_first(self):
         """Declining changes nothing, confirming does it."""
         self.plan("DRAFT", PKG)
-        self.assertFalse(gui_hives.run_action(self.conn, self.row(), "start", lambda text: False))
+        self.assertFalse(plan_view.run_action(self.conn, self.row(), "start", lambda text: False))
         self.assertEqual(self.status(), "DRAFT")
-        self.assertTrue(gui_hives.run_action(self.conn, self.row(), "start", yes))
+        self.assertTrue(plan_view.run_action(self.conn, self.row(), "start", yes))
         self.assertEqual(self.status(), "SENT")
 
     def test_start_draft_ready_stopped_before_and_rejected_draft(self):
         """Start: a stopped plan gets its earlier status, a cancelled plan DRAFT, a draft SENT."""
         self.plan("IN_PROGRESS", PKG)
         hives.pause_plan(self.conn, "testproj", REL)
-        gui_hives.run_action(self.conn, self.row(), "start", yes)
+        plan_view.run_action(self.conn, self.row(), "start", yes)
         self.assertEqual(self.status(), "RUNNING")
         self.plan("REJECTED", PKG)
-        gui_hives.run_action(self.conn, self.row(), "start", yes)
+        plan_view.run_action(self.conn, self.row(), "start", yes)
         self.assertEqual(self.status(), "DRAFT")
 
     def test_pause_and_reject(self):
         """Pause a READY plan; reject a stopped one and a draft; a running one cannot be rejected."""
         self.plan("READY", PKG)
-        gui_hives.run_action(self.conn, self.row(), "pause", yes)
+        plan_view.run_action(self.conn, self.row(), "pause", yes)
         self.assertEqual(self.status(), "PAUSED")
-        gui_hives.run_action(self.conn, self.row(), "reject", yes)
+        plan_view.run_action(self.conn, self.row(), "reject", yes)
         self.assertEqual(self.status(), "CANCELLED")
         self.plan("DRAFT", PKG)
-        gui_hives.run_action(self.conn, self.row(), "reject", yes)
+        plan_view.run_action(self.conn, self.row(), "reject", yes)
         self.assertEqual(self.status(), "CANCELLED")
         self.plan("READY", PKG)
         with self.assertRaises(ValueError):
@@ -121,80 +121,9 @@ class ActionTests(RoundCase):
     def test_action_on_a_plan_the_table_does_not_know(self):
         """A plan file never read into the table can be started."""
         write_plan(self.repo / OTHER, "DRAFT", PKG, "Never read")
-        row = next(r for r in gui_hives.plan_rows(self.conn) if r["plan_path"] == OTHER)
-        gui_hives.run_action(self.conn, row, "start", yes)
+        row = next(r for r in plan_view.plan_rows(self.conn) if r["plan_path"] == OTHER)
+        plan_view.run_action(self.conn, row, "start", yes)
         self.assertEqual(self.conn.execute("SELECT status FROM plans WHERE path=?", (OTHER,)).fetchone()[0], "SENT")
-
-
-class StyleTests(RoundCase):
-    """The list looks like the other windows."""
-
-    def test_treeview_has_the_dashboard_colours_and_font(self):
-        """After apply_style the table and its heading use the COL colours and the mono font, and the window is built under that style."""
-        import tkinter as tk
-        from tkinter import ttk
-        from haivequeen import gui_dialog
-        try:
-            root = tk.Tk()
-        except tk.TclError:
-            self.skipTest("no display")
-        self.addCleanup(root.destroy)
-        root.withdraw()
-        gui_dialog.apply_style(root, "Consolas")
-        style = ttk.Style(root)
-        col = gui.COL
-        for name in ("Treeview", "Treeview.Heading"):
-            self.assertIn("Consolas", str(style.lookup(name, "font")))
-        self.assertEqual((style.lookup("Treeview", "background"), style.lookup("Treeview", "fieldbackground"), style.lookup("Treeview", "foreground")),
-                         (col["panel"], col["panel"], col["text"]))
-        self.assertEqual((style.lookup("Treeview.Heading", "foreground"), style.lookup("Treeview.Heading", "relief")), (col["gold"], "flat"))
-        self.assertEqual(style.lookup("Treeview", "background", ("selected",)), col["select"])
-        self.assertEqual(style.lookup("Treeview", "foreground", ("selected",)), col["gold"])
-        window = gui_hives.HivesWindow(root, self.conn, "Consolas")
-        self.addCleanup(window.win.destroy)
-        for _ in range(6000):   # the plans are read in the background: let that end before the database folder goes
-            root.update()
-            if not window.loading:
-                break
-            time.sleep(0.01)
-        self.assertEqual(window.tree.winfo_class(), "Treeview")
-        self.assertEqual(window.win.cget("bg"), col["bg"])
-
-
-class WindowTests(unittest.TestCase):
-    """The button and the window."""
-
-    def test_footer_has_a_hives_button(self):
-        """The footer names the button and the Dashboard opens the list through open_hives."""
-        self.assertTrue(callable(gui.Dashboard.open_hives))
-        self.assertIn('tr("plans"), self.open_hives', inspect.getsource(gui.Dashboard.footer))
-
-    def test_open_hives_creates_the_window_once(self):
-        """A second click brings the open window to the front."""
-        win = mock.Mock(spec=gui.Dashboard)
-        win.root, win.conn, win.mono = object(), object(), "x"
-        win.hives_window = None
-        with mock.patch.object(gui_hives, "HivesWindow") as cls:
-            gui.Dashboard.open_hives(win)
-            cls.assert_called_once()
-            win.hives_window = cls.return_value
-            cls.return_value.win.winfo_exists.return_value = True
-            gui.Dashboard.open_hives(win)
-            cls.assert_called_once()
-            cls.return_value.win.lift.assert_called_once()
-
-    def test_menu_items_confirm_and_call(self):
-        """The right-click menu lists the actions of the row; choosing one runs it with the confirmation."""
-        row = {"apiary": "A", "plan_path": "p.md", "name": "X", "status": "CANCELLED", "stopped": False, "has_hive": False}
-        win = mock.Mock(spec=gui_hives.HivesWindow)
-        win.conn = object()
-        win.on_changed = None
-        win.apply.side_effect = lambda r, a: gui_hives.HivesWindow.apply(win, r, a)
-        with mock.patch.object(gui_hives, "run_action", return_value=True) as run:
-            items = gui_hives.HivesWindow.menu_items(win, row)
-            self.assertEqual([label for label, _ in items], ["Start", "Back to draft"])
-            items[1][1]()
-            run.assert_called_once_with(win.conn, row, "draft", win.confirm)
 
 
 if __name__ == "__main__":

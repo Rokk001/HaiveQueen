@@ -4,7 +4,7 @@ import ast
 import re
 from pathlib import Path
 from bzztest import REL, RoundCase
-from haivequeen import claude_hook, cli, db, gui_questions, hives, profile, runtime
+from haivequeen import claude_hook, cli, db, question_service, hives, profile, runtime
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -15,8 +15,8 @@ class TerminologyTests(unittest.TestCase):
         args = ['start', '--project', 'p', '--plan', 'x', '--package', 'P', '--class', 'light']
         self.assertIs(parser.parse_args(['agent'] + args).fn, parser.parse_args(['bee'] + args).fn)
 
-    def test_started_column_and_translation_rule(self):
-        self.assertIn('tr("Started")', (ROOT / 'haivequeen/gui_hives.py').read_text(encoding='utf-8'))
+    def test_plan_list_and_translation_rule(self):
+        self.assertIn("section('Plans')", (ROOT / 'haivequeen/web-client.js').read_text(encoding='utf-8'))
         rule = (ROOT / 'haivequeen/i18n.py').read_text(encoding='utf-8').split('"""', 2)[1]
         self.assertNotIn('product names Apiary, Hive, Queen and Bee', rule)
 
@@ -79,7 +79,7 @@ class OwnerCheckTransitionTests(RoundCase):
 
     def test_gui_owner_check_note_does_not_reject_packages(self):
         qid = db.add_question(self.conn, 'testproj', REL, 'owner-check', 'Check?', '')
-        gui_questions.answer(self.conn, qid, 'A note', rejected=['P1'])
+        question_service.answer(self.conn, qid, 'A note', rejected=['P1'])
         self.assertEqual(self.conn.execute('SELECT status FROM questions WHERE id=?', (qid,)).fetchone()[0], 'open')
 
     def test_unprocessed_answer_remains_open(self):

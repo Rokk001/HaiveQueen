@@ -938,7 +938,7 @@ def build_args(prov, vars_, allowed_tools=None):
         return re.sub(r"\{(\w+)\}", lambda m: str(vars_[m.group(1)]) if m.group(1) in vars_ else m.group(0), arg)
     args = list(prov["args"])
     if allowed_tools:
-        from .gui_config import split_args, join_args
+        from .settings import split_args, join_args
         rest, tools, position = split_args(args)
         tools.extend(tool for tool in allowed_tools if tool not in tools)
         args = join_args(rest, tools, position)

@@ -121,8 +121,22 @@ class CliTest(unittest.TestCase):
         code, o = self.run_orch("stop")
         self.assertEqual(code, 0)
         self.assertTrue((Path(self.tmp.name) / "data" / "STOP").is_file())
-        code, o = self.run_orch("start", "--foreground", "--rounds", "1")
-        self.assertEqual(code, 0)
+        # Isolate the web lifecycle: foreground startup must request it, but this
+        # CLI test must not bind a fixed port or leave an independent service.
+        script = """
+import sys
+from unittest.mock import patch
+sys.path.insert(0, sys.argv.pop(1))
+from haivequeen import cli, web_service
+with patch.object(web_service, 'start', return_value={}) as start:
+    result = cli.main()
+    assert start.call_count == 1
+sys.exit(result)
+"""
+        result = subprocess.run([sys.executable, "-I", "-c", script, str(ROOT),
+                                 "start", "--foreground", "--rounds", "1"],
+                                env=self.env, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((Path(self.tmp.name) / "data" / "STOP").exists())
 
     def test_real_folders_untouched(self):

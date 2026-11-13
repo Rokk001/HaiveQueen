@@ -32,7 +32,7 @@ def default_cores(cores: int) -> int:
 
 
 def core_choices(cores: int) -> list:
-    """The core counts the settings window offers: every whole number from 1 to the number of logical cores."""
+    """The core counts the settings page offers: every whole number from 1 to the number of logical cores."""
     return list(range(1, max(1, int(cores)) + 1))
 
 
@@ -40,7 +40,7 @@ def settings_from(value) -> dict:
     """Build settings with the defaults filled in, or None when there is no block.
 
     `value` is the buildJobs setting of config.toml: None (no block), a number (0 = the defaults; N above 0 = N cores, the old form) or a table
-    with `cores` (the core count of the settings window), `parallel`, `minFreeRamGB`, `envVar`, `parallelEnvVar`, `minFreeRamEnvVar`, `reserveMB`,
+    with `cores` (the core count of the settings page), `parallel`, `minFreeRamGB`, `envVar`, `parallelEnvVar`, `minFreeRamEnvVar`, `reserveMB`,
     `perJobMB` (number or 'auto'), `firstJobs`, `measurements` and the old keys `fixed` (read as core count) and `coreShare` ('2/3' or a number).
     The core count is `cores`, else `fixed`, else the old number; without any of them it follows `coreShare` (default two thirds, rounded up).
     """

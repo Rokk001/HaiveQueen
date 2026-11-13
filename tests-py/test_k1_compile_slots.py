@@ -12,57 +12,45 @@ from types import SimpleNamespace
 from unittest import mock
 
 import bzztest  # noqa: F401  (puts this checkout first on the path)
-from haivequeen import buildjobs, gui_config, i18n, integration, scheduler
-from test_p2_project_page import WindowCase, descendants
+from haivequeen import buildjobs, settings, i18n, integration, scheduler
 
 KEY = "maxConcurrentCompileChecks"
 LABEL = "Max concurrent compile checks"
 BIG = 1 << 20   # MB of free RAM that never limits
 
 
-class SettingTests(WindowCase):
-    """K-1: shown on the General page with its explanation, whole numbers from 1, default 2, still set after a restart."""
+class SettingTests(unittest.TestCase):
+    """The browser and settings persistence share the machine-wide compile limit."""
 
-    def test_general_page_shows_the_setting_with_default_2_and_an_explanation(self):
-        win = self.window()
-        shown = {path: getter() for path, getter, _like in win.getters}
-        self.assertEqual(shown[(KEY,)], "2")
-        texts = {w.cget("text") for w in descendants(win.form) if w.winfo_class() == "Label"}
-        self.assertIn(LABEL, texts)
-        explanation = gui_config.GENERAL_HELP[KEY]
-        self.assertIn(explanation, texts)
-        self.assertEqual(explanation, "The most compile checks that run at the same time on this computer, across all projects and Queens, also for several plans of one project.")
-        self.assertEqual(i18n.tr(explanation, language="German"), "Die höchste Zahl von Kompilierprüfungen, die gleichzeitig auf diesem Rechner laufen, für alle Projekte und Queens, auch für mehrere Pläne eines Projekts.")
-        self.assertEqual(gui_config.GENERAL_LABELS[KEY], LABEL)
+    def test_general_page_shows_default_and_explanation(self):
+        from haivequeen import web_ui
+        import re
+        page = web_ui.page('token')
+        data = json.loads(re.search(r'<script id="bootstrap" type="application/json">(.*?)</script>', page).group(1))
+        self.assertEqual(data['general'][KEY], 2)
+        self.assertEqual(data['fieldLabels']['General'][KEY], LABEL)
+        explanation = 'The most compile checks that run at the same time on this computer, across all projects and Queens, also for several plans of one project.'
+        self.assertEqual(data['fieldHelp']['General'][KEY], explanation)
+        self.assertEqual(i18n.tr(explanation, language='German'), 'Die höchste Zahl von Kompilierprüfungen, die gleichzeitig auf diesem Rechner laufen, für alle Projekte und Queens, auch für mehrere Pläne eines Projekts.')
 
     def test_only_whole_numbers_from_1_are_accepted(self):
-        for bad in ("0", "-1", "1.5", "two", ""):
-            win = self.window()
-            self.set_entry(win, (KEY,), bad)
-            self.assertFalse(win.collect() and not gui_config.check(win.data), bad)
-            win.win.destroy()
-        for problem in (0, -3, 1.5, "2", True):
-            self.assertTrue(gui_config.check({KEY: problem}), problem)
+        for problem in (0, -3, 1.5, '2', True):
+            self.assertTrue(settings.check({KEY: problem}), problem)
         for fine in (1, 2, 9):
-            self.assertEqual(gui_config.check({KEY: fine}), [])
+            self.assertEqual(settings.check({KEY: fine}), [])
 
-    def test_the_value_is_saved_and_still_set_after_a_restart(self):
-        win = self.window()
-        self.set_entry(win, (KEY,), "4")
-        self.assertTrue(win.collect())
-        self.assertEqual(win.data[KEY], 4)
-        win.save()
-        win.win.destroy()
-        self.assertEqual(gui_config.load_raw(self.base / "config.toml")[KEY], 4)
-        again = self.window()
-        self.assertEqual({path: getter() for path, getter, _like in again.getters}[(KEY,)], "4")
-        self.assertEqual(scheduler.build_settings(gui_config.load_raw(self.base / "config.toml"), {})[KEY], 4)
+    def test_value_is_saved_and_reloaded(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'config.toml'
+            settings.save_file(path, {KEY: 4})
+            self.assertEqual(settings.load_raw(path)[KEY], 4)
+            self.assertEqual(scheduler.build_settings(settings.load_raw(path), {})[KEY], 4)
 
     def test_default_machine_wide_and_no_second_new_setting(self):
         self.assertEqual(scheduler.build_settings({}, {})[KEY], 2)
-        self.assertEqual(scheduler.build_settings({KEY: 3}, {KEY: 7})[KEY], 3)   # a project cannot change a machine-wide value
-        self.assertEqual(integration.compile_limit({KEY: 0}), 2)   # a wrong value never stops all checks
-        self.assertEqual(integration.compile_limit({KEY: "x"}), 2)
+        self.assertEqual(scheduler.build_settings({KEY: 3}, {KEY: 7})[KEY], 3)
+        self.assertEqual(integration.compile_limit({KEY: 0}), 2)
+        self.assertEqual(integration.compile_limit({KEY: 'x'}), 2)
         self.assertEqual(integration.compile_limit({KEY: 5}), 5)
 
 
@@ -273,19 +261,14 @@ class CheckStepTests(unittest.TestCase):
                     for index, hold in enumerate((0, 1)):
                         extra = [integration._acquire_compile_slot(settings, 0.01) for _ in range(hold)]
                         result = Path(folder) / ("r%d.json" % index)
-                        marker = Path(folder) / ("started%d" % index)
                         job = orchestrator.Job("t%d" % index)
-                        command = '"%s" -c "import pathlib,time; pathlib.Path(\'%s\').touch(); time.sleep(1.1)"' % (sys.executable, marker.name)
-                        thread = threading.Thread(target=orchestrator._work, args=(settings, job, "Check", command, folder, None, str(result)), daemon=True)
+                        thread = threading.Thread(target=orchestrator._work, args=(settings, job, "Check", '"%s" -c "pass"' % sys.executable, folder, None, str(result)), daemon=True)
                         thread.start()
-                        deadline = time.monotonic() + (10 if hold == 0 else 0.5)
-                        while not marker.exists() and time.monotonic() < deadline:
-                            time.sleep(0.05)
-                        ran.append(marker.exists())
+                        thread.join(1.0 if hold == 0 else 0.5)
+                        ran.append(not thread.is_alive())
                         for slot in extra:
                             integration._release_compile_slot(slot, 0.01)
-                        thread.join(30)
-                        self.assertFalse(thread.is_alive(), "the Check step did not finish")
+                        thread.join(10)
                         self.assertEqual(json.loads(result.read_text(encoding="utf-8"))["code"], 0)
                     self.assertEqual(ran, [True, False], "the Check step must run with one other check and wait with two")
             finally:

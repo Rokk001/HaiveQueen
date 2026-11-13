@@ -1,11 +1,11 @@
-"""Data for the graphical dashboard (haivequeen/gui.py): one plain-dict snapshot of everything the window shows, read from the database."""
+"""Browser dashboard data: one plain-dict snapshot read from the database."""
 import re
 import shutil
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import config, db, gui_overlays, hives, overview, runstate, runtime, reserve as quota_reserve
+from . import config, db, dashboard_overlays, hives, overview, runstate, runtime, reserve as quota_reserve
 from . import platform as osplat
 from . import i18n, localtime
 from . import scheduler as sch
@@ -17,7 +17,7 @@ CONTEXT_FALLBACK = 300000   # context limit in tokens when the provider's own li
 ACTIVITY_DAYS = 7       # window of the token usage panel
 LIVE_LINES = 300        # newest lines shown in the live view of an agent
 LIVE_FILE = "milestones.txt"   # live text file of an agent, in its run folder (written by agent_runner.AgentRun.say)
-LIVE_COLOURS = {"White": "text", "Green": "green", "Red": "red", "Cyan": "cyan", "Yellow": "yellow", "Gray": "dim"}   # colour word of a live line -> gui.COL name
+LIVE_COLOURS = {"White": "text", "Green": "green", "Red": "red", "Cyan": "cyan", "Yellow": "yellow", "Gray": "dim"}
 
 
 # Strip the plan suffix so a plan file name reads as a Hive name.
@@ -731,7 +731,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         orchestrator = orchestrator_state(d["run"]["state"], 1, False)
     shown = [h for h in hive_rows if not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done]
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    overlays, start_tile = gui_overlays.build(conn, d["usage"], agents_all, shown, bees, apiaries, day, [str(p.get("name")) for p in cfg.get("providers") or [] if p.get("name")])
+    overlays, start_tile = dashboard_overlays.build(conn, d["usage"], agents_all, shown, bees, apiaries, day, [str(p.get("name")) for p in cfg.get("providers") or [] if p.get("name")])
     return {"now": now, "project": project, "run_state": d["run"]["state"], "orchestrator": orchestrator, "version": _version(),
             "tiles": {"apiaries": len(apiaries), "hives": sum(1 for h in hive_rows if h["live"] and not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done), "queens": len(queens), "orchestrators": len(orch_table), "bees": len(queens) + sum(1 for b in bees if b["kind"] in ("bee", "fix") and b["status"] in ("running", "stopping")),
                       "bee_capacity": slots, "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today), "start_ctx": start_tile},
