@@ -8,15 +8,15 @@ The German browser bootstrap uses the shared translation catalog. `test_web_ui.p
 
 Compared the last desktop sources at `6ef5cda^` with the browser implementation, including the following views and their shared data sources:
 
-| Desktop source | Browser equivalent | Findings |
+| Former desktop feature | Current browser implementation | Findings |
 | --- | --- | --- |
-| `gui.py` dashboard and live output | Dashboard, tile details, log controls and live panels; `dashboard_data`, `dashboard_overlays` | Dashboard values remain available. Fixed table headings and Orchestrator and Agent state translation; model names remain unchanged. |
-| `gui_hives.py` | Plans and plan dialog; `plan_view` | Restored the Started column with translated yes/no values. Waiting reason and header errors remain separate visible columns. W-15 controls replace the former menu. |
-| `gui_questions.py` | Questions and owner-check cards; `question_service` | Question text, recommendation, Project-wide answers, package rejection, accept and reject remain available. |
-| `gui_config.py` General | General; shared settings labels, help, build fields and defaults | General fields, build settings and installer remain available; web settings are added. |
-| `gui_config.py` Projects | Projects; shared project defaults and settings service | Repository, plans folder, integration, compile/build/deploy commands, rules and advanced settings remain available. Restored the warning identifying CLIs that load a local rule themselves even when it is switched off. Upstream files have no such warning. |
-| `gui_provider.py` and provider form | Providers; `provider_labels`, CLI presets and settings service | Restored Subscription/API key/Local LLM choice labels and explicit Login present/missing text. Model classes, custom models, effort, tools, arguments, custom CLI settings, enable/disable, connection test and benchmark remain available. Browser login replaces the desktop terminal. |
-| `gui_benchmark.py`, `gui_overlays.py` | Provider benchmark data, jobs and tile detail dialog | Shared measurements and overlay rows remain available. |
+| Dashboard and live output | Dashboard, tile details, log controls and live panels; `dashboard_data`, `dashboard_overlays` | Dashboard values remain available. Fixed table headings and Orchestrator and Agent state translation; model names remain unchanged. |
+| Plans and plan details | Plans and plan dialog; `plan_view` | Restored the Started column with translated yes/no values. Waiting reason and header errors remain separate visible columns. W-15 controls replace the former menu. |
+| Questions and owner checks | Questions and owner-check cards; `question_service` | Question text, recommendation, Project-wide answers, package rejection, accept and reject remain available. |
+| General settings | General; shared settings labels, help, build fields and defaults | General fields, build settings and installer remain available; web settings are added. |
+| Project settings | Projects; shared project defaults and settings service | Repository, plans folder, integration, compile/build/deploy commands, rules and advanced settings remain available. Restored the warning identifying CLIs that load a local rule themselves even when it is switched off. Upstream files have no such warning. |
+| Provider settings and provider form | Providers; `provider_labels`, CLI presets and settings service | Restored Subscription/API key/Local LLM choice labels and explicit Login present/missing text. Model classes, custom models, effort, tools, arguments, custom CLI settings, enable/disable, connection test and benchmark remain available. Browser login replaces the desktop terminal. |
+| Provider benchmarks and detail overlays | Provider benchmark data, jobs and tile detail dialog | Shared measurements and overlay rows remain available. |
 
 Regression evidence: before the fixes, the real browser test failed on the untranslated Runtime heading; the rule API test failed because native CLI information was absent. A further browser run failed on the missing Started column. The updated real browser scenario checks English and German, translated status and headings, access choice values and labels, login state, native rule warnings and unchanged model names. Bootstrap checks require every shared field label and help text to have a German catalog entry.
 

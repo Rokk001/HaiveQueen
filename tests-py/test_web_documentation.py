@@ -5,6 +5,15 @@ from haivequeen import cli
 
 
 class WebDocumentationTests(unittest.TestCase):
+    def test_documentation_does_not_reference_removed_desktop_modules(self):
+        root = Path(__file__).resolve().parents[1]
+        documents = [*root.glob('README*'), *(root / 'docs').rglob('*')]
+        removed_module = r'\b(?:gui\.pyw?|gui_[a-zA-Z0-9_]+(?:\.pyw?)?|haivequeen\.gui)\b'
+        for document in documents:
+            if document.is_file() and document.suffix.lower() in ('.md', '.rst', '.txt'):
+                with self.subTest(document=document.relative_to(root).as_posix()):
+                    self.assertNotRegex(document.read_text(encoding='utf-8'), removed_module)
+
     def test_readme_describes_browser_plan_menu_and_current_controls(self):
         readme = Path('README.md').read_text(encoding='utf-8')
         for obsolete in ('right click', 'right-click', 'Queen menu', 'Plans window',
