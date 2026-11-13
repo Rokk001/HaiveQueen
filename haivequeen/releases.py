@@ -3,6 +3,30 @@ import re
 from urllib.request import urlopen
 
 
+def prerelease_tag(tags, postfix, requested="", start=""):
+    """Choose a prerelease tag from all repository tags, without project files."""
+    if not re.fullmatch(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", postfix):
+        raise ValueError("invalid release postfix")
+    full = []
+    for tag in tags:
+        if re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag):
+            full.append(tuple(map(int, tag[1:].split("."))))
+    if full:
+        current = ".".join(map(str, max(full)))
+        try:
+            version = next_version(current, requested) if requested else next_version(current)
+        except ValueError:
+            version = next_version(current)
+    else:
+        if not start:
+            raise ValueError("start version required")
+        next_version(start)  # validate without incrementing the owner's start version
+        version = start
+    pattern = re.compile(r"v" + re.escape(version + "-" + postfix) + r"\.(\d+)$")
+    numbers = [int(match.group(1)) for tag in tags if (match := pattern.fullmatch(tag))]
+    return "v%s-%s.%d" % (version, postfix, max(numbers, default=0) + 1)
+
+
 def next_version(current: str, requested: str = "") -> str:
     """Increment the patch or accept a strictly newer three-part version."""
     def parse(value):
