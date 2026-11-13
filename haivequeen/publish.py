@@ -59,28 +59,16 @@ _repo = code_folder   # older name of the code repository lookup
 
 def github_repository(env, run=None):
     """owner/name when the remote (remoteName, default origin) of the code repository of the Project is on GitHub, else None."""
-    run = run or _run
-    remote = str(env.settings.get("remoteName") or "origin")
-    folder = code_folder(env)
-    code, out = run(["git", "-C", str(folder), "remote", "get-url", remote], folder)
-    if code != 0:
-        return None
-    try:
-        return releases.repository_from_remote(out.strip())
-    except ValueError:
-        return None
+    from . import git_provider
+    provider, _ = git_provider.for_project(env, run or _run)
+    return provider.repository if provider and provider.name == "github" else None
 
 
 def token(run=None) -> str:
-    """A GitHub token for publishing: GITHUB_TOKEN, GH_TOKEN, else `gh auth token`; empty when none is available."""
-    for key in ("GITHUB_TOKEN", "GH_TOKEN"):
-        value = os.environ.get(key, "").strip()
-        if value:
-            return value
-    run = run or _run
-    code, out = run(["gh", "auth", "token"], os.getcwd())
-    value = out.strip() if code == 0 else ""
-    return value if value and "\n" not in value and " " not in value else ""
+    """Find a GitHub credential using the provider's configured fallbacks."""
+    from .git_provider import Provider
+    from .git_providers import github
+    return Provider("github", github, "").call("login", run=run)
 
 
 def base_version(env) -> str:
