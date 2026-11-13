@@ -1,0 +1,37 @@
+"""Settings operations for web clients, with a revision for each file."""
+import hashlib
+from pathlib import Path
+
+from . import filetxn, gui_config
+
+
+def _revision(source):
+    path, contents = source
+    digest = hashlib.sha256()
+    digest.update(path.encode('utf-8'))
+    digest.update(b'\0missing' if contents is None else b'\0present\0' + contents)
+    return digest.hexdigest()
+
+
+@filetxn.coordinated
+def load(path):
+    """Return editable settings and a JSON-safe revision for a later save."""
+    data = gui_config.load_raw(path)
+    return {'settings': dict(data), 'revision': _revision(data.source)}
+
+
+@filetxn.coordinated
+def save(path, settings, revision, *, project=False, conn=None):
+    """Save only if the file still matches the revision the client read."""
+    data = gui_config.load_raw(path)
+    if not isinstance(revision, str) or revision != _revision(data.source):
+        raise ValueError('settings changed since loading; reload before saving')
+    data.clear()
+    data.update(settings)
+    if project and conn is not None:
+        gui_config.save_project_file(conn, Path(path), data)
+    elif project and data.get('publishReleases'):
+        raise ValueError('project database connection required for release settings')
+    else:
+        gui_config.save_file(path, data)
+    return {'settings': dict(data), 'revision': _revision(data.source)}
