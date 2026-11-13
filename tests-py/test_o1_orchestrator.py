@@ -427,7 +427,25 @@ class AsyncCommands(OrchCase):
         hives.stop_hive(self.conn, "testproj", REL)
         self.wait_job()
         self.assertLess(time.time() - started, 30)
+        self.round()
         self.assertNotIn("job", self.state())
+
+    def test_cancel_keeps_job_until_running_thread_has_stopped(self):
+        self.ready_plan()
+        state = orchestrator._new_state(self.conn, self.env(), REL, hives.get(self.conn, "testproj", REL))
+        state.update(step="Build", steps={"Build": "running"},
+                     job={"step": "Build", "token": "cancel-test", "pid": None})
+        job = orchestrator.Job("cancel-test")
+        job.thread = mock.Mock()
+        job.thread.is_alive.side_effect = [True, False]
+        orchestrator.JOBS[("testproj", REL)] = job
+        self.addCleanup(orchestrator.JOBS.pop, ("testproj", REL), None)
+        self.assertFalse(orchestrator._cancel_pipeline_job(self.conn, "testproj", REL, state))
+        self.assertTrue(orchestrator.load(self.conn, "testproj", REL)["job"]["cancelling"])
+        self.assertTrue(job.cancelled)
+        self.assertTrue(orchestrator._cancel_pipeline_job(self.conn, "testproj", REL, state))
+        self.assertNotIn("job", orchestrator.load(self.conn, "testproj", REL))
+        self.assertEqual(state["step"], "Build")
 
     def test_restart_with_a_lost_command_runs_the_step_again(self):
         self.check = self.echo("Check")

@@ -1,6 +1,7 @@
 """The Orchestrator pipeline: after an accepted `bzz ready` HaiveQueen itself (no language model) integrates the plan in the plan's worktree.
 
-Steps, one after another: Merge (the freshly fetched integration branch into the plan branch), Check (the project's compile check command), Build
+Each plan runs Merge, Check and Build speculatively on the cumulative state of its predecessors. Push and Deploy wait for those predecessors to close.
+Steps, one after another within a plan: Merge, Check (the project's compile check command), Build
 (Build command), Push (the plan branch HEAD to the integration branch, never forced), Deploy (Deploy command) and Close (queue row integrated, release,
 integration place released, worktree cleanup). A step whose command is empty is skipped. A red step starts a fix agent (phase "fix") that works in the
 plan's worktree; after its fix the pipeline starts again at step 1. The state of a plan is stored in the kv table (key orch:<plan>), so the pipeline
@@ -168,7 +169,14 @@ def run_round(conn, env, free_mb, alive=None):
     """One step of the pipeline of every plan of the project; returns the plans that were closed in this round."""
     closed = []
     integration.retire_legacy_steps(conn)   # step packages and capability questions of the time before the Orchestrator block no plan
-    for plan in runtime.list_plans(conn, env.name):
+    ready = dict(conn.execute(
+        "SELECT h.plan_path, q.id FROM hives h JOIN queue q ON q.id=h.ready_id "
+        "WHERE h.project=? AND q.project=h.project AND q.plan_path=h.plan_path AND q.status='ready'",
+        (env.name,),
+    ).fetchall())
+    plans = runtime.list_plans(conn, env.name)
+    plans.sort(key=lambda plan: (0, ready[plan["path"]]) if plan["path"] in ready else (1, 0))
+    for plan in plans:
         try:
             if advance(conn, env, plan["path"], free_mb, alive) == "closed":
                 closed.append(plan["path"])
@@ -214,6 +222,9 @@ def advance(conn, env, plan, free_mb, alive=None):
         state = _new_state(conn, env, plan, hive)
         _save_last(conn, env.name, plan, fix_agent="", steps=[], commit="")
         _log(env, "%s: Queen done, integration taken over" % _short(plan))
+    if state.get("job", {}).get("cancelling"):
+        if not _cancel_pipeline_job(conn, env.name, plan, state):
+            return None
     if _plan_status(conn, env.name, plan) in ("PAUSED", "CANCELLED", "DONE", "DRAFT"):
         _harvest_only(conn, env, plan, state)   # a running command ends; nothing new starts
         return None
@@ -257,6 +268,51 @@ def begin_owner_fix(conn, project, plan, text):
 
 # ---------------------------------------------------------------- the pipeline
 
+def _ahead(conn, project, plan):
+    """Reservations before this plan, including legacy exclusive integrations."""
+    return [row[0] for row in conn.execute(
+        "SELECT plan_path FROM hive_integration WHERE project=? AND id < "
+        "(SELECT id FROM hive_integration WHERE project=? AND plan_path=?) ORDER BY id",
+        (project, project, plan))]
+
+
+def _pending_before(conn, env, plan, state):
+    """Do not overtake accepted ready plans whose reservation is not prepared yet."""
+    hive = hives.get(conn, env.name, plan)
+    ready_id = (hive or {}).get("ready_id") or 0
+    rows = conn.execute(
+        "SELECT h.plan_path, q.id FROM hives h JOIN queue q ON q.id=h.ready_id "
+        "WHERE h.project=? AND q.status='ready' AND h.plan_path!=? AND NOT EXISTS "
+        "(SELECT 1 FROM hive_integration i WHERE i.project=h.project AND i.plan_path=h.plan_path)",
+        (env.name, plan)).fetchall()
+    for other, ticket in rows:
+        previous = load(conn, env.name, other)
+        if previous and (previous.get("phase") != "pipeline" or previous.get("rejoining")):
+            continue
+        if not state.get("rejoining") and ticket >= ready_id:
+            continue
+        if _plan_status(conn, env.name, other) not in ("QUEUED", "RUNNING", "WAITING"):
+            continue
+        if runtime.kv_get(conn, env.name, "hive-rejected-ready:" + other) == str(ticket):
+            continue
+        return True
+    return False
+
+
+def _replay_followers(conn, env, plan):
+    """Invalidate speculative results durably before asking their workers to stop."""
+    rows = conn.execute("SELECT plan_path FROM hive_integration WHERE project=? AND id > "
+                        "(SELECT id FROM hive_integration WHERE project=? AND plan_path=?) ORDER BY id",
+                        (env.name, env.name, plan)).fetchall()
+    for row in rows:
+        follower = load(conn, env.name, row[0])
+        if not follower or follower.get("phase") != "pipeline" or follower.get("step") in ("Deploy", "Close"):
+            continue
+        follower.update(replay=True, step="Merge", steps={}, ran=[])
+        save(conn, env.name, row[0], follower)
+        _cancel_pipeline_job(conn, env.name, row[0], follower)
+
+
 def _advance_pipeline(conn, env, plan, state, free_mb):
     folder = _worktree(env, plan)
     if folder is None:
@@ -270,16 +326,35 @@ def _advance_pipeline(conn, env, plan, state, free_mb):
             _blocker(conn, env, plan, "waiting for integration: " + reason)
             _set_status(conn, env, plan, "WAITING")
             return None
-        if not hives.take_integration(conn, env.name, plan):
-            _blocker(conn, env, plan, "waiting for the integration place")
+        # Reserve in ready order, but let speculative work proceed behind the head.
+        if _pending_before(conn, env, plan, state):
+            _blocker(conn, env, plan, "waiting for an earlier ready plan to join the queue")
             _set_status(conn, env, plan, "WAITING")
             return None
+        hives.take_integration(conn, env.name, plan)
         state["placed"] = True
+        state.pop("rejoining", None)
+        save(conn, env.name, plan, state)
+    if state.get("replay"):
+        if not _cancel_pipeline_job(conn, env.name, plan, state):
+            return None
+        if state.get("source"):
+            code, out = _git(folder, "reset", "--hard", state["source"])
+            if code:
+                return _red(conn, env, plan, state, "Merge", "could not restore the plan before replay:\n" + out)
+        state.pop("replay", None)
+        state.pop("merged", None)
         save(conn, env.name, plan, state)
     _blocker(conn, env, plan, "")
     _set_status(conn, env, plan, "RUNNING")
     for _ in range(4 * (len(STEPS) + 2)):   # inline steps follow each other in one round (also after a moved remote); a running command ends the round
         step = state["step"]
+        ahead = _ahead(conn, env.name, plan)
+        if step in ("Push", "Deploy", "Close") and ahead:
+            # Waiting through Close also serializes Deploy and release publication.
+            _blocker(conn, env, plan, "waiting for earlier plans to push and deploy")
+            _set_status(conn, env, plan, "WAITING")
+            return None
         if step == "Merge":
             outcome = _merge(conn, env, plan, state, folder)
         elif step == "Push":
@@ -312,6 +387,17 @@ def _done(conn, env, plan, state, step, text=""):
 
 def _merge(conn, env, plan, state, folder):
     remote, branch = _remote(env)
+    ahead = _ahead(conn, env.name, plan)
+    target = "%s/%s" % (remote, branch)
+    if ahead:
+        predecessor = load(conn, env.name, ahead[-1])
+        if not predecessor or predecessor.get("replay") or not predecessor.get("merged"):
+            _blocker(conn, env, plan, "waiting for the preceding plan to merge")
+            _set_status(conn, env, plan, "WAITING")
+            return None
+        target = predecessor["merged"]
+    if not state.get("source"):
+        state["source"] = integration.head_commit(folder)
     state["steps"]["Merge"] = "running"
     save(conn, env.name, plan, state)
     _log(env, "%s: Merge started %s" % (_short(plan), _counter(env, "Merge")))
@@ -320,9 +406,10 @@ def _merge(conn, env, plan, state, folder):
         return _red(conn, env, plan, state, "Merge", "git fetch %s %s failed:\n%s" % (remote, branch, out))
     if _git(folder, "rev-parse", "-q", "--verify", "MERGE_HEAD")[0] == 0:
         return _red(conn, env, plan, state, "Merge", "an earlier merge is not finished in the worktree of the plan (merge conflict):\n" + _git(folder, "status", "--short")[1])
-    code, out = _git(folder, "merge", "--no-edit", "%s/%s" % (remote, branch))
+    code, out = _git(folder, "merge", "--no-edit", target)
     if code != 0:
         return _red(conn, env, plan, state, "Merge", "merge of %s/%s into the plan branch failed (merge conflict; the merge is left open in the worktree):\n%s" % (remote, branch, out))
+    state["merged"] = integration.head_commit(folder)
     return _done(conn, env, plan, state, "Merge")
 
 
@@ -358,9 +445,11 @@ def _moved(conn, env, plan, state, step):
     if state["moved"] > MOVED_LIMIT:
         return _red(conn, env, plan, state, step, "the remote integration branch moved %d times while the plan was integrated" % state["moved"])
     _log(env, "%s: the remote integration branch moved, integration starts again at Merge" % _short(plan))
+    _replay_followers(conn, env, plan)
     state["step"] = "Merge"
     state["steps"] = {}
     state["ran"] = []
+    state.pop("merged", None)
     save(conn, env.name, plan, state)
     return "next"
 
@@ -546,6 +635,8 @@ def _harvest_only(conn, env, plan, state):
 
 def _red(conn, env, plan, state, step, error):
     """A step is red: the place is released and a fix agent starts."""
+    if step != "Deploy":
+        _replay_followers(conn, env, plan)
     state["steps"][step] = "red"
     _log(env, "%s: %s red %s - %s" % (_short(plan), step, _counter(env, step), " ".join(error.split())[:200]))
     state["phase"] = "fix"
@@ -620,7 +711,10 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
         _save_last(conn, env.name, plan, fix_agent=fix["agent"])
         if fix.get("owner_stopped"):   # M-4: an agent the owner stopped is never restarted; the plan waits for his instruction
             return _block(conn, env, plan, state, "stopped")
-        state.update(phase="pipeline", step="Merge", placed=False, steps={}, ran=[], fix=None, moved=0)
+        state.update(phase="pipeline", step="Merge", placed=False, steps={}, ran=[], fix=None, moved=0, rejoining=True)
+        # The fix commit becomes the new original state when joining the tail.
+        state.pop("source", None)
+        state.pop("merged", None)
         save(conn, env.name, plan, state)
         return None
     return _start_fix(conn, env, plan, state, free_mb, alive, str(fix.get("instruction") or ""))
@@ -743,24 +837,48 @@ def owner_stop(conn, project, agent_name):
     return False
 
 
+def _cancel_pipeline_job(conn, project, plan, state, stop=None):
+    """Keep the job recorded until its command and supervisor have actually stopped."""
+    record = state.get("job")
+    if not record:
+        return True
+    stop = stop or osplat.kill_process_tree
+    record["cancelling"] = True
+    job = JOBS.get((project, plan))
+    if job and job.token != record.get("token"):
+        job = None
+    if job:
+        job.cancelled = True
+    pid = (job.pid if job else None) or record.get("pid")
+    if pid and record.get("cancel_pid") != pid:
+        stop(pid)
+        record["cancel_pid"] = pid
+    save(conn, project, plan, state)
+    if job and job.alive():
+        return False
+    if record.get("compile"):
+        # A supervisor may publish before exiting, and recovery must also confirm
+        # that an orphaned check has ended before the worktree can be reused.
+        if osplat.process_alive(record["pid"]):
+            return False
+        if integration.poll_compile_check(conn, project, record) is None:
+            return False
+    elif pid and osplat.process_alive(pid):
+        return False
+    JOBS.pop((project, plan), None)
+    state.pop("job", None)
+    state["steps"] = {k: v for k, v in state["steps"].items() if v != "running"}
+    save(conn, project, plan, state)
+    return True
+
+
 def stop_plan(conn, project, plan, stop=None):
     """Stopping the plan ends its running pipeline command and its fix agent; the pipeline goes on at the resume."""
     stop = stop or osplat.kill_process_tree
     state = load(conn, project, plan)
     if state is None:
         return
-    job = JOBS.get((project, plan))
-    if job is not None:
-        job.cancelled = True
-        if job.pid:
-            stop(job.pid)
-    if state.get("job") and state["job"].get("pid") and not job:
-        stop(state["job"]["pid"])
-    if state.get("job"):
-        if state["job"].get("compile"):
-            integration.poll_compile_check(conn, project, state["job"])
-        state.pop("job", None)
-        state["steps"] = {k: v for k, v in state["steps"].items() if v != "running"}
+    _cancel_pipeline_job(conn, project, plan, state, stop)
     fix = state.get("fix")
     if state.get("phase") == "fix" and fix and fix.get("agent"):
         for row in runtime.list_agents(conn, project, "active"):
