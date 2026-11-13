@@ -168,7 +168,14 @@ def run_round(conn, env, free_mb, alive=None):
     """One step of the pipeline of every plan of the project; returns the plans that were closed in this round."""
     closed = []
     integration.retire_legacy_steps(conn)   # step packages and capability questions of the time before the Orchestrator block no plan
-    for plan in runtime.list_plans(conn, env.name):
+    ready = dict(conn.execute(
+        "SELECT h.plan_path, q.id FROM hives h JOIN queue q ON q.id=h.ready_id "
+        "WHERE h.project=? AND q.project=h.project AND q.plan_path=h.plan_path AND q.status='ready'",
+        (env.name,),
+    ).fetchall())
+    plans = runtime.list_plans(conn, env.name)
+    plans.sort(key=lambda plan: (0, ready[plan["path"]]) if plan["path"] in ready else (1, 0))
+    for plan in plans:
         try:
             if advance(conn, env, plan["path"], free_mb, alive) == "closed":
                 closed.append(plan["path"])
