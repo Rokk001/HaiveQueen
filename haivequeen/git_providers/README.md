@@ -36,3 +36,24 @@ identifier. `Provider.pr_state(id, token=None)` returns `open`, `merged`, or
 merge a pull request or enable auto-merge. Provider errors are reported as
 `ProviderError`. Bitbucket uses its existing `BITBUCKET_TOKEN` environment
 credential; callers must provide tokens for providers requiring them.
+
+## Normalized release operations
+
+All operations take the repository first and an optional token last.
+`release_tag(tag, commit, token)` creates a tag or verifies the existing tag's
+commit. `release_state(tag, commit, token)` returns `pending`, `success`, or
+`failure` for that tag's workflows only. Missing evidence remains pending.
+GitHub, GitLab, Gitea/Forgejo and Azure implement these operations. Bitbucket
+has no release resource and does not advertise release completion.
+
+Local releases use `release_prepare(tag, commit, token)` to create or recover a
+prerelease and return `{id, assets: [{name, ...}]}` with every asset page.
+`release_upload(release, name, content, token)` uploads unchanged bytes and
+returns an asset. `release_asset_digest(release, asset, token)` returns its
+verified SHA-256 digest. A retry lists and verifies existing assets, including
+an upload whose response was lost. Cleanup starts only after all digests match.
+GitHub and Gitea mark prereleases explicitly. GitLab has no prerelease boolean:
+its semantic prerelease tag and release name identify the prerelease; files
+are stored in the generic package registry and attached as release links.
+Azure classic release artifacts and Bitbucket repository downloads are not
+local prerelease attachments, so local publication is skipped with a reason.

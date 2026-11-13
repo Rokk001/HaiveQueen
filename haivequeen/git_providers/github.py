@@ -164,10 +164,12 @@ def login(repository, run=None):
     value = out.strip() if code == 0 else ""
     return value if value and not any(c.isspace() for c in value) else ""
 
-def _request(repository, path, token=None, data=None, method=None, content_type=None):
+def _request(repository, path, token=None, data=None, method=None, content_type=None, raw=False):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(p in (".", "..") for p in repository.split("/")):
         raise ValueError("repository must be an owner/name pair")
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "HaiveQueen", "X-GitHub-Api-Version": "2022-11-28"}
+    if raw:
+        headers["Accept"] = "application/octet-stream"
     if token is None:
         token = login(repository)
     if token:
@@ -181,7 +183,9 @@ def _request(repository, path, token=None, data=None, method=None, content_type=
         headers["Content-Type"] = content_type
     req = Request("https://api.github.com/repos/" + repository + path, data=data, headers=headers, method=method)
     with urlopen(req, timeout=15) as response:
-        return json.load(response)
+        if getattr(response, 'status', None) == 204:
+            return None
+        return response.read() if raw else json.load(response)
 
 def pull_request(repository, title, head, base, body="", token=None):
     return _request(repository, "/pulls", token, {"title": title, "head": head, "base": base, "body": body})
@@ -242,3 +246,69 @@ def auth_status(repository=None):
 
 def pr_status(repository, number, token=None):
     return _request(repository, "/pulls/" + quote(str(number), safe=""), token)
+
+
+CAPABILITIES |= {'release_tag', 'release_state', 'release_prepare', 'release_upload', 'release_asset_digest'}
+
+
+def release_tag(repository, name, commit, token=None):
+    from urllib.error import HTTPError
+    try:
+        ref = _request(repository, '/git/ref/tags/' + quote(name, safe=''), token)
+    except HTTPError as exc:
+        if exc.code != 404:
+            raise
+        tag(repository, name, commit, token)
+        return
+    obj = ref['object']
+    while obj.get('type') == 'tag':
+        obj = _request(repository, '/git/tags/' + obj['sha'], token)['object']
+    if obj.get('type') != 'commit' or obj.get('sha') != commit:
+        raise ValueError('release tag points at a different commit')
+
+
+def release_state(repository, name, commit, token=None):
+    from ._release import workflows
+    from urllib.parse import urlencode
+    rows = []
+    page = 1
+    while True:
+        batch = _request(repository, '/actions/runs?' + urlencode({
+            'event': 'push', 'head_sha': commit, 'per_page': 100, 'page': page}), token)['workflow_runs']
+        rows.extend(r for r in batch if r.get('head_sha') == commit and
+                    r.get('head_branch') == name and r.get('event') == 'push')
+        if len(batch) < 100:
+            return workflows(rows)
+        page += 1
+
+
+def release_prepare(repository, name, commit, token=None):
+    result = publish_release(repository, name, commit, token)
+    # The release response embeds only a bounded asset list. List every page.
+    assets = []
+    page = 1
+    while True:
+        batch = _request(repository, '/releases/%s/assets?per_page=100&page=%s' % (result['id'], page), token)
+        assets.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    # List every page before deleting placeholders so pagination cannot shift.
+    for asset in assets:
+        if asset.get('state') == 'starter':
+            _request(repository, '/releases/assets/' + quote(str(asset['id']), safe=''), token, method='DELETE')
+    return dict(result, assets=[a for a in assets if a.get('state') != 'starter'])
+
+
+def release_upload(repository, release, name, content, token=None):
+    return release_asset(repository, release['id'], name, content, token)
+
+
+def release_asset_digest(repository, release, asset, token=None):
+    if asset.get('state') != 'uploaded':
+        raise ValueError('release asset upload is incomplete')
+    if not str(asset.get('digest', '')).startswith('sha256:'):
+        import hashlib
+        return hashlib.sha256(_request(repository, '/releases/assets/' + quote(str(asset['id']), safe=''),
+                                       token, raw=True)).hexdigest()
+    return asset['digest'][7:]

@@ -36,7 +36,7 @@ def detect(remote):
     return '/'.join(parts)
 
 
-def _request(repo, method, path, token=None, data=None, query=None, multipart=None):
+def _request(repo, method, path, token=None, data=None, query=None, multipart=None, raw=False):
     if detect('https://gitlab.com/' + str(repo)) != repo:
         raise ValueError('invalid GitLab repository')
     url = 'https://gitlab.com/api/v4/projects/' + quote(repo, safe='') + path
@@ -65,11 +65,14 @@ def _request(repo, method, path, token=None, data=None, query=None, multipart=No
         body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
                 f'Content-Type: {content_type}\r\n\r\n').encode('utf-8') + content + f'\r\n--{boundary}--\r\n'.encode('ascii')
         headers['Content-Type'] = 'multipart/form-data; boundary=' + boundary
+    elif isinstance(data, bytes):
+        body = data
+        headers['Content-Type'] = 'application/octet-stream'
     elif data is not None:
         body = json.dumps(data).encode('utf-8')
         headers['Content-Type'] = 'application/json'
     with urlopen(Request(url, data=body, headers=headers, method=method), timeout=30) as response:
-        return json.load(response), response.headers.get('X-Next-Page', '')
+        return (response.read() if raw else json.load(response)), response.headers.get('X-Next-Page', '')
 
 
 def pull_request(repo, source_branch, target_branch, title, token=None, description=''):
@@ -123,3 +126,79 @@ def login_methods(repo):
 
 def pr_status(repo, number, token=None):
     return _request(repo, 'GET', '/merge_requests/' + quote(str(number), safe=''), token)[0]
+
+
+CAPABILITIES |= {'release_tag', 'release_state'}
+CAPABILITIES |= {'release_prepare', 'release_upload', 'release_asset_digest'}
+
+
+def release_prepare(repo, name, commit, token=None):
+    from urllib.error import HTTPError
+    release_tag(repo, name, commit, token)
+    try:
+        result = _request(repo, 'GET', '/releases/' + quote(name, safe=''), token)[0]
+    except HTTPError as exc:
+        if exc.code != 404:
+            raise
+        # GitLab represents prereleases by their semantic-version tag and name;
+        # unlike GitHub/Gitea its release API has no prerelease boolean.
+        result = release(repo, name, 'Pre-release ' + name, 'Pre-release ' + name, token, ref=commit)
+    if result.get('tag_name') != name or result.get('commit', {}).get('id') != commit:
+        raise ValueError('existing release has the wrong tag or commit')
+    links = []
+    page = '1'
+    while page:
+        batch, page = _request(repo, 'GET', '/releases/' + quote(name, safe='') + '/assets/links',
+                               token, query={'per_page': 100, 'page': page})
+        links.extend(batch)
+    return dict(result, id=name, assets=links)
+
+
+def _package_path(release, name):
+    return '/packages/generic/haivequeen-release/' + quote(release['id'], safe='') + '/' + quote(name, safe='')
+
+
+def release_upload(repo, release, name, content, token=None):
+    from urllib.error import HTTPError
+    path = _package_path(release, name)
+    try:
+        existing = _request(repo, 'GET', path, token, raw=True)[0]
+    except HTTPError as exc:
+        if exc.code != 404:
+            raise
+        _request(repo, 'PUT', path, token, data=content)
+    else:
+        if existing != content:
+            raise ValueError('existing release package has different content')
+    url = 'https://gitlab.com/api/v4/projects/' + quote(repo, safe='') + path
+    return asset(repo, release['id'], name, url, token)
+
+
+def release_asset_digest(repo, release, asset, token=None):
+    import hashlib
+    path = _package_path(release, asset['name'])
+    expected = 'https://gitlab.com/api/v4/projects/' + quote(repo, safe='') + path
+    if asset.get('url') != expected:
+        raise ValueError('existing release asset has an unexpected download URL')
+    return hashlib.sha256(_request(repo, 'GET', path, token, raw=True)[0]).hexdigest()
+
+
+def release_tag(repo, name, commit, token=None):
+    from urllib.error import HTTPError
+    try:
+        existing = _request(repo, 'GET', '/repository/tags/' + quote(name, safe=''), token)[0]
+    except HTTPError as exc:
+        if exc.code != 404:
+            raise
+        tag(repo, name, commit, token)
+        return
+    if existing.get('commit', {}).get('id') != commit:
+        raise ValueError('release tag points at a different commit')
+
+
+def release_state(repo, name, commit, token=None):
+    rows = _request(repo, 'GET', '/pipelines', token, query={
+        'ref': name, 'sha': commit, 'source': 'push', 'per_page': 1, 'order_by': 'id', 'sort': 'desc'})[0]
+    rows = [r for r in rows if r.get('sha') == commit and r.get('ref') == name and r.get('source') == 'push']
+    value = rows[0].get('status') if rows else None
+    return 'success' if value == 'success' else 'failure' if value in ('failed', 'canceled') else 'pending'

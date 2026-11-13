@@ -36,7 +36,7 @@ def detect(remote):
     return (origin, parts[0], parts[1])
 
 
-def _request(repo, path, token=None, method='GET', data=None, content_type=None):
+def _request(repo, path, token=None, method='GET', data=None, content_type=None, raw=False):
     origin, owner, name = repo
     url = origin.rstrip('/') + '/api/v1/repos/' + quote(owner, safe='') + '/' + quote(name, safe='') + path
     headers = {'Accept': 'application/json'}
@@ -52,7 +52,7 @@ def _request(repo, path, token=None, method='GET', data=None, content_type=None)
     request = Request(url, data=data, headers=headers, method=method)
     with urlopen(request, timeout=30) as response:
         body = response.read()
-    return json.loads(body) if body else None
+    return body if raw else json.loads(body) if body else None
 
 
 def _post(repo, path, payload, token):
@@ -109,3 +109,83 @@ def login(repo, token):
 
 def pr_status(repo, number, token=None):
     return _request(repo, '/pulls/' + quote(str(number), safe=''), token)
+
+
+CAPABILITIES |= {'release_tag', 'release_state'}
+CAPABILITIES |= {'release_prepare', 'release_upload', 'release_asset_digest'}
+
+
+def release_prepare(repo, name, commit, token=None):
+    from urllib.error import HTTPError
+    release_tag(repo, name, commit, token)
+    try:
+        result = _request(repo, '/releases/tags/' + quote(name, safe=''), token)
+    except HTTPError as exc:
+        if exc.code != 404:
+            raise
+        result = release(repo, name, name=name, target_commitish=commit, prerelease=True, token=token)
+    if result.get('tag_name') != name or result.get('draft') or result.get('prerelease') is not True:
+        raise ValueError('existing release has the wrong publication status')
+    assets = []
+    page = 1
+    while True:
+        batch = _request(repo, '/releases/%s/assets?limit=100&page=%s' % (result['id'], page), token)
+        assets.extend(batch)
+        if len(batch) < 100:
+            return dict(result, assets=assets)
+        page += 1
+
+
+def release_upload(repo, release, name, content, token=None):
+    if any(ord(c) < 32 or c in '"\\' for c in name):
+        raise ValueError('invalid upload filename')
+    boundary = 'haivequeen-' + uuid.uuid4().hex
+    data = (('--' + boundary + '\r\nContent-Disposition: form-data; name="attachment"; filename="' + name +
+             '"\r\nContent-Type: application/octet-stream\r\n\r\n').encode() + content +
+            ('\r\n--' + boundary + '--\r\n').encode())
+    return _request(repo, '/releases/%s/assets?' % release['id'] + urlencode({'name': name}), token,
+                    'POST', data, 'multipart/form-data; boundary=' + boundary)
+
+
+def release_asset_digest(repo, release, asset, token=None):
+    import hashlib
+    # Download through this configured origin only; never send credentials to a
+    # URL supplied by release metadata on another host.
+    url = asset.get('browser_download_url', '')
+    origin = repo[0].rstrip('/')
+    if not url.startswith(origin + '/'):
+        raise ValueError('release asset download is outside the provider origin')
+    if token is None:
+        from ..config import git_credential
+        credential = git_credential('gitea') or {}
+        if credential.get('origin') == origin:
+            token = credential.get('token')
+    headers = {'Authorization': 'token ' + token} if token else {}
+    with urlopen(Request(url, headers=headers), timeout=30) as response:
+        return hashlib.sha256(response.read()).hexdigest()
+
+
+def release_tag(repo, name, commit, token=None):
+    from urllib.error import HTTPError
+    try:
+        existing = _request(repo, '/tags/' + quote(name, safe=''), token)
+    except HTTPError as exc:
+        if exc.code != 404:
+            raise
+        tag(repo, name, commit, token=token)
+        return
+    if existing.get('commit', {}).get('sha') != commit:
+        raise ValueError('release tag points at a different commit')
+
+
+def release_state(repo, name, commit, token=None):
+    from ._release import workflows
+    rows = []
+    page = 1
+    while True:
+        batch = _request(repo, '/actions/runs?' + urlencode({'limit': 100, 'page': page}), token)['workflow_runs']
+        rows.extend(r for r in batch if r.get('head_sha') == commit and
+                    r.get('head_branch') in (name, 'refs/tags/' + name) and r.get('event') == 'push')
+        if len(batch) < 100:
+            return workflows(rows)
+        page += 1

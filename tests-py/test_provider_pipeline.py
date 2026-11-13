@@ -205,3 +205,36 @@ class ProviderPipeline(OrchCase):
         self.assertEqual(self.plan_status(), "REVIEW")
         self.assertEqual(self.run_order(), [])
         self.service.pipeline_state.assert_not_called()
+
+    def test_provider_only_release_waits_for_exact_tag_result_before_close(self):
+        self.configure()
+        with (self.repo / '.haivequeen/project.toml').open('a') as stream:
+            stream.write('releaseEnabled = true\nreleaseMode = "git"\nreleasePostfix = "candidate"\n')
+        self.git('tag', 'v3.0.0')
+        self.git('push', '-q', 'origin', 'refs/tags/v3.0.0')
+        self.service.repository = 'example/repo'
+        self.service.capabilities = {'release_tag', 'release_state'}
+        result = {'value': 'pending'}
+        self.service.call.side_effect = lambda op, *args: result['value'] if op == 'release_state' else None
+        self.ready_plan()
+        with mock.patch.object(orchestrator, '_merge', side_effect=AssertionError('local merge')), \
+             mock.patch.object(orchestrator, '_command', side_effect=AssertionError('local command')), \
+             mock.patch.object(orchestrator, '_push', side_effect=AssertionError('local integration push')):
+            self.round()
+            merged = self.external_merge()
+            self.service.pipeline_state.return_value = 'success'
+            self.round()
+            self.assertEqual(self.state()['step'], 'Release')
+            self.assertEqual(self.state()['release']['tag'], 'v3.0.1-candidate.1')
+            self.round()
+            self.assertEqual(self.fixers() + self.queens(), [])
+            tags = [c for c in self.service.call.call_args_list if c.args[0] == 'release_tag']
+            self.assertEqual(len(tags), 1)
+            self.assertEqual(tags[0].args[1:3], ('v3.0.1-candidate.1', merged))
+            result['value'] = 'success'
+            self.round()
+        self.assertIsNone(self.state())
+        self.assertEqual(self.plan_status(), 'REVIEW')
+        self.assertEqual(self.run_order(), [])
+        self.assertFalse(self.service.merge.called)
+        self.assertFalse(self.service.auto_merge.called)

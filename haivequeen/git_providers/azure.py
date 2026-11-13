@@ -125,3 +125,42 @@ def pr_status(repo, number, token, auth='pat'):
 
 def pipeline_for_commit(repo, commit, token, auth='pat'):
     return _request(repo, 'build/builds', token, auth, query={'repositoryId': repo[2], 'repositoryType': 'TfsGit', 'queryOrder': 'finishTimeDescending', '$top': 100}).get('value', [])
+
+
+CAPABILITIES |= {'release_tag', 'release_state'}
+
+
+def release_tag(repo, name, commit, token=None):
+    rows = _request(repo, 'git/repositories/{repo}/refs', token,
+                    query={'filter': 'tags/' + name, 'peelTags': 'true'}).get('value', [])
+    existing = next((r for r in rows if r.get('name') == 'refs/tags/' + name), None)
+    if existing:
+        if (existing.get('peeledObjectId') or existing.get('objectId')) != commit:
+            raise ValueError('release tag points at a different commit')
+    else:
+        tag(repo, name, commit, token)
+
+
+def release_state(repo, name, commit, token=None):
+    rows = []
+    continuation = None
+    while True:
+        query = {'repositoryId': repo[2], 'repositoryType': 'TfsGit',
+                 'branchName': 'refs/tags/' + name, 'queryOrder': 'queueTimeDescending', '$top': 100}
+        if continuation:
+            query['continuationToken'] = continuation
+        result, continuation = _request(repo, 'build/builds', token, query=query, include_continuation=True)
+        rows.extend(r for r in result.get('value', []) if r.get('sourceVersion') == commit and
+                    r.get('sourceBranch') == 'refs/tags/' + name)
+        if not continuation:
+            break
+    latest = {}
+    for row in rows:
+        key = row['definition']['id']
+        if key not in latest or row['id'] > latest[key]['id']:
+            latest[key] = row
+    if any(r.get('result') in ('failed', 'canceled', 'partiallySucceeded') for r in latest.values()):
+        return 'failure'
+    if latest and all(r.get('status') == 'completed' and r.get('result') == 'succeeded' for r in latest.values()):
+        return 'success'
+    return 'pending'

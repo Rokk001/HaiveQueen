@@ -1,20 +1,8 @@
-"""Release at integration: with the Project switch publishReleases on and a remote on GitHub, HaiveQueen itself (never an agent)
-publishes every integration into the integration branch as a GitHub release.
+"""Publish prereleases from the Orchestrator's durable Release step.
 
-Repository: the GitHub repository, the base version (pyproject.toml), the tags and releases and the commit of a release are always those of the
-code repository of the Project (codeRepo when it is set, else the workspace); a release recorded for another repository does not count.
-
-The version counts the last digit of the latest release up (2.0.1, 2.0.2, ...); without a release yet it counts up from the version of the
-pyproject.toml of the Project. A bigger step is taken only when the owner enters it as nextVersion on the Project page; a nextVersion that is not newer
-than the latest release is already used and is ignored.
-
-Every integration is recorded at `bzz integration release` in an ordered queue (kv release-queue) with its queue row tip and the commit at which
-that tip came into the integration branch (the integration point in the first-parent history, which later integrations do not move). When that
-commit cannot be read then, the retry looks it up again from the history of the fetched branch and never takes a later head. The loop also queues
-integrations since the switch was turned on that no `bzz integration release` recorded; integrations before that get no release. The releases go
-out oldest first; each chosen version is stored before publishing. A failed preparation or publication (network, missing token, GitHub error) stays
-at the head of the queue and is retried by the next loop round with the same version and commit; integrations that happen meanwhile wait behind it
-in their order. The token comes from GITHUB_TOKEN or GH_TOKEN, else from `gh auth token`.
+Tag versions come from the code repository. Local files are retained until all
+remote assets are verified; provider workflows are polled for the selected tag
+and commit. Legacy queue data remains readable but cannot publish independently.
 """
 import json
 import os
@@ -449,42 +437,22 @@ def _drain(conn, env, repository, run, latest, publisher, token_fn) -> list:
         done.append(entry)
 
 
-def after_integration(conn, env, plan, run=None, latest=None, publisher=None, token=None):
-    """The program step of `bzz integration release`: record the last integration of `plan` and publish the queue in order when the switch is on.
-
-    Returns the published {queue_id, plan, commit, version} of this integration, or None (switch off, no GitHub remote, already published,
-    or kept in the queue for the retry by the loop)."""
-    run = run or _run
-    latest = latest or releases.latest_version
-    publisher = publisher or releases.publish_release
-    token_fn = token or globals()["token"]
-    if not env.settings.get("publishReleases"):
-        return None
-    repository = github_repository(env, run)
-    if not repository:
-        return None
-    entry = record(conn, env, plan, run)
-    if not entry:
-        return None
-    return next((e for e in _drain(conn, env, repository, run, latest, publisher, token_fn) if e.get("queue_id") == entry["queue_id"]), None)
+def after_integration(conn, env, plan, **kwargs):
+    """Legacy command compatibility: publication belongs to the pipeline only."""
+    return None
 
 
-def retry_pending(conn, envs, run=None, latest=None, publisher=None, token=None) -> list:
-    """Publish the queued releases of every Project with the switch on (one loop round), after queueing the integrations no
-    `bzz integration release` recorded; returns the published entries."""
-    run = run or _run
-    latest = latest or releases.latest_version
-    publisher = publisher or releases.publish_release
-    token_fn = token or globals()["token"]
-    done = []
-    for env in envs:
-        if not env.settings.get("publishReleases"):
-            continue
-        repository = github_repository(env, run)
-        if repository:
-            discover(conn, env, run)
-            done.extend(_drain(conn, env, repository, run, latest, publisher, token_fn))
-    return done
+def retry_pending(conn, envs, **kwargs):
+    """Legacy queues are retained for inspection, never rediscovered or published.
+
+    A queue row is not evidence of green Build and Deploy steps. Only the
+    Orchestrator's persisted Release step may publish or retry a release.
+    """
+    return []
+
+
+class ReleaseFailed(ValueError):
+    """The provider finished a tag workflow with a failed result."""
 
 
 def pipeline_release(conn, env, plan, state, folder, settings):
@@ -497,19 +465,36 @@ def pipeline_release(conn, env, plan, state, folder, settings):
     directory = Path(settings.get("releaseFolder") or "")
     if not directory.is_absolute():
         directory = Path(folder) / directory
+    directory = directory.resolve()
+    context = {"mode": settings["releaseMode"], "directory": str(directory) if local else ""}
+    if record.get("context") and record["context"] != context:
+        raise ValueError("release mode or folder changed during publication")
+    record["context"] = context
     if local and not record.get("files"):
         if not settings.get("releaseFolder") or not directory.is_dir():
             return "release folder is empty or not set; no release made"
-        files = sorted(p for p in directory.iterdir() if p.is_file())
+        paths = sorted(directory.rglob("*"))
+        if any(p.is_symlink() for p in paths):
+            raise ValueError("release folder contains a symbolic link")
+        files = [p for p in paths if p.is_file()]
         if not files:
             return "release folder is empty; no release made"
-        record["files"] = [{"name": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in files]
+        if len({p.name for p in files}) != len(files):
+            raise ValueError("release folder contains duplicate file names")
+        record["files"] = [{"name": p.name, "path": p.relative_to(directory).as_posix(),
+                            "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in files]
         orchestrator.save(conn, env.name, plan, state)
     provider, errors = git_provider.for_project(env)
     if not provider:
         raise ValueError("; ".join(errors) or "Git provider is not supported")
-    if local and provider.name != "github":
-        raise ValueError("local release upload is not supported for provider " + provider.name)
+    required = ({"release_prepare", "release_upload", "release_asset_digest"} if local else
+                {"release_tag", "release_state"})
+    if not required <= provider.capabilities:
+        return "provider %s does not support %s releases; skipped" % (provider.name, "local" if local else "Git provider")
+    repository = json.dumps([provider.name, provider.repository])
+    if record.get("repository") and record["repository"] != repository:
+        raise ValueError("release repository changed during publication")
+    record["repository"] = repository
     commit = (state.get("provider") or {}).get("commit") or state.get("merged")
     if not commit:
         from . import integration
@@ -525,61 +510,60 @@ def pipeline_release(conn, env, plan, state, folder, settings):
     secret = provider.credential()
     tag = record["tag"]
     if local:
-        release = provider.call("publish_release", tag, commit, secret) if not record.get("uploaded") else {"assets": [], "id": "completed"}
+        return _upload_files(conn, env, plan, state, directory, provider, secret)
+    if not record.get("tagged"):
+        provider.call("release_tag", tag, commit, secret)
+        record["tagged"] = True
+        orchestrator.save(conn, env.name, plan, state)
+    result = provider.call("release_state", tag, commit, secret)
+    if result == "failure":
+        raise ReleaseFailed("tag-triggered release workflow failed")
+    if result == "pending":
+        return None
+    if result != "success":
+        raise ValueError("provider returned an unknown release state")
+    return "provider release completed for " + tag
+
+
+def _upload_files(conn, env, plan, state, directory, provider, secret):
+    """Retry the manifest, verifying remote bytes after uncertain upload responses."""
+    import hashlib
+    from . import orchestrator
+    record = state["release"]
+    expected = {item.get("path", item["name"]) for item in record["files"]}
+    actual = {p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_file()}
+    if actual - expected:
+        raise ValueError("release folder gained files during publication")
+    if not record.get("uploaded"):
+        release = provider.call("release_prepare", record["tag"], record["commit"], secret)
         assets = release.get("assets")
         if not isinstance(assets, list) or not release.get("id"):
             raise ValueError("release response has no asset list or identifier")
-        existing = {a.get("name"): a for a in assets}
-        for item in ([] if record.get("uploaded") else record["files"]):
-            path = directory / item["name"]
-            asset = existing.get(item["name"])
-            if asset:
-                if asset.get("digest") != "sha256:" + item["sha256"]:
-                    raise ValueError("existing release asset cannot be verified: " + item["name"])
-                continue
+        for item in record["files"]:
+            path = directory / item.get("path", item["name"])
             content = path.read_bytes()
             if hashlib.sha256(content).hexdigest() != item["sha256"]:
                 raise ValueError("release file changed: " + item["name"])
-            provider.call("release_asset", release["id"], item["name"], content, secret)
-        # Persist completion before cleanup so interrupted cleanup is safe to retry.
+            matches = [a for a in assets if a.get("name") == item["name"]]
+            if len(matches) > 1:
+                raise ValueError("duplicate release asset: " + item["name"])
+            asset = matches[0] if matches else None
+            if asset is None:
+                # A timeout leaves the file in place. The next attempt lists and
+                # verifies the remote asset before deciding whether to POST again.
+                asset = provider.call("release_upload", release, item["name"], content, secret)
+            digest = provider.call("release_asset_digest", release, asset, secret)
+            if digest != item["sha256"]:
+                raise ValueError("existing release asset cannot be verified: " + item["name"])
         record["uploaded"] = True
         orchestrator.save(conn, env.name, plan, state)
-        for item in record["files"]:
-            path = directory / item["name"]
-            if path.exists():
-                if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
-                    raise ValueError("release file changed before cleanup: " + item["name"])
-                path.unlink()
-        return "published " + tag
-    if not record.get("tagged"):
-        remote = str(env.settings.get("remoteName") or "origin")
-        code, output = _git(env, _run, "ls-remote", "--tags", "--refs", remote, "refs/tags/" + tag)
-        if code:
-            raise ValueError("cannot inspect release tag: " + output)
-        existing = _sha(output)
-        if existing and existing != commit.lower():
-            raise ValueError("release tag points at a different commit")
-        if not existing:
-            if provider.name == "bitbucket":
-                provider.call("tag", tag, commit)
-            else:
-                provider.call("tag", tag, commit, token=secret)
-        record["tagged"] = True
-        orchestrator.save(conn, env.name, plan, state)
-    if provider.name != "github":
-        raise ValueError("tag-triggered release completion polling is unavailable for " + provider.name)
-    from urllib.parse import urlencode
-    page = 1
-    runs = []
-    while True:
-        query = urlencode({"event": "push", "head_sha": commit, "per_page": 100, "page": page})
-        batch = provider.module._request(provider.repository, "/actions/runs?" + query, secret).get("workflow_runs", [])
-        runs.extend(r for r in batch if r.get("head_sha") == commit and r.get("head_branch") == tag and r.get("event") == "push")
-        if len(batch) < 100:
-            break
-        page += 1
-    if not runs or any(r.get("status") != "completed" for r in runs):
-        return None
-    if any(r.get("conclusion") != "success" for r in runs):
-        raise ValueError("tag-triggered release workflow failed")
-    return "provider release completed for " + tag
+    for item in record["files"]:
+        path = directory / item.get("path", item["name"])
+        if path.exists():
+            if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+                raise ValueError("release file changed before cleanup: " + item["name"])
+            path.unlink()
+    for path in sorted(directory.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+    return "published " + record["tag"]

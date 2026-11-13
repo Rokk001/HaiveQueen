@@ -381,6 +381,7 @@ def _advance_pipeline(conn, env, plan, state, free_mb):
                 return _red(conn, env, plan, state, "Merge", "could not restore the plan before replay:\n" + out)
         state.pop("replay", None)
         state.pop("merged", None)
+        state.pop("release", None)
         save(conn, env.name, plan, state)
     _blocker(conn, env, plan, "")
     _set_status(conn, env, plan, "RUNNING")
@@ -637,6 +638,7 @@ def _moved(conn, env, plan, state, step):
     state["steps"] = {}
     state["ran"] = []
     state.pop("merged", None)
+    state.pop("release", None)
     save(conn, env.name, plan, state)
     return "next"
 
@@ -839,17 +841,26 @@ def _red(conn, env, plan, state, step, error):
 def _release(conn, env, plan, state, folder):
     """Hold the integration place until publication has completed."""
     from . import publish, projsettings
+    if not projsettings.working_settings(env.settings)["releaseEnabled"]:
+        return _done(conn, env, plan, state, "Release", "release disabled; skipped")
     try:
         result = publish.pipeline_release(conn, env, plan, state, folder,
                                           projsettings.working_settings(env.settings))
         if result is None:
             return _provider_wait(conn, env, plan, state, "Release", "waiting for release publication")
         return _done(conn, env, plan, state, "Release", result)
+    except publish.ReleaseFailed as exc:
+        return _red(conn, env, plan, state, "Release", str(exc))
     except Exception as exc:
         return _provider_wait(conn, env, plan, state, "Release", "release publication: " + str(exc))
 
 
 def _close(conn, env, plan, state, folder):
+    from . import projsettings
+    if projsettings.working_settings(env.settings)["releaseEnabled"] and state["steps"].get("Release") != "done":
+        state["step"] = "Release"
+        save(conn, env.name, plan, state)
+        return False
     head = (state.get("provider") or {}).get("commit") or integration.head_commit(folder)
     row = conn.execute("SELECT * FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (env.name, plan)).fetchone()
     branch = row["branch"] if row else (__import__("haivequeen.bees", fromlist=["x"]).plan_worktree(env, plan) or ("", ""))[0]
@@ -909,6 +920,7 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
         if fix.get("owner_stopped"):   # M-4: an agent the owner stopped is never restarted; the plan waits for his instruction
             return _block(conn, env, plan, state, "stopped")
         state.update(phase="pipeline", step="Merge", placed=False, steps={}, ran=[], fix=None, moved=0, rejoining=True)
+        state.pop("release", None)
         # The fix commit becomes the new original state when joining the tail.
         state.pop("source", None)
         state.pop("merged", None)

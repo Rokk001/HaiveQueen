@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -20,8 +21,10 @@ class ReleaseFiles(TestCase):
             state = {'merged': 'a' * 40}
             provider = mock.Mock(name='provider')
             provider.name = 'github'
+            provider.capabilities = {'release_prepare', 'release_upload', 'release_asset_digest'}
             provider.repository = 'team/repo'
-            provider.call.side_effect = lambda op, *args: {'id': 1, 'assets': []} if op == 'publish_release' else {}
+            provider.call.side_effect = lambda op, *args: ({'id': 1, 'assets': []} if op == 'release_prepare' else
+                hashlib.sha256(b'original bytes').hexdigest() if op == 'release_asset_digest' else {})
             settings = {'releaseMode': 'local', 'releaseFolder': tmp}
             with mock.patch('haivequeen.git_provider.for_project', return_value=(provider, [])), \
                  mock.patch('haivequeen.orchestrator.save'), \
@@ -35,8 +38,9 @@ class ReleaseFiles(TestCase):
         provider = mock.Mock()
         provider.name = 'github'
         provider.repository = 'team/repo'
+        provider.capabilities = {'release_tag', 'release_state'}
         run = {'head_sha': 'a' * 40, 'head_branch': 'v1.0.0-dev.1', 'event': 'push', 'status': 'in_progress'}
-        provider.module._request.return_value = {'workflow_runs': [run]}
+        provider.call.side_effect = lambda *args: 'pending' if run['status'] != 'completed' else 'success' if run.get('conclusion') == 'success' else 'failure'
         with mock.patch('haivequeen.git_provider.for_project', return_value=(provider, [])):
             self.assertIsNone(publish.pipeline_release(None, env, 'plan', state, '.', {'releaseMode': 'git'}))
             run.update(status='completed', conclusion='failure')
