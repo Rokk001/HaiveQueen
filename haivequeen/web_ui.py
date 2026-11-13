@@ -24,6 +24,7 @@ def page(csrf, language=None):
                  'fieldHelp': {'General': settings.GENERAL_HELP, 'Projects': settings.SETTING_HELP,
                                'Providers': {k: v[1] for k, v in provider_labels.TEXT.items()}},
                  'capabilities': settings.CAPABILITIES,
+                 'choiceLabels': {'access': dict(provider_labels.ACCESS)},
                  'general': {**config.DEFAULT_CONFIG, **{k: sch.DEFAULT_SETTINGS[k] for k in settings.GENERAL_LABELS if k in sch.DEFAULT_SETTINGS},
                              'language': 'English',
                              'web': {'address': '0.0.0.0', 'port': 8484, 'certificate': '', 'key': '', 'network': False, 'username': ''}},

@@ -99,7 +99,12 @@ class Client {
 function mount(document, bootstrap) {
   const $ = id => document.getElementById(id);
   const t = text => bootstrap.translations[text] || text;
-  const pretty = key => t(bootstrap.labels[key] || ({apiaries:'Projects',hives:'Plans',bees:'Agents',tin:'Tokens in',tout:'Tokens out',ctx:'Context',ctx_limit:'Context limit',start_ctx:'START CONTEXT',tokens_in:'TOTAL IN',tokens_out:'TOTAL OUT',bee_capacity:'Agent slots'}[key]) || key.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/_/g,' '));
+  const viewLabels = {apiaries:'Projects',hives:'Plans',bees:'Agents',tin:'Tokens in',tout:'Tokens out',ctx:'CONTEXT',
+    ctx_limit:'Context limit',start_ctx:'START CONTEXT',tokens_in:'TOTAL IN',tokens_out:'TOTAL OUT',bee_capacity:'Agent slots',
+    apiary:'PROJECT',hive:'PLAN',task:'TASK',model:'MODEL',status:'STATUS',runtime:'RUNTIME',queen:'QUEEN',bees_running:'BUSY AGENTS',
+    progress:'PROGRESS',done:'Done',implemented:'Implemented',rejected:'Rejected',waiting:'Waiting',total:'Total',name:'Name',
+    started:'Started',waiting_for:'Waiting for',error:'Error'};
+  const pretty = key => t(bootstrap.labels[key] || viewLabels[key] || key.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/_/g,' '));
   const el = (tag, text, cls) => {const node=document.createElement(tag); if(text!==undefined) node.textContent=String(text); if(cls)node.className=cls; return node;};
   const button = (text, action) => {const node=el('button',t(text)); node.type='button'; renderGate.prepare(node); node.onclick=()=>runButton(node,action); return node;};
   async function runButton(node, action) {
@@ -145,7 +150,7 @@ function mount(document, bootstrap) {
     for(const key of columns)head.append(el('th',pretty(key)));
     if(extra)head.append(el('th',t('Actions')));
     const thead=el('thead');thead.append(head);table.append(thead,body);
-    for(const row of rows){const tr=el('tr');for(const key of columns){const td=el('td');td.append(valueView(row[key]));tr.append(td);}if(extra){const td=el('td');extra(td,row);tr.append(td);}body.append(tr);}
+    for(const row of rows){const tr=el('tr');for(const key of columns){const td=el('td');td.append(valueView(key==='status'?t(row[key]):row[key]));tr.append(td);}if(extra){const td=el('td');extra(td,row);tr.append(td);}body.append(tr);}
     if(!rows.length){const tr=el('tr'),td=el('td',t('none'),'dim');td.colSpan=columns.length+1;tr.append(td);body.append(tr);}
     wrap.append(table);return wrap;
   }
@@ -179,7 +184,7 @@ function mount(document, bootstrap) {
   }
   function renderControls() {
     const state=client.state || {}, toolbar=el('div',undefined,'toolbar');
-    toolbar.append(el('span',t('Orchestrator')+': '+(state.orchestrator?.label || '…')));
+    toolbar.append(el('span',t('Orchestrator')+': '+t(state.orchestrator?.label || '…')));
     for(const action of ['start','stop-gracefully','force-stop']){
       const node=button(actions[action],()=>act(action,{},action==='force-stop'?state.controls?.force_warning:t(actions[action]+' HaiveQueen?')));
       node.disabled=node.disabled || orchestratorDisabled(action,state.orchestrator?.label);toolbar.append(node);
@@ -270,7 +275,7 @@ function mount(document, bootstrap) {
     for(const provider of providers)bar.append(button(t('Restart Queen on %s').replace('%s',provider.name)+(provider.current?' ✓':''),()=>act('plan/restart-queen',{...key(row),provider:provider.name},t('Restart Queen on %s').replace('%s',provider.name)+'?')));
   }
   function renderPlans() {
-    const box=section('Plans');box.append(table(plans,['apiary','name','status','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));
+    const box=section('Plans');box.append(table(plans.map(row=>({...row,started:t(row.has_hive?'yes':'no')})),['apiary','name','status','started','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));
   }
   function renderQuestions() {
     const box=section('Questions');
@@ -357,7 +362,7 @@ function mount(document, bootstrap) {
         provider.allowedTools=toolsFromArgs(provider.args);
         fields(card,provider,['providers',index],data);
         card.append(button('Remove entry',()=>{if(confirm(t('Remove entry')+'?')){data.providers.splice(index,1);editor.dirty=true;render();}}));
-        const status=providerStates.find(p=>p.name===provider.name);if(status)card.append(valueView(status));
+        const status=providerStates.find(p=>p.name===provider.name);if(status){card.append(el('p',t(status.logged_in?'Login present':'Login missing')));card.append(valueView(status));}
         const models=editor.provider_models?.[provider.name];if(models)card.append(valueView(models));
         card.append(valueView((editor.benchmark || []).filter(row=>row.provider===provider.name)));
         const saved=!editor.dirty;
@@ -379,7 +384,9 @@ function mount(document, bootstrap) {
       for(const rule of editor.rules || []){
         const label=el('label',undefined,'field'),toggle=el('input');toggle.type='checkbox';toggle.checked=!(editor.data.rulesOff || []).includes(rule.label);
         toggle.onchange=()=>{const off=new Set(editor.data.rulesOff || []);if(toggle.checked)off.delete(rule.label);else off.add(rule.label);editor.data.rulesOff=[...off];changed();};
-        label.append(el('span',t('%s, %d tokens').replace('%s',rule.path).replace('%d',rule.tokens)),toggle);knowledge.append(label);
+        let text=t('%s, %d tokens').replace('%s',rule.path).replace('%d',rule.tokens);
+        if(rule.native_clis?.length)text+=' - '+t('still loaded by %s itself').replace('%s',rule.native_clis.join(' / '));
+        label.append(el('span',text),toggle);knowledge.append(label);
       }
       if(!(editor.rules || []).length)knowledge.append(el('p',t('No AGENTS.md or CLAUDE.md is checked in to the repository.')));
       if(editor.upstream){
@@ -430,7 +437,7 @@ function mount(document, bootstrap) {
       const label=el('label',undefined,'field');label.append(el('span',t(bootstrap.fieldLabels?.[tab]?.[name] || bootstrap.labels[name] || pretty(name))));
       const choices=bootstrap.choices[name] || (name==='access'?['subscription','api','llm']:name==='language'&&tab==='General'?['English','German']:null);
       let input;
-      if(choices){input=el('select');for(const choice of [...new Set([...choices,value])]){const option=el('option',t(choice));option.value=choice;input.append(option);}input.value=value;}
+      if(choices){input=el('select');for(const choice of [...new Set([...choices,value])]){const option=el('option',t(bootstrap.choiceLabels?.[name]?.[choice] || choice));option.value=choice;input.append(option);}input.value=value;}
       else if(Array.isArray(value)||String(value).includes('\n')){input=el('textarea');input.value=Array.isArray(value)?value.join('\n'):value;}
       else {input=el('input');input.type=typeof value==='boolean'?'checkbox':typeof value==='number'?'number':/apiKey|providerKey/i.test(name)?'password':'text';if(input.type==='checkbox')input.checked=value;else input.value=value ?? '';if(input.type==='number')input.step='any';}
       input.oninput=input.onchange=()=>{let next=input.value;if(typeof value==='boolean')next=input.checked;else if(typeof value==='number'){if(!input.value.trim()||!Number.isFinite(Number(input.value)))return;next=Number(input.value);}else if(Array.isArray(value))next=name==='args'?input.value.split('\n'):input.value.split('\n').filter(x=>x!=='');setValue(root,full,next);

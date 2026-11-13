@@ -17,6 +17,16 @@ window.addEventListener('load', async () => {
       let warning='';window.confirm=text=>{warning=text;return false;};
       await click('Sofort stoppen');
       assert(warning.startsWith('Sofort stoppen beendet alle'),'Force stop warning was not translated');
+      assert(document.body.textContent.includes('LÄUFT'),'Orchestrator state was not translated');
+      assert([...document.querySelectorAll('th')].some(node=>node.textContent==='LAUFZEIT'),'Runtime heading was not translated');
+      assert([...document.querySelectorAll('td')].some(node=>node.textContent==='läuft'),'Agent state was not translated');
+      assert([...document.querySelectorAll('td')].some(node=>node.textContent==='running'),'A user model name was translated');
+      await click('Anbieter');await wait(()=>field(['providers',0,'access']));
+      const access=field(['providers',0,'access']);
+      assert([...access.options].some(node=>node.value==='subscription'&&node.textContent==='Abo'),'Access choice lost its desktop label');
+      assert(document.body.textContent.includes('Login vorhanden'),'Provider login status missing');
+      await click('Projekte');await wait(()=>field(['compileCheck']));
+      assert(document.body.textContent.includes('wird von Codex CLI selbst geladen'),'Native CLI rule warning missing');
       document.body.dataset.testResult='passed';return;
     }
     await wait(()=>document.querySelector('table'));
@@ -71,7 +81,9 @@ window.addEventListener('load', async () => {
     const answer=document.querySelector('[data-question] textarea');answer.value='Proceed';
     await click('Answer');
     await click('Accept');
-    await click('Plans');await wait(()=>buttons('Plan').length);await click('Plan');
+    await click('Plans');await wait(()=>buttons('Plan').length);
+    assert([...document.querySelectorAll('th')].some(node=>node.textContent==='Started'),'Desktop plan Started column missing');
+    await click('Plan');
     await wait(()=>buttons('Restart Queen on mock ✓').length);
     assert(buttons('Stop gracefully').length>0,'Plan stop missing');
     document.getElementById('close-detail').click();

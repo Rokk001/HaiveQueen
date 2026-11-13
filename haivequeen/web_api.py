@@ -96,6 +96,8 @@ def settings_view(conn, project=None):
                       project_defaults={'integrationBranch': branch},
                       rules=profile.rule_entries(result['data'], repository),
                       upstream=profile.upstream_state(result['data'], repository))
+        result['rules'] = [{**rule, 'native_clis': profile.cli_clis(rule.get('name')) if not rule.get('upstream') else []}
+                           for rule in result['rules']]
     else:
         migrated = settings.load_migrated(settings_path(conn))
         if 'web' in migrated:

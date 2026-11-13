@@ -52,6 +52,9 @@ class BrowserTests(unittest.TestCase):
         self.assertNotIn('password',data['general']['web'])
         self.assertEqual(data['fieldLabels']['General']['language'],'Interface language')
         self.assertEqual(data['fieldLabels']['Providers']['slots'],'Simultaneous agents')
+        for group in ('labels', 'help'):
+            for text in data[group].values():
+                self.assertIn(text, data['translations'], (group, text))
 
     def test_real_browser_controls_settings_conflict_login_questions_updates_and_live(self):
         candidates = [shutil.which(name) for name in ('msedge', 'chromium', 'google-chrome')]
@@ -66,7 +69,7 @@ class BrowserTests(unittest.TestCase):
         browser_language = ['English']
         state = {'version':'test', 'orchestrator':{'label':'RUNNING'}, 'controls':{'force_warning':'Force stop ends all running Queens, Agents, Builds and Deploys immediately. Unfinished work will be done again after Start.'},
                  'projects':[{'name':'demo'}], 'tiles':{'bees':1}, 'hives':[],
-                 'bees':[{'name':'mock-agent','agent':'mock-agent','project':'demo','apiary':'demo','task':'P1'}]}
+                 'bees':[{'name':'mock-agent','agent':'mock-agent','project':'demo','apiary':'demo','task':'P1','status':'running','model':'running'}]}
         data = {'web':{'address':'127.0.0.1','port':8484,'certificate':'','key':''},
                 'providers':[{'name':'mock','protocol':'claude','command':'mock','classes':{'medium':{'model':'test'}}}]}
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -92,7 +95,7 @@ class BrowserTests(unittest.TestCase):
                 if route=='/api/settings/view' and 'project=' in self.path:
                     return self.send({'data':{'name':'demo','compileCheck':'check'},'revision':'project-revision',
                                       'place':{'repository':'demo-repository','plansFolder':'demo-plans'},
-                                      'workspace':'demo-plans','project_defaults':{'integrationBranch':'develop'},'rules':[{'label':'AGENTS.md','path':'AGENTS.md','tokens':12}],
+                                      'workspace':'demo-plans','project_defaults':{'integrationBranch':'develop'},'rules':[{'label':'AGENTS.md','path':'AGENTS.md','tokens':12,'native_clis':['Codex CLI']}],
                                       'upstream':{'on':False,'usable':False,'note':''}})
                 value={'/api/state':state, '/api/providers':[{'name':'mock','logged_in':True}],
                        '/api/settings/view':{'data':data,'revision':'revision-1','provider_models':{'mock':{'models':['test'],'efforts':['medium']}}},
@@ -144,6 +147,15 @@ class BrowserTests(unittest.TestCase):
 
 
 class SettingsViewTests(RoundCase):
+    def test_project_rules_explain_native_cli_loading(self):
+        from unittest.mock import patch
+        rules = [{'label':'AGENTS.md','name':'AGENTS.md','upstream':False},
+                 {'label':'upstream AGENTS.md','name':'AGENTS.md','upstream':True}]
+        with patch('haivequeen.profile.rule_entries', return_value=rules):
+            result = web_api.execute(self.conn, 'settings/view', {'project':'testproj'})
+        self.assertIn('Codex', result['rules'][0]['native_clis'])
+        self.assertEqual(result['rules'][1]['native_clis'], [])
+
     def test_project_form_keeps_the_repository_default_branch(self):
         from unittest.mock import patch
         with patch('haivequeen.projsettings.derive_remote',return_value=('origin',False)), \
