@@ -396,13 +396,19 @@ class AsyncCommands(OrchCase):
             time.sleep(0.05)
         self.assertFalse(orchestrator.running_jobs())
 
+    def start_check(self):
+        self.round()
+        self.wait_job()   # Merge runs in its own worker before Check can start.
+        self.round()
+        self.assertEqual(self.state()["step"], "Check")
+
     def test_pause_lets_the_command_end_then_halts_and_the_resume_goes_on(self):
         orchestrator.ASYNC = True
         self.check = self.sleeper(1) + " && " + self.echo("Check")
         self.build = self.echo("Build")
         self.project_toml()
         self.ready_plan()
-        self.round()
+        self.start_check()
         self.assertTrue(orchestrator.running_jobs())
         hives.pause_plan(self.conn, "testproj", REL)
         self.wait_job()
@@ -421,7 +427,7 @@ class AsyncCommands(OrchCase):
         self.check = self.sleeper(60)
         self.project_toml()
         self.ready_plan()
-        self.round()
+        self.start_check()
         self.assertTrue(orchestrator.running_jobs())
         started = time.time()
         hives.stop_hive(self.conn, "testproj", REL)
@@ -470,7 +476,7 @@ class AsyncCommands(OrchCase):
         self.assertEqual(integration.compile_limit(settings), 2)
         other = integration._acquire_compile_slot(settings, 0.05)   # another check of the machine runs
         try:
-            self.round()
+            self.start_check()
             self.wait_job()
             self.round()
             self.assertEqual(self.run_order(), ["Check"])   # not held back by one other check
@@ -486,7 +492,7 @@ class AsyncCommands(OrchCase):
         settings = self.env().settings
         held = [integration._acquire_compile_slot(settings, 0.05) for _ in range(integration.compile_limit(settings))]
         try:
-            self.round()
+            self.start_check()
             time.sleep(1.5)
             self.assertEqual(self.run_order(), [])
         finally:
