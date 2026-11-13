@@ -120,6 +120,10 @@ class Service:
             print(json.dumps(self.status()), flush=True)
             if self.error:
                 return 1
+            # Direct foreground serving also owns the Windows tray lifecycle.
+            # Publish the running service first so the tray can discover it.
+            from . import tray
+            tray.ensure_started()
             while not self.stopping:
                 self.control.handle_request()
                 while not self.actions.empty():

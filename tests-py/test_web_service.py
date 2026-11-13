@@ -1,4 +1,5 @@
 import http.client
+import io
 import json
 import os
 import socket
@@ -9,14 +10,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from haivequeen import config, db, runtime, web_auth, web_service
+from haivequeen import config, db, runtime, tray, web_auth, web_service
 
 
 class WebServiceTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
-        self.env = patch.dict(os.environ, {'BZZ_CONFIG_DIR': self.folder.name, 'BZZ_DATA_DIR': self.folder.name})
+        self.env = patch.dict(os.environ, {'BZZ_CONFIG_DIR': self.folder.name, 'BZZ_DATA_DIR': self.folder.name,
+                                         'BZZ_NO_DESKTOP': '1'})
         self.env.start()
         self.addCleanup(self.env.stop)
         self.addCleanup(self.stop_service)
@@ -35,6 +37,45 @@ class WebServiceTests(unittest.TestCase):
         path = Path(self.folder.name) / 'config.toml'
         web_auth.setup(path, 'operator', 'secret', '0.0.0.0', port, '', '')
         return path
+
+    def test_direct_serve_starts_tray_after_publishing_running_service(self):
+        self.configure()
+        service = web_service.Service()
+        output = io.StringIO()
+
+        def ensure_tray():
+            self.assertEqual(tray.state(), 'Stopped')
+            state = json.loads(web_service.state_path().read_text(encoding='utf-8'))
+            self.assertEqual(state['control_port'], service.control.server_address[1])
+            self.assertEqual(state['token'], service.token)
+            self.assertTrue(service.status()['running'])
+
+        def stop():
+            service.stopping = True
+
+        with patch.object(tray.loop, 'loop_running', return_value=None), \
+                patch.object(tray, 'ensure_started', side_effect=ensure_tray) as ensure, \
+                patch.object(service.control, 'handle_request', side_effect=stop), \
+                patch('sys.stdout', output):
+            self.assertEqual(service.run(), 0)
+            ensure.assert_called_once_with()
+        self.assertTrue(json.loads(output.getvalue())['running'])
+        self.assertIsNone(service.public)
+        self.assertFalse(web_service.state_path().exists())
+        self.assertFalse(web_service.state_path().with_suffix('.lock').exists())
+
+    def test_failed_direct_serve_does_not_start_tray(self):
+        self.configure()
+        service = web_service.Service()
+        output = io.StringIO()
+        with patch('haivequeen.web_server.make_server', side_effect=OSError('listener unavailable')), \
+                patch.object(tray, 'ensure_started') as ensure, patch('sys.stdout', output):
+            self.assertEqual(service.run(), 1)
+            ensure.assert_not_called()
+        self.assertIn('listener unavailable', json.loads(output.getvalue())['error'])
+        self.assertIsNone(service.public)
+        self.assertFalse(web_service.state_path().exists())
+        self.assertFalse(web_service.state_path().with_suffix('.lock').exists())
 
     def test_detached_start_restart_and_live_off(self):
         path = self.configure()
