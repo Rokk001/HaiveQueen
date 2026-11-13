@@ -1,0 +1,57 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install build tools
+        run: python -m pip install "setuptools>=70.1"
+      - name: Set package version from tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.(0|[1-9]\d*))?', tag):
+              raise SystemExit('Unsupported release tag: ' + tag)
+          path = Path('pyproject.toml')
+          text = path.read_text(encoding='utf-8')
+          text, count = re.subn(r'(?m)^version = "[^"]+"$', 'version = "' + tag[1:] + '"', text, count=1)
+          if count != 1:
+              raise SystemExit('Package version not found')
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Build distributions
+        run: |
+          python -c "import setuptools.build_meta; setuptools.build_meta.build_sdist('dist')"
+          python -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+      - name: Publish release and distributions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          prerelease=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            prerelease=(--prerelease)
+          fi
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes "${prerelease[@]}" || gh release view "$RELEASE_TAG" >/dev/null
+          fi
+          gh release upload "$RELEASE_TAG" dist/* --clobber
