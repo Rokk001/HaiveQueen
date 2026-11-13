@@ -354,6 +354,49 @@ def last_published(conn, project, repository) -> str:
     return runtime.kv_get(conn, project, LAST_KEY) or ""
 
 
+def repository_tags(env, run=None):
+    """Read all tags from the configured code repository remote."""
+    remote = str(env.settings.get("remoteName") or "origin")
+    code, output = _git(env, run or _run, "ls-remote", "--tags", "--refs", remote)
+    if code:
+        raise ValueError("could not read repository tags: " + output.strip())
+    return [line.split("refs/tags/", 1)[1].strip() for line in output.splitlines()
+            if "refs/tags/" in line]
+
+
+def _start_version(conn, env, entry, repository):
+    """Ask once per repository and reuse the owner's validated answer."""
+    item = "release-start:" + str(repository)
+    questions = runtime.list_questions(conn, env.name, item=item)
+    for question in reversed(questions):
+        answer = str(question.get("answer") or "").strip()
+        if question["status"] == "answered":
+            try:
+                releases.next_version(answer)
+                return answer
+            except ValueError:
+                raise ValueError("the start version answer must be three non-negative integers")
+    if not any(q["status"] in ("open", "triage") for q in questions):
+        db.add_question(conn, env.name, entry.get("plan") or "", item,
+                        "What start version should be used for releases of %s?" % repository,
+                        "Enter a version such as 1.0.0.")
+    raise ValueError("waiting for the start version")
+
+
+def _release_tag(conn, env, entry, repository, run):
+    tags = repository_tags(env, run)
+    settings = env.settings
+    try:
+        return releases.prerelease_tag(tags, str(settings.get("releasePostfix") or "dev"),
+                                       requested=str(settings.get("nextVersion") or "").strip())
+    except ValueError as exc:
+        if str(exc) != "start version required":
+            raise
+    start = _start_version(conn, env, entry, repository)
+    return releases.prerelease_tag(tags, str(settings.get("releasePostfix") or "dev"),
+                                   requested=str(settings.get("nextVersion") or "").strip(), start=start)
+
+
 def _current(conn, env, repository, latest) -> str:
     """The version the next release counts up from: the newer of the latest GitHub release of `repository` and the one HaiveQueen published
     last to `repository`, else the version of the pyproject.toml of the code repository."""
