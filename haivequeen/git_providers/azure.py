@@ -45,6 +45,11 @@ def login_methods(repo):
 
 
 def _request(repo, path, token, auth='pat', method='GET', body=None, query=None, release_service=False, include_continuation=False):
+    if token is None:
+        from ..config import git_credential
+        credential = git_credential('azure') or {}
+        token = credential.get('token')
+        auth = credential.get('method', auth)
     if auth not in login_methods(repo) or not isinstance(token, str) or not token:
         raise ValueError('a token and supported auth method are required')
     org, project, repository = repo
@@ -66,7 +71,7 @@ def _request(repo, path, token, auth='pat', method='GET', body=None, query=None,
         return result
 
 
-def pull_request(repo, source, target, title, token, auth='pat', description=''):
+def pull_request(repo, source, target, title, token=None, auth='pat', description=''):
     if not all(isinstance(v, str) and v for v in (source, target, title)):
         raise ValueError('source, target and title are required')
     def branch(value):
@@ -75,7 +80,7 @@ def pull_request(repo, source, target, title, token, auth='pat', description='')
                     {'sourceRefName': branch(source), 'targetRefName': branch(target), 'title': title, 'description': description})
 
 
-def tag(repo, name, commit, token, auth='pat'):
+def tag(repo, name, commit, token=None, auth='pat'):
     if not isinstance(name, str) or not name or not re.fullmatch(r'[0-9a-fA-F]{40}', commit or ''):
         raise ValueError('tag name and 40-character commit ID are required')
     result = _request(repo, 'git/repositories/{repo}/refs', token, auth, 'POST',
@@ -85,7 +90,7 @@ def tag(repo, name, commit, token, auth='pat'):
     return result
 
 
-def release(repo, definition_id, token, auth='pat', description='', artifacts=None):
+def release(repo, definition_id, token=None, auth='pat', description='', artifacts=None):
     if not isinstance(definition_id, int) or isinstance(definition_id, bool) or definition_id <= 0:
         raise ValueError('a positive release definition ID is required')
     body = {'definitionId': definition_id, 'description': description}
@@ -94,7 +99,7 @@ def release(repo, definition_id, token, auth='pat', description='', artifacts=No
     return _request(repo, 'release/releases', token, auth, 'POST', body, release_service=True)
 
 
-def release_list(repo, token, auth='pat', definition_id=None, continuation_token=None):
+def release_list(repo, token=None, auth='pat', definition_id=None, continuation_token=None):
     query = {}
     if definition_id is not None:
         query['definitionId'] = definition_id
@@ -103,14 +108,14 @@ def release_list(repo, token, auth='pat', definition_id=None, continuation_token
     return _request(repo, 'release/releases', token, auth, query=query, release_service=True, include_continuation=True)
 
 
-def release_assets(repo, release_id, token, auth='pat'):
+def release_assets(repo, release_id, token=None, auth='pat'):
     if not isinstance(release_id, int) or isinstance(release_id, bool) or release_id <= 0:
         raise ValueError('a positive release ID is required')
     result = _request(repo, 'release/releases/%d' % release_id, token, auth, release_service=True)
     return result.get('artifacts', [])
 
 
-def pipeline(repo, build_id, token, auth='pat'):
+def pipeline(repo, build_id, token=None, auth='pat'):
     if not isinstance(build_id, int) or isinstance(build_id, bool) or build_id <= 0:
         raise ValueError('a positive build ID is required')
     return _request(repo, 'build/builds/%d' % build_id, token, auth)

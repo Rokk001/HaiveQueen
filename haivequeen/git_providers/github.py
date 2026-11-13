@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from ..releases import NoRelease, next_version
 
-CAPABILITIES = frozenset({"pull_request", "tag", "publish_release", "release_list", "release_asset", "pipeline", "login", "latest_version", "check_latest"})
+CAPABILITIES = frozenset({"pull_request", "tag", "publish_release", "release_list", "release_asset", "pipeline", "login", "latest_version", "check_latest", "device_sign_in", "auth_status"})
 
 def detect(remote):
     try:
@@ -96,6 +96,8 @@ def publish_release(repository: str, version: str, commit: str, token: str, _url
     next_version(version)
     if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
         raise ValueError("commit must be a full Git object ID")
+    if token is None:
+        token = login(repository)
     if not token or "\n" in token or "\r" in token:
         raise ValueError("a GitHub token is required")
     base = "https://api.github.com/repos/" + repository
@@ -146,6 +148,10 @@ def login(repository, run=None):
         value = os.environ.get(key, "").strip()
         if value:
             return value
+    from ..config import git_credential
+    credential = git_credential("github")
+    if credential:
+        return credential["token"]
     if run is None:
         from ..publish import _run
         run = _run
@@ -157,6 +163,8 @@ def _request(repository, path, token=None, data=None, method=None, content_type=
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(p in (".", "..") for p in repository.split("/")):
         raise ValueError("repository must be an owner/name pair")
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "HaiveQueen", "X-GitHub-Api-Version": "2022-11-28"}
+    if token is None:
+        token = login(repository)
     if token:
         if "\n" in token or "\r" in token:
             raise ValueError("invalid token")
@@ -188,9 +196,11 @@ def release_list(repository, token=None):
             return result
         page += 1
 
-def release_asset(repository, release_id, name, content, token, content_type="application/octet-stream"):
+def release_asset(repository, release_id, name, content, token=None, content_type="application/octet-stream"):
     if not str(release_id).isdigit() or not name or not isinstance(content, bytes):
         raise ValueError("invalid release asset")
+    if token is None:
+        token = login(repository)
     if not token or "\n" in token or "\r" in token:
         raise ValueError("a GitHub token is required")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(p in (".", "..") for p in repository.split("/")):
@@ -201,3 +211,25 @@ def release_asset(repository, release_id, name, content, token, content_type="ap
 
 def pipeline(repository, ref, token=None):
     return _request(repository, "/commits/" + quote(ref, safe="") + "/status", token)
+
+
+def device_sign_in(repository=None, run=None):
+    """Run GitHub CLI's interactive web/device authorization and save its token."""
+    import subprocess
+    if run is None:
+        def run(args):
+            return subprocess.run(args, check=False).returncode
+    if run(['gh', 'auth', 'login', '--hostname', 'github.com', '--web']) != 0:
+        raise ValueError('GitHub device sign-in failed')
+    from ..publish import _run
+    code, value = _run(['gh', 'auth', 'token', '--hostname', 'github.com'], os.getcwd())
+    if code or not value.strip():
+        raise ValueError('GitHub CLI did not return a token')
+    from ..config import save_git_credential
+    save_git_credential('github', value.strip(), 'device')
+    return True
+
+
+def auth_status(repository=None):
+    """Report whether a credential is available, without exposing it."""
+    return bool(login(repository))

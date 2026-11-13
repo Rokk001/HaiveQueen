@@ -26,7 +26,8 @@ def _repo(repo):
 
 
 def _request(path, method='GET', payload=None, content_type='application/json'):
-    token = os.environ.get('BITBUCKET_TOKEN')
+    from ..config import git_credential
+    token = os.environ.get('BITBUCKET_TOKEN') or (git_credential('bitbucket') or {}).get('token')
     if not token:
         raise ValueError('BITBUCKET_TOKEN is required')
     headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/json'}

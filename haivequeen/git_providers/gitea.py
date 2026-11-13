@@ -40,6 +40,11 @@ def _request(repo, path, token=None, method='GET', data=None, content_type=None)
     origin, owner, name = repo
     url = origin.rstrip('/') + '/api/v1/repos/' + quote(owner, safe='') + '/' + quote(name, safe='') + path
     headers = {'Accept': 'application/json'}
+    if token is None:
+        from ..config import git_credential
+        credential = git_credential('gitea') or {}
+        if origin.startswith('https://') and credential.get('origin') == origin.rstrip('/'):
+            token = credential.get('token')
     if token:
         headers['Authorization'] = 'token ' + token
     if content_type:

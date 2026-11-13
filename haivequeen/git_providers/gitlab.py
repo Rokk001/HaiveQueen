@@ -43,6 +43,9 @@ def _request(repo, method, path, token=None, data=None, query=None, multipart=No
     if query:
         url += '?' + urlencode(query)
     headers = {'Accept': 'application/json'}
+    if token is None:
+        from ..config import git_credential
+        token = (git_credential('gitlab') or {}).get('token')
     if token:
         headers['PRIVATE-TOKEN'] = token
     body = None
@@ -63,22 +66,22 @@ def _request(repo, method, path, token=None, data=None, query=None, multipart=No
         return json.load(response), response.headers.get('X-Next-Page', '')
 
 
-def pull_request(repo, source_branch, target_branch, title, token, description=''):
+def pull_request(repo, source_branch, target_branch, title, token=None, description=''):
     return _request(repo, 'POST', '/merge_requests', token, {'source_branch': source_branch, 'target_branch': target_branch, 'title': title, 'description': description})[0]
 
 
-def tag(repo, name, ref, token):
+def tag(repo, name, ref, token=None):
     return _request(repo, 'POST', '/repository/tags', token, {'tag_name': name, 'ref': ref})[0]
 
 
-def release(repo, tag_name, name, description, token, ref=None):
+def release(repo, tag_name, name, description, token=None, ref=None):
     data = {'tag_name': tag_name, 'name': name, 'description': description}
     if ref is not None:
         data['ref'] = ref
     return _request(repo, 'POST', '/releases', token, data)[0]
 
 
-def asset(repo, tag_name, name, url, token):
+def asset(repo, tag_name, name, url, token=None):
     if not isinstance(url, str) or urlsplit(url).scheme.lower() not in ('http', 'https', 'ftp'):
         path = Path(url)
         upload, _ = _request(repo, 'POST', '/uploads', token, multipart=(path.name, path.read_bytes()))

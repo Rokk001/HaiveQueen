@@ -85,3 +85,35 @@ def load_project(workspace) -> dict:
     if not data["name"]:
         data["name"] = ws.name
     return data
+
+def git_credential(provider):
+    """Read a provider-wide credential from the user's settings directory."""
+    import json
+    try:
+        path = config_dir() / 'git-credentials.json'
+    except RuntimeError:
+        return None
+    contents = filetxn.read(path)
+    return json.loads(contents.decode('utf-8')).get(provider) if contents else None
+
+
+@filetxn.coordinated
+def save_git_credential(provider, token, method='token', origin=None):
+    """Store or remove a provider credential without touching a repository."""
+    import json
+    if provider not in ('github', 'gitlab', 'gitea', 'bitbucket', 'azure'):
+        raise ValueError('unknown Git provider')
+    if token is not None and (not isinstance(token, str) or not token or any(c.isspace() for c in token)):
+        raise ValueError('invalid token')
+    if not isinstance(method, str) or not method:
+        raise ValueError('invalid authentication method')
+    path = config_dir() / 'git-credentials.json'
+    contents = filetxn.read(path)
+    credentials = json.loads(contents.decode('utf-8')) if contents else {}
+    if token is None:
+        credentials.pop(provider, None)
+    else:
+        credentials[provider] = {'token': token, 'method': method}
+        if origin is not None:
+            credentials[provider]['origin'] = origin.rstrip('/')
+    filetxn.atomic_write(path, json.dumps(credentials).encode('utf-8'))
