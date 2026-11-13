@@ -8,6 +8,60 @@ from haivequeen import cli, force_stop, integration, interrupt, loop, orchestrat
 
 
 class ForceStopTests(RoundCase):
+    def test_foreground_console_entry_point_can_be_force_stopped(self):
+        commands = (
+            ('/opt/tools/bin/python /opt/tools/bin/bzz start --foreground', False),
+            ('/opt/tools/bin/bzz start --foreground --rounds 2', False),
+            ('"C:\\Program Files\\Python\\python.exe" "C:\\Program Files\\Python\\Scripts\\bzz.exe" start --foreground', True),
+            ('"C:\\Program Files\\Python\\Scripts\\bzz.exe" start --foreground', True),
+            ('python3.14 -I -m haivequeen start --foreground', False),
+            ('python -I /opt/tools/haivequeen/cli.py start --foreground', False),
+            ('"C:\\Program Files\\Python\\pythonw.exe" -I "C:\\Program Files\\App\\haivequeen\\cli.py" start --foreground', True),
+            ('python -m haivequeen.cli start --foreground', True),
+        )
+        for command, windows in commands:
+            with (
+                self.subTest(command=command),
+                mock.patch.object(loop, 'loop_running', return_value=910004),
+                mock.patch.object(force_stop.osplat, 'process_command_line', return_value=command),
+                mock.patch.object(force_stop.osplat, 'is_windows', return_value=windows),
+                mock.patch.object(force_stop.osplat, 'process_alive', return_value=False),
+                mock.patch.object(force_stop.signal, 'SIGKILL', 9, create=True),
+                mock.patch.object(force_stop.osplat, '_win_terminate') as win_end,
+                mock.patch.object(force_stop.os, 'kill') as posix_end,
+                mock.patch.object(force_stop.osplat, 'kill_process_tree') as tree,
+            ):
+                self.assertTrue(force_stop.stop(self.conn)['ok'])
+                if windows:
+                    win_end.assert_called_once_with(910004)
+                    posix_end.assert_not_called()
+                else:
+                    posix_end.assert_called_once_with(910004, force_stop.signal.SIGKILL)
+                    win_end.assert_not_called()
+                tree.assert_not_called()
+
+    def test_unrelated_commands_cannot_pass_as_foreground_orchestrator(self):
+        commands = (
+            'python unrelated.py haivequeen start --foreground',
+            'python unrelated.py bzz start --foreground',
+            'python -m haivequeen restart --foreground',
+            'python -m haivequeen start --foreground-other',
+            'python -m haivequeen web start --foreground',
+            'bzz-helper start --foreground',
+            'echo "bzz start --foreground"',
+            'python -c "print(1)" bzz start --foreground',
+            'python /opt/haivequeen/unrelated.py start --foreground',
+            'bzz start -- --foreground',
+            'bzz start "--foreground',
+            '',
+        )
+        for command in commands:
+            with self.subTest(command=command), mock.patch.object(force_stop.osplat, 'process_command_line', return_value=command), mock.patch.object(force_stop.osplat, '_win_terminate') as win_end, mock.patch.object(force_stop.os, 'kill') as posix_end:
+                with self.assertRaisesRegex(ValueError, 'verify'):
+                    force_stop.terminate_loop(910004)
+                win_end.assert_not_called()
+                posix_end.assert_not_called()
+
     def test_new_build_and_deploy_are_visible_to_force_stop_before_next_round(self):
         for step in ('Build', 'Deploy'):
             with self.subTest(step=step):

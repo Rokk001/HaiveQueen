@@ -1,6 +1,8 @@
 """The owner-confirmed global stop, shared by web, CLI and tray controls."""
 import json
 import os
+import re
+import shlex
 import signal
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -18,10 +20,43 @@ def requested():
         return False
 
 
+def _foreground_loop_command(command):
+    """Recognize supported CLI entry points, never arbitrary argument substrings."""
+    windows = osplat.is_windows()
+    try:
+        args = shlex.split(command, posix=not windows)
+    except ValueError:
+        return False
+    if windows:
+        args = [arg[1:-1] if arg.startswith('"') and arg.endswith('"') else arg for arg in args]
+
+    def basename(value):
+        return value.replace('\\', '/').rsplit('/', 1)[-1].lower()
+
+    if not args:
+        return False
+    if re.fullmatch(r'pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?', basename(args[0])):
+        args = args[1:]
+        while args and args[0] in ('-I', '-u', '-B', '-E', '-s', '-S', '-O', '-OO'):
+            args = args[1:]
+        if args[:2] in (['-m', 'haivequeen'], ['-m', 'haivequeen.cli']):
+            args = args[2:]
+        elif args and (basename(args[0]) in ('bzz', 'bzz.exe') or
+                       args[0].replace('\\', '/').lower().endswith('/haivequeen/cli.py')):
+            args = args[1:]
+        else:
+            return False
+    elif basename(args[0]) in ('bzz', 'bzz.exe'):
+        args = args[1:]
+    else:
+        return False
+    return bool(args and args[0] == 'start' and '--foreground' in args[1:] and '--' not in args)
+
+
 def terminate_loop(pid):
     """End the loop alone: its detached web service and tray must survive."""
     command = osplat.process_command_line(pid) or ''
-    if not ('haivequeen' in command.lower() and 'start' in command and '--foreground' in command):
+    if not _foreground_loop_command(command):
         raise ValueError('Cannot verify the Orchestrator process; refusing to end it')
     if osplat.is_windows():
         osplat._win_terminate(pid)
