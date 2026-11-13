@@ -1,4 +1,6 @@
 import json
+import threading
+from types import SimpleNamespace
 from unittest import mock
 
 from bzztest import REL, RoundCase
@@ -6,6 +8,32 @@ from haivequeen import cli, force_stop, integration, interrupt, loop, orchestrat
 
 
 class ForceStopTests(RoundCase):
+    def test_new_build_and_deploy_are_visible_to_force_stop_before_next_round(self):
+        for step in ('Build', 'Deploy'):
+            with self.subTest(step=step):
+                finished = threading.Event()
+                def watch(*args, on_start, **kwargs):
+                    on_start(910007)
+                    finished.wait(5)
+                    return 0, ''
+                env = SimpleNamespace(name='testproj', conn=self.conn,
+                                      settings={'buildCommand': 'dummy', 'deployCommand': 'dummy'})
+                state = {'steps': {}}
+                try:
+                    with mock.patch.object(orchestrator, 'ASYNC', True), mock.patch.object(orchestrator, '_log'), mock.patch.object(orchestrator, '_harvest', return_value=None), mock.patch.object(integration, 'head_commit', return_value='abc1234'), mock.patch.object(integration, '_watch_compile', side_effect=watch):
+                        orchestrator._command(self.conn, env, REL, state, self.wt, step, 8192)
+                        stored = orchestrator.load(self.conn, 'testproj', REL)
+                        self.assertEqual(stored['job']['pid'], 910007)
+                        killed = []
+                        with mock.patch.object(loop, 'loop_running', return_value=0):
+                            self.assertTrue(force_stop.stop(self.conn, kill=lambda pid: killed.append(pid) or True)['ok'])
+                        self.assertEqual(killed, [910007])
+                finally:
+                    finished.set()
+                    job = orchestrator.JOBS.pop(('testproj', REL), None)
+                    if job and job.thread:
+                        job.thread.join(5)
+
     def test_start_after_force_stop_retries_queen_without_owner_question(self):
         self.plan('READY', [{'id': 'P1', 'title': 'First'}])
         self.round()

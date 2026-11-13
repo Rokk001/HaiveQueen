@@ -252,6 +252,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 def validate_tls(settings):
     """Validate user supplied certificate files without binding a socket."""
     certificate, key = settings.get('certificate', ''), settings.get('key', '')
+    if not isinstance(certificate, str) or not isinstance(key, str):
+        raise ValueError('Certificate and key must be file paths')
     if bool(certificate) != bool(key):
         raise ValueError('Both certificate and key are required for HTTPS')
     context = None

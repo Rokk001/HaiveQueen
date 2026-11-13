@@ -72,6 +72,15 @@ class WebRoutesTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/setup', payload, {'X-CSRF-Token': self.server.setup_token})[0], 400)
         self.assertFalse(self.path.exists())
 
+    def test_setup_refuses_non_string_tls_paths_without_disconnect(self):
+        for certificate, key in ((['certificate.pem'], ['key.pem']), (5, 6)):
+            with self.subTest(certificate=certificate):
+                payload = {'username': 'operator', 'password': 'secret',
+                           'certificate': certificate, 'key': key}
+                status, _, body = self.request('POST', '/setup', payload, {'X-CSRF-Token': self.server.setup_token})
+                self.assertEqual(status, 400, body)
+                self.assertFalse(self.path.exists())
+
     def test_authenticated_network_request_reaches_real_engine_snapshot(self):
         self.configure()
         self.server.api = self.server.engine_api
