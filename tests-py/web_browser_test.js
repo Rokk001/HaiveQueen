@@ -11,6 +11,10 @@ window.addEventListener('load', async () => {
   const input = (path, value) => {const node=field(path);assert(node,'Missing field '+path);node.value=value;node.dispatchEvent(new Event('input'));};
   window.confirm=()=>false;
   try {
+    if(document.documentElement.lang==='de'){
+      assert(buttons('Allgemein').length && buttons('Anbieter').length && buttons('Projekte').length,'Language change did not translate tabs');
+      document.body.dataset.testResult='passed';return;
+    }
     await wait(()=>document.querySelector('table'));
     assert(document.body.textContent.includes('mock-agent'),'Agent snapshot missing');
     await click('Force stop');
@@ -51,6 +55,7 @@ window.addEventListener('load', async () => {
     assert(provider.args.includes(''),'Empty CLI argument was removed');
     assert(!Object.hasOwn(provider,'allowedTools'),'Synthetic tools field leaked into settings');
     await click('Projects');await wait(()=>field(['compileCheck']));
+    assert(field(['integrationBranch']).value==='develop','Repository default branch was replaced');
     const rule=[...document.querySelectorAll('label')].find(node=>node.textContent.includes('AGENTS.md, 12 tokens'));
     assert(rule,'Knowledge-base file and token count missing');rule.querySelector('input').click();
     await click('Save');await wait(()=>document.getElementById('notice').textContent==='Done');
@@ -73,6 +78,8 @@ window.addEventListener('load', async () => {
     requests=await (await fetch('/test-actions')).json();
     for(const action of ['login/input','questions/answer','owner/accept','updates/install'])assert(requests.some(row=>row.action===action),'Missing '+action);
     assert(requests.find(row=>row.action==='login/input').data.text==='return-code','Login input lost');
-    document.body.dataset.testResult='passed';
+    await click('General');await wait(()=>field(['language']));
+    input(['language'],'German');await click('Save');
+    await wait(()=>document.documentElement.lang==='de');
   } catch(error) {document.body.dataset.testResult='failed';document.body.append(document.createTextNode('BROWSER TEST: '+error.stack));}
 });

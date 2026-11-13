@@ -85,12 +85,15 @@ def settings_save(conn, data):
 @filetxn.coordinated
 def settings_view(conn, project=None):
     """The desktop's derived form information, kept separate from editable TOML."""
-    from . import cli_presets
+    from . import cli_presets, projsettings
     result = settings_read(conn, project)
     if project:
         workspace = str(settings_path(conn, project).parent.parent)
         repository, plans_folder = gui_config.apiary_place(workspace, result['data'])
+        remote, _ = projsettings.derive_remote(repository, result['data'].get('remoteName'))
+        branch = result['data'].get('integrationBranch') or projsettings.default_branch(repository, remote or 'origin') or 'main'
         result.update(workspace=workspace, repository=repository, place={'repository': repository, 'plansFolder': plans_folder},
+                      project_defaults={'integrationBranch': branch},
                       rules=profile.rule_entries(result['data'], repository),
                       upstream=profile.upstream_state(result['data'], repository))
     else:

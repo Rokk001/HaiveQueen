@@ -343,7 +343,7 @@ function mount(document, bootstrap) {
         form.append(card);
       });
     } else {
-      editor.data=mergeDefaults(bootstrap.project,data);
+      editor.data=mergeDefaults({...bootstrap.project,...editor.project_defaults},data);
       if(data.upstreamRules===undefined && editor.upstream)editor.data.upstreamRules=editor.upstream.on;
       editor.place ||= {repository:editor.repository || '',plansFolder:''};
       fields(form,editor.place,[],editor.place);
@@ -454,7 +454,9 @@ function mount(document, bootstrap) {
     if(!loaded)return;
     if(current!==editor)return;
     if(JSON.stringify([current.data,current.place])!==sent){current.revision=loaded.revision;current.dirty=true;client.notice(t('Saved. Newer edits are still unsaved.'));return;}
-    editor={...loaded,project:current.project,dirty:false,rules:current.rules,upstream:current.upstream,workspace:current.workspace,place:current.place,provider_models:current.provider_models,benchmark:current.benchmark,build:current.build,cores:current.cores};render();void client.refresh();
+    editor={...loaded,project:current.project,dirty:false,rules:current.rules,upstream:current.upstream,workspace:current.workspace,place:current.place,project_defaults:current.project_defaults,provider_models:current.provider_models,benchmark:current.benchmark,build:current.build,cores:current.cores};
+    if(!current.project && current.data.language && current.data.language!==bootstrap.language){location.reload();return;}
+    render();void client.refresh();
     if(current.data.web)client.notice(t('Saved. Restart the web server to apply changed web settings.'));
   }
   async function openLive(row) {
