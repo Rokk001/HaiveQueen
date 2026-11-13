@@ -150,6 +150,8 @@ class Service:
 def start():
     running = control('status')
     if running and running['running']:
+        from . import tray
+        tray.ensure_started()
         return running
     if running is not None:
         result = control('reload')
@@ -193,6 +195,8 @@ def start():
     if not status['ok']:
         process.wait(timeout=10)
         raise OSError(status['error'])
+    from . import tray
+    tray.ensure_started()
     _children[process.pid] = process
     def reap():
         process.wait()
