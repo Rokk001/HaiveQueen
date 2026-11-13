@@ -60,7 +60,7 @@ class BrowserTests(unittest.TestCase):
         actions = []
         live_reads = []
         browser_language = ['English']
-        state = {'version':'test', 'orchestrator':{'label':'RUNNING'}, 'controls':{'force_warning':'Everything stops. Unfinished work is done again.'},
+        state = {'version':'test', 'orchestrator':{'label':'RUNNING'}, 'controls':{'force_warning':'Force stop ends all running Queens, Agents, Builds and Deploys immediately. Unfinished work will be done again after Start.'},
                  'projects':[{'name':'demo'}], 'tiles':{'bees':1}, 'hives':[],
                  'bees':[{'name':'mock-agent','agent':'mock-agent','project':'demo','apiary':'demo','task':'P1'}]}
         data = {'web':{'address':'127.0.0.1','port':8484,'certificate':'','key':''},

@@ -13,6 +13,10 @@ window.addEventListener('load', async () => {
   try {
     if(document.documentElement.lang==='de'){
       assert(buttons('Allgemein').length && buttons('Anbieter').length && buttons('Projekte').length,'Language change did not translate tabs');
+      await wait(()=>buttons('Sofort stoppen').length);
+      let warning='';window.confirm=text=>{warning=text;return false;};
+      await click('Sofort stoppen');
+      assert(warning.startsWith('Sofort stoppen beendet alle'),'Force stop warning was not translated');
       document.body.dataset.testResult='passed';return;
     }
     await wait(()=>document.querySelector('table'));

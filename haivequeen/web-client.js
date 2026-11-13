@@ -90,7 +90,7 @@ function mount(document, bootstrap) {
     try { await action(); } catch(error) {client.notice(error.message,true);}
     finally {node.disabled=false;node.removeAttribute('aria-busy');}
   }
-  const client=new Client({csrf:bootstrap.csrf, notice:(text,bad=false)=>{ $('notice').textContent=t(text);$('notice').className=bad?'bad':'';},
+  const client=new Client({csrf:bootstrap.csrf, confirm:text=>confirm(t(text)), notice:(text,bad=false)=>{ $('notice').textContent=t(text);$('notice').className=bad?'bad':'';},
     onUnauthorized:()=>{location.href='/login';}, onError:error=>client.notice(error.message,true),onState:renderState});
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
