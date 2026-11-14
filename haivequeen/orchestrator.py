@@ -22,7 +22,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import agent_process, buildjobs, db, git_provider, hives, integration, platform as osplat, roles, runtime, scheduler as sch
+from . import action_logs, agent_process, buildjobs, db, git_provider, hives, integration, platform as osplat, roles, runtime, scheduler as sch
 from . import plans as plan_mod
 
 KEY = "orch:"              # + plan: the state of the pipeline of a plan while the Orchestrator integrates it
@@ -47,6 +47,7 @@ class Job:
         self.cancelled = False
         self.thread = None
         self.compile_job = None
+        self.log_file = None
 
     def record_pid(self, pid):
         self.pid = pid
@@ -100,6 +101,23 @@ def _save_last(conn, project, plan, **fields):
     runtime.kv_set(conn, project, LAST_KEY + plan, json.dumps(info))
 
 
+def save_step_log(conn, project, plan, step, code, output):
+    """Keep the latest command result independently of disposable job files."""
+    runtime.kv_set(conn, project, "orch-log:" + plan + ":" + step,
+                   json.dumps({"step": step, "exit_code": code, "output": str(output)}))
+
+
+def _start_log(conn, env, plan, state, step):
+    path = action_logs.start(env.name, plan, step)
+    state["log_file"] = path
+    save(conn, env.name, plan, state)
+    return path
+
+
+def _finish_log(state, code, result=None, message=""):
+    action_logs.finish(state.get("log_file"), code, result, message)
+
+
 def commands(env):
     """Local command lines; disabled and provider steps have no local command."""
     from . import projsettings
@@ -150,6 +168,12 @@ def _hive_state(conn, project, plan, state):
 # ---------------------------------------------------------------- git
 
 def _git(cwd, *args, timeout=600, job=None):
+    code, output = _git_run(cwd, *args, timeout=timeout, job=job)
+    action_logs.append(getattr(job, "log_file", None), output)
+    return code, output
+
+
+def _git_run(cwd, *args, timeout=600, job=None):
     """(exit code, output) of a git command in the folder."""
     try:
         argv = ["git", "-C", str(cwd)] + list(args)
@@ -167,15 +191,15 @@ def _git(cwd, *args, timeout=600, job=None):
                     out, err = proc.communicate(timeout=timeout)
                 except subprocess.TimeoutExpired:
                     osplat.kill_process_tree(proc.pid)
-                    proc.communicate()
-                    raise
+                    out, err = proc.communicate()
+                    return 124, out + err + "\ngit command timed out\n"
                 finally:
                     job.pid = None
-                return proc.returncode, (out + err).strip()
+                return proc.returncode, (out + err)
         done = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
         return 127, "git could not run: %s" % exc
-    return done.returncode, (done.stdout + done.stderr).strip()
+    return done.returncode, (done.stdout + done.stderr)
 
 
 def _remote(env):
@@ -424,6 +448,7 @@ def _next_step(env, state, step):
 
 
 def _done(conn, env, plan, state, step, text=""):
+    _finish_log(state, 0, message=text)
     state["steps"][step] = "done"
     if step not in state["ran"]:
         state["ran"].append(step)
@@ -572,6 +597,7 @@ def _merge(conn, env, plan, state, folder):
         state["source"] = integration.head_commit(folder)
     state["steps"]["Merge"] = "running"
     job = Job(uuid.uuid4().hex)
+    job.log_file = _start_log(conn, env, plan, state, "Merge")
     result_file = _result_file(env.name, plan, job.token)
     JOBS[key] = job
     state["job"] = {"step": "Merge", "token": job.token, "file": str(result_file), "pid": None}
@@ -590,7 +616,13 @@ def _merge(conn, env, plan, state, folder):
 
 def _merge_work(job, folder, remote, branch, target, result_file):
     """Run cancellable Git commands without holding up other plans in the round."""
-    code, out = _merge_git(job, folder, remote, branch, target)
+    try:
+        code, out = _merge_git(job, folder, remote, branch, target)
+    except Exception:
+        import traceback
+        code, out = 1, traceback.format_exc()
+        action_logs.append(job.log_file, out)
+    action_logs.finish(job.log_file, code, message=out if code else "")
     Path(result_file).write_text(json.dumps({"token": job.token, "code": code, "output": out}), encoding="utf-8")
 
 
@@ -607,6 +639,8 @@ def _merge_git(job, folder, remote, branch, target):
 
 
 def _push(conn, env, plan, state, folder):
+    job = Job(uuid.uuid4().hex)
+    job.log_file = _start_log(conn, env, plan, state, "Push")
     remote, branch = _remote(env)
     head = integration.head_commit(folder)
     if not head:
@@ -616,15 +650,16 @@ def _push(conn, env, plan, state, folder):
     state["steps"]["Push"] = "running"
     save(conn, env.name, plan, state)
     _log(env, "%s: Push started %s" % (_short(plan), _counter(env, "Push")))
-    code, out = _git(folder, "fetch", remote, branch)
+    code, out = _git(folder, "fetch", remote, branch, job=job)
     if code != 0:
         return _red(conn, env, plan, state, "Push", "git fetch %s %s failed:\n%s" % (remote, branch, out))
-    if _git(folder, "merge-base", "--is-ancestor", "refs/remotes/%s/%s" % (remote, branch), "HEAD")[0] != 0:
+    if _git(folder, "merge-base", "--is-ancestor", "refs/remotes/%s/%s" % (remote, branch), "HEAD", job=job)[0] != 0:
         return _moved(conn, env, plan, state, "Push")
-    code, out = _git(folder, "push", remote, "HEAD:refs/heads/%s" % branch)   # a normal push, never forced
+    code, out = _git(folder, "push", remote, "HEAD:refs/heads/%s" % branch, job=job)   # a normal push, never forced
+    save_step_log(conn, env.name, plan, "Push", code, out)
     if code != 0:
-        _git(folder, "fetch", remote, branch)
-        if _git(folder, "merge-base", "--is-ancestor", "refs/remotes/%s/%s" % (remote, branch), "HEAD")[0] != 0:
+        _git(folder, "fetch", remote, branch, job=job)
+        if _git(folder, "merge-base", "--is-ancestor", "refs/remotes/%s/%s" % (remote, branch), "HEAD", job=job)[0] != 0:
             return _moved(conn, env, plan, state, "Push")
         return _red(conn, env, plan, state, "Push", "git push %s HEAD:%s failed:\n%s" % (remote, branch, out))
     state["pushed"] = head
@@ -637,6 +672,7 @@ def _moved(conn, env, plan, state, step):
     state["moved"] = int(state.get("moved", 0)) + 1
     if state["moved"] > MOVED_LIMIT:
         return _red(conn, env, plan, state, step, "the remote integration branch moved %d times while the plan was integrated" % state["moved"])
+    _finish_log(state, 1, "retry", "remote integration branch moved")
     _log(env, "%s: the remote integration branch moved, integration starts again at Merge" % _short(plan))
     _replay_followers(conn, env, plan)
     state["step"] = "Merge"
@@ -671,7 +707,7 @@ def _work(env_settings, job, step, command, folder, extra_env, result_file):
         else:
             try:
                 code, output = integration._watch_compile(command, str(folder), stall, longest, poll, env=extra_env, label=step.lower() + " command",
-                                                          on_start=job.record_pid)
+                                                          on_start=job.record_pid, log_file=job.log_file)
             except OSError as exc:
                 code, output = 127, "the %s command could not start: %s" % (step, exc)
     finally:
@@ -679,8 +715,11 @@ def _work(env_settings, job, step, command, folder, extra_env, result_file):
             integration._release_compile_slot(lock, poll)
     if job.cancelled:
         code = code or 143
+    if job.log_file and not action_logs.output(job.log_file):
+        action_logs.append(job.log_file, output)
+    action_logs.finish(job.log_file, code)
     try:
-        Path(result_file).write_text(json.dumps({"token": job.token, "code": code, "output": output[-6000:]}), encoding="utf-8")
+        Path(result_file).write_text(json.dumps({"token": job.token, "code": code, "output": output}), encoding="utf-8")
     except OSError:
         pass
 
@@ -726,6 +765,7 @@ def _command(conn, env, plan, state, folder, step, free_mb):
             token = uuid.uuid4().hex
             result_file = _result_file(env.name, plan, token)
             j = Job(token)
+            j.log_file = _start_log(conn, env, plan, state, step)
             JOBS[key] = j
             state["job"] = {"step": step, "token": token, "file": str(result_file), "pid": None, "head": head}
             if planned:
@@ -734,7 +774,7 @@ def _command(conn, env, plan, state, folder, step, free_mb):
             save(conn, env.name, plan, state)
         _log(env, "%s: %s started %s" % (_short(plan), step, _counter(env, step)))
         if step == "Check":
-            compile_job = integration.start_compile_check(env, {"name": token}, cwd=str(folder), key="orch-check:" + plan, poll=POLL, milestones=False)
+            compile_job = integration.start_compile_check(env, {"name": token}, cwd=str(folder), key="orch-check:" + plan, poll=POLL, milestones=False, log_file=j.log_file)
             j.token = compile_job["token"]
             j.pid = compile_job["pid"]
             j.compile_job = compile_job
@@ -748,6 +788,12 @@ def _command(conn, env, plan, state, folder, step, free_mb):
             def launch():
                 try:
                     _work(env.settings, j, step, command, folder, extra, result_file)
+                except Exception:
+                    import traceback
+                    output = traceback.format_exc()
+                    action_logs.append(j.log_file, output)
+                    action_logs.finish(j.log_file, 1)
+                    Path(result_file).write_text(json.dumps({"token": j.token, "code": 1, "output": output}), encoding="utf-8")
                 finally:
                     j.started.set()  # A failed launch must release the scheduling round too.
             j.thread = threading.Thread(target=launch, daemon=False)
@@ -789,6 +835,7 @@ def _harvest(conn, env, plan, state):
         if result is None:
             return None
         JOBS.pop((env.name, plan), None)
+        save_step_log(conn, env.name, plan, job["step"], result["exit"], result.get("output", ""))
         return result["exit"], result.get("output", "")
     key = (env.name, plan)
     j = JOBS.get(key)
@@ -808,13 +855,16 @@ def _harvest(conn, env, plan, state):
         except OSError:
             pass
         JOBS.pop(key, None)
+        save_step_log(conn, env.name, plan, job["step"], int(data["code"]), data.get("output") or "")
         return int(data["code"]), str(data.get("output") or "")
     if j and j.token == job["token"]:
         JOBS.pop(key, None)
+        _finish_log(state, 1, message="the command ended without a result")
         return 1, "the command ended without a result"
     pid = job.get("pid")
     if pid and osplat.process_alive(pid):
         return None   # a command of an earlier run of HaiveQueen still runs: wait for it, then run the step again
+    _finish_log(state, 143, "aborted", "worker ended without a result")
     return "lost"
 
 
@@ -842,12 +892,17 @@ def _harvest_only(conn, env, plan, state):
 
 def _red(conn, env, plan, state, step, error):
     """A step is red: the place is released and a fix agent starts."""
+    path = state.get("log_file")
+    if not path or action_logs.read(path)[0]["step"] != step:
+        path = _start_log(conn, env, plan, state, step)
+        action_logs.append(path, error)
     if step != "Deploy":
         _replay_followers(conn, env, plan)
+    _finish_log(state, 1, message=error)
     state["steps"][step] = "red"
     _log(env, "%s: %s red %s - %s" % (_short(plan), step, _counter(env, step), " ".join(error.split())[:200]))
     state["phase"] = "fix"
-    state["fix"] = {"agent": None, "reason": "step", "step": step, "error": error[-4000:]}
+    state["fix"] = {"agent": None, "reason": "step", "step": step, "error": error, "log_file": state.get("log_file")}
     state["placed"] = False
     save(conn, env.name, plan, state)
     hives.release_integration(conn, env.name, plan)
@@ -872,12 +927,27 @@ def _release(conn, env, plan, state, folder):
 
 
 def _close(conn, env, plan, state, folder):
+    path = _start_log(conn, env, plan, state, "Close")
+    try:
+        result = _close_run(conn, env, plan, state, folder)
+    except Exception:
+        import traceback
+        action_logs.append(path, traceback.format_exc())
+        action_logs.finish(path, 1)
+        raise
+    action_logs.finish(path, 0)
+    return result
+
+
+def _close_run(conn, env, plan, state, folder):
     from . import projsettings
     if projsettings.working_settings(env.settings)["releaseEnabled"] and state["steps"].get("Release") != "done":
         state["step"] = "Release"
         save(conn, env.name, plan, state)
         return False
     head = (state.get("provider") or {}).get("commit") or integration.head_commit(folder)
+
+
     row = conn.execute("SELECT * FROM queue WHERE project=? AND plan_path=? ORDER BY id DESC LIMIT 1", (env.name, plan)).fetchone()
     branch = row["branch"] if row else (__import__("haivequeen.bees", fromlist=["x"]).plan_worktree(env, plan) or ("", ""))[0]
     if row is None:
@@ -893,6 +963,7 @@ def _close(conn, env, plan, state, folder):
     for package in bees.rejected_packages(conn, env.name, plan):   # the packages the owner rejected count as done again
         bees.set_package_state(conn, env.name, plan, package, "done", "Orchestrator")
     _save_last(conn, env.name, plan, commit=head, steps=list(state["ran"]))
+    action_logs.append(state.get("log_file"), "Queue integrated; integration reservation released; commit %s\n" % head)
     _log(env, "%s: integration done, commit %s" % (_short(plan), head[:7]))
     runtime.kv_set(conn, env.name, KEY + plan, "")
     runtime.kv_set(conn, env.name, "hive-blocker:" + plan, "")
@@ -914,6 +985,10 @@ def _fix_prompt(env, plan, state, owner_text=""):
         what = "The owner checked the integrated result of this plan and rejected it. His answer:\n%s\n" % fix["error"]
     else:
         what = "The integration pipeline of this plan failed at the step %s. The error:\n%s\n" % (fix["step"], fix["error"])
+    if fix.get("log_file"):
+        what += ("\nRead the complete action log of this failed run: %s\n"
+                 "The JSONL output records contain the complete, uncut command output. "
+                 "Fix all errors in that output in one run, not only the last or first error.\n" % fix["log_file"])
     if owner_text:
         what += "\nInstruction of the owner:\n%s\n" % owner_text
     text = ("You are the fix agent of the plan %s. Work only in the plan worktree %s on the plan branch.\n%s\n"
@@ -1092,6 +1167,7 @@ def _cancel_pipeline_job(conn, project, plan, state, stop=None):
             return False
     elif pid and osplat.process_alive(pid):
         return False
+    action_logs.finish(state.get("log_file"), 143, "cancelled", "pipeline command stopped")
     JOBS.pop((project, plan), None)
     state.pop("job", None)
     state["steps"] = {k: v for k, v in state["steps"].items() if v != "running"}

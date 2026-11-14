@@ -108,10 +108,12 @@ class RunStateTest(unittest.TestCase):
             return json.loads(r.stdout)
 
         self.assertEqual(orch("starts-allowed"), {"allowed": False, "state": "STOPPED"})
-        self.assertEqual(orch("pause")["state"], "PAUSED")
-        self.assertEqual(orch("starts-allowed"), {"allowed": False, "state": "STOPPED"})
         self.assertEqual(orch("run-state")["running_agents"], 0)
-        self.assertEqual(orch("resume")["state"], "RUNNING")
+        for removed in ("pause", "resume"):
+            result = subprocess.run([sys.executable, "-I", str(ROOT / "haivequeen" / "cli.py"), removed],
+                                    env=env, capture_output=True, text=True, encoding="utf-8")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid choice", result.stderr)
 
 
     # A recycled PID of a process Windows denies access to (a system service) must not hold the run open.

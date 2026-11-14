@@ -337,8 +337,12 @@ def orch_info(conn, env, hive, now=None) -> dict:
     word = {"running": "running", "red": "red", "done": "done"}.get(done.get(step), "waiting")
     if state["phase"] == "fix" and fix.get("reason") == "step":
         word = "red"
+    waiting = state['phase'] == 'pipeline' and bool(hive.get('blocker')) and not state.get('job')
+    if waiting:
+        chain = [(name, 'waiting' if name == step else status) for name, status in chain]
+        word = 'waiting'
     task = "Integration: %s %s" % (step, word) if step in steps else ("Integration: owner rejection" if fix.get("reason") == "owner" else "Integration: Close")
-    running = state["phase"] == "pipeline" and not hive.get("blocker")
+    running = state["phase"] == "pipeline" and not waiting
     reason = "owner rejection" if fix.get("reason") == "owner" else "%s red" % fix.get("step")
     return {"phase": state["phase"], "step": step, "chain": chain, "n": n, "m": len(steps), "task": task, "status": "running" if running else "waiting",
             "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started"),
@@ -482,8 +486,8 @@ def queue_panel(conn, project) -> dict:
     where, args = ("WHERE project=?", (project,)) if project else ("", ())
     glue = " AND" if where else " WHERE"
     open_q = conn.execute("SELECT COUNT(*) FROM questions " + where + glue + " status='open'", args).fetchone()[0]
-    queued = db.rows(conn, "SELECT id,project FROM queue " + where + glue + " status IN ('ready','in_run') ORDER BY id", args)
-    return {"open": open_q, "queued": len(queued), "labels": ["%s#%d" % (q["project"], q["id"]) for q in queued][:4]}
+    queued = db.rows(conn, "SELECT id,project,plan_path,branch,status,note,updated_at FROM queue " + where + glue + " status IN ('ready','in_run') ORDER BY id", args)
+    return {"open": open_q, "queued": len(queued), "items": queued, "labels": ["%s#%d" % (q["project"], q["id"]) for q in queued][:4]}
 
 
 # Tell routine round events that report nothing apart from the rest.
@@ -533,7 +537,7 @@ def limit_rows(d) -> list:
                 blocked_slots = True
         else:
             if verified:
-                reserve["age"] = age_text(p)
+                reserve["age"] = tr("Last reading: %s", age_text(p))
             ratio = p.get("quota_reserve", p["ratio"])
             if ratio is None:
                 reserve["text"] = tr("unknown")
@@ -542,6 +546,8 @@ def limit_rows(d) -> list:
                 reserve["level"] = "bad" if ratio == 0 or reserve["text"].startswith("−") else "ok"
                 pct = abs(round((ratio - 1) * 100)) if ratio != float("inf") else 99
                 reserve["hover"] = tr("%d %% more quota left than time until the reset (%s)" if ratio >= 1 else "%d %% less quota left than time until the reset (%s)", pct, reset)
+                if p.get("error"):
+                    reserve["hover"] += " · " + tr(p["error"])
         total = int(p["total_slots"] or 0)
         used = int(p["used_slots"] or 0)
         slots = {"total": total, "used": used, "extra": max(0, used - total), "none": tr("no slots") if not total else "",
@@ -561,10 +567,10 @@ def limit_rows(d) -> list:
         else:
             pct = round(p["used_pct"])
             when = tr("reset now") if due else (reset if reset else tr("reset unknown"))
-            weekly = {"pct": pct, "level": level(p["used_pct"]), "text": "7d %d %% · %s" % (pct, when)}
+            weekly = {"pct": pct, "level": level(p["used_pct"]), "text": tr("7d %d %% used · %d %% left · %s", pct, 100-pct, when)}
         five = ""
         if p.get("five_hour"):
-            five = tr("5h reset now") if p["five_hour"]["pct"] is None else "5h %d %%" % p["five_hour"]["pct"]
+            five = tr("5h reset now") if p["five_hour"]["pct"] is None else tr("5h %d %% used", p["five_hour"]["pct"])
             if p["five_hour"].get("reset") and p["five_hour"]["pct"] is not None:
                 five += " · " + p["five_hour"]["reset"]
             if verified:

@@ -593,6 +593,8 @@ GERMAN = {
     "The arguments HaiveQueen gives to the CLI, one per line; {model}, {effort} and the like are filled in at the start.": "Die Argumente, die HaiveQueen der CLI mitgibt, eines pro Zeile; {model}, {effort} und Ähnliches werden beim Start eingesetzt.",
     "Other settings of this provider exactly as they stand in config.toml; a new setting is written as typed.": "Weitere Einstellungen dieses Anbieters genau wie in config.toml; eine neue Einstellung wird so geschrieben, wie sie getippt wird.",
     "Checks the address, reads the model list and tests the interface each CLI needs; the result is kept.": "Prüft die Adresse, liest die Modellliste und testet die Schnittstelle, die jede CLI braucht; das Ergebnis bleibt erhalten.",
+    "provider %s: capability thresholds must be a table": "Anbieter %s: Fähigkeitsschwellen müssen eine Tabelle sein",
+    "provider %s: capability threshold must be a whole percent from 1 to 100": "Anbieter %s: Die Fähigkeitsschwelle muss eine ganze Prozentzahl von 1 bis 100 sein",
     "provider %s: server %s does not exist": "Anbieter %s: der Server %s existiert nicht",
     "The server does not answer at %s": "Der Server antwortet nicht unter %s", "The server answers but refuses the API key": "Der Server antwortet, lehnt aber den API-Schlüssel ab",
     "%s: usable (%s)": "%s: nutzbar (%s)", "%s: not usable, the server does not offer %s": "%s: nicht nutzbar, der Server bietet %s nicht an",
@@ -614,6 +616,9 @@ GERMAN = {
     "Start context: no benchmark yet": "Startkontext: noch kein Benchmark",
     "Measure the start context of provider %s in every registered Project, twice: once with the HaiveQueen profile and once with your own configuration? This starts the CLI %d times and uses a few tokens of your login.": "Den Startkontext von Anbieter %s in jeder registrierten Projekt zweimal messen: einmal mit dem HaiveQueen-Profil und einmal mit deiner eigenen Konfiguration? Das startet die CLI %d-mal und verbraucht einige Tokens deines Logins.",
     "measuring …": "misst …", "Provider %s is excluded (excludedProviders): nothing was measured.": "Anbieter %s ist ausgeschlossen (excludedProviders): es wurde nichts gemessen.",
+    "Confirm action": "Aktion bestätigen", "Confirm": "Bestätigen", "Cancel": "Abbrechen", "Controls": "Steuerung",
+    "Plan text": "Plantext", "No plan text available.": "Kein Plantext verfügbar.", "Source": "Quelltext", "Packages": "Pakete", "Fix Agent": "Fix-Agent",
+    "Settings": "Einstellungen", "Clear filter": "Filter lösen",
     "Settings changed since loading; reopen settings before saving.": "Die Einstellungen wurden seit dem Laden geändert; öffne sie vor dem Speichern erneut.",
     "new setting": "neue Einstellung", "Remove this provider from the settings?": "Diesen Anbieter aus den Einstellungen entfernen?", "Remove this Project from the settings?": "Dieses Projekt aus den Einstellungen entfernen?", "Saved.": "Gespeichert.",
     # ---- owner questions the program files
@@ -774,3 +779,20 @@ GERMAN = {
     "HaiveQueen's own role texts are always added.": "HaiveQueens eigene Rollentexte werden immer hinzugefügt.",
     "Force stop ends all running Queens, Agents, Builds and Deploys immediately. Unfinished work will be done again after Start.": "Sofort stoppen beendet alle laufenden Queens, Agenten, Builds und Deploys sofort. Unfertige Arbeit wird nach Start erneut ausgeführt."
 }
+
+GERMAN.update({
+    "Provider selected for the next assignment.": "Dieser Anbieter ist für die nächste Zuweisung ausgewählt.",
+    "Weekly usage": "Wochenverbrauch",
+    "5-hour usage": "5-Stunden-Verbrauch",
+    "Used quota in the 7-day window; the date is its reset time.": "Verbrauchtes Kontingent im 7-Tage-Fenster; das Datum zeigt den Reset-Zeitpunkt.",
+    "Used quota in the 5-hour window; the time is its reset time.": "Verbrauchtes Kontingent im 5-Stunden-Fenster; die Uhrzeit zeigt den Reset-Zeitpunkt.",
+})
+
+GERMAN.update({"Overview": "Übersicht", "Technical information": "Technische Angaben", "Agent ID": "Agent-ID", "Plan file": "Plandatei", "Role": "Rolle", "Context used": "Genutzter Kontext", "Stop target": "Stop-Ziel"})
+
+GERMAN.update({
+    "7d %d %% used · %d %% left · %s": "7T %d %% verbraucht · %d %% übrig · %s",
+    "5h %d %% used": "5h %d %% verbraucht",
+    "Ready": "Bereit", "Not ready": "Nicht bereit", "Package": "Paket",
+    "Last recorded quota; live quota unavailable": "Letzter gespeicherter Verbrauch; Live-Abfrage nicht verfügbar",
+})

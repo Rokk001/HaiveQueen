@@ -112,14 +112,17 @@ def settings_view(conn, project=None):
         if 'web' in migrated:
             migrated['web'] = {k: v for k, v in migrated['web'].items() if k != 'password'}
         result['data'] = migrated
-        offered = {}
+        offered, connections = {}, {}
         for provider in migrated.get('providers', []):
             key = cli_presets.key_for(provider)
             server = servers.server_of(provider)
             kept = servers.kept(server) if server else None
+            if kept:
+                connections[provider['name']] = kept
             offered[provider['name']] = {'models': list((kept or {}).get('models', [])) if server else cli_presets.model_list(key),
-                                         'efforts': cli_presets.effort_list(key)}
-        result.update(provider_models=offered, benchmark=startctx.pairs(conn),
+                                         'efforts': cli_presets.effort_list(key), 'access': servers.access_of(provider),
+                                         'address': provider.get('address', ''), 'protocol': provider.get('protocol', '')}
+        result.update(provider_models=offered, provider_connections=connections, benchmark=startctx.pairs(conn),
                       build=settings.build_values(migrated), cores=settings.machine_cores())
     return result
 
@@ -188,6 +191,33 @@ def execute(conn, action, data):
         for question in questions:
             question['packages'] = question_service.plan_packages(conn, question['project'], question['plan_path'])
         return questions
+    if action == 'plan/step-log':
+        from . import orchestrator
+        step = data.get('step')
+        if step not in orchestrator.STEPS:
+            raise ValueError('Unknown integration step')
+        if not conn.execute('SELECT 1 FROM plans WHERE project=? AND path=?', (project, plan)).fetchone():
+            raise ValueError('Unknown plan')
+        from . import web_step_logs
+        return web_step_logs.read(conn, project, plan, step)
+    if action == 'plan/detail':
+        from pathlib import Path
+        row = next((row for row in plan_view.plan_rows(conn)
+                    if row['apiary'] == project and row['plan_path'] == plan), None)
+        if row is None:
+            raise ValueError('Unknown plan')
+        registered = conn.execute('SELECT workspace FROM projects WHERE name=?', (project,)).fetchone()
+        if not registered or not registered[0]:
+            raise ValueError('Unknown project workspace')
+        workspace = Path(registered[0]).resolve()
+        source = (workspace / plan).resolve()
+        if not source.is_relative_to(workspace):
+            raise ValueError('Plan is outside the project workspace')
+        from . import plans as plan_files, web_plan_details
+        text = source.read_text(encoding='utf-8-sig')
+        return {'plan': row, 'text': text, 'body': plan_files.split_front_matter(text)[1],
+                'packages': web_plan_details.packages(conn, project, plan, text),
+                'hive': hives.get(conn, project, plan)}
     if action == 'plans':
         return plan_view.plan_rows(conn)
     if action == 'questions/answer':

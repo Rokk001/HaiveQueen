@@ -72,10 +72,16 @@ class SlotCase(unittest.TestCase):
         self.addCleanup(self.release_all)
 
     def release_all(self):
-        for slot in self.slots:
-            integration._release_compile_slot(slot, 0.01)
+        self.free, self.cores, self.builds = BIG, 8, 0
+        path = integration._compile_lock_path()
+        with integration._compile_lock_guard(path, 0.01):
+            path.write_text(json.dumps({"holders": []}), encoding="utf-8")
         for thread in self.threads:
             thread.join(5)
+            if thread.is_alive():
+                raise AssertionError("slot waiter did not finish during cleanup")
+        for slot in self.slots:
+            integration._release_compile_slot(slot, 0.01)
 
     def take(self, **settings):
         """Take a slot now (it must be free)."""
@@ -134,6 +140,15 @@ class LimitTests(SlotCase):
         granted, _ = self.try_take()
         self.assertTrue(granted.is_set())
         self.assertEqual(len(integration._compile_holders()), 1)
+
+    def test_cleanup_finishes_a_waiter_blocked_by_live_holders(self):
+        path = integration._compile_lock_path()
+        path.write_text(json.dumps({"holders": [{"token": "a", "pid": os.getpid()}, {"token": "b", "pid": os.getpid()}]}), encoding="utf-8")
+        granted, _ = self.try_take()
+        self.assertFalse(granted.is_set())
+        self.release_all()
+        self.assertTrue(granted.is_set())
+        self.assertFalse(self.threads[0].is_alive())
 
     def test_a_slot_of_a_living_process_counts(self):
         path = integration._compile_lock_path()
@@ -253,7 +268,8 @@ class CheckStepTests(unittest.TestCase):
         self.addCleanup(data.cleanup)
         with mock.patch.dict(os.environ, {"BZZ_DATA_DIR": data.name}), mock.patch.object(integration.osplat, "free_ram_mb", return_value=BIG), \
                 mock.patch.object(integration, "_running_builds", return_value=0), mock.patch.object(orchestrator, "POLL", 0.05):
-            settings = {KEY: 2, "compileStallMinutes": 5, "compileMaxMinutes": 5}
+            settings = {KEY: 2, "compileStallMinutes": 5, "compileMaxMinutes": 5,
+                        "buildJobs": {"cores": 2, "minFreeRamGB": 0}}
             first = integration._acquire_compile_slot(settings, 0.01)   # one other check runs: the Check step still starts (limit 2)
             try:
                 with tempfile.TemporaryDirectory() as folder:
@@ -264,7 +280,7 @@ class CheckStepTests(unittest.TestCase):
                         job = orchestrator.Job("t%d" % index)
                         thread = threading.Thread(target=orchestrator._work, args=(settings, job, "Check", '"%s" -c "pass"' % sys.executable, folder, None, str(result)), daemon=True)
                         thread.start()
-                        thread.join(1.0 if hold == 0 else 0.5)
+                        thread.join(15.0 if hold == 0 else 2.0)
                         ran.append(not thread.is_alive())
                         for slot in extra:
                             integration._release_compile_slot(slot, 0.01)

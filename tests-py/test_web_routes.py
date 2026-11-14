@@ -23,6 +23,15 @@ class WebRoutesTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/releases/promote', {}, {'Cookie': headers['Cookie']})[0], 403)
         self.assertEqual(self.request('POST', '/api/releases/promote', {'tag': 'v1.0.0-dev.1', 'confirmed': True}, headers)[0], 200)
 
+    def test_plan_logs_and_provider_release_routes_remain_available(self):
+        self.configure()
+        headers = self.login()
+        for action in ('plan/detail', 'plan/step-log', 'git-login/providers', 'releases'):
+            with self.subTest(action=action):
+                status, _, body = self.request('GET', '/api/' + action, headers=headers)
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body)['action'], action)
+
     def test_disconnected_client_does_not_report_server_failure(self):
         handler = object.__new__(web_server._Handler)
         with patch.object(handler, 'handle_one_request', side_effect=BrokenPipeError('peer closed')):
@@ -110,6 +119,33 @@ class WebRoutesTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/start', {}, headers)[0], 200)
         self.assertEqual(self.request('POST', '/api/start', {}, {'Cookie': headers['Cookie']})[0], 403)
         self.assertEqual(self.request('POST', '/api/start', {}, {**headers, 'Origin': 'http://other.test'})[0], 403)
+
+    def test_https_proxy_login_and_csrf_keep_external_origin(self):
+        self.configure()
+        proxy = {'Host': 'hive.example.test', 'Origin': 'https://hive.example.test', 'X-Forwarded-Proto': 'https'}
+        self.assertNotIn('unencrypted', self.request('GET', '/login', headers=proxy)[2])
+        status, response, body = self.request('POST', '/login', {'username': 'operator', 'password': 'secret'}, proxy)
+        self.assertEqual(status, 200, body)
+        self.assertIn('; Secure', response['Set-Cookie'])
+        headers = {**proxy, 'Cookie': response['Set-Cookie'].split(';')[0], 'X-CSRF-Token': json.loads(body)['csrf']}
+        self.assertEqual(self.request('POST', '/api/start', {}, headers)[0], 200)
+        self.assertEqual(self.request('POST', '/api/start', {}, {**headers, 'Origin': 'https://other.test'})[0], 403)
+        self.assertEqual(self.request('POST', '/api/start', {}, {**headers, 'X-CSRF-Token': ''})[0], 403)
+        self.assertEqual(self.request('POST', '/login', {}, {**proxy, 'X-Forwarded-Proto': 'https,http'})[0], 403)
+        self.assertEqual(self.request('POST', '/login', {}, {**proxy, 'Host': 'internal.test', 'X-Forwarded-Host': 'hive.example.test'})[0], 403)
+
+    def test_access_pages_are_branded_responsive_and_labelled(self):
+        for setup in (True, False):
+            if not setup:
+                self.configure()
+            body = self.request('GET', '/setup' if setup else '/login')[2]
+            self.assertIn('name="viewport"', body)
+            self.assertIn('class="access-shell"', body)
+            self.assertIn('rel="icon"', body)
+            self.assertIn('for="username"', body)
+            self.assertIn('for="password"', body)
+            self.assertIn('role="alert"', body)
+            self.assertIn('autocomplete="new-password"' if setup else 'autocomplete="current-password"', body)
 
     def test_browser_shell_and_assets_require_login_and_reuse_session_csrf(self):
         self.configure()

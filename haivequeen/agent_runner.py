@@ -1144,7 +1144,7 @@ def run_agent(a, out=None):
 
     # Build jobs: an agent that builds (integrate, release) gets the job count of this machine as environment variable and its RAM use is measured while it runs.
     bj_raw = cfg.get("buildJobs")
-    bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release", "queen", "bee") else None   # every agent that builds, Bees included
+    bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release") else None   # Queens and Bees do not build or reserve build cores
     bj_jobs, bj_start_mb, samples, stop, sampler = 0, 0.0, run_dir / "build-samples.txt", threading.Event(), None
     env = with_bzz_on_path(profile.environment(prov))   # the agent and everything it starts finds `bzz`, also without a PATH entry of the pip Scripts folder
     env["BZZ_AGENT"] = a.name   # tells `bzz ready` which agent calls it (only the release phase may register a branch as ready)

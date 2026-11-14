@@ -238,9 +238,7 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         sysinfo = live_sysinfo(conn, project)
     host = sysinfo["host"]
     try:
-        codex = [p for p in sch.active_providers(cfg) if p.get("limit") == "codex"]
-        for provider in codex:
-            usage.refresh_codex_usage(conn, min_interval=provider.get("usageInterval", 60), provider=provider)
+        usage.schedule_dashboard_refresh(conn, sch.active_providers(cfg))
     except Exception:
         pass
     all_rows = runtime.list_agents(conn, project, "active")
@@ -337,6 +335,13 @@ def provider_lines(conn, cfg, agents) -> list:
         saved = _parse_time(kept.get("saved")) if kept else None
         age_minutes = max(0, int((datetime.now(timezone.utc) - saved.astimezone(timezone.utc)).total_seconds() // 60)) if saved else None
         error = usage.claude_refresh_error(conn, provider=provider) if source == "claude" else ""
+        if source == "codex" and not os.environ.get("BZZ_PROVIDER_LIMITS_FILE"):
+            snapshot = _kv(conn, usage.CODEX_USAGE_KEY + ":" + provider["name"]) or {}
+            observed = _parse_time(snapshot.get("saved"))
+            age_minutes = max(0, int((datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds() // 60)) if observed else None
+            if snapshot and (snapshot.get("source") != "codex:account/rateLimits/read" or (age_minutes is not None and age_minutes > 5)):
+                stale_hours = (age_minutes or 0) / 60
+                error = "Last recorded quota; live quota unavailable"
         five = window_usage(kept or ({} if error else usage._claude_snapshot(conn, provider=provider)), datetime.now(timezone.utc)).get("FiveHour") if source == "claude" else None   # an expired reading shows no 5-hour window
         if source == "codex" and not five_file and not os.environ.get("BZZ_PROVIDER_LIMITS_FILE"):   # the 5-hour window of a Codex provider
             five = window_usage(_kv(conn, usage.CODEX_USAGE_KEY + ":" + provider["name"]) or _kv(conn, usage.CODEX_USAGE_KEY), datetime.now(timezone.utc)).get("FiveHour")
