@@ -550,7 +550,7 @@ function mount(document, bootstrap) {
       if(!latest)return;
       const file=(latest.references||[]).find(item=>item.path===selected);
       const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
-      const text=file?(file.error||file.content||t('Log file is empty.')):(latest.console_output||latest.output||t('No log output available yet.'));
+      const text=file?(file.error||file.content||t('Log file is empty.')):([latest.console_output??latest.output,latest.reason&&!(latest.console_output||'').includes(latest.reason)?latest.reason:''].filter(Boolean).join('\n\n')||t('No log output available yet.'));
       fileInfo.textContent=file?file.path+' · '+t('File updated')+': '+date(file.modified_at)+(file.truncated?' · '+t('Showing first 8 MiB'):'')+' · '+t('File currently on disk; not an archived snapshot.') : t('Recorded console output for the selected run.');
       if(output.textContent!==text){output.textContent=text;if(follow)output.scrollTop=output.scrollHeight;}
     }
@@ -561,7 +561,7 @@ function mount(document, bootstrap) {
       try{
         const result=await client.request('plan/step-log?'+new URLSearchParams({...key(row),step}));
         if(!dialog.open||!output.isConnected)return;
-        status.textContent=t({done:'Completed',running:'Running',red:'Failed',todo:'Pending',waiting:'Waiting',cancelled:'Cancelled',unknown:'Unknown'}[result.status]||result.status)+(result.reason?' · '+result.reason:'')+(!result.historical&&result.exit_code!=null?' · Exit '+result.exit_code:'')+(result.historical?' · '+t('Previous run output'):'');
+        status.textContent=t({done:'Completed',running:'Running',red:'Failed',todo:'Pending',waiting:'Waiting',cancelled:'Cancelled',unknown:'Unknown'}[result.status]||result.status)+(!result.historical&&result.exit_code!=null?' · Exit '+result.exit_code:'')+(result.historical?' · '+t('Previous run output'):'');
         status.className='step-log-status '+({done:'ok',running:'warn',red:'bad',todo:'dim',waiting:'warn',cancelled:'dim',unknown:'dim'}[result.status]||'dim');
         latest=result;
         runInfo.textContent=(result.historical?t('Previous run — not the current attempt'):result.status==='running'?t('Current run'):t('Latest recorded run'))+
@@ -1079,7 +1079,19 @@ function mount(document, bootstrap) {
 
     const queue=section('Queue',grid),queueData=state.queue||{};
 
-    const queueCount=el('p',undefined,'queue-count');queueCount.append(el('strong',String(queueData.queued??0)),el('span',t('Queue')));queue.append(queueCount);const queuedLabels=el('div',undefined,'queue-items');for(const label of queueData.labels||[])queuedLabels.append(el('span',label,'queue-item'));queue.append(queuedLabels);
+    const queueCount=el('p',undefined,'queue-count');queueCount.append(el('strong',String(queueData.queued??0)),el('span',t('Queue')));queue.append(queueCount);
+    const queueList=el('ol',undefined,'queue-list');
+    for(const item of queueData.items||[]){
+      const entry=el('li'),heading=el('div',undefined,'queue-entry-heading');
+      const name=(item.plan_path||'').split(/[\\/]/).pop()?.replace(/\.md$/i,'')||item.branch||('#'+item.id);
+      heading.append(item.plan_path?filterLink(name,'plan',{apiary:item.project,plan_path:item.plan_path}):el('strong',name),
+        el('span',t(item.status==='in_run'?'Integrating':'Queued'),item.status==='in_run'?'warn':'dim'));
+      entry.append(heading,el('small',item.project+' · #'+item.id,'dim'));
+      if(item.branch)entry.append(el('small',item.branch,'queue-branch'));
+      queueList.append(entry);
+    }
+    if(!queueList.children.length)queue.append(el('p',t('Queue is empty.'),'dim'));
+    else queue.append(queueList);
 
     const columns=el('div',undefined,'dashboard-columns');
 

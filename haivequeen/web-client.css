@@ -773,3 +773,11 @@ progress.ok::-moz-progress-bar { background: #79df9b; }progress.bad::-moz-progre
 .step-log-sources select { min-width:0; max-width:100%; flex:1; }
 .step-log-detail .entity-console > .dim { padding:0 16px; overflow-wrap:anywhere; }
 .step-log-run { padding:10px 12px; border-left:3px solid #f4c62d; background:#111e24; }
+
+.queue-list { margin:0; padding:0; list-style:none; max-height:320px; overflow:auto; scrollbar-gutter:stable; }
+.queue-list li { padding:10px 0; border-top:1px solid #263940; }
+.queue-entry-heading { display:flex; justify-content:space-between; gap:12px; align-items:baseline; }
+.queue-entry-heading a { overflow-wrap:anywhere; }
+.queue-entry-heading > span { white-space:nowrap; font-size:11px; }
+.queue-list small { display:block; margin-top:4px; }
+.queue-branch { color:#a4bdc7; overflow-wrap:anywhere; }

@@ -485,8 +485,8 @@ def queue_panel(conn, project) -> dict:
     where, args = ("WHERE project=?", (project,)) if project else ("", ())
     glue = " AND" if where else " WHERE"
     open_q = conn.execute("SELECT COUNT(*) FROM questions " + where + glue + " status='open'", args).fetchone()[0]
-    queued = db.rows(conn, "SELECT id,project FROM queue " + where + glue + " status IN ('ready','in_run') ORDER BY id", args)
-    return {"open": open_q, "queued": len(queued), "labels": ["%s#%d" % (q["project"], q["id"]) for q in queued][:4]}
+    queued = db.rows(conn, "SELECT id,project,plan_path,branch,status,note,updated_at FROM queue " + where + glue + " status IN ('ready','in_run') ORDER BY id", args)
+    return {"open": open_q, "queued": len(queued), "items": queued, "labels": ["%s#%d" % (q["project"], q["id"]) for q in queued][:4]}
 
 
 # Tell routine round events that report nothing apart from the rest.
