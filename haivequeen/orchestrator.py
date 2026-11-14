@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import subprocess
 import threading
 import time
@@ -45,6 +46,7 @@ class Job:
         self.thread = None
         self.compile_job = None
         self.log_file = None
+        self.process = None
 
     def record_pid(self, pid):
         self.pid = pid
@@ -57,6 +59,8 @@ class Job:
             if proc is not None:
                 return proc.poll() is None
             return osplat.process_alive(self.pid)
+        if self.process is not None:
+            return self.process.poll() is None
         return bool(self.thread and self.thread.is_alive())
 
 
@@ -593,6 +597,47 @@ def _work(env_settings, job, step, command, folder, extra_env, result_file):
         pass
 
 
+def _detached_work(request_file):
+    """Run a pipeline command in a supervisor independent of the core process."""
+    from . import proctree
+    request = json.loads(Path(request_file).read_text(encoding="utf-8"))
+    j = Job(request["token"])
+    j.log_file = request.get("log_file")
+    try:
+        _work(request["settings"], j, request["step"], request["command"],
+              request["folder"], request.get("extra"), request["result_file"])
+    except Exception:
+        import traceback
+        output = traceback.format_exc()
+        action_logs.append(j.log_file, output)
+        action_logs.finish(j.log_file, 1)
+        Path(request["result_file"]).write_text(json.dumps({"token": j.token, "code": 1, "output": output}), encoding="utf-8")
+    finally:
+        proctree.exempt_clear()
+        try:
+            Path(request_file).unlink()
+        except OSError:
+            pass
+
+
+def _start_detached_work(j, settings, step, command, folder, extra, result_file):
+    from . import proctree
+    request_file = Path(str(result_file) + ".request")
+    request_file.write_text(json.dumps({"token": j.token, "settings": settings, "step": step,
+        "command": command, "folder": str(folder), "extra": extra, "result_file": str(result_file),
+        "log_file": str(j.log_file) if j.log_file else None}), encoding="utf-8")
+    bootstrap = "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.orchestrator import _detached_work;_detached_work(sys.argv[2])"
+    flags = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    try:
+        j.process = subprocess.Popen([sys.executable, "-I", "-c", bootstrap, str(Path(__file__).resolve().parent.parent), str(request_file)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, **flags)
+    except OSError:
+        request_file.unlink(missing_ok=True)
+        raise
+    j.pid = j.process.pid
+    proctree.exempt_register(j.pid)
+
+
 def _result_file(project, plan, token):
     folder = osplat.data_dir() / "orchestrator" / re.sub(r"[^\w.-]", "_", project)
     folder.mkdir(parents=True, exist_ok=True)
@@ -654,27 +699,15 @@ def _command(conn, env, plan, state, folder, step, free_mb):
                 while integration.poll_compile_check(conn, env.name, compile_job) is None:
                     time.sleep(POLL)
         else:
-            def launch():
-                try:
-                    _work(env.settings, j, step, command, folder, extra, result_file)
-                except Exception:
-                    import traceback
-                    output = traceback.format_exc()
-                    action_logs.append(j.log_file, output)
-                    action_logs.finish(j.log_file, 1)
-                    Path(result_file).write_text(json.dumps({"token": j.token, "code": 1, "output": output}), encoding="utf-8")
-                finally:
-                    j.started.set()  # A failed launch must release the scheduling round too.
-            j.thread = threading.Thread(target=launch, daemon=False)
-            j.thread.start()
-            # Publish the PID before releasing the scheduling lock. Force stop may
-            # arrive before another round has a chance to harvest this command.
-            j.started.wait()
-            if j.pid:
-                state['job']['pid'] = j.pid
+            try:
+                _start_detached_work(j, env.settings, step, command, folder, extra, result_file)
+                state["job"]["pid"] = j.pid
+                state["job"]["version_path"] = str(Path(__file__).resolve().parent.parent)
                 save(conn, env.name, plan, state)
-            if not _async():
-                j.thread.join()
+            except OSError as exc:
+                Path(result_file).write_text(json.dumps({"token": j.token, "code": 127, "output": str(exc)}), encoding="utf-8")
+            if not _async() and j.process is not None:
+                j.process.wait()
     result = _harvest(conn, env, plan, state)
     if result is None:
         return None
