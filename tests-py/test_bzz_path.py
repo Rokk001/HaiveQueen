@@ -1,5 +1,6 @@
 """Tests of the PATH handling for agent processes: the folder of the `bzz` console script is put in front of PATH (no real models)."""
 import os
+import subprocess
 import stat
 import sys
 import tempfile
@@ -62,6 +63,24 @@ class BzzPathTest(unittest.TestCase):
     def test_candidates_include_python_scripts(self):
         """The folders looked at include the Scripts folder next to the running Python."""
         self.assertIn(Path(sys.executable).parent / "Scripts", ar.bzz_script_dirs())
+
+    def test_installed_agent_bzz_stays_on_its_version_after_switch(self):
+        root = Path(self.tmp.name)
+        old = root / 'versions' / 'old'
+        new = root / 'versions' / 'new'
+        for version in (old, new):
+            package = version / 'haivequeen'
+            package.mkdir(parents=True)
+            (package / 'cli.py').write_text('import pathlib\nprint(pathlib.Path(__file__).parents[1].name)\n', encoding='utf-8')
+        pointer = root / 'active-version'
+        pointer.write_text('old', encoding='utf-8')
+        env = dict(os.environ)
+        with mock.patch.object(ar, 'TOOL_ROOT', old):
+            ar.with_version_bzz(env, root / 'run')
+        pointer.write_text('new', encoding='utf-8')
+        command = ['cmd', '/c', 'bzz'] if os.name == 'nt' else ['bzz']
+        result = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.strip(), 'old')
 
 
 
