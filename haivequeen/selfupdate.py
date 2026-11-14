@@ -241,6 +241,29 @@ def start_pending_refusal(out: str) -> bool:
     return False
 
 
+def prepare_rollback(conn, sleep, poll, alive=None, loop_pid=None):
+    """Drain the restarted runtime before changing files; a timeout is not proof of exit.
+
+    Keep the update lock while draining. Even an old pending-start marker is
+    inconclusive: only its removal by startup proves that launch has settled.
+    """
+    round_path().unlink(missing_ok=True)
+    if owner_stopped():
+        raise OwnerStop()
+    stop = loop.stop_flag()
+    stop.write_text("stop requested %s (self-update rollback)\n" % db.now(), encoding="utf-8")
+    loop_pid = loop_pid or loop.loop_running
+    while True:
+        if owner_stopped():
+            raise OwnerStop()
+        pending = loop.start_pending_file().exists()
+        running = loop_pid()
+        agents = busy_agents(conn, alive)
+        if not pending and not running and not agents:
+            return
+        sleep(poll)
+
+
 def rollback(conn, live, old: str, new: str, why: str, run, restart) -> tuple:
     """Reset the live folder to `old` (git reset --keep), install again when pyproject.toml differed, start the loop, file the open question.
 
@@ -254,6 +277,8 @@ def rollback(conn, live, old: str, new: str, why: str, run, restart) -> tuple:
         code, out = run([osplat.python_executable(), "-m", "pip", "install", "-e", str(live)], live)
         if code != 0:
             return "failed", "%s; rollback: pip install -e failed: %s" % (why, out.strip()[:300])
+    if owner_stopped():
+        return "failed", "%s; rolled back to %s; %s, not restarted" % (why, old[:12], OWNER_STOP)
     ok, out = restart()
     note = "%s; rolled back to %s" % (why, old[:12])
     try:
@@ -417,7 +442,14 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
                     found = first_round_problems(conn, since_event)
                     pane_problems = "; ".join(found)   # the loop runs: pane problems are reported, never rolled back
         if failure and new != old:
-            result, note = rollback(conn, live, old, new, failure, run, restart)
+            try:
+                prepare_rollback(conn, sleep, poll, alive, loop_pid)
+            except OwnerStop:
+                result, note = "failed", failure + "; rollback cancelled, " + OWNER_STOP + "; update kept"
+            except OSError as exc:
+                result, note = "failed", failure + "; rollback could not establish quiescence: " + str(exc)
+            else:
+                result, note = rollback(conn, live, old, new, failure, run, restart)
         elif failure:
             result, note = "failed", failure
         else:

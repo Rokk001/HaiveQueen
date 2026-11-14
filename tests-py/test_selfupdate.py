@@ -58,7 +58,7 @@ class FakeGit:
             return self.fail.get("pip", 0), "pip out"
         self.calls.append(("start", str(cwd)))
         self.start_argv = list(argv)
-        self.started = True
+        self.started = not bool(self.fail.get("start"))
         if self.fail.get("start"):
             return self.fail["start"], "start failed"
         if self.conn is not None:   # the new loop runs and ends its first round
@@ -103,6 +103,89 @@ class SelfUpdateBase(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         return calls
+
+
+class RollbackQuiescenceTest(SelfUpdateBase):
+    def test_timeout_drains_loop_agents_and_pending_start_before_reset(self):
+        self.stub_faults()
+        git = FakeGit(self.conn, changed="pyproject.toml")
+        state = {"loop": 0, "agents": [], "sleeps": 0}
+
+        def timeout(*args):
+            state["loop"] = 4242
+            state["agents"] = ["worker"]
+            loop.start_pending_file().write_text("pending")
+            return False
+
+        def drain(seconds):
+            self.assertNotIn("reset --keep", git.words())
+            self.assertEqual(git.words().count("pip"), 1)
+            self.assertIn("self-update rollback", loop.stop_flag().read_text())
+            self.assertFalse(selfupdate.round_path().exists())
+            state["sleeps"] += 1
+            if state["sleeps"] == 1:
+                state["loop"] = 0
+            elif state["sleeps"] == 2:
+                state["agents"] = []
+            else:
+                loop.start_pending_file().unlink()
+
+        with mock.patch.object(selfupdate, "wait_first_round", side_effect=timeout), mock.patch.object(
+                selfupdate, "busy_agents", side_effect=lambda *a: state["agents"]):
+            result = self.update(git, loop_pid=lambda: state["loop"], sleep=drain)
+        self.assertEqual(state["sleeps"], 3)
+        self.assertEqual(result["result"], "rollback")
+        self.assertEqual(git.words().count("start"), 2)
+
+    def test_owner_stop_during_drain_keeps_installation_and_does_not_restart(self):
+        git = FakeGit(self.conn)
+        state = {"loop": 0}
+
+        def timeout(*args):
+            state["loop"] = 4242
+            return False
+
+        def owner_stop(seconds):
+            loop.stop_flag().write_text("stop requested by owner")
+            state["loop"] = 0
+
+        with mock.patch.object(selfupdate, "wait_first_round", side_effect=timeout):
+            result = self.update(git, loop_pid=lambda: state["loop"], sleep=owner_stop)
+        self.assertEqual(result["result"], "failed")
+        self.assertIn("stopped by the owner", result["note"])
+        self.assertNotIn("reset --keep", git.words())
+        self.assertEqual(git.words().count("start"), 1)
+        self.assertEqual(git.head, NEW)
+
+    def test_owner_stop_at_timeout_is_not_overwritten(self):
+        git = FakeGit(self.conn)
+
+        def timeout(*args):
+            loop.stop_flag().write_text("stop requested by owner")
+            return False
+
+        with mock.patch.object(selfupdate, "wait_first_round", side_effect=timeout):
+            result = self.update(git)
+        self.assertEqual(result["result"], "failed")
+        self.assertEqual(loop.stop_flag().read_text(), "stop requested by owner")
+        self.assertNotIn("reset --keep", git.words())
+        self.assertEqual(git.words().count("start"), 1)
+
+    def test_owner_stop_during_reset_prevents_restart(self):
+        git = FakeGit(self.conn, fail={"push": 1})
+
+        def run(argv, cwd):
+            result = git(argv, cwd)
+            if "reset" in argv:
+                loop.stop_flag().write_text("stop requested by owner")
+            return result
+
+        run.inner = git
+        result = self.update(run)
+        self.assertEqual(result["result"], "failed")
+        self.assertEqual(git.head, OLD)
+        self.assertNotIn("start", git.words())
+        self.assertIn("not restarted", result["note"])
 
 
 class TableTest(SelfUpdateBase):
@@ -519,7 +602,10 @@ class UpdateTest(SelfUpdateBase):
         """A loop that never finishes its first round within the time limit is rolled back."""
         self.stub_faults()
         inner = FakeGit(None)   # the scripted start writes no loop state
-        res = self.update(inner, round_timeout=0.1)
+        def drain(seconds):
+            if loop.stop_flag().exists() and "self-update rollback" in loop.stop_flag().read_text():
+                inner.started = False
+        res = self.update(inner, round_timeout=0.1, sleep=drain)
         self.assertEqual(res["result"], "rollback")
         self.assertIn("first round", self.row()["note"])
 
