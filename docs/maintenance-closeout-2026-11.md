@@ -360,3 +360,10 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Terminal metadata uses fixed-size reads and a bounded cache for unchanged files. Initial lookup may scan a long final record backwards; subsequent unchanged polls reuse its metadata. No full output history is retained in the cache.
 - The browser retains at most 65,536 recent output characters. Start-of-log and next-page controls expose complete history, while follow-live resumes polling. Source changes and new runs discard stale responses instead of mixing output.
 - Focused regressions cover bounded reads, complete history reconstruction, partially written records, long terminal diagnostics, reference selection and page boundaries, new attempts and UI navigation. No running application processes are used by these tests.
+
+## A-28: Recover logs after damaged records
+
+- Readers report damaged JSON, invalid record shapes and encoding errors with the byte position, then continue to subsequent recoverable output and terminal records. An unfinished final line remains pending rather than being reported as damage.
+- A new journal write separates an interrupted previous record before appending. Existing bytes are preserved; an already recorded terminal result is not replaced or duplicated.
+- Paged reads advance through oversized damaged records without an unbounded response or a stuck cursor. Terminal metadata validates long messages and falls back past malformed trailing records instead of inventing a successful result.
+- Regression tests reproduce lost output, terminal-write exceptions, hidden corruption, premature acceptance of unfinished records and invalid terminal metadata. Verification uses isolated journals and the existing isolated output-drain helper only.

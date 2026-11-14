@@ -45,8 +45,13 @@ def _write(path, record):
     with _fallback_lock:
         if key not in _fallback:
             try:
-                with Path(path).open('a', encoding='utf-8') as stream:
-                    stream.write(json.dumps(record) + '\n')
+                with Path(path).open('ab+') as stream:
+                    size = stream.seek(0, 2)
+                    if size:
+                        stream.seek(-1, 2)
+                        if stream.read(1) != b'\n':
+                            stream.write(b'\n')  # isolate an interrupted previous write
+                    stream.write((json.dumps(record) + '\n').encode('utf-8'))
                 return
             except OSError as exc:
                 message = 'Log storage error: %s. Only a bounded in-memory output tail is available; it is not durable.\n' % exc
@@ -62,6 +67,19 @@ def _write(path, record):
         _fallback[key][1].append(item)
 
 
+def _decode_record(line):
+    record = json.loads(line)
+    if not isinstance(record, dict) or record.get('event') not in ('start', 'output', 'end'):
+        raise ValueError('Invalid journal record')
+    if record['event'] == 'output' and not isinstance(record.get('text'), str):
+        raise ValueError('Invalid output record')
+    return record
+
+
+def _damage(offset):
+    return '[Warning: damaged log record at byte %d; continuing with recoverable output.]\n' % offset
+
+
 def read(path):
     """Ignore an incomplete last record while a writer is appending it."""
     records = []
@@ -69,12 +87,16 @@ def read(path):
         stored = _fallback.get(str(path))
         fallback = (stored[0], list(stored[1])) if stored else None
     try:
-        with Path(path).open(encoding='utf-8') as stream:
-            for line in stream:
-                try:
-                    records.append(json.loads(line))
-                except ValueError:
+        with Path(path).open('rb') as stream:
+            while True:
+                offset = stream.tell()
+                line = stream.readline()
+                if not line or not line.endswith(b'\n'):
                     break
+                try:
+                    records.append(_decode_record(line))
+                except ValueError:
+                    records.append({'event': 'output', 'text': _damage(offset)})
     except OSError:
         if fallback is None:
             raise
@@ -178,11 +200,14 @@ def page(path, cursor=None, limit=32768):
             if not line.endswith(b'\n') and len(line) < 8192:
                 partial = True
                 break
-            sliced = _output_slice(stream, start, line, skip, limit - length)
-            if sliced is None:
-                sliced = _output_slice(stream, start, line, skip, limit - length, 'message', 'end')
-                if sliced is not None:
-                    end = _string_header(line, 'message', 'end')[0]
+            try:
+                sliced = _output_slice(stream, start, line, skip, limit - length)
+                if sliced is None:
+                    sliced = _output_slice(stream, start, line, skip, limit - length, 'message', 'end')
+                    if sliced is not None and not sliced[2] and not sliced[3]:
+                        end = _string_header(line, 'message', 'end')[0]
+            except ValueError:
+                sliced = None
             if sliced is not None:
                 text, offset, skip, partial = sliced
                 parts.append(text)
@@ -190,15 +215,13 @@ def page(path, cursor=None, limit=32768):
                 if skip:
                     break
                 continue
-            if not line.endswith(b'\n'):
-                raise ValueError('Log metadata record exceeds the page limit')
+            stream.seek(start + len(line))
             try:
-                record = json.loads(line)
+                record = _decode_record(line)
             except (ValueError, UnicodeError):
-                # A complete malformed record must not conceal later output.
-                offset, skip = stream.tell(), 0
-                continue
-            if not isinstance(record, dict):
+                warning = _damage(start)[:limit - length]
+                parts.append(warning)
+                length += len(warning)
                 offset, skip = stream.tell(), 0
                 continue
             if record.get('event') == 'output':
@@ -268,20 +291,43 @@ def metadata(path):
         if not isinstance(start_record, dict):
             return []
         size = stream.seek(0, 2)
-        begin, finish = _last_complete_record(stream, size)
-        stream.seek(begin)
-        line = stream.read(min(65536, finish - begin))
         records = [start_record]
-        try:
-            record = json.loads(line)
-        except ValueError:
-            parsed = _string_header(line, 'message', 'end')
-            record = parsed[0] if parsed else {}
-            if parsed:
-                piece = _output_slice(stream, begin, line, 0, 4096, 'message', 'end')
-                record['message'] = piece[0]
-        if isinstance(record, dict) and record.get('event') == 'end':
-            records.append(record)
+        while size > len(first):
+            begin, finish = _last_complete_record(stream, size)
+            if not finish:
+                break
+            stream.seek(begin)
+            line = stream.read(min(65536, finish - begin))
+            try:
+                record = _decode_record(line)
+            except ValueError:
+                parsed = _string_header(line, 'message', 'end')
+                if parsed:
+                    record = parsed[0]
+                    skip = 0
+                    try:
+                        while True:
+                            text, following, skip, partial = _output_slice(
+                                stream, begin, line, skip, 32768, 'message', 'end')
+                            if not record['message']:
+                                record['message'] = text[:4096]
+                            if partial:
+                                raise ValueError('Incomplete terminal record')
+                            if not skip:
+                                if following != finish:
+                                    raise ValueError('Invalid terminal boundary')
+                                break
+                    except ValueError:
+                        size = begin
+                        continue
+                elif _string_header(line, 'text', 'output'):
+                    break  # normal output is not a terminal record
+                else:
+                    size = begin
+                    continue
+            if record.get('event') == 'end':
+                records.append(record)
+            break
     with _fallback_lock:
         _metadata_cache[str(path)] = (stamp, records)
         _metadata_cache.move_to_end(str(path))

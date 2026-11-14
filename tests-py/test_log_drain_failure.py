@@ -11,7 +11,7 @@ class LogDrainTests(RoundCase):
         script.write_text("for i in range(2000): print('line-%s '%i+'x'*2048,flush=True)\nraise SystemExit(7)\n")
         original=Path.open
         def open_file(target,*args,**kwargs):
-            if str(target)==path and (args[0] if args else kwargs.get('mode','r'))=='a':
+            if str(target)==path and (args[0] if args else kwargs.get('mode','r')).startswith('a'):
                 raise OSError('journal unavailable')
             return original(target,*args,**kwargs)
         with mock.patch.object(Path,'open',open_file):
