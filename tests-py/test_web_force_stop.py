@@ -19,6 +19,25 @@ class ForceStopTests(RoundCase):
         runtime.upsert_agent(self.conn, kwargs.get('project', 'testproj'), args[0], {'processIdentity': 'fixture-process'})
         return result
 
+    def test_cleared_pipeline_state_does_not_break_tray_status(self):
+        from haivequeen import tray
+        runtime.kv_set(self.conn, 'testproj', orchestrator.KEY + REL, '')
+        self.assertFalse(tray.work_running())
+        orchestrator.save(self.conn, 'testproj', REL + '-active', {'job': {'pid': 910006}})
+        self.assertTrue(tray.work_running())
+
+    def test_start_recovery_ignores_cleared_pipeline_state(self):
+        runtime.kv_set(self.conn, 'testproj', orchestrator.KEY + REL, '')
+        loop.stop_flag().parent.mkdir(parents=True, exist_ok=True)
+        loop.stop_flag().write_text('force stop requested before crash\n', encoding='utf-8')
+        args = cli.build_parser().parse_args(['start', '--foreground'])
+        with mock.patch.object(loop, 'loop_running', return_value=0), mock.patch.object(loop, 'run_loop', return_value=0) as run, mock.patch.object(force_stop.osplat, 'kill_process_tree') as kill:
+            self.assertEqual(loop.cmd_start(args, self.conn), 0)
+        run.assert_called_once()
+        kill.assert_not_called()
+        self.assertFalse(loop.stop_flag().exists())
+        self.assertEqual(runtime.kv_get(self.conn, 'testproj', orchestrator.KEY + REL), '')
+
     def test_held_scheduling_lock_does_not_delay_process_termination(self):
         self.plan('RUNNING')
         self.agent('worker', phase='bee', status='running', pid=910002, started=1)

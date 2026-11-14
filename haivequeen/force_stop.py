@@ -18,7 +18,7 @@ def has_work(conn):
     if any(agent_process.counts(row) for row in runtime.list_agents(conn)):
         return True
     for row in db.rows(conn, "SELECT value FROM kv WHERE key LIKE 'orch:%'"):
-        if (json.loads(row['value']).get('job') or {}).get('pid'):
+        if row['value'] and (json.loads(row['value']).get('job') or {}).get('pid'):
             return True
     for row in db.rows(conn, "SELECT project,key FROM kv WHERE key LIKE 'compile-request:%'"):
         token = row['key'][len(integration.COMPILE_REQUEST_KEY):]
@@ -85,8 +85,9 @@ def terminate_loop(pid):
 def _snapshot(conn):
     """Read registered work without waiting for scheduling to finish."""
     rows = [a for a in runtime.list_agents(conn, scope='all') if not a.get('archived') and agent_process.counts(a)]
+    # Cleared pipeline records remain as empty values after integration.
     states = [(r['project'], r['key'][len(orchestrator.KEY):], json.loads(r['value']))
-              for r in db.rows(conn, "SELECT project,key,value FROM kv WHERE key LIKE 'orch:%'")]
+              for r in db.rows(conn, "SELECT project,key,value FROM kv WHERE key LIKE 'orch:%'") if r['value']]
     victims = {int(a['pid']): agent_process._identity(a) for a in rows
                if agent_process.identity_matches(a.get('pid'), agent_process._identity(a))}
     for _, _, state in states:
