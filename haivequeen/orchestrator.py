@@ -170,9 +170,7 @@ def _hive_state(conn, project, plan, state):
 # ---------------------------------------------------------------- git
 
 def _git(cwd, *args, timeout=600, job=None):
-    code, output = _git_run(cwd, *args, timeout=timeout, job=job)
-    action_logs.append(getattr(job, "log_file", None), output)
-    return code, output
+    return _git_run(cwd, *args, timeout=timeout, job=job)
 
 
 def _git_run(cwd, *args, timeout=600, job=None):
@@ -181,26 +179,57 @@ def _git_run(cwd, *args, timeout=600, job=None):
         argv = ["git", "-C", str(cwd)] + list(args)
         if job is not None:
             if job.cancelled:
+                action_logs.append(getattr(job, 'log_file', None), 'Merge cancelled')
                 return 143, "Merge cancelled"
             kwargs = {} if osplat.is_windows() else {"start_new_session": True}
-            with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                   text=True, encoding="utf-8", errors="replace", **kwargs) as proc:
                 job.record_pid(proc.pid)
                 # Cancellation can arrive between the check above and process creation.
                 if job.cancelled:
                     osplat.kill_process_tree(proc.pid)
+                chunks, log_errors = [], []
+                def drain():
+                    for line in proc.stdout:
+                        chunks.append(line)
+                        try:
+                            action_logs.append(getattr(job, 'log_file', None), line)
+                        except OSError as exc:
+                            # A broken journal must never stop draining the child's pipe.
+                            if not log_errors:
+                                log_errors.append(str(exc))
+                reader = threading.Thread(target=drain, daemon=True)
+                reader.start()
+                code = None
                 try:
-                    out, err = proc.communicate(timeout=timeout)
+                    code = proc.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
                     osplat.kill_process_tree(proc.pid)
-                    out, err = proc.communicate()
-                    return 124, out + err + "\ngit command timed out\n"
+                    proc.wait()
+                    code = 124
                 finally:
+                    reader.join()
                     job.pid = None
-                return proc.returncode, (out + err)
+                output = ''.join(chunks)
+                if code == 124:
+                    output += '\ngit command timed out\n'
+                    try:
+                        action_logs.append(getattr(job, 'log_file', None), '\ngit command timed out\n')
+                    except OSError:
+                        pass
+                if log_errors:
+                    output += '\nGit log write failed: ' + log_errors[0] + '\n'
+                return code, output
         done = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
-        return 127, "git could not run: %s" % exc
+        message = "git could not run: %s" % exc
+        if job is not None:
+            job.pid = None
+            try:
+                action_logs.append(getattr(job, 'log_file', None), message)
+            except OSError:
+                pass
+        return 127, message
     return done.returncode, (done.stdout + done.stderr)
 
 
