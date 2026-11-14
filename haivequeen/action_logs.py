@@ -69,7 +69,7 @@ def _write(path, record):
 
 def _decode_record(line):
     record = json.loads(line)
-    if not isinstance(record, dict) or record.get('event') not in ('start', 'output', 'end'):
+    if not isinstance(record, dict) or record.get('event') not in ('start', 'output', 'end', 'execution', 'launcher', 'observer_detached'):
         raise ValueError('Invalid journal record')
     if record['event'] == 'output' and not isinstance(record.get('text'), str):
         raise ValueError('Invalid output record')

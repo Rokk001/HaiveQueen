@@ -327,6 +327,8 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     (r'^Plan state "(.*?)"(?: \(questions (.*)\))?$', lambda m: "Plan-Zustand %s%s" % (m.group(1), " (Fragen %s)" % m.group(2) if m.group(2) else "")),
     (r"^waiting for the build: (.*)$", lambda m: "Wartet auf den Build: " + _german_line(m.group(1))),
     (r"^waiting for provider (\S+): (.*)$", lambda m: "Wartet auf Anbieter %s: %s" % (m.group(1), _german_line(m.group(2)))),
+    (r"^waiting for evidence-based package diagnosis before another repair attempt$", "Wartet auf eine evidenzbasierte Paketdiagnose vor einem weiteren Reparaturversuch"),
+    (r"^remaining packages await diagnosis or its required answer$", "Verbleibende Pakete warten auf die Diagnose oder die erforderliche Antwort"),
     (r"^waiting for the integration place$", "Wartet auf den Integrationsplatz"),
     (r"^completion reported: the check of the result is pending$", "Fertigmeldung liegt vor, die Prüfung des Ergebnisses steht aus"),
     (r"^handing off, Agent processes are still running$", "Übergabe, Agent-Prozesse laufen noch"),

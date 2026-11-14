@@ -6,6 +6,23 @@ from haivequeen import action_logs
 
 
 class ActionLogRecoveryTests(RoundCase):
+    def test_execution_and_launcher_metadata_are_not_corruption(self):
+        path = action_logs.start('testproj', REL, 'Check')
+        metadata = [
+            {'event': 'execution', 'commit': 'abc', 'cwd': 'fixture', 'command': 'check', 'predecessors': []},
+            {'event': 'launcher', 'pid': 123, 'identity': 'fixture', 'completion': 'receipt.json', 'run_id': 'run'},
+            {'event': 'observer_detached', 'pid': 123, 'completion': 'receipt.json', 'running': True},
+        ]
+        for record in metadata:
+            action_logs._write(path, record)
+        action_logs.append(path, 'actual output\n')
+        action_logs.finish(path, 7)
+        self.assertEqual(action_logs.read(path)[1:4], metadata)
+        self.assertEqual(action_logs.output(path), 'actual output\n')
+        page = action_logs.page(path)
+        self.assertEqual(page['output'], 'actual output\n')
+        self.assertEqual(page['end']['exit_code'], 7)
+
     def damaged(self, raw):
         path = action_logs.start('testproj', REL, 'Check')
         action_logs.append(path, 'before\n')

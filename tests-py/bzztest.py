@@ -102,7 +102,7 @@ class RoundCase(unittest.TestCase):
         patcher = mock.patch("haivequeen.platform.process_inaccessible", return_value=False)   # the tests use made-up PIDs that may belong to real system processes
         patcher.start()
         self.addCleanup(patcher.stop)
-        answers = {"reachable": True, "models": [], "interfaces": {cli: {"ok": True} for cli in servers.INTERFACES}}   # the own server of a provider (also a migrated endpoint) answers in these tests
+        answers = {"reachable": True, "status": 200, "models": [], "interfaces": {cli: {"ok": True, "status": 400} for cli in servers.INTERFACES}}   # the own server of a provider (also a migrated endpoint) answers in these tests
         patcher = mock.patch.object(servers, "kept", lambda server: dict(answers, fingerprint=servers.fingerprint(server)))
         patcher.start()
         self.addCleanup(patcher.stop)

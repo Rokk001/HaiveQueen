@@ -218,6 +218,26 @@ class PackageDiagnosisLifecycle(PackageDiagnosis):
             self.review.advance(env, 16384, alive=lambda pid: False)
             self.assertIsNotNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', self.scope()))
 
+    def test_pending_review_runs_while_scheduler_question_is_open(self):
+        from haivequeen import db, hives
+        self.plan('WAITING', [{'id': 'P1', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'codex', '123456')
+        question = db.add_question(self.conn, 'testproj', REL, 'diagnosis-scheduler',
+                                   'The package review has not started.', 'Investigate the scheduler.')
+        self.conn.execute("UPDATE hives SET state='answer',questions_json=? WHERE project=? AND plan_path=?",
+                          (json.dumps([question]), 'testproj', REL))
+        env = self.env()
+        self.review.request(env, REL, 'P1', 'medium')
+        with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-1'), \
+             mock.patch('haivequeen.bees.plan_worktree', return_value=('branch', self.wt)), \
+             mock.patch('haivequeen.loop._min_ram', return_value=0):
+            self.round(alive=lambda pid: False, free_ram=lambda: 16)
+        state = self.review._load(self.conn, 'testproj', REL, 'P1')
+        self.assertEqual(state['phase'], 'running')
+        self.assertIsNone(state.get('authorization'))
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'medium'), 1)
+        self.assertEqual(self.conn.execute('SELECT status FROM questions WHERE id=?', (question,)).fetchone()[0], 'open')
+
     def test_exhausted_package_waits_for_diagnosis_instead_of_stronger_model(self):
         from haivequeen import hives
         self.mock_agent_worktrees()

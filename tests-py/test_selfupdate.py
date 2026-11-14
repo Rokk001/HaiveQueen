@@ -271,7 +271,8 @@ class SpawnTest(SelfUpdateBase):
     def test_command_returns_at_once(self):
         """`self-update` without --worker spawns and prints; it never runs the update itself."""
         with mock.patch.object(selfupdate, "spawn_worker", return_value={"how": "detached"}) as spawn, \
-                mock.patch.object(selfupdate, "run_update") as upd, mock.patch("builtins.print") as pr:
+                mock.patch.object(selfupdate, "run_update") as upd, mock.patch("builtins.print") as pr, \
+                mock.patch.object(selfupdate, "live_folder", return_value=self.live):
             code = cli.main(["self-update"])
         self.assertEqual(code, 0)
         spawn.assert_called_once_with()
@@ -370,7 +371,8 @@ class WaitTest(SelfUpdateBase):
             t.start()
             return {"how": "detached"}
 
-        with mock.patch.object(selfupdate, "spawn_worker", fake_spawn), mock.patch("builtins.print"):
+        with mock.patch.object(selfupdate, "spawn_worker", fake_spawn), mock.patch("builtins.print"), \
+                mock.patch.object(selfupdate, "live_folder", return_value=self.live):
             caller = threading.Thread(target=lambda: selfupdate.cmd_self_update(argparse.Namespace(worker=False), self.conn))
             caller.start()
             caller.join(5)

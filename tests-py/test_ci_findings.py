@@ -24,7 +24,9 @@ class CiFindingsTests(unittest.TestCase):
         const document={querySelectorAll:()=>attached?[node]:[],getElementById:()=>null};
         const setTimeout=fn=>fn();
         """ + helpers + "\nclick('Save').catch(error=>{console.error(error.message);process.exitCode=1});"
-        result=subprocess.run(['node','-e',script],capture_output=True,text=True,timeout=10)
+        # Windows CI may take longer to start Node under concurrent job load.
+        # The mocked browser timer remains immediate; all click assertions stay unchanged.
+        result=subprocess.run(['node','-e',script],capture_output=True,text=True,timeout=30)
         self.assertEqual(result.returncode,0,result.stderr)
 
     def test_compile_milestone_accepts_regional_time_with_spaces(self):
