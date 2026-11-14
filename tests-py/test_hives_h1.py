@@ -794,10 +794,13 @@ class HiveRoundTests(RoundCase):
     # Old elapsed-time stop rules do not create owner questions.
     def test_six_hours_without_integration_does_not_stop_hive(self):
         """Old elapsed-time stop rules do not create owner questions."""
+        from unittest import mock
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
         self.agent("Old", phase="work", package="P1", status="done", started=420, ended=410)
         self.agent("Ada", phase="queen", package="P1", status="running", started=10, pid=1234)
-        self.round(alive=lambda pid: True)
+        # This is a simulated runner. A real CI process can reuse its fixture PID.
+        with mock.patch('haivequeen.agent_process.pid_reused', return_value=False):
+            self.round(alive=lambda pid: True)
         self.assertEqual(self.ag("Ada")["status"], "running")
         self.assertEqual(runtime.list_questions(self.conn, "testproj", status="open"), [])
 

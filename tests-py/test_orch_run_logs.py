@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from bzztest import REL, RoundCase
@@ -100,7 +101,20 @@ class OutputLogs(RoundCase):
         for expected, stall, maximum in ((124, 60, 2), (125, 2, 60)):
             with self.subTest(exit=expected):
                 path = action_logs.start("testproj", REL, "Check")
-                with mock.patch.object(integration.proctree, "tree_cpu_seconds", return_value=0):
+                # Exercise timeout output retention, not Python/shell startup speed.
+                # Start the short deadline only after the fixture output is drained.
+                real_started = time.monotonic()
+                drained_at = None
+                def clock():
+                    nonlocal drained_at
+                    now = time.monotonic()
+                    if drained_at is None and "line-0549 " in output(Path(path)):
+                        drained_at = now
+                    if drained_at is not None:
+                        return now - drained_at
+                    return 0 if now - real_started < 15 else now - real_started
+                with mock.patch.object(integration.proctree, "tree_cpu_seconds", return_value=0), \
+                     mock.patch.object(integration, "time", SimpleNamespace(monotonic=clock, sleep=time.sleep)):
                     code, text = integration._watch_compile(command, str(self.base), stall, maximum, .02, log_file=path)
                 self.assertEqual(code, expected)
                 self.assertIn("line-0000 " + "x"*200, text)
