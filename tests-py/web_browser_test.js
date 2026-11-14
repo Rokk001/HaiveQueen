@@ -14,7 +14,16 @@ window.addEventListener('load', async () => {
 
   const buttons = text => [...document.querySelectorAll('button')].filter(node=>node.textContent===text || node.dataset.tab===text);
 
-  const click = async text => {const node=buttons(text).find(node=>!node.disabled);assert(node,'Missing enabled button: '+text);node.click();await new Promise(resolve=>setTimeout(resolve,20));const dialog=document.getElementById('confirmation-dialog');if(dialog?.open){warning=document.getElementById('confirmation-message').textContent;dialog.querySelectorAll('button')[confirmResult?1:0].click();await new Promise(resolve=>setTimeout(resolve,20));}await wait(()=>!node.disabled);};
+  const click = async text => {
+    const node=buttons(text).find(node=>!node.disabled);assert(node,'Missing enabled button: '+text);
+    node.click();
+    // Actions may load data before opening confirmation. Wait for either outcome,
+    // rather than checking the dialog once after an arbitrary 20 ms delay.
+    await wait(()=>document.getElementById('confirmation-dialog')?.open || !node.disabled);
+    const dialog=document.getElementById('confirmation-dialog');
+    if(dialog?.open){warning=document.getElementById('confirmation-message').textContent;dialog.querySelectorAll('button')[confirmResult?1:0].click();}
+    await wait(()=>!node.disabled);
+  };
 
   const field = path => [...document.querySelectorAll('[data-path]')].find(node=>node.dataset.path===JSON.stringify(path));
 
@@ -236,6 +245,9 @@ window.addEventListener('load', async () => {
 
     await click('Providers');await wait(()=>buttons('Login').length);
     await wait(()=>buttons('Save access token').length);
+    assert(!document.querySelector('.git-connections').open,'Git credentials must start compact');
+    document.querySelector('.git-connections').open=true;
+    document.querySelector('.git-connection').open=true;
     assert(document.body.textContent.includes('One access token is shared'),'Shared token login is not explained');
     assert(!buttons('Sign in in browser').length,'Deferred Git device login is offered');
     assert(!document.querySelector('[aria-label="Registered public OAuth client ID"]'),'Deferred OAuth registration is offered');
@@ -324,7 +336,7 @@ window.addEventListener('load', async () => {
     assert(['Merge','Check','Build','Deploy','Release'].every(name=>document.querySelector('[aria-label="'+name+' location"]').disabled),'Unsupported remote offers provider toggles');
     await click('Releases');await wait(()=>buttons('Publish as full release').length);
     assert(buttons('Publish as full release').length===1,'Full release must not offer promotion');
-    for(const value of ['v2.0.1-dev.3','2026-01-02','a'.repeat(40),'true'])assert(document.body.textContent.includes(value),'Missing release metadata '+value);
+    for(const value of ['v2.0.1-dev.3','2026-01-02','a'.repeat(40),'Prerelease'])assert(document.body.textContent.includes(value),'Missing release metadata '+value);
     await click('Publish as full release');
     requests=await (await fetch('/test-actions')).json();
     const promotion=requests.find(row=>row.action==='releases/promote');
@@ -332,6 +344,7 @@ window.addEventListener('load', async () => {
 
     await click('Questions');await wait(()=>document.querySelector('[data-question]'));
 
+    assert(document.querySelector('[data-question] .copy-output'),'Textarea copy control missing');
     const answer=document.querySelector('[data-question] textarea');answer.value='Proceed';
 
     await click('Answer');

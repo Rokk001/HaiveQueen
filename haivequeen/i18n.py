@@ -797,3 +797,30 @@ GERMAN.update({
     "Ready": "Bereit", "Not ready": "Nicht bereit", "Package": "Paket",
     "Last recorded quota; live quota unavailable": "Letzter gespeicherter Verbrauch; Live-Abfrage nicht verfügbar",
 })
+
+GERMAN.update({'Copy': 'Kopieren',
+ 'Copy text': 'Text kopieren',
+ 'Copied': 'Kopiert',
+ 'Copy failed': 'Kopieren fehlgeschlagen',
+ 'Copy failed. Select the text and copy it manually.': 'Kopieren fehlgeschlagen. Bitte den Text markieren '
+                                                       'und manuell kopieren.',
+ 'Select a project': 'Projekt auswählen',
+ 'Choose a project to see its published releases.': 'Projekt auswählen, um seine veröffentlichten Releases '
+                                                    'anzuzeigen.',
+ 'Could not load releases': 'Releases konnten nicht geladen werden',
+ 'Loading releases…': 'Releases werden geladen…',
+ 'Fetching release history for the selected project.': 'Release-Verlauf des ausgewählten Projekts wird '
+                                                       'abgerufen.',
+ 'No releases yet': 'Noch keine Releases',
+ 'This project has no published releases.': 'Für dieses Projekt wurden noch keine Releases veröffentlicht.',
+ 'Try again': 'Erneut versuchen',
+ 'Prerelease': 'Vorabversion',
+ 'Stable': 'Stabil',
+ 'Git provider login': 'Git-Zugänge',
+ 'One access token is shared by all projects for each Git provider.': 'Pro Git-Anbieter verwenden alle '
+                                                                      'Projekte denselben Zugangstoken.',
+ 'Current method': 'Aktueller Zugang',
+ 'Access token': 'Zugangstoken',
+ 'Existing access': 'Vorhandener Zugang',
+ 'Save access token': 'Zugangstoken speichern',
+ 'HTTPS server origin': 'HTTPS-Serveradresse'})

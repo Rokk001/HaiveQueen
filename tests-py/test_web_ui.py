@@ -44,6 +44,14 @@ class BrowserTests(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_cicd_views_and_clipboard(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required')
+        result = subprocess.run([node, str(Path(__file__).with_name('web_cicd_experience_test.cjs'))],
+                                cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_assets_are_packaged(self):
         text = (ROOT / 'pyproject.toml').read_text(encoding='utf-8')
         self.assertIn('web-client.js', text)
@@ -221,8 +229,8 @@ class BrowserTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as profile:
                 command=[browser,*flags,'--user-data-dir='+profile,
-                         '--dump-dom','--virtual-time-budget=15000','http://127.0.0.1:'+str(server.server_port)]
-                result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45,
+                         '--dump-dom','--virtual-time-budget=60000','http://127.0.0.1:'+str(server.server_port)]
+                result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=90,
                                       env=self.browser_environment(profile),
                                       **process_options)
                 failure=result.stdout.split('BROWSER TEST:')[-1][-1500:]

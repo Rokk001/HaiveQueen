@@ -174,6 +174,40 @@ class Client {
     }
   }
 }
+async function copyOutput(target, document, navigator) {
+  const text=target.tagName==='TEXTAREA'?target.value:(target.innerText??target.textContent);
+  if(navigator?.clipboard?.writeText){try{await navigator.clipboard.writeText(text);return;}catch(_error){/* HTTP or denied clipboard: use the selection fallback. */}}
+  const active=document.activeElement, selection=document.getSelection?.();
+  const ranges=selection?Array.from({length:selection.rangeCount},(_,i)=>selection.getRangeAt(i).cloneRange()):[];
+  const start=active?.selectionStart,end=active?.selectionEnd;
+  const temporary=document.createElement('textarea');temporary.value=text;
+  temporary.style.cssText='position:fixed;left:-10000px;top:0';temporary.setAttribute('aria-hidden','true');
+  // A modal dialog makes body siblings inert, so keep the fallback inside it.
+  const host=target.closest?.('dialog[open]') || document.body;host.append(temporary);
+  try{temporary.select();if(!document.execCommand('copy'))throw Error('Copy failed. Select the text and copy it manually.');}
+  finally{temporary.remove();active?.focus?.({preventScroll:true});if(typeof start==='number')active.setSelectionRange?.(start,end);if(selection){selection.removeAllRanges();for(const range of ranges)selection.addRange(range);}}
+}
+function installCopyButtons(document,navigator,t,notice) {
+  const decorated=new WeakSet();
+  function decorate(root){
+    const targets=[...(root.matches?.('pre,textarea')?[root]:[]),...(root.querySelectorAll?.('pre,textarea')||[])];
+    for(const target of targets){
+      if(decorated.has(target)||!target.isConnected||target.getAttribute('aria-hidden')==='true')continue;
+      decorated.add(target);
+      const bar=document.createElement('div');bar.className='copy-tools';
+      const button=document.createElement('button');button.type='button';button.className='copy-output';
+      const icon=document.createElement('span');icon.className='copy-icon';icon.setAttribute('aria-hidden','true');
+      const label=document.createElement('span');label.textContent=t('Copy');
+      button.setAttribute('aria-label',t('Copy text'));button.title=t('Copy text');button.append(icon,label);bar.append(button);
+      const status=document.createElement('span');status.className='copy-status';status.setAttribute('role','status');bar.append(status);
+      button.onclick=async event=>{event.preventDefault();event.stopPropagation();button.disabled=true;try{await copyOutput(target,document,navigator);status.textContent=t('Copied');}catch(error){status.textContent=t('Copy failed');notice(t(error.message),true);}finally{button.disabled=false;}setTimeout(()=>{status.textContent='';},2500);};
+      target.parentNode.insertBefore(bar,target.tagName==='TEXTAREA'?target.nextSibling:target);
+    }
+  }
+  decorate(document.body);
+  const observer=new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node.nodeType===1)decorate(node);});
+  observer.observe(document.body,{childList:true,subtree:true});return observer;
+}
 function mount(document, bootstrap) {
   const $ = id => document.getElementById(id);
   const t = text => bootstrap.translations[text] || text;
@@ -250,7 +284,7 @@ function mount(document, bootstrap) {
     onUnauthorized:()=>{location.href='/login';}, onError:error=>client.notice(error.message,true),onState:renderState});
   const renderGate=new RenderGate(()=>renderStateNow(client.state));
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
-  let releaseProject='', releaseData=null;
+  let releaseProject='', releaseData=null, releaseError='', releaseRequest=0;
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
   let lastAutomaticCheck=0, automaticChecking=false;
   let dashboardFilter=null;
@@ -603,21 +637,38 @@ function mount(document, bootstrap) {
     select.value=selected || '';select.onchange=()=>onchange(select.value);return select;
   }
   async function loadReleases() {
-    const project=releaseProject;releaseData=null;
-    if(!project){render();return;}
-    try{const data=await client.request('releases?'+new URLSearchParams({project}));if(project===releaseProject){releaseData=data;if(tab==='Releases')render();}}
-    catch(error){client.notice(error.message,true);}
+    const project=releaseProject,request=++releaseRequest;releaseData=null;releaseError='';
+    if(tab==='Releases')render();
+    if(!project)return;
+    try{const data=await client.request('releases?'+new URLSearchParams({project}));if(request===releaseRequest)releaseData=data;}
+    catch(error){if(request===releaseRequest)releaseError=error.message;}
+    finally{if(request===releaseRequest&&tab==='Releases')render();}
   }
   function renderReleases() {
-    const box=section('Releases');box.append(projectSelect(value=>{releaseProject=value;void loadReleases();},releaseProject,false),button('Reload',loadReleases));
-    if(!releaseData){box.append(el('p',t('Loading…')));return;}
-    if(releaseData.reason)box.append(el('p',t(releaseData.reason)));
-    box.append(table(releaseData.releases,['version','date','commit','prerelease'],(cell,row)=>{
-      if(row.prerelease && row.full_tag)cell.append(button('Publish as full release',async()=>{
+    const box=section('Releases');box.classList.add('releases-panel');
+    const toolbar=el('div',undefined,'release-toolbar'),label=el('label',t('Project'));
+    label.append(projectSelect(value=>{releaseProject=value;void loadReleases();},releaseProject,false));
+    toolbar.append(label,button('Reload',loadReleases));box.append(toolbar);
+    const empty=(title,message,bad=false)=>{const state=el('div',undefined,'release-empty');state.setAttribute('role',bad?'alert':'status');state.append(el('h3',t(title)),el('p',t(message),'dim'));box.append(state);};
+    if(!releaseProject){empty('Select a project','Choose a project to see its published releases.');return;}
+    if(releaseError){empty('Could not load releases',releaseError,true);box.append(button('Try again',loadReleases));return;}
+    if(!releaseData){empty('Loading releases…','Fetching release history for the selected project.');return;}
+    const releases=releaseData.releases||[];
+    if(!releases.length){empty('No releases yet',releaseData.reason||'This project has no published releases.');return;}
+    if(releaseData.reason)box.append(el('p',t(releaseData.reason),'dim'));
+    box.append(el('p',releases.length+' '+t('Releases'),'dim'));
+    const list=el('div',undefined,'release-list');box.append(list);
+    for(const row of releases){
+      const card=el('article',undefined,'release-card'),heading=el('div',undefined,'release-heading');
+      heading.append(el('h3',row.version||row.tag),el('span',t(row.prerelease?'Prerelease':'Stable'),row.prerelease?'release-badge warn':'release-badge ok'));card.append(heading);
+      const facts=el('dl',undefined,'release-facts');facts.append(el('dt',t('Date')),el('dd',row.date||'–'),el('dt',t('Commit')));
+      const commit=el('dd',row.commit||'–','release-commit');facts.append(commit);card.append(facts);
+      if(row.prerelease&&row.full_tag)card.append(button('Publish as full release',async()=>{
         const job=await client.action('releases/promote',{project:releaseProject,tag:row.tag,confirmed:true},t('Publish as full release')+' '+row.full_tag+'?');
         if(job){job.title='Publish as full release';jobs.set(job.id,job);renderJob(job);}
       }));
-    }));
+      list.append(card);
+    }
   }
   function renderDashboard() {
     const state=client.state;
@@ -972,18 +1023,20 @@ function mount(document, bootstrap) {
       fields(form,data,[],data,new Set(['providers','projects','buildJobs']));
       form.append(button('Install /bzz',async()=>{const job=await client.action('tools/install');if(job){job.title='Install /bzz';jobs.set(job.id,job);renderJob(job);}}));
     } else if(tab==='Providers') {
-      const git=el('fieldset');git.append(el('legend',t('Git provider login')),
+      const git=el('details',undefined,'git-connections');git.append(el('summary',t('Git provider login')),
         el('p',t('One access token is shared by all projects for each Git provider.')));form.append(git);
       client.request('git-login/providers').then(providers=>{
+        if(!git.isConnected)return;
+        const grid=el('div',undefined,'git-connection-grid');git.append(grid);
         for(const provider of providers){
           const method={device:'Browser sign-in',bearer:'Browser sign-in',token:'Access token',pat:'Access token','existing access':'Existing access'}[provider.method] || provider.method || 'None';
-          const card=el('fieldset');card.append(el('legend',provider.name),el('p',t('Current method')+': '+t(method)));
-          if(provider.error){card.append(el('p',provider.error,'bad'));git.append(card);continue;}
+          const card=el('details',undefined,'git-connection');const summary=el('summary');summary.append(el('strong',provider.name),el('span',t('Current method')+': '+t(method),'dim'));card.append(summary);
+          if(provider.error){card.append(el('p',provider.error,'bad'));grid.append(card);continue;}
           if(provider.status_error)card.append(el('p',provider.status_error,'bad'));
-          const token=el('input');token.type='password';token.autocomplete='off';token.setAttribute('aria-label',t('Access token'));
+          const token=el('input');token.placeholder=t('Access token');token.type='password';token.autocomplete='off';token.setAttribute('aria-label',t('Access token'));
           const origin=el('input');origin.placeholder=t('HTTPS server origin');origin.setAttribute('aria-label',t('HTTPS server origin'));if(provider.origin_required)card.append(origin);
           card.append(token,button('Save access token',async()=>{await client.action('git-login/token',{provider:provider.name,token:token.value,...(provider.origin_required?{origin:origin.value}:{})});token.value='';render();}));
-          git.append(card);
+          grid.append(card);
         }
       }).catch(error=>client.notice(error.message,true));
       data.providers ||= [];
@@ -1093,14 +1146,14 @@ function mount(document, bootstrap) {
   }
   function workflowFields(parent,data,capabilities) {
     const steps=[['merge','Merge'],['check','Check','compileCheck','Compile check command'],['build','Build','buildCommand','Build command'],['deploy','Deploy','deployCommand','Deploy command'],['release','Release','releaseFolder','Release folder']];
-    const group=el('fieldset');group.append(el('legend',t('Way of working')));
+    const group=el('fieldset',undefined,'workflow-settings');group.append(el('legend',t('Way of working')));
     const supported=!!capabilities?.provider;
     if(!supported)group.append(el('p',t('Git provider is not supported for this remote. Only Local is available.')));
     const select=el('select');select.setAttribute('aria-label',t('Way of working'));
     for(const [value,label] of [['local','Local'],['git','Git provider'],['custom','Custom']]){const option=el('option',t(label));option.value=value;if(value!=='local'&&!supported)option.disabled=true;select.append(option);}
     select.value=data.wayOfWorking;select.onchange=()=>{data.wayOfWorking=select.value;if(select.value!=='custom')for(const [step] of steps)data[step+'Mode']=select.value;changed();render();};group.append(select);
     for(const [step,label,field,fieldLabel] of steps){
-      const row=el('fieldset');row.append(el('legend',t(label)));
+      const row=el('fieldset',undefined,'workflow-step');row.append(el('legend',t(label)));
       if(field){const switchLabel=el('label',undefined,'field'),toggle=el('input');toggle.type='checkbox';toggle.checked=!!data[step+'Enabled'];toggle.setAttribute('aria-label',t(label+' on'));toggle.onchange=()=>{data[step+'Enabled']=toggle.checked;changed();render();};switchLabel.append(el('span',t('On')),toggle);row.append(switchLabel);}
       const mode=el('select');mode.setAttribute('aria-label',t(label+' location'));
       for(const [value,text] of [['local','Local'],['git','Git provider']]){const option=el('option',t(text));option.value=value;if(value==='git'&&!supported)option.disabled=true;mode.append(option);}
@@ -1226,11 +1279,11 @@ function mount(document, bootstrap) {
   }
   function renderLogin(run) {
     let panel=$('login-'+run.id);
-    if(!panel){panel=el('section',undefined,'live-panel');panel.id='login-'+run.id;panel.append(el('h2',run.provider+' · '+t('Login')),el('pre'),el('div'));const form=el('form'),input=el('input');input.setAttribute('aria-label',t('Code or input'));input.autocomplete='off';const send=el('button',t('Send'));send.type='submit';form.append(input,send);form.onsubmit=async event=>{event.preventDefault();await runButton(send,async()=>{await client.action('login/input',{id:run.id,text:input.value});input.value='';});};panel.append(form);$('live').append(panel);}
+    if(!panel){panel=el('section',undefined,'live-panel');panel.id='login-'+run.id;panel.append(el('h2',run.provider+' · '+t('Login')),el('pre'),el('div',undefined,'login-links'));const form=el('form'),input=el('input');input.setAttribute('aria-label',t('Code or input'));input.autocomplete='off';const send=el('button',t('Send'));send.type='submit';form.append(input,send);form.onsubmit=async event=>{event.preventDefault();await runButton(send,async()=>{await client.action('login/input',{id:run.id,text:input.value});input.value='';});};panel.append(form);$('live').append(panel);}
     panel.querySelector('pre').textContent=run.output;
-    const links=panel.querySelector('div');links.replaceChildren();
+    const links=panel.querySelector('.login-links');links.replaceChildren();
     for(const url of safeLinks(run.links || [])){const link=el('a',url);link.href=url;link.target='_blank';link.rel='noopener noreferrer';links.append(link,el('br'));}
-    panel.querySelector('input').disabled=!run.running;panel.querySelector('button').disabled=!run.running;
+    panel.querySelector('input').disabled=!run.running;panel.querySelector('form button').disabled=!run.running;
     if(!run.running){links.append(el('p',t('Login finished')+' ('+run.exit+')'));panel.append(button('Close',()=>{panel.remove();loginRuns.delete(run.id);}));}
   }
   function renderJob(job) {
@@ -1261,8 +1314,9 @@ function mount(document, bootstrap) {
       ...Array.from(jobs.values()).filter(job=>job.running&&!job.loading).map(async job=>{job.loading=true;try{const next=await client.request('jobs/status?id='+encodeURIComponent(job.id));next.title=job.title;jobs.set(job.id,next);renderJob(next);}finally{job.loading=false;}})]);
   }
   window.addEventListener('beforeunload',event=>{if(editor?.dirty){event.preventDefault();event.returnValue='';}});
+  if(typeof MutationObserver!=='undefined')installCopyButtons(document,window.navigator,t,(...args)=>client.notice(...args));
   render();void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

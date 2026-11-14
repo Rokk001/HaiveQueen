@@ -781,3 +781,41 @@ progress.ok::-moz-progress-bar { background: #79df9b; }progress.bad::-moz-progre
 .queue-entry-heading > span { white-space:nowrap; font-size:11px; }
 .queue-list small { display:block; margin-top:4px; }
 .queue-branch { color:#a4bdc7; overflow-wrap:anywhere; }
+
+/* CI/CD belongs to the same control room as plans and agents. */
+.git-connections { border:1px solid #293e46; border-radius:6px; margin:0 0 20px; padding:14px 16px; }
+.git-connections > summary { font-weight:600; color:var(--gold); cursor:pointer; }
+.git-connections > p { color:#a4bdc7; }
+.git-connection-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:12px; align-items:start; }
+.git-connection { border:1px solid #293e46; border-radius:5px; padding:12px; min-width:0; }
+.git-connection summary { cursor:pointer; }
+.git-connection summary strong { text-transform:capitalize; }
+.git-connection summary .dim { display:block; margin:6px 0 0 16px; font-size:12px; }
+.git-connection input { display:block; width:100%; margin:12px 0; }
+.git-connection button { width:100%; }
+.release-toolbar { display:flex; align-items:end; flex-wrap:wrap; gap:12px; margin:18px 0; }
+.release-toolbar label { display:grid; gap:8px; flex:1; max-width:420px; color:#a4bdc7; }
+.release-toolbar select { width:100%; }
+.release-empty { padding:48px 20px; text-align:center; border:1px dashed #293e46; border-radius:6px; }
+.release-empty h3 { font-size:20px; color:#e0e7e9; }
+.release-empty[role=alert] h3 { color:#ff7186; }
+.release-list { display:grid; gap:12px; }
+.release-card { padding:18px; border:1px solid #293e46; border-radius:6px; background:#0b171d; }
+.release-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.release-heading h3 { margin:0; font-size:20px; overflow-wrap:anywhere; }
+.release-badge { border:1px solid currentColor; border-radius:20px; padding:3px 10px; font-size:12px; }
+.release-facts { display:grid; grid-template-columns:80px minmax(0,1fr); gap:8px; margin:16px 0; }
+.release-facts dt { color:#a4bdc7; }.release-facts dd { margin:0; overflow-wrap:anywhere; }
+.release-commit { font-family:Consolas,monospace; }
+.workflow-step { border-radius:6px; background:#0b171d; padding:16px; margin:16px 0; }
+.workflow-step legend { font-size:15px; font-weight:600; }
+.workflow-step > select { width:100%; max-width:420px; }
+.copy-tools { display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:6px 0; flex:none; }
+label.field > .copy-tools { grid-column:2; padding:0; }
+.copy-output { display:inline-flex; align-items:center; gap:7px; border-radius:5px; min-height:32px; padding:5px 10px; background:#101d23; }
+.copy-icon { width:15px; height:15px; display:inline-block; position:relative; }
+.copy-icon::before,.copy-icon::after { content:''; position:absolute; width:9px; height:10px; border:1.5px solid currentColor; border-radius:2px; }
+.copy-icon::before { left:0; top:0; }.copy-icon::after { left:4px; top:4px; background:#101d23; }
+.copy-status { font-size:12px; color:#78dfa1; }
+.entity-console > .copy-tools,.live-panel > .copy-tools { padding:6px 16px; }
+@media(max-width:700px){label.field > .copy-tools { grid-column:1; }.release-empty { padding:28px 12px; }}
