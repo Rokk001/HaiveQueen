@@ -36,6 +36,31 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('gh release download "$source" --dir dist', full)
         self.assertIn('Pre-release and full release commits differ', full)
 
+    def test_maintenance_tags_skip_publishing_but_annotated_releases_continue(self):
+        full = self.workflow.split('  full-release:', 1)[1]
+        block = full.split("          python - <<'PY'\n", 1)[1].split('\n          PY', 1)[0]
+        script = '\n'.join(line[10:] for line in block.splitlines())
+        self.assertIn("if: steps.tag-kind.outputs.publish == 'true'", full)
+        with tempfile.TemporaryDirectory() as folder:
+            def git(*args):
+                subprocess.run(['git', *args], cwd=folder, check=True, capture_output=True)
+            git('init')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                'commit', '--allow-empty', '-m', 'Fixture')
+            git('tag', 'v0.2.24')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                'tag', '-a', 'v0.2.25', '-m', 'HaiveQueen prerelease: v0.2.25-rc.1')
+            output = Path(folder) / 'output'
+            summary = Path(folder) / 'summary'
+            for tag, expected in [('v0.2.24', 'false'), ('v0.2.25', 'true')]:
+                output.write_text('')
+                result = subprocess.run([sys.executable, '-c', script], cwd=folder,
+                    env=dict(os.environ, RELEASE_TAG=tag, GITHUB_OUTPUT=str(output),
+                             GITHUB_STEP_SUMMARY=str(summary)), capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output.read_text().strip(), 'publish=' + expected)
+            self.assertIn('Maintenance tag', summary.read_text())
+
     def test_tag_version_is_used_for_package_and_invalid_tags_fail(self):
         block = self.workflow.split("          python - <<'PY'\n", 1)[1].split('\n          PY', 1)[0]
         script = '\n'.join(line[10:] for line in block.splitlines())
