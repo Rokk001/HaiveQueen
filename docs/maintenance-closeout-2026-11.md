@@ -443,3 +443,23 @@ This section supersedes the historical delivery boundary above for the P1 audit 
 | A-25 | `758c1a9` | Journal errors retain a bounded fallback without interrupting pipe draining. `test_log_drain_failure` uses an isolated output-heavy helper and injected storage failure; the final output and actual exit code remain available. Durable persistence on a full disk is not promised. |
 
 Command scope: `test_api_redirect_security`, `test_inbox.InboxTest`, `test_stop_identity`, `test_descendant_identity`, `test_hive_schedule_lock`, `test_selfupdate.RollbackQuiescenceTest`, `test_stop_reservation`, `test_log_drain_failure`. Process termination was mocked; only test-owned HTTP endpoints and output helpers were started. No production process or database was changed by verification. Remaining P2/P3 completion reconciliation is tracked separately.
+
+## A-08 through A-18 completion verification against 9b92510
+
+Inspected the current request handlers, state locking, transaction boundaries and decision selection against the original audit acceptance criteria. The following evidence supersedes historical pending descriptions for these findings. The targeted rerun passed 36 tests; no full suite, build, live provider request or production process operation was performed.
+
+| Finding | Fix commit | Protection and focused evidence |
+|---|---|---|
+| A-08 | `4db1272` | Login admission precedes password hashing, with at most two concurrent hashes and five attempts per minute. Three selected `SecurityRoutes` regressions cover admission, concurrent slot release, budget expiry and normal LAN HTTP login. |
+| A-09 | `add3eea` | Accepted control sockets have a read timeout, independent of the accept timeout. `test_web_control_timeout` leaves connections empty or with incomplete headers and verifies subsequent authenticated status, reload and stop on an isolated service. |
+| A-10 | `3b9b91b` | Login input writes occur outside the shared lock, with one pending writer per session and a bounded response wait. `test_login_input_budget` verifies responsive status and close plus refusal to duplicate a pending write. Process termination is mocked. |
+| A-11 | `eab1208` | Short cross-process state transactions merge the latest persisted state after lookup; an older check cannot replace a newer result. `test_update_state_race` covers an intervening install and reversed check completion. |
+| A-12 | `4539908` | Offers record their repository, and both request and worker validate it against installation origin before lifecycle changes. `test_update_origin` verifies matching SSH/HTTPS origins and refusal before worker launch or lock acquisition on mismatch. |
+| A-13 | `dfcc5b0` | Validate all rejected package IDs before answering and commit all writes in one database transaction. `test_answer_atomic` covers invalid IDs/types, valid batches and a late write failure with complete rollback. |
+| A-14 | `f00e378` | Direct accept/reject uses the coordinated durable file/database transaction. `test_owner_atomic` covers missing files, late database errors, locked publication, successful rejection and isolated process exit before/after database commit. Recovery preserves exactly one decision. |
+| A-15 | `507e48c` | Registration and machine-settings publication share the durable transaction. `test_settings_atomic` verifies rollback on save/prepare failure and recoverable publication after commit without duplicate registration. |
+| A-16 | `0d421f8` | Registration tracks names and normalized workspaces accepted earlier in the same batch. The preceding A-16 section records both failing-before regressions and seven passing focused tests; code remains unchanged since that verification. |
+| A-17 | `9a88fed` | Status/header writes retain BOM and original line endings. The preceding A-17 section records eight encoding/newline combinations and eleven passing focused tests; code remains unchanged since that verification. |
+| A-18 | `2b1bddc` | Actual owner/coordinator answers and active decisions compete by recency; automatic duplicate references are not new authority. `test_ask_triage` covers newer decisions, newer answers, same-second precedence, superseded decisions and fresh owner-check requirements. |
+
+Rerun scope: `test_web_control_timeout`, `test_login_input_budget`, `test_update_state_race`, `test_update_origin`, `test_answer_atomic`, `test_owner_atomic`, `test_settings_atomic`, `test_ask_triage` (33 tests), plus the three login-budget methods in `test_web_security_findings.SecurityRoutes`. The isolated control endpoint's stop action concerns only its test service. No installed service is contacted.
