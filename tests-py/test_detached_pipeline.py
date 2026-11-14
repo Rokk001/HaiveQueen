@@ -48,10 +48,23 @@ class DetachedPipelineTests(unittest.TestCase):
                     self.assertIsNone(job.process.poll())
                     finish.touch()
                     job.process.wait(timeout=30)
-                    state = {'job': {'step': step, 'token': 'token', 'file': str(result), 'pid': job.pid}}
-                    with patch.object(orchestrator, 'save_step_log'):
-                        self.assertEqual(orchestrator._harvest(None, SimpleNamespace(name='project'), 'plan', state),
-                                         (0, 'finished'))
+                    state = {'step': step, 'steps': {step: 'running'}, 'ran': [],
+                             'job': {'step': step, 'token': 'token', 'file': str(result),
+                                     'pid': job.pid, 'head': 'old-revision'}}
+                    env = SimpleNamespace(name='project')
+                    # A successor has no in-memory job, and must advance the
+                    # persisted pipeline from the detached worker's result.
+                    with patch.dict(orchestrator.JOBS, {}, clear=True), \
+                         patch.object(orchestrator, 'commands', return_value={step: command}), \
+                         patch.object(orchestrator, 'chain', return_value=['Build', 'Deploy', 'Close']), \
+                         patch.object(orchestrator, 'save_step_log'), patch.object(orchestrator, 'save'), \
+                         patch.object(orchestrator, '_log'), patch.object(orchestrator, '_save_last'):
+                        self.assertEqual(orchestrator._command(None, env, 'plan', state, base, step, 4096), 'next')
+                    self.assertEqual(state['steps'][step], 'done')
+                    self.assertEqual(state['step'], 'Deploy' if step == 'Build' else 'Close')
+                    self.assertNotIn('job', state)
+                    if step == 'Deploy':
+                        self.assertEqual(state['deployed'], 'old-revision')
                 finally:
                     finish.touch()
                     if job.process and job.process.poll() is None:
