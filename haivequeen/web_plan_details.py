@@ -1,7 +1,37 @@
 """Package descriptions and their recorded progress for the plan reader."""
 from dataclasses import asdict
+from pathlib import Path
+import re
 
 from . import db, hives, plans, runtime
+from . import platform as osplat
+
+
+def substeps(prompt, reported):
+    section = re.search(r'^Steps:\s*\n(.*?)^Paths:', prompt, re.M | re.S)
+    if not section:
+        return []
+    items = re.findall(r'^\d+\.\s+(.*?)(?=^\d+\.\s|\Z)', section[1], re.M | re.S)
+    count = re.fullmatch(r'(\d+)/(\d+)', reported or '')
+    known = bool(count and int(count[2]) == len(items))
+    return [{'number':i+1, 'text':re.sub(r'^\d+\.\s+', '', text.strip()),
+             'status':('done' if i < int(count[1]) else 'pending') if known else 'unknown'}
+            for i, text in enumerate(items)]
+
+
+def package_prompt(project, package, agents):
+    newest = max((a for a in agents if a.get('package') == package and a.get('phase') == 'bee'),
+                 key=lambda a: a.get('id', 0), default=None)
+    if not newest:
+        return ''
+    root = osplat.runs_dir().resolve()
+    path = (root / project / newest['name'] / 'prompt.md').resolve()
+    if not path.is_relative_to(root):
+        return ''
+    try:
+        return path.read_text(encoding='utf-8-sig')
+    except OSError:
+        return ''
 
 
 def packages(conn, project, plan, text):
@@ -32,5 +62,6 @@ def packages(conn, project, plan, text):
                        'depends_on':package.get('depends_on') or [],
                        'requirements':definition.get('requirements') or [],
                        'verify':package.get('verify', ''), 'class':package.get('class') or package.get('cls', ''),
+                       'substeps':substeps(package_prompt(project, pid, agents), steps.get(pid, {}).get('step', '')),
                        **steps.get(pid, {})})
     return result

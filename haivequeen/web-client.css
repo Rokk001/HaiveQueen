@@ -742,3 +742,15 @@ progress.ok::-moz-progress-bar { background: #79df9b; }progress.bad::-moz-progre
   .provider-form input,.provider-form select,.provider-form textarea { font-size:16px; }
   .provider-form .capability-threshold { grid-template-columns:20px minmax(0,1fr) 60px 70px; gap:5px; font-size:12px; }
 }
+
+.package-substeps { margin: 12px 0; border-top: 1px solid var(--edge); padding-top: 12px; }
+.package-substeps summary { color: var(--cyan); cursor: pointer; }
+.package-substeps ol { list-style: none; padding: 0; margin: 12px 0 0; }
+.package-substeps li { display: grid; grid-template-columns: 25px minmax(0,1fr); gap: 5px 9px; padding: 10px 0; border-top: 1px solid #233139; line-height: 1.5; }
+.package-substeps li small { grid-column: 2; color: var(--muted); }
+.substep-number { color: var(--gold); }.package-substeps .done .substep-number,.package-substeps .done small { color: #79df9b; }
+
+.model-limit progress { border-radius: 0; -webkit-mask-image: repeating-linear-gradient(to right,#000 0,#000 calc(10% - 2px),transparent calc(10% - 2px),transparent 10%); mask-image: repeating-linear-gradient(to right,#000 0,#000 calc(10% - 2px),transparent calc(10% - 2px),transparent 10%); }
+
+.row-menu::before { content: ''; display: inline-block; width: 15px; height: 15px; vertical-align: middle; background: currentColor; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9' fill='none' stroke='black' stroke-width='1.8'/%3E%3Cpath d='M12 11v6' stroke='black' stroke-width='1.8'/%3E%3Ccircle cx='12' cy='7.5' r='1.1'/%3E%3C/svg%3E") center/contain no-repeat; }
+.row-menu:hover,.row-menu:focus-visible { color: var(--cyan); }

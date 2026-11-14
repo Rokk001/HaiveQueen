@@ -704,7 +704,7 @@ function mount(document, bootstrap) {
 
         const label=filterLink(row.name,options.hierarchy?(['queen','orch'].includes(row.kind)?'queen':'agent'):'plan',row);
 
-        const menu=button('⋯',()=>options.hierarchy?openAgent(row):openPlan(row));menu.className='row-menu';menu.setAttribute('aria-label',t('Actions')+' · '+row.name);
+        const menu=button('⋯',()=>options.hierarchy?openAgent(row):openPlan(row));menu.className='row-menu';menu.textContent='';menu.title=t('Open details');menu.setAttribute('aria-label',t('Open details')+' · '+row.name);
 
         label.classList.add('row-name');
 
@@ -762,7 +762,7 @@ function mount(document, bootstrap) {
 
           });
 
-          menu.className='row-menu';menu.setAttribute('aria-label',t('Actions')+' · '+t({apiary:'Project',queen:'Queen',hive:'Plan'}[key])+' · '+row[key]);td.append(menu);
+          menu.className='row-menu';menu.textContent='';menu.title=t('Open details');menu.setAttribute('aria-label',t('Open details')+' · '+t({apiary:'Project',queen:'Queen',hive:'Plan'}[key])+' · '+row[key]);td.append(menu);
 
         }
 
@@ -1177,6 +1177,14 @@ function mount(document, bootstrap) {
       const [label,tone]=labels[item.status]||[item.status,'dim'];
       head.append(el('code',item.id),el('span',t(label),'package-status '+tone));card.append(head,el('h4',item.title));
       if(item.step){const [n,m]=item.step.split('/').map(Number);const progress=el('div',undefined,'package-progress');progress.append(meter(n,m,item.step),el('span',t('Last reported steps')+' '+item.step));card.append(progress);}
+      const breakdown=el('details',undefined,'package-substeps');
+      breakdown.append(el('summary',t('Individual steps')+(item.substeps?.length?' · '+item.substeps.length:'')));
+      const list=el('ol');
+      for(const step of item.substeps||[]){
+        const line=el('li',undefined,step.status),label={done:'Completed',pending:'Not yet reported complete',unknown:'No matching progress report'}[step.status]||step.status;
+        line.append(el('span',step.status==='done'?'✓':String(step.number),'substep-number'),el('span',step.text),el('small',t(label)));list.append(line);
+      }
+      breakdown.append(item.substeps?.length?list:el('p',t('No saved step descriptions available for this package.'),'dim'));card.append(breakdown);
       if(item.task)card.append(el('p',item.task,'package-task'));
       if(item.reason)card.append(el('p',item.reason,'warn'));
       const facts=el('dl',undefined,'package-facts');
