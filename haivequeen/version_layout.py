@@ -46,6 +46,13 @@ def install_version(root, version, source):
 
 def set_active(root, version):
     """Atomically change the version selected by the stable launcher."""
+    from . import filetxn
+    with filetxn.locked():
+        _set_active_locked(root, version)
+
+
+def _set_active_locked(root, version):
+    """Publish the active pointer while holding the lifetime coordination lock."""
     root, version = Path(root), _version(version)
     if not (version_dir(root, version) / "haivequeen" / "cli.py").is_file():
         raise FileNotFoundError("version is not installed: " + version)

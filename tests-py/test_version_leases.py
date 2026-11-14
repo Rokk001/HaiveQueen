@@ -1,12 +1,49 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from haivequeen import config, version_leases
+from haivequeen import config, version_leases, version_layout
 
 
 class VersionLeasesTests(unittest.TestCase):
+    def test_activation_and_collection_are_serialized(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / 'install'
+            for name in ('old', 'new'):
+                cli = root / 'versions' / name / 'haivequeen' / 'cli.py'
+                cli.parent.mkdir(parents=True)
+                cli.touch()
+            (root / 'active-version').write_text('old', encoding='utf-8')
+            entered, proceed, collected = threading.Event(), threading.Event(), threading.Event()
+            original = version_layout.os.replace
+            def replace(source, target):
+                if Path(target).name == 'active-version':
+                    entered.set()
+                    self.assertTrue(proceed.wait(5))
+                return original(source, target)
+            def activate():
+                version_layout.set_active(root, 'new')
+            def collect():
+                version_leases.collect(root)
+                collected.set()
+            with patch.object(config, 'config_dir', return_value=base / 'data'), patch.object(version_layout.os, 'replace', side_effect=replace):
+                activating = threading.Thread(target=activate)
+                activating.start()
+                self.assertTrue(entered.wait(5))
+                collecting = threading.Thread(target=collect)
+                collecting.start()
+                try:
+                    self.assertFalse(collected.wait(.2))
+                finally:
+                    proceed.set()
+                    activating.join(5)
+                    collecting.join(5)
+                self.assertTrue(collected.is_set())
+                self.assertTrue((root / 'versions' / 'new').is_dir())
+
     def test_collect_retains_active_live_and_pending(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
