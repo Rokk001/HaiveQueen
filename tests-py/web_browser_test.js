@@ -143,7 +143,7 @@ window.addEventListener('load', async () => {
 
     assert(!document.querySelector('[data-panel="Activity"]'),'Activity panel remains');
 
-    assert(document.querySelector('.dashboard-primary').children.length===2,'Left column must contain only two panels');
+    assert(document.querySelector('.dashboard-primary').children.length===1,'Left column must contain the unified Hives panel');
 
     assert(document.querySelector('[data-tab="Questions"] .question-badge')?.textContent==='2','Question badge missing');
 

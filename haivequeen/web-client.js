@@ -522,7 +522,7 @@ function mount(document, bootstrap) {
       else if(options.hierarchy && isPackagePlaceholder(row) && ['ctx','tokens','runtime','model'].includes(key))td.append(el('span','–','dim'));
       else if(key==='name' && options.compact){
         const label=filterLink(row.name,options.hierarchy?(['queen','orch'].includes(row.kind)?'queen':'agent'):'plan',row);
-        const menu=button('⋯',()=>options.hierarchy?openAgent(row):openPlan(row));menu.className='row-menu';menu.textContent='';menu.title=t('Open details');menu.setAttribute('aria-label',t('Open details')+' · '+row.name);
+        const menu=button('⋯',()=>options.hierarchy?openAgent(row):openPlan(row));menu.className='row-menu';menu.textContent='';menu.title=t('Open details');menu.setAttribute('aria-label',t('Open details')+' · '+(options.hierarchy && row.kind==='queen'?t('Queen')+' · ':'')+row.name);
         label.classList.add('row-name');
         if(options.hierarchy){
           const parent=rows.some(other=>['queen','orch'].includes(other.kind) && other!==row && (other.apiary||other.project)===(row.apiary||row.project) && other.plan_path===row.plan_path);

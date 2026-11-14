@@ -247,3 +247,12 @@ class RoundCase(unittest.TestCase):
 
 if __name__ == "__main__":
     print(json.dumps({"ok": True}))
+
+
+def verified_tool_evidence(case, available):
+    """Explicit tool-discovery fixture for routing tests; never enable undeclared tools."""
+    from unittest import mock
+    patcher = mock.patch('haivequeen.mcp_setup.status', side_effect=lambda provider: {
+        'available': available.get(provider.get('name'), []), 'servers': {}})
+    patcher.start()
+    case.addCleanup(patcher.stop)

@@ -13,6 +13,11 @@ def settings(*providers):
 class SelectTest(unittest.TestCase):
     """Unit tests of the selection with invented limit values (the limits argument replaces every real source)."""
 
+    def setUp(self):
+        from bzztest import verified_tool_evidence
+        verified_tool_evidence(self, {'G': ['Image generation']})
+
+
     def pick(self, provs, cls="medium", needs=(), free=None, limits=None, avoid="", prefer=""):
         """Name of the provider that gets a task, or 'none'."""
         ps = sch.get_providers(settings(*provs))

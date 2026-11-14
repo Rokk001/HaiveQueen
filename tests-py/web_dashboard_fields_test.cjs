@@ -4,6 +4,7 @@ const source=fs.readFileSync(require.resolve('../haivequeen/web-client.js'),'utf
 class Element {
  constructor(tag,text='',cls=''){this.tag=tag;this.textContent=text;this.className=cls;this.children=[];this.dataset={};this.classList={add:()=>{}};}
  append(...nodes){this.children.push(...nodes);}
+ prepend(...nodes){this.children.unshift(...nodes);}
  setAttribute(k,v){this[k]=v;}
 }
 const el=(...args)=>new Element(...args);
@@ -18,3 +19,6 @@ assert(find(rendered,n=>n.textContent==='Model A').length===1);
 assert(find(rendered,n=>n.filterType==='project').length===2);
 assert(source.includes("['name','apiary','progress','status','runtime']"),'Hive includes project');
 console.log('Dashboard missing values and project column passed');
+
+const hierarchy=table(rows,['name'],null,{compact:true,hierarchy:true});
+assert.equal(find(hierarchy,n=>n['aria-label']==='Open details · Queen · Ada').length,1,'Queen details retain their accessible role label');

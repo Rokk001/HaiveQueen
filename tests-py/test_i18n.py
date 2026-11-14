@@ -208,7 +208,7 @@ class GermanTextsTest(unittest.TestCase):
     def test_settings_errors(self):
         with self.assertRaises(ValueError) as caught:
             settings.apply_build({}, "x", "1", "2", cores=8)
-        self.assertEqual(str(caught.exception), "CPU-Kerne pro Build: eine ganze Zahl wird erwartet")
+        self.assertEqual(str(caught.exception), "Gesamtes CPU-Budget für Builds und Checks: eine ganze Zahl wird erwartet")
 
     def test_typed_settings_errors(self):
         with self.assertRaises(ValueError) as caught:

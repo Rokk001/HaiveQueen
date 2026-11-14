@@ -200,9 +200,9 @@ class SnapshotTest(unittest.TestCase):
 
     # The queue panel counts questions and queued rows.
     def test_queue(self):
-        """One queued row labelled ODP#1 and no open question."""
-        self.assertEqual((self.snap["queue"]["open"], self.snap["queue"]["queued"]), (0, 1))
-        self.assertEqual(self.snap["queue"]["labels"], ["ODP#1"])
+        """Integration queue records are not pending dashboard plans."""
+        self.assertEqual((self.snap["queue"]["open"], self.snap["queue"]["queued"]), (0, 0))
+        self.assertEqual(self.snap["queue"]["labels"], [])
 
     # The window shows what the overview data holds.
 

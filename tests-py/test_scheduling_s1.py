@@ -16,6 +16,12 @@ ROOT = Path(__file__).resolve().parent.parent
 class SlotAndProviderChoiceTests(RoundCase):
     """Database-backed rounds and Agent starts."""
 
+    def setUp(self):
+        super().setUp()
+        from bzztest import verified_tool_evidence
+        verified_tool_evidence(self, {'codex': ['Image generation'], 'gemini': ['Image generation']})
+
+
     def limits(self, **used):
         """Make the quota reserve of the providers known: name -> used percent, all with the same reset."""
         path = self.base / 'limits.json'

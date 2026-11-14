@@ -12,6 +12,8 @@ from haivequeen import bees, cli, hives
 class ProviderWaitF2(RoundCase):
     def setUp(self):
         super().setUp()
+        from bzztest import verified_tool_evidence
+        verified_tool_evidence(self, {"codex": ["Image generation"]})
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)

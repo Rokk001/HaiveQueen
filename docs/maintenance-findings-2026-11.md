@@ -36,7 +36,7 @@ Scope: the next-fix findings list, authorized CI repairs, dashboard consolidatio
 ## Additional authorized fixes
 
 - CI: remove obsolete tmux smoke job; canonicalize Windows temporary roots to avoid 8.3/long-path mismatches; accept regional milestone times with spaces; wait correctly when browser actions replace their button.
-- Dashboard: one Hives section groups each plan with HQ, Queen and agent processes. The project is shown once on the plan. Child groups can collapse. The queue lists only unstarted queued/submitted/draft plans, without integration duplicates. Missing model, context and Queen values use compact accessible icons with hover text.
+- Dashboard: one `Hives` section groups each plan with HQ, Queen and agent processes. The project is shown once on the plan. Child groups can collapse. The queue lists only unstarted queued/submitted/draft plans, without integration duplicates. Missing model, context and Queen values use compact accessible icons with hover text.
 - Login: bounded attempts and concurrent password hashing; generic unexpected API error responses.
 - Settings: provider API keys are masked in reads and preserved during unrelated saves, including legacy configurations. Explicit clearing remains possible; renamed masked entries require re-entry.
 - Git credentials: Windows writes use user-bound DPAPI; legacy files remain readable and migrate at the next normal save. Existing production files were not rewritten. POSIX writes set owner-only permissions before publishing the replacement.

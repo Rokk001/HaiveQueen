@@ -251,7 +251,7 @@ class MigrationTests(unittest.TestCase):
         return scheduler.get_providers({"providers": [{"name": "p", "protocol": "claude", "slots": 1, "classes": {"medium": {"model": "m"}}, **extra}]})[0]
 
     def test_existing_provider_gains_no_capability_it_did_not_select(self):
-        self.assertEqual(self.old(capabilities=["images"])["capabilities"], ["Image generation", "Coding", "Queen"])
+        self.assertEqual(self.old(capabilities=["images"])["capabilities"], ["Coding", "Queen"])
         self.assertEqual(self.old(capabilities=["build"])["capabilities"], ["Build", "Coding", "Queen"])
 
     def test_existing_provider_gets_no_package_for_a_capability_it_did_not_select(self):
