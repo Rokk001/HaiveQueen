@@ -242,5 +242,65 @@ class AgentFindsOrchTest(RoundCase):
         self.assertEqual(Path(marker.read_text(encoding="utf-8")), new / "haivequeen" / "cli.py")
 
 
+    def test_old_queen_starts_version_bound_agent_after_activation(self):
+        """A real old-version Queen calls its CLI after activation and starts an old-version Agent."""
+        import json
+        from haivequeen import hives
+        root = self.base / "install"
+        old, new = root / "versions" / "old", root / "versions" / "new"
+        for version in (old, new):
+            shutil.copytree(ROOT / "haivequeen", version / "haivequeen", ignore=shutil.ignore_patterns("__pycache__"))
+        for version in (old, new):
+            shutil.copytree(ROOT / "roles", version / "roles")
+        pointer = root / "active-version"
+        pointer.write_text("old", encoding="utf-8")
+        def git(*args):
+            subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True, timeout=30)
+        git("init", "-b", "main")
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "initial")
+        git("branch", "feature/test")
+        self.plan("RUNNING", [{"id": "P1", "class": "medium"}], branch="feature/test", worktree=str(self.base / "plan"))
+        hives.create(self.conn, "testproj", REL, "claude", "123456")
+        runtime.upsert_agent(self.conn, "testproj", "Q-1", {"status": "starting", "phase": "queen", "provider": "claude", "plan_path": REL, "cwd": str(self.base / "plan"), "person": "Queen"})
+        gate, queen_result, bee_result = (self.base / n for n in ("gate", "queen-result", "bee-result"))
+        script = self.base / "fake_cli.py"
+        script.write_text(
+            'import json, os, pathlib, subprocess, time\n'
+            'base=pathlib.Path(os.environ["FAKE_MARK"]).parent\n'
+            'if os.environ["BZZ_AGENT"] == "Q-1":\n'
+            ' pathlib.Path(os.environ["FAKE_FOUND"]).touch()\n'
+            ' while not (base / "gate").exists(): time.sleep(.05)\n'
+            ' args=[os.environ["BZZ_AGENT_PYTHON"], "-I", os.environ["BZZ_AGENT_CLI"], "agent", "start", "--project", "testproj", "--plan", os.environ["TEST_PLAN"], "--package", "P1", "--class", "medium", "--name", "Bee", "--task", "work", "--steps", json.dumps(["work"]), "--no-subagents"]\n'
+            ' result=subprocess.run(args, capture_output=True, text=True)\n'
+            ' (base / "queen-result").write_text(json.dumps([result.returncode, result.stdout, result.stderr]))\n'
+            'else: (base / "bee-result").write_text(os.environ.get("BZZ_AGENT_CLI", ""))\n'
+            'print(json.dumps({"type":"result", "is_error":False, "result":"Done."}))\n', encoding="utf-8")
+        os.environ["TEST_PLAN"] = REL
+        self.addCleanup(os.environ.pop, "TEST_PLAN", None)
+        # The saved provider is read independently by the old CLI process.
+        cmd = self.base / ("fake-claude.cmd" if os.name == "nt" else "fake-claude.sh")
+        cfg = self.base / "cfg" / "config.toml"
+        cfg.write_text("slots = 4\nramReserveMb = 0\n[[providers]]\nname = 'claude'\nprotocol = 'claude'\ncommand = '%s'\nargs = []\nslots = 4\nbeeMode = 'process'\ncapabilities = ['Coding']\n[providers.classes.medium]\nmodel = 'test'\neffort = 'medium'\n" % str(cmd).replace(chr(92), "/"), encoding="utf-8")
+        prompt = self.base / "prompt.md"
+        prompt.write_text("TASK\nTest\n", encoding="utf-8")
+        spec = {"name": "Q-1", "provider": "claude", "protocol": "claude", "plan": REL, "package": "", "phase": "queen", "cwd": str(self.repo), "prompt_file": str(prompt)}
+        self.env().run_dir("Q-1").mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(loop, "TOOLS_DIR", old):
+            loop.launch_headless(self.env(), spec)
+        deadline = time.monotonic() + 60
+        while not self.found.exists() and time.monotonic() < deadline: time.sleep(.1)
+        self.assertTrue(self.found.exists(), "Queen did not start")
+        pointer.write_text("new", encoding="utf-8")
+        gate.touch()
+        while not queen_result.exists() and time.monotonic() < deadline: time.sleep(.1)
+        self.assertTrue(queen_result.exists(), "Queen did not call agent start")
+        code, stdout, stderr = json.loads(queen_result.read_text(encoding="utf-8"))
+        self.assertEqual(code, 0, stdout + stderr)
+        result = json.loads(stdout)
+        self.assertTrue(result.get("started"), result)
+        while not bee_result.exists() and time.monotonic() < deadline: time.sleep(.1)
+        self.assertTrue(bee_result.exists(), "Agent did not start")
+        self.assertEqual(Path(bee_result.read_text(encoding="utf-8")), old / "haivequeen" / "cli.py")
+
 if __name__ == "__main__":
     unittest.main()
