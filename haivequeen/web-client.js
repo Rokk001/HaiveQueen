@@ -550,6 +550,7 @@ function mount(document, bootstrap) {
         const slotLine=el('div',undefined,'slot-line');slotLine.append(cells,el('small',`${slots.used||0} / ${slots.total||0}`+(slots.extra?' +'+slots.extra:'')));
         capacity.append(limitHelp(slotLine,t('Agent slots'),[slotTip,slots.hover,slots.reason].filter(Boolean).join(' ')));
       }
+      if(slots.offline){item.append(name,explanation,capacity);box.append(item);continue;}
       if(slots.running)capacity.append(el('small',slots.running));if(slots.reason)capacity.append(el('small',slots.reason,'bad'));
       const windows=el('div',undefined,'quota-windows');
       if(weekly.text){const week=el('div');if(weekly.pct!=null)week.append(meter(weekly.pct,100,weekly.text,weekly.level));week.append(el('small',weekly.text));windows.append(limitHelp(week,t('Weekly usage'),[t('Used quota in the 7-day window; the date is its reset time.'),weekly.text,reserve.age].filter(Boolean).join(' ')));}
@@ -653,7 +654,7 @@ function mount(document, bootstrap) {
         }
       }
       else if(['model','queen'].includes(key) && (!row[key] || ['\u2013','-'].includes(row[key]))){td.append(missingValue(key==='model'?'No model':'No Queen assigned'));}
-      else if(key==='tokens')td.append(el('span',tokens(row.tin)+' / '+tokens(row.tout),'cyan'));
+      else if(key==='tokens')td.append(el('span',tokens(row.tin)+' / '+tokens(row.tout),'cyan token-values'));
       else if(key==='bees_running')td.append(el('span',`${row.bees_running||0}/${row.bees_total??row.bees_running??0}`));
       else if(key==='task' && row.kind==='orch' && orchestrationFor(row,client.state.hives)){td.append(orchestrationView(orchestrationFor(row,client.state.hives),row));}
       else if(key==='task' && row.step){td.classList.add('task-progress');const inline=el('div',undefined,'task-inline');inline.append(el('span',row.task),meter((row.step_frac||0)*100,100,row.step),el('small',row.step,'cyan'));td.append(inline);}

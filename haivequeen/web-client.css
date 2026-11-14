@@ -960,7 +960,7 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .hives-list { overflow:auto; scrollbar-gutter:stable; }
 /* A single aligned list, with hierarchy carried by indentation rather than nested tables. */
 .hives-tree { list-style:none; margin:0; padding:0; }
-.hive-tree-heading,.hive-tree-cells > div > div > div { display:grid; grid-template-columns:minmax(180px,1.5fr) 55px minmax(310px,2fr) 45px 65px minmax(90px,1fr) 65px; gap:8px; align-items:center; }
+.hive-tree-heading,.hive-tree-cells > div > div > div { display:grid; grid-template-columns:minmax(180px,1.5fr) 64px minmax(230px,2fr) 90px 104px minmax(90px,1fr) 65px; gap:8px; align-items:center; }
 .hive-tree-heading { position:sticky; top:0; z-index:1; padding:7px 8px; background:#0d171c; color:#9db2bb; font-size:11px; }
 .hive-tree-row { position:relative; border-bottom:1px solid #26383f; min-width:875px; }
 .hive-tree-row[hidden] { display:none; }
@@ -968,6 +968,8 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .hive-tree-cells [data-column=name] { padding-left:calc(var(--depth)*12px + 20px); position:relative; min-width:0; }
 .hive-tree-cells [data-column=name]::before { content:''; position:absolute; left:calc(var(--depth)*12px + 8px); top:-5px; height:calc(50% + 5px); width:10px; border-left:1px solid #3b5059; border-bottom:1px solid #3b5059; }
 .hive-tree-cells [data-column] { min-width:0; overflow-wrap:anywhere; }
+.token-values { white-space:nowrap; overflow-wrap:normal; font-variant-numeric:tabular-nums; }
+.hive-tree-cells [data-column=ctx] { white-space:nowrap; overflow-wrap:normal; font-variant-numeric:tabular-nums; }
 .hive-tree-cells .row-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
 .hive-tree-cells .tree-branch { color:#9db2bb; }
 .hive-tree-toggle { position:absolute; left:calc(var(--depth)*12px); top:2px; z-index:1; width:24px; height:30px; min-height:30px; padding:0; border:0; background:transparent; color:#a9bec7; }

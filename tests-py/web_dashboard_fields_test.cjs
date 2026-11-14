@@ -23,3 +23,14 @@ console.log('Dashboard missing values and project column passed');
 
 const hierarchy=table(rows,['name'],null,{compact:true,hierarchy:true});
 assert.equal(find(hierarchy,n=>n['aria-label']==='Open details · Queen · Ada').length,1,'Queen details retain their accessible role label');
+
+const metrics=table([{kind:'queen',tin:309200,tout:2600,ctx:18000,ctx_limit:100000}],['tokens','ctx']);
+assert.equal(find(metrics,n=>n.className==='cyan token-values').length,1,'Token pair must have a dedicated nonwrapping layout');
+
+const limitsCode=source.slice(source.indexOf('  function limitsView('),source.indexOf('  function planProgress('));
+const limitsView=new Function('el','t','limitHelp','meter',limitsCode+'return limitsView;')(el,x=>x,(node,title,description)=>{node.help=description;return node;},()=>el('progress'));
+const reason='The configured server does not answer';
+const limits=limitsView([{name:'Local',model:'Local model',reserve:{text:'+99%',level:'ok'},slots:{offline:'offline',reason},weekly:{text:'no limit'}}]);
+assert.equal(find(limits,n=>n.textContent===reason).length,0,'Offline reason belongs in details, not the overview');
+assert.equal(find(limits,n=>n.textContent==='no limit').length,0,'Offline overview needs only its status');
+assert.equal(find(limits,n=>n.textContent==='offline'&&n.help===reason).length,1,'Offline details remain available');
