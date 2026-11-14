@@ -206,7 +206,10 @@ window.addEventListener('load', async () => {
 
     const metric=document.querySelector('[data-tile="bees"]');
 
-    metric.focus();assert(!document.querySelector('#tile-preview').hidden,'Metric focus preview missing');
+    document.dispatchEvent(new Event('scroll'));
+    metric.focus();assert(document.querySelector('#tile-preview').hidden,'Metric focus must not open details');
+    metric.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'}));
+    assert(document.querySelector('#tile-preview').hidden,'Metric hover must not open details');
 
     metric.click();await wait(()=>document.querySelector('#detail').open);
 

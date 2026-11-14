@@ -44,6 +44,14 @@ class BrowserTests(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_tooltips_do_not_interrupt_scrolling(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required')
+        result = subprocess.run([node, str(Path(__file__).with_name('web_tooltip_scroll_test.cjs'))],
+                                cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_grouped_hives_and_missing_value_icons(self):
         node = shutil.which('node')
         if not node:

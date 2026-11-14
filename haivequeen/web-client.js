@@ -395,23 +395,23 @@ function mount(document, bootstrap) {
     box.append(table(display));return box;
   }
   const tilePreview=el('aside',undefined,'tile-preview');tilePreview.hidden=true;tilePreview.id='tile-preview';tilePreview.setAttribute('role','tooltip');document.body.append(tilePreview);
-  let previewTimer;
+  let previewTimer, scrollingPreview=false;
+  function hideTilePreview(){clearTimeout(previewTimer);tilePreview.hidden=true;}
+  // A stationary pointer must not activate help as content scrolls beneath it.
+  document.addEventListener('scroll',()=>{scrollingPreview=true;hideTilePreview();},{capture:true,passive:true});
+  document.addEventListener('pointermove',()=>{scrollingPreview=false;},{passive:true});
   function closeTilePreview(){clearTimeout(previewTimer);previewTimer=setTimeout(()=>{tilePreview.hidden=true;},180);}
   tilePreview.onpointerenter=()=>clearTimeout(previewTimer);tilePreview.onpointerleave=closeTilePreview;
-  document.addEventListener('keydown',event=>{if(event.key==='Escape')tilePreview.hidden=true;});
-  function previewTile(node,title,key){
-    clearTimeout(previewTimer);tilePreview.replaceChildren(el('h2',title),tileContent(key,client.state?.overlays?.[key]));
-    const rect=node.getBoundingClientRect();tilePreview.style.top=Math.min(rect.bottom+6,window.innerHeight-180)+'px';tilePreview.style.left=Math.max(8,Math.min(rect.left,window.innerWidth-760))+'px';tilePreview.hidden=false;
-  }
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')hideTilePreview();});
   function showTile(title,key) {
-    tilePreview.hidden=true;overlay={title,tile:key,value:client.state?.overlays?.[key]};renderDetail();if(!$('detail').open)$('detail').showModal();
+    hideTilePreview();overlay={title,tile:key,value:client.state?.overlays?.[key]};renderDetail();if(!$('detail').open)$('detail').showModal();
   }
   function limitHelp(node,title,text){
     if(!text)return node;
     node.classList.add('limit-help');node.tabIndex=0;node.setAttribute('role','button');node.setAttribute('aria-label',title);node.dataset.help=text;
     const show=()=>{clearTimeout(previewTimer);tilePreview.replaceChildren(el('h2',title),el('p',text));tilePreview.hidden=false;const r=node.getBoundingClientRect();tilePreview.style.left=Math.max(8,Math.min(r.left,window.innerWidth-tilePreview.offsetWidth-8))+'px';tilePreview.style.top=Math.max(8,Math.min(r.bottom+6,window.innerHeight-tilePreview.offsetHeight-8))+'px';};
-    node.onpointerenter=show;node.onpointerleave=closeTilePreview;node.onfocus=show;node.onblur=closeTilePreview;
-    node.onclick=()=>{tilePreview.hidden=true;detail(title,text);};node.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();node.click();}};
+    node.onpointerenter=event=>{if(event.pointerType==='mouse'&&!scrollingPreview){clearTimeout(previewTimer);previewTimer=setTimeout(show,600);}};node.onpointerleave=closeTilePreview;node.onfocus=()=>{if(!scrollingPreview)show();};node.onblur=closeTilePreview;
+    node.onclick=()=>{hideTilePreview();detail(title,text);};node.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();node.click();}};
     return node;
   }
   let stepLogTimer;
@@ -750,8 +750,7 @@ function mount(document, bootstrap) {
     const tiles=el('div',undefined,'tiles');
     for(const item of dashboardMetrics(state.tiles||{},tokens)){
       const tile=item.key,title=t(item.label),metric=button('',()=>showTile(title,tile));
-      metric.dataset.tile=tile;metric.setAttribute('aria-haspopup','dialog');metric.setAttribute('aria-describedby','tile-preview');
-      metric.onpointerenter=event=>{if(event.pointerType==='mouse')previewTile(metric,title,tile);};metric.onpointerleave=closeTilePreview;metric.onfocus=()=>previewTile(metric,title,tile);metric.onblur=closeTilePreview;
+      metric.dataset.tile=tile;metric.setAttribute('aria-haspopup','dialog');
       const icon=el('span',undefined,'dashboard-icon icon-'+item.icon);icon.setAttribute('aria-hidden','true');
       const content=el('span',undefined,'metric-copy');content.append(el('span',title,'metric-label'),el('strong',t(item.value)),el('small',t(item.note)));
       metric.append(icon,content);tiles.append(metric);
