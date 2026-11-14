@@ -208,15 +208,67 @@ class VersionLeasesTests(unittest.TestCase):
             (root / 'versions' / 'new').mkdir()
             class Process:
                 pid = 123
+            entered, proceed, collected = threading.Event(), threading.Event(), threading.Event()
             def spawn():
-                self.assertEqual(version_leases.collect(root), [])
+                entered.set()
+                self.assertTrue(proceed.wait(5))
                 return Process()
+            def collect():
+                version_leases.collect(root)
+                collected.set()
             with patch.object(config, 'config_dir', return_value=base / 'data'), patch.object(version_leases.platform, 'process_identity', return_value='identity'):
-                process = version_leases.launch(version, spawn)
-                self.assertEqual(process.pid, 123)
+                result = []
+                launching = threading.Thread(target=lambda: result.append(version_leases.launch(version, spawn)))
+                launching.start()
+                self.assertTrue(entered.wait(5))
+                collecting = threading.Thread(target=collect)
+                collecting.start()
+                try:
+                    self.assertFalse(collected.wait(.2))
+                finally:
+                    proceed.set()
+                    launching.join(5)
+                    collecting.join(5)
+                self.assertTrue(collected.is_set())
+                self.assertEqual(result[0].pid, 123)
                 self.assertEqual(version_leases.collect(root), [])
                 record = next(iter(version_leases._load(root).values()))
                 self.assertEqual(record['pid'], 123)
+
+    def test_fixed_launcher_serializes_spawn_with_collection(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cli = root / 'versions' / 'old' / 'haivequeen' / 'cli.py'
+            cli.parent.mkdir(parents=True)
+            cli.touch()
+            (root / 'active-version').write_text('old', encoding='utf-8')
+            entered, proceed, collected = threading.Event(), threading.Event(), threading.Event()
+            class Process:
+                pid = 123
+                def wait(self):
+                    return 0
+            def spawn(*args, **kwargs):
+                entered.set()
+                self.assertTrue(proceed.wait(5))
+                return Process()
+            def collect():
+                version_leases.collect(root)
+                collected.set()
+            with patch.object(stable_launcher, '__file__', str(root / 'launcher.py')), \
+                 patch.object(stable_launcher.subprocess, 'Popen', side_effect=spawn):
+                launching = threading.Thread(target=stable_launcher.main)
+                launching.start()
+                self.assertTrue(entered.wait(5))
+                collecting = threading.Thread(target=collect)
+                collecting.start()
+                try:
+                    self.assertFalse(collected.wait(.2))
+                finally:
+                    proceed.set()
+                    launching.join(5)
+                    collecting.join(5)
+                self.assertTrue(collected.is_set())
+                self.assertTrue(cli.exists())
 
     def test_interrupted_spawn_keeps_reservation_for_possible_child(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -83,19 +83,15 @@ def main():
         leases = _load(root)
         leases[token] = {'version': version, 'pid': None, 'identity': None}
         _save(root, leases)
-    # A spawn exception can leave a child running before its handle is returned.
-    # Retain the pending lease until recovery can prove the child is gone.
-    process = subprocess.Popen([sys.executable, "-I", str(cli), *sys.argv[1:]])
-    # Publishing the PID lets recovery remove the lease once the OS confirms
-    # that the child is gone, even when this launcher dies while waiting.
-    # If publication fails, leave the pending reservation in place.
-    try:
-        with lifetime_lock(root):
+        # Keep the lock through spawn and publication so collection cannot
+        # mistake the interval before Popen for an abandoned reservation.
+        process = subprocess.Popen([sys.executable, "-I", str(cli), *sys.argv[1:]])
+        try:
             leases = _load(root)
             leases[token]['pid'] = process.pid
             _save(root, leases)
-    except Exception:
-        pass
+        except Exception:
+            pass
     result = process.wait()
     with lifetime_lock(root):
         leases = _load(root)

@@ -44,15 +44,19 @@ def _save(root, value):
 
 def reserve(root, version):
     """Create a durable reservation before launching a process."""
-    version = _version(version)
     with lifetime_lock(root):
-        if not version_dir(root, version).is_dir():
-            raise FileNotFoundError(version)
-        leases = _load(root)
-        token = uuid.uuid4().hex
-        leases[token] = {'version': version, 'pid': None, 'identity': None}
-        _save(root, leases)
-        return token
+        return _reserve_locked(root, version)
+
+
+def _reserve_locked(root, version):
+    version = _version(version)
+    if not version_dir(root, version).is_dir():
+        raise FileNotFoundError(version)
+    leases = _load(root)
+    token = uuid.uuid4().hex
+    leases[token] = {'version': version, 'pid': None, 'identity': None}
+    _save(root, leases)
+    return token
 
 
 def publish(root, token, pid):
@@ -138,16 +142,20 @@ def reserve_for_path(path):
 
 def launch(path, popen, *args, **kwargs):
     """Reserve before spawning and bind the record to the resulting process."""
-    reservation = reserve_for_path(path)
-    # A spawn call may be interrupted after creating a child but before
-    # returning its handle. Keep the pending lease when the outcome is unknown.
-    process = popen(*args, **kwargs)
-    if reservation:
+    path = Path(path).resolve()
+    if path.parent.name != 'versions' or not (path.parent.parent / 'active-version').is_file():
+        return popen(*args, **kwargs)
+    root = path.parent.parent
+    # Keep the lock through spawn and publication. Otherwise a collector could
+    # scan an empty process table after reservation but before process creation.
+    with lifetime_lock(root):
+        token = _reserve_locked(root, path.name)
+        process = popen(*args, **kwargs)
         try:
-            publish(*reservation, process.pid)
+            leases = _load(root)
+            leases[token].update(pid=int(process.pid), identity=platform.process_identity(process.pid))
+            _save(root, leases)
         except Exception:
-            # The already-started process must remain managed by its caller.
-            # Its pending reservation protects the version until recovery.
             import logging
             logging.exception("Could not publish version lease; reservation retained")
-    return process
+        return process
