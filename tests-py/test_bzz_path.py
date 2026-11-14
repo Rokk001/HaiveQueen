@@ -298,6 +298,11 @@ class AgentFindsOrchTest(RoundCase):
             ' args=[os.environ["BZZ_AGENT_PYTHON"], "-I", os.environ["BZZ_AGENT_CLI"], "agent", "start", "--project", "testproj", "--plan", os.environ["TEST_PLAN"], "--package", "P1", "--class", "medium", "--name", "Bee", "--task", "work", "--steps", json.dumps(["work"]), "--no-subagents"]\n'
             ' result=subprocess.run(args, capture_output=True, text=True)\n'
             ' (base / "queen-result").write_text(json.dumps([result.returncode, result.stdout, result.stderr]))\n'
+            'elif os.environ["BZZ_AGENT"] == "Existing":\n'
+            ' (base / "existing-started").touch()\n'
+            ' while not (base / "gate").exists(): time.sleep(.05)\n'
+            ' result=subprocess.run([os.environ["BZZ_AGENT_PYTHON"], "-I", os.environ["BZZ_AGENT_CLI"], "--help"], capture_output=True)\n'
+            ' (base / "existing-result").write_text(os.environ["BZZ_AGENT_CLI"] + "\\n" + str(result.returncode))\n'
             'else: (base / "bee-result").write_text(os.environ.get("BZZ_AGENT_CLI", ""))\n'
             'while not (base / "release-jobs").exists(): time.sleep(.05)\n'
             'print(json.dumps({"type":"result", "is_error":False, "result":"Done."}))\n', encoding="utf-8")
@@ -325,8 +330,14 @@ class AgentFindsOrchTest(RoundCase):
         self.assertTrue((self.base / "old-core-round").exists(), "old core did not start")
         with mock.patch.object(loop, "TOOLS_DIR", old):
             loop.launch_headless(self.env(), spec)
+            runtime.upsert_agent(self.conn, "testproj", "Existing", {"status": "starting", "phase": "bee", "provider": "claude", "plan_path": REL, "person": "Existing"})
+            existing = dict(spec, name="Existing", phase="bee", package="P1")
+            self.env().run_dir("Existing").mkdir(parents=True, exist_ok=True)
+            loop.launch_headless(self.env(), existing)
         while not self.found.exists() and time.monotonic() < deadline: time.sleep(.1)
         self.assertTrue(self.found.exists(), "Queen did not start")
+        while not (self.base / "existing-started").exists() and time.monotonic() < deadline: time.sleep(.1)
+        self.assertTrue((self.base / "existing-started").exists(), "existing Agent did not start before activation")
         pointer.write_text("new", encoding="utf-8")
         gate.touch()
         while not queen_result.exists() and time.monotonic() < deadline: time.sleep(.1)
@@ -338,6 +349,11 @@ class AgentFindsOrchTest(RoundCase):
         while not bee_result.exists() and time.monotonic() < deadline: time.sleep(.1)
         self.assertTrue(bee_result.exists(), "Agent did not start")
         self.assertEqual(Path(bee_result.read_text(encoding="utf-8")), old / "haivequeen" / "cli.py")
+        while not (self.base / "existing-result").exists() and time.monotonic() < deadline: time.sleep(.1)
+        self.assertTrue((self.base / "existing-result").exists(), "existing Agent did not continue after activation")
+        cli, code = (self.base / "existing-result").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(Path(cli), old / "haivequeen" / "cli.py")
+        self.assertEqual(code, "0")
         self.assertIsNone(core.poll(), "old core ended before its round was released")
         (self.base / "release-core").touch()
         core.wait(timeout=30)
@@ -347,6 +363,7 @@ class AgentFindsOrchTest(RoundCase):
         seen = (self.base / "new-core-seen").read_text(encoding="utf-8")
         self.assertIn("('Q-1', 'running')", seen)
         self.assertIn("('Bee', 'running')", seen)
+        self.assertIn("('Existing', 'running')", seen)
         (self.base / "release-jobs").touch()
 
 if __name__ == "__main__":
