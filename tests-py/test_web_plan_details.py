@@ -42,3 +42,22 @@ class PlanDetailsTests(RoundCase):
         runtime.append_event(self.conn, 'testproj', 'P1 step 1/2 starting', kind='note', agent='New', mirror='none')
         item = web_plan_details.packages(self.conn, 'testproj', REL, (self.repo / REL).read_text())[0]
         self.assertEqual([s['status'] for s in item['substeps']], ['current', 'pending'])
+
+    def test_report_status_distinguishes_current_from_explicit_completion(self):
+        from haivequeen import runtime
+        self.plan(packages=[{'id':'P1','title':'First task'}])
+        self.agent('Worker', phase='bee', package='P1', status='running')
+        folder = self.env().run_dir('Worker')
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / 'prompt.md').write_text('Steps:\n1. Inspect\n2. Validate\n3. Report\nPaths: test\n', encoding='utf-8')
+        for message, expected in [
+            ('P1 step 2/3: starting validation', 'current'),
+            ('P1 step 2/3: starting validation; preparation completed', 'current'),
+            ('P1 step 2/3: not completed', 'current'),
+            ('P1 step 2/3: completed', 'done'),
+            ('P1 step 2/3 done: validation passed', 'done'),
+        ]:
+            with self.subTest(message=message):
+                runtime.append_event(self.conn, 'testproj', message, kind='note', agent='Worker', mirror='none')
+                item = web_api.execute(self.conn, 'plan/detail', {'project':'testproj','plan':REL})['packages'][0]
+                self.assertEqual([s['status'] for s in item['substeps']], ['done', expected, 'pending'])

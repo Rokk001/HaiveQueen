@@ -405,3 +405,9 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 
 - Resolve `agentStallSeconds` through the established machine/project settings merge, matching other runner settings. A project override wins; explicit zero disables stall reporting, and an absent override retains the machine value and existing default.
 - Three regression tests failed before the fix. Four focused runner tests pass with isolated fake CLIs: project enablement, project disablement, a longer project threshold and machine fallback. Every helper finishes normally; stall reporting never terminates it.
+
+## A-35: Distinguish the current step from completed work
+
+- The initial current/done distinction was implemented in `1330d20`. Verification found a remaining false positive: a current-step note mentioning completed preparation elsewhere in its text marked the current step done.
+- Require the completion status immediately after the step count (allowing punctuation), rather than treating any completion word in the description as evidence. Explicit negative completion reports remain current; mismatched definitions remain unknown.
+- The new API-level regression failed before this refinement. All four focused plan-detail tests pass, covering starting work, incidental completion text, negation, explicit completion and replacement-agent progress isolation.

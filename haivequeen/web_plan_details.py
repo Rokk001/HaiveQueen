@@ -62,7 +62,7 @@ def packages(conn, project, plan, text):
         attempt_notes = [n for n in notes if newest and n['agent'] == newest['name']]
         attempt_steps = hives.package_steps(conn, project, plan, [pid], agents, attempt_notes).get(pid, {})
         report = attempt_steps.get('task', '')
-        completed = bool(re.search(r'\b(?:done|completed|finished|erledigt|abgeschlossen)\b', report, re.I)
+        completed = bool(re.match(r'^\s*[:;,.\-\u2013\u2014]*\s*(?:done|completed|finished|erledigt|abgeschlossen)\b', report, re.I)
                          and not re.search(r'\b(?:not|never|nicht|noch nicht)\b', report, re.I))
         result.append({'id':pid, 'title':package.get('title') or pid, 'status':status,
                        'agent':(active or {}).get('person') or (active or {}).get('name') or record.get('agent', ''),
