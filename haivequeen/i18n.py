@@ -657,6 +657,8 @@ GERMAN = {
     'The command that compiles the code and runs the tests before integration; empty: no compile check.': 'Der Befehl, der den Code kompiliert und vor der Integration die Tests ausführt; leer: keine Kompilierprüfung.',
     'Reads AGENTS.md and CLAUDE.md of the Git remote named upstream (last fetch) or of the upstream folder.': 'Liest AGENTS.md und CLAUDE.md des Git-Remotes namens upstream (letzter Fetch) oder des Upstream-Ordners.',
     'Queen class': 'Queen-Klasse',
+    'Question / diagnosis agent class': 'Klasse des Frage- und Diagnose-Agenten',
+    'The class used to review technical questions; model and effort come from the provider settings for this class.': 'Die Klasse zur Pruefung technischer Fragen; Modell und Effort stammen aus den Anbieter-Einstellungen dieser Klasse.',
     'Agents per Queen': 'Agenten pro Queen',
     'The model class of the Queens (light, medium or heavy).': 'Die Modellklasse der Queens (light, medium oder heavy).',
     'How many Agents a Queen may have running at the same time.': 'Wie viele Agenten eine Queen gleichzeitig laufen haben darf.',

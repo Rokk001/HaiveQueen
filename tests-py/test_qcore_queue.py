@@ -580,7 +580,7 @@ class LiveQueue(OrchCase):
             self.end_fixer(self.fixers()[0], verification_command='git ls-files --error-unmatch fixed.txt')
             self.failed.clear()
             self.finished.update((REL, step) for step in ("Check", "Build", "Deploy"))
-            drive(lambda: self.state()["step"] == "Push")
+            drive(lambda: self.state()["phase"] == "pipeline" and self.state()["step"] == "Push")
             self.assertEqual(orchestrator._ahead(self.conn, "testproj", REL), [OTHER])
             self.release_workers()
             drive(lambda: self.state() is None and self.state(OTHER) is None)

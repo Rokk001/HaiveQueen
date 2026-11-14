@@ -33,7 +33,16 @@ class SharedRepair(OrchCase):
         self.assertEqual(self.state(OTHER)['phase'], 'shared-repair')
         self.assertEqual(len(self.fixers()), 2)
         prompt = (self.env().run_dir(self.fixers()[-1]['name']) / 'prompt.md').read_text(encoding='utf-8')
-        self.assertIn(OTHER, prompt)
+        # The prompt references existing evidence instead of embedding all plans.
+        groups = self.state()['shared_causes']
+        self.assertTrue(groups)
+        import json
+        from haivequeen import runtime
+        self.assertTrue(any(OTHER in json.loads(runtime.kv_get(self.conn, 'testproj', key))['members']
+                            for key in groups))
+        for key in groups:
+            self.assertIn(key, prompt)
+        self.assertIn('bzz kv get', prompt)
         self.commit(self.pwt, 'second-fix.txt')
         self.end_fixer(self.fixers()[-1])
         for _ in range(4):

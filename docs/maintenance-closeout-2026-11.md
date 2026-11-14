@@ -229,7 +229,7 @@ agent is reused without starting an additional agent. Otherwise a diagnosis agen
 reviews the failure instead of automatically asking the owner for an instruction.
 Its prompt includes the failed-run reference, commit and bounded evidence previews;
 existing read-only CLI sources retain the full history and active decisions.
-The fix and diagnosis role instructions live beside Queen and Bee in roles/.
+The fix and diagnosis role instructions live beside the Queen and Agent roles in roles/.
 The plan is referenced rather than embedded, and no duplicate evidence file is created.
 It must report concrete observations and either a justified technical next action
 or the specific product decision, permission or external prerequisite it lacks.
