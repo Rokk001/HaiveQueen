@@ -321,3 +321,10 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Require exit zero plus a nonempty model text event and step completion; error events, tool calls, incomplete output, timeouts and unrecognized CLIs cannot release an offline provider.
 - Regression tests first reproduced false recovery, then cover actual recheck state transitions, configured model/environment arguments, incomplete/error responses and missing-model refusal. No live provider credentials or model requests were used in verification.
 - CLI syntax references: https://opencode.ai/docs/cli/commands/ and https://kilo.ai/docs/code-with-ai/platforms/cli-reference . JSON event handling follows the existing agent runner parser.
+
+## A-22: Absolute Codex quota deadline
+
+- Enforce the shared absolute deadline before consuming each response, even when unrelated notifications keep the queue nonempty.
+- Bound the response queue to 32 entries, use deadline-aware backpressure and stop enqueueing during cleanup. The reader owns stdout so cleanup cannot block on another thread's read lock.
+- Bound every helper wait, including after kill. Only the metadata helper created by this request is terminated.
+- Three focused regressions failed before the fix (deadline bypass, unbounded queue and unbounded final wait). Isolated real helper processes additionally verify notification floods, silent output, successful handshakes and reader/process cleanup; no live provider or running application process is used.
