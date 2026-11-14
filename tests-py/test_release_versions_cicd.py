@@ -13,6 +13,23 @@ class TagVersions(unittest.TestCase):
             releases.prerelease_tag(['v1.0.0-dev.1'], 'dev')
         self.assertEqual(releases.prerelease_tag([], 'dev', start='1.2.3'), 'v1.2.3-dev.1')
 
+    def test_prerelease_number_continues_across_postfix_changes(self):
+        tags = ['v1.4.0', 'v1.4.1-dev.1', 'v1.4.1-preview.2',
+                'v1.4.1-release-candidate.5', 'v1.4.2-dev.99',
+                'v1.4.1-bad_postfix.90', 'v1.4.1-preview.6.extra']
+        for postfix in ('dev', 'preview', 'nightly'):
+            with self.subTest(postfix=postfix):
+                self.assertEqual(releases.prerelease_tag(tags, postfix),
+                                 'v1.4.1-%s.6' % postfix)
+
+    def test_requested_and_start_versions_share_postfix_counter(self):
+        self.assertEqual(releases.prerelease_tag(
+            ['v1.0.0', 'v2.0.0-dev.3'], 'preview', requested='2.0.0'),
+            'v2.0.0-preview.4')
+        self.assertEqual(releases.prerelease_tag(
+            ['v2.0.0-dev.3'], 'preview', start='2.0.0'),
+            'v2.0.0-preview.4')
+
     def test_invalid_postfix_and_start_rejected(self):
         for kwargs in ({'postfix': 'bad value', 'start': '1.0.0'}, {'postfix': 'dev', 'start': '01.0.0'}):
             with self.assertRaises(ValueError):
