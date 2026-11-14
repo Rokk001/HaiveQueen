@@ -11,7 +11,13 @@ from haivequeen import db, hives, inbox, orchestrator, runtime, version_layout
 
 
 class LiveCoreHandoverTest(RoundCase):
-    def test_real_core_handover_starts_successor_after_releasing_lock(self):
+    def test_real_core_handover_adopts_build(self):
+        self._handover('Build')
+
+    def test_real_core_handover_adopts_deploy(self):
+        self._handover('Deploy')
+
+    def _handover(self, step):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in ('old', 'new'):
@@ -42,7 +48,8 @@ def round_(conn, machine, envs, **kwargs):
         (base / 'seen').write_text(repr([tuple(row) for row in rows]))
 with patch.object(loop, 'run_round', side_effect=round_), patch.object(loop, 'daily_export'), \\
      patch.object(proctree, 'sweep'), patch.object(version_leases, 'collect', return_value=[]), \\
-     patch.object(orchestrator, '_push', return_value=None), patch.object(loop, 'active_count', return_value=0):
+     patch.object(orchestrator, '_push', return_value=None), patch.object(orchestrator, '_close', return_value=False), \
+     patch.object(loop, 'active_count', return_value=0):
     loop.run_loop(conn, {'providers': [], 'projects': [], 'roundMinutes': 0.01}, rounds=1)
 conn.close()
 (base / (version + '-finished')).touch()
@@ -51,7 +58,7 @@ conn.close()
         version_layout.set_active(root, 'old')
         self.plan('IN_PROGRESS', branch='feature', worktree=str(self.wt))
         with (self.repo / '.haivequeen' / 'project.toml').open('a', encoding='utf-8') as settings:
-            settings.write('buildCommand = "test-build"\n')
+            settings.write('%sCommand = "test-command"\n' % step.lower())
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         result = self.base / 'build-result.json'
         started, finish = self.base / 'build-started', self.base / 'finish-build'
@@ -63,9 +70,9 @@ conn.close()
         command = '"%s" "%s" "%s" "%s"' % (sys.executable, worker, started, finish)
         build_job = orchestrator.Job('handover-build')
         with patch.object(orchestrator, '__file__', str(root / 'versions' / 'old' / 'haivequeen' / 'orchestrator.py')):
-            orchestrator._start_detached_work(build_job, {}, 'Build', command, self.wt, None, result)
-        state = {'phase': 'pipeline', 'step': 'Build', 'placed': True, 'ran': [],
-                 'steps': {'Build': 'running'}, 'job': {'step': 'Build', 'token': 'handover-build',
+            orchestrator._start_detached_work(build_job, {}, step, command, self.wt, None, result)
+        state = {'phase': 'pipeline', 'step': step, 'placed': True, 'ran': [],
+                 'steps': {step: 'running'}, 'job': {'step': step, 'token': 'handover-build',
                  'file': str(result), 'pid': build_job.pid, 'head': 'old-revision'}}
         orchestrator.save(self.conn, 'testproj', REL, state)
         self.conn.execute("UPDATE hives SET state='integrating' WHERE project=? AND plan_path=?", ('testproj', REL))
@@ -134,8 +141,10 @@ conn.close()
             self.assertEqual(check['status'], 'open')
             self.assertTrue(all(job.poll() is None for job in jobs))
             adopted = orchestrator.load(self.conn, 'testproj', REL)
-            self.assertEqual(adopted['steps']['Build'], 'done')
-            self.assertEqual(adopted['step'], 'Push')
+            self.assertEqual(adopted['steps'][step], 'done')
+            self.assertEqual(adopted['step'], 'Push' if step == 'Build' else 'Close')
+            if step == 'Deploy':
+                self.assertEqual(adopted['deployed'], 'old-revision')
             self.assertNotIn('job', adopted)
         finally:
             finish.touch()
