@@ -293,9 +293,23 @@ function mount(document, bootstrap) {
     const footer=el('div',undefined,'confirmation-actions');
     const cancel=el('button',t('Cancel')),approve=el('button',t('Confirm'));
     cancel.type=approve.type='button';approve.className='confirm-primary';
-    cancel.onclick=()=>confirmation.close('cancel');approve.onclick=()=>confirmation.close('confirm');footer.append(cancel,approve);
+    footer.append(cancel,approve);
     confirmation.replaceChildren(title,text,footer);confirmation.returnValue='cancel';
-    return new Promise(resolve=>{confirmation.addEventListener('close',()=>resolve(confirmation.returnValue==='confirm'),{once:true});confirmation.showModal();cancel.focus();});
+    return new Promise(resolve=>{
+      let settled=false;
+      const finish=accepted=>{
+        if(settled)return;settled=true;
+        confirmation.removeEventListener('close',closed);confirmation.removeEventListener('cancel',cancelled);
+        if(confirmation.open)confirmation.close(accepted?'confirm':'cancel');
+        resolve(accepted);
+      };
+      const closed=()=>{if(!confirmation.open)finish(confirmation.returnValue==='confirm');};
+      const cancelled=event=>{event.preventDefault();finish(false);};
+      // Resolve button actions immediately, even when rendering delays the close event.
+      cancel.onclick=()=>finish(false);approve.onclick=()=>finish(true);
+      confirmation.addEventListener('close',closed);confirmation.addEventListener('cancel',cancelled);
+      confirmation.showModal();cancel.focus();
+    });
   }
   function animateHeader(){
     const canvas=$('honeycomb');if(!canvas)return;

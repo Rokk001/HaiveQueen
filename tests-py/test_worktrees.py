@@ -632,6 +632,14 @@ class CleanupTests(unittest.TestCase):
 class CleanupSchedulingTests(unittest.TestCase):
     """Check automatic cleanup at the round boundary."""
 
+    def setUp(self):
+        # Scheduling now keeps an OS guard file; isolate it with the other fixtures.
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        data = mock.patch('haivequeen.platform.data_dir', return_value=Path(folder.name))
+        data.start()
+        self.addCleanup(data.stop)
+
     # A normal round checks old worktrees for every project.
     def test_round_calls_cleanup_for_each_project(self):
         """A normal round checks old worktrees for every project."""

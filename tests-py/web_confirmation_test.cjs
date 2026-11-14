@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
+const source=fs.readFileSync('haivequeen/web-client.js','utf8');
+const events={},children=[];
+const confirmation={open:false,returnValue:'',replaceChildren(...nodes){children.splice(0,children.length,...nodes);},addEventListener(name,fn){events[name]=fn;},removeEventListener(name,fn){if(events[name]===fn)delete events[name];},showModal(){this.open=true;},close(value){this.returnValue=value;this.open=false;}};
+const el=(tag,text)=>({tag,text,append(...nodes){this.children=nodes;},focus(){}});
+const context={confirmation,el,t:x=>x};vm.createContext(context);
+vm.runInContext(source.slice(source.indexOf('  function requestConfirm('),source.indexOf('  function animateHeader(')),context);
+(async()=>{
+ let settled=false;
+ const first=context.requestConfirm('Discard edits?').then(value=>{settled=true;assert.equal(value,true);});
+ children[2].children[1].onclick();
+ await Promise.resolve();
+ assert(settled,'Explicit confirmation must settle without a delayed browser close event');await first;
+ const second=context.requestConfirm('Cancel?');
+ events.close();assert.equal(confirmation.open,true,'A queued close from the previous dialog must not dismiss the next');
+ children[2].children[0].onclick();assert.equal(await second,false);
+ const third=context.requestConfirm('Escape?');events.cancel({preventDefault(){}});assert.equal(await third,false);
+ assert.equal(confirmation.open,false);
+ console.log('Confirmation settlement passed');
+})().catch(error=>{console.error(error);process.exitCode=1;});
