@@ -16,6 +16,10 @@ function isPackagePlaceholder(row) {
   return row.kind==='bee' && !row.agent && !row.embedded && (!row.name || row.name==='–');
 }
 
+function visibleHiveRows(rows) {
+  return rows.filter(row=>!isPackagePlaceholder(row));
+}
+
 function hiveCounts(rows) {
   return {queens:rows.filter(row=>row.kind==='queen').length,
     agents:rows.filter(row=>!['queen','orch'].includes(row.kind)&&!isPackagePlaceholder(row)).length,
@@ -1015,7 +1019,7 @@ function mount(document, bootstrap) {
 
     },{compact:true,labels:{number:'#',name:'PLAN',bees_running:'AGENTS'}}));
 
-    const counts=hiveCounts(filtered.bees);const agents=section('QUEENS AND AGENTS');agents.querySelector('h2').append(el('small',' · '+counts.queens+' '+t('QUEENS')+' · '+counts.agents+' '+t('Agents')+(counts.packages?' · '+counts.packages+' '+t('Packages'):'')));agents.append(table(filtered.bees,['number','name','model','hive','task','ctx','tokens','status','runtime'],(cell,row)=>{
+    const hiveRows=visibleHiveRows(filtered.bees),counts=hiveCounts(hiveRows);const agents=section('QUEENS AND AGENTS');agents.querySelector('h2').append(el('small',' · '+counts.queens+' '+t('QUEENS')+' · '+counts.agents+' '+t('Agents')));agents.append(table(hiveRows,['number','name','model','hive','task','ctx','tokens','status','runtime'],(cell,row)=>{
 
       if(row.agent)cell.append(button('Live',()=>openLive(row)));
 
@@ -1922,6 +1926,6 @@ function mount(document, bootstrap) {
 
 }
 
-if(typeof module!=='undefined')module.exports={orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

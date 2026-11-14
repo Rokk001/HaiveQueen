@@ -6,6 +6,8 @@ const hiveExample=[{kind:'queen',name:'Queen'},{kind:'bee',name:'–',agent:null
 assert.deepEqual(hiveCounts(hiveExample),{queens:1,agents:3,packages:1});
 assert.equal(isPackagePlaceholder(hiveExample[2]),false,'embedded agents are real agents without process IDs');
 assert.equal(isPackagePlaceholder(hiveExample[3]),false,'a real waiting agent remains an agent');
+const {visibleHiveRows}=require('../haivequeen/web-client.js');
+assert.deepEqual(visibleHiveRows(hiveExample),[hiveExample[0],...hiveExample.slice(2)],'Hive excludes unstarted packages but retains Queens, HQ, embedded and waiting real agents');
 const {capabilityRows} = require('../haivequeen/web-client.js');
 const rows = capabilityRows({capabilitiesVersion:1,capabilities:['Coding'], capabilityThresholds:{Queen:42}}, ['Coding','Queen','Build']);
 assert.deepEqual(rows, [{name:'Coding', enabled:true, threshold:100}, {name:'Queen', enabled:false, threshold:42}, {name:'Build', enabled:false, threshold:100}]);
