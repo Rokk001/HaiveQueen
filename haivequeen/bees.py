@@ -340,6 +340,37 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
             conn.execute('INSERT INTO bee_attempts(project,plan_path,package,class,failures) VALUES(?,?,?,?,1) ON CONFLICT(project,plan_path,package,class) DO UPDATE SET failures=failures+1', (project, plan, package, cls))
 
 
+def attempt_history(conn, project, plan, package, *, before=0, limit=5, attempt=''):
+    """Read existing evidence only; bounded previews and explicit attempt detail."""
+    if not project or not plan or not package:
+        raise ValueError('history requires project, plan and package')
+    if not 1 <= limit <= 20 or before < 0:
+        raise ValueError('history limit must be 1..20 and before must be nonnegative')
+    empty = {'attempts': [], 'total': 0, 'next_before': None}
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bee_attempt_signals'").fetchone():
+        return empty
+    where, values = 'project=? AND plan_path=? AND package=?', [project, plan, package]
+    if attempt:
+        where += ' AND attempt=?'
+        values.append(attempt)
+    total = conn.execute('SELECT COUNT(*) FROM bee_attempt_signals WHERE ' + where, values).fetchone()[0]
+    if before:
+        where += ' AND rowid<?'
+        values.append(before)
+    rows = [dict(r) for r in conn.execute(
+        'SELECT rowid AS sequence, class, attempt, open_requirements, error, counted FROM bee_attempt_signals WHERE '
+        + where + ' ORDER BY rowid DESC LIMIT ?', [*values, limit + 1])]
+    more = len(rows) > limit
+    rows = rows[:limit]
+    for row in rows:
+        row['open_requirements'] = json.loads(row['open_requirements'])
+        row['error_truncated'] = not attempt and len(row['error']) > 500
+        if row['error_truncated']:
+            row['error'] = row['error'][:500]
+    return {'attempts': rows, 'total': total,
+            'next_before': rows[-1]['sequence'] if more else None}
+
+
 # Remember how far a package of a Hive is.
 def set_package_state(conn, project, plan, package, state, agent='', reason=''):
     """Store the progress state of one package (working, waiting, implemented, done or rejected; no row means open). `reason` says what a waiting package waits for (question:<id>, build, owner, package or provider). The Plan progress shown in the window counts the done ones, a rejected package is not done."""

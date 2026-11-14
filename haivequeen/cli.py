@@ -482,6 +482,13 @@ def cmd_bee(args, conn):
     from haivequeen import bees, scheduler
     if args.action in ("force-stop", "stop"):
         return cmd_agent_stop(args, conn)
+    if args.action == "history":
+        try:
+            out(bees.attempt_history(conn, args.project, args.plan, args.package,
+                                    before=args.before, limit=args.limit, attempt=args.attempt))
+            return 0
+        except ValueError as exc:
+            return fail(str(exc))
     missing = [f for f in ("plan", "package", "cls") if not getattr(args, f)]
     if missing:
         return fail("agent %s requires --plan, --package and --class" % args.action)
@@ -605,7 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
         "refuses a subagent of the Queen with the reason, and refuses the Queen, who can only be ended by bzz dequeen. "
         "The package stays stopped and waits for an explicit owner instruction. The Queen gets the stop as an owner message in owner_messages. "
         "'bzz agent stop' remains a compatibility alias for force-stop."))
-    p.add_argument("action", choices=["start", "result", "wait", "force-stop", "stop"])
+    p.add_argument("action", choices=["start", "result", "history", "wait", "force-stop", "stop"])
     p.add_argument("target", nargs="?", default="", help="force-stop: the name of the one running Agent to end (owner only; not the Queen, not a subagent)")
     p.add_argument("--project", required=True)
     for field in ("plan", "package", "class"):   # required except for force-stop and its stop alias
@@ -618,7 +625,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rules", default="[]")
     p.add_argument("--cwd", default="", help="legacy option; package worktree is chosen by HaiveQueen")
     p.add_argument("--outcome", choices=["failed", "interrupted", "succeeded"])
-    p.add_argument("--attempt", default="")
+    p.add_argument("--attempt", default="", help="result: attempt identity; history: retrieve one complete stored attempt")
+    p.add_argument("--before", type=int, default=0, help="history: retrieve attempts before this sequence")
+    p.add_argument("--limit", type=int, default=5, help="history: page size, 1..20")
     p.add_argument("--open-requirements", default="[]")
     p.add_argument("--error", default="")
     p.add_argument("--blocked-by", choices=["question", "build", "owner", "package", "provider"], default="")

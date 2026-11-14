@@ -268,3 +268,11 @@ completion of the broader autonomous technical diagnosis request.
 - Supply isolated plan files and workspace paths without weakening production logging.
 - Update the release invalidation regression to exercise pending and successful targeted repair verification before pipeline replay.
 - Focused validation: 19 tests passed across CheckRecoveryTests, CoreAccountingTests, release gates and Build/Deploy process registration. No full suite or build ran.
+
+
+### Package diagnosis: retrieve existing attempt evidence
+
+- Add read-only `bzz agent history --project PROJECT --plan PLAN --package PACKAGE`: five recent previews by default, `--before` for older pages, `--attempt` for full stored error detail. Maximum page size is 20.
+- Scope every query to the requested project, plan and package. Reads do not initialize attempt tables or alter counters. No additional evidence file or dependency is introduced.
+- Regression coverage checks scoping, pagination, full detail retrieval, bounded previews, invalid input and absence of database writes. The three initial tests fail without the implementation.
+- This is evidence retrieval for the pending package diagnosis workflow, not completion of automatic diagnosis or retry authorization.
