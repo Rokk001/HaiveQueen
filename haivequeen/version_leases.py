@@ -91,6 +91,8 @@ def collect(root):
                     current = platform.process_identity(pid)
                     if current != identity and (current is not None or platform.process_absent(pid)):
                         del leases[token]
+                elif pid and platform.process_absent(pid):
+                    del leases[token]
                 continue
             pid, identity = record.get('pid'), record.get('identity')
             if pid and identity:

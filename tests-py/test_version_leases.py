@@ -41,6 +41,8 @@ class VersionLeasesTests(unittest.TestCase):
             records = {
                 'pending': {'version': 'pending', 'installation': True,
                             'installer_pid': 123, 'installer_identity': 'birth'},
+                'unknown': {'version': 'unknown', 'installation': True,
+                            'installer_pid': 456, 'installer_identity': None},
                 'complete': {'version': 'complete', 'installation': True,
                              'installer_pid': 123, 'installer_identity': 'birth'},
                 'legacy': {'version': 'legacy', 'installation': True},
