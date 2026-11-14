@@ -547,8 +547,8 @@ function mount(document, bootstrap) {
       try{
         const result=await client.request('plan/step-log?'+new URLSearchParams({...key(row),step}));
         if(!dialog.open||!output.isConnected)return;
-        status.textContent=t({done:'Completed',running:'Running',red:'Failed',todo:'Pending'}[result.status]||result.status)+(result.exit_code!=null?' · Exit '+result.exit_code:'')+(result.historical?' · '+t('Previous run output'):'');
-        status.className='step-log-status '+({done:'ok',running:'ok',red:'bad',todo:'dim'}[result.status]||'dim');
+        status.textContent=t({done:'Completed',running:'Running',red:'Failed',todo:'Pending',waiting:'Waiting',cancelled:'Cancelled',unknown:'Unknown'}[result.status]||result.status)+(result.reason?' · '+result.reason:'')+(result.exit_code!=null?' · Exit '+result.exit_code:'')+(result.historical?' · '+t('Previous run output'):'');
+        status.className='step-log-status '+({done:'ok',running:'ok',red:'bad',todo:'dim',waiting:'warn',cancelled:'dim',unknown:'dim'}[result.status]||'dim');
         const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
         const text=[result.output,result.error&&result.error!==result.output?result.error:''].filter(Boolean).join('\n\n')||t('No log output available yet.');
         if(output.textContent!==text){output.textContent=text;if(follow)output.scrollTop=output.scrollHeight;}

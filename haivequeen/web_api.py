@@ -151,22 +151,14 @@ def execute(conn, action, data):
             question['packages'] = question_service.plan_packages(conn, question['project'], question['plan_path'])
         return questions
     if action == 'plan/step-log':
-        import json
         from . import orchestrator
         step = data.get('step')
         if step not in orchestrator.STEPS:
             raise ValueError('Unknown integration step')
         if not conn.execute('SELECT 1 FROM plans WHERE project=? AND path=?', (project, plan)).fetchone():
             raise ValueError('Unknown plan')
-        state = orchestrator.load(conn, project, plan) or {}
-        raw = runtime.kv_get(conn, project, 'orch-log:' + plan + ':' + step)
-        record = json.loads(raw) if raw else {}
-        fix = state.get('fix') or {}
-        return {'step': step, 'status': (state.get('steps') or {}).get(step, 'todo'),
-                'phase': state.get('phase', ''), 'exit_code': record.get('exit_code'),
-                'output': record.get('output', ''),
-                'error': fix.get('error', '') if fix.get('step') == step else '',
-                'historical': (state.get('steps') or {}).get(step) in ('running', None) and bool(record)}
+        from . import web_step_logs
+        return web_step_logs.read(conn, project, plan, step)
     if action == 'plan/detail':
         from pathlib import Path
         row = next((row for row in plan_view.plan_rows(conn)

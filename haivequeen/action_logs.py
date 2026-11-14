@@ -59,3 +59,22 @@ def finish(path, code, result=None, message=""):
 
 def output(path):
     return "".join(r["text"] for r in read(path) if r["event"] == "output")
+
+
+def latest(project, plan, step):
+    """Read the latest journal for precisely this project, plan and step."""
+    folder = osplat.data_dir() / "orchestrator" / "logs" / _component(project) / _component(plan)
+    for path in sorted(folder.glob("*-" + step + "-*.jsonl"), reverse=True):
+        records = read(path)
+        if not records:
+            continue  # The writer may not have flushed its start record yet.
+        start_record = records[0]
+        if any(start_record.get(key) != value for key, value in
+               (("event", "start"), ("project", project), ("plan", plan), ("step", step))):
+            continue
+        end = next((r for r in reversed(records) if r.get("event") == "end"), {})
+        return {"path": str(path), "started_at": start_record.get("started_at"),
+                "ended_at": end.get("ended_at"), "result": end.get("result"),
+                "exit_code": end.get("exit_code"), "message": end.get("message", ""),
+                "output": "".join(r.get("text", "") for r in records if r.get("event") == "output")}
+    return None
