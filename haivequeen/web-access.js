@@ -10,7 +10,8 @@
   reveal.addEventListener('click', () => {
     const visible = password.type === 'password';
     password.type = visible ? 'text' : 'password';
-    reveal.textContent = visible ? config.hide : config.show;
+    reveal.title = visible ? config.hide : config.show;
+    reveal.setAttribute('aria-label', reveal.title);
     reveal.setAttribute('aria-pressed', String(visible));
   });
   const confirm = document.getElementById('confirm');

@@ -18,7 +18,7 @@ def page(setup=False, token='', secure=False, language=None):
     password = 'new-password' if setup else 'current-password'
     fields = (f'<label for="username">{t("Username", "Benutzername")}</label><input id="username" name="username" autocomplete="username" required autofocus>'
               f'<label for="password">{t("Password", "Passwort")}</label><div class="password-field"><input id="password" name="password" type="password" autocomplete="{password}" required>'
-              f'<button id="show-password" class="reveal" type="button" aria-controls="password" aria-pressed="false">{t("Show", "Anzeigen")}</button></div>')
+              f'<button id="show-password" class="reveal" type="button" aria-controls="password" aria-pressed="false" aria-label="{t("Show password", "Passwort anzeigen")}" title="{t("Show password", "Passwort anzeigen")}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path class="eye-slash" d="m3 3 18 18"/></svg></button></div>')
     if setup:
         fields += (f'<label for="confirm">{t("Confirm password", "Passwort bestätigen")}</label><input id="confirm" type="password" autocomplete="new-password" required>'
                    f'</fieldset><fieldset><legend><span>02</span> {t("Connection", "Verbindung")}</legend><div class="field-grid"><div><label for="address">{t("Listen address", "Bind-Adresse")}</label>'
@@ -33,7 +33,7 @@ def page(setup=False, token='', secure=False, language=None):
     connection = (f'<span class="connection secure"><i></i>{t("HTTPS connection", "HTTPS-Verbindung")}</span>' if secure else
                   f'<div class="connection"><i></i><span>{t("HTTP connection — credentials are sent unencrypted. Use HTTPS outside a trusted network.", "HTTP-Verbindung – Zugangsdaten werden unverschlüsselt übertragen. Außerhalb eines vertrauenswürdigen Netzwerks HTTPS verwenden.")}</span></div>')
     bootstrap = json.dumps({'setup': setup, 'token': token, 'busy': 'Wird gespeichert…' if setup and german else 'Saving…' if setup else 'Anmeldung…' if german else 'Signing in…',
-                            'show': 'Anzeigen' if german else 'Show', 'hide': 'Verbergen' if german else 'Hide',
+                            'show': 'Passwort anzeigen' if german else 'Show password', 'hide': 'Passwort verbergen' if german else 'Hide password',
                             'mismatch': 'Die Passwörter stimmen nicht überein.' if german else 'Passwords do not match.',
                             'network': 'Keine Verbindung zum Server. Bitte erneut versuchen.' if german else 'Cannot reach the server. Please try again.',
                             'invalid': 'Benutzername oder Passwort ist falsch.' if german else 'Invalid username or password.',
@@ -46,7 +46,7 @@ def page(setup=False, token='', secure=False, language=None):
             f'<main class="access-shell"><section class="identity" aria-label="HaiveQueen"><img class="queen" src="{icon}" alt="">'
             '<div class="wordmark">H<span>ai</span>ve<strong>Queen</strong></div><p class="descriptor">AI AGENT ORCHESTRATOR</p>'
             f'<div class="identity-foot"><span class="hex">⬡</span><p>{t("Plans. Queens. Agents.", "Pläne. Queens. Agents.")}<br><strong>{t("Your hive, in one place.", "Dein Hive. Alles im Blick.")}</strong></p></div></section>'
-            f'<section class="access-card"><div class="eyebrow">{"SETUP / 01" if setup else "WELCOME TO THE HIVE"}</div><h1>{title}</h1><p class="subtitle">{subtitle}</p>'
+            f'<section class="access-card">{"<div class=eyebrow>SETUP / 01</div>" if setup else ""}<h1>{title}</h1><p class="subtitle">{subtitle}</p>'
             f'<form id="access-form">{fields}<p id="result" role="alert" aria-live="polite" hidden></p><button class="primary" id="submit" type="submit"><span>{button}</span><span aria-hidden="true">→</span></button></form>'
             f'{connection}<noscript>{t("JavaScript is required to sign in.", "Für die Anmeldung wird JavaScript benötigt.")}</noscript></section></main>'
             f'<script id="access-data" type="application/json">{bootstrap}</script><script>{script}</script></body></html>')
