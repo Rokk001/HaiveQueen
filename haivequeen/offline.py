@@ -11,9 +11,10 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import uuid
 from datetime import datetime, timedelta
 
-from . import localtime, profile, runtime, servers
+from . import db, localtime, profile, runtime, servers
 
 KEY = "provider-offline"
 GLOBAL = "*"
@@ -51,19 +52,22 @@ def _write(conn, data) -> None:
 def mark(conn, name, reason="", now=None) -> None:
     """Set the provider `name` offline (the time of the first mark stays, so the hover text says since when)."""
     now = now or datetime.now()
-    data = read(conn)
-    entry = data.get(name)
-    if entry is None:
-        entry = data[name] = {"since": _iso(now), "checked": _iso(now)}
-    entry["reason"] = " ".join(str(reason or "").split())[:200]
-    _write(conn, data)
+    with db.transaction(conn):
+        data = read(conn)
+        entry = data.get(name)
+        if entry is None:
+            entry = data[name] = {"since": _iso(now), "checked": _iso(now)}
+        entry["reason"] = " ".join(str(reason or "").split())[:200]
+        entry["revision"] = uuid.uuid4().hex
+        _write(conn, data)
 
 
 def clear(conn, name) -> None:
     """Set the provider `name` online again."""
-    data = read(conn)
-    if data.pop(name, None) is not None:
-        _write(conn, data)
+    with db.transaction(conn):
+        data = read(conn)
+        if data.pop(name, None) is not None:
+            _write(conn, data)
 
 
 def since_text(since) -> str:
@@ -130,7 +134,7 @@ def recheck(conn, providers, minutes, now=None) -> list:
     """Check the offline providers among `providers` whose last check is `minutes` or more ago; the ones that answer are online at once. Returns their names."""
     now = now or datetime.now()
     data = read(conn)
-    back, changed = [], False
+    back = []
     for p in providers:
         entry = data.get(p["name"])
         if entry is None or not p.get("enabled", True):
@@ -138,12 +142,15 @@ def recheck(conn, providers, minutes, now=None) -> list:
         last = _parse(entry.get("checked")) or _parse(entry.get("since"))
         if last is not None and now - last < timedelta(minutes=float(minutes)):
             continue
-        if probe(p):
-            del data[p["name"]]
-            back.append(p["name"])
-        else:
-            entry["checked"] = _iso(now)
-        changed = True
-    if changed:
-        _write(conn, data)
+        recovered = probe(p)  # Never hold a write transaction during a slow network/CLI call.
+        with db.transaction(conn):
+            current = read(conn)
+            if current.get(p["name"]) != entry:
+                continue  # A newer failure or an explicit clear wins over this probe.
+            if recovered:
+                del current[p["name"]]
+                back.append(p["name"])
+            else:
+                current[p["name"]]["checked"] = _iso(now)
+            _write(conn, current)
     return back

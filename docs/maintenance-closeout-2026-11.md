@@ -305,3 +305,11 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Connection reachability no longer implies readiness: authentication failures, rate limits and server errors reject the provider and retain automatic retesting.
 - Empty interface probes accept successful responses or expected schema errors (400/422) without loading a model. Each interface records its HTTP status. Old results without that evidence must be retested.
 - Regression evidence: the initial focused run failed 13 HTTP/cache cases before the fix. Focused coverage exercises all built-in protocols, persisted failures, schema responses, real local HTTP authentication failure and recovery, and existing connection/readiness/round behavior.
+
+
+## A-20: Concurrent offline state updates
+
+- Mark and clear now read and update the offline map inside one write transaction.
+- Recovery probes run without a write transaction. Their results are applied only if that provider's entry still matches the snapshot; other providers' latest state is preserved.
+- Each failure mark gets a revision, including identical messages recorded in the same second. A stale successful probe cannot remove a newer failure; a stale failed probe cannot restore an explicitly cleared entry. Legacy entries remain recoverable.
+- Regression tests reproduced lost updates before the fix using two database connections and controlled probe interleavings; focused coverage includes existing offline scheduling and recovery behavior.
