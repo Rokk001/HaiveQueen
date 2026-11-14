@@ -13,7 +13,7 @@ const assert=require('node:assert/strict');
   for(const width of [320,390,400,768,1280]){
    await send('Emulation.setDeviceMetricsOverride',{width,height:843,deviceScaleFactor:1,mobile:width<701});
    await send('Page.navigate',{url:`http://127.0.0.1:${preview}`});await wait(`!!document.querySelector('.model-limit')`);
-   const sizes=await evaluate(`JSON.stringify({width:innerWidth,scroll:document.documentElement.scrollWidth,plans:document.querySelector('[data-panel="ACTIVE PLANS"]').getBoundingClientRect().top,limits:document.querySelector('[data-panel="Limits"]').getBoundingClientRect().top,wrap:getComputedStyle(document.querySelector('.dashboard-primary .table-scroll')).maxHeight,card:document.querySelector('.dashboard-primary tbody tr').getBoundingClientRect().height})`);
+   const sizes=await evaluate(`JSON.stringify({width:innerWidth,scroll:document.documentElement.scrollWidth,plans:document.querySelector('[data-panel="Hives"]').getBoundingClientRect().top,limits:document.querySelector('[data-panel="Limits"]').getBoundingClientRect().top,wrap:getComputedStyle(document.querySelector('.dashboard-primary .table-scroll')).maxHeight,card:document.querySelector('.dashboard-primary tbody tr').getBoundingClientRect().height})`);
    const metrics=JSON.parse(sizes);assert(metrics.scroll<=width,JSON.stringify(metrics));
    if(width<=700){assert(metrics.plans<metrics.limits);assert.equal(metrics.wrap,'none');assert(metrics.card<320,'Plan card is unnecessarily tall');}
    await evaluate(`document.querySelector('#settings-toggle').click()`);await wait(`!document.querySelector('#settings-subnav').hidden`);

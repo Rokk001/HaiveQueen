@@ -1197,14 +1197,18 @@ function mount(document, bootstrap) {
     for(const [value,label] of [['local','Local'],['git','Git provider'],['custom','Custom']]){const option=el('option',t(label));option.value=value;if(value!=='local'&&!supported)option.disabled=true;select.append(option);}
     select.value=data.wayOfWorking;select.onchange=()=>{data.wayOfWorking=select.value;if(select.value!=='custom')for(const [step] of steps)data[step+'Mode']=select.value;changed();render();};group.append(select);
     for(const [step,label,field,fieldLabel] of steps){
-      const row=el('div',undefined,'workflow-step');row.setAttribute('role','group');row.setAttribute('aria-label',t(label));row.append(el('h3',t(label)));
+      const row=el('div',undefined,'workflow-step');row.dataset.workflowStep=step;row.setAttribute('role','group');row.setAttribute('aria-label',t(label));row.append(el('h3',t(label)));
       if(field){const switchLabel=el('label',undefined,'workflow-switch'),toggle=el('input');toggle.type='checkbox';toggle.setAttribute('role','switch');toggle.checked=!!data[step+'Enabled'];toggle.setAttribute('aria-label',t(label+' on'));toggle.onchange=()=>{data[step+'Enabled']=toggle.checked;changed();render();};switchLabel.append(toggle,el('span',t(toggle.checked?'On':'Off')));row.append(switchLabel);}
       else row.append(el('span',t('Always on'),'dim'));
       const unavailable=supported&&data[step+'Mode']==='git'&&!capabilities.supported[step];
       const mode=el('div',undefined,'workflow-location');mode.setAttribute('role','radiogroup');mode.setAttribute('aria-label',t(label+' location'));
       for(const [value,text] of [['local','Local'],['git','Git provider']]){
         const choice=el('button',t(text));choice.type='button';choice.dataset.mode=value;choice.setAttribute('role','radio');choice.setAttribute('aria-checked',String(data[step+'Mode']===value));choice.disabled=!supported||unavailable;
-        choice.onclick=()=>{data[step+'Mode']=value;const modes=new Set(steps.map(([name])=>data[name+'Mode']));data.wayOfWorking=modes.size===1?[...modes][0]:'custom';changed();render();};mode.append(choice);
+        choice.tabIndex=data[step+'Mode']===value?0:-1;
+        const choose=(next,keyboard=false)=>{data[step+'Mode']=next;const modes=new Set(steps.map(([name])=>data[name+'Mode']));data.wayOfWorking=modes.size===1?[...modes][0]:'custom';changed();render();if(keyboard)view.querySelector('[data-workflow-step="'+step+'"] [data-mode="'+next+'"]')?.focus({preventScroll:true});};
+        choice.onclick=()=>choose(value);
+        choice.onkeydown=event=>{if(choice.disabled)return;let next;if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))next=value==='local'?'git':'local';else if(event.key==='Home')next='local';else if(event.key==='End')next='git';else return;event.preventDefault();choose(next,true);};
+        mode.append(choice);
       }
       row.append(mode);
       const content=el('div',undefined,'workflow-command');row.append(content);

@@ -48,7 +48,7 @@ class BrowserTests(unittest.TestCase):
         node = shutil.which('node')
         if not node:
             self.skipTest('Node is required')
-        for name in ('web_dashboard_fields_test.cjs', 'web_hives_groups_test.cjs'):
+        for name in ('web_dashboard_fields_test.cjs', 'web_hives_groups_test.cjs', 'web_workflow_controls_test.cjs'):
             result = subprocess.run([node, str(Path(__file__).with_name(name))],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
