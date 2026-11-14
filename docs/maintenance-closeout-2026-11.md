@@ -82,3 +82,11 @@ files. Network lookups stay outside the lock and merge only check-owned fields;
 older results cannot overwrite newer checks. Install start and settlement update
 the latest state under the same lock. Both race regressions failed before the fix;
 14 focused update state, check, header and install tests pass.
+
+## A-12 release origin validation
+
+Resolved: checked offers retain their source repository. Install requests and the
+worker reject configured or offered repositories that differ from the installation
+origin before acquiring the update lock or stopping processes. HTTPS and SSH
+origins normalize to the same repository. Two regressions failed before the fix;
+27 focused update tests and four origin tests pass. No update worker was started.

@@ -369,6 +369,8 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
     if version is not None:
         from . import releases
         releases.next_version(str(version))   # only a plain version number reaches git
+        from . import updates
+        updates.validate_install_repository(version, live=live, run=run)
     else:
         why = legacy_retired(conn, live, run)
         if why:

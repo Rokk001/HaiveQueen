@@ -139,6 +139,26 @@ def installed_version(live=None, run=None) -> str:
         return "–"
 
 
+def validate_install_repository(version, *, offer=None, live=None, run=None):
+    """Reject an update source different from the install origin before stopping anything."""
+    from . import config, releases, selfupdate
+    machine = config.load_config()
+    configured = str((machine.get('update') or {}).get('repository') or '').strip()
+    offer = offered() if offer is None else offer
+    source = str((offer or {}).get('repository') or '') if (offer or {}).get('version') == str(version) else ''
+    expected = [value for value in (configured, source) if value]
+    if not expected:
+        return  # legacy offers use the installation origin, without an override
+    live = live or selfupdate.live_folder()
+    run = run or selfupdate.run_command
+    code, out = run(['git', '-C', str(live), 'remote', 'get-url', 'origin'], live)
+    if code:
+        raise ValueError('Cannot verify update repository: installation origin is unavailable')
+    actual = releases.repository_from_remote(out.strip())
+    if any(value.casefold() != actual.casefold() for value in expected):
+        raise ValueError('Update repository differs from installation origin; check the update repository setting and check for updates again')
+
+
 # ---- checking ----
 
 def due(machine, state=None, now=None) -> bool:
@@ -168,8 +188,11 @@ def check(machine, now=None, manual=False, lookup=None, current=None):
     lookup = lookup or releases.check_latest
     state = {"last_check": now.isoformat(timespec="microseconds")}
     try:
-        found = lookup(repository(machine), current or installed_version())
+        source = repository(machine)
+        found = lookup(source, current or installed_version())
         state.update(available=dict(found) if found else None, error="", no_release=False)
+        if found:
+            state['available']['repository'] = source
     except Exception as exc:   # offline, rate limit, unknown repository: shown, never fatal
         if isinstance(exc, releases.NoRelease) or (isinstance(exc, HTTPError) and exc.code == 404):
             state.update(available=None, error="", no_release=True)
@@ -206,6 +229,7 @@ def request_install(version, spawn=None) -> dict:
     found = offered()
     if not found or found["version"] != str(version):
         raise ValueError("version %s is not the offered update" % version)
+    validate_install_repository(version, offer=found)
     after = 0
     try:
         conn = db.connect(selfupdate_db_path())
