@@ -15,6 +15,52 @@ class SecurityRoutes(WebRoutesTests):
         self.assertIn(429, codes)
         self.assertLess(verify.call_count, 8)
 
+    def test_parallel_login_hashes_are_bounded_and_slots_are_released(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        self.configure()
+        entered = threading.Barrier(3)
+        release = threading.Event()
+
+        def verify(*args):
+            entered.wait(timeout=5)
+            if not release.wait(timeout=5):
+                raise TimeoutError('test did not release password checks')
+            return False
+
+        with patch.object(web_auth, 'verify', side_effect=verify) as hashing:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                pending = [pool.submit(self.request, 'POST', '/login',
+                                       {'username': 'operator', 'password': 'wrong'}) for _ in range(2)]
+                try:
+                    entered.wait(timeout=5)
+                    code, _, body = self.request('POST', '/login', {'username': 'operator', 'password': 'wrong'})
+                    self.assertEqual(code, 429)
+                    self.assertIn('Wait one minute', body)
+                    self.assertEqual(hashing.call_count, 2)
+                finally:
+                    release.set()
+                self.assertEqual([request.result()[0] for request in pending], [401, 401])
+        self.assertEqual(self.server.login_inflight, 0)
+        self.login()  # Normal HTTP login still works after concurrent rejected attempts.
+
+    def test_login_budget_recovers_after_one_minute(self):
+        from types import SimpleNamespace
+        from haivequeen import web_server
+        clock = [100.0]
+        with patch.object(web_server, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
+            for _ in range(5):
+                self.assertTrue(self.server.begin_login())
+                self.server.end_login()
+            self.assertFalse(self.server.begin_login())
+            clock[0] = 159.9
+            self.assertFalse(self.server.begin_login())
+            clock[0] = 160.0
+            self.assertTrue(self.server.begin_login())
+            self.server.end_login()
+        self.assertEqual(self.server.login_inflight, 0)
+        self.assertEqual(len(self.server.login_attempts), 1)
+
     def test_untrusted_forwarded_scheme_is_ignored_and_http_works(self):
         self.configure()
         configured = settings.load_raw(self.path)

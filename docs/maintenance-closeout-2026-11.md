@@ -42,3 +42,16 @@ This inventory records delivered changes, not a claim that the remaining audit i
 - OAuth application registration remains deliberately deferred. The historical provider-slot incident remains inconclusive, and exceeding the soft context limit during handoff is intended. These are explicitly recorded in the findings disposition, not silently marked fixed.
 - A-04 and subsequent audit work are not included in this delivery.
 - Production rollout and worktree cleanup are operational steps reported separately; a merged commit does not imply that an already running process has loaded it.
+
+## A-08 verification follow-up
+
+A-08 is resolved by the login budget introduced in `4db1272`. In
+`haivequeen/web_server.py`, `begin_login` limits password hashing to two
+concurrent requests and five accepted attempts in a rolling minute, before
+`web_auth.verify` runs. Excess requests receive HTTP 429 with a retry explanation;
+`end_login` releases the concurrency slot in a `finally` block.
+
+Focused regressions in `test_web_security_findings.SecurityRoutes` verify the
+rate limit before hashing, two concurrent requests with a rejected third,
+released slots, budget expiry, and normal HTTP login. All four targeted tests
+passed. No production process was restarted or changed for this verification.
