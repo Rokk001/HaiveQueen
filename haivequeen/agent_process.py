@@ -57,3 +57,16 @@ def counts(row, alive=None):
     if row.get("status") in ACTIVE:
         return not (row.get("pid") and pid_reused(row))
     return is_live(row, alive)
+
+
+def identity_matches(pid, identity):
+    """Only a recorded birth identity authorizes termination of a persisted PID."""
+    return bool(pid and identity and osplat.process_identity(pid) == identity)
+
+
+def recorded_alive(pid, identity):
+    """Wait conservatively on unknown identity, but never wait on a proven reused PID."""
+    if not pid or not osplat.process_alive(pid):
+        return False
+    current = osplat.process_identity(pid)
+    return not (identity and current and current != identity)

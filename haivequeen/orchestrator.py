@@ -43,6 +43,7 @@ class Job:
     def __init__(self, token):
         self.token = token
         self.pid = None
+        self.identity = None
         self.started = threading.Event()
         self.cancelled = False
         self.thread = None
@@ -50,6 +51,7 @@ class Job:
         self.log_file = None
 
     def record_pid(self, pid):
+        self.identity = osplat.process_identity(pid) if pid else None
         self.pid = pid
         self.started.set()
 
@@ -59,7 +61,7 @@ class Job:
             proc = integration.SUPERVISORS.get(self.token)
             if proc is not None:
                 return proc.poll() is None
-            return osplat.process_alive(self.pid)
+            return agent_process.recorded_alive(self.pid, self.identity)
         return bool(self.thread and self.thread.is_alive())
 
 
@@ -183,7 +185,7 @@ def _git_run(cwd, *args, timeout=600, job=None):
             kwargs = {} if osplat.is_windows() else {"start_new_session": True}
             with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   text=True, encoding="utf-8", errors="replace", **kwargs) as proc:
-                job.pid = proc.pid
+                job.record_pid(proc.pid)
                 # Cancellation can arrive between the check above and process creation.
                 if job.cancelled:
                     osplat.kill_process_tree(proc.pid)
@@ -613,7 +615,7 @@ def _merge(conn, env, plan, state, folder):
         job.thread.join()
         return _merge(conn, env, plan, state, folder)
     if job.pid:
-        state["job"]["pid"] = job.pid
+        state["job"].update(pid=job.pid, identity=job.identity)
         save(conn, env.name, plan, state)
     return None
 
@@ -783,6 +785,7 @@ def _command(conn, env, plan, state, folder, step, free_mb):
             compile_job = integration.start_compile_check(env, {"name": token}, cwd=str(folder), key="orch-check:" + plan, poll=POLL, milestones=False, log_file=j.log_file)
             j.token = compile_job["token"]
             j.pid = compile_job["pid"]
+            j.identity = compile_job.get("identity")
             j.compile_job = compile_job
             state["job"].update(compile_job)
             state["job"]["compile"] = True
@@ -808,7 +811,7 @@ def _command(conn, env, plan, state, folder, step, free_mb):
             # arrive before another round has a chance to harvest this command.
             j.started.wait()
             if j.pid:
-                state['job']['pid'] = j.pid
+                state['job'].update(pid=j.pid, identity=j.identity)
                 save(conn, env.name, plan, state)
             if not _async():
                 j.thread.join()
@@ -847,7 +850,7 @@ def _harvest(conn, env, plan, state):
     j = JOBS.get(key)
     if j and j.token == job["token"]:
         if j.pid != job.get("pid"):
-            job["pid"] = j.pid
+            job.update(pid=j.pid, identity=j.identity)
             save(conn, env.name, plan, state)
         if j.alive():
             return None
@@ -868,7 +871,7 @@ def _harvest(conn, env, plan, state):
         _finish_log(state, 1, message="the command ended without a result")
         return 1, "the command ended without a result"
     pid = job.get("pid")
-    if pid and osplat.process_alive(pid):
+    if agent_process.recorded_alive(pid, job.get("identity")):
         return None   # a command of an earlier run of HaiveQueen still runs: wait for it, then run the step again
     _finish_log(state, 143, "aborted", "worker ended without a result")
     return "lost"
@@ -1202,22 +1205,26 @@ def _cancel_pipeline_job(conn, project, plan, state, stop=None):
     if job:
         job.cancelled = True
     pid = job.pid if job else record.get("pid")
-    if pid:
-        record["pid"] = pid
+    if job:
+        record.update(pid=pid, identity=job.identity)
+    identity = record.get("identity")
     if pid and record.get("cancel_pid") != pid:
-        stop(pid)
-        record["cancel_pid"] = pid
+        if agent_process.identity_matches(pid, identity):
+            stop(pid)
+            record["cancel_pid"] = pid
+        else:
+            record["cancel_note"] = "Process identity could not be verified; no termination sent"
     save(conn, project, plan, state)
     if job and job.alive():
         return False
     if record.get("compile"):
         # A supervisor may publish before exiting, and recovery must also confirm
         # that an orphaned check has ended before the worktree can be reused.
-        if osplat.process_alive(record["pid"]):
+        if agent_process.recorded_alive(record.get("pid"), identity):
             return False
         if integration.poll_compile_check(conn, project, record) is None:
             return False
-    elif pid and osplat.process_alive(pid):
+    elif agent_process.recorded_alive(pid, identity):
         return False
     action_logs.finish(state.get("log_file"), 143, "cancelled", "pipeline command stopped")
     JOBS.pop((project, plan), None)
@@ -1238,7 +1245,13 @@ def stop_plan(conn, project, plan, stop=None):
     if state.get("phase") == "fix" and fix and fix.get("agent"):
         for row in runtime.list_agents(conn, project, "active"):
             if row.get("name") == fix["agent"] and row.get("phase") == "fix" and row.get("pid"):
-                stop(row["pid"])
+                verified = agent_process.identity_matches(row["pid"], agent_process._identity(row))
+                if verified:
+                    stop(row["pid"])
+                elif agent_process.recorded_alive(row["pid"], agent_process._identity(row)):
+                    fix["stop_note"] = "Process identity could not be verified; no termination sent"
+                    save(conn, project, plan, state)
+                    return
                 runtime.upsert_agent(conn, project, row["name"], {"status": "done", "pid": None, "ended_at": db.now(), "last_line": "stopped with the plan"})
         fix["agent"] = None   # a stop of the plan is no stop of the owner at the agent: a fix agent starts again at the resume
         att = runtime.kv_get(conn, project, ATTEMPTS_KEY + plan)

@@ -12,7 +12,7 @@ from pathlib import Path
 import time
 from datetime import datetime
 
-from . import db, localtime, plans, platform as osplat, proctree, runtime
+from . import agent_process, db, localtime, plans, platform as osplat, proctree, runtime
 
 COMPILE_MILESTONE = re.compile(r"^(\w+)\t[^\r\n]+ Compile test\b")   # the live line of a compile check in milestones.txt (the dashboard shows it)
 COMPILE_KEY = "compile-check:"   # + Queen name: the stored result of `bzz compile-check` for that Queen run
@@ -388,7 +388,7 @@ def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=Tr
         return {"token": token, "pid": 0, "database": database}
     proctree.exempt_register(proc.pid)
     SUPERVISORS[token] = proc
-    return {"token": token, "pid": proc.pid, "database": database}
+    return {"token": token, "pid": proc.pid, "identity": osplat.process_identity(proc.pid), "database": database}
 
 
 def compile_supervisor(database, project, token):
@@ -482,7 +482,7 @@ def poll_compile_check(conn, project, job, clean_slot=True):
     raw = runtime.kv_get(conn, project, COMPILE_RUN_KEY + token)
     if raw:
         return json.loads(raw)
-    if osplat.process_alive(job["pid"]):
+    if agent_process.recorded_alive(job["pid"], job.get("identity")):
         return None
     # Serialize recovery and check again: the supervisor may have published just before exit.
     with db.transaction(conn):

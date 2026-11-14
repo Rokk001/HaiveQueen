@@ -87,10 +87,12 @@ def _snapshot(conn):
     rows = [a for a in runtime.list_agents(conn, scope='all') if not a.get('archived') and agent_process.counts(a)]
     states = [(r['project'], r['key'][len(orchestrator.KEY):], json.loads(r['value']))
               for r in db.rows(conn, "SELECT project,key,value FROM kv WHERE key LIKE 'orch:%'")]
-    victims = {int(a['pid']) for a in rows if a.get('pid') and not agent_process.pid_reused(a)}
+    victims = {int(a['pid']): agent_process._identity(a) for a in rows
+               if agent_process.identity_matches(a.get('pid'), agent_process._identity(a))}
     for _, _, state in states:
-        if (state.get('job') or {}).get('pid'):
-            victims.add(int(state['job']['pid']))
+        job = state.get('job') or {}
+        if agent_process.identity_matches(job.get('pid'), job.get('identity')):
+            victims[int(job['pid'])] = job['identity']
     # Detached checks can outlive their requesting Queen or the loop.
     checks = []
     for row in db.rows(conn, "SELECT project,key,value FROM kv WHERE key LIKE 'compile-request:%'"):
@@ -100,24 +102,23 @@ def _snapshot(conn):
         request = json.loads(row['value'])
         supervisor = request.get('supervisor_pid')
         if supervisor and request.get('supervisor_identity') and osplat.process_identity(supervisor) == request['supervisor_identity']:
-            victims.add(int(supervisor))
+            victims[int(supervisor)] = request['supervisor_identity']
         pid = request.get('check_pid')
         if pid and request.get('check_identity') and osplat.process_identity(pid) == request['check_identity']:
-            victims.add(int(pid))
+            victims[int(pid)] = request['check_identity']
         checks.append((row['project'], token, request))
-    for holder in integration._read_holders(integration._compile_lock_path()):
-        if holder.get('run_token') in {token for _, token, _ in checks} and str(holder.get('database')) == str(config_database(conn)):
-            command = osplat.process_command_line(holder['pid']) or ''
-            if 'compile_supervisor' in command and holder['run_token'] in command:
-                victims.add(holder['pid'])
     return rows, states, victims, checks
 
 
 def _end_work(victims, kill, errors):
     # Work is ended in parallel, so one slow process tree cannot hold up the rest.
-    victims.discard(os.getpid())
+    victims.pop(os.getpid(), None)
+    def verified_kill(pid, identity):
+        if agent_process.identity_matches(pid, identity):
+            return kill(pid)
+        return True
     with ThreadPoolExecutor(max_workers=max(1, min(32, len(victims)))) as pool:
-        futures = {pool.submit(kill, pid): pid for pid in victims}
+        futures = {pool.submit(verified_kill, pid, identity): pid for pid, identity in victims.items()}
         for future, victim in futures.items():
             try:
                 if future.result() is False:
@@ -152,8 +153,16 @@ def stop(conn, kill=None, end_loop=None):
             with loop.hive_schedule_lock(timeout=0.1, reason="force-stop cleanup"):
                 # Re-read under the lock to catch work registered during termination.
                 rows, states, current, checks = _snapshot(conn)
-                _end_work(current - victims, kill, errors)
+                _end_work({pid: ident for pid, ident in current.items() if victims.get(pid) != ident}, kill, errors)
                 victims.update(current)
+                registrations = [(r.get('pid'), agent_process._identity(r)) for r in rows]
+                registrations += [((s.get('job') or {}).get('pid'), (s.get('job') or {}).get('identity')) for _, _, s in states]
+                for _, _, request in checks:
+                    registrations += [(request.get('supervisor_pid'), request.get('supervisor_identity')),
+                                      (request.get('check_pid'), request.get('check_identity'))]
+                for registered_pid, identity in registrations:
+                    if agent_process.recorded_alive(registered_pid, identity) and not agent_process.identity_matches(registered_pid, identity):
+                        errors.append('Cannot verify process %s; unfinished work retained' % registered_pid)
                 if errors:
                     return {'ok': False, 'error': '; '.join(errors), 'warning': WARNING}
                 for row in rows:
@@ -186,7 +195,7 @@ def stop(conn, kill=None, end_loop=None):
             if errors:
                 return {'ok': False, 'error': '; '.join(errors), 'warning': WARNING}
             _, _, current, _ = _snapshot(conn)
-            _end_work(current - victims, kill, errors)
+            _end_work({pid: ident for pid, ident in current.items() if victims.get(pid) != ident}, kill, errors)
             victims.update(current)
     return {'ok': True, 'running_agents': 0, 'warning': WARNING}
 
