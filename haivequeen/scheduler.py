@@ -38,6 +38,7 @@ DEFAULT_SETTINGS = {
     "hives": 2,
     "excludedProviders": [],
     "queenClass": "medium",
+    "diagnosisClass": "medium",
     "beesPerQueen": 3,
     "roundMinutes": 5,
     "escalateAfter": 3,

@@ -101,8 +101,9 @@ class RepairEvidence(OrchCase):
         self.commit(self.pwt, 'unrelated.txt')
         self.end_fixer(self.fixers()[0], verification_command='git ls-files --error-unmatch unrelated.txt')
         self.round()
-        self.assertEqual(len(self.fixers()), 1)
+        self.assertTrue(self.state()['fix']['diagnosis'])
         history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        self.assertEqual(len([e for e in history if e['event'] == 'attempt-started']), 1)
         self.assertFalse(any(e['event'] == 'repaired-step-passed' for e in history))
         self.assertEqual(orchestrator._attempts(self.conn, self.env(), REL)['n'], 1)
 
@@ -133,7 +134,10 @@ class TargetedVerification(OrchCase):
         self.assertEqual(action_logs.latest('testproj', REL, 'Check')['path'], self.check_log)
         self.assertEqual(self.state()['phase'], 'fix')
 
-    def test_verification_prompt_uses_unique_agent_run_directory(self):
+    def test_verification_and_diagnosis_use_unique_agent_run_directories(self):
+        first = self.env().run_dir(self.agent['name'])
+        self.assertIn(str(first / 'repair-verification.json'),
+                      (first / 'prompt.md').read_text(encoding='utf-8'))
         self.end_fixer(self.agent, verification=False)
         with mock.patch.object(loop, 'agent_identity', return_value={'Person': self.agent['name'], 'Color': 'FFFFFF'}):
             self.round()
@@ -141,7 +145,8 @@ class TargetedVerification(OrchCase):
         self.assertNotEqual(agent['name'], self.agent['name'])
         folder = self.env().run_dir(agent['name'])
         prompt = (folder / 'prompt.md').read_text(encoding='utf-8')
-        self.assertIn(str(folder / 'repair-verification.json'), prompt)
+        self.assertTrue(self.state()['fix']['diagnosis'])
+        self.assertIn(str(folder / 'repair-diagnosis.json'), prompt)
 
     def test_failed_targeted_verification_returns_to_diagnosis(self):
         self.end_with_evidence('echo targeted-regression-failed && exit 9')

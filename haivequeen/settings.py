@@ -12,7 +12,7 @@ import tomlkit
 from .i18n import N_, tr
 
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
-CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "queenClass": ("light", "medium", "heavy"), "use": ("preferred", "fallback"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
+CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "queenClass": ("light", "medium", "heavy"), "diagnosisClass": ("light", "medium", "heavy"), "use": ("preferred", "fallback"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
 CAPABILITIES = ("Coding", "Queen", "Build", "Deploy", "Image generation", "3D modelling", "Audio generation", "Video generation", "Vision", "Browser automation", "Web research", "GPU workloads", "Confidential data")
 CLASSES = ("light", "medium", "heavy")
 # The block "Build" of the General page: exactly these three fields, each with one sentence of explanation (key in the buildJobs table, label, explanation).
@@ -73,10 +73,11 @@ SETTING_HELP = {
     "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
 }
 GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model"),
-                  "owner": N_("Owner name"), "queenClass": N_("Queen class"), "beesPerQueen": N_("Agents per Queen"),
+                  "owner": N_("Owner name"), "queenClass": N_("Queen class"), "diagnosisClass": N_("Question / diagnosis agent class"), "beesPerQueen": N_("Agents per Queen"),
                   "maxConcurrentCompileChecks": N_("Max concurrent compile checks")}
 GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class."),
                 "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("The model class of the Queens (light, medium or heavy)."),
+                "diagnosisClass": N_("The class used to review technical questions; model and effort come from the provider settings for this class."),
                 "beesPerQueen": N_("How many Agents a Queen may have running at the same time."),
                 "maxConcurrentCompileChecks": N_("The most compile checks that run at the same time on this computer, across all projects and Queens, also for several plans of one project.")}
 SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Project."), "allowedTools": N_("Commands agents of this Project may run without asking.")})
@@ -91,7 +92,7 @@ HIDDEN_KEYS = ("name", "workspace", "preferredProvider", "codeRepo", "repo", "wo
 # Owner decision 742: a field is as wide as its kind of value needs, never the full window width.
 SHORT_WIDTH, PATH_WIDTH, LABEL_WIDTH = 20, 60, 34   # characters: short values, paths and commands (they scroll inside), the label column
 SHORT_KEYS = frozenset(("name", "colour", "color", "priority", "integrationBranch", "remoteName", "nextVersion", "worktreePrefix", "owner", "language", "model", "effort",
-                        "slots", "protocol", "outputFormat", "use", "beeMode", "queenClass", "source", "hives", "roundMinutes", "timeoutSeconds", "checkHours", "version", "branch"))
+                        "slots", "protocol", "outputFormat", "use", "beeMode", "queenClass", "diagnosisClass", "source", "hives", "roundMinutes", "timeoutSeconds", "checkHours", "version", "branch"))
 
 
 def field_width(key, value) -> int:

@@ -1196,10 +1196,6 @@ def _record_repair(conn, project, plan, event, **fields):
 def _fix_prompt(env, plan, state, owner_text=""):
     fix = state["fix"]
     folder = _worktree(env, plan)
-    try:
-        plan_text = (env.workspace / plan).read_text(encoding="utf-8", errors="replace")[:60000]
-    except OSError:
-        plan_text = ""
     remote, branch = _remote(env)
     if fix["reason"] == "owner":
         what = "The owner checked the integrated result of this plan and rejected it. His answer:\n%s\n" % fix["error"]
@@ -1211,23 +1207,21 @@ def _fix_prompt(env, plan, state, owner_text=""):
                  "Fix all errors in that output in one run, not only the last or first error.\n" % fix["log_file"])
     if owner_text:
         what += "\nAdditional recovery instruction:\n%s\n" % owner_text
+    from . import repair_review
     history = repair_history(env.conn, env.name, plan)
     if history:
-        what += '\nCOMPLETE REPAIR HISTORY (read every referenced log before choosing a new approach)\n' + json.dumps(history, indent=2)
+        _, preview = repair_review.context([], history, env.name, plan)
+        what += '\nRECENT REPAIR FINDINGS\n' + preview
     for key in state.get('shared_causes', []):
-        group = json.loads(runtime.kv_get(env.conn, env.name, key) or '{}')
-        what += '\nSHARED FAILURE: repair the common cause; these plans await full verification.\n' + json.dumps(group, indent=2)
-        for member in group.get('members', {}):
-            if member != plan:
-                what += '\nRelated repair history:\n' + json.dumps(repair_history(env.conn, env.name, member), indent=2)
+        what += ('\nSHARED FAILURE: investigate the common cause and affected plans using '
+                 'this existing record; retrieve only relevant member histories:\n'
+                 'bzz kv get --project %s --key %s\n' % (json.dumps(env.name), json.dumps(key)))
     what += ('\nAn ended agent is not a verified repair. Diagnose prior failed attempts, add a targeted regression '
              'for the original failure and report its command and result. Commit the repair; an unchanged tree '
              'does not justify repeating the integration. Never weaken checks.\n')
-    text = ("You are the fix agent of the plan %s. Work only in the plan worktree %s on the plan branch.\n%s\n"
-            "Fix exactly this. On a merge conflict keep the content of both sides (the merge of %s/%s is left open in the worktree: resolve it and commit it). "
-            "Commit your fix and end. Do not push, do not merge into the integration branch, do not call bzz ready and do not change the queue: the Orchestrator of HaiveQueen "
-            "starts the integration again at the first step after your fix. Write your final report as the answer of your last message.\n\nTHE PLAN\n\n%s"
-            % (plan, folder, what, remote, branch, plan_text))
+    from . import roles
+    text = roles.role_text("fix", {"plan": plan, "worktree": folder, "task": what,
+        "remote": remote, "branch": branch, "plan_file": env.workspace / plan})
     return text
 
 
@@ -1244,6 +1238,8 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
         _save_last(conn, env.name, plan, fix_agent=fix["agent"])
         if fix.get("owner_stopped"):   # M-4: an agent the owner stopped is never restarted; the plan waits for his instruction
             return _block(conn, env, plan, state, "stopped")
+        if fix.get('diagnosis'):
+            return _finish_review(conn, env, plan, state)
         folder = _worktree(env, plan)
         head = integration.head_commit(folder) if folder else ''
         try:
@@ -1259,6 +1255,9 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
                        before=fix.get('head', ''), after=head, report=report,
                        changed=changed, conditions_changed=conditions_changed)
         if not changed and not conditions_changed:
+            fix['review_required'] = True
+            if (env.run_dir(fix['agent']) / 'repair-diagnosis.json').is_file():
+                return _finish_review(conn, env, plan, state)
             fix['agent'] = None
             fix['instruction'] = ('The previous attempt provided no committed repair or changed command. '
                                   'Continue diagnosis using the complete history; do not repeat the unchanged pipeline.')
@@ -1290,6 +1289,7 @@ def _repair_diagnosis(conn, env, plan, state, reason):
     fix = state['fix']
     _record_repair(conn, env.name, plan, 'diagnosis-required', agent=fix.get('agent'), reason=reason)
     fix.pop('verification', None)
+    fix['review_required'] = True
     fix['agent'] = None
     fix['instruction'] = reason + '. Continue diagnosis from the complete repair history; do not repeat the unchanged pipeline.'
     save(conn, env.name, plan, state)
@@ -1348,22 +1348,37 @@ def _verify_repair(conn, env, plan, state):
     save(conn, env.name, plan, state)
 
 
+def _review_scope(conn, env, plan, fix):
+    from . import repair_review
+    folder = _worktree(env, plan)
+    return {'commit': integration.head_commit(folder) if folder else '',
+            'failure_log': fix.get('log_file', ''),
+            'decisions': repair_review.decisions(conn, env.name, plan)}
+
+
 def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
-    from . import bees, loop
+    from . import bees, loop, repair_review
     fix = state["fix"]
+    diagnosis = False
+    if fix.get('review_authorized') and fix['review_authorized'] != _review_scope(conn, env, plan, fix):
+        fix.pop('review_authorized', None)
+        fix.pop('review_class', None)
+        fix['review_required'] = True
+        fix['instruction'] = 'The commit, failed run or active decisions changed after diagnosis; inspect the current state.'
+        _record_repair(conn, env.name, plan, 'diagnosis-invalidated', reason=fix['instruction'])
+        save(conn, env.name, plan, state)
     excluded = list(env.settings.get("excludedProviders") or [])
     threshold = int(env.settings.get("escalateAfter", 3))
     attempts = _attempts(conn, env, plan)
     cls = attempts.get("cls") or str(env.settings.get("queenClass", "medium"))
     n = int(attempts.get("n", 0))
-    if n >= threshold:
-        higher = bees.next_class(env.providers, cls, excluded)
-        if higher:
-            cls, n = higher, 0
-        else:
-            attempts.update(cls=cls, n=n)
-            runtime.kv_set(conn, env.name, ATTEMPTS_KEY + plan, json.dumps(attempts))
-            return _block(conn, env, plan, state, "escalation")
+    if fix.get('review_authorized'):
+        selected = fix.get('review_class', cls)
+        if selected != cls:
+            cls, n = selected, 0
+    elif fix.get('review_required') or n >= threshold:
+        diagnosis = True
+        cls = str(env.settings.get("diagnosisClass", "medium"))
     if bees.drain_refusal():
         _blocker(conn, env, plan, "waiting to start the fix agent: HaiveQueen waits for an update")
         return None
@@ -1391,6 +1406,7 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
         suffix += 1
         name = '%s-%s' % (base_name, suffix)
     before_head = integration.head_commit(folder)
+    fix['review_decisions'] = repair_review.decisions(conn, env.name, plan)
     action = {"name": name, "type": pick["name"], "phase": "fix", "plan": plan, "package": "", "cwd": str(folder), "prompt": _fix_prompt(env, plan, state, owner_text), "class": cls}
     action['prompt'] += ('\nREQUIRED TARGETED VERIFICATION\nBefore ending, write %s as JSON with fields '
                          'command (the targeted regression command), commit (full repaired HEAD), '
@@ -1398,6 +1414,19 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
                          'HQ runs this command itself, then the unchanged full integration pipeline. '
                          'A passing report alone is insufficient. Do not weaken existing checks.\n' %
                          (env.run_dir(name) / 'repair-verification.json', json.dumps(fix.get('log_file', ''))))
+    action['prompt'] += repair_review.failure_report_prompt(
+        env.run_dir(name) / 'repair-diagnosis.json', before_head,
+        fix.get('log_file', ''), fix['review_decisions'], project=env.name, plan=plan)
+    if diagnosis:
+        action['prompt'] = repair_review.prompt(
+            env.run_dir(name) / 'repair-diagnosis.json', before_head, fix.get('log_file', ''),
+            fix['review_decisions'], repair_history(conn, env.name, plan), project=env.name, plan=plan)
+        action['prompt'] += '\nPlan: %s\nWorktree: %s\n' % (plan, folder)
+        action['prompt'] += '\nTopics reserved for the owner: ' + json.dumps(env.settings.get('ownerTopics', []))
+        action['prompt'] += '\nPrevious review feedback: ' + str(fix.get('instruction', ''))
+        action['prompt'] += '\nCurrent repair class: ' + str(attempts.get('cls') or env.settings.get('queenClass', 'medium'))
+        action['prompt'] += '\nAvailable repair classes: ' + json.dumps(sorted({c for p in env.providers
+            if p['name'] not in excluded for c, entry in p.get('classes', {}).items() if entry.get('model')}))
     st = {"names": existing, "busy": [], "plan_status": {sch.norm_plan(plan): "RUNNING"}, "by_path": {sch.norm_plan(plan): {"path": plan}}}
     ctx = {"env": env, "state": st, "pool": loop.Pool(free, 0), "report": [], "dry": False, "settle": 0}
     if not loop._do_start(ctx, action, forced_pick=pick):
@@ -1406,15 +1435,73 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
     fix["agent"] = started
     fix["head"] = before_head
     fix['commands'] = commands(env)
-    _record_repair(conn, env.name, plan, 'attempt-started', agent=started, commit=before_head,
+    _record_repair(conn, env.name, plan, 'diagnosis-started' if diagnosis else 'attempt-started', agent=started, commit=before_head,
                    step=fix['step'], log_file=fix.get('log_file'))
-    attempts.update(cls=cls, n=n + 1)
+    fix['diagnosis'] = diagnosis
+    if not diagnosis:
+        fix.pop('review_authorized', None)
+        fix.pop('review_class', None)
+        attempts.update(cls=cls, n=n + 1)
     runtime.kv_set(conn, env.name, ATTEMPTS_KEY + plan, json.dumps(attempts))
     state["fix"] = fix
     save(conn, env.name, plan, state)
     _blocker(conn, env, plan, "")
     _set_status(conn, env, plan, "RUNNING")
     _log(env, "%s: fix agent %s started (%s)" % (_short(plan), started, "Fix: " + (fix["step"] if fix["reason"] == "step" else "owner rejection")))
+    return None
+
+
+def _finish_review(conn, env, plan, state):
+    from . import repair_review
+    fix = state['fix']
+    agent = fix['agent']
+    folder = _worktree(env, plan)
+    head = integration.head_commit(folder) if folder else ''
+    try:
+        if head != fix.get('head'):
+            raise ValueError('the commit changed during diagnosis; inspect the new state')
+        known = repair_review.decisions(conn, env.name, plan)
+        if known != fix.get('review_decisions'):
+            raise ValueError('active decisions changed during diagnosis; review the current decisions')
+        review = repair_review.read(env.run_dir(agent) / 'repair-diagnosis.json', head,
+                                    fix.get('log_file', ''), known)
+        if review['kind'] == 'technical':
+            current_class = _attempts(conn, env, plan).get('cls') or env.settings.get('queenClass', 'medium')
+            selected_class = review.get('repair_class', current_class)
+            if selected_class != current_class:
+                if not isinstance(review.get('class_reason'), str) or not review['class_reason'].strip():
+                    raise ValueError('a model class change requires a concrete diagnosis reason')
+                if not any(p['name'] not in env.settings.get('excludedProviders', []) and
+                           (p.get('classes', {}).get(selected_class) or {}).get('model') for p in env.providers):
+                    raise ValueError('the requested repair class is not configured')
+            signature = json.dumps({key: review[key] for key in
+                                    ('commit', 'failure_log', 'evidence', 'next_action')}, sort_keys=True)
+            previous = [e.get('signature') for e in repair_history(conn, env.name, plan)
+                        if e.get('event') == 'diagnosis-accepted']
+            if signature in previous:
+                raise ValueError('this repair approach has already been authorized; diagnose its result before choosing a new approach')
+        else:
+            signature = ''
+    except (OSError, ValueError, KeyError) as exc:
+        _record_repair(conn, env.name, plan, 'diagnosis-rejected', agent=agent, reason=str(exc))
+        fix.update(agent=None, instruction='Correct the structured diagnosis: ' + str(exc))
+        save(conn, env.name, plan, state)
+        return None
+    _record_repair(conn, env.name, plan, 'diagnosis-accepted', agent=agent,
+                   review=review, signature=signature)
+    fix.update(agent=None, diagnosis=False, review_required=False)
+    if review['kind'] == 'technical':
+        fix['review_authorized'] = _review_scope(conn, env, plan, fix)
+        fix['review_class'] = selected_class
+        fix['instruction'] = '\n'.join((review['analysis'], review['next_action'], review['why_new']))
+    else:
+        text = '\n\n'.join((review['question'], review['why_owner'], review['analysis'],
+                            '\n'.join(review['evidence'])))
+        qid = db.add_question(conn, env.name, plan, 'fix-escalation', text, review['recommendation'])
+        state.update(phase='blocked', blocked={'kind': 'diagnosis', 'question': qid})
+        hives.release_integration(conn, env.name, plan)
+        _set_status(conn, env, plan, 'WAITING')
+    save(conn, env.name, plan, state)
     return None
 
 
@@ -1464,6 +1551,13 @@ def _advance_blocked(conn, env, plan, state):
         state['step'] = state['blocked']['step']
         state['phase'] = 'pipeline'
         state['steps'][state['step']] = 'todo'
+        state.pop('blocked', None)
+        save(conn, env.name, plan, state)
+        return None
+    if state['blocked'].get('kind') == 'diagnosis':
+        state['phase'] = 'fix'
+        state['fix'].update(agent=None, instruction=str(row[1] or ''))
+        state['fix']['review_authorized'] = _review_scope(conn, env, plan, state['fix'])
         state.pop('blocked', None)
         save(conn, env.name, plan, state)
         return None

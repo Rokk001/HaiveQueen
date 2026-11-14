@@ -220,3 +220,34 @@ step recorded as completion of the whole integration.
 
 This fixes one source of premature escalation. Autonomous diagnosis after genuine
 attempt exhaustion and evidence-backed owner questions remain under investigation.
+
+## Diagnosis before exhausted integration repairs reach the owner
+
+An unsuccessful repair without changed code requires diagnosis before another
+repair or a costlier model. A valid structured diagnosis supplied by the repair
+agent is reused without starting an additional agent. Otherwise a diagnosis agent
+reviews the failure instead of automatically asking the owner for an instruction.
+Its prompt includes the failed-run reference, commit and bounded evidence previews;
+existing read-only CLI sources retain the full history and active decisions.
+The fix and diagnosis role instructions live beside Queen and Bee in roles/.
+The plan is referenced rather than embedded, and no duplicate evidence file is created.
+It must report concrete observations and either a justified technical next action
+or the specific product decision, permission or external prerequisite it lacks.
+The diagnosis class is configurable alongside the Queen class; its model and
+effort come from the selected provider's class settings.
+
+A technical diagnosis authorizes one repair without erasing attempt history.
+The authorization is tied to the commit, failed run and active decisions, and is
+consumed only after an agent starts. Changed evidence requires a fresh diagnosis.
+An identical previously authorized approach is rejected rather than retried.
+Owner answers to specific diagnosis questions preserve the attempt count too.
+Targeted verification and the unchanged full integration pipeline remain required.
+
+Focused regressions cover exhausted attempts, concrete product questions, existing
+decisions, stale reports and changes after review, one-use authorization, repeated
+approaches, configurable model/effort, malformed class rejection, early diagnosis,
+reuse of an existing diagnosis, bounded prompts and successful repair verification. Tests use
+isolated repositories and controlled agent reports; they establish orchestration
+behavior, not the diagnostic quality of a live model. Package exhaustion and other
+question creation paths still need the same pre-escalation review. This is not yet
+completion of the broader autonomous technical diagnosis request.

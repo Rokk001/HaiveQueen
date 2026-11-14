@@ -289,18 +289,20 @@ class FixAgent(OrchCase):
         prompt = (self.env().run_dir(self.fixers()[1]["name"]) / "prompt.md").read_text(encoding="utf-8")
         self.assertIn("Try again, add fixed.txt", prompt)
 
-    def test_failed_fix_attempts_escalate_up_to_one_owner_question(self):
-        self.settings = {"escalateAfter": 1}
+    def test_failed_fix_attempts_require_diagnosis_before_stronger_model(self):
+        self.settings = {"escalateAfter": 1, "diagnosisClass": "light"}
         self.machine.update(self.settings)
         self.ready_plan()
-        for _ in range(8):
+        for _ in range(2):
             self.round()
             for agent in self.fixers():
                 if agent["status"] in ("running", "starting"):
                     self.end_fixer(agent)
-        self.assertEqual([a["class"] for a in self.fixers()], ["medium", "heavy"])   # then no higher class is offered: the owner is asked once
-        self.assertEqual(len(self.question("fix-escalation")), 1)
-        self.assertEqual(self.plan_status(), "WAITING")
+        self.round()
+        self.assertEqual([a["class"] for a in self.fixers()][:2], ["medium", "light"])
+        self.assertTrue(self.state()['fix']['diagnosis'])
+        self.assertEqual(len(self.question("fix-escalation")), 0)
+        self.assertEqual(self.plan_status(), "RUNNING")
 
     def test_waiting_plan_does_not_block_another_plan(self):
         second = self.make_worktree("other-br", "otherwt")
