@@ -29,11 +29,14 @@ from haivequeen import config, db, loop, proctree, version_leases
 base = Path(os.environ['TEST_BASE'])
 version = Path(__file__).resolve().parents[1].name
 conn = db.connect(config.db_path())
+real_round = loop.run_round
 def round_(conn, machine, envs, **kwargs):
     (base / (version + '-round')).write_text(str(os.getpid()))
     if version == 'old':
         while not (base / 'release-old').exists(): time.sleep(.02)
     else:
+        real_round(conn, machine, envs, **kwargs)
+        (base / 'actual-successor-round').touch()
         rows = conn.execute("SELECT name, status FROM agents WHERE project='testproj' ORDER BY name").fetchall()
         (base / 'seen').write_text(repr([tuple(row) for row in rows]))
 with patch.object(loop, 'run_round', side_effect=round_), patch.object(loop, 'daily_export'), \\
@@ -71,6 +74,7 @@ conn.close()
             self.assertEqual(core.returncode, 0)
             wait(self.base / 'new-round')
             wait(self.base / 'seen')
+            wait(self.base / 'actual-successor-round')
             wait(self.base / 'new-finished')
             # The detached launcher closes its inherited log after its child exits.
             end = time.monotonic() + 10
