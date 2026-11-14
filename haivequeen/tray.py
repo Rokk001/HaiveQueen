@@ -5,7 +5,7 @@ import threading
 from contextlib import closing
 from pathlib import Path
 
-from . import config, db, force_stop, loop, web_service
+from . import config, db, force_stop, loop, version_leases, web_service
 from . import platform as osplat
 
 
@@ -32,7 +32,7 @@ def state():
 def run_command(args):
     executable = osplat.python_executable()
     cli = str(Path(__file__).with_name('cli.py'))
-    subprocess.Popen([executable, cli] + args, stdin=subprocess.DEVNULL,
+    version_leases.launch(Path(__file__).resolve().parent.parent, subprocess.Popen, [executable, cli] + args, stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS)
 
@@ -59,7 +59,7 @@ def ensure_started():
     if os.name != 'nt' or os.environ.get('BZZ_NO_DESKTOP'):
         return
     try:
-        process = subprocess.Popen([osplat.python_executable(), '-m', 'haivequeen.tray'],
+        process = version_leases.launch(Path(__file__).resolve().parent.parent, subprocess.Popen, [osplat.python_executable(), '-m', 'haivequeen.tray'],
                                    cwd=str(Path(__file__).resolve().parent.parent),
                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS)

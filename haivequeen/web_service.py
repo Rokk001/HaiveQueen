@@ -171,7 +171,8 @@ def start():
     environment.pop('BZZ_AGENT', None)
     environment.pop('BZZ_UPDATE_RESTART', None)
     with log.open('ab') as errors:
-        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=errors, env=environment, **options)
+        from . import version_leases
+        process = version_leases.launch(Path(__file__).resolve().parent.parent, subprocess.Popen, argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=errors, env=environment, **options)
     from . import proctree
     proctree.exempt_register(process.pid)
     result = queue.Queue()
