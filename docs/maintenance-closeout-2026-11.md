@@ -204,3 +204,19 @@ The pre-publication regression failed before this fix. Focused coverage also
 checks post-publication access failure, normal failed-check replay, cumulative
 parallel merges and checks, and parallel builds with ordered publication.
 This does not serialize the queue or make successors wait for the repair.
+
+## Technical escalation: retain history without inheriting exhausted attempts
+
+The integration repair counter previously survived successful repairs unchanged.
+A later failure could therefore exhaust the model-class budget before any agent
+had investigated that failure. The regression reproduces a repaired Check followed
+by a distinct failing Build at the highest offered class.
+
+After targeted verification, HQ now retains the original failed step as pending.
+Only that step passing in the normal pipeline completes its attempt budget. Its
+previous counter and log remain in repair history. A targeted command passing
+while the original check still fails does not reset attempts. Nor is a successful
+step recorded as completion of the whole integration.
+
+This fixes one source of premature escalation. Autonomous diagnosis after genuine
+attempt exhaustion and evidence-backed owner questions remain under investigation.

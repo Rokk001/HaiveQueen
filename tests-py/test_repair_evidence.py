@@ -78,6 +78,34 @@ class RepairEvidence(OrchCase):
         self.assertIn('Check', verified[0]['steps'])
         self.assertIn('Build', verified[0]['steps'])
 
+    def test_verified_step_does_not_exhaust_budget_for_next_failure(self):
+        self.machine.update({'queenClass': 'heavy', 'escalateAfter': 1})
+        self.check = 'git ls-files --error-unmatch first-fix.txt'
+        self.build = 'git ls-files --error-unmatch second-fix.txt'
+        self.project_toml()
+        self.round()
+        first = self.fixers()[0]
+        self.commit(self.pwt, 'first-fix.txt')
+        self.end_fixer(first, 'The original check is repaired.')
+        self.round()
+        self.assertEqual(len(self.fixers()), 2)
+        self.assertFalse(self.question('fix-escalation'))
+        self.assertEqual(self.state()['fix']['step'], 'Build')
+        history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        self.assertEqual(len([e for e in history if e['event'] == 'attempt-started']), 2)
+        self.assertFalse(any(e['event'] == 'verified' for e in history))
+
+    def test_targeted_pass_does_not_reset_budget_when_original_check_still_fails(self):
+        self.machine.update({'queenClass': 'heavy', 'escalateAfter': 1})
+        self.round()
+        self.commit(self.pwt, 'unrelated.txt')
+        self.end_fixer(self.fixers()[0], verification_command='git ls-files --error-unmatch unrelated.txt')
+        self.round()
+        self.assertEqual(len(self.fixers()), 1)
+        history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        self.assertFalse(any(e['event'] == 'repaired-step-passed' for e in history))
+        self.assertEqual(orchestrator._attempts(self.conn, self.env(), REL)['n'], 1)
+
 
 class TargetedVerification(OrchCase):
     def setUp(self):

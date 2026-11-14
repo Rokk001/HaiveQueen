@@ -496,6 +496,13 @@ def _next_step(env, state, step):
 
 
 def _done(conn, env, plan, state, step, text=""):
+    if state.get('repair_pending_step') == step:
+        attempts = _attempts(conn, env, plan)
+        _record_repair(conn, env.name, plan, 'repaired-step-passed', step=step,
+                       attempts=attempts, log_file=state.get('log_file'))
+        attempts['n'] = 0
+        runtime.kv_set(conn, env.name, ATTEMPTS_KEY + plan, json.dumps(attempts))
+        state.pop('repair_pending_step', None)
     _finish_log(state, 0, message=text)
     state["steps"][step] = "done"
     if step not in state["ran"]:
@@ -1334,6 +1341,7 @@ def _verify_repair(conn, env, plan, state):
         return _repair_diagnosis(conn, env, plan, state, 'The targeted regression changed the committed repair')
     _record_repair(conn, env.name, plan, 'pipeline-retry', commit=evidence['commit'],
                    reason=evidence['retry_reason'], verification_log=evidence['log_file'])
+    state['repair_pending_step'] = fix['step']
     state.update(phase='pipeline', step='Merge', placed=False, steps={}, ran=[], fix=None, moved=0, rejoining=True)
     for field in ('release', 'source', 'merged'):
         state.pop(field, None)
