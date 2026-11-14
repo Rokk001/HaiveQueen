@@ -11,7 +11,9 @@ buildJobs = { cores = 6, parallel = 1, minFreeRamGB = 2 }   # builds: CPU cores 
 ramReserveMb = 2048       # RAM that must stay free
 agentStallSeconds = 3600  # an agent that prints nothing for this long is marked as stalled, never ended (0 = off)
 exportDir = "%LOCALAPPDATA%\\HaiveQueen\\exports"
-retention = { logsDays = 30, runsDays = 30, databaseDays = 90, inboxDays = 30 }  # expired data is removed by the loop; zero disables that category
+# logsDays also expires completed orchestrator action journals after their end time;
+# active, incomplete or unreadable journals are kept. Zero disables that category.
+retention = { logsDays = 30, runsDays = 30, databaseDays = 90, inboxDays = 30 }  # expired data is removed by the loop
 update = { checkHours = 24, repository = "" }   # hours between two update checks (0 = only Check now); repository "owner/name" (empty: the origin of the install folder)
 
 # Interrupted agent ends (laptop sleep, network or API errors, vanished process): the values below are the defaults.

@@ -346,3 +346,9 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Already fixed by `758c1a9`: journal write failures retain a bounded in-memory tail and a storage-error notice while draining the subprocess pipe.
 - Reverified with `test_log_drain_failure`: an isolated helper emits 2,000 large lines while journal writes fail, finishes with its real exit code 7, and retains the final line and terminal record.
 - All four focused tests for A-24 and A-25 pass. Only isolated test helpers were launched; running application processes were not touched.
+
+## A-26: Retention for completed action journals
+
+- Apply the existing `retention.logsDays` setting to orchestrator action journals. Both the terminal timestamp and last file modification must be older than the cutoff; zero disables cleanup.
+- Read records incrementally and require a complete start-to-terminal journal. Preserve active, incomplete, malformed, unreadable and concurrently changed files. Do not traverse symlinks or junctions or remove enclosing directories.
+- Two regression tests failed before the change. Thirteen focused retention tests pass, including custom periods, disabled cleanup, active/recent files, changed files and linked-path protection. Tests use isolated temporary data only; production cleanup was not run manually.

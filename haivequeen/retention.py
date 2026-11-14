@@ -1,5 +1,6 @@
 """Periodic removal of expired logs, completed runs, database history and inbox files."""
 import shutil
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -47,6 +48,52 @@ def _remove_tree(path):
         return 0
 
 
+def _expired_action_journal(path, cutoff):
+    """Require a complete terminal record; age alone never proves completion."""
+    try:
+        before = path.stat()
+        if datetime.fromtimestamp(before.st_mtime) >= cutoff:
+            return False
+        last = None
+        with path.open(encoding="utf-8") as stream:
+            for line in stream:
+                record = json.loads(line)
+                if not isinstance(record, dict) or not line.endswith("\n"):
+                    return False
+                if last is None and record.get("event") != "start":
+                    return False
+                if last is not None and last.get("event") == "end":
+                    return False
+                last = record
+        ended = db.parse_time(last.get("ended_at")) if last and last.get("event") == "end" else None
+        after = path.stat()
+        return bool(ended and ended < cutoff and
+                    (before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns))
+    except (OSError, ValueError):
+        return False
+
+
+def _action_journals(root):
+    """Inspect only the expected project/plan/file levels, never linked folders."""
+    def ordinary(path):
+        return not path.is_symlink() and not getattr(path, "is_junction", lambda: False)()
+
+    try:
+        if not ordinary(root.parent) or not ordinary(root) or not root.is_dir():
+            return
+        for project in root.iterdir():
+            if not ordinary(project) or not project.is_dir():
+                continue
+            for plan in project.iterdir():
+                if not ordinary(plan) or not plan.is_dir():
+                    continue
+                for path in plan.glob("*.jsonl"):
+                    if ordinary(path) and path.is_file() and path.resolve().is_relative_to(root.resolve()):
+                        yield path
+    except OSError:
+        return
+
+
 def cleanup(conn, machine=None, *, now=None, data_dir=None, runs_dir=None, projects=None):
     """Apply configured retention periods and return removed counts by artifact type."""
     machine = machine if machine is not None else config.load_config()
@@ -59,6 +106,9 @@ def cleanup(conn, machine=None, *, now=None, data_dir=None, runs_dir=None, proje
 
     cutoff = _cutoff(now, periods["logsDays"])
     if cutoff:
+        for path in _action_journals(data_dir / "orchestrator" / "logs"):
+            if _expired_action_journal(path, cutoff):
+                counts["logs"] += _remove_file(path)
         log_dirs = {data_dir / "logs" / (p.get("name") or "_") for p in projects}
         log_dirs.update(runtime.mirror_dir(p.get("name")) for p in projects if p.get("name"))
         log_dirs.add(data_dir / "logs")
