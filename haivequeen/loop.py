@@ -852,6 +852,14 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
             for env in envs[:1]:
                 env.log("RETENTION ERROR %s" % exc)
         try:
+            # Source checkouts have no versioned installation to collect.
+            if TOOLS_DIR.parent.name == 'versions':
+                from . import version_leases
+                version_leases.collect(TOOLS_DIR.parent.parent)
+        except Exception as exc:
+            for env in envs[:1]:
+                env.log("VERSION COLLECTION ERROR %s" % exc)
+        try:
             from . import publish, updates
             updates.scheduled_check(machine)   # Once per interval, the result is kept for the GUI
             publish.retry_pending(conn, envs)   # A release that failed at integration is published again

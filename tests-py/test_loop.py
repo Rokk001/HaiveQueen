@@ -125,6 +125,34 @@ class RunStateTest(RoundCase):
 class LoopTest(RoundCase):
     """The loop: re-attach at the start, one lock, STOP, round errors."""
 
+    def test_rounds_collect_only_after_all_workers_exit(self):
+        from haivequeen import version_leases
+        root = self.base / 'installation'
+        versions = root / 'versions'
+        for name in ('active', 'queen', 'agent', 'build', 'deploy', 'unused'):
+            (versions / name).mkdir(parents=True)
+        (root / 'active-version').write_text('active', encoding='utf-8')
+        for pid, name in enumerate(('queen', 'agent', 'build', 'deploy'), 101):
+            token = version_leases.reserve(root, name)
+            with mock.patch.object(version_leases.platform, 'process_identity', return_value='birth'):
+                version_leases.publish(root, token, pid)
+        calls = []
+
+        def round_action(*args, **kwargs):
+            calls.append(None)
+            if len(calls) == 2:
+                self.assertFalse((versions / 'unused').exists())
+                for name in ('queen', 'agent', 'build', 'deploy'):
+                    self.assertTrue((versions / name).is_dir())
+
+        with mock.patch.object(loop, 'TOOLS_DIR', versions / 'active'), \
+             mock.patch.object(loop, 'run_round', side_effect=round_action), \
+             mock.patch.object(version_leases.process_scan, 'scan', return_value=False), \
+             mock.patch.object(version_leases.platform, 'process_identity', side_effect=lambda pid: 'birth' if len(calls) == 1 else None), \
+             mock.patch.object(version_leases.platform, 'process_absent', return_value=True):
+            self.assertEqual(loop.run_loop(self.conn, self.machine, rounds=2, sleep=lambda s: None, round_minutes=0.0001), 0)
+        self.assertEqual({p.name for p in versions.iterdir()}, {'active'})
+
     # Verify reattachment and complete any Queen started during the round.
     def test_reattach_and_end(self):
         """At the start a running agent with a living pid stays, one with a dead pid fails; the loop ends after the rounds and removes its lock."""
