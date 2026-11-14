@@ -298,3 +298,10 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Transfer existing dependent repair groups when consolidating causes. Preserve histories and running processes. Only affected integrations wait; unrelated speculative work keeps its existing parallel flow.
 - The leader must pass targeted repair verification and its required full pipeline before followers merge the published fix and run their own full pipeline. A subsequent failure keeps followers waiting for verified completion.
 - Isolated regression scenarios cover different error texts, a second failure after the first repair, actual structured report consumption, prompt candidate references, stale evidence, cancellation and cycle rejection. Controlled agent reports verify coordination; they do not establish that every live model diagnosis is correct.
+
+
+## A-19: Local LLM HTTP readiness
+
+- Connection reachability no longer implies readiness: authentication failures, rate limits and server errors reject the provider and retain automatic retesting.
+- Empty interface probes accept successful responses or expected schema errors (400/422) without loading a model. Each interface records its HTTP status. Old results without that evidence must be retested.
+- Regression evidence: the initial focused run failed 13 HTTP/cache cases before the fix. Focused coverage exercises all built-in protocols, persisted failures, schema responses, real local HTTP authentication failure and recovery, and existing connection/readiness/round behavior.

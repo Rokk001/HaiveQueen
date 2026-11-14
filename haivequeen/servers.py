@@ -461,10 +461,21 @@ def _model_ids(text) -> list:
     return out
 
 
+def _probe_usable(code):
+    """An empty generation request may fail schema validation without loading a model."""
+    return isinstance(code, int) and (200 <= code < 300 or code in (400, 422))
+
+
+def _catalog_usable(code):
+    """A missing optional model catalogue is allowed; auth and service failures are not."""
+    return isinstance(code, int) and (200 <= code < 300 or code in (404, 405))
+
+
 def run_test(server, timeout=TIMEOUT_S, now=None) -> dict:
     """Test the connection of a server and keep the result: does the address answer, which models does it list, and for each built-in CLI does it offer
     the interface that CLI needs (Claude Code: /v1/messages, Codex: /v1/responses, OpenCode and Kilo Code: /v1/chat/completions). An interface counts as
-    offered when its path answers anything but 404, 405 or 501 to an empty request (no model is loaded by the test). Returns the kept result."""
+    offered on success or an expected empty-request schema error (400/422). Authentication, rate limits and server errors are not usable.
+    No model is loaded by the test. Returns the kept result."""
     key = server.get("apiKey") or PLACEHOLDER_KEY
     base = clean_address(server["address"])
     status, text = _request(base + "/v1/models", key, timeout=timeout)
@@ -479,8 +490,8 @@ def run_test(server, timeout=TIMEOUT_S, now=None) -> dict:
             result["lines"] = [tr("The server answers but refuses the API key")]
         for cli, (label, path) in INTERFACES.items():
             code, _ = _request(base + path, key, body={}, timeout=timeout)
-            ok = code is not None and code not in (404, 405, 501)
-            result["interfaces"][cli] = {"ok": ok, "path": path}
+            ok = _probe_usable(code) and _catalog_usable(status)
+            result["interfaces"][cli] = {"ok": ok, "path": path, "status": code}
         lines = result.get("lines", [])
         for cli, (label, path) in INTERFACES.items():
             if result["interfaces"][cli]["ok"]:
@@ -542,8 +553,20 @@ def readiness(prov, has_login) -> tuple:
             return False, tr("the connection to the Local LLM %s has not been tested yet", server["name"])
         if not result.get("reachable"):
             return False, tr("the Local LLM %s does not answer", server["name"])
-        if prov.get("protocol") in INTERFACES and not (result.get("interfaces") or {}).get(prov["protocol"], {}).get("ok"):
-            return False, tr("the Local LLM %s does not offer %s, which %s needs", server["name"], path, label)
+        interface = (result.get("interfaces") or {}).get(prov.get("protocol"), {})
+        codes = (result.get("status"), interface.get("status"))
+        if any(code in (401, 403) for code in codes):
+            return False, tr("The server answers but refuses the API key")
+        if not _catalog_usable(result.get("status")):
+            return False, tr("Local LLM connection test failed (HTTP %s)", result.get("status"))
+        if prov.get("protocol") in INTERFACES:
+            if "status" not in interface:
+                return False, tr("the connection to the Local LLM %s has not been tested yet", server["name"])
+            if not interface.get("ok") or not _probe_usable(interface.get("status")):
+                if interface.get("status") in (404, 405, 501):
+                    return False, tr("the Local LLM %s does not offer %s, which %s needs", server["name"], path, label)
+                return False, tr("Local LLM connection test failed (HTTP %s)", interface.get("status"))
+
     elif not has_login:
         return False, tr("the login is missing")
     available = known_models(prov)
@@ -564,7 +587,9 @@ def needs_retest(prov) -> bool:
     if not server:
         return False
     result = kept(server)
-    return not (result and result.get("reachable") and (result.get("interfaces") or {}).get(prov.get("protocol"), {}).get("ok", True))
+    interface = ((result or {}).get("interfaces") or {}).get(prov.get("protocol"), {})
+    return not (result and result.get("reachable") and _catalog_usable(result.get("status"))
+                and (prov.get("protocol") not in INTERFACES or (interface.get("ok") and _probe_usable(interface.get("status")))))
 
 
 def test_used(providers, only=None, timeout=TIMEOUT_S) -> list:

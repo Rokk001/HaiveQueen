@@ -598,6 +598,7 @@ GERMAN = {
     "provider %s: capability thresholds must be a table": "Anbieter %s: Fähigkeitsschwellen müssen eine Tabelle sein",
     "provider %s: capability threshold must be a whole percent from 1 to 100": "Anbieter %s: Die Fähigkeitsschwelle muss eine ganze Prozentzahl von 1 bis 100 sein",
     "provider %s: server %s does not exist": "Anbieter %s: der Server %s existiert nicht",
+    "Local LLM connection test failed (HTTP %s)": "Verbindungstest zum lokalen LLM fehlgeschlagen (HTTP %s)",
     "The server does not answer at %s": "Der Server antwortet nicht unter %s", "The server answers but refuses the API key": "Der Server antwortet, lehnt aber den API-Schlüssel ab",
     "%s: usable (%s)": "%s: nutzbar (%s)", "%s: not usable, the server does not offer %s": "%s: nicht nutzbar, der Server bietet %s nicht an",
     "Not tested yet": "Noch nicht getestet", "Tested at %s": "Getestet um %s",
