@@ -74,3 +74,11 @@ non-durable fallback. A real subprocess emitting several megabytes still complet
 with its original exit code when journal writes fail. Completion-recovery and
 existing live/stall output regressions also pass. Full disk failure can still
 prevent durable receipts; this fix does not claim persistence without storage.
+
+## A-11 update state transactions
+
+Resolved: state mutations use a process/thread lock and unique atomic temporary
+files. Network lookups stay outside the lock and merge only check-owned fields;
+older results cannot overwrite newer checks. Install start and settlement update
+the latest state under the same lock. Both race regressions failed before the fix;
+14 focused update state, check, header and install tests pass.

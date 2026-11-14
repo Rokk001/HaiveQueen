@@ -10,6 +10,8 @@ import json
 import os
 import re
 import tomllib
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -33,6 +35,40 @@ TEXT_NO_RELEASE = N_("no release published yet")
 
 # ---- persisted state ----
 
+_state_mutex = threading.RLock()
+
+
+@contextmanager
+def _state_lock():
+    """Serialize short state transactions across threads and processes."""
+    with _state_mutex:
+        path = state_path().with_suffix('.lock')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'a+b') as handle:
+            if handle.tell() == 0:
+                handle.write(b'0')
+                handle.flush()
+            handle.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                if os.name == 'nt':
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _write_state(state):
+    from .filetxn import atomic_write
+    atomic_write(state_path(), json.dumps(state, indent=1).encode('utf-8'))
+
 def state_path() -> Path:
     """The file that keeps the result of the last check and a started install."""
     return osplat.data_dir() / STATE_FILE
@@ -49,11 +85,8 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     """Write the state atomically."""
-    path = state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".tmp")
-    temp.write_text(json.dumps(state, indent=1), encoding="utf-8")
-    os.replace(temp, path)
+    with _state_lock():
+        _write_state(state)
 
 
 # ---- settings ----
@@ -133,7 +166,7 @@ def check(machine, now=None, manual=False, lookup=None, current=None):
     if not manual and not due(machine, state, now):
         return None
     lookup = lookup or releases.check_latest
-    state["last_check"] = now.isoformat(timespec="seconds")
+    state = {"last_check": now.isoformat(timespec="microseconds")}
     try:
         found = lookup(repository(machine), current or installed_version())
         state.update(available=dict(found) if found else None, error="", no_release=False)
@@ -142,8 +175,12 @@ def check(machine, now=None, manual=False, lookup=None, current=None):
             state.update(available=None, error="", no_release=True)
         else:
             state.update(available=None, error=str(exc)[:300] or exc.__class__.__name__, no_release=False)
-    save_state(state)
-    return state
+    with _state_lock():
+        latest = load_state()
+        if str(latest.get('last_check') or '') <= state['last_check']:
+            latest.update(state)
+            _write_state(latest)
+        return latest
 
 
 def offered(state=None):
@@ -181,9 +218,10 @@ def request_install(version, spawn=None) -> dict:
         pass
     spawn = spawn or (lambda v: selfupdate.spawn_worker(version=v))
     result = spawn(found["version"])
-    state = load_state()
-    state["installing"] = {"version": found["version"], "after_row": after, "since": datetime.now().isoformat(timespec="seconds")}
-    save_state(state)
+    with _state_lock():
+        state = load_state()
+        state["installing"] = {"version": found["version"], "after_row": after, "since": datetime.now().isoformat(timespec="seconds")}
+        _write_state(state)
     return result or {}
 
 
@@ -205,6 +243,11 @@ def install_finished(state, last_row):
 
 def settle_install(last_row) -> str:
     """Close a started install once its self-update row ended: 'ok' (the GUI restarts itself) or 'failed' (shown until the next check); None otherwise."""
+    with _state_lock():
+        return _settle_install(last_row)
+
+
+def _settle_install(last_row):
     state = load_state()
     done = install_finished(state, last_row)
     if done:
@@ -216,7 +259,7 @@ def settle_install(last_row) -> str:
         else:
             state.pop("failed", None)
             state["available"] = None
-        save_state(state)
+        _write_state(state)
     return done
 
 
