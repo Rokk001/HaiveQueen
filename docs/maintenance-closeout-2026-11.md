@@ -63,3 +63,14 @@ is rejected while a write remains pending. Status and shutdown remain available.
 The regression reproduces a non-reading pipe and verifies bounded request time,
 status access, duplicate rejection and shutdown. Existing interactive login tests
 also pass. No production process was restarted.
+
+## A-25 journal failure isolation
+
+Resolved: journal write errors no longer escape into output-draining threads.
+A bounded in-memory tail (128 records, at most 4096 characters per output record,
+16 failed journals) preserves recent output and terminal status for the process.
+Both returned output and the diagnostic logger identify storage failure and the
+non-durable fallback. A real subprocess emitting several megabytes still completes
+with its original exit code when journal writes fail. Completion-recovery and
+existing live/stall output regressions also pass. Full disk failure can still
+prevent durable receipts; this fix does not claim persistence without storage.

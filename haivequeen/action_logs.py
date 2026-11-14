@@ -1,4 +1,7 @@
 """Append-only action journals: a start, uncut output, and a terminal result."""
+import collections
+import logging
+import threading
 import hashlib
 import json
 import re
@@ -8,6 +11,9 @@ from pathlib import Path
 
 from . import platform as osplat
 
+
+_fallback = collections.OrderedDict()
+_fallback_lock = threading.RLock()
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
@@ -34,19 +40,47 @@ def append(path, text):
 
 
 def _write(path, record):
-    with Path(path).open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(record) + "\n")
+    key = str(path)
+    with _fallback_lock:
+        if key not in _fallback:
+            try:
+                with Path(path).open('a', encoding='utf-8') as stream:
+                    stream.write(json.dumps(record) + '\n')
+                return
+            except OSError as exc:
+                message = 'Log storage error: %s. Only a bounded in-memory output tail is available; it is not durable.\n' % exc
+                _fallback[key] = (message, collections.deque(maxlen=128))
+                while len(_fallback) > 16:
+                    _fallback.popitem(last=False)
+                logging.getLogger(__name__).error('%s', message.rstrip())
+        # Do not let a failed journal stop draining the command pipe. Keep a
+        # bounded tail and terminal status, explicitly marked as non-durable.
+        item = dict(record)
+        if 'text' in item:
+            item['text'] = item['text'][-4096:]
+        _fallback[key][1].append(item)
 
 
 def read(path):
     """Ignore an incomplete last record while a writer is appending it."""
     records = []
-    with Path(path).open(encoding="utf-8") as stream:
-        for line in stream:
-            try:
-                records.append(json.loads(line))
-            except ValueError:
-                break
+    with _fallback_lock:
+        stored = _fallback.get(str(path))
+        fallback = (stored[0], list(stored[1])) if stored else None
+    try:
+        with Path(path).open(encoding='utf-8') as stream:
+            for line in stream:
+                try:
+                    records.append(json.loads(line))
+                except ValueError:
+                    break
+    except OSError:
+        if fallback is None:
+            raise
+    if fallback:
+        message, tail = fallback
+        records.append({'event': 'output', 'text': message})
+        records.extend(tail)
     return records
 
 
