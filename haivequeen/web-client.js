@@ -174,6 +174,15 @@ class Client {
     }
   }
 }
+function credentialStatus(provider) {
+  if(provider.error||provider.status_error)return {label:'Check access',tone:'error',icon:'!'};
+  if(['device','bearer','token','pat','existing access'].includes(provider.method))return {label:'Access present',tone:'ok',icon:'\u2713'};
+  return {label:'Not configured',tone:'neutral',icon:'\u2014'};
+}
+function loginStatus(status) {
+  if(!status||typeof status.logged_in!=='boolean')return {label:'Login status unknown',tone:'neutral',icon:'?'};
+  return status.logged_in?{label:'Login present',tone:'ok',icon:'\u2713'}:{label:'Login missing',tone:'warn',icon:'!'};
+}
 async function copyOutput(target, document, navigator) {
   const text=target.tagName==='TEXTAREA'?target.value:(target.innerText??target.textContent);
   if(navigator?.clipboard?.writeText){try{await navigator.clipboard.writeText(text);return;}catch(_error){/* HTTP or denied clipboard: use the selection fallback. */}}
@@ -218,6 +227,10 @@ function mount(document, bootstrap) {
     started:'Started',waiting_for:'Waiting for',error:'Error'};
   const pretty = key => t(bootstrap.labels[key] || viewLabels[key] || key.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/_/g,' '));
   const el = (tag, text, cls) => {const node=document.createElement(tag); if(text!==undefined) node.textContent=String(text); if(cls)node.className=cls; return node;};
+  const statusBadge = status => {
+    const badge=el('span',undefined,'access-status access-'+status.tone);
+    const icon=el('span',status.icon);icon.setAttribute('aria-hidden','true');badge.append(icon,el('span',t(status.label)));return badge;
+  };
   const button = (text, action) => {const node=el('button',t(text)); node.type='button'; renderGate.prepare(node); node.onclick=()=>runButton(node,action); return node;};
   async function runButton(node, action) {
     renderGate.begin(node);
@@ -487,7 +500,7 @@ function mount(document, bootstrap) {
     for(const key of columns)head.append(el('th',t(options.labels?.[key]||pretty(key))));
     if(extra && !options.compact)head.append(el('th',t('Actions')));
     const thead=el('thead');thead.append(head);table.append(thead,body);
-    for(const [index,row] of rows.entries()){const tr=el('tr');tr.dataset.kind=row.kind||'';for(const key of columns){const td=el('td');td.dataset.label=t(options.labels?.[key]||pretty(key));
+    for(const [index,row] of rows.entries()){const tr=el('tr');tr.dataset.kind=row.kind||'';for(const key of columns){const td=el('td');td.dataset.column=key;td.dataset.label=t(options.labels?.[key]||pretty(key));
       if(key==='number')td.append(el('span',index+1));
       else if(options.hierarchy && isPackagePlaceholder(row) && key==='name'){
         const label=filterLink(t('Package'),'plan',row);label.prepend(el('span','└ ','tree-branch'));
@@ -736,6 +749,7 @@ function mount(document, bootstrap) {
     const plans=primary?.querySelector('[data-panel="ACTIVE PLANS"] .table-scroll');
     const hive=primary?.querySelector('[data-panel="QUEENS AND AGENTS"] .table-scroll');
     if(!plans || !hive)return;
+    if(window.innerWidth<=1100){primary.style.height='';plans.style.maxHeight='';hive.style.maxHeight='';return;}
     const rows=[...plans.querySelectorAll('tbody tr')].map(row=>row.getBoundingClientRect().height);
     const header=plans.querySelector('thead')?.getBoundingClientRect().height||0;
     const desktop=window.innerWidth>1100;
@@ -1030,7 +1044,7 @@ function mount(document, bootstrap) {
         const grid=el('div',undefined,'git-connection-grid');git.append(grid);
         for(const provider of providers){
           const method={device:'Browser sign-in',bearer:'Browser sign-in',token:'Access token',pat:'Access token','existing access':'Existing access'}[provider.method] || provider.method || 'None';
-          const card=el('details',undefined,'git-connection');const summary=el('summary');summary.append(el('strong',provider.name),el('span',t('Current method')+': '+t(method),'dim'));card.append(summary);
+          const card=el('details',undefined,'git-connection');const summary=el('summary');summary.append(el('strong',provider.name),statusBadge(credentialStatus(provider)),el('span',t('Current method')+': '+t(method),'dim'));card.append(summary);
           if(provider.error){card.append(el('p',provider.error,'bad'));grid.append(card);continue;}
           if(provider.status_error)card.append(el('p',provider.status_error,'bad'));
           const token=el('input');token.placeholder=t('Access token');token.type='password';token.autocomplete='off';token.setAttribute('aria-label',t('Access token'));
@@ -1072,7 +1086,7 @@ function mount(document, bootstrap) {
         const saved=!editor.dirty;
         const savedAction=(title,fn,parent=source,ready=true)=>{const node=button(title,fn);node.disabled=node.disabled||!saved||!ready;node.dataset.savedOnly='true';parent.append(node);return node;};
         if(access==='subscription'){
-          source.append(el('p',t(status?.logged_in?'Login present':'Login missing')));
+          source.append(statusBadge(loginStatus(status)));
           savedAction('Login',async()=>{const run=await client.action('login/start',{provider:provider.name});if(run){loginRuns.set(run.id,run);renderLogin(run);}});
           source.append(el('small',t('This login is shared by all providers with this CLI.')));
         }else{
@@ -1153,14 +1167,20 @@ function mount(document, bootstrap) {
     for(const [value,label] of [['local','Local'],['git','Git provider'],['custom','Custom']]){const option=el('option',t(label));option.value=value;if(value!=='local'&&!supported)option.disabled=true;select.append(option);}
     select.value=data.wayOfWorking;select.onchange=()=>{data.wayOfWorking=select.value;if(select.value!=='custom')for(const [step] of steps)data[step+'Mode']=select.value;changed();render();};group.append(select);
     for(const [step,label,field,fieldLabel] of steps){
-      const row=el('fieldset',undefined,'workflow-step');row.append(el('legend',t(label)));
-      if(field){const switchLabel=el('label',undefined,'field'),toggle=el('input');toggle.type='checkbox';toggle.checked=!!data[step+'Enabled'];toggle.setAttribute('aria-label',t(label+' on'));toggle.onchange=()=>{data[step+'Enabled']=toggle.checked;changed();render();};switchLabel.append(el('span',t('On')),toggle);row.append(switchLabel);}
-      const mode=el('select');mode.setAttribute('aria-label',t(label+' location'));
-      for(const [value,text] of [['local','Local'],['git','Git provider']]){const option=el('option',t(text));option.value=value;if(value==='git'&&!supported)option.disabled=true;mode.append(option);}
-      mode.value=data[step+'Mode'];const unavailable=supported&&data[step+'Mode']==='git'&&!capabilities.supported[step];mode.disabled=!supported||unavailable;
-      mode.onchange=()=>{data[step+'Mode']=mode.value;const modes=new Set(steps.map(([name])=>data[name+'Mode']));data.wayOfWorking=modes.size===1?[...modes][0]:'custom';changed();render();};row.append(mode);
-      if(unavailable)row.append(el('p',t('This provider does not support this step; it will be skipped.')));
-      if(field){const inputLabel=el('label',undefined,'field'),input=el('input');input.value=data[field]||'';input.dataset.path=JSON.stringify([field]);input.disabled=!data[step+'Enabled']||data[step+'Mode']==='git';input.required=!input.disabled;input.oninput=()=>{data[field]=input.value;changed();};inputLabel.append(el('span',t(fieldLabel)),input);row.append(inputLabel);}
+      const row=el('div',undefined,'workflow-step');row.setAttribute('role','group');row.setAttribute('aria-label',t(label));row.append(el('h3',t(label)));
+      if(field){const switchLabel=el('label',undefined,'workflow-switch'),toggle=el('input');toggle.type='checkbox';toggle.setAttribute('role','switch');toggle.checked=!!data[step+'Enabled'];toggle.setAttribute('aria-label',t(label+' on'));toggle.onchange=()=>{data[step+'Enabled']=toggle.checked;changed();render();};switchLabel.append(toggle,el('span',t(toggle.checked?'On':'Off')));row.append(switchLabel);}
+      else row.append(el('span',t('Always on'),'dim'));
+      const unavailable=supported&&data[step+'Mode']==='git'&&!capabilities.supported[step];
+      const mode=el('div',undefined,'workflow-location');mode.setAttribute('role','radiogroup');mode.setAttribute('aria-label',t(label+' location'));
+      for(const [value,text] of [['local','Local'],['git','Git provider']]){
+        const choice=el('button',t(text));choice.type='button';choice.dataset.mode=value;choice.setAttribute('role','radio');choice.setAttribute('aria-checked',String(data[step+'Mode']===value));choice.disabled=!supported||unavailable;
+        choice.onclick=()=>{data[step+'Mode']=value;const modes=new Set(steps.map(([name])=>data[name+'Mode']));data.wayOfWorking=modes.size===1?[...modes][0]:'custom';changed();render();};mode.append(choice);
+      }
+      row.append(mode);
+      const content=el('div',undefined,'workflow-command');row.append(content);
+      if(field){const inputLabel=el('label',undefined,'workflow-field'),input=el('input');input.value=data[field]||'';input.dataset.path=JSON.stringify([field]);input.disabled=!data[step+'Enabled']||data[step+'Mode']==='git';input.required=!input.disabled;input.oninput=()=>{data[field]=input.value;changed();};inputLabel.append(el('span',t(fieldLabel)),input);content.append(inputLabel);}
+      const explanation=unavailable?'This provider does not support this step; it will be skipped.':field&&!data[step+'Enabled']?'Step is off; it will be skipped.':data[step+'Mode']==='git'?'Executed by the Git provider.':'Executed locally by HaiveQueen.';
+      content.append(el('small',t(explanation),'dim'));
       group.append(row);
     }
     parent.append(group);
@@ -1318,5 +1338,5 @@ function mount(document, bootstrap) {
   render();void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

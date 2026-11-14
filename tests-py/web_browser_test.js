@@ -301,16 +301,16 @@ window.addEventListener('load', async () => {
     await click('Projects');await wait(()=>field(['compileCheck']));
     const way=document.querySelector('[aria-label="Way of working"]');
     assert(way && way.options.length===3,'Workflow choices missing');
-    assert([...document.querySelectorAll('legend')].filter(node=>['Merge','Check','Build','Deploy','Release'].includes(node.textContent)).length===5,'Workflow rows missing');
+    assert([...document.querySelectorAll('.workflow-step h3')].filter(node=>['Merge','Check','Build','Deploy','Release'].includes(node.textContent)).length===5,'Workflow rows missing');
     assert(!document.querySelector('[aria-label="Merge on"]'),'Merge must not have an off switch');
     assert(!document.getElementById('app').textContent.includes('Publish release at integration'),'Legacy release switch remains');
     assert(!field(['compileCheck']).disabled && field(['compileCheck']).required,'Enabled local check must require its command');
     assert(field(['buildCommand']).disabled,'Disabled build command must be greyed');
     way.value='git';way.dispatchEvent(new Event('change'));
     assert(field(['compileCheck']).disabled,'Provider check command must be greyed');
-    assert(document.querySelector('[aria-label="Release location"]').disabled,'Unsupported provider release must be greyed');
+    assert([...document.querySelectorAll('[aria-label="Release location"] button')].every(button=>button.disabled),'Unsupported provider release must be greyed');
     assert(document.querySelector('[aria-label="Way of working"]').value==='git','Unsupported step must not change the choice');
-    const checkMode=document.querySelector('[aria-label="Check location"]');checkMode.value='local';checkMode.dispatchEvent(new Event('change'));
+    document.querySelector('[aria-label="Check location"] [data-mode=local]').click();
     assert(document.querySelector('[aria-label="Way of working"]').value==='custom','Manual change must select Custom');
     document.querySelector('[aria-label="Way of working"]').value='local';document.querySelector('[aria-label="Way of working"]').dispatchEvent(new Event('change'));
 
@@ -333,7 +333,7 @@ window.addEventListener('load', async () => {
     const selectProject=document.querySelector('[aria-label="Project"]');selectProject.value='local-only';selectProject.dispatchEvent(new Event('change'));
     await wait(()=>document.body.textContent.includes('Only Local is available.'));
     assert([...document.querySelector('[aria-label="Way of working"]').options].filter(option=>option.value!=='local').every(option=>option.disabled),'Unsupported remote offers nonlocal choice');
-    assert(['Merge','Check','Build','Deploy','Release'].every(name=>document.querySelector('[aria-label="'+name+' location"]').disabled),'Unsupported remote offers provider toggles');
+    assert(['Merge','Check','Build','Deploy','Release'].every(name=>[...document.querySelectorAll('[aria-label="'+name+' location"] button')].every(button=>button.disabled)),'Unsupported remote offers provider toggles');
     await click('Releases');await wait(()=>buttons('Publish as full release').length);
     assert(buttons('Publish as full release').length===1,'Full release must not offer promotion');
     for(const value of ['v2.0.1-dev.3','2026-01-02','a'.repeat(40),'Prerelease'])assert(document.body.textContent.includes(value),'Missing release metadata '+value);

@@ -824,3 +824,7 @@ GERMAN.update({'Copy': 'Kopieren',
  'Existing access': 'Vorhandener Zugang',
  'Save access token': 'Zugangstoken speichern',
  'HTTPS server origin': 'HTTPS-Serveradresse'})
+
+GERMAN.update({'Access present': 'Zugang vorhanden', 'Not configured': 'Nicht eingerichtet', 'Check access': 'Zugang prüfen', 'Login status unknown': 'Loginstatus unbekannt'})
+
+GERMAN.update({'Always on': 'Immer an', 'Step is off; it will be skipped.': 'Schritt ist aus und wird ausgelassen.', 'Executed by the Git provider.': 'Ausführung beim Git-Anbieter.', 'Executed locally by HaiveQueen.': 'Lokale Ausführung durch HaiveQueen.'})

@@ -52,6 +52,14 @@ class BrowserTests(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_mobile_layout_state_and_access_badges(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required')
+        result = subprocess.run([node, str(Path(__file__).with_name('web_mobile_state_test.cjs'))],
+                                cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_assets_are_packaged(self):
         text = (ROOT / 'pyproject.toml').read_text(encoding='utf-8')
         self.assertIn('web-client.js', text)
