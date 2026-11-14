@@ -379,10 +379,10 @@ class RunnerVariablesTest(RunnerBase):
             self.env.pop(key, None)
 
     def test_every_building_agent_gets_the_variables(self):
-        """Integrate, release, Queen and Bee agents get the job count in the configured variable, BUILD_PARALLEL and the minimum free RAM; a work agent none."""
+        """Only integrate and release agents get build variables; Queens, Bees and work agents do not."""
         self.write_config('[buildJobs]\nenvVar = "BUILD_MP_JOBS"\ncores = 4\nparallel = 2\nminFreeRamGB = 0.5\nperJobMB = 1\n')
         expected = str(max(1, min(4, os.cpu_count() or 1) // 2))
-        for i, phase in enumerate(("integrate", "release", "queen", "bee")):
+        for i, phase in enumerate(("integrate", "release")):
             name = "V-%d" % i
             self.prepare(name)
             self.run_runner(name, "claude", claude_stream(), phase=phase, env={"BZZ_SAMPLE_SEC": "0.2"})
@@ -393,35 +393,40 @@ class RunnerVariablesTest(RunnerBase):
         self.assertEqual((self.record()["mp_jobs"], self.record()["parallel"]), (None, None))
 
     def test_a_bee_is_not_a_build_agent_of_its_own(self):
-        """A Bee gets the variables but no job count in its row and no measurement."""
+        """A Bee gets no build variables, job reservation or measurement."""
         self.write_config("[buildJobs]\ncores = 2\n")
         self.prepare("B-bee")
         self.run_runner("B-bee", "claude", claude_stream(), phase="bee", env={"BZZ_SAMPLE_SEC": "0.2"})
         self.assertNotIn("buildJobs", self.row("B-bee"))
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM build_measurements").fetchone()[0], 0)
 
-    def test_agent_start_counts_compile_checks_and_waits_for_cores(self):
-        """Startup uses the current shared core budget before exporting build variables."""
+    def test_queen_and_bee_start_when_all_build_cores_are_taken(self):
+        """S-1: neither phase consults or reserves build cores before starting."""
         self.write_config('[buildJobs]\nenvVar = "BUILD_MP_JOBS"\ncores = 8\nparallel = 2\nfirstJobs = 8\n')
         (self.base / 'stream.txt').write_text(claude_stream(), encoding='utf-8')
-        for name, counts in (('checks-running', [2]), ('checks-full', [8, 2])):
-            with self.subTest(name=name):
+        for phase in ('queen', 'bee'):
+            with self.subTest(phase=phase):
                 (self.base / 'record.json').unlink(missing_ok=True)
-                self.prepare(name)
+                self.prepare(phase)
                 script = ('import sys\nfrom haivequeen import agent_runner as ar, buildjobs\n'
                           'ar.osplat.logical_cores = lambda: 8\n'
                           'ar.osplat.free_ram_mb = lambda: 64000\n'
-                          'counts = iter(%r)\n' % counts +
-                          'buildjobs._running_checks = lambda: next(counts, 2)\n'
+                          'buildjobs._running_checks = lambda: 8\n'
+                          'def forbidden(*args, **kwargs):\n'
+                          '    raise AssertionError("Queen/Bee entered build core allocation")\n'
+                          'buildjobs.plan_build = forbidden\n'
+                          'buildjobs.reserve_agent_build = forbidden\n'
+                          'ar.queen_build_monitor = forbidden\n'
                           'sys.exit(ar.main(sys.argv[1:]))\n')
                 result = subprocess.run([sys.executable, '-c', script,
-                    '--project', 'demo', '--name', name, '--provider', 'claude',
-                    '--plan', 'plans/Demo-PLAN.md', '--package', 'P1', '--phase', 'bee',
+                    '--project', 'demo', '--name', phase, '--provider', 'claude',
+                    '--plan', 'plans/Demo-PLAN.md', '--package', 'P1', '--phase', phase,
                     '--cwd', str(self.ws), '--prompt-file', str(self.prompt), '--runs-dir', str(self.runs)],
                     cwd=str(ROOT), env=self.env, capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual((self.record()['mp_jobs'], self.record()['parallel']), ('1', '2'))
-                self.assertEqual('Waiting for build cores' in result.stdout, counts[0] == 8)
+                self.assertNotIn('Waiting for build cores', result.stdout)
+                self.assertEqual((self.record()['mp_jobs'], self.record()['parallel']), (None, None))
+                self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM build_measurements").fetchone()[0], 0)
 
 
 class InstructionsTest(RoundCase):
