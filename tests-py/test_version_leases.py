@@ -127,10 +127,25 @@ class VersionLeasesTests(unittest.TestCase):
             for name in ('active', 'unknown'):
                 (root / 'versions' / name).mkdir(parents=True)
             (root / 'active-version').write_text('active', encoding='utf-8')
-            with patch.object(config, 'config_dir', return_value=base / 'data'), patch.object(version_leases.platform, 'process_identity', return_value=None):
+            with patch.object(config, 'config_dir', return_value=base / 'data'), patch.object(version_leases.platform, 'process_identity', return_value=None), patch.object(version_leases.platform, 'process_absent', return_value=False):
                 token = version_leases.reserve(root, 'unknown')
                 version_leases.publish(root, token, 100)
                 self.assertEqual(version_leases.collect(root), [])
+
+    def test_unknown_identity_is_recovered_only_after_definite_absence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name in ('active', 'old'):
+                (root / 'versions' / name).mkdir(parents=True)
+            (root / 'active-version').write_text('active', encoding='utf-8')
+            with patch.object(version_leases.platform, 'process_identity', return_value=None), \
+                 patch.object(version_leases.platform, 'process_absent', return_value=False) as absent:
+                token = version_leases.reserve(root, 'old')
+                version_leases.publish(root, token, 123)
+                self.assertEqual(version_leases.collect(root), [])
+                absent.return_value = True
+                self.assertEqual(version_leases.collect(root), ['old'])
+                self.assertNotIn(token, version_leases._load(root))
 
     def test_unavailable_probe_is_not_proof_of_death(self):
         with tempfile.TemporaryDirectory() as temp:

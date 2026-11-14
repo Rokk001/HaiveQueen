@@ -97,6 +97,10 @@ def collect(root):
                 current = platform.process_identity(pid)
                 if current != identity and (current is not None or platform.process_absent(pid)):
                     del leases[token]
+            elif pid and platform.process_absent(pid):
+                # A published PID without a birth identity cannot be matched to
+                # a live process, but definitive absence still proves it ended.
+                del leases[token]
         _save(root, leases)
         protected = {active} | {_version(r['version']) for r in leases.values()}
         versions = root / 'versions'
