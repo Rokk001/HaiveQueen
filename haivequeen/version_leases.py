@@ -101,3 +101,35 @@ def collect(root):
                     shutil.rmtree(path)
                     removed.append(path.name)
         return removed
+
+
+def reserve_for_path(path):
+    """Reserve the immutable version containing path, or None for a source checkout.
+
+    The reservation is intentionally kept if publication is interrupted: safety
+    takes priority over collecting a directory whose process might have started.
+    """
+    path = Path(path).resolve()
+    if path.parent.name != 'versions' or not (path.parent.parent / 'active-version').is_file():
+        return None
+    return path.parent.parent, reserve(path.parent.parent, path.name)
+
+
+def launch(path, popen, *args, **kwargs):
+    """Reserve before spawning and bind the record to the resulting process."""
+    reservation = reserve_for_path(path)
+    try:
+        process = popen(*args, **kwargs)
+    except BaseException:
+        if reservation:
+            release(*reservation)
+        raise
+    if reservation:
+        try:
+            publish(*reservation, process.pid)
+        except Exception:
+            # The already-started process must remain managed by its caller.
+            # Its pending reservation protects the version until recovery.
+            import logging
+            logging.exception("Could not publish version lease; reservation retained")
+    return process

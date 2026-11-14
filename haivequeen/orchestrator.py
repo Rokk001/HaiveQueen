@@ -640,7 +640,8 @@ def _start_detached_work(j, settings, step, command, folder, extra, result_file,
     bootstrap = "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.orchestrator import _detached_work;_detached_work(sys.argv[2])"
     flags = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
     try:
-        j.process = subprocess.Popen([sys.executable, "-I", "-c", bootstrap, str(Path(__file__).resolve().parent.parent), str(request_file)],
+        from . import version_leases
+        j.process = version_leases.launch(Path(__file__).resolve().parent.parent, subprocess.Popen, [sys.executable, "-I", "-c", bootstrap, str(Path(__file__).resolve().parent.parent), str(request_file)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, **flags)
     except OSError:
         request_file.unlink(missing_ok=True)

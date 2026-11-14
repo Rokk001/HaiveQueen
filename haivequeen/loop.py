@@ -245,7 +245,8 @@ def launch_headless(env, spec: dict) -> None:
     log = open(env.run_dir(spec["name"]) / "runner.log", "ab")
     flags = {"creationflags": 0x08000000 | 0x00000200} if osplat.is_windows() else {"start_new_session": True}   # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP (hidden console: its children open no windows)
     try:
-        subprocess.Popen(runner_argv(env, spec), stdin=subprocess.DEVNULL, stdout=log, stderr=log, **flags)
+        from . import version_leases
+        version_leases.launch(TOOLS_DIR, subprocess.Popen, runner_argv(env, spec), stdin=subprocess.DEVNULL, stdout=log, stderr=log, **flags)
     finally:
         log.close()
 
