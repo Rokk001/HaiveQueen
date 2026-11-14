@@ -1037,3 +1037,5 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 @media(max-width:900px){.loading-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:600px){.loading-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.loading-columns{grid-template-columns:1fr}.loading-metric{min-height:72px;padding:12px}}
 @media(prefers-reduced-motion:reduce){.loading-honeycomb,.loading-row{animation:none}}
+
+.plan-resume{margin-left:.5rem;padding:.15rem .5rem;font-size:inherit;white-space:nowrap}

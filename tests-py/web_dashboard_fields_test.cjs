@@ -34,3 +34,8 @@ const limits=limitsView([{name:'Local',model:'Local model',reserve:{text:'+99%',
 assert.equal(find(limits,n=>n.textContent===reason).length,0,'Offline reason belongs in details, not the overview');
 assert.equal(find(limits,n=>n.textContent==='no limit').length,0,'Offline overview needs only its status');
 assert.equal(find(limits,n=>n.textContent==='offline'&&n.help===reason).length,1,'Offline details remain available');
+
+const paused=table([{name:'Paused plan',paused:true,status:'Plan paused',orch:{chain:[['Build','pending']]}}],['status'],null,{tree:true});
+assert.equal(find(paused,n=>n.tag==='button'&&n.textContent==='Resume').length,1,'Paused dashboard plan offers an inline Resume button');
+const active=table([{name:'Active plan',paused:false,status:'Running'}],['status'],null,{tree:true});
+assert.equal(find(active,n=>n.tag==='button'&&n.textContent==='Resume').length,0);

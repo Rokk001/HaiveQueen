@@ -403,6 +403,11 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
 
 GERMAN = {
     "Questions": "Fragen", "Limits": "Grenzen", "Queue": "Warteschlange",
+    "Pause %s plans? Running work continues; no new work starts.": "%s Pläne pausieren? Laufende Arbeiten werden fortgesetzt; neue Arbeiten starten nicht.",
+    "Force stop %s plans? Their running work will end immediately.": "%s Pläne sofort stoppen? Ihre laufenden Arbeiten werden sofort beendet.",
+    "Resume %s paused plans?": "%s pausierte Pläne fortsetzen?",
+    "Plans processed: %s": "Bearbeitete Pläne: %s",
+    "The plan cannot resume yet. Refresh its status.": "Der Plan kann noch nicht fortgesetzt werden. Aktualisiere seinen Status.",
     "Clear": "Leeren", "Resume": "Fortsetzen", "Update": "Aktualisieren",
     "Coding (including tests, docs and review)": "Programmierung (einschließlich Tests, Dokumentation und Prüfung)",
     "Queen (plan cutting and coordination)": "Queen (Planaufteilung und Koordination)",

@@ -169,6 +169,12 @@ function planActions(row) {
   if (row.status === 'CANCELLED' || row.stopped) out.push('back-to-draft');
   return out;
 }
+async function resolvePlanActions(row, request) {
+  if (/^[A-Z]+$/.test(row.status||'')) return planActions(row);
+  const plans=await request('plans');
+  const match=plans.find(plan=>(plan.apiary||plan.project)===(row.apiary||row.project) && plan.plan_path===row.plan_path);
+  return match?planActions(match):[];
+}
 function dashboardMetrics(tiles,format) {
   return [
     {key:'apiaries',label:'PROJECTS',value:String(tiles.apiaries??0),note:'active',icon:'t_apiaries'},
@@ -231,6 +237,28 @@ class Client {
       return result;
     } catch (error) { this.notice(error.message, true); throw error; }
     finally {this.pending.delete(key);}
+  }
+  async plansAction(action, warning) {
+    const lock='plans/batch';
+    if(this.pending.has(lock))return null;
+    this.pending.set(lock,true);
+    try {
+      const rows=await this.request('plans'),seen=new Set();
+      const selected=rows.filter(row=>{
+        const key=JSON.stringify([row.apiary||row.project,row.plan_path]);
+        if(seen.has(key)||!planActions(row).includes(action))return false;
+        seen.add(key);return true;
+      });
+      if(!selected.length)return {count:0};
+      const names=selected.map(row=>(row.apiary||row.project)+' / '+(row.name||row.plan_path)).join('\n');
+      if(!await this.confirm(warning(selected.length)+'\n\n'+names))return null;
+      let count=0;
+      for(const row of selected){
+        await this.action('plan/'+action,{project:row.apiary||row.project,plan:row.plan_path,confirmed:true});
+        count++;
+      }
+      return {count};
+    } finally {this.pending.delete(lock);}
   }
   async refresh() {
     if (this.loading) { this.refreshWanted=true; return; }
@@ -689,8 +717,13 @@ function mount(document, bootstrap) {
       else if(key==='task' && row.kind==='orch' && orchestrationFor(row,client.state.hives)){td.append(orchestrationView(orchestrationFor(row,client.state.hives),row));}
       else if(key==='task' && row.step){td.classList.add('task-progress');const inline=el('div',undefined,'task-inline');inline.append(el('span',row.task),meter((row.step_frac||0)*100,100,row.step),el('small',row.step,'cyan'));td.append(inline);}
       else if(key==='progress' && Number.isFinite(Number(row[key]))){td.append(planProgress(row));}else if(key==='ctx'){td.classList.add('context-cell');td.append(row.ctx_limit?meter(100*(row.ctx||0)/row.ctx_limit,100,t('CONTEXT')):missingValue('No context value available'));if(row.ctx_limit)td.append(el('small',Math.round(100*(row.ctx||0)/row.ctx_limit)+'%'));td.title=tokens(row.ctx)+' / '+tokens(row.ctx_limit);}
-      else if(key==='status' && row.orch?.chain && !options.hierarchy){td.append(orchestrationView(row.orch,row));}
-      else if(key==='status'){const state=String(row[key]||'');const tone=/^(running|active)$/i.test(state)?'running':/fail|error|reject/i.test(state)?'error':/wait|paus|stop|pending/i.test(state)?'waiting':'neutral';td.append(el('span',t(state),'state-badge state-'+tone));}
+      else if(key==='status' && row.orch?.chain && !row.paused && !options.hierarchy){td.append(orchestrationView(row.orch,row));}
+      else if(key==='status'){const state=String(row[key]||'');const tone=/^(running|active)$/i.test(state)?'running':/fail|error|reject/i.test(state)?'error':/wait|paus|stop|pending/i.test(state)?'waiting':'neutral';td.append(el('span',t(state),'state-badge state-'+tone));
+        if(row.paused && !options.hierarchy){const resume=button('Resume',async()=>{
+          const available=await resolvePlanActions(row,route=>client.request(route));
+          if(!available.includes('resume'))throw Error(t('The plan cannot resume yet. Refresh its status.'));
+          await act('plan/resume',key(row),t('Resume')+' '+row.name+'?');
+        });resume.classList.add('plan-resume');td.append(resume);}}
       else td.append(valueView(row[key]));tr.append(td);}if(extra && !options.compact){const td=el('td');td.className='row-actions';td.dataset.label=t('Actions');extra(td,row);tr.append(td);}body.append(tr);}
     if(!rows.length){const tr=el('tr'),td=el('td',t('none'),'dim');td.colSpan=columns.length+1;tr.append(td);body.append(tr);}
     wrap.append(table);return wrap;
@@ -757,10 +790,22 @@ function mount(document, bootstrap) {
       const node=button(actions[action],()=>act(action,{},action==='force-stop'?state.controls?.force_warning:t(actions[action]+' HaiveQueen?')));
       node.disabled=node.disabled||orchestratorDisabled(action,label);if(action==='force-stop')node.classList.add('danger-action');orchestrator.append(node);
     }
+    const planControls=el('div',undefined,'control-group');planControls.append(el('h3',t('PLANS')));
+    for(const action of ['stop-gracefully','force-stop','resume']){
+      const warnings={'stop-gracefully':'Pause %s plans? Running work continues; no new work starts.',
+        'force-stop':'Force stop %s plans? Their running work will end immediately.',
+        resume:'Resume %s paused plans?'};
+      const node=button(actions[action],async()=>{
+        try {const result=await client.plansAction(action,count=>t(warnings[action]).replace('%s',count));
+          if(result)client.notice(t('Plans processed: %s').replace('%s',result.count));
+        } finally {void client.refresh();void refreshLists();}
+      });
+      if(action==='force-stop')node.classList.add('danger-action');planControls.append(node);
+    }
     const web=el('div',undefined,'control-group');web.append(el('h3',t('Web server')),
       button('Stop',async()=>{if(await client.action('web/stop',{},t('Stop the web server? The browser will disconnect.')))client.notice(t('Web server stopped.'));}),
       button('Restart',async()=>{await client.action('web/restart',{},t('Restart the web server? The browser will reconnect.'));}));
-    panel.append(orchestrator,web,button('Logout',async()=>{const response=await fetch('/logout',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':client.csrf},body:'{}'});if(response.ok)location.href='/login';else throw Error(t('Logout failed'));}));
+    panel.append(orchestrator,planControls,web,button('Logout',async()=>{const response=await fetch('/logout',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':client.csrf},body:'{}'});if(response.ok)location.href='/login';else throw Error(t('Logout failed'));}));
     menu.append(panel);toolbar.append(status,menu);$('controls').replaceChildren(toolbar);
   }
   document.addEventListener('click',event=>{const menu=$('controls').querySelector('details');if(menu && !menu.contains(event.target))menu.open=false;});
@@ -1082,14 +1127,11 @@ function mount(document, bootstrap) {
       text.replaceChildren(planDocument(result.body??result.text??t('No plan text available.')));if(result.text){const source=el('details',undefined,'plan-raw');source.append(el('summary',t('Plan source')),el('pre',result.text,'plan-source'));technical.append(source);}
       frame.content.querySelector('.package-loading')?.remove();frame.content.append(packageCards(result.packages||[]));
     }).catch(error=>{if(target.contains(reader)){text.textContent=error.message;frame.content.querySelector('.package-loading')?.remove();}});
-    for(const action of planActions(row))bar.append(button(actions[action],()=>act('plan/'+action,key(row),t(actions[action])+' '+row.name+'?')));
-    // The active dashboard row and the all-plans row use the same plan menu.
-    if(!row.status || !/^[A-Z]+$/.test(row.status)){
-      bar.append(button('Stop gracefully',()=>act('plan/stop-gracefully',key(row),t('Stop gracefully')+'?')),
-        button('Force stop',()=>act('plan/force-stop',key(row),t('Force stop')+'?')));
-      if(row.stopped)bar.append(button('Resume',()=>act('plan/resume',key(row),t('Resume')+'?')));
-      bar.append(button('Cancel plan',()=>act('plan/cancel',key(row),t('Cancel plan')+'?')));
-    }
+    try {
+      const available=await resolvePlanActions(row,route=>client.request(route));
+      if(!target.contains(bar))return;
+      for(const action of available)bar.append(button(actions[action],()=>act('plan/'+action,key(row),t(actions[action])+' '+row.name+'?')));
+    } catch(error) {if(target.contains(bar))bar.append(el('span',error.message,'bad'));}
     if(row.status!=='DONE')bar.append(button('Release',()=>act('owner/release',key(row),t('Release')+'?')));
     let providers;try{providers=await client.request('plan/providers?'+new URLSearchParams(key(row)));}catch(error){if(target.contains(bar))bar.append(el('span',error.message,'bad'));return;}
     if(target!==$('detail-body') || !target.contains(bar))return;
@@ -1513,5 +1555,5 @@ function mount(document, bootstrap) {
   void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));
