@@ -118,3 +118,11 @@ Missing files and late database failures preserve the original state; interrupte
 publication recovers on the next database open without duplicating the decision.
 The regression failed before the fix. All 47 focused owner and inbox tests pass,
 including subprocess exits immediately before and after the database commit.
+
+## Windows console test isolation
+
+Run 43603154526 failed on both Windows versions because two console fixtures
+created completion receipts in the fallback data directory. Console drivers now
+receive dedicated data, config and log directories; standalone runs also load the
+isolation guard. The two affected tests reproduced the exact leak before the fix.
+Nine focused console, receipt-lifetime and isolation tests pass after the fix.

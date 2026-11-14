@@ -13,6 +13,8 @@ import time
 import unittest
 from pathlib import Path
 
+import isolation  # Keep standalone focused runs away from real profile folders.
+
 ROOT = Path(__file__).resolve().parent.parent
 DETACHED_PROCESS, NEW_GROUP, NO_WINDOW = 0x00000008, 0x00000200, 0x08000000
 
@@ -29,8 +31,10 @@ def run_without_console(code, timeout=90):
         head = "import sys\nsys.path.insert(0, %r)\nsys.stdout = open(%r, 'w', buffering=1)\n" % (str(ROOT), str(out))
         head += "sys.stderr = sys.stdout\n"
         script.write_text(head + code + "\n", encoding="utf-8")
+        env = {**os.environ, **{key: str(Path(tmp) / leaf) for key, leaf in
+               (("BZZ_DATA_DIR", "data"), ("BZZ_CONFIG_DIR", "config"), ("BZZ_LOG_DIR", "logs"))}}
         proc = subprocess.Popen([sys.executable, "-I", str(script)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                creationflags=DETACHED_PROCESS | NEW_GROUP)
+                                creationflags=DETACHED_PROCESS | NEW_GROUP, env=env)
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
