@@ -394,3 +394,9 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Refresh status in one background worker at a time; the Windows message loop only reads cached snapshots. Slow web status or database access no longer blocks menu handling.
 - Mark unavailable, failed or aged status as outdated and disable state-dependent actions until fresh data arrives. Closing the tray does not wait for an outstanding probe; late results are discarded.
 - Three regression tests failed before implementation. Twelve focused tray tests pass, covering slow probes, bounded worker count, stale status, recovery, late results, existing actions and icon loading. The installed tray and running application processes were not touched.
+
+## A-33: Isolate concurrent database exports
+
+- Each SQLite backup owns an exclusively created temporary file. Failed source access, backup or publication removes only that attempt's temporary file and preserves the previously published backup.
+- Serialize atomic publication and retention across threads and processes using a folder-local OS file lock. Backup creation remains independent; retention tolerates an already removed old file.
+- The overlapping-export regression failed before the change. Nine focused tests pass, including simultaneous backup creation, four separate export processes, failed publication, previous-backup preservation, retention and the export CLI. Tests use temporary databases only.
