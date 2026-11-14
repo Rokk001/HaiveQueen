@@ -1084,7 +1084,7 @@ function mount(document, bootstrap) {
     for(const item of queueData.items||[]){
       const entry=el('li'),heading=el('div',undefined,'queue-entry-heading');
       const name=(item.plan_path||'').split(/[\\/]/).pop()?.replace(/\.md$/i,'')||item.branch||('#'+item.id);
-      heading.append(item.plan_path?filterLink(name,'plan',{apiary:item.project,plan_path:item.plan_path}):el('strong',name),
+      heading.append(item.plan_path?button(name,()=>openQueuedPlan(item)):el('strong',name),
         el('span',t(item.status==='in_run'?'Integrating':'Queued'),item.status==='in_run'?'warn':'dim'));
       entry.append(heading,el('small',item.project+' · #'+item.id,'dim'));
       if(item.branch)entry.append(el('small',item.branch,'queue-branch'));
@@ -1324,6 +1324,15 @@ function mount(document, bootstrap) {
 
     await attachConsole(frame.content,source);
 
+  }
+
+  async function openQueuedPlan(item) {
+    try {
+      const available=await client.request('plans');
+      const plan=available.find(row=>row.apiary===item.project && row.plan_path===item.plan_path);
+      if(!plan)throw new Error(t('Plan details are no longer available.'));
+      await openPlan(plan);
+    } catch(error) { detail(t('Plan details'),error.message); }
   }
 
   async function openPlan(row) {
