@@ -109,13 +109,13 @@ def save_step_log(conn, project, plan, step, code, output):
                    json.dumps({"step": step, "exit_code": code, "output": str(output)}))
 
 
-def _start_log(conn, env, plan, state, step):
+def _start_log(conn, env, plan, state, step, command=None):
     path = action_logs.start(env.name, plan, step)
     assignment = __import__('haivequeen.bees', fromlist=['x']).plan_worktree(env, plan)
     folder = assignment[1] if assignment else None
     action_logs._write(path, {'event': 'execution', 'time': action_logs._now(),
                               'commit': integration.head_commit(folder) if folder else '',
-                              'cwd': str(folder or ''), 'command': commands(env).get(step, step),
+                              'cwd': str(folder or ''), 'command': commands(env).get(step, step) if command is None else command,
                               'predecessors': _ahead(conn, env.name, plan)})
     state["log_file"] = path
     save(conn, env.name, plan, state)
@@ -1114,7 +1114,7 @@ def _fix_prompt(env, plan, state, owner_text=""):
                  "The JSONL output records contain the complete, uncut command output. "
                  "Fix all errors in that output in one run, not only the last or first error.\n" % fix["log_file"])
     if owner_text:
-        what += "\nInstruction of the owner:\n%s\n" % owner_text
+        what += "\nAdditional recovery instruction:\n%s\n" % owner_text
     history = repair_history(env.conn, env.name, plan)
     if history:
         what += '\nCOMPLETE REPAIR HISTORY (read every referenced log before choosing a new approach)\n' + json.dumps(history, indent=2)
@@ -1131,6 +1131,8 @@ def _fix_prompt(env, plan, state, owner_text=""):
 
 def _advance_fix(conn, env, plan, state, free_mb, alive):
     fix = state["fix"]
+    if fix.get('verification'):
+        return _verify_repair(conn, env, plan, state)
     if fix.get("agent"):
         row = next((a for a in runtime.list_agents(conn, env.name, "all") if a.get("name") == fix["agent"] and a.get("phase") == "fix"), None)
         if row is not None and agent_process.counts(row, alive):
@@ -1160,16 +1162,87 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
                                   'Continue diagnosis using the complete history; do not repeat the unchanged pipeline.')
             save(conn, env.name, plan, state)
             return None
-        _record_repair(conn, env.name, plan, 'pipeline-retry', commit=head,
-                       reason='committed tree changed' if changed else 'configured command changed')
-        state.update(phase="pipeline", step="Merge", placed=False, steps={}, ran=[], fix=None, moved=0, rejoining=True)
-        state.pop("release", None)
-        # The fix commit becomes the new original state when joining the tail.
-        state.pop("source", None)
-        state.pop("merged", None)
+        try:
+            evidence_path = env.run_dir(fix['agent']) / 'repair-verification.json'
+            if evidence_path.stat().st_size > 65536:
+                raise ValueError('verification record exceeds 64 KiB')
+            evidence = json.loads(evidence_path.read_text(encoding='utf-8'))
+            if not isinstance(evidence, dict) or evidence.get('commit') != head:
+                raise ValueError('verification must name the current repair commit')
+            if evidence.get('failure_log') != fix.get('log_file', ''):
+                raise ValueError('verification must reference the original failure log')
+            if not isinstance(evidence.get('command'), str) or not evidence['command'].strip():
+                raise ValueError('a targeted regression command is required')
+            if not isinstance(evidence.get('reason'), str) or not evidence['reason'].strip():
+                raise ValueError('explain how this regression covers the original failure')
+        except (OSError, ValueError) as exc:
+            return _repair_diagnosis(conn, env, plan, state, 'Missing or invalid repair verification: ' + str(exc))
+        fix['verification'] = {**evidence, 'retry_reason':
+                               'committed tree changed' if changed else 'configured command changed'}
         save(conn, env.name, plan, state)
-        return None
+        return _verify_repair(conn, env, plan, state)
     return _start_fix(conn, env, plan, state, free_mb, alive, str(fix.get("instruction") or ""))
+
+
+def _repair_diagnosis(conn, env, plan, state, reason):
+    fix = state['fix']
+    _record_repair(conn, env.name, plan, 'diagnosis-required', agent=fix.get('agent'), reason=reason)
+    fix.pop('verification', None)
+    fix['agent'] = None
+    fix['instruction'] = reason + '. Continue diagnosis from the complete repair history; do not repeat the unchanged pipeline.'
+    save(conn, env.name, plan, state)
+
+
+def _verify_repair(conn, env, plan, state):
+    """Run the targeted regression through the bounded, durable check supervisor."""
+    from copy import copy
+    fix = state['fix']
+    evidence = fix['verification']
+    folder = _worktree(env, plan)
+    if not state.get('job'):
+        if not folder or integration.head_commit(folder) != evidence['commit']:
+            return _repair_diagnosis(conn, env, plan, state, 'Repair commit changed before targeted verification')
+        check_env = copy(env)
+        check_env.settings = {**env.settings, 'compileCheck': evidence['command']}
+        path = _start_log(conn, env, plan, state, 'RepairCheck', command=evidence['command'])
+        evidence['log_file'] = path
+        job = integration.start_compile_check(check_env, {'name': fix['agent']}, cwd=str(folder),
+                    key='orch-repair-check:' + plan, poll=POLL, milestones=False, log_file=path)
+        state['job'] = {**job, 'compile': True, 'step': 'RepairCheck', 'head': evidence['commit']}
+        worker = Job(job['token'])
+        worker.pid, worker.identity = job['pid'], job.get('identity')
+        worker.compile_job, worker.log_file = job, path
+        JOBS[(env.name, plan)] = worker
+        save(conn, env.name, plan, state)
+        if not _async():
+            while integration.poll_compile_check(conn, env.name, job) is None:
+                time.sleep(POLL)
+    result = _harvest(conn, env, plan, state)
+    if result is None:
+        return None
+    state.pop('job', None)
+    code, output = result if result != 'lost' else (143, 'Targeted verification result was lost')
+    _record_repair(conn, env.name, plan, 'targeted-verification', commit=evidence['commit'],
+                   command=evidence['command'], reason=evidence['reason'], exit_code=code,
+                   log_file=evidence['log_file'], failure_log=evidence['failure_log'])
+    if code != 0:
+        if authentication_failure(output):
+            _access_wait(conn, env, plan, state, 'RepairCheck', output)
+            state['fix'] = fix
+            state['blocked']['kind'] = 'repair-access'
+            save(conn, env.name, plan, state)
+            return None
+        return _repair_diagnosis(conn, env, plan, state,
+            'Targeted regression failed (exit %s); read %s' % (code, evidence['log_file']))
+    status, changes = _git(folder, 'status', '--porcelain', '--untracked-files=no')
+    if integration.head_commit(folder) != evidence['commit'] or status or changes.strip():
+        return _repair_diagnosis(conn, env, plan, state, 'The targeted regression changed the committed repair')
+    _record_repair(conn, env.name, plan, 'pipeline-retry', commit=evidence['commit'],
+                   reason=evidence['retry_reason'], verification_log=evidence['log_file'])
+    state.update(phase='pipeline', step='Merge', placed=False, steps={}, ran=[], fix=None, moved=0, rejoining=True)
+    for field in ('release', 'source', 'merged'):
+        state.pop(field, None)
+    save(conn, env.name, plan, state)
 
 
 def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
@@ -1210,8 +1283,18 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
         return None
     existing = [a["name"] for a in runtime.list_agents(conn, env.name, "all")]
     name = loop.agent_identity(conn)["Person"]
+    base_name, suffix = name, 1
+    while name in existing:
+        suffix += 1
+        name = '%s-%s' % (base_name, suffix)
     before_head = integration.head_commit(folder)
     action = {"name": name, "type": pick["name"], "phase": "fix", "plan": plan, "package": "", "cwd": str(folder), "prompt": _fix_prompt(env, plan, state, owner_text), "class": cls}
+    action['prompt'] += ('\nREQUIRED TARGETED VERIFICATION\nBefore ending, write %s as JSON with fields '
+                         'command (the targeted regression command), commit (full repaired HEAD), '
+                         'reason (how it covers the original failure), and failure_log = %s. '
+                         'HQ runs this command itself, then the unchanged full integration pipeline. '
+                         'A passing report alone is insufficient. Do not weaken existing checks.\n' %
+                         (env.run_dir(name) / 'repair-verification.json', json.dumps(fix.get('log_file', ''))))
     st = {"names": existing, "busy": [], "plan_status": {sch.norm_plan(plan): "RUNNING"}, "by_path": {sch.norm_plan(plan): {"path": plan}}}
     ctx = {"env": env, "state": st, "pool": loop.Pool(free, 0), "report": [], "dry": False, "settle": 0}
     if not loop._do_start(ctx, action, forced_pick=pick):
@@ -1267,6 +1350,12 @@ def _advance_blocked(conn, env, plan, state):
     row = conn.execute("SELECT status, answer FROM questions WHERE id=?", (qid,)).fetchone()
     if row is None or row[0] != "answered":
         _set_status(conn, env, plan, "WAITING")
+        return None
+    if state['blocked'].get('kind') == 'repair-access':
+        _record_repair(conn, env.name, plan, 'access-corrected', question=state['blocked']['question'])
+        state['phase'] = 'fix'
+        state.pop('blocked', None)
+        save(conn, env.name, plan, state)
         return None
     if state['blocked'].get('kind') == 'access':
         state['step'] = state['blocked']['step']

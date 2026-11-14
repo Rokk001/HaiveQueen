@@ -141,3 +141,21 @@ including a second failure after the first repair and an integration verificatio
 record only after all pipeline steps complete. Eight existing fix and owner-reject
 tests also pass. This is the evidence foundation, not completion of cross-plan
 cause coordination or machine-verified targeted repair checks; those remain open.
+
+## Targeted repair verification
+
+Fix agents now supply a regression command tied to the repaired commit and the
+original failure log. HQ executes that command through its durable, resource-bound
+check supervisor before retrying the full integration pipeline. Missing or stale
+evidence, a failed regression, or a changed tree returns to diagnosis with retained
+history. Authentication failures request user action instead of repeated repairs.
+Observer recovery consumes the existing result without starting a duplicate check.
+Unique agent names are assigned before publishing the verification-file location.
+
+Seven focused regressions cover missing evidence, stale commits, failed and passing
+verification, observer recovery, access correction and reused agent names. Existing
+fix-agent, owner-check, run-log, queue and provider-pipeline cases exercise the new
+contract. The original regressions failed before their corresponding fixes.
+Cross-plan common-cause coordination remains open. HQ validates execution and
+commit identity; the supplied explanation still requires the repair agent to choose
+a regression that actually covers the original failure.

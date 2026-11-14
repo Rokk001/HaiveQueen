@@ -114,7 +114,16 @@ class OrchCase(RoundCase):
     def state(self, rel=REL):
         return orchestrator.load(self.conn, "testproj", rel)
 
-    def end_fixer(self, agent, report="fixed it"):
+    def end_fixer(self, agent, report="fixed it", verification=True, verification_command=None):
+        if verification:
+            env = self.env()
+            state = self.state(agent['plan_path'])
+            fix = (state or {}).get('fix') or {}
+            command = verification_command or orchestrator.commands(env).get(fix.get('step')) or 'git diff --check HEAD^ HEAD'
+            evidence = {'command': command, 'reason': 'Exercise the original fixture failure.',
+                        'commit': integration.head_commit(agent['cwd']),
+                        'failure_log': fix.get('log_file', '')}
+            (env.run_dir(agent['name']) / 'repair-verification.json').write_text(json.dumps(evidence), encoding='utf-8')
         self.finish(agent["name"], final=report)
         runtime.upsert_agent(self.conn, "testproj", agent["name"], {"pid": None})
 

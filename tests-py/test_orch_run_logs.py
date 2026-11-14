@@ -61,9 +61,9 @@ class RunLogs(OrchCase):
         with mock.patch.object(orchestrator, "_merge_git", side_effect=observed):
             self.round()
         logs = self.logs()
-        self.assertEqual(len(logs), 8)
+        self.assertEqual(len(logs), 9)
         self.assertEqual(sorted(records(p)[0]["step"] for p in logs),
-                         sorted(["Merge", "Check", "Merge", "Check", "Build", "Push", "Deploy", "Close"]))
+                         sorted(["Merge", "Check", "RepairCheck", "Merge", "Check", "Build", "Push", "Deploy", "Close"]))
         for p in logs:
             data = records(p)
             self.assertTrue(data[0]["started_at"])
@@ -71,7 +71,7 @@ class RunLogs(OrchCase):
             self.assertEqual(data[-1]["event"], "end")
             self.assertTrue(data[-1]["ended_at"])
             self.assertIn(data[-1]["result"], ("succeeded", "failed"))
-            if data[0]["step"] in ("Check", "Build", "Deploy"):
+            if data[0]["step"] in ("Check", "Build", "Deploy", "RepairCheck"):
                 self.assertEqual(len(output(p).splitlines()), 550)
         for p, before in snapshots.items():
             self.assertEqual(p.read_bytes(), before)
