@@ -55,3 +55,11 @@ Focused regressions in `test_web_security_findings.SecurityRoutes` verify the
 rate limit before hashing, two concurrent requests with a rejected third,
 released slots, budget expiry, and normal HTTP login. All four targeted tests
 passed. No production process was restarted or changed for this verification.
+## A-10 login input isolation
+
+Resolved: login input is written by one bounded pending writer per session, outside
+ the shared session lock. Requests stop waiting after two seconds; repeated input
+is rejected while a write remains pending. Status and shutdown remain available.
+The regression reproduces a non-reading pipe and verifies bounded request time,
+status access, duplicate rejection and shutdown. Existing interactive login tests
+also pass. No production process was restarted.

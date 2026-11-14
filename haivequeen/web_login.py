@@ -9,6 +9,7 @@ from pathlib import Path
 
 _lock = threading.RLock()
 _runs = {}
+INPUT_TIMEOUT = 2.0
 
 
 def command(provider):
@@ -79,11 +80,34 @@ def send(token, text):
         run = _runs.get(token)
         if not run or run['process'].poll() is not None:
             raise ValueError('Provider login is no longer running')
-        try:
-            run['process'].stdin.write((text + '\n').encode('utf-8'))
-            run['process'].stdin.flush()
-        except OSError as exc:
-            raise ValueError('Provider login no longer accepts input') from exc
+        if run.get('input_done') and not run['input_done'].is_set():
+            raise ValueError('Previous login input is still pending; wait or close the login')
+        done = threading.Event()
+        errors = []
+        run['input_done'] = done
+        stream = run['process'].stdin
+        payload = (text + '\n').encode('utf-8')
+
+        def write():
+            try:
+                remaining = memoryview(payload)
+                while remaining:
+                    written = stream.write(remaining)
+                    if not written:
+                        raise OSError('Login input pipe accepted no data')
+                    remaining = remaining[written:]
+                stream.flush()
+            except (OSError, ValueError) as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+        threading.Thread(target=write, daemon=True).start()
+    # Never wait for a pipe while holding the shared session lock. Only one
+    # bounded input may be pending per session, so retries cannot spawn writers.
+    if not done.wait(INPUT_TIMEOUT):
+        raise ValueError('Login input is still pending; do not resend it')
+    if errors:
+        raise ValueError('Provider login no longer accepts input') from errors[0]
     return status(token)
 
 
