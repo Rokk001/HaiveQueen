@@ -11,7 +11,7 @@ def page(setup=False, token='', secure=False, language=None):
     german = i18n.is_german_language(language or i18n.machine_language())
     def t(en, de):
         return html.escape(de if german else en)
-    icon = 'data:image/png;base64,' + base64.b64encode(Path(__file__).with_name('web-icon.png').read_bytes()).decode('ascii')
+    icon = 'data:image/png;base64,' + base64.b64encode(Path(__file__).with_name('web-login-logo.png').read_bytes()).decode('ascii')
     title = t('Set up your hive', 'Richte deinen Hive ein') if setup else t('Welcome back', 'Willkommen zurück')
     subtitle = t('Create your account and configure access to HaiveQueen.', 'Erstelle deinen Zugang und richte HaiveQueen ein.') if setup else t('Sign in to your HaiveQueen dashboard.', 'Melde dich an deinem HaiveQueen-Dashboard an.')
     button = t('Create account', 'Zugang erstellen') if setup else t('Sign in', 'Anmelden')
