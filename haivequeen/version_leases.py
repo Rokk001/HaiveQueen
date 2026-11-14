@@ -110,12 +110,10 @@ def collect(root):
                 current = platform.process_identity(pid)
                 if current != identity and (current is not None or platform.process_absent(pid)):
                     del leases[token]
-            elif pid and platform.process_absent(pid):
-                # A published PID without a birth identity cannot be matched to
-                # a live process, but definitive absence still proves it ended.
-                del leases[token]
-            elif not pid and not record.get('installation') and scan_version(record['version']) is False:
-                # The launch lock excludes an in-flight spawn while scanning.
+            elif (not record.get('installation') and (not pid or platform.process_absent(pid))
+                  and scan_version(record['version']) is False):
+                # A missing birth identity requires a clear scan even after
+                # PID exit. The launch lock excludes an in-flight spawn.
                 del leases[token]
         _save(root, leases)
         protected = {active} | {_version(r['version']) for r in leases.values()}
