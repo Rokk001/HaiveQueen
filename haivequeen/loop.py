@@ -149,6 +149,14 @@ def read_state(conn):
         return None
 
 
+def record_completed_round(conn):
+    """Record the process and version that completed a successful round."""
+    runtime.kv_set(conn, sch.GLOBAL, "loop-completed-round", json.dumps({
+        "at": datetime.now().isoformat(timespec="microseconds"),
+        "pid": os.getpid(), "identity": osplat.process_identity(os.getpid()),
+        "code_path": str(TOOLS_DIR.resolve())}))
+
+
 # ---- names, tasks, identity ----
 
 def agent_task(env, plan: str, package: str, phase: str, prompt_file=None) -> str:
@@ -840,6 +848,7 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
         write_state(conn, "round", datetime.now(), None)
         try:
             run_round(conn, machine, envs, **round_kwargs)
+            record_completed_round(conn)
         except Exception as exc:   # a broken round must never stop the loop
             for env in envs:
                 env.log("ROUND ERROR %s" % exc)

@@ -218,6 +218,32 @@ def wait_first_round(conn, started_after: str, sleep, poll: float, timeout: floa
     return False
 
 
+def wait_successor_round(conn, version_path, started_after, sleep, poll, timeout,
+                         loop_pid=None, stopped=None, identity=None):
+    """Accept only a successful round from the current core in version_path."""
+    from . import runtime, scheduler
+    loop_pid = loop_pid or loop.loop_running
+    stopped = stopped or owner_stopped
+    identity = identity or osplat.process_identity
+    start = time.monotonic()
+    after = db.parse_time(started_after)
+    while time.monotonic() - start <= timeout:
+        if stopped():
+            raise OwnerStop()
+        try:
+            receipt = json.loads(runtime.kv_get(conn, scheduler.GLOBAL, "loop-completed-round") or "{}")
+            pid = int(receipt.get("pid") or 0)
+            at = db.parse_time(receipt.get("at"))
+            if (pid and pid == loop_pid() and receipt.get("identity") and
+                    receipt["identity"] == identity(pid) and at and after and at >= after and
+                    Path(receipt.get("code_path", "")).resolve() == Path(version_path).resolve()):
+                return True
+        except (TypeError, ValueError, OSError):
+            pass
+        sleep(poll)
+    return False
+
+
 def file_fault_rollback(conn, text: str, kind: str = FAULT_KIND) -> None:
     """File the rollback (or, with kind self_update_pane, the pane problems of a kept update) as an open question of project HaiveQueen (file_fault of haivequeen.faults, imported only here)."""
     from haivequeen.faults import file_fault
