@@ -289,3 +289,12 @@ completion of the broader autonomous technical diagnosis request.
 ### Maintenance push tags
 
 Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pushes with new commits increment the patch tag once per push, not once per commit. Existing tags are never rewritten.
+
+
+### Shared causes across different integration errors
+
+- Diagnosis receives bounded references to other failed integrations in the same project. An optional structured shared-cause finding must name the peer and provide observations for both failures.
+- Bind the finding to the peer checkout commit, failed step/output, commands and active decisions. Changed evidence, cancelled peers, unknown peers and incomplete evidence are rejected. A peer already waiting on a shared repair cannot become a new leader, preventing cycles.
+- Transfer existing dependent repair groups when consolidating causes. Preserve histories and running processes. Only affected integrations wait; unrelated speculative work keeps its existing parallel flow.
+- The leader must pass targeted repair verification and its required full pipeline before followers merge the published fix and run their own full pipeline. A subsequent failure keeps followers waiting for verified completion.
+- Isolated regression scenarios cover different error texts, a second failure after the first repair, actual structured report consumption, prompt candidate references, stale evidence, cancellation and cycle rejection. Controlled agent reports verify coordination; they do not establish that every live model diagnosis is correct.

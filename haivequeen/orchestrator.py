@@ -1418,9 +1418,12 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
         env.run_dir(name) / 'repair-diagnosis.json', before_head,
         fix.get('log_file', ''), fix['review_decisions'], project=env.name, plan=plan)
     if diagnosis:
+        from . import shared_diagnosis
+        fix['review_peers'] = shared_diagnosis.candidates(conn, env, plan)
         action['prompt'] = repair_review.prompt(
             env.run_dir(name) / 'repair-diagnosis.json', before_head, fix.get('log_file', ''),
             fix['review_decisions'], repair_history(conn, env.name, plan), project=env.name, plan=plan)
+        action['prompt'] += shared_diagnosis.prompt(fix['review_peers'])
         action['prompt'] += '\nPlan: %s\nWorktree: %s\n' % (plan, folder)
         action['prompt'] += '\nTopics reserved for the owner: ' + json.dumps(env.settings.get('ownerTopics', []))
         action['prompt'] += '\nPrevious review feedback: ' + str(fix.get('instruction', ''))
@@ -1455,6 +1458,7 @@ def _finish_review(conn, env, plan, state):
     from . import repair_review
     fix = state['fix']
     agent = fix['agent']
+    shared = None
     folder = _worktree(env, plan)
     head = integration.head_commit(folder) if folder else ''
     try:
@@ -1466,6 +1470,10 @@ def _finish_review(conn, env, plan, state):
         review = repair_review.read(env.run_dir(agent) / 'repair-diagnosis.json', head,
                                     fix.get('log_file', ''), known)
         if review['kind'] == 'technical':
+            if 'shared_cause' in review:
+                from . import shared_diagnosis
+                shared = shared_diagnosis.validate(conn, env, plan, state,
+                    fix.get('review_peers', []), review['shared_cause'])
             current_class = _attempts(conn, env, plan).get('cls') or env.settings.get('queenClass', 'medium')
             selected_class = review.get('repair_class', current_class)
             if selected_class != current_class:
@@ -1490,7 +1498,9 @@ def _finish_review(conn, env, plan, state):
     _record_repair(conn, env.name, plan, 'diagnosis-accepted', agent=agent,
                    review=review, signature=signature)
     fix.update(agent=None, diagnosis=False, review_required=False)
-    if review['kind'] == 'technical':
+    if shared:
+        shared_diagnosis.attach(conn, env, plan, state, shared)
+    elif review['kind'] == 'technical':
         fix['review_authorized'] = _review_scope(conn, env, plan, fix)
         fix['review_class'] = selected_class
         fix['instruction'] = '\n'.join((review['analysis'], review['next_action'], review['why_new']))
