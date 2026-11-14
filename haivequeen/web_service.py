@@ -39,6 +39,16 @@ def control(action):
         connection.close()
 
 
+class _ControlServer(http.server.HTTPServer):
+    # HTTPServer.timeout only limits accept(), not reads from an accepted client.
+    request_timeout = 2.0
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(self.request_timeout)
+        return connection, address
+
+
 class Service:
     def __init__(self):
         self.path = config.config_dir() / 'config.toml'
@@ -73,7 +83,7 @@ class Service:
             def log_message(self, *args):
                 pass
 
-        self.control = http.server.HTTPServer(('127.0.0.1', 0), Control)
+        self.control = _ControlServer(('127.0.0.1', 0), Control)
         self.control.timeout = 0.2
 
     def status(self):
