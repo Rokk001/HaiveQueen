@@ -195,6 +195,7 @@ class ForceStopTests(RoundCase):
                 posix_end.assert_not_called()
 
     def test_new_build_and_deploy_are_visible_to_force_stop_before_next_round(self):
+        self.plan()
         for step in ('Build', 'Deploy'):
             with self.subTest(step=step):
                 finished = threading.Event()
@@ -202,7 +203,7 @@ class ForceStopTests(RoundCase):
                     on_start(910007)
                     finished.wait(5)
                     return 0, ''
-                env = SimpleNamespace(name='testproj', conn=self.conn,
+                env = SimpleNamespace(name='testproj', conn=self.conn, workspace=self.repo,
                                       settings={'buildCommand': 'dummy', 'deployCommand': 'dummy'})
                 state = {'steps': {}}
                 try:

@@ -260,3 +260,11 @@ completion of the broader autonomous technical diagnosis request.
 - Preserve project/plan scope and mandatory fresh owner checks. Superseded decisions are excluded.
 - Regression reproduced before the fix: `test_new_decision_supersedes_old_answer_and_auto_duplicates`. Focused coverage: `test_ask_triage` and `test_gui_questions`.
 - This fixes decision lookup, not the still-open package diagnosis workflow.
+
+
+### CI run 43609606492: repair integration test fixtures
+
+- Reproduced all seven errors across six test methods on current main. Project fixtures omitted the workspace and plan required by execution logging.
+- Supply isolated plan files and workspace paths without weakening production logging.
+- Update the release invalidation regression to exercise pending and successful targeted repair verification before pipeline replay.
+- Focused validation: 19 tests passed across CheckRecoveryTests, CoreAccountingTests, release gates and Build/Deploy process registration. No full suite or build ran.

@@ -18,6 +18,7 @@ class DetachedCompileCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
+        bzztest.write_plan(self.base / 'plan', 'RUNNING', (), 'Fixture plan', '', '')
         self.data = self.base / 'data'
         self.env = {**os.environ, 'BZZ_DATA_DIR': str(self.data)}
         self.conn = db.connect(self.data / 'haivequeen.db')
@@ -131,7 +132,7 @@ class CheckRecoveryTests(DetachedCompileCase):
     def check_job(self, source):
         script = self.base / 'check.py'
         script.write_text(source, encoding='utf-8')
-        env = SimpleNamespace(name='project', conn=self.conn, settings={
+        env = SimpleNamespace(name='project', conn=self.conn, workspace=self.base, settings={
             'compileCheck': '"%s" "%s"' % (sys.executable, script),
             'compileMaxMinutes': 180})
         with mock.patch.dict(os.environ, self.env):

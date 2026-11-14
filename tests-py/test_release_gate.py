@@ -32,11 +32,21 @@ class ReleaseGateTests(TestCase):
 
     def test_new_pipeline_attempt_discards_release_selected_for_old_commit(self):
         env = SimpleNamespace(name='test')
-        state = {'fix': {'agent': 'fixer'}, 'release': {'tag': 'v1.0.0-dev.1'}, 'merged': 'old'}
-        with mock.patch('haivequeen.runtime.list_agents', return_value=[]), \
-             mock.patch.object(orchestrator, '_log'), mock.patch.object(orchestrator, '_save_last'), \
+        evidence = {'commit': 'fixed', 'command': 'targeted-check', 'reason': 'regression',
+                    'log_file': 'verification-log', 'failure_log': 'failed-log',
+                    'retry_reason': 'targeted regression passed'}
+        state = {'fix': {'agent': 'fixer', 'step': 'Build', 'verification': evidence},
+                 'job': {'step': 'RepairCheck'},
+                 'release': {'tag': 'v1.0.0-dev.1'}, 'merged': 'old'}
+        with mock.patch.object(orchestrator, '_worktree', return_value='worktree'), \
+             mock.patch.object(orchestrator, '_harvest', side_effect=[None, (0, 'passed')]), \
+             mock.patch.object(orchestrator.integration, 'head_commit', return_value='fixed'), \
+             mock.patch.object(orchestrator, '_git', return_value=(0, '')), \
+             mock.patch.object(orchestrator, '_record_repair'), \
              mock.patch.object(orchestrator, 'save'):
-            orchestrator._advance_fix(None, env, 'plan', state, 4096, lambda _: False)
+            orchestrator._verify_repair(None, env, 'plan', state)
+            self.assertIn('release', state, 'pending verification must not restart the pipeline')
+            orchestrator._verify_repair(None, env, 'plan', state)
         self.assertNotIn('release', state)
         self.assertEqual(state['step'], 'Merge')
 
