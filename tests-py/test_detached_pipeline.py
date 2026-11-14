@@ -22,6 +22,9 @@ class DetachedPipelineTests(unittest.TestCase):
                 old = root / 'versions' / 'old'
                 shutil.copytree(Path(orchestrator.__file__).parent, old / 'haivequeen',
                                 ignore=shutil.ignore_patterns('__pycache__'))
+                marker = base / 'worker-version'
+                with (old / 'haivequeen' / 'orchestrator.py').open('a', encoding='utf-8') as module:
+                    module.write("\nfrom pathlib import Path as _TestPath\n_TestPath(%r).write_text(__file__)\n" % str(marker))
                 (root / 'versions' / 'new' / 'haivequeen').mkdir(parents=True)
                 (root / 'versions' / 'new' / 'haivequeen' / 'cli.py').touch()
                 (root / 'active-version').write_text('old', encoding='utf-8')
@@ -42,12 +45,14 @@ class DetachedPipelineTests(unittest.TestCase):
                     while not started.exists() and time.monotonic() < deadline:
                         time.sleep(.05)
                     self.assertTrue(started.exists())
+                    self.assertEqual(Path(marker.read_text(encoding='utf-8')), old / 'haivequeen' / 'orchestrator.py')
                     version_layout.set_active(root, 'new')
                     with patch.object(version_leases.process_scan, 'scan', return_value=False):
                         self.assertEqual(version_leases.collect(root), [])
                     self.assertIsNone(job.process.poll())
                     finish.touch()
                     job.process.wait(timeout=30)
+                    self.assertEqual(Path(marker.read_text(encoding='utf-8')), old / 'haivequeen' / 'orchestrator.py')
                     state = {'step': step, 'steps': {step: 'running'}, 'ran': [],
                              'job': {'step': step, 'token': 'token', 'file': str(result),
                                      'pid': job.pid, 'head': 'old-revision'}}
