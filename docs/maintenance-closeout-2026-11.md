@@ -313,3 +313,11 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Recovery probes run without a write transaction. Their results are applied only if that provider's entry still matches the snapshot; other providers' latest state is preserved.
 - Each failure mark gets a revision, including identical messages recorded in the same second. A stale successful probe cannot remove a newer failure; a stale failed probe cannot restore an explicitly cleared entry. Legacy entries remain recoverable.
 - Regression tests reproduced lost updates before the fix using two database connections and controlled probe interleavings; focused coverage includes existing offline scheduling and recovery behavior.
+
+
+## A-21: Remote recovery probes for OpenCode and Kilo
+
+- Replace local version checks with a bounded one-word request to the configured model through the isolated provider environment. Do not auto-approve tools or fall back to a different default model.
+- Require exit zero plus a nonempty model text event and step completion; error events, tool calls, incomplete output, timeouts and unrecognized CLIs cannot release an offline provider.
+- Regression tests first reproduced false recovery, then cover actual recheck state transitions, configured model/environment arguments, incomplete/error responses and missing-model refusal. No live provider credentials or model requests were used in verification.
+- CLI syntax references: https://opencode.ai/docs/cli/commands/ and https://kilo.ai/docs/code-with-ai/platforms/cli-reference . JSON event handling follows the existing agent runner parser.

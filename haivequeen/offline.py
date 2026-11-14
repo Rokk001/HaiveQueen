@@ -100,6 +100,27 @@ def _model_of(p) -> str:
     return ""
 
 
+def _model_probe_completed(output) -> bool:
+    """Require a completed model answer, not a version banner or a zero-exit error event."""
+    answered = finished = False
+    for line in str(output or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind in ("error", "tool_use"):
+            return False
+        part = event.get("part") if isinstance(event.get("part"), dict) else {}
+        if kind == "text" and str(part.get("text") or "").strip():
+            answered = True
+        elif kind == "step_finish":
+            finished = True
+    return answered and finished
+
+
 def run_cli(p) -> bool:
     """A short call of the CLI of a provider (a one-word question, nothing else): True when it ends with exit code 0 within the time limit."""
     model = _model_of(p)
@@ -107,15 +128,19 @@ def run_cli(p) -> bool:
         args = ["-p", QUESTION, "--max-turns", "1"] + (["--model", model] if model else [])
     elif p.get("protocol") == "codex":
         args = ["exec", "--skip-git-repo-check"] + (["-m", model] if model else []) + [QUESTION]
+    elif p.get("protocol") in ("opencode", "kilo"):
+        if not model:
+            return False  # A default model might test a different provider.
+        args = ["run", "--format", "json", "--model", model, QUESTION]
     else:
-        args = ["--version"]
+        return False  # An unknown CLI has no reliable remote recovery probe.
     command = shutil.which(str(p.get("command") or "")) or str(p.get("command") or "")
     try:
         done = subprocess.run([command] + args, env=profile.environment(p), cwd=tempfile.gettempdir(), capture_output=True, text=True,
                               stdin=subprocess.DEVNULL, timeout=CLI_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError, ValueError):
         return False
-    return done.returncode == 0
+    return done.returncode == 0 and (p.get("protocol") not in ("opencode", "kilo") or _model_probe_completed(done.stdout))
 
 
 def probe(p) -> bool:
