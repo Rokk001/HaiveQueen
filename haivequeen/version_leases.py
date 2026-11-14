@@ -83,6 +83,15 @@ def collect(root):
         active = _version((root / 'active-version').read_text(encoding='utf-8').strip())
         leases = _load(root)
         for token, record in list(leases.items()):
+            # A failed copy cannot leave a child using the target.  Keep a
+            # completed installation reserved for later activation, however.
+            if record.get('installation') and not version_dir(root, record['version']).exists():
+                pid, identity = record.get('installer_pid'), record.get('installer_identity')
+                if pid and identity:
+                    current = platform.process_identity(pid)
+                    if current != identity and (current is not None or platform.process_absent(pid)):
+                        del leases[token]
+                continue
             pid, identity = record.get('pid'), record.get('identity')
             if pid and identity:
                 current = platform.process_identity(pid)

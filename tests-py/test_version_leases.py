@@ -1,4 +1,5 @@
 import tempfile
+import os
 import errno
 import threading
 import unittest
@@ -9,6 +10,29 @@ from haivequeen import config, version_leases, version_layout
 
 
 class VersionLeasesTests(unittest.TestCase):
+    def test_interrupted_install_reservation_requires_definite_death_and_no_target(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'versions' / 'active').mkdir(parents=True)
+            (root / 'active-version').write_text('active', encoding='utf-8')
+            records = {
+                'pending': {'version': 'pending', 'installation': True,
+                            'installer_pid': 123, 'installer_identity': 'birth'},
+                'complete': {'version': 'complete', 'installation': True,
+                             'installer_pid': 123, 'installer_identity': 'birth'},
+                'legacy': {'version': 'legacy', 'installation': True},
+            }
+            (root / 'versions' / 'complete').mkdir()
+            version_leases._save(root, records)
+            with patch.object(version_leases.platform, 'process_identity', return_value=None), \
+                 patch.object(version_leases.platform, 'process_absent', return_value=False) as absent:
+                version_leases.collect(root)
+                self.assertEqual(set(version_leases._load(root)), set(records))
+                absent.return_value = True
+                version_leases.collect(root)
+                self.assertEqual(set(version_leases._load(root)), {'complete', 'legacy'})
+                self.assertTrue((root / 'versions' / 'complete').exists())
+
     def test_absent_probe_requires_definitive_os_error(self):
         platform = version_leases.platform
         with patch.object(platform, 'is_windows', return_value=False), patch.object(platform, 'is_linux', return_value=True), patch.object(platform.os, 'kill') as kill:
@@ -33,6 +57,9 @@ class VersionLeasesTests(unittest.TestCase):
             (root / 'active-version').write_text('old', encoding='utf-8')
             with patch.object(config, 'config_dir', return_value=base / 'data'):
                 version_layout.install_version(root, 'new', source)
+                record = next(iter(version_leases._load(root).values()))
+                self.assertEqual(record['installer_pid'], os.getpid())
+                self.assertEqual(record['installer_identity'], version_leases.platform.process_identity(os.getpid()))
                 self.assertEqual(version_leases.collect(root), [])
                 self.assertTrue((root / 'versions' / 'new').exists())
                 version_layout.set_active(root, 'new')

@@ -40,7 +40,9 @@ def install_version(root, version, source):
     with lifetime_lock(root):
         leases = version_leases._load(root)
         token = 'install-' + uuid.uuid4().hex
-        leases[token] = {'version': version, 'pid': None, 'identity': None, 'installation': True}
+        leases[token] = {'version': version, 'pid': None, 'identity': None, 'installation': True,
+                         'installer_pid': os.getpid(),
+                         'installer_identity': version_leases.platform.process_identity(os.getpid())}
         version_leases._save(root, leases)
     staging = None
     try:
