@@ -98,3 +98,25 @@ class LoopEndTest(RoundCase):
         self.assertIn("ROUND ERROR wait refresh broke", self.log())
         self.assertEqual(loop.read_state(self.conn)["status"], "ended")
         self.assertEqual(self.questions(), [])
+
+    def test_version_switch_releases_loop_without_waiting_for_agents(self):
+        with patch.object(loop, "version_switch_requested", side_effect=[False, True, True, True]), \
+                patch.object(loop, "run_round"), patch.object(loop, "daily_export"), \
+                patch.object(loop, "active_count", return_value=1):
+            loop.run_loop(self.conn, self.machine, sleep=lambda _: None)
+        self.assertEqual(loop.read_state(self.conn)["status"], "ended")
+        self.assertFalse(loop.lock_file().exists())
+
+    def test_active_pointer_selects_when_old_loop_yields(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = root / "versions" / "old"
+            old.mkdir(parents=True)
+            pointer = root / "active-version"
+            pointer.write_text("old\n", encoding="utf-8")
+            with patch.object(loop, "TOOLS_DIR", old):
+                self.assertFalse(loop.version_switch_requested())
+                pointer.write_text("new\n", encoding="utf-8")
+                self.assertTrue(loop.version_switch_requested())

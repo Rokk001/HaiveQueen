@@ -63,6 +63,17 @@ def stop_flag() -> Path:
     return osplat.data_dir() / "STOP"
 
 
+def version_switch_requested():
+    """Yield the core when the active pointer selects another installed version."""
+    if TOOLS_DIR.parent.name != "versions":
+        return False
+    try:
+        active = (TOOLS_DIR.parent.parent / "active-version").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return bool(active) and active != TOOLS_DIR.name
+
+
 def lock_file() -> Path:
     """Path of the loop lock file (the process id of the running loop)."""
     return osplat.data_dir() / "loop.lock"
@@ -834,7 +845,7 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
     except Exception as exc:
         for env in envs[:1]:
             env.log("SERVER TEST ERROR %s" % exc)
-    while not stop_flag().exists() and (not rounds or done < rounds):
+    while not stop_flag().exists() and not version_switch_requested() and (not rounds or done < rounds):
         reload_settings()
         state.update(busy=True)
         write_state(conn, "round", datetime.now(), None)
@@ -876,12 +887,16 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
         from . import hives
         wake = hives.wake_marker(conn, envs)
         end = time.time() + minutes * 60
-        while time.time() < end and not stop_flag().exists():
+        while time.time() < end and not stop_flag().exists() and not version_switch_requested():
             sleep(wait_seconds)
             changed = wait_refresh()
             if changed or hives.wake_marker(conn, envs) != wake:
                 break
     stopped = stop_flag().exists()
+    if not stopped and version_switch_requested():
+        for env in envs:
+            env.log("active version changed; releasing the loop for takeover")
+        return 0
     for env in envs:
         env.log("STOP found, loop ending" if stopped else "loop ending")
         env.event("STOP file found: no new agents, waiting for running agents" if stopped else "Loop ending")
