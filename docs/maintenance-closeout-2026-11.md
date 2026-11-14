@@ -159,3 +159,22 @@ contract. The original regressions failed before their corresponding fixes.
 Cross-plan common-cause coordination remains open. HQ validates execution and
 commit identity; the supplied explanation still requires the repair agent to choose
 a regression that actually covers the original failure.
+
+## Shared integration diagnostics
+
+Detailed identical local Check/Build diagnostics for the same command and project
+now share one repair leader. Worktree prefixes are normalized; a generic exit or
+wrapper message never establishes a shared cause. Followers retain their failure
+records and wait without starting duplicate fix agents. Their evidence and repair
+history are included in subsequent diagnosis prompts. A second error after the
+first repair keeps followers waiting until the leader's full integration succeeds.
+Followers then merge the published repair and run their own complete pipeline;
+they never inherit a successful check result. A cancelled leader transfers diagnosis
+without being marked successful. Independent speculative work remains enabled.
+
+The two-plan regression reproduced duplicate fix agents before the change and
+passes with two successive failures, targeted verification and both plans reaching
+review. Focused cases cover different diagnostics, generic errors, cancellation,
+observer recovery and unrelated speculative work. This matching is deliberately
+evidence-based: different diagnostic texts or remote provider failures are not
+automatically declared the same root cause. Broader causal diagnosis remains open.

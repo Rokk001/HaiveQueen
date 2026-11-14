@@ -332,6 +332,8 @@ def advance(conn, env, plan, free_mb, alive=None):
         before = (state["phase"], bool((state.get("fix") or {}).get("agent")))
         if state["phase"] == "fix":
             result = _advance_fix(conn, env, plan, state, free_mb, alive)
+        elif state['phase'] == 'shared-repair':
+            result = _advance_shared_repair(conn, env, plan, state)
         elif state["phase"] == "blocked":
             result = _advance_blocked(conn, env, plan, state)
         else:
@@ -1009,6 +1011,7 @@ def _red(conn, env, plan, state, step, error):
     _log(env, "%s: %s red %s - %s" % (_short(plan), step, _counter(env, step), " ".join(error.split())[:200]))
     state["phase"] = "fix"
     state["fix"] = {"agent": None, "reason": "step", "step": step, "error": error, "log_file": state.get("log_file")}
+    _coordinate_repair(conn, env, plan, state, step, error)
     _record_repair(conn, env.name, plan, 'failure', step=step, error=error,
                    log_file=state.get('log_file'))
     state["placed"] = False
@@ -1077,6 +1080,11 @@ def _close_run(conn, env, plan, state, folder):
     if repair_history(conn, env.name, plan):
         _record_repair(conn, env.name, plan, 'verified', commit=head,
                        scope='integration pipeline', steps=list(state['ran']))
+    for key in state.get('shared_causes', []):
+        group = json.loads(runtime.kv_get(conn, env.name, key) or '{}')
+        if group.get('leader') == plan:
+            group['verified_commit'] = head
+            runtime.kv_set(conn, env.name, key, json.dumps(group))
     action_logs.append(state.get("log_file"), "Queue integrated; integration reservation released; commit %s\n" % head)
     _log(env, "%s: integration done, commit %s" % (_short(plan), head[:7]))
     runtime.kv_set(conn, env.name, KEY + plan, "")
@@ -1086,6 +1094,85 @@ def _close_run(conn, env, plan, state, folder):
 
 
 # ---------------------------------------------------------------- fix agent
+
+def _coordinate_repair(conn, env, plan, state, step, error):
+    """Coalesce detailed identical local diagnostics, never just a generic exit."""
+    import hashlib
+    command = commands(env).get(step)
+    if step not in ('Check', 'Build') or not command:
+        return
+    diagnostic = str(error).strip()
+    folder = _worktree(env, plan)
+    if folder:
+        diagnostic = diagnostic.replace(str(folder), '<worktree>').replace(folder.as_posix(), '<worktree>')
+    # A wrapper such as 'checks failed, see file' cannot establish a common cause.
+    if len(diagnostic) < 80 or not re.search(r'assertion|traceback|error:|fatal:|timed out|timeout', diagnostic, re.I):
+        return
+    fingerprint = hashlib.sha256(json.dumps([step, command, diagnostic]).encode()).hexdigest()
+    index = 'orch-shared-index:' + fingerprint
+    key = runtime.kv_get(conn, env.name, index)
+    group = json.loads(runtime.kv_get(conn, env.name, key) or '{}') if key else {}
+    if not group or group.get('verified_commit'):
+        key = 'orch-shared-repair:' + uuid.uuid4().hex
+        group = {'leader': plan, 'step': step, 'diagnostic': diagnostic, 'members': {}}
+        runtime.kv_set(conn, env.name, index, key)
+    leader, seen = group['leader'], set()
+    while leader not in seen:
+        if leader == plan:
+            # The other repair already waits on this plan: consolidate both
+            # causes here rather than forming a circular dependency.
+            group['leader'] = plan
+            break
+        seen.add(leader)
+        waiting = load(conn, env.name, leader) or {}
+        if waiting.get('phase') != 'shared-repair':
+            break
+        dependency = json.loads(runtime.kv_get(conn, env.name, waiting['shared_repair']) or '{}')
+        leader = dependency.get('leader')
+        if not leader:
+            break
+    group['members'][plan] = state.get('log_file')
+    runtime.kv_set(conn, env.name, key, json.dumps(group))
+    if group['leader'] == plan:
+        if key not in state.setdefault('shared_causes', []):
+            state['shared_causes'].append(key)
+    else:
+        state.update(phase='shared-repair', shared_repair=key)
+        _record_repair(conn, env.name, plan, 'shared-repair-wait', leader=group['leader'],
+                       log_file=state.get('log_file'), group=key)
+        _blocker(conn, env, plan, 'waiting for verified shared repair: ' + group['leader'])
+        _set_status(conn, env, plan, 'WAITING')
+
+
+def _advance_shared_repair(conn, env, plan, state):
+    key = state['shared_repair']
+    group = json.loads(runtime.kv_get(conn, env.name, key) or '{}')
+    if group.get('verified_commit'):
+        _record_repair(conn, env.name, plan, 'shared-repair-verified', leader=group['leader'],
+                       commit=group['verified_commit'], group=key)
+        # The normal Merge fetches the published fix; every follower still runs
+        # its own full integration. No result is copied from the repair leader.
+        state.update(phase='pipeline', step='Merge', placed=False, steps={}, ran=[],
+                     fix=None, moved=0, rejoining=True)
+        for field in ('source', 'merged', 'release', 'shared_repair'):
+            state.pop(field, None)
+        save(conn, env.name, plan, state)
+        _blocker(conn, env, plan, '')
+        return
+    leader = group.get('leader')
+    if not leader or _plan_status(conn, env.name, leader) in ('CANCELLED', 'DONE') or not load(conn, env.name, leader):
+        # A cancelled leader is not success. Transfer diagnosis, retaining every
+        # member's evidence, without touching the old process or attempt history.
+        group['leader'] = plan
+        runtime.kv_set(conn, env.name, key, json.dumps(group))
+        state.setdefault('shared_causes', []).append(key)
+        state['phase'] = 'fix'
+        state.pop('shared_repair', None)
+        save(conn, env.name, plan, state)
+        return
+    _blocker(conn, env, plan, 'waiting for verified shared repair: ' + leader)
+    _set_status(conn, env, plan, 'WAITING')
+
 
 def repair_history(conn, project, plan):
     raw = runtime.kv_get(conn, project, 'orch-repair-history:' + plan)
@@ -1118,6 +1205,12 @@ def _fix_prompt(env, plan, state, owner_text=""):
     history = repair_history(env.conn, env.name, plan)
     if history:
         what += '\nCOMPLETE REPAIR HISTORY (read every referenced log before choosing a new approach)\n' + json.dumps(history, indent=2)
+    for key in state.get('shared_causes', []):
+        group = json.loads(runtime.kv_get(env.conn, env.name, key) or '{}')
+        what += '\nSHARED FAILURE: repair the common cause; these plans await full verification.\n' + json.dumps(group, indent=2)
+        for member in group.get('members', {}):
+            if member != plan:
+                what += '\nRelated repair history:\n' + json.dumps(repair_history(env.conn, env.name, member), indent=2)
     what += ('\nAn ended agent is not a verified repair. Diagnose prior failed attempts, add a targeted regression '
              'for the original failure and report its command and result. Commit the repair; an unchanged tree '
              'does not justify repeating the integration. Never weaken checks.\n')
