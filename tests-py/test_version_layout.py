@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from haivequeen import version_layout as layout
@@ -91,12 +92,16 @@ class TestVersionLayout(unittest.TestCase):
                     time.sleep(.02)
                 self.assertTrue(started.exists())
                 layout.set_active(root, 'new')
-                self.assertEqual(version_leases.collect(root), [])
+                with patch.object(version_leases.process_scan, 'scan', return_value=False):
+                    self.assertEqual(version_leases.collect(root), [])
                 self.assertTrue((root / 'versions' / 'old').is_dir())
             finally:
                 finish.touch()
                 process.wait(timeout=10)
-            self.assertEqual(version_leases.collect(root), ['old'])
+            # This test checks the launch lease; the host process table may be
+            # unreadable, in which case collection correctly retains versions.
+            with patch.object(version_leases.process_scan, 'scan', return_value=False):
+                self.assertEqual(version_leases.collect(root), ['old'])
 
     def test_versions_and_stable_launchers(self):
         with tempfile.TemporaryDirectory() as directory:

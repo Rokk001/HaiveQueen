@@ -509,6 +509,25 @@ def with_bzz_on_path(env, dirs=None):
     return env
 
 
+def with_version_bzz(env, run_dir):
+    """Bind an installed version's agent commands to the runner's own code."""
+    if TOOL_ROOT.parent.name != "versions":
+        return with_bzz_on_path(env)
+    folder = Path(run_dir) / "version-bzz"
+    folder.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        (folder / "bzz.cmd").write_text('@"%BZZ_AGENT_PYTHON%" -I "%BZZ_AGENT_CLI%" %*\r\n', encoding="utf-8")
+    else:
+        script = folder / "bzz"
+        script.write_text('#!/bin/sh\nexec "$BZZ_AGENT_PYTHON" -I "$BZZ_AGENT_CLI" "$@"\n', encoding="utf-8")
+        script.chmod(0o755)
+    env["BZZ_AGENT_PYTHON"] = osplat.python_executable()
+    env["BZZ_AGENT_CLI"] = str(TOOL_ROOT / "haivequeen" / "cli.py")
+    key = next((k for k in env if k.upper() == "PATH"), "PATH")
+    env[key] = str(folder) + os.pathsep + env.get(key, "")
+    return env
+
+
 def task_text(conn, project, plan, package, phase, plan_short):
     """Return the task text: work = package row of the plan (id and title); verify / release / integrate = phase plus package."""
     pkg_txt = "package " + package if package and package != "ALL" and not re.match(r"^(REL|INT-)", package) else "whole plan"
@@ -1146,7 +1165,7 @@ def run_agent(a, out=None):
     bj_raw = cfg.get("buildJobs")
     bj = buildjobs.settings_from(None if isinstance(bj_raw, bool) else bj_raw) if a.phase in ("integrate", "release") else None   # Queens and Bees do not build or reserve build cores
     bj_jobs, bj_start_mb, samples, stop, sampler = 0, 0.0, run_dir / "build-samples.txt", threading.Event(), None
-    env = with_bzz_on_path(profile.environment(prov))   # the agent and everything it starts finds `bzz`, also without a PATH entry of the pip Scripts folder
+    env = with_version_bzz(profile.environment(prov), run_dir)
     env["BZZ_AGENT"] = a.name   # tells `bzz ready` which agent calls it (only the release phase may register a branch as ready)
     if a.phase == 'bee':
         guard = runtime.kv_get(conn, a.project, 'agent-branch:' + a.name)

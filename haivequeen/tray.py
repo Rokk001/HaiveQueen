@@ -120,7 +120,7 @@ def main():
     user.DispatchMessageW.argtypes = [ctypes.POINTER(w.MSG)]
     user.DefWindowProcW.restype = LRESULT
     user.TrackPopupMenu.restype = w.UINT
-    current = {'state': '', 'web': False, 'work': False}
+    current = {'state': '', 'web': False, 'work': False, 'handover': False}
     icon = NID()
     icon.size = ctypes.sizeof(NID)
     icon.id = 1
@@ -130,6 +130,10 @@ def main():
     user.DestroyIcon.argtypes = [w.HICON]
 
     def refresh(hwnd):
+        if loop.version_switch_requested():
+            current['handover'] = True
+            user.PostMessageW(hwnd, 0x10, 0, 0)
+            return
         try:
             current['state'] = state()
             status = web_service.control('status')
@@ -189,6 +193,23 @@ def main():
     if icon.icon:
         user.DestroyIcon(icon.icon)
     kernel.CloseHandle(mutex)
+    if current['handover']:
+        start_active_tray()
+
+
+def start_active_tray():
+    """Start the replacement only after the previous tray releases its mutex."""
+    target = loop.active_version_directory()
+    if not target:
+        return
+    try:
+        version_leases.launch(target, subprocess.Popen,
+                              [osplat.python_executable(), '-m', 'haivequeen.tray'],
+                              cwd=str(target), stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS)
+    except OSError:
+        pass
 
 
 if __name__ == '__main__':
