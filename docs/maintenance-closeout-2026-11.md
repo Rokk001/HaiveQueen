@@ -463,3 +463,31 @@ Inspected the current request handlers, state locking, transaction boundaries an
 | A-18 | `2b1bddc` | Actual owner/coordinator answers and active decisions compete by recency; automatic duplicate references are not new authority. `test_ask_triage` covers newer decisions, newer answers, same-second precedence, superseded decisions and fresh owner-check requirements. |
 
 Rerun scope: `test_web_control_timeout`, `test_login_input_budget`, `test_update_state_race`, `test_update_origin`, `test_answer_atomic`, `test_owner_atomic`, `test_settings_atomic`, `test_ask_triage` (33 tests), plus the three login-budget methods in `test_web_security_findings.SecurityRoutes`. The isolated control endpoint's stop action concerns only its test service. No installed service is contacted.
+
+## Final A-19 through A-35 verification against 851e788
+
+All 76 focused Python tests and four JavaScript regression scripts passed. This reconciliation completes the original A-01 through A-35 findings together with the preceding verification tables. Historical pending descriptions are superseded by these completion records. This is not a full-suite or current CI result.
+
+| Finding | Fix commit | Verified protection and regression evidence |
+|---|---|---|
+| A-19 | `d14ec181` | HTTP readiness rejects authentication and server failures; expected schema errors are distinguished. `test_servers.HttpReadiness`. |
+| A-20 | `22549adb` | Offline state updates are transactional and stale probes cannot overwrite a newer failure. `test_offline_concurrency`. |
+| A-21 | `ee43ee64` | OpenCode/Kilo recovery requires a bounded actual model response, not a version response. `test_offline_cli_recovery`. |
+| A-22 | `535e7a40` | Quota discovery has an absolute deadline and bounded notification queue and helper cleanup. `test_codex_quota_deadline`. |
+| A-23 | `b1dfeba9` | Ready observation retains and reuses a live pending attempt instead of launching duplicate checks. `test_ready_observation`. |
+| A-24 | `1330d20` | Git output is streamed before exit while retaining order and result. `test_git_live_output`. |
+| A-25 | `758c1a9` | Journal write failure does not stop pipe draining; bounded fallback preserves diagnostics and actual exit. See the preceding P1 verification and `test_log_drain_failure`. |
+| A-26 | `f040259d` | Action journal retention protects active, malformed and concurrently changed files. `test_action_log_retention`. |
+| A-27 | `13607e74` | Bounded incremental pages and client buffers retain access to full history without repeated full reads. `test_action_log_pages`, `test_web_log_pages`, `log_pager_test.cjs`, `step_log_paging_test.cjs`. |
+| A-28 | `2dce7173` | Damaged records are reported while subsequent valid records remain readable; partial tails remain pending. `test_action_log_recovery`. |
+| A-29 | `1330d20` | Progress uses the newest attempt's definitions and notes; incompatible definitions remain unknown. `test_web_plan_details`. |
+| A-30 | `2bdfe96` | Owner jobs are persisted before work, shutdown waits for workers, and interrupted jobs remain visible without replay. `test_web_job_lifecycle`, `web_owner_history_test.cjs`. |
+| A-31 | `cd8ee62` | Failed listener changes restore working configuration and reachability and report the failure. `test_web_reload_recovery`, `web_listener_error_test.cjs`. |
+| A-32 | `f0f0259` | Tray status probes run outside the UI thread; stale status is identified and late closed-cache updates discarded. `test_tray_refresh`. |
+| A-33 | `4603241` | Backup exports use distinct temporary files and serialized publication, retaining an existing valid backup on failure. `test_export_isolation`. |
+| A-34 | `254e6b4` | Agent stall detection honors project overrides including zero to disable the threshold. `test_project_stall`. |
+| A-35 | `a143400` | A current step is not completed merely because its description mentions completed work elsewhere. `test_web_plan_details`. |
+
+Verification used isolated fixtures and test-owned helpers; no production database, agent, orchestrator or tray process was changed. Updating installation files does not reload code already held by running processes.
+
+The separate R-01 through R-05 entries remain risk/product-policy decisions, not unresolved A findings: stale quota policy, degraded operation with a corrupt recovery journal, immutable archival of referenced historical logs, missing-plan representation, and dependency/action pinning policy. This closeout does not claim those policies were implemented or that no additional defects can exist.
