@@ -11,7 +11,7 @@ import shutil
 import tempfile
 import uuid
 
-from . import platform
+from . import platform, process_scan
 from .stable_launcher import lifetime_lock
 from .version_layout import _version, version_dir
 
@@ -86,6 +86,13 @@ def collect(root):
     with lifetime_lock(root):
         active = _version((root / 'active-version').read_text(encoding='utf-8').strip())
         leases = _load(root)
+        scans = {}
+
+        def scan_version(version):
+            if version not in scans:
+                scans[version] = process_scan.scan(version_dir(root, version))
+            return scans[version]
+
         for token, record in list(leases.items()):
             # A failed copy cannot leave a child using the target.  Keep a
             # completed installation reserved for later activation, however.
@@ -107,6 +114,9 @@ def collect(root):
                 # A published PID without a birth identity cannot be matched to
                 # a live process, but definitive absence still proves it ended.
                 del leases[token]
+            elif not pid and not record.get('installation') and scan_version(record['version']) is False:
+                # The launch lock excludes an in-flight spawn while scanning.
+                del leases[token]
         _save(root, leases)
         protected = {active} | {_version(r['version']) for r in leases.values()}
         versions = root / 'versions'
@@ -117,6 +127,8 @@ def collect(root):
                     try:
                         _version(path.name)
                     except ValueError:
+                        continue
+                    if scan_version(path.name) is not False:
                         continue
                     try:
                         shutil.rmtree(path)

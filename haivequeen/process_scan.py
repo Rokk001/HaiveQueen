@@ -1,6 +1,14 @@
 """Conservative process table inspection for version directory recovery."""
 import os
+import sys
 from pathlib import Path
+
+
+def scan(directory):
+    """Return absence only when the platform inspection can prove it."""
+    if sys.platform.startswith('linux'):
+        return scan_linux(directory)
+    return None
 
 
 def _contains(directory, value):

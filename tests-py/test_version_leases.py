@@ -10,6 +10,12 @@ from haivequeen import config, stable_launcher, version_leases, version_layout
 
 
 class VersionLeasesTests(unittest.TestCase):
+    def setUp(self):
+        # These lease tests model an otherwise empty process table.
+        scanner = patch.object(version_leases.process_scan, 'scan', return_value=False)
+        self.scan = scanner.start()
+        self.addCleanup(scanner.stop)
+
     def test_failed_removal_is_retained_and_retried(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -146,11 +152,13 @@ class VersionLeasesTests(unittest.TestCase):
                 (root / 'versions' / name).mkdir(parents=True)
             (root / 'active-version').write_text('current', encoding='utf-8')
             with patch.object(config, 'config_dir', return_value=base / 'data'), patch.object(version_leases.platform, 'process_identity', return_value='identity') as identity:
+                self.scan.side_effect = lambda path: path.name == 'pending'
                 token = version_leases.reserve(root, 'live')
                 pending = version_leases.reserve(root, 'pending')
                 version_leases.publish(root, token, 123)
                 self.assertEqual(version_leases.collect(root), ['old'])
                 version_leases.release(root, pending)
+                self.scan.side_effect = None
                 self.assertEqual(version_leases.collect(root), ['pending'])
                 identity.return_value = 'reused'
                 self.assertEqual(version_leases.collect(root), ['live'])
@@ -289,6 +297,7 @@ class VersionLeasesTests(unittest.TestCase):
                     stable_launcher.main()
             self.assertEqual(len(version_leases._load(root)), 2)
             (root / 'active-version').write_text('active', encoding='utf-8')
+            self.scan.return_value = None
             self.assertEqual(version_leases.collect(root), [])
 
     def test_launch_failure_retains_reservation_when_outcome_unknown(self):
