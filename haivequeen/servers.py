@@ -14,6 +14,7 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 
@@ -407,16 +408,36 @@ def forget(name) -> None:
         _write_tests(results)
 
 
+class _SameOriginRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep server credentials on the configured HTTP(S) origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        def origin(url):
+            parsed = urllib.parse.urlsplit(url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username is not None:
+                return None
+            return (parsed.scheme, parsed.hostname, parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80))
+
+        try:
+            source, destination = origin(req.full_url), origin(newurl)
+        except ValueError:
+            source = destination = None
+        if source is None or destination is None or source != destination:
+            raise urllib.error.HTTPError(req.full_url, code, "Cross-origin redirect refused", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _request(url, key, body=None, timeout=TIMEOUT_S):
     """(status, text) of one request; status None when the server does not answer."""
     headers = {"Authorization": "Bearer " + key, "x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
     req = urllib.request.Request(url, data=None if body is None else json.dumps(body).encode("utf-8"), headers=headers, method="GET" if body is None else "POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.build_opener(_SameOriginRedirect()).open(req, timeout=timeout) as resp:
             return resp.status, resp.read(1 << 20).decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         try:
-            return exc.code, exc.read(1 << 16).decode("utf-8", "replace")
+            with exc:
+                return exc.code, exc.read(1 << 16).decode("utf-8", "replace")
         except OSError:
             return exc.code, ""
     except (OSError, ValueError, urllib.error.URLError):
