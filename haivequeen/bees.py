@@ -391,6 +391,15 @@ def failure_count(conn, project, plan, package, cls):
 FAILURE_QUESTION = 'The package remains unsolved at the highest available class. How should it continue?'
 
 
+def is_failure_question(text):
+    """Recognize the canonical failure question with optional diagnostic paragraphs."""
+    text = (text or '').strip()
+    for heading in (FAILURE_QUESTION, tr(FAILURE_QUESTION, language='German')):
+        if text == heading or (text.startswith(heading) and text[len(heading):].startswith(('\n', '\r\n'))):
+            return True
+    return False
+
+
 def retry_epoch(conn, project, plan, package):
     """Last signal before the most recent owner-directed retry; None before any answer."""
     # Signal boundaries advance when answers arrive, regardless of question creation order.
@@ -400,7 +409,7 @@ def retry_epoch(conn, project, plan, package):
 
 def answer_failure_question(conn, question, by):
     """Start a fresh counting cycle once for an owner/coordinator failure answer, retaining history."""
-    if by not in ('owner', 'coordinator') or question['question'] not in (FAILURE_QUESTION, tr(FAILURE_QUESTION, language='German')):
+    if by not in ('owner', 'coordinator') or not is_failure_question(question['question']):
         return
     ensure_attempts(conn)
     key = (question['project'], question['plan_path'], question['item'])
@@ -793,7 +802,7 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
     if outcome == 'failed' and next_attempt(env.conn, env.name, plan, package, cls, escalation_providers(env, plan, package), excluded, threshold) is None:
         language = roles.language(env.settings)
         text = tr(FAILURE_QUESTION, language=language)
-        if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=package)):
+        if not any(is_failure_question(q.get('question')) for q in runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=package)):
             db.add_question(env.conn, env.name, plan, package, text, tr('Review the failed attempts and choose the next approach.', language=language))
 
 

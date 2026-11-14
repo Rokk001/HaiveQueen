@@ -68,6 +68,35 @@ class ReleaseRetryTests(RoundCase):
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_attempt_signals').fetchone()[0], 8)
         self.assertEqual(bees.start_process(env, REL, 'P1', 'Bea', 'heavy', 'task', ['one'], [], [])['class'], 'heavy')
 
+    def test_detailed_failure_answer_preserves_history_and_retry_limit(self):
+        from haivequeen.i18n import tr
+        self.mock_agent_worktrees()
+        env = self.env()
+        for language, author in [('English', 'owner'), ('German', 'coordinator')]:
+            for n in range(4):
+                bees.report_attempt(env, REL, 'P1', 'heavy', 'failed', language + str(n), ['R'])
+            question = next(q for q in db.open_questions(self.conn, 'testproj', True)
+                            if q['item'] == 'P1')
+            detail = tr(bees.FAILURE_QUESTION, language=language) + '\n\nAdditional diagnostic details.'
+            self.conn.execute('UPDATE questions SET question=? WHERE id=?', (detail, question['id']))
+            before = self.conn.execute('SELECT COUNT(*) FROM bee_attempt_signals').fetchone()[0]
+            db.answer_question(self.conn, question['id'], 'Continue with the corrected approach.', author)
+            self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 0)
+            self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_attempt_signals').fetchone()[0], before)
+            self.assertEqual(bees.start_process(env, REL, 'P1', 'Worker', 'medium', 'task', ['one'], [], [])['class'], 'heavy')
+            bees.close_embedded(self.conn, 'testproj', REL, 'P1')
+        for n in range(4):
+            bees.report_attempt(env, REL, 'P1', 'heavy', 'failed', 'again' + str(n), ['R'])
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 3)
+        self.assertFalse(bees.start_process(env, REL, 'P1', 'Worker', 'heavy', 'task', ['one'], [], []))
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_retry_answers').fetchone()[0], 2)
+
+    def test_failure_heading_is_not_a_substring_match(self):
+        for text in ('Other question: ' + bees.FAILURE_QUESTION,
+                     bees.FAILURE_QUESTION + ' Not a diagnostic paragraph.', '', None):
+            self.assertFalse(bees.is_failure_question(text))
+        self.assertTrue(bees.is_failure_question(bees.FAILURE_QUESTION + '\r\nDetails'))
+
     def test_unrelated_or_automatic_answers_do_not_reset_failures(self):
         env = self.env()
         for n in range(4):
@@ -76,6 +105,7 @@ class ReleaseRetryTests(RoundCase):
         db.answer_question(self.conn, unrelated, 'Try again.', 'owner')
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 3)
         q = db.open_questions(self.conn, 'testproj', True)[0]
+        self.conn.execute('UPDATE questions SET question=? WHERE id=?', (bees.FAILURE_QUESTION + '\n\nDetails', q['id']))
         db.answer_question(self.conn, q['id'], 'Duplicate.', 'auto')
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 3)
 
