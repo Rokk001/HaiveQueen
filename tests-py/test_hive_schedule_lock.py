@@ -75,15 +75,64 @@ class HiveScheduleLockTests(unittest.TestCase):
                 with loop.hive_schedule_lock(timeout=1):
                     self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["pid"], os.getpid())
 
-    # A living holder without a heartbeat is abandoned too.
-    def test_lock_with_expired_heartbeat_is_taken_over(self):
-        """An expired heartbeat marks the lock abandoned even when the process lives."""
+    def test_live_holder_with_expired_heartbeat_is_not_taken_over(self):
+        """A stalled heartbeat must not permit a second live scheduler."""
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"BZZ_DATA_DIR": directory}):
             path = Path(directory) / "hive-schedule.lock"
             self._foreign_lock(path, 4242, "scheduling round", loop.HIVE_LOCK_EXPIRY + 5)
             with mock.patch.object(loop.osplat, "process_alive", lambda pid: True):
-                with loop.hive_schedule_lock(timeout=1):
-                    self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["pid"], os.getpid())
+                with self.assertRaises(TimeoutError):
+                    with loop.hive_schedule_lock(timeout=0.01):
+                        self.fail("entered the live holder's scheduling section")
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["pid"], 4242)
+
+    def test_takeover_rechecks_holder_liveness(self):
+        """A newly live holder must survive the second recovery read."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'hive-schedule.lock'
+            self._foreign_lock(path, 4242, 'round', loop.HIVE_LOCK_EXPIRY + 5)
+            with mock.patch.object(loop.osplat, 'process_alive', side_effect=[False, True, True, True]):
+                self.assertEqual(loop._try_hive_lock(path, 'new round'), (4242, 'round'))
+            self.assertEqual(json.loads(path.read_text())['pid'], 4242)
+
+    def test_os_guard_prevents_concurrent_recovery_before_metadata_exists(self):
+        """A second contender cannot enter during lock metadata publication."""
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {'BZZ_DATA_DIR': directory}):
+            guard = os.open(str(Path(directory) / 'hive-schedule.lock.guard'), os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    msvcrt.locking(guard, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaises(TimeoutError):
+                    with loop.hive_schedule_lock(timeout=0.01):
+                        self.fail('entered while another contender owns the OS guard')
+            finally:
+                os.close(guard)
+            with loop.hive_schedule_lock(timeout=0.1):
+                pass
+
+    def test_guard_is_held_through_body_and_released_on_exception(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {'BZZ_DATA_DIR': directory}):
+            path = Path(directory) / 'hive-schedule.lock'
+            with self.assertRaisesRegex(ValueError, 'body failed'):
+                with loop.hive_schedule_lock():
+                    with self.assertRaises(TimeoutError):
+                        loop._acquire_hive_guard(path, time.monotonic())
+                    raise ValueError('body failed')
+            with loop.hive_schedule_lock(timeout=0.1):
+                pass
+
+    def test_unreadable_stale_metadata_is_not_permission_to_take_over(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'hive-schedule.lock'
+            path.write_text('{unfinished')
+            old = time.time() - loop.HIVE_LOCK_EXPIRY - 10
+            os.utime(path, (old, old))
+            self.assertEqual(loop._try_hive_lock(path, 'new round'), (-1, ''))
+            self.assertEqual(path.read_text(), '{unfinished')
 
     # Replay of questions 608/612: a start waits for a busy lock, gives up and names the holder.
     def test_timeout_names_holder_and_reason(self):

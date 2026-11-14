@@ -7,6 +7,7 @@ a lock starts a triage agent (D5), and at the start running agents are re-attach
 The agent process itself is `haivequeen.agent_runner` (see docs/S13-S14-INTERFACE.md).
 """
 import faulthandler
+import errno
 import json
 import math
 import os
@@ -292,7 +293,7 @@ def _state_summary(env, quiet=False) -> dict:
 _hive_schedule_guard = threading.Lock()
 _abandoned_hive_locks = set()
 HIVE_LOCK_HEARTBEAT = 5.0   # seconds between two heartbeats of the holder
-HIVE_LOCK_EXPIRY = 60.0     # a lock whose last heartbeat is older than this is abandoned
+HIVE_LOCK_EXPIRY = 60.0     # diagnostic heartbeat threshold; never proof of a dead holder
 
 
 def _read_hive_lock(path: Path):
@@ -312,8 +313,41 @@ def _read_hive_lock(path: Path):
 
 
 def hive_lock_abandoned(pid: int, age: float) -> bool:
-    """A lock is abandoned when its holder is gone or its heartbeat has expired."""
-    return not osplat.process_alive(pid) or age > HIVE_LOCK_EXPIRY
+    """Only a dead holder permits recovery; a stalled heartbeat is not proof."""
+    return not osplat.process_alive(pid)
+
+
+def _acquire_hive_guard(path: Path, deadline: float):
+    """Hold an OS lock through scheduling and recovery; process exit releases it.
+
+    The guard file must never be unlinked: every contender locks the same inode.
+    The JSON lock remains for diagnostics and compatibility with older holders.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path) + '.guard', os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        while True:
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise
+                if time.monotonic() >= deadline:
+                    held = _read_hive_lock(path)
+                    pid, why = held[:2] if held else ('unknown', '')
+                    raise TimeoutError('Plan scheduling is busy: the lock is held by process %s%s' %
+                                       (pid, ' (%s)' % why if why else '')) from None
+                time.sleep(0.1)
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def _try_hive_lock(path: Path, reason: str):
@@ -325,20 +359,15 @@ def _try_hive_lock(path: Path, reason: str):
         except FileExistsError:
             held = _read_hive_lock(path)
             if held is None:
-                try:
-                    if time.time() - path.stat().st_mtime <= HIVE_LOCK_EXPIRY:
-                        return -1, ""   # just created and not written yet
-                except FileNotFoundError:
+                if not path.exists():
                     continue
-                except OSError:
-                    return -1, ""
-                held = (-1, "", HIVE_LOCK_EXPIRY + 1)   # damaged and stale
+                return -1, ""   # unknown ownership must not authorize recovery
             pid, why, age = held
             if pid != -1 and not hive_lock_abandoned(pid, age):
                 return pid, why
             try:
                 again = _read_hive_lock(path)
-                if (again is None and pid == -1) or (again is not None and again[:2] == held[:2]):
+                if again is not None and again[:2] == held[:2] and hive_lock_abandoned(again[0], again[2]):
                     path.unlink()   # only the lock that was judged abandoned
             except OSError:
                 return pid, why
@@ -363,7 +392,8 @@ def _hive_heartbeat(path: Path, stop: threading.Event) -> None:
 def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
     """Serialize Plan scheduling; the lock holds the holder's process id, its reason and a heartbeat.
 
-    A lock of a dead holder or with an expired heartbeat is taken over; a wait that gives up names the holder and what it is doing."""
+    Only a dead holder is recovered. An OS guard serializes recovery and the whole
+    scheduling section; a wait that gives up names the holder and what it is doing."""
     path = osplat.data_dir() / "hive-schedule.lock"
     if not reason:
         try:
@@ -379,7 +409,9 @@ def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
                            (os.getpid(), " (%s)" % why if why else ""))
     stop = threading.Event()
     beat = None
+    guard = None
     try:
+        guard = _acquire_hive_guard(path, deadline)
         while True:
             if path in _abandoned_hive_locks:
                 try:
@@ -415,6 +447,8 @@ def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
                 _abandoned_hive_locks.add(path)
                 raise
     finally:
+        if guard is not None:
+            os.close(guard)
         _hive_schedule_guard.release()
 
 
