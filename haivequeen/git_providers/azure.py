@@ -179,7 +179,8 @@ def release_state(repo, name, commit, token=None):
 
 # Normalized operations own provider-specific integration behavior.
 from . import _integration as _normalized
-CAPABILITIES |= {'open_pr', 'find_pr', 'pr_state', 'pr_commit', 'pipeline_state', 'credential'}
+CAPABILITIES |= {'open_pr', 'find_pr', 'pr_state', 'pr_commit', 'pipeline_state', 'credential',
+                 'release_tag', 'release_state'}
 
 def pr_state(repo, identifier, token=None):
     return _normalized.state(pr_status(repo, identifier, token))
