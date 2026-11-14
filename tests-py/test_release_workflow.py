@@ -26,6 +26,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
                      'prerelease=(--prerelease)', 'gh release upload "$RELEASE_TAG" dist/* --clobber'):
             self.assertIn(part, self.workflow)
 
+    def test_full_release_job_does_not_run_distribution_build(self):
+        prerelease, full = self.workflow.split('  full-release:', 1)
+        self.assertIn("if: contains(github.ref_name, '-')", prerelease)
+        self.assertIn("if: ${{ !contains(github.ref_name, '-') }}", full)
+        self.assertNotIn('Build distributions', full)
+        self.assertNotIn('pip wheel', full)
+        self.assertIn('gh release create "$RELEASE_TAG" --verify-tag', full)
+        self.assertIn('gh release download "$source" --dir dist', full)
+        self.assertIn('Pre-release and full release commits differ', full)
+
     def test_tag_version_is_used_for_package_and_invalid_tags_fail(self):
         block = self.workflow.split("          python - <<'PY'\n", 1)[1].split('\n          PY', 1)[0]
         script = '\n'.join(line[10:] for line in block.splitlines())
