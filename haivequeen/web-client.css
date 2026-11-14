@@ -754,3 +754,17 @@ progress.ok::-moz-progress-bar { background: #79df9b; }progress.bad::-moz-progre
 
 .row-menu::before { content: ''; display: inline-block; width: 15px; height: 15px; vertical-align: middle; background: currentColor; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9' fill='none' stroke='black' stroke-width='1.8'/%3E%3Cpath d='M12 11v6' stroke='black' stroke-width='1.8'/%3E%3Ccircle cx='12' cy='7.5' r='1.1'/%3E%3C/svg%3E") center/contain no-repeat; }
 .row-menu:hover,.row-menu:focus-visible { color: var(--cyan); }
+
+/* Shared transparent emblem, with live text over the animated honeycomb. */
+.header-identity { position: relative; z-index: 1; display: flex; align-items: center; gap: 18px; height: 100%; padding: 0 18px; width: fit-content; max-width: 100%; box-sizing: border-box; }
+.header-queen { width: 104px; height: 104px; object-fit: contain; flex: none; }
+.header-wordmark { font: 800 clamp(28px, 3.4vw, 54px)/1 'Segoe UI', sans-serif; letter-spacing: -2px; color: #e8f0f2; white-space: nowrap; }
+.header-wordmark span { color: #17d7ee; }
+.header-wordmark strong { color: #f4c62d; }
+.header-descriptor { margin: 10px 0 0; font: 10px monospace; letter-spacing: .42em; color: #b4c9d0; }
+@media(max-width:700px) {
+ .header-identity { gap: 10px; padding: 0 10px; }
+ .header-queen { width: 70px; height: 70px; }
+ .header-wordmark { letter-spacing: -1px; }
+ .header-descriptor { font-size: 7px; letter-spacing: .2em; margin-top: 7px; }
+}

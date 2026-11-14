@@ -12,6 +12,7 @@ def page(setup=False, token='', secure=False, language=None):
     def t(en, de):
         return html.escape(de if german else en)
     icon = 'data:image/png;base64,' + base64.b64encode(Path(__file__).with_name('web-login-logo.png').read_bytes()).decode('ascii')
+    favicon = 'data:image/png;base64,' + base64.b64encode(Path(__file__).with_name('web-icon.png').read_bytes()).decode('ascii')
     title = t('Set up your hive', 'Richte deinen Hive ein') if setup else t('Welcome back', 'Willkommen zurück')
     subtitle = t('Create your account and configure access to HaiveQueen.', 'Erstelle deinen Zugang und richte HaiveQueen ein.') if setup else t('Sign in to your HaiveQueen dashboard.', 'Melde dich an deinem HaiveQueen-Dashboard an.')
     button = t('Create account', 'Zugang erstellen') if setup else t('Sign in', 'Anmelden')
@@ -41,7 +42,7 @@ def page(setup=False, token='', secure=False, language=None):
     css = Path(__file__).with_name('web-access.css').read_text(encoding='utf-8')
     script = Path(__file__).with_name('web-access.js').read_text(encoding='utf-8')
     return (f'<!doctype html><html lang="{"de" if german else "en"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>HaiveQueen {"Setup" if setup else "Login"}</title><link rel="icon" href="{icon}"><style>{css}</style></head>'
+            f'<title>HaiveQueen {"Setup" if setup else "Login"}</title><link rel="icon" href="{favicon}"><style>{css}</style></head>'
             f'<body><div class="topline"><span>HAIVEQUEEN</span><span>{t("FIRST-TIME SETUP", "ERSTEINRICHTUNG") if setup else t("DASHBOARD ACCESS", "DASHBOARD-ZUGANG")}</span></div>'
             f'<main class="access-shell"><section class="identity" aria-label="HaiveQueen"><img class="queen" src="{icon}" alt="">'
             '<div class="wordmark">H<span>ai</span>ve<strong>Queen</strong></div><p class="descriptor">AI AGENT ORCHESTRATOR</p>'

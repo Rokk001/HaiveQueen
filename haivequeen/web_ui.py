@@ -39,9 +39,10 @@ def page(csrf, language=None):
                  'cliModels': {key: {'models': cli_presets.model_list(key), 'efforts': cli_presets.effort_list(key)} for key in cli_presets.PRESETS},
                  'updateConfirm': updates.TEXT_CONFIRM}
     favicon = 'data:image/png;base64,' + base64.b64encode(Path(__file__).with_name('web-icon.png').read_bytes()).decode('ascii')
-    banner = Path(__file__).with_name('web-header.png')
-    branding = ('<img class="brand-banner" alt="HaiveQueen — AI Agent Orchestrator" src="data:image/png;base64,'
-                + base64.b64encode(banner.read_bytes()).decode('ascii') + '">') if banner.is_file() else '<h1>HaiveQueen</h1>'
+    logo = 'data:image/png;base64,' + base64.b64encode(Path(__file__).with_name('web-login-logo.png').read_bytes()).decode('ascii')
+    branding = ('<div class="header-identity"><img class="header-queen" alt="" src="' + logo + '">'
+                '<div><div class="header-wordmark">H<span>ai</span>ve<strong>Queen</strong></div>'
+                '<p class="header-descriptor">AI AGENT ORCHESTRATOR</p></div></div>')
     data = json.dumps(bootstrap, ensure_ascii=False).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     return ('<!doctype html><html lang="' + ('de' if i18n.is_german_language(language) else 'en') + '">'
             '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
