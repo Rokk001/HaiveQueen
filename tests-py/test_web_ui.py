@@ -44,6 +44,15 @@ class BrowserTests(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_grouped_hives_and_missing_value_icons(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required')
+        for name in ('web_dashboard_fields_test.cjs', 'web_hives_groups_test.cjs'):
+            result = subprocess.run([node, str(Path(__file__).with_name(name))],
+                                    cwd=ROOT, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_cicd_views_and_clipboard(self):
         node = shutil.which('node')
         if not node:
@@ -147,7 +156,7 @@ class BrowserTests(unittest.TestCase):
         saved_projects = {}
         state = {'version':'test', 'orchestrator':{'label':'RUNNING'}, 'controls':{'force_warning':'Force stop ends all running Queens, Agents, Builds and Deploys immediately. Unfinished work will be done again after Start.'},
                  'projects':[{'name':'demo'}, {'name':'local-only'}], 'tiles':{'bees':1}, 'hives':[],
-                 'bees':[{'name':'mock-agent','agent':'mock-agent','project':'demo','apiary':'demo','task':'P1','status':'running','model':'running'}]}
+                 'bees':[{'name':'mock-agent','agent':'mock-agent','plan_path':'mock.md','project':'demo','apiary':'demo','task':'P1','status':'running','model':'running'}]}
         state['hives'] = [{'name':'Mock','apiary':'demo','plan_path':'mock.md','queen':'Test Queen','queen_agent':'queen-test','progress':50,'done':1,'total':2,'status':'Running'}]
         state['queue'] = {'open': 2, 'queued': 0}
         state['bees'][0].update(kind='bee', plan_path='mock.md')

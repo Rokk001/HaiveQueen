@@ -46,10 +46,10 @@ def exempt_clear(pid=None) -> None:
         pass
 
 
-def is_exempt(pid, parents) -> bool:
-    """True when the process or one of its recorded ancestors (`parents`: pid -> parent pid) carries a valid exempt mark."""
+def is_exempt(pid, parents, root=None) -> bool:
+    """True when the process or one of its recorded ancestors (`parents`: pid -> parent pid) carries a valid exempt mark below the owning cleanup root."""
     seen = set()
-    while pid and pid not in seen:
+    while pid and pid != root and pid not in seen:
         seen.add(pid)
         try:
             recorded = (exempt_dir() / str(pid)).read_text(encoding="utf-8")
@@ -122,11 +122,11 @@ def _terminate(pid) -> None:
         pass
 
 
-def kill_recorded(procs, protect=()) -> list:
+def kill_recorded(procs, protect=(), root=None) -> list:
     """End the recorded processes ({pid: {"identity", "ppid"}}) that still run with their recorded identity and are not exempt; returns the pids ended.
     Children go before parents."""
     parents = {int(pid): info.get("ppid") for pid, info in procs.items()}
-    exempt = {pid for pid in parents if is_exempt(pid, parents)}
+    exempt = {pid for pid in parents if is_exempt(pid, parents, root)}
     ancestors = set()
     for pid in exempt:
         parent = parents.get(pid)
@@ -223,7 +223,7 @@ class Tracker:
                 pass
             with self.lock:
                 procs = dict(self.procs)
-            now = kill_recorded(procs, protect=(self.root, os.getpid()))
+            now = kill_recorded(procs, protect=(self.root, os.getpid()), root=self.root)
             ended += now
             if not now:
                 break
@@ -252,7 +252,7 @@ def sweep(runs_root) -> list:
         if pid and osplat.process_alive(pid) and (not data.get("rootIdentity") or osplat.process_identity(pid) == data["rootIdentity"]):
             continue   # the runner still watches its agent
         procs = {int(p): i for p, i in (data.get("procs") or {}).items()}
-        ended += kill_recorded(procs)
+        ended += kill_recorded(procs, root=pid)
         try:
             state.unlink()
         except OSError:

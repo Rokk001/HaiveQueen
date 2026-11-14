@@ -39,6 +39,7 @@ class Plan:
     packages: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     errors: list = field(default_factory=list)   # header problems shown in the GUI: broken header, unknown status or class
+    depends_on: list = field(default_factory=list)   # project-relative paths of prerequisite plans
     owner_check: str = "ask"   # "ask": the owner accepts the integrated plan; "none" (header owner_check = "none") skips that question
     branch: str = ""      # header field `branch`: the plan branch, the only source of it
     worktree: str = ""    # header field `worktree`: the folder of the plan worktree, the only source of it
@@ -140,9 +141,44 @@ def parse_plan_text(text, path=""):
                 depends_on=_depends(row.get("depends_on")),
                 requirements=_depends(row.get("requirements")),
             ))
+    dependencies = header.get("depends_on", [])
+    if not isinstance(dependencies, list) or any(not isinstance(v, str) or not v.strip() for v in dependencies):
+        errors.append("plan depends_on must be a list of nonempty project-relative plan paths")
+        dependencies = []
+    dependencies = [v.replace('\\', '/').strip() for v in dependencies]
+    if any(os.path.isabs(v) or ':' in v or '..' in v.split('/') for v in dependencies):
+        errors.append("plan dependencies must stay inside the project")
     owner_check = "none" if str(header.get("owner_check", "")).strip().lower() in ("none", "false", "no", "off") else "ask"
-    return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings, errors=errors, owner_check=owner_check,
+    return Plan(path=path, title=first_heading(body), status=normalize_status(header.get("status")), packages=packages, warnings=warnings, errors=errors, depends_on=dependencies, owner_check=owner_check,
                 branch=str(header.get("branch") or "").strip(), worktree=str(header.get("worktree") or "").strip())
+
+
+def dependency_blocker(plan, plans_by_path, integrated):
+    """Explain missing, cyclic or unfinished prerequisites; independent plans stay parallel."""
+    visiting, checked = set(), set()
+    def validate(path):
+        if path in visiting:
+            return 'plan dependency cycle: ' + path
+        if path in checked:
+            return ''
+        current = plans_by_path.get(path)
+        if current is None:
+            return 'missing plan dependency: ' + path
+        if current.errors:
+            return 'invalid plan dependency: ' + path + ': ' + '; '.join(current.errors)
+        visiting.add(path)
+        for parent in current.depends_on:
+            problem = validate(parent)
+            if problem:
+                return problem
+        visiting.remove(path)
+        checked.add(path)
+        return ''
+    problem = validate(plan.path)
+    if problem:
+        return problem
+    pending = [path for path in plan.depends_on if path not in integrated]
+    return 'waiting for integrated plans: ' + ', '.join(pending) if pending else ''
 
 
 @filetxn.coordinated

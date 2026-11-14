@@ -144,7 +144,7 @@ def resolve_agent_class(settings: dict, phase: str, requested: str, failures: in
 
 # ---- providers ----
 
-def provider_capabilities(p):
+def declared_capabilities(p):
     capabilities = [canonical_capability(c) for c in (p.get("capabilities") or [])]
     if not p.get("capabilitiesVersion"):
         if p.get("use") != "capability-only" and "Coding" not in capabilities:
@@ -152,6 +152,13 @@ def provider_capabilities(p):
         if not servers.is_local(p) and "Queen" not in capabilities:
             capabilities.append("Queen")
     return list(dict.fromkeys(capabilities))
+
+
+def provider_capabilities(p):
+    capabilities = declared_capabilities(p)
+    from . import mcp_setup
+    verified = set(mcp_setup.status(p)["available"])
+    return [c for c in dict.fromkeys(capabilities) if c in mcp_setup.NATIVE or c in verified]
 
 
 def capability_thresholds(p):
@@ -164,7 +171,7 @@ def capability_thresholds(p):
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
             raise ValueError(tr("provider %s: capability threshold must be a whole percent from 1 to 100", p.get("name", "")))
         result[canonical_capability(capability)] = value
-    for capability in provider_capabilities(p):
+    for capability in declared_capabilities(p):
         result.setdefault(capability, 100)
     return result
 

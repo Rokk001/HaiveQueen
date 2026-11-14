@@ -142,7 +142,7 @@ def set_access(entry, access, new=False) -> None:
     keeps what it offers now); the limit source is derived again from the access type (see `settle`)."""
     from . import scheduler
     if not entry.get("capabilitiesVersion"):
-        entry["capabilities"] = scheduler.provider_capabilities(entry)
+        entry["capabilities"] = scheduler.declared_capabilities(entry)
         entry["capabilitiesVersion"] = 1
     entry.pop("server", None)
     if access == "subscription":

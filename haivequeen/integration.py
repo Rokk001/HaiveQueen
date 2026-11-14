@@ -14,7 +14,7 @@ from datetime import datetime
 
 from . import db, localtime, plans, platform as osplat, proctree, runtime
 
-COMPILE_MILESTONE = re.compile(r"^(\w+)\t\S+ Compile test\b")   # the live line of a compile check in milestones.txt (the dashboard shows it)
+COMPILE_MILESTONE = re.compile(r"^(\w+)\t[^\r\n]+ Compile test\b")   # the live line of a compile check in milestones.txt (the dashboard shows it)
 COMPILE_KEY = "compile-check:"   # + Queen name: the stored result of `bzz compile-check` for that Queen run
 POLL_SECONDS = 1.0   # how often a compile check looks at its process and at the lock of the machine
 COMPILE_AGENT_KEY = "compile-agent:"   # + name or worktree: the stored result of an Agent; it never counts for `bzz ready`

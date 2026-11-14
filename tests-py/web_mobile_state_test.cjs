@@ -11,9 +11,9 @@ assert.equal(loginStatus(undefined).tone,'neutral');
 const source=fs.readFileSync(require.resolve('../haivequeen/web-client.js'),'utf8');
 const body=source.slice(source.indexOf('  function fitDashboard(){'),source.indexOf("  window.addEventListener('resize',fitDashboard)"));
 for(const width of [320,400,768,1100]){
- const plans={style:{maxHeight:'250px'},querySelectorAll(){throw Error('Mobile must not allocate a desktop scroll height');}},hive={style:{maxHeight:'500px'}};
- const primary={style:{height:'800px'},querySelector:s=>s.includes('ACTIVE PLANS')?plans:hive};
+ const list={style:{maxHeight:'500px'},getBoundingClientRect(){throw Error('Mobile must not measure desktop height');}};
+ const primary={style:{height:'800px'},querySelector:()=>list};
  const fit=new Function('view','window',`const tab='Dashboard';${body}return fitDashboard;`)({querySelector:()=>primary},{innerWidth:width});
- fit();assert.equal(primary.style.height,'');assert.equal(plans.style.maxHeight,'');assert.equal(hive.style.maxHeight,'');
+ fit();assert.equal(primary.style.height,'');assert.equal(list.style.maxHeight,'');
 }
 console.log('Credential badges and mobile height reset passed');

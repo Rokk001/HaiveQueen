@@ -83,11 +83,11 @@ class UnqueuedCleanupTests(unittest.TestCase):
         self.git(self.repo, 'show-ref', '--verify', 'refs/heads/sub-branch')
 
     # File the .gitignore leaves out does not keep the worktree.
-    def test_ignored_file_does_not_keep_it(self):
-        """Ignored build output is no blocker."""
+    def test_ignored_file_is_preserved_without_allowlist(self):
+        """Git ignore alone does not authorize deleting data."""
         (self.wt / 'ignored').mkdir()
         (self.wt / 'ignored' / 'x').write_text('x', encoding='utf-8')
-        self.assertTrue(self.removed())
+        self.assertFalse(self.removed())
 
     # Name and location rule.
     def test_other_name_or_location_is_kept(self):

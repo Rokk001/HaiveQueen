@@ -481,14 +481,16 @@ def activity_rows(agents_all, now) -> list:
     return rows
 
 
-# Read the integration queue and open questions for the apiary-queue panel.
+# Pending plans, rather than the separate integration execution queue.
 def queue_panel(conn, project) -> dict:
-    """Open question count, queued integration rows and their short labels (PROJECT#id)."""
     where, args = ("WHERE project=?", (project,)) if project else ("", ())
     glue = " AND" if where else " WHERE"
     open_q = conn.execute("SELECT COUNT(*) FROM questions " + where + glue + " status='open'", args).fetchone()[0]
-    queued = db.rows(conn, "SELECT id,project,plan_path,branch,status,note,updated_at FROM queue " + where + glue + " status IN ('ready','in_run') ORDER BY id", args)
-    return {"open": open_q, "queued": len(queued), "items": queued, "labels": ["%s#%d" % (q["project"], q["id"]) for q in queued][:4]}
+    queued = db.rows(conn, "SELECT project,path AS plan_path,title,status,updated_at FROM plans " + where + glue +
+                     " status IN ('DRAFT','SENT','QUEUED') AND NOT EXISTS (SELECT 1 FROM hives h WHERE h.project=plans.project AND h.plan_path=plans.path AND h.state!='done') ORDER BY CASE status WHEN 'QUEUED' THEN 0 WHEN 'SENT' THEN 1 ELSE 2 END, project,path", args)
+    drafts = sum(row['status'] == 'DRAFT' for row in queued)
+    return {"open": open_q, "queued": len(queued), "drafts": drafts, "pending": len(queued)-drafts,
+            "items": queued, "labels": [row['title'] or hive_name(row['plan_path']) for row in queued]}
 
 
 # Tell routine round events that report nothing apart from the rest.

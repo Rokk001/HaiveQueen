@@ -563,7 +563,9 @@ def _provider_step(conn, env, plan, state, folder, step):
             return _provider_wait(conn, env, plan, state, step, "waiting for provider %s %s pipeline at %s" % (provider.name, step, commit))
         return _done(conn, env, plan, state, step, "provider pipeline green")
     except git_provider.ProviderError as exc:
-        # Network/authentication failures are retried without spending model tokens.
+        if authentication_failure(str(exc)):
+            return _access_wait(conn, env, plan, state, step, str(exc))
+        # Transient network failures may be retried without spending model tokens.
         return _provider_wait(conn, env, plan, state, step, str(exc))
 
 
@@ -660,6 +662,8 @@ def _push(conn, env, plan, state, folder):
     code, out = _git(folder, "push", remote, "HEAD:refs/heads/%s" % branch, job=job)   # a normal push, never forced
     save_step_log(conn, env.name, plan, "Push", code, out)
     if code != 0:
+        if authentication_failure(out):
+            return _red(conn, env, plan, state, "Push", out)
         _git(folder, "fetch", remote, branch, job=job)
         if _git(folder, "merge-base", "--is-ancestor", "refs/remotes/%s/%s" % (remote, branch), "HEAD", job=job)[0] != 0:
             return _moved(conn, env, plan, state, "Push")
@@ -892,8 +896,44 @@ def _harvest_only(conn, env, plan, state):
     save(conn, env.name, plan, state)
 
 
+def authentication_failure(error):
+    """Recognize explicit remote authentication/authorization failures, not code errors."""
+    text = str(error).lower()
+    return any(marker in text for marker in (
+        'authentication failed', 'permission denied (publickey)',
+        'could not read username', 'terminal prompts disabled',
+        'bad credentials', 'resource not accessible by',
+        'http 401', 'http 403', 'error: 401', 'error: 403',
+        'requested url returned error: 401', 'requested url returned error: 403',
+        'without workflow scope', "without `workflow` scope", "without 'workflow' scope",
+    )) or ('permission to ' in text and ' denied to ' in text)
+
+
+def _access_wait(conn, env, plan, state, step, error):
+    """Require an owner answer before retrying this exact step; keep completed work."""
+    item = 'integration-access-' + step.lower()
+    pending = runtime.list_questions(conn, env.name, status='open', plan=plan, item=item)
+    qid = pending[0]['id'] if pending else db.add_question(
+        conn, env.name, plan, item,
+        'Integration stopped at %s because access was refused. Correct the Git login, token scopes or repository permissions, then answer to retry this step. Error: %s' % (step, error),
+        'Correct access and confirm when this step may be retried. Completed integration steps are retained.')
+    _finish_log(state, 1, message=error)
+    state['steps'][step] = 'red'
+    state['phase'] = 'blocked'
+    state['blocked'] = {'kind': 'access', 'question': qid, 'step': step}
+    state['placed'] = False
+    state.pop('fix', None)
+    save(conn, env.name, plan, state)
+    hives.release_integration(conn, env.name, plan)
+    _blocker(conn, env, plan, 'waiting for access correction (question %s)' % qid)
+    _set_status(conn, env, plan, 'WAITING')
+    return None
+
+
 def _red(conn, env, plan, state, step, error):
     """A step is red: the place is released and a fix agent starts."""
+    if authentication_failure(error):
+        return _access_wait(conn, env, plan, state, step, error)
     path = state.get("log_file")
     if not path or action_logs.read(path)[0]["step"] != step:
         path = _start_log(conn, env, plan, state, step)
@@ -925,6 +965,8 @@ def _release(conn, env, plan, state, folder):
     except publish.ReleaseFailed as exc:
         return _red(conn, env, plan, state, "Release", str(exc))
     except Exception as exc:
+        if authentication_failure(exc):
+            return _access_wait(conn, env, plan, state, "Release", str(exc))
         return _provider_wait(conn, env, plan, state, "Release", "release publication: " + str(exc))
 
 
@@ -1114,6 +1156,13 @@ def _advance_blocked(conn, env, plan, state):
     row = conn.execute("SELECT status, answer FROM questions WHERE id=?", (qid,)).fetchone()
     if row is None or row[0] != "answered":
         _set_status(conn, env, plan, "WAITING")
+        return None
+    if state['blocked'].get('kind') == 'access':
+        state['step'] = state['blocked']['step']
+        state['phase'] = 'pipeline'
+        state['steps'][state['step']] = 'todo'
+        state.pop('blocked', None)
+        save(conn, env.name, plan, state)
         return None
     state["phase"] = "fix"
     state["fix"]["agent"] = None

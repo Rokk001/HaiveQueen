@@ -121,7 +121,7 @@ class DerivedValuesTest(Dirs):
         merged = scheduler.build_settings({"owner": "Alex", "queenClass": "light", "beesPerQueen": 2, "roundMinutes": 7, "escalateAfter": 4}, project)
         for key, value in {"owner": "Alex", "queenClass": "light", "beesPerQueen": 2, "roundMinutes": 7, "escalateAfter": 4, "contextLimitTokens": 300000}.items():
             self.assertEqual(merged[key], value, key)
-        for key in ("capabilityRules", "preferredProvider", "ownerCheckText", "allowedTools", "ignoredBuildOutput", "protectedWorktrees", "compileCheckEnabled", "claudeTools", "language"):
+        for key in ("capabilityRules", "preferredProvider", "ownerCheckText", "allowedTools", "protectedWorktrees", "compileCheckEnabled", "claudeTools", "language"):
             self.assertNotIn(key, merged)
 
     def test_context_limit_per_provider_and_model_entry_wins(self):
@@ -308,7 +308,7 @@ class MigrationTest(Dirs):
         self.assertEqual(len(done), 2)
         self.assertEqual((self.example / ".haivequeen" / "project.toml.bak").read_text(encoding="utf-8"), old_example)
         new = self.project_toml(self.example)
-        self.assertEqual(set(new), {"name", "colour", "priority", "codeRepo", "integrationBranch", "worktreePrefix", "plans",
+        self.assertEqual(set(new), {"ignoredBuildOutput", "name", "colour", "priority", "codeRepo", "integrationBranch", "worktreePrefix", "plans",
                                     "compileCheck", "buildProcessNames", "onEvent", "wayOfWorking", "mergeMode", "checkMode",
                                     "buildMode", "deployMode", "releaseMode", "checkEnabled", "buildEnabled", "deployEnabled",
                                     "releaseEnabled", "releaseFolder", "releasePostfix"})
@@ -319,7 +319,7 @@ class MigrationTest(Dirs):
         self.assertEqual(new["plans"], ["docs/**/*-PLAN.md", "docs/**/FEATURE-QS-[0-9].md", "!docs/orchestrator/**"])
         self.assertEqual(new["onEvent"]["timeoutSeconds"], 180)
         text = self.md(self.example)
-        for key in ("owner", "language" if False else "roundMinutes", "escalateAfter", "ignoredBuildOutput", "protectedWorktrees", "claudeTools", "allowedTools", "views", "integrationStateFile",
+        for key in ("owner", "language" if False else "roundMinutes", "escalateAfter", "protectedWorktrees", "claudeTools", "allowedTools", "views", "integrationStateFile",
                     "minClass", "bundle", "openMarker", "integratorSlots", "paneCloseDelaySeconds", "terminalProfile", "ruleSources", "phaseRules", "planStandaloneRegex",
                     "planSuffixRegex", "somethingNew", "planGlobs", "planExclude", "repo", "buildFlowDoc", "integratorInstructions"):
             self.assertIn("`%s`" % key, text, key)

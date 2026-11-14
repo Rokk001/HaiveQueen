@@ -549,6 +549,7 @@ GERMAN = {
     "Use recommendation": "Empfehlung übernehmen", "Answer": "Antworten", "No open questions.": "Keine offenen Fragen.", "%s\n\nRecommendation:\n%s": "%s\n\nEmpfehlung:\n%s",
     "question %s is already answered": "Frage %s ist bereits beantwortet", "unknown question %s": "unbekannte Frage %s",
     # ---- settings window
+    "Total CPU budget for builds and checks": "Gesamtes CPU-Budget für Builds und Checks",
     "CPU cores per build": "CPU-Kerne pro Build", "Parallel builds": "Parallele Builds", "Minimum free RAM before a build": "Mindestens freier RAM vor einem Build",
     "How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short.": "Wie viele deiner Prozessorkerne Builds insgesamt nutzen dürfen; ein Build nutzt weniger, wenn der freie RAM knapp ist.",
     "How many targets the build command builds at the same time (the number after --parallel); each target gets the cores divided by this number.": "Wie viele Ziele der Build-Befehl gleichzeitig baut (die Zahl nach --parallel); jedes Ziel bekommt die Kerne geteilt durch diese Zahl.",
@@ -828,3 +829,8 @@ GERMAN.update({'Copy': 'Kopieren',
 GERMAN.update({'Access present': 'Zugang vorhanden', 'Not configured': 'Nicht eingerichtet', 'Check access': 'Zugang prüfen', 'Login status unknown': 'Loginstatus unbekannt'})
 
 GERMAN.update({'Always on': 'Immer an', 'Step is off; it will be skipped.': 'Schritt ist aus und wird ausgelassen.', 'Executed by the Git provider.': 'Ausführung beim Git-Anbieter.', 'Executed locally by HaiveQueen.': 'Lokale Ausführung durch HaiveQueen.'})
+
+GERMAN.update({
+    'Trusted proxy IP addresses (one per line)': 'Vertrauenswuerdige Proxy-IP-Adressen (eine pro Zeile)',
+    'Empty: trust local and private network addresses. Enter proxy IP addresses, one per line, to trust only those proxies. Direct HTTP access remains available.': 'Leer: lokalen und privaten Netzwerkadressen vertrauen. Proxy-IP-Adressen zeilenweise eintragen, um nur diesen Proxys zu vertrauen. Direkter HTTP-Zugriff bleibt moeglich.',
+})

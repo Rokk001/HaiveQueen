@@ -23,7 +23,7 @@ KEPT_KEYS = (
     "nextVersion", "onEvent", "colour", "priority", "buildProcessNames", "ownerTopics",
     "wayOfWorking", "mergeMode", "checkMode", "buildMode", "deployMode", "releaseMode",
     "checkEnabled", "buildEnabled", "deployEnabled", "releaseEnabled", "releaseFolder", "releasePostfix",
-    "worktreePrefix", "upstreamRepo", "upstreamRules", "rulesOff",
+    "ignoredBuildOutput", "worktreePrefix", "upstreamRepo", "upstreamRules", "rulesOff",
     "prompts", "readyCheckClass", "readyCheckTimeoutSec", "agentStallSeconds", "rateLimitWaitMinutes", "retryWaitMinutes", "clockJumpSeconds",
 )
 GENERAL_NOTE = "the General value applies"
@@ -31,7 +31,6 @@ NO_EFFECT = "had no effect and is dropped"
 REMOVED_NOTES = {
     "language": GENERAL_NOTE, "escalateAfter": GENERAL_NOTE, "roundMinutes": GENERAL_NOTE,
     "owner": "now the General field Owner name",
-    "ignoredBuildOutput": "the .gitignore of the repository decides what counts as build output",
     "protectedWorktrees": "the cleanup removes only worktrees of branches it integrated",
     "claudeTools": "now the setting Tools available to Claude agents of each Claude provider",
     "allowedTools": "the push permission of the integrating Queen is given by HaiveQueen; other entries moved to the Claude providers",
@@ -54,7 +53,7 @@ REMOVED_NOTES = {
 }
 UNKNOWN_NOTE = "not used"
 # Keys of a project that General or the providers now decide; build_settings ignores them in a project file (the migration has moved their effect).
-DROPPED_FROM_PROJECT = ("language", "escalateAfter", "roundMinutes", "owner", "ignoredBuildOutput", "protectedWorktrees", "claudeTools", "allowedTools",
+DROPPED_FROM_PROJECT = ("language", "escalateAfter", "roundMinutes", "owner", "protectedWorktrees", "claudeTools", "allowedTools",
                         "compileCheckEnabled", "buildFlowDoc", "integratorInstructions", "queenClass", "beesPerQueen", "contextLimitTokens", "capabilityRules", "preferredProvider", "ownerCheckText",
                         "views", "integrationStateFile", "planStandaloneRegex", "planSuffixRegex", "ruleSources", "phaseRules")
 PUSH_FORMS = ("Bash(git push {r} HEAD:{b})", "Bash(git -C * push {r} HEAD:{b})", "PowerShell(git push {r} HEAD:{b})", "PowerShell(git -C * push {r} HEAD:{b})")

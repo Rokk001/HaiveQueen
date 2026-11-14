@@ -1,5 +1,7 @@
 """HTTP listener primitives for the independent web service."""
 import http.server
+import ipaddress
+from collections import deque
 import hmac
 import json
 import secrets
@@ -41,10 +43,29 @@ class _Server(http.server.ThreadingHTTPServer):
         self.config_path = config.config_dir() / 'config.toml'
         self.sessions = {}
         self.session_lock = threading.Lock()
+        self.login_lock = threading.Lock()
+        self.login_attempts = deque()
+        self.login_inflight = 0
         self.setup_token = secrets.token_urlsafe(32)
         self.api = self.engine_api
         self.lifecycle = lambda action: None
         super().__init__(*args, **kwargs)
+
+    def begin_login(self):
+        # A global budget also bounds distributed attempts and password-hash CPU.
+        with self.login_lock:
+            now = time.monotonic()
+            while self.login_attempts and self.login_attempts[0] <= now - 60:
+                self.login_attempts.popleft()
+            if len(self.login_attempts) >= 5 or self.login_inflight >= 2:
+                return False
+            self.login_attempts.append(now)
+            self.login_inflight += 1
+            return True
+
+    def end_login(self):
+        with self.login_lock:
+            self.login_inflight -= 1
 
     def get_request(self):
         connection, address = super().get_request()
@@ -131,7 +152,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         # the authority used for CSRF checks or grants access to local setup.
         if isinstance(self.connection, ssl.SSLSocket):
             return 'https'
-        forwarded = self.headers.get_all('X-Forwarded-Proto', [])
+        try:
+            peer = ipaddress.ip_address(self.client_address[0])
+            if isinstance(peer, ipaddress.IPv6Address) and peer.ipv4_mapped:
+                peer = peer.ipv4_mapped
+            addresses = self.settings().get('trustedProxies', [])
+            if addresses:
+                trusted = any(peer == ipaddress.ip_address(address) for address in addresses)
+            else:
+                # Explicit LAN ranges: is_private also includes documentation and
+                # reserved addresses, which are not trusted network defaults.
+                trusted = any(peer in ipaddress.ip_network(network) for network in (
+                    '127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
+                    '169.254.0.0/16', '::1/128', 'fc00::/7', 'fe80::/10'))
+        except (ValueError, TypeError):
+            trusted = False
+        forwarded = self.headers.get_all('X-Forwarded-Proto', []) if trusted else []
         return 'https' if len(forwarded) == 1 and forwarded[0].strip().lower() == 'https' else 'http'
 
     def same_origin(self):
@@ -179,8 +215,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.reply(200, self.server.api(action, data))
         except (ValueError, KeyError, TypeError) as exc:
             self.reply(400, {'error': str(exc)})
-        except Exception as exc:
-            self.reply(500, {'error': str(exc)})
+        except Exception:
+            self.reply(500, {'error': 'Internal request failure.'})
 
     def do_POST(self):
         settings = self.settings()
@@ -225,7 +261,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.server.lifecycle('reload')
             return
         if path == '/login':
-            if not configured or not web_auth.verify(settings, data.get('username', ''), data.get('password', '')):
+            if not self.server.begin_login():
+                return self.reply(429, {'error': 'Too many sign-in attempts. Wait one minute and try again.'})
+            try:
+                valid = configured and web_auth.verify(settings, data.get('username', ''), data.get('password', ''))
+            finally:
+                self.server.end_login()
+            if not valid:
                 return self.reply(401, {'error': 'Invalid username or password'})
             token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             with self.server.session_lock:
@@ -256,6 +298,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 def validate_tls(settings):
     """Validate user supplied certificate files without binding a socket."""
+    proxies = settings.get('trustedProxies', [])
+    if not isinstance(proxies, list):
+        raise ValueError('Trusted proxies must be a list of IP addresses')
+    try:
+        for address in proxies:
+            if not isinstance(address, str):
+                raise ValueError()
+            ipaddress.ip_address(address)
+    except ValueError:
+        raise ValueError('Trusted proxies must contain only explicit IP addresses') from None
     certificate, key = settings.get('certificate', ''), settings.get('key', '')
     if not isinstance(certificate, str) or not isinstance(key, str):
         raise ValueError('Certificate and key must be file paths')

@@ -20,13 +20,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
-      - name: Install tmux
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y tmux
       - name: Install package and dependencies
         run: python -m pip install -e .
       - name: Unit tests
         run: python -m unittest discover -s tests-py -v
-      - name: tmux smoke test
-        if: runner.os == 'Linux'
-        run: python -m unittest discover -s tests-py -p test_tmux_smoke.py -v

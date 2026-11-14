@@ -45,10 +45,11 @@ def _decode(value):
     return None if value is None else base64.b64decode(value)
 
 
-def atomic_write(path, contents):
+def atomic_write(path, contents, *, mode=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+    if mode is None:
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
     fd, temp = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=path.parent)
     try:
         with os.fdopen(fd, 'wb') as handle:

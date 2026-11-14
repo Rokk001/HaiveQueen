@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+from pathlib import Path
 from . import buildjobs, db, roles, runtime, agent_process, interrupt
 from . import integration as integration_steps
 from . import plans as plan_mod
@@ -1115,6 +1116,10 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                         except Exception as exc:
                             env.log('stopped packages not reported: %s' % exc)
                     continue
+                dependency = plan_dependency_blocker(conn, env, plan['path'])
+                if dependency:
+                    not_started(env, plan['path'], dependency)
+                    continue
                 if hive and not dry_run and completion_report(conn, env.name, plan['path']):
                     not_started(env, plan['path'], 'completion reported: the check of the result is pending')   # no new Queen and no queen-ended question while the report waits for its check
                     continue
@@ -1374,3 +1379,25 @@ def wake_marker(conn, envs):
     state = runtime.kv_get(conn, '*', 'run-state')
     from . import worktrees
     return (tuple(agents), questions, hive_rows, places, due, tuple(sorted(files)), state, worktrees.deferred_busy())
+
+
+def plan_dependency_blocker(conn, env, path):
+    """Use project-local plan headers and the latest recorded integration result."""
+    parsed = {}
+    for row in runtime.list_plans(conn, env.name):
+        name = row['path'].replace('\\', '/')
+        try:
+            item = plan_mod.load_plan(str(Path(env.workspace) / name))
+            item.path = name
+            parsed[name] = item
+        except (OSError, ValueError):
+            continue
+    name = path.replace('\\', '/')
+    if name not in parsed:
+        return 'plan file cannot be read: ' + name
+    latest = {}
+    for row in db.queue_rows(conn, env.name):
+        if row.get('plan_path'):
+            latest[row['plan_path'].replace('\\', '/')] = row
+    integrated = {key for key, row in latest.items() if row['status'] == 'integrated'}
+    return plan_mod.dependency_blocker(parsed[name], parsed, integrated)

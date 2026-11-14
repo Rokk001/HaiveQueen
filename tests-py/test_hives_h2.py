@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import unittest
+from unittest import mock
 from haivequeen import bees
 
 
@@ -38,7 +39,8 @@ class BeePolicyTests(unittest.TestCase):
         self.assertIsNone(bees.select_route(self.providers, self.free, 'cloud', 'medium', ['images'], [], False))
 
     # Check image uses codex.
-    def test_image_uses_codex(self):
+    @mock.patch("haivequeen.mcp_setup.status", return_value={"available": ["Image generation", "3D modelling"]})
+    def test_image_uses_codex(self, verified_setup):
         self.assertEqual(bees.select_route(self.providers, self.free, 'cloud', 'medium', ['images'], [], False), ('images', 'medium'))
 
     # Check escalation skips unavailable classes.
@@ -270,7 +272,8 @@ class QueenIntegrationTests(RoundCase):
         self.assertEqual(bees.runnable_packages(self.env(), REL, images), [])
 
     # Check a capability that two providers offer does not stop the Hive when one of them is missing.
-    def test_a_shared_capability_runs_on_the_other_provider(self):
+    @mock.patch("haivequeen.mcp_setup.status", return_value={"available": ["Image generation", "3D modelling"]})
+    def test_a_shared_capability_runs_on_the_other_provider(self, verified_setup):
         from bzztest import REL, provider
         first, second = provider('claude', 2), provider('codex', 1, proto='codex')
         first['capabilities'], second['capabilities'] = ['blender'], ['blender', 'images']

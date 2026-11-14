@@ -122,6 +122,10 @@ class WebRoutesTests(unittest.TestCase):
 
     def test_https_proxy_login_and_csrf_keep_external_origin(self):
         self.configure()
+        from haivequeen import settings as store
+        configured = store.load_raw(self.path)
+        configured['web']['trustedProxies'] = ['127.0.0.1']
+        store.save_file(self.path, configured)
         proxy = {'Host': 'hive.example.test', 'Origin': 'https://hive.example.test', 'X-Forwarded-Proto': 'https'}
         self.assertNotIn('unencrypted', self.request('GET', '/login', headers=proxy)[2])
         status, response, body = self.request('POST', '/login', {'username': 'operator', 'password': 'secret'}, proxy)

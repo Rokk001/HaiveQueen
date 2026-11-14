@@ -44,7 +44,7 @@ const text=node=>node.textContent+node.children.map(text).join('');
  // Exercise the browser helper when a confirmation arrives later than 20 ms.
  const testSource=fs.readFileSync(require.resolve('./web_browser_test.js'),'utf8');
  const clickBody=testSource.slice(testSource.indexOf('  const click ='),testSource.indexOf('  const field ='));
- let open=false,confirmed=false;const button={disabled:false,click(){this.disabled=true;setTimeout(()=>open=true,60);}};
+ let open=false,confirmed=false;const button={disabled:false,isConnected:true,click(){this.disabled=true;setTimeout(()=>open=true,60);}};
  const dialog={get open(){return open;},querySelectorAll:()=>[{}, {click(){confirmed=true;open=false;button.disabled=false;}}]};
  const click=new Function('buttons','assert','wait','document',`let confirmResult=true,warning='';${clickBody}return click;`)(()=>[button],assert,async predicate=>{for(let n=0;n<100;n++){if(predicate())return;await new Promise(r=>setTimeout(r,5));}throw Error('Timeout');},{getElementById:id=>id==='confirmation-dialog'?dialog:{textContent:'Accept?'}});
  await click('Accept');assert(confirmed);

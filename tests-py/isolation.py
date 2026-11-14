@@ -14,6 +14,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Windows may expose an 8.3 TEMP alias while Git returns the long path.
+# Give every fixture a canonical root before creating temporary directories.
+tempfile.tempdir = os.path.realpath(tempfile.gettempdir())
+
 REPO = str(Path(__file__).resolve().parent.parent)
 if REPO not in sys.path:   # haivequeen of this checkout, not an installed copy, even when this module is imported first (test_00_isolation.py)
     sys.path.insert(0, REPO)

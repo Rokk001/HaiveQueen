@@ -121,6 +121,8 @@ def environment(prov, base=None) -> dict:
     for key in servers.drop_variables(prov or {}):
         env.pop(key, None)
     env.update(servers.environment(prov or {}))   # an own server: its address and key for this CLI, only in the agent's environment
+    from . import mcp_setup
+    env.update(mcp_setup.environment(prov or {}, env))
     return env
 
 

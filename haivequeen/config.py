@@ -3,7 +3,7 @@ import tomllib
 from pathlib import Path
 
 from haivequeen import platform as osplat
-from . import filetxn
+from . import filetxn, credential_store
 
 APP = "HaiveQueen"
 
@@ -94,7 +94,7 @@ def git_credential(provider):
     except RuntimeError:
         return None
     contents = filetxn.read(path)
-    credential = json.loads(contents.decode('utf-8')).get(provider) if contents else None
+    credential = credential_store.decode(contents).get(provider)
     if credential and 'expires_at' in credential:
         from .git_auth import refresh_credential
         return refresh_credential(provider, credential)
@@ -113,7 +113,7 @@ def save_git_credential(provider, token, method='token', origin=None, oauth=None
         raise ValueError('invalid authentication method')
     path = config_dir() / 'git-credentials.json'
     contents = filetxn.read(path)
-    credentials = json.loads(contents.decode('utf-8')) if contents else {}
+    credentials = credential_store.decode(contents)
     if token is None:
         credentials.pop(provider, None)
     else:
@@ -122,4 +122,5 @@ def save_git_credential(provider, token, method='token', origin=None, oauth=None
             credentials[provider].update(oauth)
         if origin is not None:
             credentials[provider]['origin'] = origin.rstrip('/')
-    filetxn.atomic_write(path, json.dumps(credentials).encode('utf-8'))
+    filetxn.atomic_write(path, credential_store.encode(credentials),
+                         mode=0o600 if __import__('os').name != 'nt' else None)

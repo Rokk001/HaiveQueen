@@ -14,6 +14,15 @@ function isPackagePlaceholder(row) {
 function visibleHiveRows(rows) {
   return rows.filter(row=>!isPackagePlaceholder(row));
 }
+function planProcessGroups(plans,rows) {
+  const visible=visibleHiveRows(rows);
+  return plans.map(plan=>{
+    const project=plan.apiary||plan.project;
+    const processes=visible.filter(row=>(row.apiary||row.project)===project&&row.plan_path===plan.plan_path);
+    return {key:JSON.stringify([project,plan.plan_path]),plan,processes,
+      summary:{...plan,orch:processes.some(row=>row.kind==='orch')?null:plan.orch}};
+  });
+}
 function dashboardPlanHeight({available,planChrome,gap,header,rows,hiveHeight}) {
   const minimum=header+rows.slice(0,3).reduce((sum,height)=>sum+height,0)+1;
   const full=header+rows.reduce((sum,height)=>sum+height,0)+1;
@@ -301,6 +310,7 @@ function mount(document, bootstrap) {
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
   let lastAutomaticCheck=0, automaticChecking=false;
   let dashboardFilter=null;
+  const collapsedHives=new Set();
   let generation=0, logCleared=0, logFilter='', showNoise=false, logFollow=true, selectedPlan='', selectedAgent='';
   const liveRuns=new Map(), loginRuns=new Map(), jobs=new Map();
   const view=$('app');
@@ -495,6 +505,9 @@ function mount(document, bootstrap) {
     return link;
   }
   function table(rows, columns, extra, options={}) {
+    function missingValue(label){
+      const icon=el('span',undefined,'missing-value-icon');icon.title=t(label);icon.setAttribute('role','img');icon.setAttribute('aria-label',t(label));return icon;
+    }
     const wrap=el('div',undefined,'table-scroll'), table=el('table'), head=el('tr'), body=el('tbody');
     columns=columns || [...new Set(rows.flatMap(row=>Object.keys(row)))];
     for(const key of columns)head.append(el('th',t(options.labels?.[key]||pretty(key))));
@@ -523,7 +536,7 @@ function mount(document, bootstrap) {
         }
         td.append(label,menu);
       }
-      else if(options.compact && ['apiary','hive','queen'].includes(key) && row[key] && row[key]!=='–'){
+      else if(options.compact && ['apiary','hive','queen'].includes(key) && row[key] && !['–','-'].includes(row[key])){
         td.append(filterLink(row[key],{apiary:'project',hive:'plan',queen:'queen'}[key],row));
         if(['apiary','queen','hive'].includes(key)){
           const menu=button('⋯',()=>{
@@ -542,11 +555,12 @@ function mount(document, bootstrap) {
           menu.className='row-menu';menu.textContent='';menu.title=t('Open details');menu.setAttribute('aria-label',t('Open details')+' · '+t({apiary:'Project',queen:'Queen',hive:'Plan'}[key])+' · '+row[key]);td.append(menu);
         }
       }
+      else if(['model','queen'].includes(key) && (!row[key] || ['\u2013','-'].includes(row[key]))){td.append(missingValue(key==='model'?'No model':'No Queen assigned'));}
       else if(key==='tokens')td.append(el('span',tokens(row.tin)+' / '+tokens(row.tout),'cyan'));
       else if(key==='bees_running')td.append(el('span',`${row.bees_running||0}/${row.bees_total??row.bees_running??0}`));
       else if(key==='task' && row.kind==='orch' && orchestrationFor(row,client.state.hives)){td.append(orchestrationView(orchestrationFor(row,client.state.hives),row));}
       else if(key==='task' && row.step){td.classList.add('task-progress');const inline=el('div',undefined,'task-inline');inline.append(el('span',row.task),meter((row.step_frac||0)*100,100,row.step),el('small',row.step,'cyan'));td.append(inline);}
-      else if(key==='progress' && Number.isFinite(Number(row[key]))){td.append(planProgress(row));}else if(key==='ctx'){td.classList.add('context-cell');td.append(row.ctx_limit?meter(100*(row.ctx||0)/row.ctx_limit,100,t('CONTEXT')):el('span','–'));if(row.ctx_limit)td.append(el('small',Math.round(100*(row.ctx||0)/row.ctx_limit)+'%'));td.title=tokens(row.ctx)+' / '+tokens(row.ctx_limit);}
+      else if(key==='progress' && Number.isFinite(Number(row[key]))){td.append(planProgress(row));}else if(key==='ctx'){td.classList.add('context-cell');td.append(row.ctx_limit?meter(100*(row.ctx||0)/row.ctx_limit,100,t('CONTEXT')):missingValue('No context value available'));if(row.ctx_limit)td.append(el('small',Math.round(100*(row.ctx||0)/row.ctx_limit)+'%'));td.title=tokens(row.ctx)+' / '+tokens(row.ctx_limit);}
       else if(key==='status' && row.orch?.chain){td.append(orchestrationView(row.orch,row));}
       else if(key==='status'){const state=String(row[key]||'');const tone=/^(running|active)$/i.test(state)?'running':/fail|error|reject/i.test(state)?'error':/wait|paus|stop|pending/i.test(state)?'waiting':'neutral';td.append(el('span',t(state),'state-badge state-'+tone));}
       else td.append(valueView(row[key]));tr.append(td);}if(extra && !options.compact){const td=el('td');td.className='row-actions';td.dataset.label=t('Actions');extra(td,row);tr.append(td);}body.append(tr);}
@@ -555,7 +569,7 @@ function mount(document, bootstrap) {
   }
   function section(title, parent=view) {
     const node=el('section'),heading=el('h2',title==='QUEENS AND AGENTS'?'Hive':t(title));node.dataset.panel=title;
-    const icon={ 'ACTIVE PLANS':'panel_icon','QUEENS AND AGENTS':'t_queens',Limits:'icon_system',SYSTEM:'icon_system',Queue:'icon_queue',STATUS:'panel_icon',LOG:'icon_logs'}[title];
+    const icon={ 'ACTIVE PLANS':'panel_icon','QUEENS AND AGENTS':'t_queens',Limits:'icon_system',SYSTEM:'icon_system',Hives:'t_queens',Queue:'icon_queue',STATUS:'panel_icon',LOG:'icon_logs'}[title];
     if(icon){const image=el('span',undefined,'panel-icon icon-'+icon);image.setAttribute('aria-hidden','true');heading.prepend(image);}
     node.append(heading);parent.append(node);return node;
   }
@@ -702,17 +716,26 @@ function mount(document, bootstrap) {
       metric.append(icon,content);tiles.append(metric);
     }
     view.append(tiles);
-    const active=section('ACTIVE PLANS');active.append(table(filtered.hives,['number','name','apiary','queen','bees_running','progress','status','runtime'],(cell,row)=>{
-      cell.append(button('Plan',()=>openPlan(row)),button('Details',()=>detail(row.name,row)));
-      if(row.queen_agent)cell.append(button('Live',()=>openLive({...row,agent:row.queen_agent,project:row.apiary})));
-      cell.append(button('Filter log',()=>{selectedPlan=row.name;selectedAgent='';$('detail').close();selectTab('Logs');}));
-    },{compact:true,labels:{number:'#',name:'PLAN',bees_running:'AGENTS'}}));
-    const hiveRows=visibleHiveRows(filtered.bees),counts=hiveCounts(hiveRows);const agents=section('QUEENS AND AGENTS');agents.querySelector('h2').append(el('small',' · '+counts.queens+' '+t('QUEENS')+' · '+counts.agents+' '+t('Agents')));agents.append(table(hiveRows,['number','name','model','hive','task','ctx','tokens','status','runtime'],(cell,row)=>{
-      if(row.agent)cell.append(button('Live',()=>openLive(row)));
-      if(row.stop_agent){const stop=button('Force stop',()=>act('agent/force-stop',{project:row.project,agent:row.stop_agent},t('Stop agent %s (%s)? The package stays stopped until you resume it.').replace('%s',row.name).replace('%s',row.task)));stop.disabled=stop.disabled || !!row.stop_disabled;stop.title=row.stop_disabled||'';cell.append(stop);}
-      if(row.stopped)cell.append(button('Resume package',()=>act('package/resume',{...key(row),package:row.package || row.task},t('Resume package')+'?')));
-      cell.append(button('Details',()=>detail(row.name,row)),button('Filter log',()=>{selectedAgent=row.agent || row.name;selectedPlan='';$('detail').close();selectTab('Logs');}));
-    },{compact:true,hierarchy:true,labels:{number:'#',name:'AGENT',tokens:'TOKENS'}}));
+    const active=section('Hives');active.classList.add('hives-panel');
+    const groups=planProcessGroups(filtered.hives,filtered.bees);
+    const list=el('div',undefined,'hives-list');active.append(list);
+    for(const group of groups){
+      const card=el('article',undefined,'hive-group');card.dataset.hive=group.key;
+      card.append(table([group.summary],['name','apiary','progress','status','runtime'],null,{compact:true,labels:{name:'PLAN'}}));
+      if(group.processes.length){
+        const counts=hiveCounts(group.processes),hq=group.processes.filter(row=>row.kind==='orch').length;
+        const caption=[hq?`${hq} HQ`:'',counts.queens?`${counts.queens} ${t('QUEENS')}`:'',counts.agents?`${counts.agents} ${t('Agents')}`:''].filter(Boolean).join(' / ');
+        const toggle=button('',()=>{});toggle.className='hive-process-toggle';
+        const processes=table(group.processes,['name','model','task','ctx','tokens','status','runtime'],null,{compact:true,hierarchy:true,labels:{name:'PROCESS',tokens:'TOKENS'}});
+        processes.classList.add('hive-processes');processes.id='hive-processes-'+list.children.length;
+        toggle.setAttribute('aria-controls',processes.id);
+        const update=()=>{const open=!collapsedHives.has(group.key);processes.hidden=!open;toggle.setAttribute('aria-expanded',String(open));toggle.textContent=(open?'\u25be ':'\u25b8 ')+caption;};
+        toggle.onclick=()=>{if(collapsedHives.has(group.key))collapsedHives.delete(group.key);else collapsedHives.add(group.key);update();};
+        update();card.append(toggle,processes);
+      }
+      list.append(card);
+    }
+    if(!groups.length)list.append(el('p',t('No plans to display.'),'dim'));
     const grid=el('div',undefined,'grid');view.append(grid);
     section('Limits',grid).append(limitsView(state.limits || []));
     const system=section('SYSTEM',grid);
@@ -722,15 +745,14 @@ function mount(document, bootstrap) {
       const labelNode=el('span',label);const icon=el('span',undefined,'system-icon icon-icon_'+label.toLowerCase());icon.setAttribute('aria-hidden','true');labelNode.prepend(icon);meter.className=value>=86?'bad':value>=70?'warn':'ok';line.append(labelNode,meter,el('span',value==null?'–':Math.round(value)+'%'));system.append(line);
     }
     const queue=section('Queue',grid),queueData=state.queue||{};
-    const queueCount=el('p',undefined,'queue-count');queueCount.append(el('strong',String(queueData.queued??0)),el('span',t('Queue')));queue.append(queueCount);
+    const queueCount=el('p',undefined,'queue-count');queueCount.append(el('strong',String(queueData.queued??0)),el('span',`${queueData.pending??0} ${t('Queued')} \u00b7 ${queueData.drafts??0} ${t('Drafts')}`));queue.append(queueCount);
     const queueList=el('ol',undefined,'queue-list');
     for(const item of queueData.items||[]){
       const entry=el('li'),heading=el('div',undefined,'queue-entry-heading');
-      const name=(item.plan_path||'').split(/[\\/]/).pop()?.replace(/\.md$/i,'')||item.branch||('#'+item.id);
-      heading.append(item.plan_path?button(name,()=>openQueuedPlan(item)):el('strong',name),
-        el('span',t(item.status==='in_run'?'Integrating':'Queued'),item.status==='in_run'?'warn':'dim'));
-      entry.append(heading,el('small',item.project+' · #'+item.id,'dim'));
-      if(item.branch)entry.append(el('small',item.branch,'queue-branch'));
+      const name=item.title||(item.plan_path||'').split(/[\\/]/).pop()?.replace(/\.md$/i,'')||item.branch||('#'+item.id);
+      const link=button(name,()=>openQueuedPlan(item));link.className='queue-plan-link';link.title=item.plan_path;link.setAttribute('aria-haspopup','dialog');
+      heading.append(link,el('span',t({DRAFT:'Draft',SENT:'Submitted',QUEUED:'Queued'}[item.status]||item.status),'queue-state '+(item.status==='DRAFT'?'dim':'warn')));
+      entry.append(heading,el('small',item.project,'dim'));
       queueList.append(entry);
     }
     if(!queueList.children.length)queue.append(el('p',t('Queue is empty.'),'dim'));
@@ -738,7 +760,7 @@ function mount(document, bootstrap) {
     const columns=el('div',undefined,'dashboard-columns');
     const primary=el('div',undefined,'dashboard-primary');
     const secondary=el('div',undefined,'dashboard-secondary');
-    primary.append(active,agents);
+    primary.append(active);
     secondary.append(grid.querySelector('[data-panel="Limits"]'),grid.querySelector('[data-panel="SYSTEM"]'),grid.querySelector('[data-panel="Queue"]'));
     grid.remove();columns.append(primary,secondary);view.append(columns);
     renderUpdates();
@@ -746,20 +768,10 @@ function mount(document, bootstrap) {
   function fitDashboard(){
     if(tab!=='Dashboard')return;
     const primary=view.querySelector('.dashboard-primary');
-    const plans=primary?.querySelector('[data-panel="ACTIVE PLANS"] .table-scroll');
-    const hive=primary?.querySelector('[data-panel="QUEENS AND AGENTS"] .table-scroll');
-    if(!plans || !hive)return;
-    if(window.innerWidth<=1100){primary.style.height='';plans.style.maxHeight='';hive.style.maxHeight='';return;}
-    const rows=[...plans.querySelectorAll('tbody tr')].map(row=>row.getBoundingClientRect().height);
-    const header=plans.querySelector('thead')?.getBoundingClientRect().height||0;
-    const desktop=window.innerWidth>1100;
-    const available=Math.max(340,window.innerHeight-(primary.getBoundingClientRect().top+window.scrollY)-12);
-    primary.style.height=desktop?available+'px':'';
-    const planChrome=plans.parentElement.getBoundingClientRect().height-plans.getBoundingClientRect().height;
-    const hiveChrome=hive.parentElement.getBoundingClientRect().height-hive.getBoundingClientRect().height;
-    const hiveHeight=Math.max(140,hiveChrome+(hive.querySelector('table')?.getBoundingClientRect().height||0)+1);
-    const gap=parseFloat(getComputedStyle(primary).gap)||0;
-    plans.style.maxHeight=dashboardPlanHeight({available:desktop?available:0,planChrome,gap,header,rows,hiveHeight})+'px';
+    const list=primary?.querySelector('.hives-list');
+    if(!list)return;
+    primary.style.height='';
+    list.style.maxHeight=window.innerWidth<=1100?'':Math.max(340,window.innerHeight-(list.getBoundingClientRect().top+window.scrollY)-16)+'px';
   }
   window.addEventListener('resize',fitDashboard);
   const dashboardResize=new ResizeObserver(()=>requestAnimationFrame(fitDashboard));
@@ -1085,6 +1097,13 @@ function mount(document, bootstrap) {
         const source=group(access==='subscription'?'Login':access==='api'?'API key':'Local LLM');
         const saved=!editor.dirty;
         const savedAction=(title,fn,parent=source,ready=true)=>{const node=button(title,fn);node.disabled=node.disabled||!saved||!ready;node.dataset.savedOnly='true';parent.append(node);return node;};
+        const cliUpdate=status?.cli_update;
+        if(cliUpdate){
+          const updateLine=el('p',undefined,cliUpdate.status==='update'?'provider-not-ready':'muted');
+          updateLine.textContent=cliUpdate.status==='update'?t('Update available')+' · '+cliUpdate.installed+' → '+cliUpdate.latest:cliUpdate.status==='current'?t('Up to date')+' · '+cliUpdate.installed:t(cliUpdate.message||'Version check unavailable');
+          cli.append(updateLine);
+        }
+        savedAction('Check for CLI updates',async()=>{await client.action('provider/updates',{provider:provider.name});},cli);
         if(access==='subscription'){
           source.append(statusBadge(loginStatus(status)));
           savedAction('Login',async()=>{const run=await client.action('login/start',{provider:provider.name});if(run){loginRuns.set(run.id,run);renderLogin(run);}});
@@ -1118,6 +1137,17 @@ function mount(document, bootstrap) {
           draw();capabilities.append(line);
         }
         capabilities.append(button('Add own',()=>{const name=prompt(t('Capability name'));if(name?.trim()){provider.capabilities=effectiveCapabilities(provider);if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));use.append(capabilities);
+        const setup=group('Tool connections');
+        const verified=new Set(status?.mcp?.available||[]),native=new Set(['Coding','Queen','Build','Deploy','Confidential data']);
+        for(const capability of effectiveCapabilities(provider).filter(name=>!native.has(name))){
+          setup.append(el('p',capability+' · '+t(verified.has(capability)?'Verified':'Missing setup'),verified.has(capability)?'provider-ready':'provider-not-ready'));
+        }
+        const mcpForm=el('details');mcpForm.append(el('summary',t('MCP configuration')));setup.append(mcpForm);
+        const configuration=el('textarea');configuration.rows=8;configuration.setAttribute('aria-label',t('MCP configuration'));
+        configuration.placeholder='{"mcpServers": {}, "capabilities": {"3D modeling": {"server": "server-name", "tools": ["tool-name"]}}}';
+        configuration.value=editor.mcpDraft?.[provider.name]||'';
+        configuration.oninput=()=>{editor.mcpDraft ||= {};editor.mcpDraft[provider.name]=configuration.value;};mcpForm.append(configuration);
+        savedAction('Import and verify',async()=>{const value=JSON.parse(configuration.value);const job=await client.action('provider/mcp',{provider:provider.name,configuration:value},t('Import this configuration into the HaiveQueen CLI profile and start the supplied servers to verify their tools?'));if(job){jobs.set(job.id,job);renderJob(job);}},mcpForm);
         const advanced=el('details',undefined,'provider-advanced');advanced.append(el('summary',t('Advanced')));card.append(advanced);
         provider.allowedTools=toolsFromArgs(provider.args);
         selected(use,['contextLimit','beeMode']);
@@ -1249,7 +1279,7 @@ function mount(document, bootstrap) {
         const items=name==='model'?offered.models:offered.efforts;
         if(items?.length){const list=el('datalist');list.id='choices-'+Math.random().toString(36).slice(2);for(const item of items){const option=el('option');option.value=typeof item==='string'?item:item.id||item.name;list.append(option);}input.setAttribute('list',list.id);label.append(list);}
       }
-      label.append(input);const help=bootstrap.fieldHelp?.[tab]?.[name] || bootstrap.help[name];if(help)label.append(el('small',t(help)));parent.append(label);
+      label.append(input);const help=bootstrap.fieldHelp?.[tab]?.[name] || bootstrap.help[name] || bootstrap.defaultHelp?.[tab];if(help)label.append(el('small',t(help)));parent.append(label);
     }
     if(!allowAdd)return;
     const add=button('Add setting',()=>{
@@ -1338,5 +1368,5 @@ function mount(document, bootstrap) {
   render();void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

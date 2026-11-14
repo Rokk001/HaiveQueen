@@ -419,6 +419,54 @@ def answer_failure_question(conn, question, by):
         conn.execute('UPDATE bee_attempts SET failures=0 WHERE project=? AND plan_path=? AND package=?', key)
 
 
+def reconcile_failure_answers(conn, project, plan, package):
+    """Apply an overlooked approval once, only with a provable historical boundary.
+
+    Later counted failures survive. Missing or ambiguous attempt timestamps leave
+    the gate closed rather than granting an unproven retry.
+    """
+    ensure_attempts(conn)
+    key = (project, plan, package)
+    with db.transaction(conn):
+        questions = conn.execute("SELECT * FROM questions WHERE project=? AND plan_path=? AND item=? AND status='answered' AND answered_by IN ('owner','coordinator') ORDER BY answered_at,id", key).fetchall()
+        for q in questions:
+            answered_at = db.parse_time(q['answered_at'])
+            if not is_failure_question(q['question']) or answered_at is None:
+                continue
+            if conn.execute('SELECT 1 FROM bee_retry_answers WHERE question_id=?', (q['id'],)).fetchone():
+                continue
+            # Never replay an older answer across an already consumed newer one.
+            if conn.execute('SELECT 1 FROM bee_retry_answers r JOIN questions q ON q.id=r.question_id WHERE r.project=? AND r.plan_path=? AND r.package=? AND (q.answered_at>? OR (q.answered_at=? AND q.id>?))', (*key, q['answered_at'], q['answered_at'], q['id'])).fetchone():
+                continue
+            epoch = retry_epoch(conn, *key) or 0
+            signals = conn.execute('SELECT rowid,* FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND rowid>? ORDER BY rowid', (*key, epoch)).fetchall()
+            boundary, remove, later, proven = epoch, {}, False, True
+            for signal in signals:
+                times = conn.execute('SELECT ended_at FROM agents WHERE project=? AND plan_path=? AND package=? AND name=? UNION ALL SELECT ended_at FROM embedded_bees WHERE project=? AND plan_path=? AND package=? AND name=?', (*key, signal['attempt'], *key, signal['attempt'])).fetchall()
+                ended = {db.parse_time(row[0]) for row in times}
+                if len(ended) != 1 or None in ended or '' in ended:
+                    proven = False
+                    break
+                at = next(iter(ended))
+                if at == answered_at:
+                    proven = False
+                    break
+                if at < answered_at:
+                    if later:
+                        proven = False
+                        break
+                    boundary = signal['rowid']
+                    remove[signal['class']] = remove.get(signal['class'], 0) + signal['counted']
+                else:
+                    later = True
+            counts = dict(conn.execute('SELECT class,failures FROM bee_attempts WHERE project=? AND plan_path=? AND package=?', key))
+            if not proven or boundary == epoch or any(n > counts.get(cls, 0) for cls, n in remove.items()):
+                continue
+            conn.execute('INSERT INTO bee_retry_answers VALUES(?,?,?,?,?,?)', (q['id'], *key, boundary, json.dumps(counts)))
+            for cls, n in remove.items():
+                conn.execute('UPDATE bee_attempts SET failures=MAX(0,failures-?) WHERE project=? AND plan_path=? AND package=? AND class=?', (n, *key, cls))
+
+
 # Determine the current or next escalation class.
 def next_attempt(conn, project, plan, package, cls, providers, excluded, threshold):
     """Return the current class, its next offered class, or None at the top."""
@@ -1053,6 +1101,7 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, plan=plan, item=package)):
             db.add_question(env.conn, env.name, plan, package, text, tr('Configure an eligible provider.', language=language))
         return refuse(env, package, 'no configured provider offers the required class or the capability %s (question filed)' % ', '.join(need) if need else 'no configured provider offers the required class (question filed)')
+    reconcile_failure_answers(env.conn, env.name, plan, package)
     current = base_class
     if retry_epoch(env.conn, env.name, plan, package) is not None:
         offered = escalation_providers(env, plan, package)

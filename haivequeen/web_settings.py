@@ -2,7 +2,7 @@
 import hashlib
 from pathlib import Path
 
-from . import filetxn, scheduler, settings as settings_store
+from . import web_secrets, filetxn, scheduler, settings as settings_store
 
 
 def _revision(source):
@@ -17,7 +17,7 @@ def _revision(source):
 def load(path):
     """Return editable settings and a JSON-safe revision for a later save."""
     data = settings_store.load_raw(path)
-    return {'settings': dict(data), 'revision': _revision(data.source)}
+    return {'settings': web_secrets.redact(data), 'revision': _revision(data.source)}
 
 
 @filetxn.coordinated
@@ -26,6 +26,7 @@ def save(path, settings, revision, *, project=False, conn=None):
     data = settings_store.load_raw(path)
     if not isinstance(revision, str) or revision != _revision(data.source):
         raise ValueError('settings changed since loading; reload before saving')
+    settings = web_secrets.restore(settings, settings_store.load_migrated(path), data)
     if not project:
         for provider in settings.get('providers', []):
             scheduler.capability_thresholds(provider)
@@ -37,4 +38,4 @@ def save(path, settings, revision, *, project=False, conn=None):
         raise ValueError('project database connection required for release settings')
     else:
         settings_store.save_file(path, data)
-    return {'settings': dict(data), 'revision': _revision(data.source)}
+    return {'settings': web_secrets.redact(data), 'revision': _revision(data.source)}

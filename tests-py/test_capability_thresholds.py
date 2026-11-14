@@ -12,6 +12,8 @@ from haivequeen import bees, scheduler, web_settings
 
 class CapabilityThresholdTest(unittest.TestCase):
     def setUp(self):
+        proof=mock.patch("haivequeen.mcp_setup.status", return_value={"available":["Image generation"]})
+        proof.start();self.addCleanup(proof.stop)
         self.raw = {'name': 'test', 'protocol': 'codex', 'slots': 2,
                     'capabilitiesVersion': 1, 'capabilities': ['Coding', 'Queen', 'Image generation'],
                     'classes': {'medium': {'model': 'test-model'}},

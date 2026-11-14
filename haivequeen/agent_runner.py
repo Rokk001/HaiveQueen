@@ -942,7 +942,8 @@ def build_args(prov, vars_, allowed_tools=None):
         rest, tools, position = split_args(args)
         tools.extend(tool for tool in allowed_tools if tool not in tools)
         args = join_args(rest, tools, position)
-    return [sub(a) for a in args + endpoint_args(prov)]
+    from . import mcp_setup
+    return [sub(a) for a in args + endpoint_args(prov)] + mcp_setup.arguments(prov)
 
 
 # Estimate the parts of HaiveQueen in the start context of a Queen or Bee.

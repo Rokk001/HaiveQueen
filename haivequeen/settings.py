@@ -18,7 +18,7 @@ CLASSES = ("light", "medium", "heavy")
 # The block "Build" of the General page: exactly these three fields, each with one sentence of explanation (key in the buildJobs table, label, explanation).
 BUILD_TEXT_WIDTH = 470   # pixels of an explanation in the block "Build": what stays free beside the field in the window size below, in every language
 BUILD_FIELDS = (
-    ("cores", N_("CPU cores per build"), N_("How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short.")),
+    ("cores", N_("Total CPU budget for builds and checks"), N_("How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short.")),
     ("parallel", N_("Parallel builds"), N_("How many targets the build command builds at the same time (the number after --parallel); each target gets the cores divided by this number.")),
     ("minFreeRamGB", N_("Minimum free RAM before a build"), N_("A build only starts while at least this many GB of RAM are free, otherwise it waits.")),
 )
@@ -184,7 +184,7 @@ def apply_build(data, cores_text, parallel_text, ram_text, cores=None):
         if value < low or (high is not None and value > high):
             raise ValueError(tr("%s: a whole number from %d to %d is expected", tr(label), low, high) if high is not None else tr("%s: a whole number from %d up is expected", tr(label), low))
         return value
-    n_cores = whole(cores_text, N_("CPU cores per build"), 1, cores)
+    n_cores = whole(cores_text, N_("Total CPU budget for builds and checks"), 1, cores)
     parallel = whole(parallel_text, N_("Parallel builds"), 1)
     try:
         ram = float(str(ram_text).strip().replace(",", "."))
@@ -372,7 +372,7 @@ def keep_legacy_entry(data, old):
     if old.get("capabilitiesVersion"):
         return
     use_kept = old.get("use") != "capability-only" or data.get("use") == "preferred"
-    if set(data.get("capabilities") or []) != set(scheduler.provider_capabilities(old)) or not use_kept:
+    if set(data.get("capabilities") or []) != set(scheduler.declared_capabilities(old)) or not use_kept:
         data["capabilitiesVersion"] = 1
         return
     for key in ("capabilities", "use"):

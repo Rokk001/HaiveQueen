@@ -412,6 +412,9 @@ def cmd_plan(args, conn):
     path = runtime._workspace(conn, args.project) / plan
     if not path.is_file():
         return fail("plan file not found: %s" % plan)
+    conflicts = runtime.list_questions(conn, args.project, status='open', plan=plan, item='plan-flow')
+    if conflicts:
+        return fail('plan flow conflict requires owner correction or explicit permission to ignore the conflicting instruction (question %s)' % conflicts[0]['id'])
     parsed = plan_mod.load_plan(str(path))
     problems = plan_mod.check_plan(parsed, {c for p in env.providers if p.get("enabled", True) for c in p.get("capabilities", [])}, plan_mod.load_requirements(str(path)), main_checkout=env.code_repo)
     if problems:
@@ -423,9 +426,12 @@ def cmd_plan(args, conn):
     runtime.sync_plans(conn, args.project)
     from haivequeen import bees
     default = bees.cut_default(env, plan)
-    handoff = parsed.branch != default[0] or not plan_mod.same_folder(parsed.worktree, default[1])   # the cut Queen started in the default worktree
+    current_folder = queen.get('cwd') or default[1]
+    handoff = not plan_mod.same_folder(parsed.worktree, current_folder)
     result = {"ok": True, "plan": plan, "status": status, "packages": [p.id for p in parsed.packages], "warnings": plan_mod.plan_warnings(parsed), "handoff": handoff}
     if handoff:
+        from haivequeen import hives
+        hives.context_limit(conn, args.project, plan)
         result["next"] = "the header names branch %s and worktree %s, not the worktree you run in: write your handoff and end now; the next Queen starts in the worktree of the header" % (parsed.branch, parsed.worktree)
     out(result)
     return 0

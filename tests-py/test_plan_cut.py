@@ -1,5 +1,6 @@
 """Cutting a submitted plan: requirements with ids in the state file, capability packages, dependencies, and the requirement check of bzz plan check."""
 import unittest
+from unittest import mock
 
 from bzztest import REL, runtime
 from haivequeen import plans, roles
@@ -62,7 +63,8 @@ class CutCheckTests(test_plan_submit.SubmittedPlanTests):
         self.assertIn("requirement R3 belongs to no package", output)
         self.assertEqual(plans.load_plan(str(self.repo / REL)).status, "SENT")
 
-    def test_check_passes_when_every_requirement_is_covered_and_capability_work_is_apart(self):
+    @mock.patch("haivequeen.mcp_setup.status", return_value={"available": ["Image generation", "3D modelling"]})
+    def test_check_passes_when_every_requirement_is_covered_and_capability_work_is_apart(self, verified_setup):
         self.queen_of("SUBMITTED", [{"id": "P1", "title": "Window", "requirements": ["R1", "R3"]},
                                     {"id": "P2", "title": "Logo", "capability": "images", "requirements": ["R2"]},
                                     {"id": "P3", "title": "Use the logo", "depends": ["P2"], "requirements": ["R1"]}])

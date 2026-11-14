@@ -1,5 +1,6 @@
 """Authenticated web actions use the same engine functions as the owner UI."""
 import hashlib
+from . import web_secrets
 from contextlib import closing
 from types import SimpleNamespace
 
@@ -30,7 +31,7 @@ def settings_read(conn, project=None):
     data = settings.load_raw(path)
     if not project and 'web' in data:
         data['web'] = {k: v for k, v in data['web'].items() if k != 'password'}
-    return {'data': data, 'revision': revision(data.source)}
+    return {'data': web_secrets.redact(data), 'revision': revision(data.source)}
 
 
 @filetxn.coordinated
@@ -43,7 +44,7 @@ def settings_save(conn, data):
     proposed = data['data']
     if not isinstance(proposed, dict):
         raise ValueError('Settings must be an object')
-    proposed = dict(proposed)
+    proposed = web_secrets.restore(proposed, settings.load_migrated(path), loaded)
     if project and data.get('place') is not None:
         place = data['place']
         if not isinstance(place, dict) or any(not isinstance(place.get(k, ''), str) for k in ('repository', 'plansFolder')):
@@ -111,7 +112,7 @@ def settings_view(conn, project=None):
         migrated = settings.load_migrated(settings_path(conn))
         if 'web' in migrated:
             migrated['web'] = {k: v for k, v in migrated['web'].items() if k != 'password'}
-        result['data'] = migrated
+        result['data'] = web_secrets.redact(migrated)
         offered, connections = {}, {}
         for provider in migrated.get('providers', []):
             key = cli_presets.key_for(provider)
@@ -232,8 +233,22 @@ def execute(conn, action, data):
         return settings_view(conn, project)
     if action == 'settings/save':
         return settings_save(conn, data)
+    if action == 'provider/mcp':
+        from . import mcp_setup
+        if data.get('confirmed') is not True:
+            raise ValueError('Confirm importing and testing MCP configuration in the HaiveQueen profile.')
+        _, machine, _ = owner.provider_settings(data['provider'])
+        provider = next(p for p in sch.get_providers(machine) if p['name'] == data['provider'])
+        setup = mcp_setup.validate(data['configuration'])
+        return web_jobs.start('mcp:' + provider['name'], lambda _progress: mcp_setup.configure(provider, setup, confirmed=True))
+    if action == 'provider/updates':
+        from . import cli_updates
+        _, machine, _ = owner.provider_settings(data['provider'])
+        provider = next(p for p in sch.get_providers(machine) if p['name'] == data['provider'])
+        return cli_updates.notice(provider, refresh=True)
     if action == 'providers':
-        return [{'name': p['name'], 'logged_in': profile.has_login(p), 'ready': servers.readiness(p, profile.has_login(p))} for p in sch.get_providers(config.load_config())]
+        from . import cli_updates, mcp_setup
+        return [{'mcp': mcp_setup.status(p), 'name': p['name'], 'cli_update': cli_updates.notice(p), 'logged_in': profile.has_login(p), 'ready': servers.readiness(p, profile.has_login(p))} for p in sch.get_providers(config.load_config())]
     if action == 'provider/test':
         result = servers.run_test(data['server'])
         return {'ok': True, 'result': result, 'message': servers.summary(data['server'])}

@@ -165,7 +165,7 @@ def refresh_credential(provider, credential):
     import json
     with filetxn.locked():
         contents = filetxn.read(config.config_dir() / 'git-credentials.json')
-        current = json.loads(contents.decode('utf-8')).get(provider) if contents else None
+        current = config.credential_store.decode(contents).get(provider)
         if not current or 'expires_at' not in current or time.time() < current['expires_at']:
             return current
         refresh = current.get('refresh_token')

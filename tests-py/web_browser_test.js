@@ -19,10 +19,10 @@ window.addEventListener('load', async () => {
     node.click();
     // Actions may load data before opening confirmation. Wait for either outcome,
     // rather than checking the dialog once after an arbitrary 20 ms delay.
-    await wait(()=>document.getElementById('confirmation-dialog')?.open || !node.disabled);
+    await wait(()=>document.getElementById('confirmation-dialog')?.open || !node.isConnected || !node.disabled);
     const dialog=document.getElementById('confirmation-dialog');
     if(dialog?.open){warning=document.getElementById('confirmation-message').textContent;dialog.querySelectorAll('button')[confirmResult?1:0].click();}
-    await wait(()=>!node.disabled);
+    await wait(()=>!node.isConnected || !node.disabled);
   };
 
   const field = path => [...document.querySelectorAll('[data-path]')].find(node=>node.dataset.path===JSON.stringify(path));
@@ -35,9 +35,9 @@ window.addEventListener('load', async () => {
 
   try {
 
-    await wait(()=>document.querySelector('[data-panel="QUEENS AND AGENTS"] h2'));
+    await wait(()=>document.querySelector('[data-panel="Hives"] h2'));
 
-    assert(document.querySelector('[data-panel="QUEENS AND AGENTS"] h2').textContent.startsWith('Hive'),'Hive heading missing');
+    assert(document.querySelector('[data-panel="Hives"] h2').textContent.startsWith('Hives'),'Hive heading missing');
     assert(!document.querySelector('.dashboard [data-panel="STATUS"]'),'Redundant status panel must be absent');
     assert(!document.querySelector('[data-panel="SYSTEM"] button'),'System card must not contain redundant details action');
     assert(document.querySelector('.quota-label')?.textContent,'Quota reserve label missing');
@@ -151,15 +151,15 @@ window.addEventListener('load', async () => {
 
     const headings=panel=>[...document.querySelectorAll(`[data-panel="${panel}"] th`)].map(node=>node.textContent).join('|');
 
-    assert(headings('ACTIVE PLANS')==='#|PLAN|PROJECT|QUEEN|AGENTS|PROGRESS|STATUS|RUNTIME','Plan columns differ from desktop GUI');
+    assert(document.querySelector('.hive-group th').textContent==='PLAN','Plan group heading missing');
 
-    assert(headings('QUEENS AND AGENTS')==='#|AGENT|MODEL|PLAN|TASK|CONTEXT|TOKENS|STATUS|RUNTIME','Agent columns differ from desktop GUI');
+    assert([...document.querySelectorAll('.hive-processes th')].slice(0,7).map(n=>n.textContent).join('|')==='PROCESS|MODEL|TASK|CONTEXT|TOKENS|STATUS|RUNTIME','Process columns missing');
 
     assert(document.querySelector('tr.child-agent .tree-branch'),'Agent hierarchy missing');
 
     assert(!document.querySelector('#app [data-panel="Projects"]'),'Redundant Projects dashboard panel remains');
 
-    assert(document.querySelector('.dashboard-primary [data-panel="ACTIVE PLANS"]'),'Independent plan column missing');
+    assert(document.querySelector('.dashboard-primary [data-panel="Hives"]'),'Independent plan column missing');
 
     assert(!document.querySelector('[data-panel="LOG"]'),'Logs should have their own tab');
 

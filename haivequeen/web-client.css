@@ -945,3 +945,25 @@ label.field > .copy-tools { grid-column:2; padding:0; }
  .workflow-location,.workflow-command { grid-column:1/-1; }
  .workflow-location button { min-height:44px; }
 }
+
+.missing-value-icon { display:inline-block; width:13px; height:13px; border:1.5px solid #91a5ac; border-radius:50%; position:relative; vertical-align:middle; }
+.missing-value-icon::after { content:""; position:absolute; width:8px; height:1.5px; background:#91a5ac; top:4px; left:1px; transform:rotate(-45deg); }
+.queue-plan-link { border:0; background:transparent; padding:4px 0; color:var(--cyan,#22d3ee); text-align:left; white-space:normal; overflow-wrap:anywhere; min-width:0; }
+.queue-plan-link:hover { text-decoration:underline; }
+.queue-entry-heading { gap:12px; align-items:center; }
+.queue-state { flex-shrink:0; font-size:12px; }
+
+.hives-panel { min-width:0; }
+.hives-list { overflow:auto; scrollbar-gutter:stable; }
+.hive-group { border:1px solid #293e46; border-radius:5px; margin-bottom:10px; overflow:hidden; }
+.hive-group:last-child { margin-bottom:0; }
+.hive-group > .table-scroll { max-height:none; overflow:visible; }
+.hive-group table { width:100%; table-layout:fixed; }
+.hive-group > .table-scroll:first-child { padding:8px 10px; }
+.hive-process-toggle { border:0; border-top:1px solid #293e46; background:#101c21; width:100%; text-align:left; color:#a4bdc7; padding:8px 12px; }
+.hive-process-toggle:hover { color:var(--gold); }
+.hive-group > .hive-processes { padding:0 10px 8px 24px; background:#081115; border-left:2px solid #394b40; }
+.hive-processes td { overflow-wrap:anywhere; }
+.hive-processes[hidden] { display:none; }
+@media(max-width:1100px) { .hives-list { max-height:none; overflow:visible; } }
+@media(max-width:700px) { .hive-group > .hive-processes { padding-left:12px; }.hive-process-toggle { min-height:44px; }.hive-group table { table-layout:auto; } }
