@@ -29,6 +29,7 @@ from .scheduler import ACTIVE, norm_plan
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent
 PHASES = ("work", "verify", "release", "integrate")
+VERSION_HANDOVER = object()
 TEMPORARY = re.compile(r"^(no worker slot|no free slot|no integrator slot|free RAM|STOP flag|run state)")   # a start rejected for one of these is tried again next round
 def names_file() -> Path:
     """Editable list of agent names in the user's configuration directory."""
@@ -678,7 +679,6 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, sle
             report_loop_failure(conn, "Loop ended unexpectedly\n" + text)
             raise
         write_state(conn, "ended", datetime.now(), None)
-        return result
     finally:
         if crash:
             faulthandler.disable()
@@ -689,6 +689,13 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, sle
             lock_file().unlink()
         except OSError:
             pass
+    if result is VERSION_HANDOVER:
+        if not stop_flag().exists():
+            launcher = TOOLS_DIR.parent.parent / "launcher.py"
+            spawn_detached([osplat.python_executable(), "-I", str(launcher), "start", "--foreground", "--keep-pause"],
+                           osplat.runs_dir() / "beekeeper.log")
+        return 0
+    return result
 
 
 def daily_export(envs) -> None:
@@ -896,7 +903,7 @@ def _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_k
     if not stopped and version_switch_requested():
         for env in envs:
             env.log("active version changed; releasing the loop for takeover")
-        return 0
+        return VERSION_HANDOVER
     for env in envs:
         env.log("STOP found, loop ending" if stopped else "loop ending")
         env.event("STOP file found: no new agents, waiting for running agents" if stopped else "Loop ending")

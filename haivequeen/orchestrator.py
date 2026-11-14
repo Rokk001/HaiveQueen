@@ -10,6 +10,7 @@ goes on after a pause, a fix, an owner answer and a restart of HaiveQueen.
 Check runs in a detached supervisor and publishes its result in the database. Merge, Build and Deploy run in threads and store their results in files. Push and the fix agent start run in the round itself.
 """
 import json
+import tempfile
 import os
 import re
 import sqlite3
@@ -557,6 +558,21 @@ def _moved(conn, env, plan, state, step):
     return "next"
 
 
+def _write_result(result_file, token, code, output):
+    """Publish a complete result atomically for a successor core."""
+    path = Path(result_file)
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"token": token, "code": code, "output": output}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
 def _work(env_settings, job, step, command, folder, extra_env, result_file):
     """The thread of one command: run it (the Check in a slot of the machine), store the result in a file."""
     if step == "Check":
@@ -592,7 +608,7 @@ def _work(env_settings, job, step, command, folder, extra_env, result_file):
         action_logs.append(job.log_file, output)
     action_logs.finish(job.log_file, code)
     try:
-        Path(result_file).write_text(json.dumps({"token": job.token, "code": code, "output": output}), encoding="utf-8")
+        _write_result(result_file, job.token, code, output)
     except OSError:
         pass
 
@@ -621,7 +637,7 @@ def _detached_work(request_file):
         output = traceback.format_exc()
         action_logs.append(j.log_file, output)
         action_logs.finish(j.log_file, 1)
-        Path(request["result_file"]).write_text(json.dumps({"token": j.token, "code": 1, "output": output}), encoding="utf-8")
+        _write_result(request["result_file"], j.token, 1, output)
     finally:
         proctree.exempt_clear()
         try:
@@ -722,7 +738,7 @@ def _command(conn, env, plan, state, folder, step, free_mb):
                     j.process.terminate()
                 if not isinstance(exc, OSError):
                     raise
-                Path(result_file).write_text(json.dumps({"token": j.token, "code": 127, "output": str(exc)}), encoding="utf-8")
+                _write_result(result_file, j.token, 127, str(exc))
             if not _async() and j.process is not None:
                 j.process.wait()
     result = _harvest(conn, env, plan, state)
@@ -733,12 +749,12 @@ def _command(conn, env, plan, state, folder, step, free_mb):
         save(conn, env.name, plan, state)
         return "next"
     code, output = result
-    state.pop("job", None)
+    job = state.pop("job", None) or {}
     JOBS.pop(key, None)
     if code != 0:
         return _red(conn, env, plan, state, step, "the %s command (exit %s) failed:\n%s" % (step, code, output))
     if step == "Deploy":
-        head = integration.head_commit(folder)
+        head = job.get("head")
         state["deployed"] = head
         _save_last(conn, env.name, plan, deployed=head)
     return _done(conn, env, plan, state, step)
@@ -769,10 +785,8 @@ def _harvest(conn, env, plan, state):
     except (OSError, ValueError):
         data = None
     if data and data.get("token") == job["token"]:
-        try:
-            Path(job["file"]).unlink()
-        except OSError:
-            pass
+        # Keep the result until the persisted step advances: a successor can
+        # replay harvesting if this core exits before saving that transition.
         JOBS.pop(key, None)
         save_step_log(conn, env.name, plan, job["step"], int(data["code"]), data.get("output") or "")
         return int(data["code"]), str(data.get("output") or "")

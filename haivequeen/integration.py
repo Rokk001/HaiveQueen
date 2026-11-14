@@ -374,7 +374,9 @@ def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=Tr
     bootstrap = "import sys; sys.path.insert(0, sys.argv[1]); from haivequeen.integration import compile_supervisor; compile_supervisor(*sys.argv[2:])"
     options = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
     try:
-        proc = subprocess.Popen([sys.executable, "-I", "-c", bootstrap, str(Path(__file__).resolve().parent.parent), database, env.name, token],
+        from . import version_leases
+        proc = version_leases.launch(Path(__file__).resolve().parent.parent, subprocess.Popen,
+                                [sys.executable, "-I", "-c", bootstrap, str(Path(__file__).resolve().parent.parent), database, env.name, token],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, **options)
     except OSError as exc:
         conn = db.connect(database)

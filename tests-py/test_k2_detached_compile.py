@@ -58,6 +58,16 @@ class DetachedCompileCase(unittest.TestCase):
 
 
 class DetachedCompileTests(DetachedCompileCase):
+    def test_supervisor_launch_reserves_its_code_version(self):
+        from haivequeen import version_leases
+        env = SimpleNamespace(name='project', conn=self.conn, settings={'compileCheck': 'check'})
+        process = SimpleNamespace(pid=12345)
+        with mock.patch.object(version_leases, 'launch', return_value=process) as launch, \
+             mock.patch.object(integration.proctree, 'exempt_register'):
+            integration.start_compile_check(env, {'name': 'agent'}, cwd=str(self.base), milestones=False)
+        self.assertEqual(launch.call_args.args[0], Path(integration.__file__).resolve().parent.parent)
+        self.assertIs(launch.call_args.args[1], subprocess.Popen)
+
     def test_signal_exit_is_stored_as_aborted(self):
         env = SimpleNamespace(name='project', conn=self.conn, settings={'compileCheck': 'check'})
         with mock.patch.object(integration, '_acquire_compile_slot', return_value='slot'), \

@@ -102,10 +102,23 @@ class LoopEndTest(RoundCase):
     def test_version_switch_releases_loop_without_waiting_for_agents(self):
         with patch.object(loop, "version_switch_requested", side_effect=[False, True, True, True]), \
                 patch.object(loop, "run_round"), patch.object(loop, "daily_export"), \
-                patch.object(loop, "active_count", return_value=1):
+                patch.object(loop, "active_count", return_value=1), \
+                patch.object(loop, "spawn_detached") as spawn:
             loop.run_loop(self.conn, self.machine, sleep=lambda _: None)
+        self.assertEqual(spawn.call_count, 1)
         self.assertEqual(loop.read_state(self.conn)["status"], "ended")
         self.assertFalse(loop.lock_file().exists())
+
+    def test_successor_starts_after_lock_release_and_keeps_pause(self):
+        calls = []
+        def start(argv, log):
+            self.assertFalse(loop.lock_file().exists())
+            calls.append(argv)
+        with patch.object(loop, "_run_loop", return_value=loop.VERSION_HANDOVER), \
+                patch.object(loop, "spawn_detached", side_effect=start):
+            self.assertEqual(loop.run_loop(self.conn, self.machine), 0)
+        self.assertEqual(calls[0][-3:], ["start", "--foreground", "--keep-pause"])
+        self.assertEqual(calls[0][-4], str(loop.TOOLS_DIR.parent.parent / "launcher.py"))
 
     def test_active_pointer_selects_when_old_loop_yields(self):
         from tempfile import TemporaryDirectory

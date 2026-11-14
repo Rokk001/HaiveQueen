@@ -33,6 +33,26 @@ class DetachedPipelineTests(unittest.TestCase):
                     job.process.terminate()
                     job.process.wait(timeout=10)
 
+    def test_result_can_be_harvested_again_after_core_crash(self):
+        with tempfile.TemporaryDirectory() as folder:
+            result = Path(folder) / "result.json"
+            orchestrator._write_result(result, "token", 0, "done")
+            state = {"job": {"step": "Build", "token": "token", "file": str(result)}}
+            with patch.object(orchestrator, "save_step_log"):
+                for _ in range(2):
+                    self.assertEqual(orchestrator._harvest(None, SimpleNamespace(name="project"), "plan", state), (0, "done"))
+
+    def test_deploy_records_the_revision_that_was_started(self):
+        state = {"job": {"step": "Deploy", "head": "old"}, "steps": {}}
+        env = SimpleNamespace(name="project")
+        with patch.object(orchestrator, "commands", return_value={"Deploy": "deploy"}), \
+                patch.object(orchestrator, "_harvest", return_value=(0, "")), \
+                patch.object(orchestrator, "_save_last") as save_last, \
+                patch.object(orchestrator, "_done", return_value="next"):
+            self.assertEqual(orchestrator._command(None, env, "plan", state, ".", "Deploy", 4096), "next")
+        self.assertEqual(state["deployed"], "old")
+        self.assertEqual(save_last.call_args.kwargs["deployed"], "old")
+
     def test_build_and_deploy_survive_and_are_harvested(self):
         for step in ("Build", "Deploy"):
             with self.subTest(step=step), tempfile.TemporaryDirectory() as folder:
