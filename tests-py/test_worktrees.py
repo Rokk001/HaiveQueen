@@ -202,6 +202,8 @@ class CleanupTests(unittest.TestCase):
         except OSError as exc:
             self.skipTest('Creating symlinks is unavailable: %s' % exc)
         self.env.settings['ignoredBuildOutput'] = ['ignored/']
+        # Git's directory-only pattern does not ignore a POSIX symlink.
+        (self.repo / '.git' / 'info' / 'exclude').write_text('ignored\n', encoding='utf-8')
         self.assertIn(str(self.linked), worktrees.prune(self.env)['removed'])
         self.assertEqual(data.read_text(encoding='utf-8'), 'keep')
 

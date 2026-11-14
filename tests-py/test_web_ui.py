@@ -14,6 +14,16 @@ from haivequeen import web_api, web_ui
 
 
 class BrowserTests(unittest.TestCase):
+    @staticmethod
+    def browser_environment(folder):
+        # Chromium also writes NSS, crash reports and MIME settings outside
+        # --user-data-dir. Keep all of those in this test's own temporary home.
+        environment = dict(os.environ)
+        for key in ('HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA',
+                    'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'):
+            environment[key] = folder
+        return environment
+
     def test_page_bootstraps_csrf_and_shared_translations_safely(self):
         page = web_ui.page('session-token', language='German')
         self.assertIn('session-token', page)
@@ -105,6 +115,7 @@ class BrowserTests(unittest.TestCase):
                 try:
                     probe = subprocess.run([candidate, *flags, '--user-data-dir=' + profile,
                                             '--dump-dom', 'data:text/html,<p>headless probe</p>'],
+                                           env=self.browser_environment(profile),
                                            capture_output=True, timeout=15, **process_options)
                 except (OSError, subprocess.TimeoutExpired):
                     continue
@@ -212,6 +223,7 @@ class BrowserTests(unittest.TestCase):
                 command=[browser,*flags,'--user-data-dir='+profile,
                          '--dump-dom','--virtual-time-budget=15000','http://127.0.0.1:'+str(server.server_port)]
                 result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45,
+                                      env=self.browser_environment(profile),
                                       **process_options)
                 failure=result.stdout.split('BROWSER TEST:')[-1][-1500:]
             self.assertTrue('data-test-result="passed"' in result.stdout,

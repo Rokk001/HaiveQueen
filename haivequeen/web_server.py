@@ -24,7 +24,9 @@ def json_value(value):
 
 
 class _Server(http.server.ThreadingHTTPServer):
-    allow_reuse_address = False
+    # POSIX needs SO_REUSEADDR to rebind after closing accepted connections.
+    # Windows instead retains exclusive ownership of the listening address.
+    allow_reuse_address = not hasattr(socket, 'SO_EXCLUSIVEADDRUSE')
     daemon_threads = True
 
     def server_bind(self):

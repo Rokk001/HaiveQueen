@@ -106,9 +106,9 @@ window.addEventListener('load', async () => {
 
     assert(document.querySelector('#app.dashboard'),'Dashboard layout missing');
 
-    const projectMenu=document.querySelector('button[aria-label="Actions · Project · demo"]');
+    const projectMenu=document.querySelector('button[aria-label="Open details · Project · demo"]');
 
-    const queenMenu=document.querySelector('button[aria-label="Actions · Queen · Test Queen"]');
+    const queenMenu=document.querySelector('button[aria-label="Open details · Queen · Test Queen"]');
 
     assert(projectMenu && queenMenu,'Project or Queen action menu missing');
 
@@ -160,7 +160,7 @@ window.addEventListener('load', async () => {
 
     await click('Dashboard');
 
-    document.querySelector('button[aria-label="Actions · mock-agent"]').click();
+    document.querySelector('button[aria-label="Open details · mock-agent"]').click();
 
     await click('Filter log');
 
@@ -366,7 +366,7 @@ window.addEventListener('load', async () => {
 
     document.getElementById('close-detail').click();
 
-    await click('Dashboard');document.querySelector('button[aria-label="Actions · mock-agent"]').click();await wait(()=>document.querySelector('#detail .live-output'));
+    await click('Dashboard');document.querySelector('button[aria-label="Open details · mock-agent"]').click();await wait(()=>document.querySelector('#detail .live-output'));
 
     await wait(()=>document.querySelector('.live-output')?.textContent.includes('live milestone'));
 

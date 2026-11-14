@@ -108,8 +108,9 @@ class IsolationActiveTest(unittest.TestCase):
         """A child process whose BZZ_* or AppData folders, or whose fallback to the home folder, point into a guarded folder is a hit; the redirected
         environment of this session is not."""
         home = isolation.Path(isolation.tempfile.gettempdir()) / "guard-home"
-        real = home / "AppData" / "Local" / "HaiveQueen"
-        g = self.guarded(real) + self.guarded(home / "AppData" / "Roaming" / "HaiveQueen")
+        folders = isolation.child_folders({}, home)
+        real = folders[0]
+        g = self.guarded(real) + self.guarded(folders[1])
         own = {"LOCALAPPDATA": str(isolation.ROOT / "local"), "APPDATA": str(isolation.ROOT / "roaming"), "XDG_DATA_HOME": str(isolation.ROOT / "local"),
                "XDG_CONFIG_HOME": str(isolation.ROOT / "roaming")}
         self.assertEqual(isolation.guard_event("subprocess.Popen", ("py", ["py"], None, own), g, home), [])

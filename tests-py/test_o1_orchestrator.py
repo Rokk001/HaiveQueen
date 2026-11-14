@@ -346,6 +346,10 @@ class WaitingAndRam(OrchCase):
 
 
 class OwnerCheckFix(OrchCase):
+    def test_owner_fix_completed_in_same_second_reaches_review(self):
+        with mock.patch.object(db, 'now', return_value=db.now()):
+            self.test_rejection_starts_a_fix_agent_and_the_whole_pipeline_again()
+
     def test_rejection_starts_a_fix_agent_and_the_whole_pipeline_again(self):
         self.check = self.echo("Check")
         self.project_toml()

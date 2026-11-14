@@ -150,7 +150,12 @@ def integrated_ready(conn, env, hive):
         return None
     rejected = runtime.list_questions(conn, env.name, status='answered', plan=plan, item='owner-check-answered')
     if rejected and db.owner_check_result(conn, rejected[-1]['id']) == 'rejected' and str(rejected[-1].get('answered_at') or '') >= str(row['updated_at'] or ''):
-        return None
+        # Timestamps have second precision. A completed fix pipeline can close
+        # in the same second as the rejection; use its exact question and tip.
+        from . import orchestrator
+        completed = orchestrator.last_info(conn, env.name, plan)
+        if completed.get('owner_check') != rejected[-1]['id'] or completed.get('commit') != row['tip']:
+            return None
     # A queue status alone does not prove that the plan branch reached integration.
     if not nothing_to_integrate(conn, env, plan)[0]:
         return None

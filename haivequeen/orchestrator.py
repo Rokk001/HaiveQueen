@@ -321,6 +321,8 @@ def begin_owner_fix(conn, project, plan, text):
     state = {"phase": "fix", "step": "Merge", "placed": False, "ran": [], "steps": {}, "moved": 0, "pushed": last.get("pushed", ""),
              "deployed": last.get("deployed", ""), "started": db.now(),
              "fix": {"agent": None, "reason": "owner", "step": "Owner check", "error": str(text or "")}}
+    answered = runtime.list_questions(conn, project, status='answered', plan=plan, item='owner-check-answered')
+    state['owner_check'] = max((q['id'] for q in answered), default=0)
     save(conn, project, plan, state)
     _hive_state(conn, project, plan, "integrating")
 
@@ -962,7 +964,8 @@ def _close_run(conn, env, plan, state, folder):
     bees = __import__("haivequeen.bees", fromlist=["x"])
     for package in bees.rejected_packages(conn, env.name, plan):   # the packages the owner rejected count as done again
         bees.set_package_state(conn, env.name, plan, package, "done", "Orchestrator")
-    _save_last(conn, env.name, plan, commit=head, steps=list(state["ran"]))
+    _save_last(conn, env.name, plan, commit=head, steps=list(state["ran"]),
+               owner_check=state.get('owner_check', 0))
     action_logs.append(state.get("log_file"), "Queue integrated; integration reservation released; commit %s\n" % head)
     _log(env, "%s: integration done, commit %s" % (_short(plan), head[:7]))
     runtime.kv_set(conn, env.name, KEY + plan, "")

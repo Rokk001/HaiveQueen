@@ -104,7 +104,7 @@ class ProviderWaitF2(RoundCase):
 
     def test_round_blocker_says_not_ready(self):
         self.prov('codex')['slots'] = 0
-        self.conn.execute("UPDATE agents SET status='done' WHERE name='queen'")
+        self.conn.execute("UPDATE agents SET status='done',pid=NULL WHERE name='queen'")
         bees.wait_for_provider(self.conn, 'testproj', REL, 'claude')
         with mock.patch('haivequeen.servers.readiness', return_value=(False, 'the login is missing')):
             self.round()
