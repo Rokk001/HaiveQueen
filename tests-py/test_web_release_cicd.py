@@ -170,13 +170,14 @@ class HistoryTests(TestCase):
              mock.patch.object(gitea, '_request', return_value={'commit': {'sha': SHA}}):
             self.assertEqual(gitea.release_history(('https://git.example', 'team', 'repo'), 'mock'), expected)
 
-    def test_azure_peels_tag_and_paginates(self):
-        with mock.patch.object(azure, '_request', side_effect=[({'value': [{'name': 'refs/tags/' + PRE, 'objectId': 'b' * 40, 'peeledObjectId': SHA}]}, 'next'),
-                                                              ({'value': [{'sourceVersion': SHA, 'sourceBranch': 'refs/tags/' + PRE, 'finishTime': '2026-01-02'}]}, None), ({'value': []}, None)]) as request:
-            rows = azure.release_history(('org', 'project', 'repo'), 'mock')
-        self.assertEqual(rows[0]['commit'], SHA)
-        self.assertEqual(rows[0]['date'], '2026-01-02')
-        self.assertEqual(request.call_args.kwargs['query']['continuationToken'], 'next')
+    def test_azure_does_not_present_tags_as_release_history(self):
+        provider = git_provider.Provider('azure', azure, ('org', 'project', 'repo'))
+        with mock.patch.object(web_releases, 'context', return_value=(provider, {})), \
+             mock.patch.object(azure, '_request') as request:
+            result = web_releases.listing(None, 'demo')
+        self.assertEqual(result['releases'], [])
+        self.assertIn('does not support release history', result['reason'])
+        request.assert_not_called()
 
     def test_full_release_prepare_uses_full_publication_status(self):
         with mock.patch.object(github, 'publish_release', return_value={'id': 2}) as publish, \

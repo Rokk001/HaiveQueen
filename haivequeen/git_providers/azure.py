@@ -133,30 +133,7 @@ def pipeline_for_commit(repo, commit, token, auth='pat'):
     return _request(repo, 'build/builds', token, auth, query={'repositoryId': repo[2], 'repositoryType': 'TfsGit', 'queryOrder': 'finishTimeDescending', '$top': 100}).get('value', [])
 
 
-CAPABILITIES |= {'release_tag', 'release_state', 'release_history'}
-
-
-def release_history(repo, token=None):
-    """Azure tag workflows identify versions by Git refs, not classic release IDs."""
-    from ._release import metadata
-    rows = []
-    continuation = None
-    while True:
-        query = {'filter': 'tags/v', 'peelTags': 'true', '$top': 100}
-        if continuation:
-            query['continuationToken'] = continuation
-        result, continuation = _request(repo, 'git/repositories/{repo}/refs', token,
-                                        query=query, include_continuation=True)
-        for ref in result.get('value', []):
-            name = ref['name'].removeprefix('refs/tags/')
-            if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\.\d+)?', name):
-                continue
-            commit = ref.get('peeledObjectId') or ref['objectId']
-            builds = _release_builds(repo, name, commit, token)
-            date = max((r.get('finishTime') or r.get('queueTime', '') for r in builds), default='')
-            rows.append(metadata(name, date, commit))
-        if not continuation:
-            return rows
+CAPABILITIES |= {'release_tag', 'release_state'}
 
 
 def release_tag(repo, name, commit, token=None):
