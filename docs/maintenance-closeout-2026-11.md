@@ -335,3 +335,14 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Serialize lookup and registration in a write transaction, releasing it before observation. Concurrent callers register only one attempt. Legacy live checkers also block duplicate starts.
 - Deliver the completed attempt's verdict only after its runner exits. Bind retained results to the request, completeness text, working directory and HEAD; changed or unknown scopes require a fresh check after the old one ends. Owner-stop results remain aborted.
 - Three regression tests reproduced duplicate starts and discarded results before the fix. Twenty-one focused tests pass, including concurrent database connections, resumed success/failure, changed requirements, legacy attempts, terminal-but-live runners, existing answer-file handling and start-block rules. No real agents were launched.
+
+## A-24: Git action output is streamed
+
+- Already fixed by `1330d20`: local merge, fetch and push jobs publish output while their subprocess runs rather than waiting for exit.
+- Reverified with `test_git_live_output`: the first output is published while the helper is still waiting, output order and Unicode are preserved, no output is duplicated, and launch failure clears the recorded PID.
+
+## A-25: Journal failure does not block process output
+
+- Already fixed by `758c1a9`: journal write failures retain a bounded in-memory tail and a storage-error notice while draining the subprocess pipe.
+- Reverified with `test_log_drain_failure`: an isolated helper emits 2,000 large lines while journal writes fail, finishes with its real exit code 7, and retains the final line and terminal record.
+- All four focused tests for A-24 and A-25 pass. Only isolated test helpers were launched; running application processes were not touched.
