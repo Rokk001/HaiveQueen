@@ -8,6 +8,26 @@ from haivequeen import config, version_leases, version_layout
 
 
 class VersionLeasesTests(unittest.TestCase):
+    def test_installation_survives_collection_until_activation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / 'install'
+            source = base / 'source'
+            cli = source / 'haivequeen' / 'cli.py'
+            cli.parent.mkdir(parents=True)
+            cli.touch()
+            old = root / 'versions' / 'old' / 'haivequeen' / 'cli.py'
+            old.parent.mkdir(parents=True)
+            old.touch()
+            (root / 'active-version').write_text('old', encoding='utf-8')
+            with patch.object(config, 'config_dir', return_value=base / 'data'):
+                version_layout.install_version(root, 'new', source)
+                self.assertEqual(version_leases.collect(root), [])
+                self.assertTrue((root / 'versions' / 'new').exists())
+                version_layout.set_active(root, 'new')
+                self.assertEqual(version_leases._load(root), {})
+                self.assertEqual(version_leases.collect(root), ['old'])
+
     def test_activation_and_collection_are_serialized(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)

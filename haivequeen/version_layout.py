@@ -10,6 +10,7 @@ import shlex
 import shutil
 import sys
 import tempfile
+import uuid
 
 _VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
@@ -26,20 +27,34 @@ def version_dir(root, version):
 
 def install_version(root, version, source):
     """Copy a complete release into its own directory, never replace a release."""
+    from . import filetxn, version_leases
     root, source = Path(root), Path(source)
+    version = _version(version)
     target = version_dir(root, version)
     if not (source / "haivequeen" / "cli.py").is_file():
         raise ValueError("release does not contain haivequeen/cli.py")
     target.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".install-", dir=target.parent))
+    # Protect the target before it becomes visible to the collector. If this
+    # process dies, the reservation deliberately survives until recovery.
+    with filetxn.locked():
+        leases = version_leases._load(root)
+        token = 'install-' + uuid.uuid4().hex
+        leases[token] = {'version': version, 'pid': None, 'identity': None, 'installation': True}
+        version_leases._save(root, leases)
+    staging = None
     try:
+        staging = Path(tempfile.mkdtemp(prefix=".install-", dir=target.parent))
         shutil.copytree(source, staging, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', '__pycache__', '*.pyc'))
         # A version is immutable. Rename only after the complete copy succeeds.
         if target.exists():
             raise FileExistsError(str(target))
-        staging.rename(target)
+        with filetxn.locked():
+            staging.rename(target)
+    except BaseException:
+        version_leases.release(root, token)
+        raise
     finally:
-        if staging.exists():
+        if staging is not None and staging.exists():
             shutil.rmtree(staging)
     return target
 
@@ -64,6 +79,13 @@ def _set_active_locked(root, version):
             f.flush()
             os.fsync(f.fileno())
         os.replace(name, root / "active-version")
+        # The active pointer now protects this version, so installation
+        # reservations for it are no longer needed.
+        from . import version_leases
+        leases = version_leases._load(root)
+        leases = {key: record for key, record in leases.items()
+                  if not (record.get('installation') and record.get('version') == version)}
+        version_leases._save(root, leases)
     finally:
         if os.path.exists(name):
             os.unlink(name)
