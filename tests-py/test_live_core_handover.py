@@ -6,7 +6,7 @@ import sys
 import time
 from unittest.mock import patch
 
-from bzztest import RoundCase
+from bzztest import REL, RoundCase
 from haivequeen import db, inbox, runtime, version_layout
 
 
@@ -48,6 +48,9 @@ conn.close()
 ''', encoding='utf-8')
         version_layout.install_launcher(root)
         version_layout.set_active(root, 'old')
+        self.plan('IN_PROGRESS')
+        question = db.add_question(self.conn, 'testproj', REL, 'handover-question', 'Continue?', '')
+        owner_check = db.add_question(self.conn, 'testproj', REL, 'owner-check', 'Please check.', '')
         env = dict(os.environ, TEST_BASE=str(self.base))
         jobs = [subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], env=env) for _ in range(2)]
         core = None
@@ -67,7 +70,8 @@ conn.close()
             folder = inbox.inbox_dir(self.repo)
             folder.mkdir(parents=True, exist_ok=True)
             (folder / 'handover.toml').write_text(
-                '[[decision]]\nsource="owner"\nitem="handover-test"\ntext="continue"\n',
+                '[[decision]]\nsource="owner"\nitem="handover-test"\ntext="continue"\n'
+                '[[answer]]\nquestion_id=%d\ntext="yes"\nby="owner"\n' % question,
                 encoding='utf-8')
             version_layout.set_active(root, 'new')
             contender = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'), 'start'],
@@ -98,6 +102,10 @@ conn.close()
             self.assertIn("('Agent', 'running')", (self.base / 'seen').read_text())
             decisions = runtime.list_decisions(self.conn, 'testproj', item='handover-test', active_only=True)
             self.assertEqual([decision['text'] for decision in decisions], ['continue'])
+            answered = self.conn.execute('SELECT status, answer FROM questions WHERE id=?', (question,)).fetchone()
+            self.assertEqual(tuple(answered), ('answered', 'yes'))
+            check = self.conn.execute('SELECT status FROM questions WHERE id=?', (owner_check,)).fetchone()
+            self.assertEqual(check['status'], 'open')
             self.assertTrue(all(job.poll() is None for job in jobs))
         finally:
             (self.base / 'release-old').touch()
