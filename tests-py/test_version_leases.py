@@ -6,10 +6,33 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from haivequeen import config, version_leases, version_layout
+from haivequeen import config, stable_launcher, version_leases, version_layout
 
 
 class VersionLeasesTests(unittest.TestCase):
+    def test_launcher_crash_after_publication_retains_child_until_absent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name in ('active', 'old'):
+                (root / 'versions' / name / 'haivequeen').mkdir(parents=True)
+            (root / 'versions' / 'old' / 'haivequeen' / 'cli.py').touch()
+            (root / 'active-version').write_text('old', encoding='utf-8')
+            class Process:
+                pid = 123
+                def wait(self):
+                    raise RuntimeError('launcher interrupted')
+            with patch.object(stable_launcher, '__file__', str(root / 'launcher.py')), \
+                 patch.object(stable_launcher.subprocess, 'Popen', return_value=Process()):
+                with self.assertRaises(RuntimeError):
+                    stable_launcher.main()
+            record = next(iter(version_leases._load(root).values()))
+            self.assertEqual(record['pid'], 123)
+            (root / 'active-version').write_text('active', encoding='utf-8')
+            with patch.object(version_leases.platform, 'process_absent', return_value=False) as absent:
+                self.assertEqual(version_leases.collect(root), [])
+                absent.return_value = True
+                self.assertEqual(version_leases.collect(root), ['old'])
+
     def test_interrupted_install_reservation_requires_definite_death_and_no_target(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

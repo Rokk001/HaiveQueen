@@ -91,7 +91,16 @@ def main():
             leases.pop(token, None)
             _save(root, leases)
         raise
-    # The pending record protects the child even if waiting or publication fails.
+    # Publishing the PID lets recovery remove the lease once the OS confirms
+    # that the child is gone, even when this launcher dies while waiting.
+    # If publication fails, leave the pending reservation in place.
+    try:
+        with lifetime_lock(root):
+            leases = _load(root)
+            leases[token]['pid'] = process.pid
+            _save(root, leases)
+    except Exception:
+        pass
     result = process.wait()
     with lifetime_lock(root):
         leases = _load(root)
