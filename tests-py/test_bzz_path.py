@@ -214,6 +214,33 @@ class AgentFindsOrchTest(RoundCase):
         self.assertEqual(Path(cli), old / "haivequeen" / "cli.py")
         self.assertEqual(code, "0")
 
+    def test_queen_started_by_new_version_uses_new_version_cli(self):
+        root = self.base / "install"
+        new = root / "versions" / "new"
+        shutil.copytree(ROOT / "haivequeen", new / "haivequeen", ignore=shutil.ignore_patterns("__pycache__"))
+        (root / "active-version").write_text("new", encoding="utf-8")
+        marker = self.base / "queen-version"
+        script = self.base / "fake_cli.py"
+        script.write_text(
+            'import json, os, pathlib\n'
+            'pathlib.Path(os.environ["QUEEN_RESULT"]).write_text(os.environ.get("BZZ_AGENT_CLI", ""))\n'
+            'print(json.dumps({"type":"result", "is_error":False, "result":"Done."}))\n', encoding="utf-8")
+        os.environ["QUEEN_RESULT"] = str(marker)
+        self.addCleanup(os.environ.pop, "QUEEN_RESULT", None)
+        prompt = self.base / "prompt.md"
+        prompt.write_text("TASK\nTest\n", encoding="utf-8")
+        runtime.upsert_agent(self.conn, "testproj", "Q-1", {"status": "starting", "class": "medium", "person": "Test", "color": "4FA8FF"})
+        spec = {"name": "Q-1", "provider": "claude", "protocol": "claude", "plan": REL,
+                "package": "", "phase": "queen", "cwd": str(self.repo), "prompt_file": str(prompt)}
+        self.env().run_dir("Q-1").mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(loop, "TOOLS_DIR", new):
+            loop.launch_headless(self.env(), spec)
+            deadline = time.monotonic() + 45
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(.1)
+        self.assertTrue(marker.exists(), "provider did not start")
+        self.assertEqual(Path(marker.read_text(encoding="utf-8")), new / "haivequeen" / "cli.py")
+
 
 if __name__ == "__main__":
     unittest.main()
