@@ -71,6 +71,39 @@ class AskTriageTest(RoundCase):
         self.assertIn("decision %d" % did, res["answer"])
         self.assertEqual(runtime.list_questions(self.conn, "testproj", "open"), [])
 
+    def test_new_decision_supersedes_old_answer_and_auto_duplicates(self):
+        old = db.add_question(self.conn, "testproj", REL, "revision", "Which?", "")
+        db.answer_question(self.conn, old, "Old instruction.", "owner")
+        self.conn.execute("UPDATE questions SET answered_at='2026-01-01T10:00:00' WHERE id=?", (old,))
+        self.conn.execute("UPDATE decisions SET ts='2026-01-01T10:00:00' WHERE item='revision'")
+        self.ask("revision")  # Automatic references must not become new authority.
+        did = runtime.add_decision(self.conn, "testproj", "owner", "Corrected instruction.", REL, "revision")
+        self.conn.execute("UPDATE decisions SET ts='2026-01-02T10:00:00' WHERE id=?", (did,))
+        result = self.ask("revision")
+        self.assertIn("decision %d" % did, result["answer"])
+        self.assertIn("Corrected instruction.", result["answer"])
+
+    def test_independent_decision_wins_same_second_and_superseded_is_ignored(self):
+        old = db.add_question(self.conn, "testproj", REL, "same-second", "Which?", "")
+        db.answer_question(self.conn, old, "Old answer.", "owner")
+        stamp = self.status(old)["answered_at"]
+        did = runtime.add_decision(self.conn, "testproj", "owner", "New instruction.", REL, "same-second")
+        self.conn.execute("UPDATE decisions SET ts=? WHERE id=?", (stamp, did))
+        self.assertIn("decision %d" % did, self.ask("same-second")["answer"])
+        runtime.update_decision(self.conn, did, status="superseded")
+        self.assertIn("question %d" % old, self.ask("same-second")["answer"])
+
+    def test_new_owner_answer_can_correct_older_decision(self):
+        did = runtime.add_decision(self.conn, "testproj", "owner", "Old instruction.", REL, "revision")
+        self.conn.execute("UPDATE decisions SET ts='2026-01-01T10:00:00' WHERE id=?", (did,))
+        old = db.add_question(self.conn, "testproj", REL, "revision", "Which?", "")
+        db.answer_question(self.conn, old, "New answer.", "owner")
+        self.conn.execute("UPDATE questions SET answered_at='2026-01-02T10:00:00' WHERE id=?", (old,))
+        self.conn.execute("UPDATE decisions SET ts='2026-01-02T10:00:00' WHERE item='revision' AND id!=?", (did,))
+        result = self.ask("revision")
+        self.assertIn("question %d" % old, result["answer"])
+        self.assertIn("New answer.", result["answer"])
+
     def test_owner_checks_remain_open_after_prior_answers_and_decisions(self):
         """Each owner check requires a fresh owner answer, even for a previously settled item."""
         from haivequeen import hives

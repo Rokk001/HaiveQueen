@@ -8,12 +8,26 @@ def _known_answer(conn, project, plan, item):
     decision of the plan or without a plan. None when there is none (or no item)."""
     if not item or item == "owner-check" or item.startswith("owner-check-"):
         return None
-    for q in reversed(runtime.list_questions(conn, project, "answered", plan, item)):
-        return ("question", q["id"], q["answer"] or "")
-    for d in reversed(runtime.list_decisions(conn, project, None, item, active_only=True)):
-        if d["plan_path"] in (None, "", plan):
-            return ("decision", d["id"], d["text"] or "")
-    return None
+    # Automatic duplicate references carry no new instruction. Their later
+    # timestamps must never outrank the actual owner/coordinator decision.
+    questions = [q for q in runtime.list_questions(conn, project, "answered", plan, item)
+                 if q["answered_by"] in ("owner", "coordinator")]
+    candidates = [(q["answered_at"] or q["created_at"] or "", 0, q["id"],
+                   ("question", q["id"], q["answer"] or "")) for q in questions]
+    for d in runtime.list_decisions(conn, project, None, item, active_only=True):
+        if d["plan_path"] not in (None, "", plan):
+            continue
+        # answer_question also records the same answer as a decision. Keep
+        # the question reference for that mirror, but rank independent
+        # decisions ahead when the timestamp has only second precision.
+        mirror = next((q for q in questions
+                       if d["ts"] == q["answered_at"]
+                       and d["text"] == f"{q['question']} -> {q['answer']}"), None)
+        reference = (("question", mirror["id"], mirror["answer"] or "") if mirror
+                     else ("decision", d["id"], d["text"] or ""))
+        candidates.append((d["ts"] or "", 1, d["id"], reference))
+    return max(candidates)[3] if candidates else None
+
 
 
 def _close_with_reference(conn, qid, kind, ref_id, text) -> dict:

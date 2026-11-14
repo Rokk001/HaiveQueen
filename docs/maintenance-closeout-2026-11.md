@@ -251,3 +251,12 @@ isolated repositories and controlled agent reports; they establish orchestration
 behavior, not the diagnostic quality of a live model. Package exhaustion and other
 question creation paths still need the same pre-escalation review. This is not yet
 completion of the broader autonomous technical diagnosis request.
+
+
+### A-18: respect current decisions during question deduplication
+
+- Confirmed that a historical answer (including a later automatic duplicate reference) displaced a newer active decision.
+- Select the latest applicable answer or active decision; automatic duplicate answers do not create new authority. Independent decisions win timestamp ties; mirrored answer records retain the question reference.
+- Preserve project/plan scope and mandatory fresh owner checks. Superseded decisions are excluded.
+- Regression reproduced before the fix: `test_new_decision_supersedes_old_answer_and_auto_duplicates`. Focused coverage: `test_ask_triage` and `test_gui_questions`.
+- This fixes decision lookup, not the still-open package diagnosis workflow.
