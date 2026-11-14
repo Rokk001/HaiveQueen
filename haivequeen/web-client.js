@@ -548,7 +548,7 @@ function mount(document, bootstrap) {
         const result=await client.request('plan/step-log?'+new URLSearchParams({...key(row),step}));
         if(!dialog.open||!output.isConnected)return;
         status.textContent=t({done:'Completed',running:'Running',red:'Failed',todo:'Pending',waiting:'Waiting',cancelled:'Cancelled',unknown:'Unknown'}[result.status]||result.status)+(result.reason?' · '+result.reason:'')+(result.exit_code!=null?' · Exit '+result.exit_code:'')+(result.historical?' · '+t('Previous run output'):'');
-        status.className='step-log-status '+({done:'ok',running:'ok',red:'bad',todo:'dim',waiting:'warn',cancelled:'dim',unknown:'dim'}[result.status]||'dim');
+        status.className='step-log-status '+({done:'ok',running:'warn',red:'bad',todo:'dim',waiting:'warn',cancelled:'dim',unknown:'dim'}[result.status]||'dim');
         const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
         const text=[result.output,result.error&&result.error!==result.output?result.error:''].filter(Boolean).join('\n\n')||t('No log output available yet.');
         if(output.textContent!==text){output.textContent=text;if(follow)output.scrollTop=output.scrollHeight;}
@@ -561,8 +561,8 @@ function mount(document, bootstrap) {
     const box=el('div',undefined,'hq-pipeline');
     const chain=el('div',undefined,'hq-steps');
     for(const [name,state] of info.chain){
-      const label={done:'Completed',running:'Running',red:'Failed',todo:'Pending'}[state]||state;
-      const step=el('button',({done:'✓ ',running:'▶ ',red:'✕ ',todo:'○ '}[state]||'')+t(name),'hq-step '+state);
+      const label={done:'Completed',running:'Running',red:'Failed',todo:'Pending',waiting:'Waiting'}[state]||state;
+      const step=el('button',({done:'✓ ',running:'▶ ',red:'✕ ',todo:'○ ',waiting:'◷ '}[state]||'')+t(name),'hq-step '+state);
       step.type='button';step.title=t(name)+' · '+t(label);step.setAttribute('aria-label',step.title);step.onclick=()=>showStepLog(step,row,name);chain.append(step);
     }
     box.append(chain,el('small',`${info.n} / ${info.m}`+(info.phase==='fix'?' · '+t('Fix Agent'):''),'hq-step-count'));return box;
@@ -777,7 +777,7 @@ function mount(document, bootstrap) {
 
       else if(key==='progress' && Number.isFinite(Number(row[key]))){td.append(planProgress(row));}else if(key==='ctx'){td.classList.add('context-cell');td.append(row.ctx_limit?meter(100*(row.ctx||0)/row.ctx_limit,100,t('CONTEXT')):el('span','–'));if(row.ctx_limit)td.append(el('small',Math.round(100*(row.ctx||0)/row.ctx_limit)+'%'));td.title=tokens(row.ctx)+' / '+tokens(row.ctx_limit);}
 
-      else if(key==='status' && row.orch?.chain){const chain=el('div',undefined,'integration-chain');for(const [name,status] of row.orch.chain)chain.append(el('span',t(name)+({done:' ✓',running:' ▶',red:' ✗'}[status]||''),status));td.append(chain,el('span',t(row.status)));}
+      else if(key==='status' && row.orch?.chain){td.append(orchestrationView(row.orch,row));}
 
       else if(key==='status'){const state=String(row[key]||'');const tone=/^(running|active)$/i.test(state)?'running':/fail|error|reject/i.test(state)?'error':/wait|paus|stop|pending/i.test(state)?'waiting':'neutral';td.append(el('span',t(state),'state-badge state-'+tone));}
 
@@ -1138,33 +1138,53 @@ function mount(document, bootstrap) {
   }
 
   function planDocument(text) {
-
-    const document=el('div',undefined,'plan-document');
-
+    const doc=el('div',undefined,'plan-document');
+    const inline=(node,value)=>{
+      for(const part of String(value).split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g)){
+        if(part.startsWith('**')&&part.endsWith('**'))node.append(el('strong',part.slice(2,-2)));
+        else if(part.startsWith('`')&&part.endsWith('`'))node.append(el('code',part.slice(1,-1)));
+        else {const link=part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);if(link){const a=el('a',link[1]);a.href=link[2];a.target='_blank';a.rel='noopener noreferrer';node.append(a);}else node.append(document.createTextNode(part));}
+      }
+      return node;
+    };
     const lines=String(text).split(/\r?\n/);let list=null,code=null,paragraph=[];
-
-    const flush=()=>{if(paragraph.length){document.append(el('p',paragraph.join(' ')));paragraph=[];}};
-
-    for(const line of lines){
-
-      if(line.startsWith('```')){flush();list=null;if(code)code=null;else{code=el('pre',undefined,'plan-code');document.append(code);}continue;}
-
+    const flush=()=>{if(paragraph.length){doc.append(inline(el('p'),paragraph.join(' ')));paragraph=[];}};
+    for(let i=0;i<lines.length;i++){
+      const line=lines[i];
+      if(/^\s*```/.test(line)){flush();list=null;if(code)code=null;else{code=el('pre',undefined,'plan-code');doc.append(code);}continue;}
       if(code){code.textContent+=line+'\n';continue;}
-
-      const heading=line.match(/^(#{1,6})\s+(.+)$/),bullet=line.match(/^\s*[-*]\s+(.+)$/);
-
-      if(heading){flush();list=null;document.append(el('h'+Math.min(6,heading[1].length+1),heading[2]));}
-
-      else if(bullet){flush();if(!list){list=el('ul');document.append(list);}list.append(el('li',bullet[1]));}
-
+      if(line.includes('|')&&/^\s*\|?\s*:?-{3,}/.test(lines[i+1]||'')){
+        flush();list=null;const wrap=el('div',undefined,'plan-document-table'),grid=el('table');wrap.append(grid);doc.append(wrap);
+        const cells=value=>value.trim().replace(/^\||\|$/g,'').split('|').map(x=>x.trim());
+        const head=el('tr');for(const value of cells(line))head.append(inline(el('th'),value));const thead=el('thead');thead.append(head);grid.append(thead);i++;
+        const body=el('tbody');grid.append(body);while((lines[i+1]||'').includes('|')){const row=el('tr');for(const value of cells(lines[++i]))row.append(inline(el('td'),value));body.append(row);}continue;
+      }
+      const heading=line.match(/^(#{1,6})\s+(.+)$/),bullet=line.match(/^\s*(?:[-*]|(\d+)\.)\s+(.+)$/);
+      if(heading){flush();list=null;doc.append(inline(el('h'+Math.min(6,heading[1].length+1)),heading[2]));}
+      else if(bullet){flush();const tag=bullet[1]?'OL':'UL';if(!list||list.tagName!==tag){list=el(tag.toLowerCase());doc.append(list);}list.append(inline(el('li'),bullet[2]));}
       else if(!line.trim()){flush();list=null;}
-
+      else if(/^\s*---+\s*$/.test(line)){flush();doc.append(el('hr'));}
       else{list=null;paragraph.push(line);}
-
     }
+    flush();return doc;
+  }
 
-    flush();return document;
-
+  function packageCards(packages) {
+    const grid=el('div',undefined,'plan-packages');
+    for(const item of packages){
+      const card=el('article',undefined,'plan-package'),head=el('div',undefined,'package-heading');
+      const labels={done:['Completed','ok'],implemented:['Implemented','blue'],working:['In progress','warn'],waiting:['Waiting','warn'],rejected:['Rejected','bad'],open:['Not started','dim']};
+      const [label,tone]=labels[item.status]||[item.status,'dim'];
+      head.append(el('code',item.id),el('span',t(label),'package-status '+tone));card.append(head,el('h4',item.title));
+      if(item.step){const [n,m]=item.step.split('/').map(Number);const progress=el('div',undefined,'package-progress');progress.append(meter(n,m,item.step),el('span',t('Last reported steps')+' '+item.step));card.append(progress);}
+      if(item.task)card.append(el('p',item.task,'package-task'));
+      if(item.reason)card.append(el('p',item.reason,'warn'));
+      const facts=el('dl',undefined,'package-facts');
+      for(const [label,value] of [['Agent',item.agent],['Depends on',(item.depends_on||[]).join(', ')],['Requirements',(item.requirements||[]).join(', ')],['Verification',item.verify]])if(value)facts.append(el('dt',t(label)),el('dd',value));
+      card.append(facts);grid.append(card);
+    }
+    if(!packages.length)grid.append(el('p',t('No work packages defined yet.'),'dim'));
+    return grid;
   }
 
   function entityFrame(row,kind) {
@@ -1278,23 +1298,27 @@ function mount(document, bootstrap) {
     }
     layout.before(tabs);layout.after(readerPanel,technical);select(0);
     const extra=Object.fromEntries(Object.entries(row).filter(([key])=>!['name','apiary','project','queen','runtime','done','total','implemented','waiting','rejected','progress','status','hive','task','model','step','waiting_reasons'].includes(key)));
-    technical.append(el('h3',t('Technical information')),valueView(extra));
+    const facts=el('dl',undefined,'plan-technical-facts');
+    for(const [label,value] of [['Plan path',row.plan_path],['Queen',row.queen_agent],['Model',row.queen_model],['Tokens in',tokens(row.hive_tin)],['Tokens out',tokens(row.hive_tout)]])if(value)facts.append(el('dt',t(label)),el('dd',value));
+    technical.append(el('h3',t('Technical information')),facts);
+    const raw=el('details',undefined,'plan-raw');raw.append(el('summary',t('Raw metadata')),el('pre',JSON.stringify(extra,null,2)));technical.append(raw);
 
-    entityStats(frame.summary,[['Done',(row.done??0)+' / '+(row.total??0)],['Implemented',row.implemented??0],['Waiting',row.waiting??0],['Rejected',row.rejected??0]]);
+    entityStats(frame.summary,[['Completed packages',(row.done??0)+' / '+(row.total??0)],['Implemented',row.implemented??0],['Waiting',row.waiting??0],['Rejected',row.rejected??0]]);
 
     const progress=planProgress(row);progress.querySelectorAll('details').forEach(node=>node.remove());frame.summary.prepend(progress);
 
     const reader=el('section',undefined,'plan-reader');reader.append(el('h3',t('Plan text')));
 
-    const text=el('div',t('Loading…'),'plan-text');reader.append(text);readerPanel.append(reader);frame.content.append(el('h3',t('Packages')),el('p',t('Loading…'),'package-loading'));
+    const text=el('div',t('Loading…'),'plan-text');reader.append(text);readerPanel.append(reader);frame.content.append(el('h3',t('Work packages')),el('p',t('Loading…'),'package-loading'));
+    if(row.orch)frame.summary.append(el('h3',t('Integration')),orchestrationView(row.orch,row));
 
     void client.request('plan/detail?'+new URLSearchParams(key(row))).then(result=>{
 
       if(!target.contains(reader))return;
 
-      text.replaceChildren(planDocument(result.text||t('No plan text available.')));if(result.text)technical.append(el('h3',t('Source')),el('pre',result.text,'plan-source'));
+      text.replaceChildren(planDocument(result.body??result.text??t('No plan text available.')));if(result.text){const source=el('details',undefined,'plan-raw');source.append(el('summary',t('Plan source')),el('pre',result.text,'plan-source'));technical.append(source);}
 
-      frame.content.querySelector('.package-loading')?.remove();if(result.hive)frame.content.append(valueView(result.hive.packages||result.hive));else frame.content.append(el('p',t('none'),'dim'));
+      frame.content.querySelector('.package-loading')?.remove();frame.content.append(packageCards(result.packages||[]));
 
     }).catch(error=>{if(target.contains(reader)){text.textContent=error.message;frame.content.querySelector('.package-loading')?.remove();}});
 

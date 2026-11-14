@@ -337,8 +337,12 @@ def orch_info(conn, env, hive, now=None) -> dict:
     word = {"running": "running", "red": "red", "done": "done"}.get(done.get(step), "waiting")
     if state["phase"] == "fix" and fix.get("reason") == "step":
         word = "red"
+    waiting = state['phase'] == 'pipeline' and bool(hive.get('blocker')) and not state.get('job')
+    if waiting:
+        chain = [(name, 'waiting' if name == step else status) for name, status in chain]
+        word = 'waiting'
     task = "Integration: %s %s" % (step, word) if step in steps else ("Integration: owner rejection" if fix.get("reason") == "owner" else "Integration: Close")
-    running = state["phase"] == "pipeline" and not hive.get("blocker")
+    running = state["phase"] == "pipeline" and not waiting
     reason = "owner rejection" if fix.get("reason") == "owner" else "%s red" % fix.get("step")
     return {"phase": state["phase"], "step": step, "chain": chain, "n": n, "m": len(steps), "task": task, "status": "running" if running else "waiting",
             "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started")}

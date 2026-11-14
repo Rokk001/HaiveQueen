@@ -81,3 +81,14 @@ class StepLogsTests(RoundCase):
         action_logs.finish(path, 143, 'cancelled', 'command stopped')
         self.assertEqual(self.request()['status'], 'cancelled')
         self.assertEqual(self.request()['reason'], 'command stopped')
+
+    def test_dashboard_chain_reports_waiting_instead_of_running(self):
+        from haivequeen import dashboard_data
+        self.state()
+        hive = {'project':'testproj', 'plan_path':REL, 'blocker':'waiting for build cores'}
+        info = dashboard_data.orch_info(self.conn, None, hive)
+        self.assertEqual(dict(info['chain'])['Build'], 'waiting')
+        self.assertEqual(info['status'], 'waiting')
+        self.state(job={'step':'Build'})
+        info = dashboard_data.orch_info(self.conn, None, hive)
+        self.assertEqual(dict(info['chain'])['Build'], 'running')
