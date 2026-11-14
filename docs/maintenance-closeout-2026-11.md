@@ -388,3 +388,9 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Coordinate reload with configuration writers. Restore the previous web configuration after a failed change while preserving unrelated machine settings. Explicitly report any restoration failure instead of claiming success.
 - Publish listener errors in authenticated dashboard state and display each changed error once in the browser. Polling and the existing reachable interface continue; successful later reloads clear the error.
 - Three regressions failed before the change. Twenty-three focused Python tests and browser client/notification tests pass, covering occupied ports, invalid addresses, missing TLS files, successful changes, existing listener security and service lifecycle behavior. Only isolated test listeners were started.
+
+## A-32: Keep tray status probes off the window thread
+
+- Refresh status in one background worker at a time; the Windows message loop only reads cached snapshots. Slow web status or database access no longer blocks menu handling.
+- Mark unavailable, failed or aged status as outdated and disable state-dependent actions until fresh data arrives. Closing the tray does not wait for an outstanding probe; late results are discarded.
+- Three regression tests failed before implementation. Twelve focused tray tests pass, covering slow probes, bounded worker count, stale status, recovery, late results, existing actions and icon loading. The installed tray and running application processes were not touched.

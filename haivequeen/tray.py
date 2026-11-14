@@ -2,6 +2,7 @@
 import os
 import subprocess
 import threading
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -9,14 +10,75 @@ from . import config, db, force_stop, loop, web_service
 from . import platform as osplat
 
 
-def menu(state, web_running, work_running=False):
-    return [(1, 'Open web interface', True),
+def menu(state, web_running, work_running=False, stale=False):
+    entries = [(1, 'Open web interface', True),
             (2, 'Start', state == 'Stopped'),
             (3, 'Stop gracefully', state == 'Running'),
             (4, 'Force stop', state != 'Stopped' or work_running),
             (5, 'Start', not web_running),
             (6, 'Stop', web_running),
             (7, 'Restart', web_running)]
+    return [(number, label, enabled and (not stale or number == 1)) for number, label, enabled in entries]
+
+
+def read_status():
+    current = state()
+    status = web_service.control('status')
+    return {'state': current, 'web': bool(status and status.get('running')),
+            'work': current == 'Stopped' and work_running()}
+
+
+class StatusCache:
+    """At most one I/O probe; the window thread only reads short locked snapshots."""
+    def __init__(self, probe=read_status, clock=time.monotonic):
+        self.probe, self.clock = probe, clock
+        self.lock = threading.Lock()
+        self.value = {'state': 'Unknown', 'web': False, 'work': False}
+        self.updated = None
+        self.failed = False
+        self.refreshing = False
+        self.closed = False
+
+    def snapshot(self):
+        with self.lock:
+            return {**self.value, 'refreshing': self.refreshing,
+                    'stale': self.failed or self.updated is None or self.clock() - self.updated > 6}
+
+    def request(self):
+        with self.lock:
+            if self.closed or self.refreshing:
+                return
+            self.refreshing = True
+
+        def run():
+            try:
+                value = self.probe()
+                with self.lock:
+                    if not self.closed:
+                        self.value = value
+                        self.updated = self.clock()
+                        self.failed = False
+            except Exception:
+                with self.lock:
+                    self.failed = True
+            finally:
+                with self.lock:
+                    self.refreshing = False
+
+        try:
+            threading.Thread(target=run, daemon=True).start()
+        except RuntimeError:
+            with self.lock:
+                self.refreshing = False
+                self.failed = True
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+
+
+def status_tip(current):
+    return 'HaiveQueen - ' + current['state'] + (' (status outdated)' if current['stale'] else '')
 
 
 def work_running():
@@ -120,7 +182,8 @@ def main():
     user.DispatchMessageW.argtypes = [ctypes.POINTER(w.MSG)]
     user.DefWindowProcW.restype = LRESULT
     user.TrackPopupMenu.restype = w.UINT
-    current = {'state': '', 'web': False, 'work': False}
+    cache = StatusCache()
+    current = cache.snapshot()
     icon = NID()
     icon.size = ctypes.sizeof(NID)
     icon.id = 1
@@ -130,16 +193,11 @@ def main():
     user.DestroyIcon.argtypes = [w.HICON]
 
     def refresh(hwnd):
-        try:
-            current['state'] = state()
-            status = web_service.control('status')
-            current['web'] = bool(status and status.get('running'))
-            current['work'] = current['state'] == 'Stopped' and work_running()
-        except (OSError, ValueError, KeyError):
-            return
-        icon.tip = 'HaiveQueen - ' + current['state']
+        current.update(cache.snapshot())
+        cache.request()
+        icon.tip = status_tip(current)
         shell.Shell_NotifyIconW(1, ctypes.byref(icon))
-        if current['state'] == 'Stopped' and not current['web']:
+        if not current['stale'] and current['state'] == 'Stopped' and not current['web']:
             user.PostMessageW(hwnd, 0x10, 0, 0)
 
     @WNDPROC
@@ -149,7 +207,8 @@ def main():
             return 0
         if msg == 0x8001 and lp in (0x205, 0x202):
             popup = user.CreatePopupMenu()
-            entries = menu(current['state'], current['web'], current['work'])
+            current.update(cache.snapshot())
+            entries = menu(current['state'], current['web'], current['work'], current['stale'])
             for index, (number, label, enabled) in enumerate(entries):
                 if index in (1, 4):
                     user.AppendMenuW(popup, 0x800, 0, None)
@@ -167,6 +226,7 @@ def main():
             user.DestroyWindow(hwnd)
             return 0
         if msg == 0x2:
+            cache.close()
             shell.Shell_NotifyIconW(2, ctypes.byref(icon))
             user.PostQuitMessage(0)
             return 0
@@ -178,7 +238,7 @@ def main():
     hwnd = user.CreateWindowExW(0, cls.name, 'HaiveQueen', 0, 0, 0, 0, 0, None, None, instance, None)
     if hwnd:
         icon.window = hwnd
-        icon.tip = 'HaiveQueen - ' + state()
+        icon.tip = 'HaiveQueen - Checking status'
         shell.Shell_NotifyIconW(0, ctypes.byref(icon))
         refresh(hwnd)
         user.SetTimer(hwnd, 1, 2000, None)
@@ -186,6 +246,7 @@ def main():
         while user.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
             user.TranslateMessage(ctypes.byref(message))
             user.DispatchMessageW(ctypes.byref(message))
+    cache.close()
     if icon.icon:
         user.DestroyIcon(icon.icon)
     kernel.CloseHandle(mutex)
