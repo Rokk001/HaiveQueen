@@ -1,5 +1,6 @@
 """Tests of the PATH handling for agent processes: the folder of the `bzz` console script is put in front of PATH (no real models)."""
 import os
+import shutil
 import subprocess
 import stat
 import sys
@@ -166,6 +167,52 @@ class AgentFindsOrchTest(RoundCase):
         found = self.found.read_text(encoding="utf-8").strip()
         self.assertTrue(found and Path(found).parent == self.scripts, "bzz found at %r, expected folder %s" % (found, self.scripts))
         self.assertIn("note", self.mark.read_text(encoding="utf-8"))
+
+    def test_running_agent_keeps_version_bound_bzz_after_pointer_switch(self):
+        """A real runner and provider retain the old CLI after activation changes."""
+        root = self.base / "install"
+        old = root / "versions" / "old"
+        new = root / "versions" / "new"
+        for version in (old, new):
+            shutil.copytree(ROOT / "haivequeen", version / "haivequeen", ignore=shutil.ignore_patterns("__pycache__"))
+        pointer = root / "active-version"
+        pointer.write_text("old", encoding="utf-8")
+        gate = self.base / "gate"
+        marker = self.base / "version-result"
+        script = self.base / "fake_cli.py"
+        script.write_text(
+            'import json, os, pathlib, subprocess, time\n'
+            'gate = pathlib.Path(os.environ["FAKE_MARK"])\n'
+            'pathlib.Path(os.environ["FAKE_FOUND"]).write_text("running")\n'
+            'deadline = time.monotonic() + 45\n'
+            'while not gate.exists() and time.monotonic() < deadline: time.sleep(.05)\n'
+            'cli = os.environ.get("BZZ_AGENT_CLI", "")\n'
+            'result = subprocess.run("bzz --help", shell=True, capture_output=True)\n'
+            'pathlib.Path(os.environ["VERSION_RESULT"]).write_text(cli + "\\n" + str(result.returncode))\n'
+            'print(json.dumps({"type":"result", "is_error":False, "result":"Done."}))\n', encoding="utf-8")
+        os.environ["FAKE_MARK"] = str(gate)
+        os.environ["VERSION_RESULT"] = str(marker)
+        self.addCleanup(os.environ.pop, "VERSION_RESULT", None)
+        prompt = self.base / "prompt.md"
+        prompt.write_text("TASK\nTest\n", encoding="utf-8")
+        runtime.upsert_agent(self.conn, "testproj", "A-1", {"status": "starting", "class": "medium", "person": "Test", "color": "4FA8FF"})
+        spec = {"name": "A-1", "provider": "claude", "protocol": "claude", "plan": REL,
+                "package": "P1", "phase": "work", "cwd": str(self.repo), "prompt_file": str(prompt)}
+        self.env().run_dir("A-1").mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(loop, "TOOLS_DIR", old):
+            loop.launch_headless(self.env(), spec)
+            deadline = time.monotonic() + 45
+            while not self.found.exists() and time.monotonic() < deadline:
+                time.sleep(.1)
+            self.assertTrue(self.found.exists(), "provider did not start")
+            pointer.write_text("new", encoding="utf-8")
+            gate.touch()
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(.1)
+        self.assertTrue(marker.exists(), "provider did not continue after switch")
+        cli, code = marker.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(Path(cli), old / "haivequeen" / "cli.py")
+        self.assertEqual(code, "0")
 
 
 if __name__ == "__main__":
