@@ -120,6 +120,48 @@ class LoopEndTest(RoundCase):
         self.assertEqual(calls[0][-3:], ["start", "--foreground", "--keep-pause"])
         self.assertEqual(calls[0][-4], str(loop.TOOLS_DIR.parent.parent / "launcher.py"))
 
+    def test_live_jobs_survive_switch_and_are_reattached_by_successor(self):
+        import subprocess
+        import sys
+        from haivequeen import db
+        from haivequeen import orchestrator, proctree
+
+        root = self.base / "install"
+        old, new = root / "versions" / "old", root / "versions" / "new"
+        old.mkdir(parents=True)
+        new.mkdir(parents=True)
+        pointer = root / "active-version"
+        pointer.write_text("old", encoding="utf-8")
+        jobs = [subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3600)"]) for _ in range(2)]
+        try:
+            for name, phase, job in zip(("Queen", "Agent"), ("queen", "bee"), jobs):
+                db.add_agent(self.conn, "testproj", name=name, phase=phase, status="running", pid=job.pid)
+            seen = []
+            def old_round(*args, **kwargs):
+                self.assertTrue(all(job.poll() is None for job in jobs))
+                pointer.write_text("new", encoding="utf-8")
+            def new_round(*args, **kwargs):
+                seen.extend(self.conn.execute("SELECT name, status, pid FROM agents WHERE project='testproj' ORDER BY name").fetchall())
+                self.assertTrue(all(job.poll() is None for job in jobs))
+            with patch.object(proctree, "sweep"), patch.object(loop, "daily_export"), \
+                    patch.object(loop, "spawn_detached") as spawn, patch.object(loop, "TOOLS_DIR", old), \
+                    patch.object(loop, "run_round", side_effect=old_round), \
+                    patch.object(loop, "active_count", side_effect=AssertionError("handover waited for jobs")):
+                loop.run_loop(self.conn, self.machine, rounds=1)
+            self.assertEqual(spawn.call_count, 1)
+            self.assertFalse(loop.lock_file().exists())
+            with patch.object(proctree, "sweep"), patch.object(loop, "daily_export"), \
+                    patch.object(loop, "TOOLS_DIR", new), patch.object(loop, "run_round", side_effect=new_round), \
+                    patch.object(loop, "active_count", return_value=0), patch.object(orchestrator, "running_jobs", return_value=False):
+                loop.run_loop(self.conn, self.machine, rounds=1)
+            self.assertEqual([(r[0], r[1]) for r in seen], [("Agent", "running"), ("Queen", "running")])
+            self.assertEqual({r[2] for r in seen}, {job.pid for job in jobs})
+        finally:
+            for job in jobs:
+                job.terminate()
+            for job in jobs:
+                job.wait(timeout=10)
+
     def test_active_pointer_selects_when_old_loop_yields(self):
         from tempfile import TemporaryDirectory
         from pathlib import Path
