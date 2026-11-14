@@ -63,11 +63,11 @@ window.addEventListener('load', async () => {
 
       assert(document.body.textContent.includes('LÄUFT'),'Orchestrator state was not translated');
 
-      assert([...document.querySelectorAll('th')].some(node=>node.textContent==='LAUFZEIT'),'Runtime heading was not translated');
+      assert([...document.querySelectorAll('th,.hive-tree-heading span')].some(node=>node.textContent==='LAUFZEIT'),'Runtime heading was not translated');
 
-      assert([...document.querySelectorAll('td')].some(node=>node.textContent==='läuft'),'Agent state was not translated');
+      assert([...document.querySelectorAll('td,[data-column]')].some(node=>node.textContent==='läuft'),'Agent state was not translated');
 
-      assert([...document.querySelectorAll('td')].some(node=>node.textContent==='running'),'A user model name was translated');
+      assert([...document.querySelectorAll('td,[data-column]')].some(node=>node.textContent==='running'),'A user model name was translated');
 
       await click('Einstellungen');
 
@@ -89,7 +89,7 @@ window.addEventListener('load', async () => {
 
     }
 
-    await wait(()=>document.querySelector('table'));
+    await wait(()=>document.querySelector('.hive-tree-row'));
 
     const settingsMenu=document.querySelector('#settings-subnav');
 
@@ -147,15 +147,21 @@ window.addEventListener('load', async () => {
 
     assert(document.querySelector('[data-tab="Questions"] .question-badge')?.textContent==='2','Question badge missing');
 
-    assert(!document.querySelector('[data-panel="Queue"] button'),'Queue questions action remains');
+    assert(document.querySelectorAll('.queue-list li').length===2,'Queue must exclude active and duplicate plans');
+    assert(document.querySelector('.queue-count strong').textContent==='2','Queue count must match visible plans');
+    assert(!document.querySelector('.queue-list').textContent.includes('in_run'),'Internal queue status leaked');
 
     const headings=panel=>[...document.querySelectorAll(`[data-panel="${panel}"] th`)].map(node=>node.textContent).join('|');
 
-    assert(document.querySelector('.hive-group th').textContent==='PLAN','Plan group heading missing');
+    assert(document.querySelector('.hive-tree-project'),'Project root missing');
+    assert(!document.querySelector('.hives-list table'),'Nested tables remain');
 
-    assert([...document.querySelectorAll('.hive-processes th')].slice(0,7).map(n=>n.textContent).join('|')==='PROCESS|MODEL|TASK|CONTEXT|TOKENS|STATUS|RUNTIME','Process columns missing');
+    assert(document.querySelector('.hive-tree-heading').children.length===7,'Shared columns missing');
+    const projectToggle=document.querySelector('.hive-tree-project .hive-tree-toggle');projectToggle.click();
+    assert(document.querySelector('.hive-tree-plan').hidden,'Project collapse must hide descendants');await wait(()=>!document.querySelector('.hive-tree-project .hive-tree-toggle').disabled);document.querySelector('.hive-tree-project .hive-tree-toggle').click();
+    assert(!document.querySelector('.hive-tree-plan').hidden,'Project expand must restore descendants');
 
-    assert(document.querySelector('tr.child-agent .tree-branch'),'Agent hierarchy missing');
+    assert(document.querySelector('.hive-tree-row .child-agent .tree-branch'),'Agent hierarchy missing');
 
     assert(!document.querySelector('#app [data-panel="Projects"]'),'Redundant Projects dashboard panel remains');
 
@@ -179,7 +185,7 @@ window.addEventListener('load', async () => {
 
     assert(document.querySelector('.dashboard-secondary [data-panel="SYSTEM"]'),'Compact system panel missing');
 
-    assert(document.querySelector('td[data-label]'),'Mobile table labels missing');
+    assert(document.querySelector('[data-column][data-label]'),'Mobile table labels missing');
 
     const limits=document.querySelector('.model-limits');
 
@@ -305,9 +311,10 @@ window.addEventListener('load', async () => {
     assert(!document.querySelector('[aria-label="Merge on"]'),'Merge must not have an off switch');
     assert(!document.getElementById('app').textContent.includes('Publish release at integration'),'Legacy release switch remains');
     assert(!field(['compileCheck']).disabled && field(['compileCheck']).required,'Enabled local check must require its command');
-    assert(field(['buildCommand']).disabled,'Disabled build command must be greyed');
+    assert(!field(['buildCommand']),'Disabled build must not show an empty command');
+    assert(document.querySelector('[data-workflow-step=build] .workflow-location').hidden,'Disabled step must be compact');
     way.value='git';way.dispatchEvent(new Event('change'));
-    assert(field(['compileCheck']).disabled,'Provider check command must be greyed');
+    assert(!field(['compileCheck']),'Provider check must not show a local command');
     assert([...document.querySelectorAll('[aria-label="Release location"] button')].every(button=>button.disabled),'Unsupported provider release must be greyed');
     assert(document.querySelector('[aria-label="Way of working"]').value==='git','Unsupported step must not change the choice');
     document.querySelector('[aria-label="Check location"] [data-mode=local]').click();
@@ -355,7 +362,7 @@ window.addEventListener('load', async () => {
 
     await click('Plans');await wait(()=>buttons('Plan').length);
 
-    assert([...document.querySelectorAll('th')].some(node=>node.textContent==='Started'),'Desktop plan Started column missing');
+    assert([...document.querySelectorAll('th,.hive-tree-heading span')].some(node=>node.textContent==='Started'),'Desktop plan Started column missing');
 
     await click('Plan');
 

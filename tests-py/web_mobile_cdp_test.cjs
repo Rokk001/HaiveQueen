@@ -13,7 +13,7 @@ const assert=require('node:assert/strict');
   for(const width of [320,390,400,768,1280]){
    await send('Emulation.setDeviceMetricsOverride',{width,height:843,deviceScaleFactor:1,mobile:width<701});
    await send('Page.navigate',{url:`http://127.0.0.1:${preview}`});await wait(`!!document.querySelector('.model-limit')`);
-   const sizes=await evaluate(`JSON.stringify({width:innerWidth,scroll:document.documentElement.scrollWidth,plans:document.querySelector('[data-panel="Hives"]').getBoundingClientRect().top,limits:document.querySelector('[data-panel="Limits"]').getBoundingClientRect().top,wrap:getComputedStyle(document.querySelector('.dashboard-primary .table-scroll')).maxHeight,card:document.querySelector('.dashboard-primary tbody tr').getBoundingClientRect().height})`);
+   const sizes=await evaluate(`JSON.stringify({width:innerWidth,scroll:document.documentElement.scrollWidth,plans:document.querySelector('[data-panel="Hives"]').getBoundingClientRect().top,limits:document.querySelector('[data-panel="Limits"]').getBoundingClientRect().top,wrap:getComputedStyle(document.querySelector('.hives-list')).maxHeight,card:document.querySelector('.hive-tree-plan').getBoundingClientRect().height})`);
    const metrics=JSON.parse(sizes);assert(metrics.scroll<=width,JSON.stringify(metrics));
    if(width<=700){assert(metrics.plans<metrics.limits);assert.equal(metrics.wrap,'none');assert(metrics.card<320,'Plan card is unnecessarily tall');}
    await evaluate(`document.querySelector('#settings-toggle').click()`);await wait(`!document.querySelector('#settings-subnav').hidden`);
@@ -27,12 +27,12 @@ const assert=require('node:assert/strict');
    assert.equal(await evaluate(`document.querySelectorAll('.workflow-switch input').length`),4);
    assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth`),'Workflow overflow');
    await evaluate(`(()=>{const way=document.querySelector('[aria-label="Way of working"]');way.value='git';way.dispatchEvent(new Event('change'))})()`);
-   assert(await evaluate(`[...document.querySelectorAll('.workflow-field input')].every(input=>input.disabled)`),'Git fields must be disabled');
+   assert(await evaluate(`document.querySelectorAll('.workflow-field input').length===0`),'Git fields must be disabled');
    await evaluate(`document.querySelector('[aria-label="Check location"] [data-mode="local"]').click()`);
    assert.equal(await evaluate(`document.querySelector('[aria-label="Way of working"]').value`),'custom');
    assert(await evaluate(`document.querySelector('.workflow-step[aria-label="Check"] .workflow-field input').required`),'Enabled local command must be required');
    await evaluate(`document.querySelector('[aria-label="Check on"]').click()`);
-   assert(await evaluate(`document.querySelector('.workflow-step[aria-label="Check"] .workflow-field input').disabled`),'Off command must be disabled');
+   assert(await evaluate(`!document.querySelector('.workflow-step[aria-label="Check"] .workflow-field input')`),'Off command must be disabled');
    // Discard test-only edits through the application confirmation.
    await evaluate(`document.querySelector('[data-tab="Releases"]').click()`);
    await wait(`document.querySelector('#confirmation-dialog').open`);

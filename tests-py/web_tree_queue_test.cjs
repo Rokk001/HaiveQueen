@@ -1,0 +1,12 @@
+const assert=require('node:assert/strict');
+const {hiveTree,pendingQueue}=require('../haivequeen/web-client.js');
+const plans=[{apiary:'p',name:'Plan',plan_path:'a.md'}];
+const rows=[{project:'p',plan_path:'a.md',kind:'queen',agent:'q',name:'Q'},{project:'p',plan_path:'a.md',kind:'bee',agent:'a',name:'A'},{project:'p',plan_path:'a.md',kind:'bee',agent:'s',parent_agent:'a',name:'S'},{project:'p',plan_path:'a.md',kind:'bee',name:'–'}];
+const tree=hiveTree(plans,rows,[{name:'p'},{name:'empty'}]);
+assert.deepEqual(tree.map(n=>[n.type,n.depth]),[['project',0],['plan',1],['queen',2],['bee',3],['bee',4],['project',0]]);
+assert.equal(new Set(tree.map(n=>n.key)).size,tree.length);
+assert.equal(tree[4].parent,tree[3].key);
+const queue=pendingQueue({queued:99,items:[{project:'p',plan_path:'a.md',status:'QUEUED'},{project:'p',plan_path:'b.md',status:'in_run'},{project:'p',plan_path:'c.md',status:'DRAFT'},{project:'p',plan_path:'c.md',status:'DRAFT'},{project:'p',plan_path:'d.md',status:'queued'},{project:'p',plan_path:'e.md',status:'ready'}]},plans);
+assert.equal(queue.queued,2);assert.equal(queue.pending,1);assert.equal(queue.drafts,1);
+assert.deepEqual(queue.items.map(i=>i.status),['DRAFT','QUEUED']);
+console.log('Tree hierarchy and pending queue passed');

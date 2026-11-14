@@ -955,15 +955,54 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 
 .hives-panel { min-width:0; }
 .hives-list { overflow:auto; scrollbar-gutter:stable; }
-.hive-group { border:1px solid #293e46; border-radius:5px; margin-bottom:10px; overflow:hidden; }
-.hive-group:last-child { margin-bottom:0; }
-.hive-group > .table-scroll { max-height:none; overflow:visible; }
-.hive-group table { width:100%; table-layout:fixed; }
-.hive-group > .table-scroll:first-child { padding:8px 10px; }
-.hive-process-toggle { border:0; border-top:1px solid #293e46; background:#101c21; width:100%; text-align:left; color:#a4bdc7; padding:8px 12px; }
-.hive-process-toggle:hover { color:var(--gold); }
-.hive-group > .hive-processes { padding:0 10px 8px 24px; background:#081115; border-left:2px solid #394b40; }
-.hive-processes td { overflow-wrap:anywhere; }
-.hive-processes[hidden] { display:none; }
-@media(max-width:1100px) { .hives-list { max-height:none; overflow:visible; } }
-@media(max-width:700px) { .hive-group > .hive-processes { padding-left:12px; }.hive-process-toggle { min-height:44px; }.hive-group table { table-layout:auto; } }
+/* A single aligned list, with hierarchy carried by indentation rather than nested tables. */
+.hives-tree { list-style:none; margin:0; padding:0; }
+.hive-tree-heading,.hive-tree-cells > div > div > div { display:grid; grid-template-columns:minmax(210px,2fr) 75px minmax(160px,1.6fr) 65px 75px minmax(100px,1fr) 75px; gap:12px; align-items:center; }
+.hive-tree-heading { position:sticky; top:0; z-index:1; padding:12px 8px; background:#0d171c; color:#9db2bb; font-size:11px; }
+.hive-tree-row { position:relative; border-bottom:1px solid #26383f; min-width:900px; }
+.hive-tree-row[hidden] { display:none; }
+.hive-tree-cells > div > div > div { padding:10px 8px; min-height:44px; }
+.hive-tree-cells [data-column=name] { padding-left:calc(var(--depth)*18px + 24px); position:relative; min-width:0; }
+.hive-tree-cells [data-column=name]::before { content:''; position:absolute; left:calc(var(--depth)*18px + 8px); top:-10px; height:calc(50% + 10px); width:10px; border-left:1px solid #3b5059; border-bottom:1px solid #3b5059; }
+.hive-tree-cells [data-column] { min-width:0; overflow-wrap:anywhere; }
+.hive-tree-cells .row-name { white-space:normal; }
+.hive-tree-cells .tree-branch { color:#9db2bb; }
+.hive-tree-toggle { position:absolute; left:calc(var(--depth)*18px); top:7px; z-index:1; width:28px; height:30px; min-height:30px; padding:0; border:0; background:transparent; color:#a9bec7; }
+.hive-tree-project { display:flex; align-items:center; gap:16px; padding:14px 12px 14px 32px; background:#102027; }
+.hive-project-name { font-weight:700; }.hive-project-count { font-size:12px; }
+.hive-tree-plan { background:#0c171c; }
+.hive-tree-queen { background:#171e15; }
+.hive-tree-cells .orchestration { flex-wrap:wrap; }
+.workflow-overall { display:flex; align-items:center; gap:16px; padding:8px 0 18px; font-size:13px; }
+.workflow-overall select { width:auto; min-width:200px; }
+.workflow-step.is-off { padding:10px 0; grid-template-columns:76px 80px minmax(0,1fr); }
+.workflow-step.is-off .workflow-command { grid-column:3/-1; }
+.workflow-step [hidden] { display:none; }
+.workflow-location [aria-checked=true] { background:#23343d; color:#e6eff2; box-shadow:inset 0 -2px #91aab7; }
+.workflow-command small { margin-top:0; }
+.workflow-field + small { margin-top:6px; }
+@media(max-width:1100px) {
+ .hives-tree { overflow:auto; max-height:none; }
+}
+@media(max-width:700px) {
+ .hive-tree-heading { display:none; }
+ .hive-tree-row { min-width:0; }
+ .hive-tree-cells > div > div > div { grid-template-columns:1fr 1fr; padding:12px 8px 12px calc(var(--depth)*10px + 12px); gap:8px 12px; }
+ .hive-tree-cells [data-column=name] { grid-column:1/-1; padding-left:20px; }
+ .hive-tree-cells [data-column=name]::before { left:4px; }
+ .hive-tree-toggle { left:calc(var(--depth)*10px); top:9px; }
+ .hive-tree-cells [data-column=task],.hive-tree-cells [data-column=status] { grid-column:1/-1; }
+ .hive-tree-cells [data-column]:not([data-column=name])::before { content:attr(data-label); display:block; color:#95aab4; font-size:10px; margin-bottom:3px; }
+ .workflow-overall { align-items:stretch; flex-direction:column; gap:6px; }
+ .workflow-step.is-off { grid-template-columns:minmax(0,1fr) auto; }
+ .workflow-step.is-off .workflow-command { grid-column:1/-1; }
+}
+
+.hive-tree-plan [data-column=model],.hive-tree-plan [data-column=ctx],.hive-tree-plan [data-column=tokens] { visibility:hidden; }
+@media(max-width:700px) { .hive-tree-plan [data-column=model],.hive-tree-plan [data-column=ctx],.hive-tree-plan [data-column=tokens] { display:none; } }
+
+.hive-tree-heading { min-width:900px; }
+.hive-tree-cells [data-column=name] { display:flex; align-items:center; gap:5px; }
+.hive-tree-cells .row-menu { flex-shrink:0; }
+.hive-tree-cells { font-size:12px; }
+@media(max-width:700px) { .hive-tree-heading { min-width:0; } }

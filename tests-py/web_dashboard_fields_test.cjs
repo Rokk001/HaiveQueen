@@ -17,7 +17,8 @@ for(const label of ['No model','No context value available','No Queen assigned']
 assert(find(rendered,n=>n.tag==='progress').length===1,'Real zero context retains meter');
 assert(find(rendered,n=>n.textContent==='Model A').length===1);
 assert(find(rendered,n=>n.filterType==='project').length===2);
-assert(source.includes("['name','apiary','progress','status','runtime']"),'Hive includes project');
+const flat=table(rows,['name','model'],null,{compact:true,hierarchy:true,tree:true});
+assert.equal(find(flat,n=>['table','thead','tbody','tr','td','th'].includes(n.tag)).length,0,'Tree rows must not contain tables');
 console.log('Dashboard missing values and project column passed');
 
 const hierarchy=table(rows,['name'],null,{compact:true,hierarchy:true});

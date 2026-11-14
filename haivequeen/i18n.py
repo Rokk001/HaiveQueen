@@ -835,3 +835,10 @@ GERMAN.update({
     'Trusted proxy IP addresses (one per line)': 'Vertrauenswuerdige Proxy-IP-Adressen (eine pro Zeile)',
     'Empty: trust local and private network addresses. Enter proxy IP addresses, one per line, to trust only those proxies. Direct HTTP access remains available.': 'Leer: lokalen und privaten Netzwerkadressen vertrauen. Proxy-IP-Adressen zeilenweise eintragen, um nur diesen Proxys zu vertrauen. Direkter HTTP-Zugriff bleibt moeglich.',
 })
+
+GERMAN.update({
+    "Execution mode": "Ausführungsmodus",
+    "Project / Plan / Process": "Projekt / Plan / Prozess",
+    "Progress / Task": "Fortschritt / Aufgabe",
+    "Expand or collapse": "Auf- oder zuklappen",
+})

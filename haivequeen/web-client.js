@@ -23,6 +23,45 @@ function planProcessGroups(plans,rows) {
       summary:{...plan,orch:processes.some(row=>row.kind==='orch')?null:plan.orch}};
   });
 }
+function pendingQueue(data,plans=[]) {
+  const key=row=>JSON.stringify([row.project||row.apiary,(row.plan_path||'').replaceAll('\\','/')]);
+  const active=new Set(plans.map(key)),seen=new Set();
+  const items=(data.items||[]).filter(row=>{
+    const status=String(row.status||'').toUpperCase(),id=key(row);
+    if(!['DRAFT','SENT','QUEUED'].includes(status)||active.has(id)||seen.has(id))return false;
+    seen.add(id);return true;
+  }).map(row=>({...row,status:String(row.status).toUpperCase()}));
+  return {items,queued:items.length,drafts:items.filter(row=>row.status==='DRAFT').length,pending:items.filter(row=>row.status!=='DRAFT').length};
+}
+function hiveTree(plans,rows,projects=[]) {
+  const result=[],groups=planProcessGroups(plans,rows);
+  const names=[...new Set([...projects.map(p=>p.name),...plans.map(p=>p.apiary||p.project)])].filter(Boolean);
+  for(const project of names){
+    const projectKey=JSON.stringify(['project',project]);
+    result.push({key:projectKey,parent:null,type:'project',depth:0,row:{name:project,apiary:project}});
+    for(const group of groups.filter(g=>(g.plan.apiary||g.plan.project)===project)){
+      const planKey=JSON.stringify(['plan',project,group.plan.plan_path]);
+      result.push({key:planKey,parent:projectKey,type:'plan',depth:1,row:group.summary});
+      const processes=group.processes,keys=new Map(processes.map((r,i)=>[r,JSON.stringify(['process',project,group.plan.plan_path,r.agent||r.stop_agent||r.name,r.kind,r.task||''])]));
+      const parents=new Map();
+      for(const row of processes){
+        const explicit=row.parent_agent||row.parent;
+        const parent=explicit?processes.find(p=>p!==row&&(p.agent===explicit||p.name===explicit)):
+          !['queen','orch'].includes(row.kind)?processes.find(p=>p.kind===(row.kind==='fix'?'orch':'queen')):null;
+        parents.set(row,parent);
+      }
+      const visited=new Set();
+      function append(row,parent,depth){
+        if(visited.has(row))return;visited.add(row);
+        result.push({key:keys.get(row),parent,type:row.kind,depth,row});
+        for(const child of processes.filter(p=>parents.get(p)===row))append(child,keys.get(row),depth+1);
+      }
+      for(const row of processes.filter(p=>!parents.get(p)))append(row,planKey,2);
+      for(const row of processes)if(!visited.has(row))append(row,planKey,2);
+    }
+  }
+  return result;
+}
 function dashboardPlanHeight({available,planChrome,gap,header,rows,hiveHeight}) {
   const minimum=header+rows.slice(0,3).reduce((sum,height)=>sum+height,0)+1;
   const full=header+rows.reduce((sum,height)=>sum+height,0)+1;
@@ -508,13 +547,15 @@ function mount(document, bootstrap) {
     function missingValue(label){
       const icon=el('span',undefined,'missing-value-icon');icon.title=t(label);icon.setAttribute('role','img');icon.setAttribute('aria-label',t(label));return icon;
     }
-    const wrap=el('div',undefined,'table-scroll'), table=el('table'), head=el('tr'), body=el('tbody');
+    const wrap=el('div',undefined,options.tree?'hive-tree-cells':'table-scroll'), table=el(options.tree?'div':'table'), head=el('tr'), body=el(options.tree?'div':'tbody');
     columns=columns || [...new Set(rows.flatMap(row=>Object.keys(row)))];
     for(const key of columns)head.append(el('th',t(options.labels?.[key]||pretty(key))));
     if(extra && !options.compact)head.append(el('th',t('Actions')));
-    const thead=el('thead');thead.append(head);table.append(thead,body);
-    for(const [index,row] of rows.entries()){const tr=el('tr');tr.dataset.kind=row.kind||'';for(const key of columns){const td=el('td');td.dataset.column=key;td.dataset.label=t(options.labels?.[key]||pretty(key));
-      if(key==='number')td.append(el('span',index+1));
+    const thead=el('thead');thead.append(head);if(!options.tree)table.append(thead);table.append(body);
+    for(const [index,row] of rows.entries()){const tr=el(options.tree?'div':'tr');tr.dataset.kind=row.kind||'';for(const key of columns){const td=el(options.tree?'div':'td');td.dataset.column=key;td.dataset.label=t(options.labels?.[key]||pretty(key));
+      if(options.tree && !options.hierarchy && ['model','ctx','tokens'].includes(key)){}
+      else if(options.tree && key==='task' && !options.hierarchy)td.append(planProgress(row));
+      else if(key==='number')td.append(el('span',index+1));
       else if(options.hierarchy && isPackagePlaceholder(row) && key==='name'){
         const label=filterLink(t('Package'),'plan',row);label.prepend(el('span','└ ','tree-branch'));
         td.append(label);tr.classList.add('child-agent');
@@ -532,7 +573,7 @@ function mount(document, bootstrap) {
             if(row.kind==='orch'){const icon=el('span',undefined,'system-icon icon-icon_system');icon.setAttribute('aria-hidden','true');role.append(icon);}
             if(row.kind==='queen'){const crown=el('span',undefined,'queen-icon');crown.setAttribute('aria-hidden','true');role.prepend(crown);}label.prepend(role);
           }
-          else if(parent || row.kind==='fix'){label.prepend(el('span',row.kind==='fix'?'└ Fix Agent · ':'└ Agent · ','tree-branch'));tr.classList.add('child-agent');}
+          else if(options.tree || parent || row.kind==='fix'){label.prepend(el('span',row.kind==='fix'?'Fix Agent · ':row.embedded?'Subagent · ':'Agent · ','tree-branch'));tr.classList.add('child-agent');}
         }
         td.append(label,menu);
       }
@@ -639,7 +680,7 @@ function mount(document, bootstrap) {
   $('controls').addEventListener('keydown',event=>{if(event.key==='Escape'){const menu=$('controls').querySelector('details');if(menu){menu.open=false;menu.querySelector('summary').focus();}}});
   function render() {
     const sameTab=view.dataset.tab===tab,pageX=window.scrollX,pageY=window.scrollY;
-    const positions=sameTab?[...view.querySelectorAll('.table-scroll,.log,details')].map(node=>({left:node.scrollLeft,top:node.scrollTop,open:node.open})):[];
+    const positions=sameTab?[...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].map(node=>({left:node.scrollLeft,top:node.scrollTop,open:node.open})):[];
     const focused=document.activeElement,selection=focused?.selectionStart,editingFilter=sameTab && focused?.placeholder===t('Filter');
     if(sameTab)view.style.minHeight=view.getBoundingClientRect().height+'px';
     view.dataset.tab=tab;view.replaceChildren();
@@ -650,9 +691,9 @@ function mount(document, bootstrap) {
     if(tab==='Questions')renderQuestions();
     if(tab==='Releases')renderReleases();
     if(['General','Providers','Projects'].includes(tab))renderEditor();
-    [...view.querySelectorAll('.table-scroll,.log,details')].forEach((node,index)=>{if(positions[index] && node.tagName==='DETAILS')node.open=positions[index].open;});
+    [...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].forEach((node,index)=>{if(positions[index] && node.tagName==='DETAILS')node.open=positions[index].open;});
     fitDashboard();
-    [...view.querySelectorAll('.table-scroll,.log,details')].forEach((node,index)=>{const position=positions[index];if(position){node.scrollLeft=position.left;if(!node.classList.contains('log')||!logFollow)node.scrollTop=position.top;}});
+    [...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].forEach((node,index)=>{const position=positions[index];if(position){node.scrollLeft=position.left;if(!node.classList.contains('log')||!logFollow)node.scrollTop=position.top;}});
     view.style.minHeight='';
     if(sameTab)window.scrollTo({left:pageX,top:pageY,behavior:'instant'});
     if(editingFilter){const input=view.querySelector('input[placeholder]');input?.focus({preventScroll:true});input?.setSelectionRange(selection,selection);}
@@ -717,25 +758,32 @@ function mount(document, bootstrap) {
     }
     view.append(tiles);
     const active=section('Hives');active.classList.add('hives-panel');
-    const groups=planProcessGroups(filtered.hives,filtered.bees);
-    const list=el('div',undefined,'hives-list');active.append(list);
-    for(const group of groups){
-      const card=el('article',undefined,'hive-group');card.dataset.hive=group.key;
-      card.append(table([group.summary],['name','apiary','progress','status','runtime'],null,{compact:true,labels:{name:'PLAN'}}));
-      if(group.processes.length){
-        const counts=hiveCounts(group.processes),hq=group.processes.filter(row=>row.kind==='orch').length;
-        const caption=[hq?`${hq} HQ`:'',counts.queens?`${counts.queens} ${t('QUEENS')}`:'',counts.agents?`${counts.agents} ${t('Agents')}`:''].filter(Boolean).join(' / ');
-        const toggle=button('',()=>{});toggle.className='hive-process-toggle';
-        const processes=table(group.processes,['name','model','task','ctx','tokens','status','runtime'],null,{compact:true,hierarchy:true,labels:{name:'PROCESS',tokens:'TOKENS'}});
-        processes.classList.add('hive-processes');processes.id='hive-processes-'+list.children.length;
-        toggle.setAttribute('aria-controls',processes.id);
-        const update=()=>{const open=!collapsedHives.has(group.key);processes.hidden=!open;toggle.setAttribute('aria-expanded',String(open));toggle.textContent=(open?'\u25be ':'\u25b8 ')+caption;};
-        toggle.onclick=()=>{if(collapsedHives.has(group.key))collapsedHives.delete(group.key);else collapsedHives.add(group.key);update();};
-        update();card.append(toggle,processes);
+    const tree=hiveTree(filtered.hives,filtered.bees,dashboardFilter?[]:state.projects||[]);
+    const list=el('ul',undefined,'hives-list hives-tree');active.append(list);
+    const header=el('li',undefined,'hive-tree-heading');
+    for(const title of ['Project / Plan / Process','MODEL','Progress / Task','CONTEXT','TOKENS','STATUS','RUNTIME'])header.append(el('span',t(title)));
+    list.append(header);
+    const nodes=new Map(tree.map(node=>[node.key,node]));
+    function hidden(node){const parent=nodes.get(node.parent);return !!parent&&(collapsedHives.has(parent.key)||hidden(parent));}
+    const rendered=[];
+    function updateTree(){for(const {node,line,toggle} of rendered){line.hidden=hidden(node);if(toggle){const open=!collapsedHives.has(node.key);toggle.textContent=open?'▾':'▸';toggle.setAttribute('aria-expanded',String(open));}}}
+    for(const node of tree){
+      const line=el('li',undefined,'hive-tree-row hive-tree-'+node.type);line.style.setProperty('--depth',node.depth);line.dataset.key=node.key;
+      const hasChildren=tree.some(child=>child.parent===node.key);
+      let toggle;
+      if(node.type==='project'){
+        const name=el('div',undefined,'hive-project-name');name.append(filterLink(node.row.name,'project',node.row));
+        const info=button('',()=>{detail(node.row.name,state.projects?.find(p=>p.name===node.row.name)||node.row);const actions=el('div',undefined,'actions');actions.append(button('Settings',()=>{$('detail').close();selectTab('Projects',node.row.name);}));$('detail-body').prepend(actions);});info.className='row-menu';info.title=t('Open details');info.setAttribute('aria-label',t('Open details')+' · '+t('Project')+' · '+node.row.name);name.append(info);line.append(name);
+        line.append(el('span',`${tree.filter(child=>child.parent===node.key).length} ${t('Plans')}`,'dim hive-project-count'));
+      }else{
+        const cells=table([node.row],['name','model','task','ctx','tokens','status','runtime'],null,{compact:true,hierarchy:node.type!=='plan',tree:true,labels:{task:node.type==='plan'?'PROGRESS':'TASK',tokens:'TOKENS'}});
+        line.append(cells);
       }
-      list.append(card);
+      if(hasChildren){toggle=button('',()=>{if(collapsedHives.has(node.key))collapsedHives.delete(node.key);else collapsedHives.add(node.key);updateTree();});toggle.className='hive-tree-toggle';toggle.setAttribute('aria-label',t('Expand or collapse')+' · '+node.row.name);line.prepend(toggle);}
+      rendered.push({node,line,toggle});list.append(line);
     }
-    if(!groups.length)list.append(el('p',t('No plans to display.'),'dim'));
+    updateTree();
+    if(!tree.length)list.append(el('li',t('No plans to display.'),'dim'));
     const grid=el('div',undefined,'grid');view.append(grid);
     section('Limits',grid).append(limitsView(state.limits || []));
     const system=section('SYSTEM',grid);
@@ -744,7 +792,7 @@ function mount(document, bootstrap) {
       const meter=el('progress');meter.max=100;meter.value=Number(value)||0;meter.setAttribute('aria-label',label);
       const labelNode=el('span',label);const icon=el('span',undefined,'system-icon icon-icon_'+label.toLowerCase());icon.setAttribute('aria-hidden','true');labelNode.prepend(icon);meter.className=value>=86?'bad':value>=70?'warn':'ok';line.append(labelNode,meter,el('span',value==null?'–':Math.round(value)+'%'));system.append(line);
     }
-    const queue=section('Queue',grid),queueData=state.queue||{};
+    const queue=section('Queue',grid),queueData=pendingQueue(state.queue||{},state.hives||[]);
     const queueCount=el('p',undefined,'queue-count');queueCount.append(el('strong',String(queueData.queued??0)),el('span',`${queueData.pending??0} ${t('Queued')} \u00b7 ${queueData.drafts??0} ${t('Drafts')}`));queue.append(queueCount);
     const queueList=el('ol',undefined,'queue-list');
     for(const item of queueData.items||[]){
@@ -1195,9 +1243,10 @@ function mount(document, bootstrap) {
     if(!supported)group.append(el('p',t('Git provider is not supported for this remote. Only Local is available.')));
     const select=el('select');select.setAttribute('aria-label',t('Way of working'));
     for(const [value,label] of [['local','Local'],['git','Git provider'],['custom','Custom']]){const option=el('option',t(label));option.value=value;if(value!=='local'&&!supported)option.disabled=true;select.append(option);}
-    select.value=data.wayOfWorking;select.onchange=()=>{data.wayOfWorking=select.value;if(select.value!=='custom')for(const [step] of steps)data[step+'Mode']=select.value;changed();render();};group.append(select);
+    select.value=data.wayOfWorking;select.onchange=()=>{data.wayOfWorking=select.value;if(select.value!=='custom')for(const [step] of steps)data[step+'Mode']=select.value;changed();render();};const overall=el('label',undefined,'workflow-overall');overall.append(el('span',t('Execution mode')),select);group.append(overall);
     for(const [step,label,field,fieldLabel] of steps){
-      const row=el('div',undefined,'workflow-step');row.dataset.workflowStep=step;row.setAttribute('role','group');row.setAttribute('aria-label',t(label));row.append(el('h3',t(label)));
+      const enabled=!field||!!data[step+'Enabled'];
+      const row=el('div',undefined,'workflow-step'+(enabled?'':' is-off'));row.dataset.workflowStep=step;row.setAttribute('role','group');row.setAttribute('aria-label',t(label));row.append(el('h3',t(label)));
       if(field){const switchLabel=el('label',undefined,'workflow-switch'),toggle=el('input');toggle.type='checkbox';toggle.setAttribute('role','switch');toggle.checked=!!data[step+'Enabled'];toggle.setAttribute('aria-label',t(label+' on'));toggle.onchange=()=>{data[step+'Enabled']=toggle.checked;changed();render();};switchLabel.append(toggle,el('span',t(toggle.checked?'On':'Off')));row.append(switchLabel);}
       else row.append(el('span',t('Always on'),'dim'));
       const unavailable=supported&&data[step+'Mode']==='git'&&!capabilities.supported[step];
@@ -1210,9 +1259,9 @@ function mount(document, bootstrap) {
         choice.onkeydown=event=>{if(choice.disabled)return;let next;if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))next=value==='local'?'git':'local';else if(event.key==='Home')next='local';else if(event.key==='End')next='git';else return;event.preventDefault();choose(next,true);};
         mode.append(choice);
       }
-      row.append(mode);
+      mode.hidden=!enabled;row.append(mode);
       const content=el('div',undefined,'workflow-command');row.append(content);
-      if(field){const inputLabel=el('label',undefined,'workflow-field'),input=el('input');input.value=data[field]||'';input.dataset.path=JSON.stringify([field]);input.disabled=!data[step+'Enabled']||data[step+'Mode']==='git';input.required=!input.disabled;input.oninput=()=>{data[field]=input.value;changed();};inputLabel.append(el('span',t(fieldLabel)),input);content.append(inputLabel);}
+      if(field && enabled && data[step+'Mode']!=='git'){const inputLabel=el('label',undefined,'workflow-field'),input=el('input');input.value=data[field]||'';input.dataset.path=JSON.stringify([field]);input.disabled=!data[step+'Enabled']||data[step+'Mode']==='git';input.required=!input.disabled;input.oninput=()=>{data[field]=input.value;changed();};inputLabel.append(el('span',t(fieldLabel)),input);content.append(inputLabel);}
       const explanation=unavailable?'This provider does not support this step; it will be skipped.':field&&!data[step+'Enabled']?'Step is off; it will be skipped.':data[step+'Mode']==='git'?'Executed by the Git provider.':'Executed locally by HaiveQueen.';
       content.append(el('small',t(explanation),'dim'));
       group.append(row);
@@ -1372,5 +1421,5 @@ function mount(document, bootstrap) {
   render();void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

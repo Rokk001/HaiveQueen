@@ -48,7 +48,7 @@ class BrowserTests(unittest.TestCase):
         node = shutil.which('node')
         if not node:
             self.skipTest('Node is required')
-        for name in ('web_dashboard_fields_test.cjs', 'web_hives_groups_test.cjs', 'web_workflow_controls_test.cjs'):
+        for name in ('web_dashboard_fields_test.cjs', 'web_hives_groups_test.cjs', 'web_tree_queue_test.cjs', 'web_workflow_controls_test.cjs'):
             result = subprocess.run([node, str(Path(__file__).with_name(name))],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -158,7 +158,12 @@ class BrowserTests(unittest.TestCase):
                  'projects':[{'name':'demo'}, {'name':'local-only'}], 'tiles':{'bees':1}, 'hives':[],
                  'bees':[{'name':'mock-agent','agent':'mock-agent','plan_path':'mock.md','project':'demo','apiary':'demo','task':'P1','status':'running','model':'running'}]}
         state['hives'] = [{'name':'Mock','apiary':'demo','plan_path':'mock.md','queen':'Test Queen','queen_agent':'queen-test','progress':50,'done':1,'total':2,'status':'Running'}]
-        state['queue'] = {'open': 2, 'queued': 0}
+        state['queue'] = {'open': 2, 'queued': 99, 'items': [
+            {'project':'demo','plan_path':'mock.md','status':'QUEUED'},
+            {'project':'demo','plan_path':'old.md','status':'in_run'},
+            {'project':'demo','plan_path':'next.md','title':'Next plan','status':'QUEUED'},
+            {'project':'demo','plan_path':'draft.md','title':'Draft plan','status':'DRAFT'},
+            {'project':'demo','plan_path':'draft.md','title':'Draft plan','status':'DRAFT'}]}
         state['bees'][0].update(kind='bee', plan_path='mock.md')
         state['bees'].insert(0, {'kind':'queen','name':'Test Queen','apiary':'demo','project':'demo','plan_path':'mock.md','hive':'Mock','task':'Queen'})
         state['limits'] = [{'name': name, 'model': 'test-model', 'reserve': {'text': '+10 %', 'level': 'ok'},
