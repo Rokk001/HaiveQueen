@@ -13,4 +13,6 @@
 
 ## Integration
 
+- For owner-authorized maintenance pushes to main, publish one version tag per push containing new commits, starting from v0.2.0 and incrementing the patch number (v0.2.1, v0.2.2, ...). Multiple commits in one push share one tag. Never move or overwrite an existing version tag.
+
 - A Queen never integrates and never pushes. After an accepted `bzz ready` the Orchestrator merges the integration branch, runs the compile check, builds, pushes and deploys.

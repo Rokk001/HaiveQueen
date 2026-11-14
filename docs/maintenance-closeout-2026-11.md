@@ -276,3 +276,16 @@ completion of the broader autonomous technical diagnosis request.
 - Scope every query to the requested project, plan and package. Reads do not initialize attempt tables or alter counters. No additional evidence file or dependency is introduced.
 - Regression coverage checks scoping, pagination, full detail retrieval, bounded previews, invalid input and absence of database writes. The three initial tests fail without the implementation.
 - This is evidence retrieval for the pending package diagnosis workflow, not completion of automatic diagnosis or retry authorization.
+
+### Package diagnosis before costlier retries
+
+- Repeated package failures now queue a diagnosis at the configured diagnosis class instead of escalating automatically to a stronger class or filing a generic owner question.
+- A validated technical diagnosis grants one retry tied to the current checkout commit, attempt history and active decisions. A class change needs a concrete reason. The grant is consumed only after a successful start; counters and historical approvals remain intact.
+- Diagnosis uses the existing role and existing attempt/decision records, with bounded previews and references. It runs in the package checkout and never changes project files by instruction.
+- Concrete product, permission or external questions block their package and dependent work. Independent packages remain available; Queens are not repeatedly started when all remaining packages await review. Answered questions trigger a fresh review of the decision.
+- Regression cases cover invalid/stale reports, single-use starts, class selection, historical approvals, dependencies, unresolved questions, successful completion and cancelled plans. Fixtures start no live agents.
+- Broader semantic coordination of differently worded integration failures is separate from this package retry change.
+
+### Maintenance push tags
+
+Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pushes with new commits increment the patch tag once per push, not once per commit. Existing tags are never rewritten.

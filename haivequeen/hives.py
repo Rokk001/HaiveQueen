@@ -970,7 +970,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
     from datetime import datetime, timedelta
     from pathlib import Path
     from . import loop, routine, runstate, scheduler as sch, usage
-    from . import faults, inbox, views
+    from . import faults, inbox, views, package_diagnosis
     free_ram = free_ram or loop.ram_gb
     result = {'skipped': None, 'projects': {}}
     from . import offline
@@ -1031,6 +1031,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
             except Exception as exc:
                 env.log('ended subagent Agents not closed: %s' % exc)
             technical_start_faults(conn, env.name)
+            package_diagnosis.advance(env, int(free_ram() * 1024), alive=alive)
             runtime.archive_agents(conn, env.name, 12)
     all_active = runtime.list_agents(conn, None, 'active')
     is_alive = alive or osplat.process_alive
@@ -1161,6 +1162,11 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                         questions = [q for q in runtime.list_questions(conn, env.name, status='open', plan=plan['path']) if not str(q['item']).upper().startswith('STALL-')]   # stop-rule questions never block a Hive
                         if last and interrupt.kind_of(last) == interrupt.VANISHED:
                             conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, plan['path']))
+                        elif (package_diagnosis.reviews(env, plan['path']) and
+                              all(q['item'] in package_diagnosis.reviews(env, plan['path']) for q in questions)):
+                            # Package reviews own their questions. Do not turn an ended Queen
+                            # into a second generic owner escalation or block independent work.
+                            conn.execute("UPDATE hives SET state='waiting' WHERE project=? AND plan_path=?", (env.name, plan['path']))
                         elif last and last.get('status') == 'done' and 'WAITING_FOR_OWNER' in final_report and questions:
                             wait_for_answers(conn, env.name, plan['path'], [q['id'] for q in questions])
                         elif last and not interrupt.is_interrupted(last) and ended_without_work(env, last):   # open owner questions are the reason; her final text does not matter, only without any a question is filed
@@ -1187,6 +1193,9 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     hive = get(conn, env.name, plan['path'])
                 if hive and hive['state'] in ('queenless', 'resting', 'answer', 'owner_check', 'handoff'):
                     not_started(env, plan['path'], 'Plan state "%s"%s' % (hive['state'], ' (questions %s)' % ', '.join(str(i) for i in json.loads(hive['questions_json'] or '[]')) if hive['state'] == 'answer' else ''))
+                    continue
+                if package_diagnosis.waiting(env, plan['path']):
+                    not_started(env, plan['path'], 'remaining packages await diagnosis or its required answer')
                     continue
                 qs = runtime.list_packages(conn, env.name, plan['path'])
                 waiting = min((sch.waiting_since(env, plan['path'], p['id']) for p in qs), default='')

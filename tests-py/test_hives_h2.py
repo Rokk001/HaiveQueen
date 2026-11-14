@@ -222,6 +222,20 @@ class QueenIntegrationTests(RoundCase):
         kwargs.setdefault('worktree', str(self.base / 'plan-worktree'))
         return super().plan(*args, **kwargs)
 
+    def authorize_retry(self, env, current='medium', selected='heavy'):
+        from haivequeen import package_diagnosis as review
+        from bzztest import REL
+        bees.prepare_agent_worktree(env, REL, 'P1')
+        scope = review.scope(self.conn, 'testproj', REL, 'P1', review.current_commit(env, REL, 'P1'))
+        report = {'kind': 'technical', **{k: scope[k] for k in ('commit', 'failure_log')},
+                  'reviewed_decisions': [], 'evidence': ['caller.py:10 incorrect argument'],
+                  'analysis': 'The wrong caller was repaired.', 'next_action': 'Fix the actual caller.',
+                  'why_new': 'The actual failing caller is now identified.', 'repair_class': selected,
+                  'class_reason': 'The repair spans multiple interfaces.'}
+        path = self.base / 'diagnosis.json'
+        path.write_text(json.dumps(report), encoding='utf-8')
+        review.accept(self.conn, 'testproj', REL, 'P1', path, scope, current, ['light', 'medium', 'heavy'])
+
     # Configure a separate local provider for process Bee tests.
     def add_local_provider(self):
         from bzztest import provider
@@ -339,8 +353,8 @@ class QueenIntegrationTests(RoundCase):
         self.assertIn('do first', prompt)
         self.assertNotIn('CLAUDE.md', prompt)
 
-    # Check highest class failures open one owner question.
-    def test_highest_class_failures_open_one_owner_question(self):
+    # Exhaustion requires diagnosis, not a generic owner decision.
+    def test_highest_class_failures_queue_one_diagnosis(self):
         from haivequeen import hives
         from bzztest import REL
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First', 'class': 'heavy'}])
@@ -348,7 +362,9 @@ class QueenIntegrationTests(RoundCase):
         for i in range(5):
             bees.report_attempt(self.env(), REL, 'P1', 'heavy', 'failed', 'attempt-%s' % i, ['open'])
         questions = runtime.list_questions(self.conn, 'testproj', status='open', plan=REL, item='P1')
-        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions, [])
+        from haivequeen import package_diagnosis
+        self.assertEqual(package_diagnosis._load(self.conn, 'testproj', REL, 'P1')['phase'], 'pending')
 
 
 
@@ -465,6 +481,7 @@ class QueenIntegrationTests(RoundCase):
             for i in range(4):
                 bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'try-%s' % i,
                                     open_requirements=['unfinished'], error='test failed')
+            self.authorize_retry(env)
             result = bees.start_process(env, REL, 'P1', 'Cora', 'heavy', 'task', ['one'], [], [], cwd=str(other))
             self.assertEqual(Path(result['cwd']), first)
         self.assertEqual((first / 'uncommitted.txt').read_text(encoding='utf-8'), 'keep')
@@ -544,7 +561,7 @@ class QueenIntegrationTests(RoundCase):
             bees.report_attempt(env, REL, 'P1', 'light', 'failed', 'attempt-%s' % i, ['open'])
         bees.start_process(env, REL, 'P1', 'Ada', 'medium', 'task', ['one'], [], [])
         self.assertIn('P1', self.log())
-        self.assertIn('Queen class medium', self.log())
+        self.assertIn('diagnosis', self.log())
 
     # The provider setting beeMode process runs the Bee of the Queen's own provider as a separate agent.
     def test_bee_mode_process_starts_a_separate_agent(self):
@@ -596,6 +613,7 @@ class QueenIntegrationTests(RoundCase):
         env = self.env()
         for i in range(4):
             bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'queen-%s' % i, ['open'])
+        self.authorize_retry(env)
         result = bees.start_process(env, REL, 'P1', 'Ada', 'heavy', 'task', ['one'], [], [])
         self.assertEqual((result['kind'], result['class']), ('subagent', 'heavy'))
 
@@ -630,6 +648,7 @@ class QueenIntegrationTests(RoundCase):
         env = self.env()
         for i in range(4):
             bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'attempt-%s' % i, ['open'])
+        self.authorize_retry(env)
         bee_wt = self.base / 'bee-wt'
         bee_wt.mkdir()
         with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True):
@@ -734,7 +753,7 @@ class QueenIntegrationTests(RoundCase):
         self.assertFalse(bees.start_process(env, REL, 'P1', 'Ada', 'medium', 'image', ['one'], [], [], cwd=str(self.wt)))
         self.assertEqual(len(runtime.list_questions(self.conn, 'testproj', plan=REL, item='P1')), 1)
 
-    # An image package asks the owner after the highest Codex class fails.
+    # An image package also needs diagnosis at its highest available class.
     def test_image_escalation_stops_at_highest_codex_class(self):
         from haivequeen import hives
         from bzztest import REL
@@ -744,7 +763,9 @@ class QueenIntegrationTests(RoundCase):
         env = self.env()
         for i in range(4):
             bees.report_attempt(env, REL, 'P1', 'medium', 'failed', 'attempt-%s' % i, ['open'])
-        self.assertEqual(len(runtime.list_questions(self.conn, 'testproj', status='open', plan=REL, item='P1')), 1)
+        self.assertEqual(runtime.list_questions(self.conn, 'testproj', status='open', plan=REL, item='P1'), [])
+        from haivequeen import package_diagnosis
+        self.assertEqual(package_diagnosis._load(self.conn, 'testproj', REL, 'P1')['phase'], 'pending')
         self.assertIsNone(bees.next_attempt(self.conn, 'testproj', REL, 'P1', 'medium', bees.escalation_providers(env, REL, 'P1'), [], 3))
 
     # A separate Bee process cannot start below the configured free-RAM minimum.

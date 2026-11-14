@@ -857,9 +857,9 @@ def escalation_providers(env, plan, package):
     return capable_providers(env.providers, need) if need else env.providers
 
 
-# Record an attempt and file one owner question when the top class is exhausted.
+# Record attempts and require diagnosis before repeating exhausted repairs.
 def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked='', force_failure=False):
-    """Record an outcome and ask once after the highest class fails repeatedly. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
+    """Record an outcome and diagnose repeated failures before another attempt. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
     attempt, foreign = package_branch_violation(env, plan, package, attempt)
     if foreign:
         from . import branchguard
@@ -876,13 +876,13 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
     record_attempt(env.conn, env.name, plan, package, cls, outcome, attempt, open_requirements, error, row['verify'] if row else 'code', force_failure)
     if outcome == 'succeeded':
         env.conn.execute('DELETE FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package))
+        from . import package_diagnosis
+        package_diagnosis.completed(env, plan, package)
     threshold = int(env.settings.get('escalateAfter', 3))
-    excluded = env.settings.get('excludedProviders', [])
-    if outcome == 'failed' and next_attempt(env.conn, env.name, plan, package, cls, escalation_providers(env, plan, package), excluded, threshold) is None:
-        language = roles.language(env.settings)
-        text = tr(FAILURE_QUESTION, language=language)
-        if not any(is_failure_question(q.get('question')) for q in runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=package)):
-            db.add_question(env.conn, env.name, plan, package, text, tr('Review the failed attempts and choose the next approach.', language=language))
+    if outcome == 'failed' and failure_count(env.conn, env.name, plan, package, cls) >= threshold:
+        from . import package_diagnosis
+        package_diagnosis.request(env, plan, package, cls)
+
 
 
 def prepare_agent_worktree(env, plan, package):
@@ -1133,31 +1133,49 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
             db.add_question(env.conn, env.name, plan, package, text, tr('Configure an eligible provider.', language=language))
         return refuse(env, package, 'no configured provider offers the required class or the capability %s (question filed)' % ', '.join(need) if need else 'no configured provider offers the required class (question filed)')
     reconcile_failure_answers(env.conn, env.name, plan, package)
-    current = base_class
-    if retry_epoch(env.conn, env.name, plan, package) is not None:
-        offered = escalation_providers(env, plan, package)
-        while next_class(offered, current, excluded):
-            current = next_class(offered, current, excluded)
-        cls = current   # the owner's answer directs the retry to the highest offered class
-    queen_class = env.settings.get('queenClass', 'medium')
-    if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
-            failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):
-        current = next_class(escalation_providers(env, plan, package), queen_class, excluded)
-        if current is None:
-            return refuse(env, package, 'the package failed %d times at the Queen class %s and no higher class is offered' % (threshold, queen_class))
-    while failure_count(env.conn, env.name, plan, package, current) >= threshold:
-        previous = current
-        current = next_class(escalation_providers(env, plan, package), current, excluded)
-        if current is None:
-            return refuse(env, package, 'the package failed %d times and no higher class is offered' % threshold)
-        if scheduler.class_index(previous) < scheduler.class_index(queen_class) <= scheduler.class_index(current):
-            env.log('Package %s raised to Queen class %s after failures' % (package, current))
-    ensure_attempts(env.conn)
-    stored = env.conn.execute('SELECT class FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
-    if stored and stored[0] == cls and scheduler.class_index(cls) > scheduler.class_index(current):
-        current = cls   # the package was already escalated to this higher class: keep it even when the failure counters were reset
-    if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
-        return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
+    from . import package_diagnosis
+    review_scope = None
+    review_grant = None
+    exhausted = next((c for c in reversed(scheduler.CLASS_NAMES)
+                      if failure_count(env.conn, env.name, plan, package, c) >= threshold), None)
+    review_state = package_diagnosis._load(env.conn, env.name, plan, package)
+    if exhausted or (review_state and review_state.get('phase') != 'completed'):
+        head = package_diagnosis.current_commit(env, plan, package)
+        review_scope = package_diagnosis.scope(env.conn, env.name, plan, package, head)
+        review_grant = package_diagnosis.authorization(env.conn, env.name, plan, package, review_scope)
+        if not review_grant:
+            package_diagnosis.request(env, plan, package, exhausted or base_class)
+            return refuse(env, package, 'waiting for evidence-based package diagnosis before another repair attempt')
+        task += '\n\nDIAGNOSED REPAIR APPROACH\n' + review_grant['instruction']
+        cls = review_grant['class']
+    if review_grant:
+        current = review_grant['class']
+    else:
+        current = base_class
+        if retry_epoch(env.conn, env.name, plan, package) is not None:
+            offered = escalation_providers(env, plan, package)
+            while next_class(offered, current, excluded):
+                current = next_class(offered, current, excluded)
+            cls = current   # the owner's answer directs the retry to the highest offered class
+        queen_class = env.settings.get('queenClass', 'medium')
+        if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
+                failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):
+            current = next_class(escalation_providers(env, plan, package), queen_class, excluded)
+            if current is None:
+                return refuse(env, package, 'the package failed %d times at the Queen class %s and no higher class is offered' % (threshold, queen_class))
+        while failure_count(env.conn, env.name, plan, package, current) >= threshold:
+            previous = current
+            current = next_class(escalation_providers(env, plan, package), current, excluded)
+            if current is None:
+                return refuse(env, package, 'the package failed %d times and no higher class is offered' % threshold)
+            if scheduler.class_index(previous) < scheduler.class_index(queen_class) <= scheduler.class_index(current):
+                env.log('Package %s raised to Queen class %s after failures' % (package, current))
+        ensure_attempts(env.conn)
+        stored = env.conn.execute('SELECT class FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+        if stored and stored[0] == cls and scheduler.class_index(cls) > scheduler.class_index(current):
+            current = cls   # the package was already escalated to this higher class: keep it even when the failure counters were reset
+        if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
+            return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
     queen_provider = scheduler.get_provider(env.providers, hive['provider'])
     embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
     free = scheduler.provider_free(env.providers, running, env.conn)   # A subagent Bee needs a free slot of the Queen's provider like a Bee process
@@ -1200,6 +1218,8 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
         prompt = bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')), roles.language(env.settings))
         prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
+        if review_grant:
+            package_diagnosis.consume(env.conn, env.name, plan, package, review_scope)
         return {'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
     if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
         return refuse(env, package, 'an Agent process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
@@ -1215,6 +1235,8 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         return refuse(env, package, 'the agent runner could not start the Agent process')
     env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
     record_step_count(env.conn, env.name, plan, package, len(steps))
+    if review_grant:
+        package_diagnosis.consume(env.conn, env.name, plan, package, review_scope)
     return {'kind': 'process', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute()), 'branch': branch}
 
 
