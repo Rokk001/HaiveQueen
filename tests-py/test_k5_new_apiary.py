@@ -84,3 +84,26 @@ class NewApiaryTests(ApiaryCase):
         other.mkdir()
         self.assertEqual(init.register_listed(conn, [{"name": "known", "workspace": str(other)}, {"name": "twin", "workspace": str(self.workspace)}]), [])
         self.assertEqual(tuple(conn.execute("SELECT name, workspace, priority FROM projects").fetchone()), ("known", str(self.workspace), 3))
+
+
+class BatchRegistrationTests(ApiaryCase):
+    """Collisions within one request obey the existing registration rules."""
+
+    def test_same_name_does_not_overwrite_first_workspace(self):
+        conn = self.open_db()
+        other = self.base / "other"
+        other.mkdir()
+        entries = [{"name": "first", "workspace": str(self.workspace)},
+                   {"name": "first", "workspace": str(other)},
+                   {"name": "second", "workspace": str(other)}]
+        self.assertEqual(init.register_listed(conn, entries), ["first", "second"])
+        self.assertEqual([tuple(r) for r in conn.execute("SELECT name, workspace FROM projects ORDER BY name")],
+                         [("first", str(self.workspace)), ("second", str(other))])
+        self.assertEqual(init.register_listed(conn, entries), [])
+
+    def test_workspace_alias_does_not_register_twice(self):
+        conn = self.open_db()
+        entries = [{"name": "first", "workspace": str(self.workspace)},
+                   {"name": "alias", "workspace": str(self.workspace / ".." / "ws")}]
+        self.assertEqual(init.register_listed(conn, entries), ["first"])
+        self.assertEqual([r[0] for r in conn.execute("SELECT name FROM projects")], ["first"])

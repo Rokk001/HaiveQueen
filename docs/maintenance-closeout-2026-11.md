@@ -411,3 +411,10 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - The initial current/done distinction was implemented in `1330d20`. Verification found a remaining false positive: a current-step note mentioning completed preparation elsewhere in its text marked the current step done.
 - Require the completion status immediately after the step count (allowing punctuation), rather than treating any completion word in the description as evidence. Explicit negative completion reports remain current; mismatched definitions remain unknown.
 - The new API-level regression failed before this refinement. All four focused plan-detail tests pass, covering starting work, incidental completion text, negation, explicit completion and replacement-agent progress isolation.
+
+
+## A-16: Keep batch project registration unique
+
+The registration loop now tracks names and resolved workspace paths added earlier in the same request. Later colliding entries follow the existing skip policy; they cannot overwrite the first registration or register a workspace alias twice. Independent entries remain registerable.
+
+Evidence: both tests in `test_k5_new_apiary.BatchRegistrationTests` failed before the change and passed afterward. Coverage includes duplicate names, normalized workspace aliases, an independent subsequent entry, and an idempotent repeated request. The complete focused `test_k5_new_apiary` module passes (7 tests). Production processes are not touched.

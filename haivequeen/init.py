@@ -94,6 +94,8 @@ def register_listed(conn, entries) -> list:
             continue
         proj = config.load_project(ws)
         db.upsert_project(conn, name, str(ws), proj["colour"], proj["priority"])
+        known[name] = str(ws)
+        places.add(os.path.normcase(str(ws)))
         added.append(name)
     return added
 
