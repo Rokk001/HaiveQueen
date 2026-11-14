@@ -64,6 +64,19 @@ def stop_flag() -> Path:
     return osplat.data_dir() / "STOP"
 
 
+def active_version_directory():
+    """Return the selected installed version, or None outside a valid layout."""
+    if TOOLS_DIR.parent.name != "versions":
+        return None
+    try:
+        active = (TOOLS_DIR.parent.parent / "active-version").read_text(encoding="utf-8").strip()
+        from .version_layout import version_dir
+        target = version_dir(TOOLS_DIR.parent.parent, active)
+        return target if (target / "haivequeen" / "cli.py").is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
 def version_switch_requested():
     """Yield the core when the active pointer selects another installed version."""
     if TOOLS_DIR.parent.name != "versions":

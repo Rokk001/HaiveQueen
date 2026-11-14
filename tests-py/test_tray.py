@@ -1,10 +1,22 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from haivequeen import tray
 
 
 class TrayTests(unittest.TestCase):
+    def test_replacement_tray_uses_active_version(self):
+        target = Path('new-version')
+        with patch.object(tray.loop, 'active_version_directory', return_value=target), \
+                patch.object(tray.subprocess, 'CREATE_NO_WINDOW', 0, create=True), \
+                patch.object(tray.subprocess, 'DETACHED_PROCESS', 0, create=True), \
+                patch.object(tray.version_leases, 'launch') as launch:
+            tray.start_active_tray()
+        self.assertEqual(launch.call_args.args[0], target)
+        self.assertEqual(launch.call_args.kwargs['cwd'], str(target))
+        self.assertEqual(launch.call_args.args[2][-2:], ['-m', 'haivequeen.tray'])
+
     def test_states_and_menu(self):
         for state, expected in [('Running', (False, True, True)), ('Stopping', (False, False, True)), ('Stopped', (True, False, False))]:
             menu = tray.menu(state, True)

@@ -64,6 +64,23 @@ class WebServiceTests(unittest.TestCase):
         self.assertFalse(web_service.state_path().exists())
         self.assertFalse(web_service.state_path().with_suffix('.lock').exists())
 
+    def test_version_handover_releases_service_before_starting_active_version(self):
+        from haivequeen import loop
+        self.configure()
+        service = web_service.Service()
+        def launch(argv, **kwargs):
+            self.assertFalse(web_service.state_path().exists())
+            self.assertFalse(web_service.state_path().with_suffix('.lock').exists())
+            self.assertEqual(argv[-2:], ['web', 'start'])
+            self.assertEqual(Path(argv[2]).name, 'launcher.py')
+        with patch.object(loop, 'version_switch_requested', return_value=True), \
+                patch.object(tray, 'ensure_started'), \
+                patch.object(service.control, 'handle_request'), \
+                patch.object(web_service.subprocess, 'Popen', side_effect=launch) as spawn, \
+                patch('sys.stdout', io.StringIO()):
+            self.assertEqual(service.run(), 0)
+            spawn.assert_called_once()
+
     def test_failed_direct_serve_does_not_start_tray(self):
         self.configure()
         service = web_service.Service()

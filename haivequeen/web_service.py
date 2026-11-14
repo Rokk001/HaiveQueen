@@ -47,6 +47,7 @@ class Service:
         self.error = ''
         self.stopping = False
         self.restarting = False
+        self.version_handover = False
         self.actions = queue.Queue()
         self.token = secrets.token_urlsafe(32)
         service = self
@@ -126,6 +127,9 @@ class Service:
             tray.ensure_started()
             while not self.stopping:
                 self.control.handle_request()
+                if loop.version_switch_requested():
+                    self.version_handover = True
+                    self.stopping = True
                 while not self.actions.empty():
                     action = self.actions.get_nowait()
                     if action == 'stop':
@@ -146,7 +150,14 @@ class Service:
             state_path().unlink(missing_ok=True)
             lock.unlink(missing_ok=True)
             proctree.exempt_clear()
-        if self.restarting:
+        if self.version_handover:
+            # The stable launcher resolves the current pointer and reserves its
+            # version. Start only after releasing the old service's lock.
+            launcher = loop.TOOLS_DIR.parent.parent / 'launcher.py'
+            options = {'creationflags': subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS} if os.name == 'nt' else {'start_new_session': True}
+            subprocess.Popen([osplat.python_executable(), '-I', str(launcher), 'web', 'start'],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
+        elif self.restarting:
             start()
         return 0
 
