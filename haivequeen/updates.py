@@ -268,6 +268,22 @@ def started_by_update_worker(parent=None) -> bool:
 def cmd_update(args, conn) -> int:
     """`bzz update`: check now (default) or, with --install X, install the offered release X (the same as the update button)."""
     from . import config
+    from . import selfupdate, force_stop
+    try:
+        waiting = json.loads(selfupdate.release_status_path().read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        waiting = None
+    if getattr(args, 'force', False):
+        if not waiting:
+            print(json.dumps({'ok': False, 'error': 'No incompatible update is waiting'}))
+            return 1
+        print(force_stop.WARNING)
+        selfupdate.release_force_path().write_text('confirmed', encoding='utf-8')
+        print(json.dumps({'ok': True, 'force_requested': True, **waiting}))
+        return 0
+    if waiting:
+        print(json.dumps({'ok': True, **waiting}))
+        return 0
     if args.install:
         try:
             res = request_install(args.install)
@@ -284,5 +300,6 @@ def cmd_update(args, conn) -> int:
 def register(sub) -> None:
     """Add the command update to the sub-parser collection of haivequeen/cli.py."""
     p = sub.add_parser("update")
+    p.add_argument("--force", action="store_true", help="Confirm force stop for a waiting incompatible update")
     p.add_argument("--install", metavar="VERSION", help="install the offered release (waits for running agents, then restarts)")
     p.set_defaults(fn=cmd_update)

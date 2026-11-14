@@ -357,6 +357,105 @@ def clear_stale_lock(conn, alive=None, cmdline=None, now=None, kill=None, head=N
     return why
 
 
+# ---- side-by-side release worker ----
+
+def release_lock_path():
+    # This is separate from the legacy drain lock: a compatible update must
+    # not prevent an old Queen from starting its Agents during handover.
+    return osplat.data_dir() / "release-update.lock"
+
+
+def release_status_path():
+    return osplat.data_dir() / "release-update.json"
+
+
+def release_force_path():
+    return osplat.data_dir() / "release-update.force"
+
+
+def write_release_status(status):
+    path = release_status_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix('.tmp')
+    temp.write_text(json.dumps(status), encoding='utf-8')
+    os.replace(temp, path)
+
+
+def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
+                       timeout=ROUND_TIMEOUT, stage=None, jobs=None,
+                       activate=None, receipt=None, start=None, loop_pid=None):
+    """Stage and switch an immutable release; retain running work when compatible."""
+    from . import release_activation, release_compat, release_staging, updates, version_layout
+    root = Path(root)
+    stage = stage or release_staging.stage_release
+    jobs = jobs or release_compat.running_jobs
+    activate = activate or release_activation.activate
+    receipt = receipt or wait_successor_round
+    loop_pid = loop_pid or loop.loop_running
+    start = start or (lambda: run_command([osplat.python_executable(), '-I', str(root / 'launcher.py'),
+                                           'start', '--keep-pause'], root)[0] == 0)
+    holder = loop._take_pid_lock(release_lock_path(), own_ok=False, wait=0.5)
+    if holder:
+        return {'result': 'locked', 'note': 'another release update runs', 'old': '', 'new': ''}
+    old = (root / 'active-version').read_text(encoding='utf-8').strip()
+    row = start_row(conn, old)
+    try:
+        target = version_layout.version_dir(root, version)
+        if not target.exists():
+            target = stage(root, updates.repository(config.load_config()), version)
+        info = release_compat.compatibility(target)
+        if not info['compatible']:
+            status = release_compat.begin_wait(conn, target, jobs=jobs)
+            while True:
+                status['jobs'] = jobs(conn)
+                status['waiting'] = bool(status['jobs'] or loop_pid())
+                write_release_status(status)
+                if release_force_path().exists():
+                    from . import force_stop
+                    release_force_path().unlink()
+                    forced = force_stop.stop(conn)
+                    if not forced.get('ok'):
+                        raise RuntimeError(forced.get('error', 'force stop failed'))
+                    loop.stop_flag().write_text('stop requested %s (self-update incompatible release)\n' % db.now(), encoding='utf-8')
+                    continue
+                if owner_stopped():
+                    end_row(conn, row, old, 'skipped', 'skipped, ' + OWNER_STOP)
+                    return {'result': 'skipped', 'note': OWNER_STOP, 'old': old, 'new': old}
+                if not status['waiting']:
+                    break
+                sleep(poll)
+        began = db.now()
+        had_core = bool(loop_pid())
+        def first_round():
+            if not had_core and not start():
+                return False
+            return receipt(conn, target, began, sleep, poll, timeout, loop_pid=loop_pid)
+        passed = activate(root, version, first_round)
+        if passed:
+            result, note = 'ok', 'updated to version ' + version
+        else:
+            # The pointer now names the old version. A live successor will
+            # yield on the pointer change; otherwise start the old core.
+            if not loop_pid():
+                start()
+            result, note = 'rollback', 'first round failed; rolled back to ' + old
+            file_fault_rollback(conn, note)
+        end_row(conn, row, version if passed else old, result, note)
+        return {'result': result, 'note': note, 'old': old, 'new': version if passed else old}
+    except Exception as exc:
+        note = 'release update failed: ' + str(exc)
+        if (root / 'active-version').read_text(encoding='utf-8').strip() == old and not loop_pid():
+            start()
+        end_row(conn, row, old, 'failed', note)
+        return {'result': 'failed', 'note': note, 'old': old, 'new': old}
+    finally:
+        for path in (release_status_path(), release_force_path(), release_lock_path()):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
 # ---- the update ----
 
 def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, poll: float = 5.0, round_timeout: float = ROUND_TIMEOUT,
@@ -367,6 +466,8 @@ def run_update(conn, live=None, run=run_command, sleep=time.sleep, alive=None, p
     first round. With `version` the release tag v<version> is installed instead of origin/<integrationBranch>, without a push. Injectable parts (`run`, `sleep`, `alive`, `loop_pid`) serve the tests, which never touch the real flag, lock or agents.
     """
     live = Path(live or live_folder())
+    if version is not None and live.parent.name == "versions" and (live.parent.parent / "active-version").is_file():
+        return run_release_update(conn, live.parent.parent, str(version), sleep=sleep, poll=poll, timeout=round_timeout, loop_pid=loop_pid)
     if version is not None:
         from . import releases
         releases.next_version(str(version))   # only a plain version number reaches git
