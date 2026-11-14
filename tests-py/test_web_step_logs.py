@@ -10,8 +10,8 @@ class StepLogsTests(RoundCase):
         super().setUp()
         self.plan()
 
-    def request(self, step='Build'):
-        return web_api.execute(self.conn, 'plan/step-log', {'project':'testproj','plan':REL,'step':step})
+    def request(self, step='Build', **data):
+        return web_api.execute(self.conn, 'plan/step-log', {'project':'testproj','plan':REL,'step':step, **data})
 
     def state(self, **extra):
         value = {'phase':'pipeline','step':'Build','steps':{'Build':'running'}}
@@ -102,10 +102,11 @@ class StepLogsTests(RoundCase):
         runtime.kv_set(self.conn, 'testproj', 'orch-log:'+REL+':Build',
                        json.dumps({'exit_code':1, 'output':r'checks failed (exit 1), see out\checks-old.txt'}))
         result = self.request()
-        self.assertIn('first failure', result['output'])
+        source = result['references'][0]['source']
+        self.assertIn('first failure', self.request(source=source, run=result['run'])['output'])
         self.assertEqual(result['exit_code'], 1)
         log.write_text('first failure\nsecond failure\n', encoding='utf-8')
-        self.assertIn('second failure', self.request()['output'])
+        self.assertIn('second failure', self.request(source=source, run=result['run'])['output'])
 
     def test_journal_reference_is_deduplicated_and_missing_file_explained(self):
         self.plan(branch='test', worktree=str(self.wt))
@@ -115,9 +116,12 @@ class StepLogsTests(RoundCase):
         path = action_logs.start('testproj', REL, 'Build')
         action_logs.append(path, 'log out/build-old.log\nlog out/build-old.log\nsee out/missing.txt')
         action_logs.finish(path, 1)
-        output = self.request()['output']
+        result = self.request()
+        self.assertEqual(len(result['references']), 2)
+        output = self.request(source=result['references'][0]['source'], run=result['run'])['output']
         self.assertEqual(output.count('compiler error'), 1)
-        self.assertIn('Referenced log unavailable: out/missing.txt', output)
+        missing = self.request(source=result['references'][1]['source'], run=result['run'])['output']
+        self.assertIn('Referenced log unavailable: out/missing.txt', missing)
 
     def test_reference_cannot_escape_plan_worktree(self):
         self.plan(branch='test', worktree=str(self.wt))

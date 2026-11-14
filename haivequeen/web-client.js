@@ -1,3 +1,14 @@
+class LogPager {
+  constructor(){this.run='';this.source='';this.restart();}
+  restart(cursor=null){const carry=cursor&&cursor===this.cursor?this.continuation:'';this.cursor=cursor;this.text='';this.more=false;this.continuation=carry||'';}
+  request(){return {run:this.run,source:this.source,cursor:JSON.stringify(this.cursor),continuation:this.continuation};}
+  accept(result){
+    if(result.reset || (this.run && this.run!==result.run)){this.restart();this.source=result.source||'';}
+    this.run=result.run;this.cursor=result.cursor;this.more=result.more;
+    this.continuation=result.continuation||'';
+    this.text=(this.text+(result.output||'')).slice(-65536);
+  }
+}
 function dashboardLoading(document,t) {
   const make=(tag,cls,text)=>{const node=document.createElement(tag);node.className=cls;if(text)node.textContent=t(text);return node;};
   const root=make('section','dashboard-loading');root.setAttribute('aria-busy','true');
@@ -484,31 +495,43 @@ function mount(document, bootstrap) {
     const sources=el('div',undefined,'step-log-sources'),runInfo=el('p',undefined,'step-log-run'),fileInfo=el('p',undefined,'dim');
     const sourceSelect=el('select');sourceSelect.setAttribute('aria-label','Log source');
     sources.append(el('label','Log source'),sourceSelect);body.insertBefore(runInfo,panel);panel.insertBefore(sources,output);panel.insertBefore(fileInfo,output);
-    let latest=null, selected=null;
+    let latest=null, selected='',following=true,loading=false,revision=0,autoSource=true;
+    const pager=new LogPager(),knownSources=new Map();
+    const paging=el('div',undefined,'step-log-sources'),firstPage=el('button',t('Start of log')),nextPage=el('button',t('Next page')),followLive=el('button',t('Follow live'));
+    for(const button of [firstPage,nextPage,followLive])button.type='button';
+    paging.append(firstPage,nextPage,followLive);panel.insertBefore(paging,output);
     const date=value=>value?new Date(value).toLocaleString():t('Unknown');
     function display(){
       if(!latest)return;
-      const file=(latest.references||[]).find(item=>item.path===selected);
+      const file=knownSources.get(selected);
       const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
-      const text=file?(file.error||file.content||t('Log file is empty.')):([latest.console_output??latest.output,latest.reason&&!(latest.console_output||'').includes(latest.reason)?latest.reason:''].filter(Boolean).join('\n\n')||t('No log output available yet.'));
-      fileInfo.textContent=file?file.path+' · '+t('File updated')+': '+date(file.modified_at)+(file.truncated?' · '+t('Showing first 8 MiB'):'')+' · '+t('File currently on disk; not an archived snapshot.') : t('Recorded console output for the selected run.');
+      const text=([pager.text,!file&&latest.reason&&!pager.text.includes(latest.reason)?latest.reason:''].filter(Boolean).join('\n\n')||t('No log output available yet.'));
+      fileInfo.textContent=(file?file.path+' · '+t('File updated')+': '+date(file.modified_at)+' · '+t('File currently on disk; not an archived snapshot.'):t('Recorded console output for the selected run.'))+' · '+t('Recent output is limited; use Start of log and Next page for full history.');
+      nextPage.disabled=!pager.more;followLive.setAttribute('aria-pressed',String(following));
       if(output.textContent!==text){output.textContent=text;if(follow)output.scrollTop=output.scrollHeight;}
     }
-    sourceSelect.onchange=()=>{selected=sourceSelect.value;display();};
+    function navigate(cursor,follow){revision++;following=follow;pager.restart(cursor);clearTimeout(stepLogTimer);void refresh();}
+    sourceSelect.onchange=()=>{autoSource=false;selected=sourceSelect.value;pager.source=selected;navigate(null,true);};
+    firstPage.onclick=()=>{autoSource=false;navigate(null,false);};
+    nextPage.onclick=()=>navigate(pager.cursor,false);
+    followLive.onclick=()=>{following=true;clearTimeout(stepLogTimer);void refresh();};
     const dialog=$('detail');
     async function refresh(){
-      if(!dialog.open||!output.isConnected)return;
+      if(!dialog.open||!output.isConnected||loading)return;
+      loading=true;const requestedRevision=revision;
       try{
-        const result=await client.request('plan/step-log?'+new URLSearchParams({...key(row),step}));
-        if(!dialog.open||!output.isConnected)return;
+        const result=await client.request('plan/step-log?'+new URLSearchParams({...key(row),step,...pager.request()}));
+        if(!dialog.open||!output.isConnected||requestedRevision!==revision)return;
         status.textContent=t({done:'Completed',running:'Running',red:'Failed',todo:'Pending',waiting:'Waiting',cancelled:'Cancelled',unknown:'Unknown'}[result.status]||result.status)+(!result.historical&&result.exit_code!=null?' · Exit '+result.exit_code:'')+(result.historical?' · '+t('Previous run output'):'');
         status.className='step-log-status '+({done:'ok',running:'warn',red:'bad',todo:'dim',waiting:'warn',cancelled:'dim',unknown:'dim'}[result.status]||'dim');
-        latest=result;
+        if(result.reset||(pager.run&&pager.run!==result.run)){knownSources.clear();selected=result.source||'';}
+        pager.accept(result);latest=result;
+        for(const item of result.references||[]){knownSources.set(item.source,item);if(knownSources.size>128)knownSources.delete(knownSources.keys().next().value);}
+        if(autoSource&&result.references?.length){autoSource=false;selected=result.references[0].source;pager.source=selected;navigate(null,true);return;}
         runInfo.textContent=(result.historical?t('Previous run — not the current attempt'):result.status==='running'?t('Current run'):t('Latest recorded run'))+
           ' · '+t('Started')+': '+date(result.started_at)+' · '+t('Ended')+': '+date(result.ended_at)+(result.exit_code!=null?' · '+t('Run result')+': '+(result.exit_code===0?t('Completed'):t('Failed'))+' · Exit '+result.exit_code:'');
         panel.querySelector('h3').textContent=step+' · '+(result.historical?t('Previous run'):result.status==='running'?t('Live'):t('Recorded logs'));
-        const choices=[{path:'',label:t('Console output')},...(result.references||[]).map(item=>({path:item.path,label:t('Referenced file')+': '+item.path}))];
-        if(selected===null)selected=choices[1]?.path||'';
+        const choices=[{path:'',label:t('Console output')},...Array.from(knownSources.values()).map(item=>({path:item.source,label:t('Referenced file')+': '+item.path}))];
         if(!choices.some(item=>item.path===selected))selected='';
         const signature=JSON.stringify(choices);
         if(sourceSelect.dataset.choices!==signature){
@@ -517,7 +540,10 @@ function mount(document, bootstrap) {
         }
         sourceSelect.value=selected;display();
       }catch(error){if(output.isConnected)status.textContent=error.message;}
-      if(dialog.open&&output.isConnected)stepLogTimer=setTimeout(refresh,2000);
+      finally{
+        loading=false;
+        if(dialog.open&&output.isConnected&&(following||requestedRevision!==revision))stepLogTimer=setTimeout(refresh,requestedRevision!==revision||pager.more?100:2000);
+      }
     }
     dialog.addEventListener('close',()=>clearTimeout(stepLogTimer),{once:true});refresh();
   }
@@ -1477,5 +1503,5 @@ function mount(document, bootstrap) {
   render();void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

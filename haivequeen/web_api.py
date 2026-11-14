@@ -201,7 +201,7 @@ def execute(conn, action, data):
         if not conn.execute('SELECT 1 FROM plans WHERE project=? AND path=?', (project, plan)).fetchone():
             raise ValueError('Unknown plan')
         from . import web_step_logs
-        return web_step_logs.read(conn, project, plan, step)
+        return web_step_logs.read(conn, project, plan, step, page_request=data)
     if action == 'plan/detail':
         from pathlib import Path
         row = next((row for row in plan_view.plan_rows(conn)

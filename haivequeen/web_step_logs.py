@@ -7,14 +7,14 @@ from pathlib import Path
 from . import action_logs, orchestrator, runtime, plans
 
 
-def read(conn, project, plan, step):
+def read(conn, project, plan, step, *, page_request=None):
     state = orchestrator.load(conn, project, plan) or {}
     status = (state.get('steps') or {}).get(step, 'todo')
     current = state.get('step') == step
     job = state.get('job') or {}
     blocker = runtime.kv_get(conn, project, 'hive-blocker:' + plan) or ''
     waiting = current and state.get('phase') == 'pipeline' and bool(blocker) and not job
-    journal = action_logs.latest(project, plan, step)
+    journal = action_logs.latest(project, plan, step, metadata_only=page_request is not None)
     historical = False
     reason = ''
     if journal:
@@ -45,6 +45,14 @@ def read(conn, project, plan, step):
     if waiting:
         status, reason = 'waiting', blocker
     fix = state.get('fix') or {}
+    summary = {'step': step, 'status': status, 'phase': state.get('phase', ''),
+               'exit_code': record.get('exit_code'),
+               'error': fix.get('error', '') if fix.get('step') == step else '',
+               'reason': reason, 'historical': historical,
+               'started_at': record.get('started_at'), 'ended_at': record.get('ended_at')}
+    if page_request is not None:
+        from . import web_log_pages
+        return web_log_pages.response(conn, project, plan, step, record, journal, summary, page_request)
     console = record.get('output', '')
     references = referenced_logs(conn, project, plan, console + '\n' + reason)
     output = console
@@ -57,12 +65,7 @@ def read(conn, project, plan, step):
             'started_at':record.get('started_at'), 'ended_at':record.get('ended_at')}
 
 
-def referenced_logs(conn, project, plan, text):
-    """Read only explicitly named log files inside this plan's worktree."""
-    names = list(dict.fromkeys(match.group(1).replace('\\', '/')
-        for match in re.finditer(r"(?i)\b(?:see|log)\s+[\"']?(out[\\/][^\r\n\"']*?\.(?:txt|log))(?=[\s\"']|$)", text)))
-    if not names:
-        return []
+def reference_root(conn, project, plan):
     row = conn.execute('SELECT workspace FROM projects WHERE name=?', (project,)).fetchone()
     root = None
     try:
@@ -74,6 +77,18 @@ def referenced_logs(conn, project, plan, text):
                 root = Path(named).resolve()
     except (OSError, ValueError, TypeError):
         pass
+    return root
+
+
+def referenced_logs(conn, project, plan, text, *, content=True):
+    """Read only explicitly named log files inside this plan's worktree."""
+    names = list(dict.fromkeys(match.group(1).replace('\\', '/')
+        for match in re.finditer(r"(?i)\b(?:see|log)\s+[\"']?(out[\\/][^\r\n\"']*?\.(?:txt|log))(?=[\s\"']|$)", text)))
+    if not names:
+        return []
+    if not content:
+        names = [name for name in names if len(name) <= 1024][:16]
+    root = reference_root(conn, project, plan)
     result = []
     for name in names:
         item = {'path':name}
@@ -86,6 +101,9 @@ def referenced_logs(conn, project, plan, text):
             stat = path.stat()
             item['modified_at'] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
             item['size'] = stat.st_size
+            if not content:
+                result.append(item)
+                continue
             # Bound each response; the original file remains untouched.
             with path.open('rb') as stream:
                 raw = stream.read(8 * 1024 * 1024)

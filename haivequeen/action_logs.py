@@ -14,6 +14,7 @@ from . import platform as osplat
 
 _fallback = collections.OrderedDict()
 _fallback_lock = threading.RLock()
+_metadata_cache = collections.OrderedDict()
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
@@ -95,11 +96,208 @@ def output(path):
     return "".join(r["text"] for r in read(path) if r["event"] == "output")
 
 
-def latest(project, plan, step):
+def _string_header(prefix, field, event):
+    match = re.search(rb'"' + field.encode() + rb'"\s*:\s*"', prefix)
+    if not match:
+        return None
+    try:
+        header = json.loads(prefix[:match.start()] + ('"' + field + '":""}').encode())
+    except ValueError:
+        return None
+    return (header, match.end()) if header.get('event') == event else None
+
+
+def _output_slice(stream, start, prefix, skip, limit, field='text', event='output'):
+    """Decode a bounded slice of the writer's final JSON text field."""
+    parsed = _string_header(prefix, field, event)
+    if parsed is None:
+        return None
+    position = skip or parsed[1]
+    stream.seek(start + position)
+    raw = stream.read(limit + 12)
+    index, closed = 0, False
+    while index < len(raw) and index < limit:
+        byte = raw[index]
+        if byte == 34:
+            closed = True
+            break
+        if byte == 92:
+            if index + 1 >= len(raw):
+                break
+            width = 6 if raw[index + 1] == 117 else 2
+            if width == 6 and index + 6 <= len(raw):
+                try:
+                    high = int(raw[index + 2:index + 6], 16)
+                except ValueError:
+                    break
+                if 0xD800 <= high <= 0xDBFF:
+                    width = 12  # retain a UTF-16 surrogate pair as one code point
+        else:
+            width = 1 if byte < 128 else 2 if byte < 224 else 3 if byte < 240 else 4
+        if index + width > len(raw):
+            break
+        index += width
+    text = json.loads(b'"' + raw[:index] + b'"')
+    if closed:
+        stream.seek(start + position + index + 1)
+        suffix = stream.readline(65536)
+        if not suffix.endswith(b'\n'):
+            return text, start, position + index, True
+        if suffix.strip() != b'}':
+            raise ValueError('Invalid output record ending')
+        return text, stream.tell(), 0, False
+    return text, start, position + index, index < limit
+
+
+def page(path, cursor=None, limit=32768):
+    """Return one output page; cursor offsets locate the record and encoded text.
+
+    A partially written record is retried on the next poll. The journal remains
+    unchanged and callers can retain page-start cursors to revisit history.
+    """
+    limit = max(1, min(int(limit), 32768))
+    try:
+        offset, skip = cursor if cursor is not None else (0, 0)
+        offset, skip = int(offset), int(skip)
+        if offset < 0 or skip < 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise ValueError('Invalid log cursor') from None
+    parts, length, end, partial = [], 0, {}, False
+    with Path(path).open('rb') as stream:
+        size = stream.seek(0, 2)
+        if offset > size:
+            raise ValueError('Log cursor is beyond the file')
+        stream.seek(offset)
+        read_from = offset
+        while length < limit and stream.tell() - read_from < 256 * 1024:
+            start = stream.tell()
+            line = stream.readline(8192)
+            if not line:
+                break
+            if not line.endswith(b'\n') and len(line) < 8192:
+                partial = True
+                break
+            sliced = _output_slice(stream, start, line, skip, limit - length)
+            if sliced is None:
+                sliced = _output_slice(stream, start, line, skip, limit - length, 'message', 'end')
+                if sliced is not None:
+                    end = _string_header(line, 'message', 'end')[0]
+            if sliced is not None:
+                text, offset, skip, partial = sliced
+                parts.append(text)
+                length += len(text)
+                if skip:
+                    break
+                continue
+            if not line.endswith(b'\n'):
+                raise ValueError('Log metadata record exceeds the page limit')
+            try:
+                record = json.loads(line)
+            except (ValueError, UnicodeError):
+                # A complete malformed record must not conceal later output.
+                offset, skip = stream.tell(), 0
+                continue
+            if not isinstance(record, dict):
+                offset, skip = stream.tell(), 0
+                continue
+            if record.get('event') == 'output':
+                text = record.get('text', '')
+                text = text if isinstance(text, str) else str(text)
+                piece = text[skip:skip + limit - length]
+                parts.append(piece)
+                length += len(piece)
+                if skip + len(piece) < len(text):
+                    offset, skip = start, skip + len(piece)
+                    break
+            elif record.get('event') == 'end':
+                end = record
+            offset, skip = stream.tell(), 0
+    if offset == size and not partial:
+        with _fallback_lock:
+            stored = _fallback.get(str(path))
+            if stored:
+                message, tail = stored
+                text = ''.join(r.get('text', '') for r in tail if r.get('event') == 'output')
+                end = next((r for r in reversed(tail) if r.get('event') == 'end'), end)
+                warning = message[:limit]
+                remaining = limit - len(warning)
+                return {'output': warning + (text[-remaining:] if remaining else ''),
+                        'cursor': [offset, 0], 'more': False, 'end': end, 'reset': True}
+    return {'output': ''.join(parts), 'cursor': [offset, skip],
+            'more': not partial and (offset < size or skip > 0), 'end': end}
+
+
+def _last_complete_record(stream, size):
+    """Locate the last complete line with fixed-size reads and constant memory."""
+    position, end = size, None
+    while position:
+        begin = max(0, position - 65536)
+        stream.seek(begin)
+        block = stream.read(position - begin)
+        if end is None:
+            index = block.rfind(b'\n')
+            if index < 0:
+                position = begin
+                continue
+            end = begin + index + 1
+            block = block[:index]
+        index = block.rfind(b'\n')
+        if index >= 0:
+            return begin + index + 1, end
+        position = begin
+    return (0, end) if end is not None else (0, 0)
+
+
+def metadata(path):
+    """Read start/terminal fields, caching unchanged files without output history."""
+    stat = Path(path).stat()
+    stamp = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
+    with _fallback_lock:
+        cached = _metadata_cache.get(str(path))
+        if cached and cached[0] == stamp and str(path) not in _fallback:
+            return [dict(record) for record in cached[1]]
+    with Path(path).open('rb') as stream:
+        first = stream.readline(65536)
+        if not first.endswith(b'\n'):
+            return []
+        try:
+            start_record = json.loads(first)
+        except ValueError:
+            return []
+        if not isinstance(start_record, dict):
+            return []
+        size = stream.seek(0, 2)
+        begin, finish = _last_complete_record(stream, size)
+        stream.seek(begin)
+        line = stream.read(min(65536, finish - begin))
+        records = [start_record]
+        try:
+            record = json.loads(line)
+        except ValueError:
+            parsed = _string_header(line, 'message', 'end')
+            record = parsed[0] if parsed else {}
+            if parsed:
+                piece = _output_slice(stream, begin, line, 0, 4096, 'message', 'end')
+                record['message'] = piece[0]
+        if isinstance(record, dict) and record.get('event') == 'end':
+            records.append(record)
+    with _fallback_lock:
+        _metadata_cache[str(path)] = (stamp, records)
+        _metadata_cache.move_to_end(str(path))
+        while len(_metadata_cache) > 128:
+            _metadata_cache.popitem(last=False)
+        fallback = _fallback.get(str(path))
+        if fallback:
+            records.extend(r for r in fallback[1] if r.get('event') == 'end')
+    return records
+
+
+def latest(project, plan, step, *, metadata_only=False):
     """Read the latest journal for precisely this project, plan and step."""
     folder = osplat.data_dir() / "orchestrator" / "logs" / _component(project) / _component(plan)
     for path in sorted(folder.glob("*-" + step + "-*.jsonl"), reverse=True):
-        records = read(path)
+        records = metadata(path) if metadata_only else read(path)
         if not records:
             continue  # The writer may not have flushed its start record yet.
         start_record = records[0]

@@ -352,3 +352,11 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Apply the existing `retention.logsDays` setting to orchestrator action journals. Both the terminal timestamp and last file modification must be older than the cutoff; zero disables cleanup.
 - Read records incrementally and require a complete start-to-terminal journal. Preserve active, incomplete, malformed, unreadable and concurrently changed files. Do not traverse symlinks or junctions or remove enclosing directories.
 - Two regression tests failed before the change. Thirteen focused retention tests pass, including custom periods, disabled cleanup, active/recent files, changed files and linked-path protection. Tests use isolated temporary data only; production cleanup was not run manually.
+
+## A-27: Incremental integration log pages
+
+- The step-log API returns one selected source per request, at most 32,768 output characters, bounded diagnostic metadata and at most 16 file-reference descriptors. It no longer repeats console output or embeds referenced-file contents in the same response.
+- Journal cursors resume at record/text offsets, including large single output and terminal-message records. Referenced files use byte cursors with UTF-8/UTF-16 boundary handling. Signed, run-scoped references retain the existing plan-output-folder restriction; signed continuation context preserves references split across pages.
+- Terminal metadata uses fixed-size reads and a bounded cache for unchanged files. Initial lookup may scan a long final record backwards; subsequent unchanged polls reuse its metadata. No full output history is retained in the cache.
+- The browser retains at most 65,536 recent output characters. Start-of-log and next-page controls expose complete history, while follow-live resumes polling. Source changes and new runs discard stale responses instead of mixing output.
+- Focused regressions cover bounded reads, complete history reconstruction, partially written records, long terminal diagnostics, reference selection and page boundaries, new attempts and UI navigation. No running application processes are used by these tests.
