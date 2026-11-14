@@ -238,7 +238,11 @@ class Client {
     const project = this.project;
     try {
       const value=await this.request('state' + (project ? '?project='+encodeURIComponent(project) : ''));
-      if (project === this.project) { this.state=value; this.onState(value); }
+      if (project === this.project) {
+        this.state=value; this.onState(value);
+        if(value.web_listener_error && value.web_listener_error!==this.listenerError)this.notice(value.web_listener_error,true);
+        this.listenerError=value.web_listener_error || '';
+      }
       else this.refreshWanted=true;
     } catch(error) { this.onError(error); }
     finally {
@@ -1447,7 +1451,7 @@ function mount(document, bootstrap) {
     editor={...loaded,project:current.project,dirty:false,rules:current.rules,upstream:current.upstream,workspace:current.workspace,place:current.place,project_defaults:current.project_defaults,git_workflow:current.git_workflow,provider_models:current.provider_models,benchmark:current.benchmark,build:current.build,cores:current.cores};
     if(!current.project && current.data.language && current.data.language!==bootstrap.language){location.reload();return;}
     render();void client.refresh();
-    client.notice(t(current.data.web?'Saved. Restart the web server to apply changed web settings.':'Saved.'));
+    client.notice(t(current.data.web?'Saved. Applying web settings.':'Saved.'));
   }
   async function openLive(row) {
     const project=row.project || row.apiary,agent=row.agent || row.name,id=JSON.stringify([project,agent]);

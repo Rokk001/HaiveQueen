@@ -381,3 +381,10 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Startup recovers saved results. An action interrupted by an unexpected process exit is explicitly reported as having an unknown outcome, with its last progress preserved; it is never automatically replayed. Damaged records remain intact and visible as unreadable history.
 - The authenticated job endpoint exposes recent history, and a reloaded browser restores running actions plus a collapsed history of completed/interrupted actions.
 - Focused regression coverage includes shutdown ordering, result recovery, interrupted work, failed initial persistence, corrupted history, API access and browser history restoration. Isolated service tests exercise restart behavior without touching the installed service.
+
+## A-31: Recover failed web listener changes
+
+- Validate TLS before releasing the working listener. Acquire a different port before closing the old listener; for overlapping same-port address changes, restore the previous listener if the replacement fails.
+- Coordinate reload with configuration writers. Restore the previous web configuration after a failed change while preserving unrelated machine settings. Explicitly report any restoration failure instead of claiming success.
+- Publish listener errors in authenticated dashboard state and display each changed error once in the browser. Polling and the existing reachable interface continue; successful later reloads clear the error.
+- Three regressions failed before the change. Twenty-three focused Python tests and browser client/notification tests pass, covering occupied ports, invalid addresses, missing TLS files, successful changes, existing listener security and service lifecycle behavior. Only isolated test listeners were started.

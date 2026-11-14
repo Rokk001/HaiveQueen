@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, filetxn, web_auth, web_jobs, web_server
+from . import config, filetxn, settings, web_auth, web_jobs, web_server
 from . import platform as osplat
 
 _children = {}
@@ -97,21 +97,52 @@ class Service:
             self.public.server_close()
             self.public = None
 
+    def _serve(self, server, candidate):
+        self.public = server
+        self.settings = candidate
+        server.config_path = self.path
+        server.lifecycle = self.actions.put
+
+        def api(action, data):
+            result = server.engine_api(action, data)
+            if action == 'state':
+                result = {**result, 'web_listener_error': self.error}
+            return result
+
+        server.api = api
+        self.worker = threading.Thread(target=server.serve_forever, daemon=True)
+        self.worker.start()
+        address = server.server_address[0]
+        host = '127.0.0.1' if address == '0.0.0.0' else address
+        self.url = '%s://%s:%s' % ('https' if candidate['certificate'] else 'http', host, server.server_address[1])
+
+    @filetxn.coordinated
     def reload(self):
-        self.close_listener()
+        previous = dict(self.settings) if self.public else None
         try:
-            self.settings = web_auth.read(self.path)
-            self.public = web_server.make_server(self.settings)
-            self.public.config_path = self.path
-            self.public.lifecycle = self.actions.put
-            self.worker = threading.Thread(target=self.public.serve_forever, daemon=True)
-            self.worker.start()
-            address = self.public.server_address[0]
-            host = '127.0.0.1' if address == '0.0.0.0' else address
-            self.url = '%s://%s:%s' % ('https' if self.settings['certificate'] else 'http', host, self.public.server_address[1])
+            candidate = web_auth.read(self.path)
+            web_server.validate_tls(candidate)
+            # Same-port address changes can overlap our current wildcard binding.
+            # Other ports can be acquired before releasing the working listener.
+            if self.public and candidate['port'] == self.public.server_address[1]:
+                self.close_listener()
+            replacement = web_server.make_server(candidate)
+            self.close_listener()
+            self._serve(replacement, candidate)
             self.error = ''
         except (OSError, ValueError, TypeError) as exc:
             self.error = 'Web server could not start: ' + str(exc)
+            if previous is not None:
+                try:
+                    data = settings.load_raw(self.path)
+                    data['web'] = previous
+                    settings.save_file(self.path, data)
+                    self.settings = previous
+                    if self.public is None:
+                        self._serve(web_server.make_server(previous), previous)
+                    self.error += '. Previous web settings restored.'
+                except (OSError, ValueError, TypeError) as recovery:
+                    self.error += '. Restoring previous web settings failed: ' + str(recovery)
         return self.status()
 
     def run(self):
