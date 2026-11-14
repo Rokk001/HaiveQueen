@@ -1192,7 +1192,7 @@ def run_agent(a, out=None):
     threading.Thread(target=clock_watch, daemon=True, args=(clock_jumps,), kwargs={"limit": jump_limit}).start()
     if os.environ.get("BZZ_FAKE_CLOCK_JUMP"):   # tests only: simulate a clock jump of this many seconds during the run
         clock_jumps.append(float(os.environ["BZZ_FAKE_CLOCK_JUMP"]))
-    stall_limit = float(cfg.get("agentStallSeconds", DEFAULT_STALL_SECONDS) or 0)
+    stall_limit = float(scheduler.build_settings(cfg, pcfg).get("agentStallSeconds", DEFAULT_STALL_SECONDS) or 0)
 
     def mark_stalled(secs):
         """Mark the running agent as stalled (row field, event, live text line); the process keeps running."""

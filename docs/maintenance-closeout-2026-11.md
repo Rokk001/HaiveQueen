@@ -400,3 +400,8 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Each SQLite backup owns an exclusively created temporary file. Failed source access, backup or publication removes only that attempt's temporary file and preserves the previously published backup.
 - Serialize atomic publication and retention across threads and processes using a folder-local OS file lock. Backup creation remains independent; retention tolerates an already removed old file.
 - The overlapping-export regression failed before the change. Nine focused tests pass, including simultaneous backup creation, four separate export processes, failed publication, previous-backup preservation, retention and the export CLI. Tests use temporary databases only.
+
+## A-34: Apply project stall thresholds in the agent runner
+
+- Resolve `agentStallSeconds` through the established machine/project settings merge, matching other runner settings. A project override wins; explicit zero disables stall reporting, and an absent override retains the machine value and existing default.
+- Three regression tests failed before the fix. Four focused runner tests pass with isolated fake CLIs: project enablement, project disablement, a longer project threshold and machine fallback. Every helper finishes normally; stall reporting never terminates it.
