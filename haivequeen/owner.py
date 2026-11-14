@@ -135,6 +135,13 @@ def provider_settings(name):
 @filetxn.coordinated
 def apply(conn, action, project=None, plan=None, **fields):
     """Perform one checked owner action and return its public result."""
+    if action in ("accept", "reject"):
+        with filetxn.transaction(conn):
+            return _apply(conn, action, project, plan, **fields)
+    return _apply(conn, action, project, plan, **fields)
+
+
+def _apply(conn, action, project=None, plan=None, **fields):
     validate(conn, action, project, plan, **fields)
     by = fields.get("by", "owner")
     if action == "provider":

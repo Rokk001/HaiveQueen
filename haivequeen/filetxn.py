@@ -105,9 +105,10 @@ def _acknowledge(ack):
 def _publish(journal, record):
     """Idempotently finish a committed record, checking *all* targets first."""
     ack = record['ack']
-    archived = _disk(ack['target'])
-    if archived is not None and archived != _decode(ack['contents']):
-        raise RecoveryError('Inbox archive changed; journal: %s' % journal)
+    if ack is not None:
+        archived = _disk(ack['target'])
+        if archived is not None and archived != _decode(ack['contents']):
+            raise RecoveryError('Inbox archive changed; journal: %s' % journal)
     for entry in record['files']:
         if _disk(entry['path']) not in (_decode(entry['before']), _decode(entry['after'])):
             raise RecoveryError('Inbox recovery preserves a concurrent edit in %s; journal: %s' % (entry['path'], journal))
@@ -115,8 +116,9 @@ def _publish(journal, record):
         if _disk(entry['path']) != _decode(entry['after']):
             atomic_write(entry['path'], _decode(entry['after']))
     # Archive exactly the bytes consumed, even if a writer replaced the source.
-    atomic_write(ack['target'], _decode(ack['contents']))
-    _acknowledge(ack)
+    if ack is not None:
+        atomic_write(ack['target'], _decode(ack['contents']))
+        _acknowledge(ack)
     journal.unlink()
 
 
@@ -212,8 +214,8 @@ class Batch:
         self.before = {}
         self.after = {}
 
-    def prepare(self, conn, source, contents):
-        if _disk(source) != contents:
+    def prepare(self, conn, source=None, contents=None):
+        if source is not None and _disk(source) != contents:
             raise ValueError('inbox file changed while being processed')
         for path, before in self.before.items():
             if _disk(path) != before:
@@ -223,16 +225,19 @@ class Batch:
             raise ValueError('inbox processing requires a persistent database')
         ident = uuid.uuid4().hex
         journal = _journals() / (ident + '.json')
-        target = source.parent / 'done' / (datetime.now().strftime('%Y%m%d-%H%M%S-') + source.name)
-        if target.exists():
-            target = target.with_name(ident + '-' + target.name)
+        ack = None
+        if source is not None:
+            target = source.parent / 'done' / (datetime.now().strftime('%Y%m%d-%H%M%S-') + source.name)
+            if target.exists():
+                target = target.with_name(ident + '-' + target.name)
+            ack = {'source': str(source.absolute()), 'contents': _encode(contents),
+                   'claim': str((source.parent / ('.' + ident + '.ack')).absolute()),
+                   'replacement': str((source.parent / (ident + '-' + source.name)).absolute()),
+                   'target': str(target.resolve())}
         record = {'id': ident, 'database': str(Path(database).resolve()),
                   'files': [{'path': path, 'before': _encode(self.before[path]), 'after': _encode(after)}
                             for path, after in self.after.items()],
-                  'ack': {'source': str(source.absolute()), 'contents': _encode(contents),
-                          'claim': str((source.parent / ('.' + ident + '.ack')).absolute()),
-                          'replacement': str((source.parent / (ident + '-' + source.name)).absolute()),
-                          'target': str(target.resolve())}}
+                  'ack': ack}
         # Durable prepare precedes the receipt; the receipt commits with ALL SQL.
         atomic_write(journal, json.dumps(record).encode('utf-8'))
         conn.execute('CREATE TABLE IF NOT EXISTS inbox_receipts (id TEXT PRIMARY KEY)')
@@ -257,3 +262,22 @@ def finish(prepared):
         _publish(*prepared)
     except (OSError, ValueError) as exc:
         raise RecoveryError('Committed inbox operation awaits recovery: %s' % prepared[0]) from exc
+
+
+@contextmanager
+def transaction(conn):
+    """Commit a direct file/database action, or join the enclosing inbox batch."""
+    from . import db
+    with locked():
+        if getattr(_local, 'stage', None) is not None:
+            if not conn.in_transaction:
+                raise RuntimeError('file staging requires a database transaction')
+            yield
+            return
+        if conn.in_transaction:
+            raise RuntimeError('direct file action requires its own database transaction')
+        with staging() as batch:
+            with db.transaction(conn):
+                yield
+                prepared = batch.prepare(conn)
+        finish(prepared)

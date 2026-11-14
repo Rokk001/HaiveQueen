@@ -109,3 +109,12 @@ The regression reproduced a second successor Check after an upload failure, then
 verifies that completed checks and builds survive through successor publication.
 This does not eliminate required replay after pre-push failures or change the
 configured concurrency. Existing Deploy and pre-push replay cases remain covered.
+
+## A-14 atomic owner decisions
+
+Resolved: direct Accept and Reject stage plan files and commit all database changes
+with a durable recovery receipt. Inbox decisions join their existing batch.
+Missing files and late database failures preserve the original state; interrupted
+publication recovers on the next database open without duplicating the decision.
+The regression failed before the fix. All 47 focused owner and inbox tests pass,
+including subprocess exits immediately before and after the database commit.
