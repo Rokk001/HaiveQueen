@@ -245,7 +245,7 @@ class AgentFindsOrchTest(RoundCase):
     def test_old_queen_starts_version_bound_agent_after_activation(self):
         """A real old-version Queen calls its CLI after activation and starts an old-version Agent."""
         import json
-        from haivequeen import hives
+        from haivequeen import hives, version_layout
         root = self.base / "install"
         old, new = root / "versions" / "old", root / "versions" / "new"
         for version in (old, new):
@@ -254,6 +254,31 @@ class AgentFindsOrchTest(RoundCase):
             shutil.copytree(ROOT / "roles", version / "roles")
         pointer = root / "active-version"
         pointer.write_text("old", encoding="utf-8")
+        version_layout.install_launcher(root)
+        core_script = self.base / "core.py"
+        core_script.write_text(
+            'import os, sys, time\n'
+            'from pathlib import Path\n'
+            'from unittest.mock import patch\n'
+            'sys.path.insert(0, sys.argv[1])\n'
+            'from haivequeen import config, db, loop, proctree, version_leases\n'
+            'base=Path(os.environ["FAKE_MARK"]).parent\n'
+            'version=Path(sys.argv[1]).name\n'
+            'conn=db.connect(config.db_path())\n'
+            'def round_(*args, **kwargs):\n'
+            ' if version == "old":\n'
+            '  (base / "old-core-round").touch()\n'
+            '  while not (base / "release-core").exists(): time.sleep(.05)\n'
+            ' else:\n'
+            '  rows=conn.execute("SELECT name, status FROM agents ORDER BY name").fetchall()\n'
+            '  (base / "new-core-seen").write_text(repr([tuple(row) for row in rows]))\n'
+            'with patch.object(loop, "run_round", side_effect=round_), patch.object(loop, "daily_export"), patch.object(proctree, "sweep"), patch.object(version_leases, "collect", return_value=[]), patch.object(loop, "active_count", return_value=0):\n'
+            ' loop.run_loop(conn, {"providers": [], "projects": [], "roundMinutes": .01}, rounds=1)\n'
+            'conn.close()\n', encoding="utf-8")
+        (new / "haivequeen" / "cli.py").write_text(
+            'import runpy, sys\n'
+            'sys.argv=[%r, %r]\n'
+            'runpy.run_path(%r, run_name="__main__")\n' % (str(core_script), str(new), str(core_script)), encoding="utf-8")
         def git(*args):
             subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True, timeout=30)
         git("init", "-b", "main")
@@ -274,6 +299,7 @@ class AgentFindsOrchTest(RoundCase):
             ' result=subprocess.run(args, capture_output=True, text=True)\n'
             ' (base / "queen-result").write_text(json.dumps([result.returncode, result.stdout, result.stderr]))\n'
             'else: (base / "bee-result").write_text(os.environ.get("BZZ_AGENT_CLI", ""))\n'
+            'while not (base / "release-jobs").exists(): time.sleep(.05)\n'
             'print(json.dumps({"type":"result", "is_error":False, "result":"Done."}))\n', encoding="utf-8")
         os.environ["TEST_PLAN"] = REL
         self.addCleanup(os.environ.pop, "TEST_PLAN", None)
@@ -285,9 +311,20 @@ class AgentFindsOrchTest(RoundCase):
         prompt.write_text("TASK\nTest\n", encoding="utf-8")
         spec = {"name": "Q-1", "provider": "claude", "protocol": "claude", "plan": REL, "package": "", "phase": "queen", "cwd": str(self.repo), "prompt_file": str(prompt)}
         self.env().run_dir("Q-1").mkdir(parents=True, exist_ok=True)
+        core = subprocess.Popen([sys.executable, str(core_script), str(old)], env=dict(os.environ), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def cleanup_core():
+            if self.base.exists():
+                (self.base / "release-core").touch()
+                (self.base / "release-jobs").touch()
+            if core.poll() is None:
+                core.terminate()
+                core.wait(timeout=10)
+        self.addCleanup(cleanup_core)
+        deadline = time.monotonic() + 60
+        while not (self.base / "old-core-round").exists() and time.monotonic() < deadline: time.sleep(.1)
+        self.assertTrue((self.base / "old-core-round").exists(), "old core did not start")
         with mock.patch.object(loop, "TOOLS_DIR", old):
             loop.launch_headless(self.env(), spec)
-        deadline = time.monotonic() + 60
         while not self.found.exists() and time.monotonic() < deadline: time.sleep(.1)
         self.assertTrue(self.found.exists(), "Queen did not start")
         pointer.write_text("new", encoding="utf-8")
@@ -301,6 +338,16 @@ class AgentFindsOrchTest(RoundCase):
         while not bee_result.exists() and time.monotonic() < deadline: time.sleep(.1)
         self.assertTrue(bee_result.exists(), "Agent did not start")
         self.assertEqual(Path(bee_result.read_text(encoding="utf-8")), old / "haivequeen" / "cli.py")
+        self.assertIsNone(core.poll(), "old core ended before its round was released")
+        (self.base / "release-core").touch()
+        core.wait(timeout=30)
+        self.assertEqual(core.returncode, 0)
+        while not (self.base / "new-core-seen").exists() and time.monotonic() < deadline: time.sleep(.1)
+        self.assertTrue((self.base / "new-core-seen").exists(), "new core did not run")
+        seen = (self.base / "new-core-seen").read_text(encoding="utf-8")
+        self.assertIn("('Q-1', 'running')", seen)
+        self.assertIn("('Bee', 'running')", seen)
+        (self.base / "release-jobs").touch()
 
 if __name__ == "__main__":
     unittest.main()
