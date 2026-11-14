@@ -114,11 +114,11 @@ class DataTest(unittest.TestCase):
     def test_last_verified_reading_keeps_colour_and_shows_age(self):
         """The reserve of a last verified reading keeps green/red and has its age; without reset time it is unknown with the age."""
         old = rows_of(prow(ratio=0.85, stale=True, stale_hours=2.0, error="x", age_minutes=120))[0]["reserve"]
-        self.assertEqual((old["text"], old["level"], old["age"]), (MINUS + "15 %", "bad", "2h"))
+        self.assertEqual((old["text"], old["level"], old["age"]), (MINUS + "15 %", "bad", "Last reading: 2h"))
         young = rows_of(prow(ratio=1.1, error="x", age_minutes=15))[0]["reserve"]
-        self.assertEqual((young["text"], young["level"], young["age"]), ("+10 %", "ok", "15min"))
+        self.assertEqual((young["text"], young["level"], young["age"]), ("+10 %", "ok", "Last reading: 15min"))
         none = rows_of(prow(ratio=None, hours=None, reset_at=None, stale=True, stale_hours=1.0, error="x", age_minutes=60))[0]["reserve"]
-        self.assertEqual((none["text"], none["age"]), ("unknown", "1h"))
+        self.assertEqual((none["text"], none["age"]), ("unknown", "Last reading: 1h"))
 
     def test_without_reading_shows_the_error_or_unknown(self):
         """No reading shows 'unknown' with the stored error in its hover; the weekly line says '7d unknown'."""
@@ -133,27 +133,27 @@ class DataTest(unittest.TestCase):
         """With no time left the weekly line says 'reset now' and the reserve remains a percentage."""
         row = rows_of(prow(hours=0.0, ratio=float("inf")))[0]
         self.assertEqual(row["reserve"]["text"], "+99 %")
-        self.assertEqual(row["weekly"]["text"], "7d 40 % · reset now")
+        self.assertEqual(row["weekly"]["text"], "7d 40 % used · 60 % left · reset now")
 
     def test_reading_without_reset_time(self):
         """A reading without reset time gives the reserve 'unknown' and 'reset unknown' in the weekly line."""
         row = rows_of(prow(ratio=None, hours=None, reset_at=None))[0]
         self.assertEqual(row["reserve"]["text"], "unknown")
-        self.assertEqual(row["weekly"]["text"], "7d 40 % · reset unknown")
+        self.assertEqual(row["weekly"]["text"], "7d 40 % used · 60 % left · reset unknown")
 
     def test_weekly_line_and_colour_by_used_share(self):
         """The weekly line holds percent and reset; the colour follows the used share as before."""
         date = time.strftime("%d.%m. %H:%M", time.localtime(prow()["reset_at"]))
-        self.assertEqual(rows_of(prow(used_pct=60.0))[0]["weekly"], {"pct": 60, "level": "warn", "text": "7d 60 % · " + date})
+        self.assertEqual(rows_of(prow(used_pct=60.0))[0]["weekly"], {"pct": 60, "level": "warn", "text": "7d 60 % used · 40 % left · " + date})
         self.assertEqual([rows_of(prow(used_pct=u))[0]["weekly"]["level"] for u in (10.0, 70.0, 90.0)], ["ok", "warn", "bad"])
 
     def test_five_hour_line(self):
         """The 5h percent, reset status and age of a kept reading."""
-        self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}))[0]["five"], "5h 12 %")
+        self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}))[0]["five"], "5h 12 % used")
         self.assertEqual(rows_of(prow(five_hour={"pct": None, "reset": "new window"}))[0]["five"], "5h reset now")
         self.assertEqual(rows_of(prow())[0]["five"], "")
-        self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}, error="x", age_minutes=5))[0]["five"], "5h 12 % · 5min")
-        self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}, stale=True, stale_hours=1.0))[0]["five"], "5h 12 % · 1h")
+        self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}, error="x", age_minutes=5))[0]["five"], "5h 12 % used · 5min")
+        self.assertEqual(rows_of(prow(five_hour={"pct": 12, "reset": ""}, stale=True, stale_hours=1.0))[0]["five"], "5h 12 % used · 1h")
 
     def test_slots(self):
         """Totals, used and the extra agents above the slot count; 0 slots says 'no slots' and the running agents."""
@@ -173,8 +173,8 @@ class DataTest(unittest.TestCase):
         self.assertEqual((de[2]["reserve"]["text"], de[2]["weekly"]["text"], de[2]["slots"]["none"], de[2]["slots"]["running"]),
                          ("+99 %", "kein Limit", "keine Slots", "2 laufen"))
         self.assertEqual((de[3]["reserve"]["text"], de[3]["weekly"]["text"]), ("unbekannt", "7d unbekannt"))
-        self.assertEqual((de[4]["reserve"]["text"], de[4]["weekly"]["text"], de[4]["five"]), ("+99 %", "7d 40 % · Reset jetzt", "5h Reset jetzt"))
-        self.assertEqual(de[5]["weekly"]["text"], "7d 40 % · Reset unbekannt")
+        self.assertEqual((de[4]["reserve"]["text"], de[4]["weekly"]["text"], de[4]["five"]), ("+99 %", "7T 40 % verbraucht · 60 % übrig · Reset jetzt", "5h Reset jetzt"))
+        self.assertEqual(de[5]["weekly"]["text"], "7T 40 % verbraucht · 60 % übrig · Reset unbekannt")
         from haivequeen import i18n
         self.assertEqual([i18n.tr(t, language="German") for t in ("NEXT", "Quota reserve", "reserve, slots and weekly limit")],
                          ["NEXT", "Quota-Reserve", "Reserve, Slots und Wochenlimit"])
@@ -217,7 +217,7 @@ class ProviderLinesTest(unittest.TestCase):
                     "other": {"usedPercent": 10, "resetHours": 100}}
         providers = [self.provider("claude", 2, "claude"), self.provider("codex", 2, "codex"), self.provider("other", 2, "codex")]
         _raw, rows = self.lines(readings, providers)
-        self.assertEqual([r["five"] for r in rows], ["5h 12 %", "5h 33 %", ""])
+        self.assertEqual([r["five"] for r in rows], ["5h 12 % used", "5h 33 % used", ""])
         self.assertEqual(len([r for r in rows]), 3)   # no separate 5h rows
 
     def test_codex_five_hour_from_the_stored_reading(self):
@@ -228,7 +228,7 @@ class ProviderLinesTest(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k not in ("BZZ_RUNTIME_OVERRIDE", "BZZ_PROVIDER_LIMITS_FILE")}
         with mock.patch.dict(os.environ, env, clear=True):
             rows = overview.provider_lines(self.conn, {"providers": [self.provider("codex", 2, "codex")]}, [])
-        self.assertTrue(dashboard_data.limit_rows({"provider_limits": rows})[0]["five"].startswith("5h 25 % · "))
+        self.assertTrue(dashboard_data.limit_rows({"provider_limits": rows})[0]["five"].startswith("5h 25 % used · "))
 
     def test_snapshot_limits_are_the_rows(self):
         """The snapshot holds the rows; a slot that becomes used shows in the next snapshot."""

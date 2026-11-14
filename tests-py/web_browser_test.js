@@ -52,11 +52,11 @@ window.addEventListener('load', async () => {
 
       assert(warning.startsWith('Sofort stoppen beendet alle'),'Force stop warning was not translated');
 
-      assert(document.body.textContent.includes('LÃ„UFT'),'Orchestrator state was not translated');
+      assert(document.body.textContent.includes('LÄUFT'),'Orchestrator state was not translated');
 
       assert([...document.querySelectorAll('th')].some(node=>node.textContent==='LAUFZEIT'),'Runtime heading was not translated');
 
-      assert([...document.querySelectorAll('td')].some(node=>node.textContent==='lÃ¤uft'),'Agent state was not translated');
+      assert([...document.querySelectorAll('td')].some(node=>node.textContent==='läuft'),'Agent state was not translated');
 
       assert([...document.querySelectorAll('td')].some(node=>node.textContent==='running'),'A user model name was translated');
 
@@ -102,13 +102,13 @@ window.addEventListener('load', async () => {
 
     assert(document.body.textContent.includes('mock-agent'),'Agent snapshot missing');
 
-    assert(document.querySelector('.brand-banner')?.complete,'Brand banner missing');
+    assert(document.querySelector('.header-queen')?.complete,'Header emblem missing');
 
     assert(document.querySelector('#app.dashboard'),'Dashboard layout missing');
 
-    const projectMenu=document.querySelector('button[aria-label="Actions Â· Project Â· demo"]');
+    const projectMenu=document.querySelector('button[aria-label="Actions · Project · demo"]');
 
-    const queenMenu=document.querySelector('button[aria-label="Actions Â· Queen Â· Test Queen"]');
+    const queenMenu=document.querySelector('button[aria-label="Actions · Queen · Test Queen"]');
 
     assert(projectMenu && queenMenu,'Project or Queen action menu missing');
 
@@ -160,7 +160,7 @@ window.addEventListener('load', async () => {
 
     await click('Dashboard');
 
-    document.querySelector('button[aria-label="Actions Â· mock-agent"]').click();
+    document.querySelector('button[aria-label="Actions · mock-agent"]').click();
 
     await click('Filter log');
 
@@ -354,9 +354,9 @@ window.addEventListener('load', async () => {
     assert(!document.querySelector('#plan-panel-1').hidden&&document.querySelector('#plan-panel-0').hidden,'Plan text tab must show the document');
     document.querySelector('#plan-tab-0').click();
 
-    await wait(()=>buttons('Restart Queen on mock âœ“').length);
+    await wait(()=>buttons('Restart Queen on mock ✓').length);
 
-    assert(buttons('Restart Queen on mock âœ“')[0].disabled,'Unavailable current provider must be marked and disabled');
+    assert(buttons('Restart Queen on mock ✓')[0].disabled,'Unavailable current provider must be marked and disabled');
 
     assert(buttons('Restart Queen on excluded')[0]?.disabled,'Excluded provider must be visible and disabled');
 
@@ -366,7 +366,7 @@ window.addEventListener('load', async () => {
 
     document.getElementById('close-detail').click();
 
-    await click('Dashboard');document.querySelector('button[aria-label="Actions Â· mock-agent"]').click();await wait(()=>document.querySelector('#detail .live-output'));
+    await click('Dashboard');document.querySelector('button[aria-label="Actions · mock-agent"]').click();await wait(()=>document.querySelector('#detail .live-output'));
 
     await wait(()=>document.querySelector('.live-output')?.textContent.includes('live milestone'));
 

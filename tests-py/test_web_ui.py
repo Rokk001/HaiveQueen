@@ -42,9 +42,10 @@ class BrowserTests(unittest.TestCase):
     def test_dashboard_branding_is_packaged_and_dialog_is_named(self):
         import base64
         page = web_ui.page('token', language='English')
-        banner = ROOT / 'haivequeen' / 'web-header.png'
-        self.assertIn(base64.b64encode(banner.read_bytes()).decode('ascii'), page)
-        self.assertIn('web-header.png', (ROOT / 'pyproject.toml').read_text())
+        emblem = ROOT / 'haivequeen' / 'web-login-logo.png'
+        source = 'data:image/png;base64,' + base64.b64encode(emblem.read_bytes()).decode('ascii')
+        self.assertTrue(f'class="header-queen" alt="" src="{source}"' in page)
+        self.assertIn(emblem.name, (ROOT / 'pyproject.toml').read_text())
         self.assertIn('aria-labelledby="detail-title"', page)
 
     def test_header_groups_navigation_and_exposes_decorative_animation(self):
@@ -89,10 +90,29 @@ class BrowserTests(unittest.TestCase):
         candidates = [shutil.which(name) for name in ('msedge', 'chromium', 'google-chrome')]
         for variable in ('PROGRAMFILES(X86)', 'PROGRAMFILES'):
             if os.environ.get(variable):
-                candidates.append(str(Path(os.environ[variable]) / 'Microsoft/Edge/Application/msedge.exe'))
-        browser = next((candidate for candidate in candidates if candidate and Path(candidate).is_file()), None)
+                for executable in ('Microsoft/Edge/Application/msedge.exe', 'Google/Chrome/Application/chrome.exe'):
+                    candidates.append(str(Path(os.environ[variable]) / executable))
+        flags = ['--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+                 '--disable-extensions', '--disable-background-networking']
+        process_options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+        browser = None
+        for candidate in dict.fromkeys(candidates):
+            if not candidate or not Path(candidate).is_file():
+                continue
+            # Some Windows browser launchers return before their child exits
+            # and the child may still hold the throwaway probe profile open.
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile:
+                try:
+                    probe = subprocess.run([candidate, *flags, '--user-data-dir=' + profile,
+                                            '--dump-dom', 'data:text/html,<p>headless probe</p>'],
+                                           capture_output=True, timeout=15, **process_options)
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+            if probe.returncode == 0 and b'<p>headless probe</p>' in probe.stdout:
+                browser = candidate
+                break
         if not browser:
-            self.skipTest('A Chromium browser is required for the DOM smoke test')
+            self.skipTest('The DOM smoke test requires a Chromium browser with working headless DOM output')
         actions = []
         live_reads = []
         browser_language = ['English']
@@ -114,7 +134,7 @@ class BrowserTests(unittest.TestCase):
             def send(self, value, mime='application/json', status=200):
                 body=(value if isinstance(value,str) else json.dumps(value)).encode()
                 self.send_response(status)
-                self.send_header('Content-Type',mime)
+                self.send_header('Content-Type', mime + '; charset=utf-8')
                 self.send_header('Content-Length',str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -140,7 +160,7 @@ class BrowserTests(unittest.TestCase):
                                       'workspace':'demo-plans','project_defaults':{'integrationBranch':'develop'},'rules':[{'label':'AGENTS.md','path':'AGENTS.md','tokens':12,'native_clis':['Codex CLI']}],
                                       'upstream':{'on':False,'usable':False,'note':''}})
                 value={'/api/state':state, '/api/providers':[{'name':'mock','logged_in':True}],
-                       '/api/git-login/providers':[{'name':'example','method':git_method[0],'device':True,'registration_url':'https://example.invalid/register','registration_help':'Register a public client or enter an access token.'}],
+                       '/api/git-login/providers':[{'name':'example','method':git_method[0],'device':False}],
                        '/api/releases':{'releases':[{'tag':'v2.0.1-dev.3','version':'v2.0.1-dev.3','date':'2026-01-02','commit':'a'*40,'prerelease':True,'full_tag':'v2.0.1'},
                                                     {'tag':'v2.0.0','version':'v2.0.0','date':'2026-01-01','commit':'b'*40,'prerelease':False,'full_tag':''}]},
                        '/api/settings/view':{'data':data,'revision':'revision-1','provider_models':{'mock':{'models':['test'],'efforts':['medium']}}},
@@ -189,13 +209,13 @@ class BrowserTests(unittest.TestCase):
         thread.start()
         try:
             with tempfile.TemporaryDirectory() as profile:
-                command=[browser,'--headless','--disable-gpu','--no-first-run','--no-default-browser-check',
-                         '--disable-extensions','--disable-background-networking','--user-data-dir='+profile,
+                command=[browser,*flags,'--user-data-dir='+profile,
                          '--dump-dom','--virtual-time-budget=15000','http://127.0.0.1:'+str(server.server_port)]
                 result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45,
-                                      **({'creationflags':subprocess.CREATE_NO_WINDOW} if os.name=='nt' else {}))
+                                      **process_options)
                 failure=result.stdout.split('BROWSER TEST:')[-1][-1500:]
-                self.assertTrue('data-test-result="passed"' in result.stdout, failure+result.stderr[-300:])
+            self.assertTrue('data-test-result="passed"' in result.stdout,
+                            f'Browser exit code {result.returncode}\n{failure}\n{result.stderr[-1000:]}')
         finally:
             server.shutdown()
             thread.join()

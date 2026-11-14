@@ -186,13 +186,13 @@ class HistoryTests(TestCase):
              mock.patch.object(gitea, '_request', return_value={'commit': {'sha': SHA}}):
             self.assertEqual(gitea.release_history(('https://git.example', 'team', 'repo'), 'mock'), expected)
 
-    def test_azure_release_controls_are_unavailable_but_git_and_pipeline_remain(self):
+    def test_azure_supports_release_workflows_without_local_upload_or_promotion(self):
         provider = git_provider.Provider('azure', azure, ('org', 'project', 'repo'))
         self.assertTrue(provider.supports_step('Merge'))
         self.assertTrue(provider.supports_step('Check'))
         self.assertIn('tag', provider.capabilities)
-        self.assertFalse({'release_tag', 'release_state'} <= provider.capabilities)
-        self.assertFalse({'release_prepare', 'release_upload', 'release_asset_digest'} <= provider.capabilities)
+        self.assertTrue({'release_tag', 'release_state'} <= provider.capabilities)
+        self.assertFalse({'release_prepare', 'release_upload', 'release_asset_digest'} & provider.capabilities)
         with self.assertRaisesRegex(ValueError, 'does not support release history or promotion'):
             web_releases.promote(provider, 'git', PRE)
 

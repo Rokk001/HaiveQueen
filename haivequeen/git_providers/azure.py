@@ -133,8 +133,8 @@ def pipeline_for_commit(repo, commit, token, auth='pat'):
     return _request(repo, 'build/builds', token, auth, query={'repositoryId': repo[2], 'repositoryType': 'TfsGit', 'queryOrder': 'finishTimeDescending', '$top': 100}).get('value', [])
 
 
-# Repository release publication is unavailable for Azure DevOps.
-# Ordinary Git tag operations remain available via 'tag'.
+# Azure Pipelines can run on release tags. Azure has no repository release
+# history or file uploads.
 
 
 def release_tag(repo, name, commit, token=None):

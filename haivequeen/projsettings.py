@@ -293,6 +293,10 @@ def migrate_data(data: dict, workspace, general: dict) -> tuple:
         removed.append(("compileCheckEnabled", old["compileCheckEnabled"], "moved to checkEnabled"))
     if "publishReleases" in old:
         removed.append(("publishReleases", old["publishReleases"], "moved to releaseEnabled"))
+    if "wayOfWorking" not in old:
+        for key in ("buildEnabled", "deployEnabled"):
+            if key in old:
+                removed.append((key, old[key], "legacy switch replaced by the command-derived switch"))
     # settings that move to General and the providers
     if old.get("owner") and not str(general.get("owner") or "").strip():
         general["owner"] = old["owner"]

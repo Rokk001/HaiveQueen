@@ -40,7 +40,7 @@ class WebApiTests(RoundCase):
         self.assertEqual(view['git_workflow']['provider'], '')
         self.assertFalse(any(view['git_workflow']['supported'].values()))
 
-    def test_azure_workflow_disables_release_but_keeps_git_and_pipeline(self):
+    def test_azure_workflow_supports_tag_triggered_release(self):
         from haivequeen import git_provider, projsettings
         from haivequeen.git_providers import azure
         provider = git_provider.Provider('azure', azure, ('org', 'project', 'repo'))
@@ -49,7 +49,7 @@ class WebApiTests(RoundCase):
             supported = web_api.settings_view(self.conn, 'testproj')['git_workflow']['supported']
         self.assertTrue(supported['merge'])
         self.assertTrue(supported['check'])
-        self.assertFalse(supported['release'])
+        self.assertTrue(supported['release'])
 
     def test_step_logs_are_isolated_by_plan_and_step(self):
         from haivequeen import orchestrator

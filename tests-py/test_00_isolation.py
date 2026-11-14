@@ -13,6 +13,16 @@ class IsolationActiveTest(unittest.TestCase):
         self.assertTrue(os.environ["LOCALAPPDATA"].startswith(str(isolation.ROOT)))
         self.assertTrue(os.environ["APPDATA"].startswith(str(isolation.ROOT)))
 
+    def test_dashboard_cannot_start_a_live_quota_worker(self):
+        from unittest.mock import Mock, patch
+        from haivequeen import usage
+        with patch.dict(os.environ), patch.object(usage, "_dashboard_refresh_at", 0):
+            for key in ("BZZ_DATA_DIR", "BZZ_RUNTIME_OVERRIDE", "BZZ_PROVIDER_LIMITS_FILE"):
+                os.environ.pop(key, None)
+            connection = Mock()
+            usage.schedule_dashboard_refresh(connection, [{"limit": "claude"}])
+            connection.execute.assert_not_called()
+
     def test_cli_runtime_files_in_the_profile_are_live(self):
         """The session logs, caches and state a CLI writes in the profile while a Hive runs are not counted as changes made by a test."""
         for rel in ("profile/claude/.claude.json", "profile/claude/projects/p/s.jsonl", "profile/claude/sessions/1.json", "profile/codex/sessions/2026/a.jsonl",

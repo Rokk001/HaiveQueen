@@ -312,7 +312,7 @@ class ClaudeRefreshTests(RoundCase):
             self.assertAlmostEqual(row['stale_hours'], 2, delta=0.1)
             shown = dashboard_data.limit_rows({'provider_limits': [row]})[0]
             self.assertEqual(shown['weekly']['pct'], 90)
-            self.assertEqual(shown['reserve']['age'], '2h')
+            self.assertEqual(shown['reserve']['age'], 'Last reading: 2h')
             old = (datetime.now(timezone.utc) - timedelta(hours=usage.RETAIN_HOURS + 1)).isoformat()
             runtime.kv_set(self.conn, '*', 'usage-claude:claude', json.dumps({'saved': old, 'refresh_error': 'x',
                 'sevenDay': {'utilization': 0.9, 'resetsAt': int(self.reset.timestamp())}}))

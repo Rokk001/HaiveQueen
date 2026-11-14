@@ -21,8 +21,8 @@ class GithubProviderTests(unittest.TestCase):
         with mock.patch.object(github, 'urlopen', side_effect=[self.response({'number': 1}), self.response({'ref': 'refs/tags/v1'}), self.response([{'id': 1}]), self.response({'state': 'success'}), self.response({'id': 2})]) as request:
             self.assertEqual(self.provider.call('pull_request', 'title', 'feature', 'main', token='secret')['number'], 1)
             self.provider.call('tag', 'v1', 'abc', token='secret')
-            self.assertEqual(self.provider.call('release_list'), [{'id': 1}])
-            self.assertEqual(self.provider.call('pipeline', 'main')['state'], 'success')
+            self.assertEqual(self.provider.call('release_list', token='secret'), [{'id': 1}])
+            self.assertEqual(self.provider.call('pipeline', 'main', token='secret')['state'], 'success')
             self.provider.call('release_asset', 1, 'a b.zip', b'data', 'secret')
         calls = [c.args[0] for c in request.call_args_list]
         self.assertEqual(json.loads(calls[0].data)['head'], 'feature')
@@ -43,11 +43,11 @@ class GithubProviderTests(unittest.TestCase):
             self.assertEqual(self.provider.call('login', run=lambda *a: (1, '')), '')
         with mock.patch.object(github, 'urlopen', side_effect=HTTPError('url', 403, 'denied', {}, None)):
             with self.assertRaises(git_provider.ProviderError):
-                self.provider.call('pipeline', 'main')
+                self.provider.call('pipeline', 'main', token='secret')
 
     def test_release_list_paginates_and_remote_detection_is_strict(self):
         with mock.patch.object(github, 'urlopen', side_effect=[self.response([{}] * 100), self.response([{'id': 101}])]):
-            self.assertEqual(len(self.provider.call('release_list')), 101)
+            self.assertEqual(len(self.provider.call('release_list', token='secret')), 101)
         self.assertIsNone(github.detect('https://github.com.evil/team/project'))
         self.assertIsNone(github.detect('https://github.com/../project'))
 

@@ -100,6 +100,8 @@ class ReleasePipeline(OrchCase):
         self.assertEqual(len(list(out.iterdir())), 2)
         self.assertEqual(self.fixers(), [])
         # Polling after reload must recover the uploaded-but-unacknowledged file.
+        self.remote_commit('later.txt')
+        self.assertNotEqual(self.remote_head(), state['release']['commit'])
         self.round()
         self.assertIsNone(self.state())
         self.assertEqual(self.plan_status(), 'REVIEW')
@@ -108,6 +110,7 @@ class ReleasePipeline(OrchCase):
         release = self.releases['v1.4.1-preview.1']
         self.assertTrue(release['prerelease'])
         self.assertEqual(release['target_commitish'], state['release']['commit'])
+        self.assertEqual(self.refs['v1.4.1-preview.1'], state['release']['commit'])
 
     def test_empty_and_unset_folder_skip_without_tag(self):
         self.configure()

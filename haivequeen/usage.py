@@ -505,7 +505,8 @@ _dashboard_refresh_at = 0.0
 def schedule_dashboard_refresh(conn, providers):
     """Refresh cached metadata off the dashboard request thread, including while the loop is stopped."""
     global _dashboard_refresh_at
-    if os.environ.get('BZZ_DATA_DIR') or os.environ.get('BZZ_RUNTIME_OVERRIDE') or os.environ.get('BZZ_PROVIDER_LIMITS_FILE'):
+    if (os.environ.get('BZZ_NO_DASHBOARD_QUOTA_REFRESH') or os.environ.get('BZZ_DATA_DIR')
+            or os.environ.get('BZZ_RUNTIME_OVERRIDE') or os.environ.get('BZZ_PROVIDER_LIMITS_FILE')):
         return
     if time.monotonic() - _dashboard_refresh_at < 60 or not _dashboard_refresh_lock.acquire(blocking=False):
         return
