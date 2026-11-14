@@ -541,17 +541,41 @@ function mount(document, bootstrap) {
     const status=el('p',t('Loading…'),'step-log-status'),panel=el('section',undefined,'entity-console');
     panel.append(el('h3',step+' · '+t('Live')));
     const output=el('pre',undefined,'live-output');output.setAttribute('aria-label',step+' log');panel.append(output);body.append(header,status,panel);
+    const sources=el('div',undefined,'step-log-sources'),runInfo=el('p',undefined,'step-log-run'),fileInfo=el('p',undefined,'dim');
+    const sourceSelect=el('select');sourceSelect.setAttribute('aria-label','Log source');
+    sources.append(el('label','Log source'),sourceSelect);body.insertBefore(runInfo,panel);panel.insertBefore(sources,output);panel.insertBefore(fileInfo,output);
+    let latest=null, selected=null;
+    const date=value=>value?new Date(value).toLocaleString():t('Unknown');
+    function display(){
+      if(!latest)return;
+      const file=(latest.references||[]).find(item=>item.path===selected);
+      const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
+      const text=file?(file.error||file.content||t('Log file is empty.')):(latest.console_output||latest.output||t('No log output available yet.'));
+      fileInfo.textContent=file?file.path+' · '+t('File updated')+': '+date(file.modified_at)+(file.truncated?' · '+t('Showing first 8 MiB'):'')+' · '+t('File currently on disk; not an archived snapshot.') : t('Recorded console output for the selected run.');
+      if(output.textContent!==text){output.textContent=text;if(follow)output.scrollTop=output.scrollHeight;}
+    }
+    sourceSelect.onchange=()=>{selected=sourceSelect.value;display();};
     const dialog=$('detail');
     async function refresh(){
       if(!dialog.open||!output.isConnected)return;
       try{
         const result=await client.request('plan/step-log?'+new URLSearchParams({...key(row),step}));
         if(!dialog.open||!output.isConnected)return;
-        status.textContent=t({done:'Completed',running:'Running',red:'Failed',todo:'Pending',waiting:'Waiting',cancelled:'Cancelled',unknown:'Unknown'}[result.status]||result.status)+(result.reason?' · '+result.reason:'')+(result.exit_code!=null?' · Exit '+result.exit_code:'')+(result.historical?' · '+t('Previous run output'):'');
+        status.textContent=t({done:'Completed',running:'Running',red:'Failed',todo:'Pending',waiting:'Waiting',cancelled:'Cancelled',unknown:'Unknown'}[result.status]||result.status)+(result.reason?' · '+result.reason:'')+(!result.historical&&result.exit_code!=null?' · Exit '+result.exit_code:'')+(result.historical?' · '+t('Previous run output'):'');
         status.className='step-log-status '+({done:'ok',running:'warn',red:'bad',todo:'dim',waiting:'warn',cancelled:'dim',unknown:'dim'}[result.status]||'dim');
-        const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
-        const text=[result.output,result.error&&result.error!==result.output?result.error:''].filter(Boolean).join('\n\n')||t('No log output available yet.');
-        if(output.textContent!==text){output.textContent=text;if(follow)output.scrollTop=output.scrollHeight;}
+        latest=result;
+        runInfo.textContent=(result.historical?t('Previous run — not the current attempt'):result.status==='running'?t('Current run'):t('Latest recorded run'))+
+          ' · '+t('Started')+': '+date(result.started_at)+' · '+t('Ended')+': '+date(result.ended_at)+(result.exit_code!=null?' · '+t('Run result')+': '+(result.exit_code===0?t('Completed'):t('Failed'))+' · Exit '+result.exit_code:'');
+        panel.querySelector('h3').textContent=step+' · '+(result.historical?t('Previous run'):result.status==='running'?t('Live'):t('Recorded logs'));
+        const choices=[{path:'',label:t('Console output')},...(result.references||[]).map(item=>({path:item.path,label:t('Referenced file')+': '+item.path}))];
+        if(selected===null)selected=choices[1]?.path||'';
+        if(!choices.some(item=>item.path===selected))selected='';
+        const signature=JSON.stringify(choices);
+        if(sourceSelect.dataset.choices!==signature){
+          sourceSelect.replaceChildren(...choices.map(item=>{const option=el('option',item.label);option.value=item.path;return option;}));
+          sourceSelect.dataset.choices=signature;
+        }
+        sourceSelect.value=selected;display();
       }catch(error){if(output.isConnected)status.textContent=error.message;}
       if(dialog.open&&output.isConnected)stepLogTimer=setTimeout(refresh,2000);
     }

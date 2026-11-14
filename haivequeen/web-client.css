@@ -768,3 +768,8 @@ progress.ok::-moz-progress-bar { background: #79df9b; }progress.bad::-moz-progre
  .header-wordmark { letter-spacing: -1px; }
  .header-descriptor { font-size: 7px; letter-spacing: .2em; margin-top: 7px; }
 }
+
+.step-log-sources { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:12px 16px 0; }
+.step-log-sources select { min-width:0; max-width:100%; flex:1; }
+.step-log-detail .entity-console > .dim { padding:0 16px; overflow-wrap:anywhere; }
+.step-log-run { padding:10px 12px; border-left:3px solid #f4c62d; background:#111e24; }
