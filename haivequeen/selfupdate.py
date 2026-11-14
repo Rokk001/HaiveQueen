@@ -397,9 +397,11 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
     holder = loop._take_pid_lock(release_lock_path(), own_ok=False, wait=0.5)
     if holder:
         return {'result': 'locked', 'note': 'another release update runs', 'old': '', 'new': ''}
-    old = (root / 'active-version').read_text(encoding='utf-8').strip()
-    row = start_row(conn, old)
+    old = ''
+    row = None
     try:
+        old = (root / 'active-version').read_text(encoding='utf-8').strip()
+        row = start_row(conn, old)
         target = version_layout.version_dir(root, version)
         if not target.exists():
             target = stage(root, updates.repository(config.load_config()), version)
@@ -430,23 +432,40 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
             if not had_core and not start():
                 return False
             return receipt(conn, target, began, sleep, poll, timeout, loop_pid=loop_pid)
-        passed = activate(root, version, first_round)
+        recovered = [False]
+        def recover_old(old_version):
+            # The old reservation stays held during this callback. A successor
+            # must relinquish the core lock itself; never kill a foreign process.
+            deadline = time.monotonic() + timeout
+            began_old = db.now()
+            old_path = version_layout.version_dir(root, old_version)
+            while loop_pid() and time.monotonic() < deadline:
+                if receipt(conn, old_path, began_old, sleep, poll, min(poll, max(0.0, deadline - time.monotonic())), loop_pid=loop_pid):
+                    recovered[0] = True
+                    return
+                sleep(poll)
+            if loop_pid():
+                return
+            if start():
+                recovered[0] = receipt(conn, version_layout.version_dir(root, old_version), began_old,
+                                       sleep, poll, timeout, loop_pid=loop_pid)
+        passed = activate(root, version, first_round, after_rollback=recover_old)
         if passed:
             result, note = 'ok', 'updated to version ' + version
         else:
-            # The pointer now names the old version. A live successor will
-            # yield on the pointer change; otherwise start the old core.
-            if not loop_pid():
-                start()
-            result, note = 'rollback', 'first round failed; rolled back to ' + old
+            result = 'rollback' if recovered[0] else 'failed'
+            note = 'first round failed; rolled back to ' + old
+            if not recovered[0]:
+                note += '; old core restart was not verified'
             file_fault_rollback(conn, note)
         end_row(conn, row, version if passed else old, result, note)
         return {'result': result, 'note': note, 'old': old, 'new': version if passed else old}
     except Exception as exc:
         note = 'release update failed: ' + str(exc)
-        if (root / 'active-version').read_text(encoding='utf-8').strip() == old and not loop_pid():
+        if old and (root / 'active-version').read_text(encoding='utf-8').strip() == old and not loop_pid():
             start()
-        end_row(conn, row, old, 'failed', note)
+        if row is not None:
+            end_row(conn, row, old, 'failed', note)
         return {'result': 'failed', 'note': note, 'old': old, 'new': old}
     finally:
         for path in (release_status_path(), release_force_path(), release_lock_path()):

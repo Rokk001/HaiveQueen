@@ -3,6 +3,9 @@ import contextlib
 import io
 import json
 import os
+import subprocess
+import sys
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -105,12 +108,79 @@ class ReleaseWorkerTests(unittest.TestCase):
         self.assertEqual(calls, ['stop'])
         self.assertEqual(result['result'], 'ok')
 
+    def test_real_stalled_successor_yields_before_verified_old_restart(self):
+        self.metadata(True)
+        lock = Path(self.temp.name) / 'loop.lock'
+        code = ("import os,sys,time,pathlib; p=pathlib.Path(sys.argv[1]); "
+                "lock=pathlib.Path(sys.argv[2]); lock.write_text(str(os.getpid())); "
+                "exec(\"while p.read_text().strip() == '2.0.0': time.sleep(.01)\"); lock.unlink()")
+        child = None
+        calls = []
+        def pid():
+            try:
+                return int(lock.read_text())
+            except (OSError, ValueError):
+                return 0
+        def receipt(conn, target, began, sleep, poll, timeout, loop_pid):
+            nonlocal child
+            calls.append(target.name)
+            if target.name == '2.0.0':
+                child = subprocess.Popen([sys.executable, '-c', code, str(self.root / 'active-version'), str(lock)])
+                for _ in range(200):
+                    if pid(): break
+                    time.sleep(.01)
+                self.assertTrue(pid())
+                return False
+            self.assertEqual(self.active(), '1.0.0')
+            return not pid()
+        try:
+            with mock.patch.object(selfupdate, 'file_fault_rollback') as fault, \
+                 mock.patch.object(selfupdate, 'wait_successor_round', side_effect=receipt), \
+                 mock.patch.object(selfupdate, 'run_command', return_value=(0, '')):
+                result = selfupdate.run_update(self.conn, live=self.root / 'versions' / '1.0.0', version='2.0.0',
+                    poll=.01, round_timeout=3, loop_pid=pid, sleep=time.sleep)
+        finally:
+            if child:
+                child.wait(timeout=5)
+        self.assertEqual(result['result'], 'rollback')
+        self.assertEqual(calls[0], '2.0.0')
+        self.assertIn('1.0.0', calls)
+        fault.assert_called_once()
+
+    def test_exception_in_successor_check_attempts_old_recovery(self):
+        self.metadata(True)
+        seen = []
+        def receipt(conn, target, *args, **kwargs):
+            seen.append(target.name)
+            if target.name == '2.0.0':
+                raise RuntimeError('receipt failed')
+            return True
+        result = selfupdate.run_release_update(self.conn, self.root, '2.0.0',
+                  loop_pid=lambda: 0, start=lambda: True, receipt=receipt)
+        self.assertEqual(result['result'], 'failed')
+        self.assertEqual(seen, ['2.0.0', '1.0.0'])
+        self.assertEqual(self.active(), '1.0.0')
+        self.assertFalse(selfupdate.release_lock_path().exists())
+
+    def test_missing_pointer_releases_update_lock(self):
+        (self.root / 'active-version').unlink()
+        result = selfupdate.run_release_update(self.conn, self.root, '2.0.0')
+        self.assertEqual(result['result'], 'failed')
+        self.assertFalse(selfupdate.release_lock_path().exists())
+
+    def test_row_setup_failure_releases_update_lock(self):
+        with mock.patch.object(selfupdate, 'start_row', side_effect=RuntimeError('row failed')):
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', loop_pid=lambda: 1)
+        self.assertEqual(result['result'], 'failed')
+        self.assertFalse(selfupdate.release_lock_path().exists())
+
     def test_failed_successor_restores_pointer_and_reports(self):
         self.metadata(True)
         with mock.patch.object(selfupdate, 'file_fault_rollback') as fault:
-            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', loop_pid=lambda: 42,
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', loop_pid=lambda: 42, timeout=0,
                                                    receipt=lambda *a, **k: False)
-        self.assertEqual(result['result'], 'rollback')
+        self.assertEqual(result['result'], 'failed')
+        self.assertIn('restart was not verified', result['note'])
         self.assertEqual(self.active(), '1.0.0')
         fault.assert_called_once()
 
