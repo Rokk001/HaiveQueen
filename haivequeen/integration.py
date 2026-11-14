@@ -221,10 +221,14 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, lab
     """Run `command` in `cwd` until it ends; returns (exit code, output text). The check ends red (124) after max_seconds of running and red (125,
     "stalled") when for stall_seconds neither a new output line appeared nor the CPU time of its process tree grew. `env` adds environment variables,
     `label` names the command in the messages and `on_start(pid)` is called once the process runs (the Orchestrator keeps it to end the command)."""
-    import tempfile
-    with tempfile.TemporaryDirectory(prefix="compile-completion-") as folder:
-        return _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll,
-                                  Path(folder) / "exit", env, label, on_start, log_file)
+    import uuid
+    # The launcher can outlive this observer (including its exception paths).
+    # Keep its exit receipt with the durable action, never in auto-cleaned temp.
+    completion = (Path(log_file).with_suffix('.exit') if log_file else
+                  osplat.data_dir() / 'command-completions' / (uuid.uuid4().hex + '.exit'))
+    completion.parent.mkdir(parents=True, exist_ok=True)
+    return _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll,
+                              completion, env, label, on_start, log_file)
 
 
 def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completion, env, label, on_start, log_file=None):
@@ -236,27 +240,39 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
     state = {"lines": 0}
 
     def read(stream):
-        for line in iter(stream.readline, ""):
-            action_logs.append(log_file, line)
-            lines.append(line.rstrip("\r\n"))
-            state["lines"] += 1
+        try:
+            for line in iter(stream.readline, ""):
+                action_logs.append(log_file, line)
+                lines.append(line.rstrip("\r\n"))
+                state["lines"] += 1
+        finally:
+            stream.close()
 
     # The configured command line is the owner's own text, so the system shell runs it (named explicitly, no shell flag): cmd /s keeps a quoted program path intact.
     line = 'cmd.exe /d /s /c "%s"' % command if os.name == "nt" else ["/bin/sh", "-c", command]
-    launcher = ("import json, pathlib, subprocess, sys; "
+    launcher = ("import json, os, pathlib, subprocess, sys; "
                 "code = subprocess.call(json.loads(sys.argv[1])); "
-                "pathlib.Path(sys.argv[2]).write_text(str(code), encoding='ascii')")
+                "target = pathlib.Path(sys.argv[2]); "
+                "target.parent.mkdir(parents=True, exist_ok=True); "
+                "pending = target.with_suffix('.pending'); "
+                "handle = pending.open('w', encoding='ascii'); "
+                "handle.write(str(code)); handle.flush(); os.fsync(handle.fileno()); handle.close(); "
+                "os.replace(pending, target)")
     proc = subprocess.Popen([sys.executable, "-I", "-c", launcher, json.dumps(line), str(completion)],
                             cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                             env={**os.environ, **env} if env else None, **({"start_new_session": True} if os.name != "nt" else {}))
-    if on_start:
-        on_start(proc.pid)
     proctree.exempt_register(proc.pid)   # started by HaiveQueen, not by the agent: the cleanup of the agent's leftover processes leaves it alone
     reader = threading.Thread(target=read, args=(proc.stdout,), daemon=True)
     reader.start()
     started = last_progress = time.monotonic()
     seen_lines, seen_cpu, ended = 0, -1.0, None
     try:
+        if log_file:
+            action_logs._write(log_file, {'event': 'launcher', 'time': action_logs._now(),
+                                          'pid': proc.pid, 'identity': osplat.process_identity(proc.pid),
+                                          'completion': str(completion), 'run_id': completion.stem})
+        if on_start:
+            on_start(proc.pid)
         while proc.poll() is None:
             now = time.monotonic()
             cpu = proctree.tree_cpu_seconds(proc.pid)
@@ -273,10 +289,23 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
         try:
             proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
-            pass
+            action_logs.append(log_file, '\nInfrastructure error: launcher still alive after termination request; completion receipt retained.\n')
+            raise RuntimeError('launcher still alive after termination request')
         reader.join(timeout=5)
+    except BaseException:
+        def reap_detached():
+            proc.wait()
+            reader.join()
+            proctree.exempt_clear(proc.pid)
+        threading.Thread(target=reap_detached, daemon=True).start()
+        if log_file:
+            action_logs._write(log_file, {'event': 'observer_detached', 'time': action_logs._now(),
+                                          'pid': proc.pid, 'completion': str(completion),
+                                          'running': proc.poll() is None})
+        raise
     finally:
-        proctree.exempt_clear(proc.pid)
+        if proc.poll() is not None:
+            proctree.exempt_clear(proc.pid)
     text = action_logs.output(log_file) if log_file else "\n".join(lines)
     if ended:
         if log_file:
@@ -288,7 +317,7 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
     except (OSError, ValueError):
         code = None
     if proc.returncode != 0 or code is None:
-        message = "the command launcher ended without completing the run"
+        message = "Infrastructure error: the command launcher ended without completing the run (launcher exit %s; receipt %s)" % (proc.returncode, completion)
         action_logs.append(log_file, "\n" + message + "\n")
         return -1, text + ("\n" if text else "") + message
     return code, text

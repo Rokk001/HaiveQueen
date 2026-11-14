@@ -61,6 +61,21 @@ class SpeculativeQueue(OrchCase):
             self.assertEqual(self.started[plan, "Check"], 1)
         self.assertNotEqual(self.remote_head(), self.git("rev-parse", "HEAD", cwd=self.pwt))
 
+    def test_serial_build_waits_for_earlier_integration(self):
+        """Keep builds and their checks in queue order when the project requires it."""
+        self.project_toml("serialIntegrationBuild = true\n")
+        self.tick()
+        self.finish_step(OTHER, "Check")
+        self.assertEqual(self.started[OTHER, "Build"], 0)
+        self.finish_step(REL, "Check")
+        self.assertEqual(self.started[REL, "Build"], 1)
+        self.assertEqual(self.started[OTHER, "Build"], 0)
+        self.finish_step(REL, "Build")
+        self.assertEqual(self.started[OTHER, "Build"], 0)
+        self.finish_step(REL, "Deploy")
+        self.assertEqual(self.started[OTHER, "Build"], 1)
+        self.assertEqual(self.started[OTHER, "Check"], 1)
+
     def test_parallel_builds_ordered_push_deploy_and_no_recheck(self):
         self.tick()
         self.finish_step(OTHER, "Check")

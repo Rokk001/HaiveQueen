@@ -18,7 +18,7 @@ MIGRATION_FILE = "removed-settings.md"
 
 # Keys of a project.toml that stay. Fields of the project page (P-1, P-2) and the internal keys without a field of their own.
 KEPT_KEYS = (
-    "name", "codeRepo", "integrationBranch", "compileCheck", "buildCommand", "deployCommand",
+    "name", "codeRepo", "integrationBranch", "compileCheck", "buildCommand", "deployCommand", "serialIntegrationBuild",
     "plans", "worktreeLocation", "deleteFinishedWorktrees", "deleteIntegratedBranches",
     "nextVersion", "onEvent", "colour", "priority", "buildProcessNames", "ownerTopics",
     "wayOfWorking", "mergeMode", "checkMode", "buildMode", "deployMode", "releaseMode",

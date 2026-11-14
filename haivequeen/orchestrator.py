@@ -453,6 +453,10 @@ def _advance_pipeline(conn, env, plan, state, free_mb):
     for _ in range(4 * (len(STEPS) + 2)):   # inline steps follow each other in one round (also after a moved remote); a running command ends the round
         step = state["step"]
         ahead = _ahead(conn, env.name, plan)
+        if step == "Build" and settings.get("serialIntegrationBuild") and ahead and not state.get("job"):
+            _blocker(conn, env, plan, "waiting for earlier plans to finish integration before building")
+            _set_status(conn, env, plan, "WAITING")
+            return None
         if step in ("Push", "Deploy", "Release", "Close") and ahead:
             # Waiting through Close also serializes Deploy and release publication.
             _blocker(conn, env, plan, "waiting for earlier plans to push and deploy")
@@ -833,6 +837,10 @@ def _command(conn, env, plan, state, folder, step, free_mb):
                     import traceback
                     output = traceback.format_exc()
                     action_logs.append(j.log_file, output)
+                    if agent_process.recorded_alive(j.pid, j.identity):
+                        # The observer failed, not necessarily its command. Keep
+                        # the reservation until the durable receipt can be read.
+                        return
                     action_logs.finish(j.log_file, 1)
                     Path(result_file).write_text(json.dumps({"token": j.token, "code": 1, "output": output}), encoding="utf-8")
                 finally:
@@ -898,13 +906,24 @@ def _harvest(conn, env, plan, state):
         JOBS.pop(key, None)
         save_step_log(conn, env.name, plan, job["step"], int(data["code"]), data.get("output") or "")
         return int(data["code"]), str(data.get("output") or "")
+    pid = job.get("pid")
+    if agent_process.recorded_alive(pid, job.get("identity")):
+        return None
+    receipt = Path(state["log_file"]).with_suffix('.exit') if state.get('log_file') else None
+    try:
+        recovered_code = int(receipt.read_text(encoding='ascii')) if receipt else None
+    except (OSError, ValueError):
+        recovered_code = None
+    if recovered_code is not None:
+        output = action_logs.output(state['log_file'])
+        action_logs.finish(state['log_file'], recovered_code)
+        JOBS.pop(key, None)
+        save_step_log(conn, env.name, plan, job['step'], recovered_code, output)
+        return recovered_code, output
     if j and j.token == job["token"]:
         JOBS.pop(key, None)
         _finish_log(state, 1, message="the command ended without a result")
         return 1, "the command ended without a result"
-    pid = job.get("pid")
-    if agent_process.recorded_alive(pid, job.get("identity")):
-        return None   # a command of an earlier run of HaiveQueen still runs: wait for it, then run the step again
     _finish_log(state, 143, "aborted", "worker ended without a result")
     return "lost"
 
