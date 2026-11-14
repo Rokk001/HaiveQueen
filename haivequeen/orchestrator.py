@@ -601,6 +601,16 @@ def _detached_work(request_file):
     """Run a pipeline command in a supervisor independent of the core process."""
     from . import proctree
     request = json.loads(Path(request_file).read_text(encoding="utf-8"))
+    gate = request.get("gate")
+    if gate:
+        # Never execute until the core has durably recorded our PID. If it dies
+        # before publishing the gate, recovery may retry without duplicating work.
+        while not Path(gate).exists():
+            if not osplat.process_alive(request["parent_pid"]):
+                Path(request_file).unlink(missing_ok=True)
+                return
+            time.sleep(0.05)
+        Path(gate).unlink(missing_ok=True)
     j = Job(request["token"])
     j.log_file = request.get("log_file")
     try:
@@ -620,12 +630,13 @@ def _detached_work(request_file):
             pass
 
 
-def _start_detached_work(j, settings, step, command, folder, extra, result_file):
+def _start_detached_work(j, settings, step, command, folder, extra, result_file, gated=False):
     from . import proctree
     request_file = Path(str(result_file) + ".request")
     request_file.write_text(json.dumps({"token": j.token, "settings": settings, "step": step,
         "command": command, "folder": str(folder), "extra": extra, "result_file": str(result_file),
-        "log_file": str(j.log_file) if j.log_file else None}), encoding="utf-8")
+        "log_file": str(j.log_file) if j.log_file else None,
+        "gate": str(result_file) + ".go" if gated else None, "parent_pid": os.getpid()}), encoding="utf-8")
     bootstrap = "import sys;sys.path.insert(0,sys.argv[1]);from haivequeen.orchestrator import _detached_work;_detached_work(sys.argv[2])"
     flags = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
     try:
@@ -700,11 +711,16 @@ def _command(conn, env, plan, state, folder, step, free_mb):
                     time.sleep(POLL)
         else:
             try:
-                _start_detached_work(j, env.settings, step, command, folder, extra, result_file)
+                _start_detached_work(j, env.settings, step, command, folder, extra, result_file, gated=True)
                 state["job"]["pid"] = j.pid
                 state["job"]["version_path"] = str(Path(__file__).resolve().parent.parent)
                 save(conn, env.name, plan, state)
-            except OSError as exc:
+                Path(str(result_file) + ".go").touch()
+            except Exception as exc:
+                if j.process is not None and j.process.poll() is None:
+                    j.process.terminate()
+                if not isinstance(exc, OSError):
+                    raise
                 Path(result_file).write_text(json.dumps({"token": j.token, "code": 127, "output": str(exc)}), encoding="utf-8")
             if not _async() and j.process is not None:
                 j.process.wait()

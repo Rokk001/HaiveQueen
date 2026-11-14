@@ -11,6 +11,28 @@ from haivequeen import orchestrator
 
 
 class DetachedPipelineTests(unittest.TestCase):
+    def test_gated_worker_waits_for_durable_registration(self):
+        import time
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            result = folder / "result.json"
+            output = folder / "done.txt"
+            program = "from pathlib import Path; Path(%r).write_text('finished')" % str(output)
+            command = '"%s" -c "%s"' % (sys.executable, program)
+            job = orchestrator.Job("gate-token")
+            orchestrator._start_detached_work(job, {}, "Build", command, folder, None, result, gated=True)
+            try:
+                time.sleep(0.5)
+                self.assertFalse(output.exists())
+                self.assertIsNone(job.process.poll())
+                Path(str(result) + ".go").touch()
+                job.process.wait(timeout=30)
+                self.assertEqual(output.read_text(), "finished")
+            finally:
+                if job.process.poll() is None:
+                    job.process.terminate()
+                    job.process.wait(timeout=10)
+
     def test_build_and_deploy_survive_and_are_harvested(self):
         for step in ("Build", "Deploy"):
             with self.subTest(step=step), tempfile.TemporaryDirectory() as folder:
