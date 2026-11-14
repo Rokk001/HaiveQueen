@@ -178,3 +178,15 @@ review. Focused cases cover different diagnostics, generic errors, cancellation,
 observer recovery and unrelated speculative work. This matching is deliberately
 evidence-based: different diagnostic texts or remote provider failures are not
 automatically declared the same root cause. Broader causal diagnosis remains open.
+
+## A-15: Atomic machine settings and project registration
+
+Machine settings saves now register projects and stage the settings file within
+the existing durable file/database transaction. A save or journal-preparation
+failure leaves both unchanged. A publication failure after the database commit
+retains the recovery receipt; the next coordinated read publishes the committed
+settings without registering a project twice.
+
+Three regressions failed before the fix and now pass: settings-write failure,
+journal-preparation failure and publication recovery. Two focused compatibility
+tests also pass for secret preservation and workflow settings round-tripping.

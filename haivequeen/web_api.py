@@ -81,8 +81,9 @@ def settings_save(conn, data):
     else:
         for provider in proposed.get('providers') or []:
             servers.settle(provider)
-        init.register_listed(conn, proposed.get('projects'))
-        settings.save_file(path, loaded)
+        with filetxn.transaction(conn):
+            init.register_listed(conn, proposed.get('projects'))
+            settings.save_file(path, loaded)
     return {'ok': True, **settings_read(conn, project)}
 
 
