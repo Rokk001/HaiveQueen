@@ -93,6 +93,3 @@ conn.close()
             for job in jobs:
                 job.terminate()
                 job.wait(timeout=10)
-
-
-
