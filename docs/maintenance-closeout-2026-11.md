@@ -425,3 +425,21 @@ Evidence: both tests in `test_k5_new_apiary.BatchRegistrationTests` failed befor
 Status and branch/worktree mutations now decode UTF-8 BOM files consistently with the plan reader and retain the original BOM and LF/CRLF convention when writing. Untouched plan text, including non-ASCII characters and package tables, remains unchanged.
 
 Evidence: `test_plan_encoding` reproduced failed BOM header/status detection and unwanted CRLF conversion before the fix. Both tests pass with all eight encoding/newline combinations; header insertion and replacement are checked byte for byte. The focused run of `test_plan_encoding`, `test_plan_control`, and `test_k6_lifecycle.StatusNameTests.test_an_old_name_is_written_new_at_the_next_status_change` passes all 11 tests. No production process was restarted.
+
+
+## P1 completion verification against 9a88fed
+
+This section supersedes the historical delivery boundary above for the P1 audit findings. Code and regression coverage were inspected against the original acceptance criteria. All 44 focused tests below passed on the current tree. This is not a full-suite or CI claim, nor proof that running production processes have reloaded updated files.
+
+| Finding | Fix commit | Current protection and focused evidence |
+|---|---|---|
+| A-01 | `c567b1c` | `servers._SameOriginRedirect` refuses changes to scheme, host or port and userinfo destinations. `test_api_redirect_security` exercises two real isolated HTTP endpoints, all supported redirect codes, normal LAN HTTP and same-origin requests, plus downgrade rejection. |
+| A-02 | `d87bb66` | Inbox validation checks each answer's project before mutation. `test_inbox.InboxTest` verifies a mixed own/foreign answer batch is rejected without changing answers, decisions or events, while ordinary own-project answers work. |
+| A-03 | `95dd61b` | Persisted pipeline and fix-agent termination requires recorded matching birth identity. `test_stop_identity` covers missing, unreadable, matching and reused identities, a second check before force termination, retained unverified live registrations and supervisor recovery. |
+| A-04 | `d93f2e3` | `proctree.kill_recorded` requires a nonempty matching identity. `test_descendant_identity` covers failed identity capture, saved orphan records, PID reuse and verified child-before-parent cleanup. |
+| A-05 | `309d8b5` | A live scheduler cannot be displaced by heartbeat age. The OS guard remains held throughout recovery and protected work; malformed ownership metadata does not permit takeover. `test_hive_schedule_lock` covers expired live holders, renewed liveness, concurrent recovery, exceptions and dead-holder recovery. |
+| A-06 | `cef6649` | `prepare_rollback` waits for loop, agents and pending launch to settle before installation changes. `test_selfupdate.RollbackQuiescenceTest` checks that reset/install do not occur during draining and owner stop remains effective before, during and after draining. |
+| A-07 | `bd1e458` | `stop_plan` retains its integration reservation while the pipeline worker/supervisor or fix agent remains alive. `test_stop_reservation` checks that successors cannot acquire it early and can proceed after confirmed termination. |
+| A-25 | `758c1a9` | Journal errors retain a bounded fallback without interrupting pipe draining. `test_log_drain_failure` uses an isolated output-heavy helper and injected storage failure; the final output and actual exit code remain available. Durable persistence on a full disk is not promised. |
+
+Command scope: `test_api_redirect_security`, `test_inbox.InboxTest`, `test_stop_identity`, `test_descendant_identity`, `test_hive_schedule_lock`, `test_selfupdate.RollbackQuiescenceTest`, `test_stop_reservation`, `test_log_drain_failure`. Process termination was mocked; only test-owned HTTP endpoints and output helpers were started. No production process or database was changed by verification. Remaining P2/P3 completion reconciliation is tracked separately.
