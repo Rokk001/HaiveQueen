@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import tempfile
+import time
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -39,7 +40,7 @@ def check_versions_and_stable_launchers(tmp_path):
     layout.install_version(root, '1.0', one)
     layout.install_version(root, '2.0', two)
     layout.install_launcher(root)
-    launchers = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
+    launchers = {p.name: p.read_bytes() for p in root.iterdir() if p.name in ("launcher.py", "bzz", "start", "bzz.cmd", "start.cmd")}
     env = dict(os.environ, BZZ_DATA_DIR=str(tmp_path / 'shared'))
     layout.set_active(root, '1.0')
     first = _invoke(root, 'bzz', env)
@@ -68,6 +69,35 @@ def check_versions_and_stable_launchers(tmp_path):
 
 
 class TestVersionLayout(unittest.TestCase):
+    def test_running_launcher_keeps_selected_version_until_child_exits(self):
+        from haivequeen import version_leases
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root, source = base / 'fixed', base / 'source'
+            _release(source, 'old')
+            (source / 'haivequeen' / 'cli.py').write_text(
+                "import pathlib, sys, time\n"
+                "pathlib.Path(sys.argv[1]).touch()\n"
+                "while not pathlib.Path(sys.argv[2]).exists(): time.sleep(.02)\n")
+            layout.install_version(root, 'old', source)
+            layout.install_version(root, 'new', source)
+            layout.install_launcher(root)
+            layout.set_active(root, 'old')
+            started, finish = base / 'started', base / 'finish'
+            process = subprocess.Popen([sys.executable, '-I', str(root / 'launcher.py'), str(started), str(finish)])
+            try:
+                deadline = time.monotonic() + 10
+                while not started.exists() and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertTrue(started.exists())
+                layout.set_active(root, 'new')
+                self.assertEqual(version_leases.collect(root), [])
+                self.assertTrue((root / 'versions' / 'old').is_dir())
+            finally:
+                finish.touch()
+                process.wait(timeout=10)
+            self.assertEqual(version_leases.collect(root), ['old'])
+
     def test_versions_and_stable_launchers(self):
         with tempfile.TemporaryDirectory() as directory:
             check_versions_and_stable_launchers(Path(directory))

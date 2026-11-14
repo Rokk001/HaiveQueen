@@ -11,7 +11,8 @@ import shutil
 import tempfile
 import uuid
 
-from . import filetxn, platform
+from . import platform
+from .stable_launcher import lifetime_lock
 from .version_layout import _version, version_dir
 
 
@@ -44,7 +45,7 @@ def _save(root, value):
 def reserve(root, version):
     """Create a durable reservation before launching a process."""
     version = _version(version)
-    with filetxn.locked():
+    with lifetime_lock(root):
         if not version_dir(root, version).is_dir():
             raise FileNotFoundError(version)
         leases = _load(root)
@@ -56,7 +57,7 @@ def reserve(root, version):
 
 def publish(root, token, pid):
     """Bind a reservation to a process; retain it when identity is unavailable."""
-    with filetxn.locked():
+    with lifetime_lock(root):
         leases = _load(root)
         record = leases[token]
         record.update(pid=int(pid), identity=platform.process_identity(pid))
@@ -65,7 +66,7 @@ def publish(root, token, pid):
 
 def release(root, token):
     """Release only after the caller has established the job cannot use the version."""
-    with filetxn.locked():
+    with lifetime_lock(root):
         leases = _load(root)
         leases.pop(token, None)
         _save(root, leases)
@@ -78,7 +79,7 @@ def collect(root):
     before this function can safely be enabled by the update workflow.
     """
     root = Path(root)
-    with filetxn.locked():
+    with lifetime_lock(root):
         active = _version((root / 'active-version').read_text(encoding='utf-8').strip())
         leases = _load(root)
         for token, record in list(leases.items()):

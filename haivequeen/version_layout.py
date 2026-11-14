@@ -27,7 +27,8 @@ def version_dir(root, version):
 
 def install_version(root, version, source):
     """Copy a complete release into its own directory, never replace a release."""
-    from . import filetxn, version_leases
+    from . import version_leases
+    from .stable_launcher import lifetime_lock
     root, source = Path(root), Path(source)
     version = _version(version)
     target = version_dir(root, version)
@@ -36,7 +37,7 @@ def install_version(root, version, source):
     target.parent.mkdir(parents=True, exist_ok=True)
     # Protect the target before it becomes visible to the collector. If this
     # process dies, the reservation deliberately survives until recovery.
-    with filetxn.locked():
+    with lifetime_lock(root):
         leases = version_leases._load(root)
         token = 'install-' + uuid.uuid4().hex
         leases[token] = {'version': version, 'pid': None, 'identity': None, 'installation': True}
@@ -48,7 +49,7 @@ def install_version(root, version, source):
         # A version is immutable. Rename only after the complete copy succeeds.
         if target.exists():
             raise FileExistsError(str(target))
-        with filetxn.locked():
+        with lifetime_lock(root):
             staging.rename(target)
     except BaseException:
         version_leases.release(root, token)
@@ -61,8 +62,8 @@ def install_version(root, version, source):
 
 def set_active(root, version):
     """Atomically change the version selected by the stable launcher."""
-    from . import filetxn
-    with filetxn.locked():
+    from .stable_launcher import lifetime_lock
+    with lifetime_lock(root):
         _set_active_locked(root, version)
 
 
