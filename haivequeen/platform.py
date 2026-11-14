@@ -4,6 +4,7 @@ Inside the package use `from haivequeen import platform as osplat`; the standard
 is not affected because imports in this package are absolute.
 """
 import ctypes
+import errno
 import inspect
 import ntpath
 import os
@@ -188,6 +189,34 @@ def process_alive(pid) -> bool:
         return _win_process_alive(pid) if is_windows() else _posix_process_alive(pid)
     except (OSError, AttributeError):
         return False
+
+
+def process_absent(pid) -> bool:
+    """Return true only when the OS confirms that a PID does not exist.
+
+    Access failures and unsupported platforms are inconclusive, unlike the
+    best-effort process_alive helper.
+    """
+    try:
+        pid = int(pid)
+        if pid <= 0:
+            return False
+        if is_windows():
+            kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            handle = kernel.OpenProcess(0x1000, False, pid)
+            if handle:
+                kernel.CloseHandle(ctypes.c_void_p(handle))
+                return False
+            return ctypes.get_last_error() == 87  # ERROR_INVALID_PARAMETER: no such PID
+        if is_linux():
+            try:
+                os.kill(pid, 0)
+            except OSError as exc:
+                return exc.errno == errno.ESRCH
+    except (OSError, AttributeError, TypeError, ValueError, OverflowError):
+        pass
+    return False
 
 
 # Read the immutable creation tick count of a Windows process.

@@ -1,4 +1,5 @@
 import tempfile
+import errno
 import threading
 import unittest
 from pathlib import Path
@@ -8,6 +9,16 @@ from haivequeen import config, version_leases, version_layout
 
 
 class VersionLeasesTests(unittest.TestCase):
+    def test_absent_probe_requires_definitive_os_error(self):
+        platform = version_leases.platform
+        with patch.object(platform, 'is_windows', return_value=False), patch.object(platform, 'is_linux', return_value=True), patch.object(platform.os, 'kill') as kill:
+            kill.side_effect = PermissionError(errno.EPERM, 'denied')
+            self.assertFalse(platform.process_absent(123))
+            kill.side_effect = ProcessLookupError(errno.ESRCH, 'missing')
+            self.assertTrue(platform.process_absent(123))
+            kill.side_effect = OSError(errno.EIO, 'unknown')
+            self.assertFalse(platform.process_absent(123))
+
     def test_installation_survives_collection_until_activation(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
@@ -93,6 +104,21 @@ class VersionLeasesTests(unittest.TestCase):
                 token = version_leases.reserve(root, 'unknown')
                 version_leases.publish(root, token, 100)
                 self.assertEqual(version_leases.collect(root), [])
+
+    def test_unavailable_probe_is_not_proof_of_death(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name in ('active', 'old'):
+                (root / 'versions' / name).mkdir(parents=True)
+            (root / 'active-version').write_text('active', encoding='utf-8')
+            with patch.object(version_leases.platform, 'process_identity', return_value='birth') as identity:
+                token = version_leases.reserve(root, 'old')
+                version_leases.publish(root, token, 123)
+                identity.return_value = None
+                with patch.object(version_leases.platform, 'process_alive', return_value=False), patch.object(version_leases.platform, 'process_absent', return_value=False) as absent:
+                    self.assertEqual(version_leases.collect(root), [])
+                    absent.return_value = True
+                    self.assertEqual(version_leases.collect(root), ['old'])
 
     def test_launch_reserves_before_spawn_and_binds_process(self):
         with tempfile.TemporaryDirectory() as temp:

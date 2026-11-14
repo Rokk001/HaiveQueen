@@ -86,7 +86,7 @@ def collect(root):
             pid, identity = record.get('pid'), record.get('identity')
             if pid and identity:
                 current = platform.process_identity(pid)
-                if current != identity and (current is not None or not platform.process_alive(pid)):
+                if current != identity and (current is not None or platform.process_absent(pid)):
                     del leases[token]
         _save(root, leases)
         protected = {active} | {_version(r['version']) for r in leases.values()}
