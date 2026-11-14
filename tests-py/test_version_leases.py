@@ -10,6 +10,17 @@ from haivequeen import config, stable_launcher, version_leases, version_layout
 
 
 class VersionLeasesTests(unittest.TestCase):
+    def test_failed_removal_is_retained_and_retried(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name in ('active', 'old'):
+                (root / 'versions' / name).mkdir(parents=True)
+            (root / 'active-version').write_text('active', encoding='utf-8')
+            with patch.object(version_leases.shutil, 'rmtree', side_effect=PermissionError('locked')):
+                self.assertEqual(version_leases.collect(root), [])
+                self.assertTrue((root / 'versions' / 'old').is_dir())
+            self.assertEqual(version_leases.collect(root), ['old'])
+
     def test_launcher_crash_after_publication_retains_child_until_absent(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

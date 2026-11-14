@@ -114,7 +114,12 @@ def collect(root):
                         _version(path.name)
                     except ValueError:
                         continue
-                    shutil.rmtree(path)
+                    try:
+                        shutil.rmtree(path)
+                    except OSError:
+                        # A locked or inaccessible file is not proof that the
+                        # version can be removed. Retry on a later collection.
+                        continue
                     removed.append(path.name)
         return removed
 
