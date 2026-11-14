@@ -132,12 +132,9 @@ def reserve_for_path(path):
 def launch(path, popen, *args, **kwargs):
     """Reserve before spawning and bind the record to the resulting process."""
     reservation = reserve_for_path(path)
-    try:
-        process = popen(*args, **kwargs)
-    except BaseException:
-        if reservation:
-            release(*reservation)
-        raise
+    # A spawn call may be interrupted after creating a child but before
+    # returning its handle. Keep the pending lease when the outcome is unknown.
+    process = popen(*args, **kwargs)
     if reservation:
         try:
             publish(*reservation, process.pid)

@@ -205,7 +205,28 @@ class VersionLeasesTests(unittest.TestCase):
                 record = next(iter(version_leases._load(root).values()))
                 self.assertEqual(record['pid'], 123)
 
-    def test_launch_failure_releases_reservation(self):
+    def test_interrupted_spawn_keeps_reservation_for_possible_child(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            version = root / 'versions' / 'old'
+            cli = version / 'haivequeen' / 'cli.py'
+            cli.parent.mkdir(parents=True)
+            cli.touch()
+            (root / 'versions' / 'active').mkdir()
+            (root / 'active-version').write_text('old', encoding='utf-8')
+            def interrupted(*args, **kwargs):
+                raise KeyboardInterrupt()
+            with self.assertRaises(KeyboardInterrupt):
+                version_leases.launch(version, interrupted)
+            with patch.object(stable_launcher, '__file__', str(root / 'launcher.py')), \
+                 patch.object(stable_launcher.subprocess, 'Popen', side_effect=interrupted):
+                with self.assertRaises(KeyboardInterrupt):
+                    stable_launcher.main()
+            self.assertEqual(len(version_leases._load(root)), 2)
+            (root / 'active-version').write_text('active', encoding='utf-8')
+            self.assertEqual(version_leases.collect(root), [])
+
+    def test_launch_failure_retains_reservation_when_outcome_unknown(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             root = base / 'install'
@@ -217,7 +238,7 @@ class VersionLeasesTests(unittest.TestCase):
             with patch.object(config, 'config_dir', return_value=base / 'data'):
                 with self.assertRaises(OSError):
                     version_leases.launch(version, fail)
-                self.assertEqual(version_leases._load(root), {})
+                self.assertEqual(len(version_leases._load(root)), 1)
 
 
 if __name__ == '__main__':
