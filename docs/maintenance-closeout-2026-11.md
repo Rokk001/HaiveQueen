@@ -98,3 +98,14 @@ plan before writing. Answer, decision, events and all package changes share one
 transaction. A later write failure rolls everything back. Owner-check answers
 remain notes and do not reject packages. Regressions reproduced both invalid IDs
 and partial writes before the fix; focused answer and terminology tests pass.
+
+## Merge queue: preserve checks after release failure
+
+The merge-queue requirements explicitly retain speculative Merge, Check and Build,
+ordered publication, and replay after a predecessor fails before Push. The CI/CD
+requirements add Release after publication; a failed release cannot remove code
+already pushed. Only Merge, Check, Build and Push failures invalidate followers.
+The regression reproduced a second successor Check after an upload failure, then
+verifies that completed checks and builds survive through successor publication.
+This does not eliminate required replay after pre-push failures or change the
+configured concurrency. Existing Deploy and pre-push replay cases remain covered.

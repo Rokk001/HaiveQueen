@@ -992,7 +992,9 @@ def _red(conn, env, plan, state, step, error):
     if not path or action_logs.read(path)[0]["step"] != step:
         path = _start_log(conn, env, plan, state, step)
         action_logs.append(path, error)
-    if step != "Deploy":
+    # Only a failure before publication removes a speculative predecessor.
+    # Deploy and Release run after Push: its code remains in the target branch.
+    if step in ("Merge", "Check", "Build", "Push"):
         _replay_followers(conn, env, plan)
     _finish_log(state, 1, message=error)
     state["steps"][step] = "red"

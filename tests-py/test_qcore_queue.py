@@ -315,6 +315,30 @@ class SpeculativeQueue(OrchCase):
         orchestrator._moved(self.conn, self.env(), REL, state, "Push")
         self.assertTrue(self.state(OTHER)["replay"])
 
+    def test_red_release_keeps_successors_completed_checks_and_builds(self):
+        from haivequeen import publish
+        self.project_toml('wayOfWorking = "local"\ncheckEnabled = true\nbuildEnabled = true\n'
+                          'deployEnabled = true\nreleaseEnabled = true\nreleaseMode = "local"\n')
+        self.tick()
+        for plan in (OTHER, REL):
+            self.finish_step(plan, "Check")
+            self.finish_step(plan, "Build")
+        pushed = self.remote_head()
+        self.assertEqual(pushed, self.state()["pushed"])
+        with mock.patch.object(publish, "pipeline_release", side_effect=publish.ReleaseFailed("upload failed")):
+            self.finish_step(REL, "Deploy")
+        self.assertEqual(self.state()["phase"], "fix")
+        self.assertFalse(self.state(OTHER).get("replay"))
+        self.assertEqual(self.started[OTHER, "Check"], 1)
+        self.assertEqual(self.started[OTHER, "Build"], 1)
+        self.git("merge-base", "--is-ancestor", pushed, self.remote_head())
+        with mock.patch.object(publish, "pipeline_release", return_value="published"):
+            self.finish_step(OTHER, "Deploy")
+        self.assertIsNone(self.state(OTHER))
+        self.assertEqual(self.started[OTHER, "Check"], 1)
+        self.assertEqual(self.started[OTHER, "Build"], 1)
+        self.assert_contains(self.second, "first.txt", "second.txt")
+
     def test_middle_failure_replays_the_tail_onto_the_surviving_prefix(self):
         self.third = self.make_worktree("third-br", "thirdwt")
         self.ready_plan(THIRD, "third-br", self.third, "third.txt")
