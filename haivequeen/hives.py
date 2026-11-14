@@ -725,7 +725,7 @@ def can_handoff(conn, project, plan):
 
 
 # End this Hive's Queen and own-process Bees, leaving it queenless.
-def dequeen(conn, project, plan, stop=None):
+def dequeen(conn, project, plan, stop=None, release_place=True):
     """End this Plan's Queen and own-process Agents, leaving it queenless."""
     if get(conn, project, plan) is None:
         raise ValueError('unknown Plan')
@@ -737,7 +737,8 @@ def dequeen(conn, project, plan, stop=None):
         runtime.upsert_agent(conn, project, row['name'], {'status': 'done', 'pid': None, 'ended_at': db.now(), 'last_line': 'dequeened'})
     with db.transaction(conn):
         conn.execute("UPDATE hives SET state=CASE WHEN state='integrating' THEN state ELSE 'queenless' END,reset_at=NULL,requested_provider=NULL WHERE project=? AND plan_path=?", (project, plan))
-        conn.execute("DELETE FROM hive_integration WHERE project=? AND plan_path=?", (project, plan))
+        if release_place:
+            conn.execute("DELETE FROM hive_integration WHERE project=? AND plan_path=?", (project, plan))
 
 
 # The status a plan had before it was paused is kept in the kv table (survives a restart).
@@ -764,8 +765,8 @@ def stop_hive(conn, project, plan, stop=None):
     """End the Queen and the own-process Agents of the Plan (as dequeen does) and set the plan to PAUSED."""
     pause_plan(conn, project, plan)
     if get(conn, project, plan) is not None:
-        dequeen(conn, project, plan, stop=stop)
         from . import orchestrator
+        dequeen(conn, project, plan, stop=stop, release_place=not orchestrator.active(conn, project, plan))
         orchestrator.stop_plan(conn, project, plan, stop=stop)   # also its running pipeline command and fix agent end
 
 

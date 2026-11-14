@@ -283,6 +283,9 @@ def advance(conn, env, plan, free_mb, alive=None):
         state = _new_state(conn, env, plan, hive)
         _save_last(conn, env.name, plan, fix_agent="", steps=[], commit="")
         _log(env, "%s: Queen done, integration taken over" % _short(plan))
+    if state.get("stopping"):
+        stop_plan(conn, env.name, plan)
+        return None
     if state.get("job", {}).get("cancelling"):
         if not _cancel_pipeline_job(conn, env.name, plan, state):
             return None
@@ -1205,8 +1208,10 @@ def _cancel_pipeline_job(conn, project, plan, state, stop=None):
     if job:
         job.cancelled = True
     pid = job.pid if job else record.get("pid")
-    if job:
+    if job and pid is not None:
         record.update(pid=pid, identity=job.identity)
+    elif job:
+        pid = record.get("pid")   # retain the last identity while its worker unwinds
     identity = record.get("identity")
     if pid and record.get("cancel_pid") != pid:
         if agent_process.identity_matches(pid, identity):
@@ -1240,7 +1245,10 @@ def stop_plan(conn, project, plan, stop=None):
     state = load(conn, project, plan)
     if state is None:
         return
-    _cancel_pipeline_job(conn, project, plan, state, stop)
+    state["stopping"] = True
+    save(conn, project, plan, state)
+    if not _cancel_pipeline_job(conn, project, plan, state, stop):
+        return
     fix = state.get("fix")
     if state.get("phase") == "fix" and fix and fix.get("agent"):
         for row in runtime.list_agents(conn, project, "active"):
@@ -1251,6 +1259,8 @@ def stop_plan(conn, project, plan, stop=None):
                 elif agent_process.recorded_alive(row["pid"], agent_process._identity(row)):
                     fix["stop_note"] = "Process identity could not be verified; no termination sent"
                     save(conn, project, plan, state)
+                    return
+                if agent_process.recorded_alive(row["pid"], agent_process._identity(row)):
                     return
                 runtime.upsert_agent(conn, project, row["name"], {"status": "done", "pid": None, "ended_at": db.now(), "last_line": "stopped with the plan"})
         fix["agent"] = None   # a stop of the plan is no stop of the owner at the agent: a fix agent starts again at the resume
@@ -1263,6 +1273,7 @@ def stop_plan(conn, project, plan, stop=None):
             value["n"] = int(value["n"]) - 1   # this attempt was not the fix agent's failure
             runtime.kv_set(conn, project, ATTEMPTS_KEY + plan, json.dumps(value))
     state["placed"] = False
+    state.pop("stopping", None)
     save(conn, project, plan, state)
     hives.release_integration(conn, project, plan)
 
