@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, filetxn, web_auth, web_server
+from . import config, filetxn, web_auth, web_jobs, web_server
 from . import platform as osplat
 
 _children = {}
@@ -122,6 +122,7 @@ class Service:
             self.control.server_close()
             raise OSError('Web service is already running or starting')
         try:
+            web_jobs.recover()
             self.reload()
             state = {'control_port': self.control.server_address[1], 'token': self.token}
             filetxn.atomic_write(state_path(), json.dumps(state).encode())
@@ -149,7 +150,9 @@ class Service:
                 if not self.stopping and web_auth.read(self.path) != self.settings:
                     self.reload()
         finally:
+            web_jobs.begin_shutdown()
             self.close_listener()
+            web_jobs.finish_shutdown()
             from . import web_login
             web_login.close()
             self.control.server_close()

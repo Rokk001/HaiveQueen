@@ -14,6 +14,45 @@ from haivequeen import config, db, runtime, tray, web_auth, web_service
 
 
 class WebServiceTests(unittest.TestCase):
+    def test_restart_finishes_owner_job_before_releasing_service_lock(self):
+        from haivequeen import web_jobs
+        self.configure()
+        service = web_service.Service()
+        release, completed = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        token = []
+
+        def work(progress):
+            release.wait(3)
+            self.assertTrue(web_service.state_path().with_suffix('.lock').exists())
+            completed.set()
+            return {'installed': True}
+
+        def request():
+            token.append(web_jobs.start('tools:install', work)['id'])
+            service.restarting = service.stopping = True
+
+        close = service.close_listener
+
+        def close_listener():
+            if token:
+                with self.assertRaisesRegex(ValueError, 'stopping'):
+                    web_jobs.start('another', lambda progress: None)
+                release.set()
+            close()
+
+        def restarted():
+            self.assertTrue(completed.is_set())
+            self.assertFalse(web_service.state_path().with_suffix('.lock').exists())
+            web_jobs.recover()
+            self.assertEqual(web_jobs.status(token[0])['result'], {'installed': True})
+
+        with patch.object(tray, 'ensure_started'), patch.object(service.control, 'handle_request', side_effect=request), \
+                patch.object(service, 'close_listener', side_effect=close_listener), \
+                patch.object(web_service, 'start', side_effect=restarted) as restart, patch('sys.stdout', io.StringIO()):
+            self.assertEqual(service.run(), 0)
+            restart.assert_called_once()
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)

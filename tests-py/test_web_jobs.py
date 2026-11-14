@@ -1,11 +1,23 @@
 import threading
 import time
 import unittest
+import os
+import tempfile
+from unittest.mock import patch
 
 from haivequeen import web_jobs
 
 
 class WebJobsTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        env = patch.dict(os.environ, {'BZZ_DATA_DIR': folder.name})
+        env.start()
+        self.addCleanup(env.stop)
+        web_jobs.recover()
+        self.addCleanup(web_jobs.finish_shutdown)
+
     def finished(self, token):
         deadline = time.monotonic() + 3
         while web_jobs.status(token)['running'] and time.monotonic() < deadline:

@@ -1473,7 +1473,7 @@ function mount(document, bootstrap) {
   }
   function renderJob(job) {
     let panel=$('job-'+job.id);if(!panel){panel=el('section');panel.id='job-'+job.id;$('live').append(panel);}
-    panel.replaceChildren(el('h2',t(job.title || 'Benchmark Start Context')),valueView(job));
+    panel.replaceChildren(el('h2',t(job.title || job.key || 'Owner action')),valueView(job));
     if(!job.running)panel.append(button('Close',()=>{jobs.delete(job.id);panel.remove();}));
   }
   async function refreshLists() {
@@ -1500,7 +1500,13 @@ function mount(document, bootstrap) {
   }
   window.addEventListener('beforeunload',event=>{if(editor?.dirty){event.preventDefault();event.returnValue='';}});
   if(typeof MutationObserver!=='undefined')installCopyButtons(document,window.navigator,t,(...args)=>client.notice(...args));
-  render();void tick();setInterval(()=>void tick(),2000);
+  render();
+  void client.request('jobs/status').then(history=>{
+    const previous=el('details');previous.append(el('summary',t('Previous owner actions')));
+    for(const job of history){if(!jobs.has(job.id)){jobs.set(job.id,job);renderJob(job);if(!job.running)previous.append($('job-'+job.id));}}
+    if(previous.children.length>1)$('live').append(previous);
+  }).catch(error=>client.notice(error.message,true));
+  void tick();setInterval(()=>void tick(),2000);
   return client;
 }
 if(typeof module!=='undefined')module.exports={LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};

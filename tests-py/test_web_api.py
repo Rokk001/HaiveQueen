@@ -7,6 +7,14 @@ from haivequeen import bees, db, dashboard_data, hives, loop, owner, runtime, st
 
 
 class WebApiTests(RoundCase):
+    def test_owner_job_history_and_individual_status_are_available(self):
+        history = [{'id': 'saved', 'running': False, 'result': {'completed': 2}}]
+        with mock.patch.object(web_jobs, 'recent', return_value=history):
+            self.assertEqual(web_api.execute(self.conn, 'jobs/status', {}), history)
+        with mock.patch.object(web_jobs, 'status', return_value=history[0]) as status:
+            self.assertEqual(web_api.execute(self.conn, 'jobs/status', {'id': 'saved'}), history[0])
+            status.assert_called_once_with('saved')
+
     def test_workflow_saved_reloaded_and_empty_field_does_not_disable_step(self):
         from haivequeen import projsettings
         view = web_api.settings_view(self.conn, 'testproj')

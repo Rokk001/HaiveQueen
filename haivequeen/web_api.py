@@ -266,7 +266,7 @@ def execute(conn, action, data):
                 return startctx.benchmark(worker, machine, provider, progress=progress)
         return web_jobs.start('benchmark:' + provider, measure)
     if action == 'jobs/status':
-        return web_jobs.status(data['id'])
+        return web_jobs.status(data['id']) if data.get('id') else web_jobs.recent()
     if action == 'tools/install':
         from . import bzz_install
         return web_jobs.start('tools:install', lambda _progress: bzz_install.install())

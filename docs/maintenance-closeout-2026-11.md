@@ -373,3 +373,11 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Already fixed by `1330d20`: package details select the newest agent's prompt and restrict progress notes to that agent. A predecessor's completion count cannot mark replacement instructions as done, even when both prompts have the same number of steps.
 - Reverified all three `test_web_plan_details` tests. The replacement regression checks unknown progress before the new agent reports, then current/pending states after its own first report; the other tests cover package metadata and explicit step completion.
 - No runtime state or running agents were changed for this verification.
+
+## A-30: Preserve long owner actions across web restarts
+
+- Record each owner action before starting side effects, then persist progress and completion atomically in the data directory's `owner-jobs` folder. Refuse a new action if its initial record cannot be saved.
+- Web shutdown rejects new jobs and joins its existing owner workers before releasing the service lock or starting a replacement process. Worker threads are no longer daemons. No agent, orchestrator or unrelated subprocess is terminated.
+- Startup recovers saved results. An action interrupted by an unexpected process exit is explicitly reported as having an unknown outcome, with its last progress preserved; it is never automatically replayed. Damaged records remain intact and visible as unreadable history.
+- The authenticated job endpoint exposes recent history, and a reloaded browser restores running actions plus a collapsed history of completed/interrupted actions.
+- Focused regression coverage includes shutdown ordering, result recovery, interrupted work, failed initial persistence, corrupted history, API access and browser history restoration. Isolated service tests exercise restart behavior without touching the installed service.
