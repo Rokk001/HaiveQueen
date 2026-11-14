@@ -20,6 +20,12 @@ function visibleHiveRows(rows) {
   return rows.filter(row=>!isPackagePlaceholder(row));
 }
 
+function dashboardPlanHeight({available,planChrome,gap,header,rows,hiveHeight}) {
+  const minimum=header+rows.slice(0,3).reduce((sum,height)=>sum+height,0)+1;
+  const full=header+rows.reduce((sum,height)=>sum+height,0)+1;
+  return Math.ceil(Math.max(minimum,Math.min(full,available-planChrome-gap-hiveHeight)));
+}
+
 function hiveCounts(rows) {
   return {queens:rows.filter(row=>row.kind==='queen').length,
     agents:rows.filter(row=>!['queen','orch'].includes(row.kind)&&!isPackagePlaceholder(row)).length,
@@ -1068,21 +1074,21 @@ function mount(document, bootstrap) {
   }
 
   function fitDashboard(){
-
     if(tab!=='Dashboard')return;
-
-    const primary=view.querySelector('.dashboard-primary'),plans=view.querySelector('[data-panel="ACTIVE PLANS"] .table-scroll');
-
-    if(!primary || !plans)return;
-
-    const rows=[...plans.querySelectorAll('tbody tr')].slice(0,3);
-
-    const height=(plans.querySelector('thead')?.getBoundingClientRect().height||0)+rows.reduce((sum,row)=>sum+row.getBoundingClientRect().height,0);
-
-    plans.style.maxHeight=Math.ceil(height+1)+'px';
-
-    primary.style.height=window.innerWidth>1100?Math.max(340,window.innerHeight-(primary.getBoundingClientRect().top+window.scrollY)-12)+'px':'';
-
+    const primary=view.querySelector('.dashboard-primary');
+    const plans=primary?.querySelector('[data-panel="ACTIVE PLANS"] .table-scroll');
+    const hive=primary?.querySelector('[data-panel="QUEENS AND AGENTS"] .table-scroll');
+    if(!plans || !hive)return;
+    const rows=[...plans.querySelectorAll('tbody tr')].map(row=>row.getBoundingClientRect().height);
+    const header=plans.querySelector('thead')?.getBoundingClientRect().height||0;
+    const desktop=window.innerWidth>1100;
+    const available=Math.max(340,window.innerHeight-(primary.getBoundingClientRect().top+window.scrollY)-12);
+    primary.style.height=desktop?available+'px':'';
+    const planChrome=plans.parentElement.getBoundingClientRect().height-plans.getBoundingClientRect().height;
+    const hiveChrome=hive.parentElement.getBoundingClientRect().height-hive.getBoundingClientRect().height;
+    const hiveHeight=Math.max(140,hiveChrome+(hive.querySelector('table')?.getBoundingClientRect().height||0)+1);
+    const gap=parseFloat(getComputedStyle(primary).gap)||0;
+    plans.style.maxHeight=dashboardPlanHeight({available:desktop?available:0,planChrome,gap,header,rows,hiveHeight})+'px';
   }
 
   window.addEventListener('resize',fitDashboard);
@@ -1926,6 +1932,6 @@ function mount(document, bootstrap) {
 
 }
 
-if(typeof module!=='undefined')module.exports={orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));
