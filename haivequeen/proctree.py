@@ -146,8 +146,8 @@ def kill_recorded(procs, protect=(), root=None) -> list:
         if pid in protect or not osplat.process_alive(pid):
             continue
         identity = info.get("identity")
-        if identity and osplat.process_identity(pid) != identity:
-            continue   # the process id belongs to another process now
+        if not identity or osplat.process_identity(pid) != identity:
+            continue   # missing evidence or the PID now belongs to another process
         # Ending its debugger would also end an exempt compile command or Bee.
         # Other ancestors keep the existing cleanup behavior, and ordinary
         # descendants of a supervisor remain eligible for cleanup.

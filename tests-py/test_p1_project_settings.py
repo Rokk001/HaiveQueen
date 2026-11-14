@@ -497,9 +497,12 @@ class LeftoverProcessTest(Dirs):
             osplat.kill_process_tree(pid)
 
     def test_cleanup_ends_children_before_supervisors_regardless_of_pid(self):
-        procs = {900: {"ppid": 1}, 100: {"ppid": 900}, 50: {"ppid": 100}}
+        procs = {900: {"ppid": 1, "identity": "birth900"},
+                 100: {"ppid": 900, "identity": "birth100"},
+                 50: {"ppid": 100, "identity": "birth50"}}
         with (mock.patch.object(proctree, "is_exempt", return_value=False),
               mock.patch.object(osplat, "process_alive", return_value=True),
+              mock.patch.object(osplat, "process_identity", side_effect=lambda pid: "birth%d" % pid),
               mock.patch.object(proctree, "_terminate") as terminate):
             self.assertEqual(proctree.kill_recorded(procs), [50, 100, 900])
         self.assertEqual([call.args[0] for call in terminate.call_args_list], [50, 100, 900])
