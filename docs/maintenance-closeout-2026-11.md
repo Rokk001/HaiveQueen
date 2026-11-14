@@ -418,3 +418,10 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 The registration loop now tracks names and resolved workspace paths added earlier in the same request. Later colliding entries follow the existing skip policy; they cannot overwrite the first registration or register a workspace alias twice. Independent entries remain registerable.
 
 Evidence: both tests in `test_k5_new_apiary.BatchRegistrationTests` failed before the change and passed afterward. Coverage includes duplicate names, normalized workspace aliases, an independent subsequent entry, and an idempotent repeated request. The complete focused `test_k5_new_apiary` module passes (7 tests). Production processes are not touched.
+
+
+## A-17: Preserve BOM plan files during lifecycle changes
+
+Status and branch/worktree mutations now decode UTF-8 BOM files consistently with the plan reader and retain the original BOM and LF/CRLF convention when writing. Untouched plan text, including non-ASCII characters and package tables, remains unchanged.
+
+Evidence: `test_plan_encoding` reproduced failed BOM header/status detection and unwanted CRLF conversion before the fix. Both tests pass with all eight encoding/newline combinations; header insertion and replacement are checked byte for byte. The focused run of `test_plan_encoding`, `test_plan_control`, and `test_k6_lifecycle.StatusNameTests.test_an_old_name_is_written_new_at_the_next_status_change` passes all 11 tests. No production process was restarted.

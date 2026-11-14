@@ -564,7 +564,9 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
     path = _workspace(conn, project, workspace) / plan
     if not path.is_file():
         raise CmdError(f"plan file not found: {plan}")
-    text = filetxn.read(path).decode("utf-8").replace("\r\n", "\n")
+    raw = filetxn.read(path)
+    encoding = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
+    text = raw.decode(encoding)
     nl = "\r\n" if "\r\n" in text else "\n"
     lines = text.split(nl)
     changed = False
@@ -581,7 +583,7 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
         changed = True
     if not changed:
         raise CmdError(f"no status line found in {plan}")
-    filetxn.write(path, nl.join(lines).encode("utf-8"))
+    filetxn.write(path, nl.join(lines).encode(encoding))
     with db.transaction(conn):
         conn.execute("UPDATE plans SET status=?, updated_at=? WHERE project=? AND path=?",
                      (status, db.now(), project, plan))
@@ -598,8 +600,11 @@ def set_plan_header(conn, project, plan, branch, worktree, workspace=None) -> di
     path = _workspace(conn, project, workspace) / plan
     if not path.is_file():
         raise CmdError(f"plan file not found: {plan}")
-    text = filetxn.read(path).decode("utf-8").replace("\r\n", "\n")
-    lines = text.split("\n")
+    raw = filetxn.read(path)
+    encoding = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
+    text = raw.decode(encoding)
+    nl = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(nl)
     end = next((i for i in range(1, len(lines)) if lines[i].strip() == "+++"), None) if lines and lines[0].strip() == "+++" else None
     if end is None:
         raise CmdError(f"no plan header found in {plan}")
@@ -614,7 +619,7 @@ def set_plan_header(conn, project, plan, branch, worktree, workspace=None) -> di
             at = next((i + 1 for i, line in enumerate(header[:first_table]) if re.match(r"^\s*status\s*=", line)), 0)
             header.insert(at, row)
             first_table += 1
-    filetxn.write(path, "\n".join(lines[:1] + header + lines[end:]).encode("utf-8"))
+    filetxn.write(path, nl.join(lines[:1] + header + lines[end:]).encode(encoding))
     return {"plan": plan, "branch": branch, "worktree": str(worktree)}
 
 
