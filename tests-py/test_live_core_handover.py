@@ -7,7 +7,7 @@ import time
 from unittest.mock import patch
 
 from bzztest import RoundCase
-from haivequeen import db, version_layout
+from haivequeen import db, inbox, runtime, version_layout
 
 
 class LiveCoreHandoverTest(RoundCase):
@@ -61,6 +61,14 @@ conn.close()
                     time.sleep(.03)
                 self.assertTrue(path.exists(), 'timed out waiting for ' + str(path))
             wait(self.base / 'old-round')
+            # An owner decision arrives while the old round is still running.
+            # The successor's real scheduling round must consume it from the
+            # shared inbox after the lock changes hands.
+            folder = inbox.inbox_dir(self.repo)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / 'handover.toml').write_text(
+                '[[decision]]\nsource="owner"\nitem="handover-test"\ntext="continue"\n',
+                encoding='utf-8')
             version_layout.set_active(root, 'new')
             contender = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'), 'start'],
                                        env=env, capture_output=True, text=True, timeout=20)
@@ -88,6 +96,8 @@ conn.close()
             time.sleep(.3)
             self.assertIn("('Queen', 'running')", (self.base / 'seen').read_text())
             self.assertIn("('Agent', 'running')", (self.base / 'seen').read_text())
+            decisions = runtime.list_decisions(self.conn, 'testproj', item='handover-test', active_only=True)
+            self.assertEqual([decision['text'] for decision in decisions], ['continue'])
             self.assertTrue(all(job.poll() is None for job in jobs))
         finally:
             (self.base / 'release-old').touch()
