@@ -17,7 +17,10 @@ class LiveCoreHandoverTest(RoundCase):
     def test_real_core_handover_adopts_deploy(self):
         self._handover('Deploy')
 
-    def _handover(self, step):
+    def test_successor_starts_next_queen_for_same_plan(self):
+        self._handover('Build', same_plan=True)
+
+    def _handover(self, step, same_plan=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in ('old', 'new'):
@@ -108,9 +111,18 @@ conn.close()
         env.pop('BZZ_TEST_NOSTART', None)
         jobs = [subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], env=env) for _ in range(2)]
         core = None
+        old_queen = None
         try:
             for name, phase, job in zip(('Queen', 'Agent'), ('queen', 'bee'), jobs):
                 db.add_agent(self.conn, 'testproj', name=name, phase=phase, status='running', pid=job.pid)
+            if same_plan:
+                hives.create(self.conn, 'testproj', next_plan, 'test', '123456')
+                old_queen = subprocess.Popen([sys.executable, '-c',
+                    'import pathlib,sys,time; p=pathlib.Path(sys.argv[1]); '
+                    'exec("while not p.exists(): time.sleep(.02)")',
+                    str(self.base / 'old-queen-finish')], env=env)
+                old_id = db.add_agent(self.conn, 'testproj', name='OldQueen', phase='queen',
+                                      plan_path=next_plan, status='running', pid=old_queen.pid)
             core = subprocess.Popen([sys.executable, '-I', str(root / 'launcher.py'), 'start'], env=env)
             def wait(path):
                 end = time.monotonic() + 20
@@ -137,6 +149,13 @@ conn.close()
             (self.base / 'new-finished').unlink(missing_ok=True)
             self.assertTrue(all(job.poll() is None for job in jobs))
             self.assertIsNone(build_job.process.poll())
+            if same_plan:
+                self.assertIsNone(old_queen.poll())
+                self.assertFalse((self.base / 'queen-cli').exists())
+                hives.context_limit(self.conn, 'testproj', next_plan)
+                (self.base / 'old-queen-finish').touch()
+                old_queen.wait(timeout=20)
+                db.finish_agent(self.conn, old_id, 'Handoff completed')
             (self.base / 'release-old').touch()
             core.wait(timeout=20)
             self.assertEqual(core.returncode, 0)
@@ -165,7 +184,8 @@ conn.close()
             queens = self.conn.execute(
                 "SELECT status FROM agents WHERE project=? AND plan_path=? AND phase='queen'",
                 ('testproj', next_plan)).fetchall()
-            self.assertEqual([row['status'] for row in queens], ['running'])
+            self.assertEqual([row['status'] for row in queens],
+                             ['done', 'running'] if same_plan else ['running'])
             self.assertEqual(Path((self.base / 'successor-version').read_text()), root / 'versions' / 'new')
             decisions = runtime.list_decisions(self.conn, 'testproj', item='handover-test', active_only=True)
             self.assertEqual([decision['text'] for decision in decisions], ['continue'])
@@ -182,6 +202,9 @@ conn.close()
             self.assertNotIn('job', adopted)
         finally:
             finish.touch()
+            (self.base / 'old-queen-finish').touch()
+            if old_queen is not None and old_queen.poll() is None:
+                old_queen.wait(timeout=20)
             (self.base / 'release-queen').touch()
             rows = self.conn.execute("SELECT pid FROM agents WHERE project=? AND plan_path=? AND phase='queen'", ('testproj', next_plan)).fetchall()
             deadline = time.monotonic() + 20
