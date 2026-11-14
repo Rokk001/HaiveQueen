@@ -126,3 +126,18 @@ created completion receipts in the fallback data directory. Console drivers now
 receive dedicated data, config and log directories; standalone runs also load the
 isolation guard. The two affected tests reproduced the exact leak before the fix.
 Nine focused console, receipt-lifetime and isolation tests pass after the fix.
+
+## Integration repair evidence
+
+Action journals record the tested commit, command, worktree and speculative
+predecessors. Worker cancellation is recorded as cancellation rather than a
+project failure. Repair history retains failures, agent reports, before/after
+commits and explicit retry reasons. Empty commits and ended agents without a
+committed tree change or changed command do not rerun the unchanged pipeline.
+Existing attempt limits and owner-stop handling remain in effect.
+
+Five regressions failed before the corresponding changes and pass afterwards,
+including a second failure after the first repair and an integration verification
+record only after all pipeline steps complete. Eight existing fix and owner-reject
+tests also pass. This is the evidence foundation, not completion of cross-plan
+cause coordination or machine-verified targeted repair checks; those remain open.

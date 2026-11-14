@@ -51,7 +51,7 @@ class RunLogs(OrchCase):
         self.end_fixer(self.fixers()[0])
         merge = orchestrator._merge_git
         def observed(*args):
-            running = [p for p in self.logs() if records(p)[-1]["event"] == "start"]
+            running = [p for p in self.logs() if not any(r['event'] == 'end' for r in records(p))]
             self.assertEqual(len(running), 1)
             start = records(running[0])[0]
             self.assertEqual(start["result"], "running")

@@ -111,6 +111,12 @@ def save_step_log(conn, project, plan, step, code, output):
 
 def _start_log(conn, env, plan, state, step):
     path = action_logs.start(env.name, plan, step)
+    assignment = __import__('haivequeen.bees', fromlist=['x']).plan_worktree(env, plan)
+    folder = assignment[1] if assignment else None
+    action_logs._write(path, {'event': 'execution', 'time': action_logs._now(),
+                              'commit': integration.head_commit(folder) if folder else '',
+                              'cwd': str(folder or ''), 'command': commands(env).get(step, step),
+                              'predecessors': _ahead(conn, env.name, plan)})
     state["log_file"] = path
     save(conn, env.name, plan, state)
     return path
@@ -664,7 +670,8 @@ def _merge_work(job, folder, remote, branch, target, result_file):
         import traceback
         code, out = 1, traceback.format_exc()
         action_logs.append(job.log_file, out)
-    action_logs.finish(job.log_file, code, message=out if code else "")
+    action_logs.finish(job.log_file, code, result='cancelled' if job.cancelled else None,
+                       message='HQ cancelled this speculative run' if job.cancelled else (out if code else ''))
     Path(result_file).write_text(json.dumps({"token": job.token, "code": code, "output": out}), encoding="utf-8")
 
 
@@ -761,7 +768,8 @@ def _work(env_settings, job, step, command, folder, extra_env, result_file):
         code = code or 143
     if job.log_file and not action_logs.output(job.log_file):
         action_logs.append(job.log_file, output)
-    action_logs.finish(job.log_file, code)
+    action_logs.finish(job.log_file, code, result='cancelled' if job.cancelled else None,
+                       message='HQ cancelled this speculative run' if job.cancelled else '')
     try:
         Path(result_file).write_text(json.dumps({"token": job.token, "code": code, "output": output}), encoding="utf-8")
     except OSError:
@@ -1001,6 +1009,8 @@ def _red(conn, env, plan, state, step, error):
     _log(env, "%s: %s red %s - %s" % (_short(plan), step, _counter(env, step), " ".join(error.split())[:200]))
     state["phase"] = "fix"
     state["fix"] = {"agent": None, "reason": "step", "step": step, "error": error, "log_file": state.get("log_file")}
+    _record_repair(conn, env.name, plan, 'failure', step=step, error=error,
+                   log_file=state.get('log_file'))
     state["placed"] = False
     save(conn, env.name, plan, state)
     hives.release_integration(conn, env.name, plan)
@@ -1064,6 +1074,9 @@ def _close_run(conn, env, plan, state, folder):
         bees.set_package_state(conn, env.name, plan, package, "done", "Orchestrator")
     _save_last(conn, env.name, plan, commit=head, steps=list(state["ran"]),
                owner_check=state.get('owner_check', 0))
+    if repair_history(conn, env.name, plan):
+        _record_repair(conn, env.name, plan, 'verified', commit=head,
+                       scope='integration pipeline', steps=list(state['ran']))
     action_logs.append(state.get("log_file"), "Queue integrated; integration reservation released; commit %s\n" % head)
     _log(env, "%s: integration done, commit %s" % (_short(plan), head[:7]))
     runtime.kv_set(conn, env.name, KEY + plan, "")
@@ -1073,6 +1086,16 @@ def _close_run(conn, env, plan, state, folder):
 
 
 # ---------------------------------------------------------------- fix agent
+
+def repair_history(conn, project, plan):
+    raw = runtime.kv_get(conn, project, 'orch-repair-history:' + plan)
+    return json.loads(raw) if raw else []
+
+
+def _record_repair(conn, project, plan, event, **fields):
+    history = repair_history(conn, project, plan)
+    history.append({'event': event, 'time': db.now(), **fields})
+    runtime.kv_set(conn, project, 'orch-repair-history:' + plan, json.dumps(history))
 
 def _fix_prompt(env, plan, state, owner_text=""):
     fix = state["fix"]
@@ -1092,6 +1115,12 @@ def _fix_prompt(env, plan, state, owner_text=""):
                  "Fix all errors in that output in one run, not only the last or first error.\n" % fix["log_file"])
     if owner_text:
         what += "\nInstruction of the owner:\n%s\n" % owner_text
+    history = repair_history(env.conn, env.name, plan)
+    if history:
+        what += '\nCOMPLETE REPAIR HISTORY (read every referenced log before choosing a new approach)\n' + json.dumps(history, indent=2)
+    what += ('\nAn ended agent is not a verified repair. Diagnose prior failed attempts, add a targeted regression '
+             'for the original failure and report its command and result. Commit the repair; an unchanged tree '
+             'does not justify repeating the integration. Never weaken checks.\n')
     text = ("You are the fix agent of the plan %s. Work only in the plan worktree %s on the plan branch.\n%s\n"
             "Fix exactly this. On a merge conflict keep the content of both sides (the merge of %s/%s is left open in the worktree: resolve it and commit it). "
             "Commit your fix and end. Do not push, do not merge into the integration branch, do not call bzz ready and do not change the queue: the Orchestrator of HaiveQueen "
@@ -1111,6 +1140,28 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
         _save_last(conn, env.name, plan, fix_agent=fix["agent"])
         if fix.get("owner_stopped"):   # M-4: an agent the owner stopped is never restarted; the plan waits for his instruction
             return _block(conn, env, plan, state, "stopped")
+        folder = _worktree(env, plan)
+        head = integration.head_commit(folder) if folder else ''
+        try:
+            report = (env.run_dir(fix['agent']) / 'final.txt').read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            report = ''
+        status_code, status_output = _git(folder, 'status', '--porcelain') if folder else (1, '')
+        changed = bool(folder and fix.get('head') and head and
+                       _git(folder, 'diff', '--quiet', fix['head'], head)[0] == 1 and
+                       status_code == 0 and not status_output.strip())
+        conditions_changed = 'commands' in fix and fix['commands'] != commands(env)
+        _record_repair(conn, env.name, plan, 'attempt-ended', agent=fix['agent'],
+                       before=fix.get('head', ''), after=head, report=report,
+                       changed=changed, conditions_changed=conditions_changed)
+        if not changed and not conditions_changed:
+            fix['agent'] = None
+            fix['instruction'] = ('The previous attempt provided no committed repair or changed command. '
+                                  'Continue diagnosis using the complete history; do not repeat the unchanged pipeline.')
+            save(conn, env.name, plan, state)
+            return None
+        _record_repair(conn, env.name, plan, 'pipeline-retry', commit=head,
+                       reason='committed tree changed' if changed else 'configured command changed')
         state.update(phase="pipeline", step="Merge", placed=False, steps={}, ran=[], fix=None, moved=0, rejoining=True)
         state.pop("release", None)
         # The fix commit becomes the new original state when joining the tail.
@@ -1159,6 +1210,7 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
         return None
     existing = [a["name"] for a in runtime.list_agents(conn, env.name, "all")]
     name = loop.agent_identity(conn)["Person"]
+    before_head = integration.head_commit(folder)
     action = {"name": name, "type": pick["name"], "phase": "fix", "plan": plan, "package": "", "cwd": str(folder), "prompt": _fix_prompt(env, plan, state, owner_text), "class": cls}
     st = {"names": existing, "busy": [], "plan_status": {sch.norm_plan(plan): "RUNNING"}, "by_path": {sch.norm_plan(plan): {"path": plan}}}
     ctx = {"env": env, "state": st, "pool": loop.Pool(free, 0), "report": [], "dry": False, "settle": 0}
@@ -1166,7 +1218,10 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
         return None
     started = st["names"][-1]
     fix["agent"] = started
-    fix["head"] = integration.head_commit(folder)
+    fix["head"] = before_head
+    fix['commands'] = commands(env)
+    _record_repair(conn, env.name, plan, 'attempt-started', agent=started, commit=before_head,
+                   step=fix['step'], log_file=fix.get('log_file'))
     attempts.update(cls=cls, n=n + 1)
     runtime.kv_set(conn, env.name, ATTEMPTS_KEY + plan, json.dumps(attempts))
     state["fix"] = fix
