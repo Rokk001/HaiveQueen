@@ -11,12 +11,14 @@
    submitted, with the decisions of the plan (owner and coordinator), with the list and the branch and ends with `READY-CHECK: PASSED` or `READY-CHECK: FAILED` plus the missing points. Only a passed
    result accepts the branch. When the agent cannot run, `bzz ready` waits and the Queen calls it again next round.
 """
+import hashlib
+import json
 import os
 import re
 import subprocess
 import time
 
-from . import plans, roles, runtime
+from . import db, plans, roles, runtime
 
 CHECK_RUNNER = None   # tests replace this: callable(request dict) -> (verdict, text); verdict is passed, failed or unavailable
 
@@ -190,7 +192,7 @@ def gate(env, plan, queen):
     if shown:
         prompt += "\n\nDecisions of the plan (owner and coordinator):\n" + "\n".join(
             "- decision %s (%s, item %s): %s" % (d.get("id"), d.get("source"), d.get("item") or "-", " ".join(str(d.get("text") or "").split())) for d in shown)
-    request = {"env": env, "queen": queen, "plan": plan, "cwd": queen.get("cwd") or str(env.workspace), "prompt": prompt}
+    request = {"env": env, "queen": queen, "plan": plan, "cwd": queen.get("cwd") or str(env.workspace), "prompt": prompt, "state_text": state_text}
     runner = CHECK_RUNNER or (lambda r: start_check_agent(r["env"], r["queen"], r))
     verdict, text = runner(request)
     if verdict == "passed":
@@ -204,20 +206,72 @@ def gate(env, plan, queen):
     return False, "the check agent could not run (%s): ready waits, call bzz ready again next round" % (text or "no reason given"), True
 
 
-def start_check_agent(env, queen, request, sleep=time.sleep):
-    """Start the check agent through the agent runner like an Agent and wait for its answer; returns (verdict, text).
+def _check_scope(request):
+    """Bind a pending verdict to the request and branch it actually checked."""
+    try:
+        head = subprocess.run(["git", "-C", request["cwd"], "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        head = ""
+    data = [os.path.normcase(os.path.abspath(request["cwd"])), head,
+            request["prompt"], request.get("state_text", "")]
+    return hashlib.sha256(json.dumps(data).encode("utf-8")).hexdigest()
 
-    The configured ready-check class runs on an eligible provider with a free slot and limit, and it
-    takes a slot like an Agent. No provider, no slot, a failed start, an agent that ends without verdict or a timeout (setting readyCheckTimeoutSec)
-    give `unavailable`."""
+
+def start_check_agent(env, queen, request, sleep=time.sleep):
+    """Observe a pending ready check across timeouts; only start when none exists."""
+    from . import agent_process, hives, scheduler
+    plan = request["plan"]
+    if not hives.get(env.conn, env.name, plan):
+        return "unavailable", "no Plan of this plan"
+    key = "ready-check-attempt:" + scheduler.norm_plan(plan)
+    scope = _check_scope(request)
+    # Serialize selection and registration, never the observation wait.
+    with db.transaction(env.conn):
+        raw = runtime.kv_get(env.conn, env.name, key)
+        attempt = json.loads(raw) if raw else None
+        if not attempt:
+            existing = next((a for a in runtime.list_agents(env.conn, env.name, "all")
+                             if scheduler.norm_plan(a.get("plan_path") or "") == scheduler.norm_plan(plan)
+                             and a.get("phase") == "verify" and a.get("package") == "READY-CHECK"
+                             and agent_process.counts(a)), None)
+            if existing:
+                # Legacy attempts have no proven request scope. Observe their end,
+                # then request a fresh check rather than accepting stale evidence.
+                attempt = {"name": existing["name"], "scope": None}
+            else:
+                name, reason = _launch_check_agent(env, queen, request)
+                if not name:
+                    return "unavailable", reason
+                attempt = {"name": name, "scope": scope}
+            runtime.kv_set(env.conn, env.name, key, json.dumps(attempt))
+    name = attempt["name"]
+    deadline = time.monotonic() + float(env.settings.get("readyCheckTimeoutSec", 3600))
+    while time.monotonic() < deadline:
+        # A terminal row alone is insufficient while its runner still writes files.
+        row = runtime.get_agent(env.conn, env.name, name)
+        if row is not None and row.get("status") not in scheduler.ACTIVE and not agent_process.is_live(row):
+            with db.transaction(env.conn):
+                current = runtime.kv_get(env.conn, env.name, key)
+                if current and json.loads(current) == attempt:
+                    runtime.kv_delete(env.conn, env.name, key)
+            verdict = ended_verdict(row, answer_text(env.run_dir(name)))
+            if verdict[0] == "aborted":
+                return verdict
+            if attempt["scope"] != scope or _check_scope(request) != scope:
+                return "unavailable", "the previous check ended for a different review scope; a fresh check is required"
+            return verdict
+        sleep(min(5, max(0, deadline - time.monotonic())))
+    return "unavailable", "the check agent did not end in time; the existing attempt will be observed next round"
+
+
+def _launch_check_agent(env, queen, request):
+    """Choose a free provider and register one new checker under the caller's lock."""
     from . import agent_process, hives, loop, scheduler
     plan = request["plan"]
-    hive = hives.get(env.conn, env.name, plan)
-    if not hive:
-        return "unavailable", "no Plan of this plan"
     blocked = hives.start_block_reason(env.conn, env.name, plan)
     if blocked:
-        return "unavailable", "the check agent may not start now (starts paused or stopped, or the plan is paused): %s" % blocked
+        return None, "the check agent may not start now (starts paused or stopped, or the plan is paused): %s" % blocked
     active = runtime.list_agents(env.conn, None, "active")
     running = [{**a, "status": "running"} for a in active if agent_process.counts(a)]
     free = scheduler.provider_free(env.providers, running, env.conn)
@@ -226,7 +280,7 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
     candidates = [p for p in env.providers if p["name"] not in env.settings.get("excludedProviders", []) and p["name"] not in limited]
     pick = scheduler.select_provider(candidates, cls, [], free, conn=env.conn)
     if not pick:
-        return "unavailable", "no provider with a free slot and class %s" % cls
+        return None, "no provider with a free slot and class %s" % cls
     provider = pick["name"]
     existing = [a["name"] for a in runtime.list_agents(env.conn, env.name, "all")]
     state = {"names": existing, "busy": [], "plan_status": {scheduler.norm_plan(plan): "RUNNING"}, "by_path": {scheduler.norm_plan(plan): {"path": plan}}}
@@ -234,13 +288,6 @@ def start_check_agent(env, queen, request, sleep=time.sleep):
     action = {"name": "%s-ready-check" % re.sub(r"-\d+$", "", str(queen["name"])), "type": provider, "phase": "verify", "plan": plan, "package": "READY-CHECK",
               "cwd": request["cwd"], "prompt": request["prompt"], "class": cls}
     if not loop._do_start(ctx, action, forced_pick=scheduler.get_provider(env.providers, provider)):
-        return "unavailable", "the agent runner could not start the check agent"
+        return None, "the agent runner could not start the check agent"
     name = state["names"][-1]
-    deadline = time.monotonic() + float(env.settings.get("readyCheckTimeoutSec", 3600))
-    while time.monotonic() < deadline:
-        # bzz done can set a terminal status before the runner writes final.txt.
-        row = runtime.get_agent(env.conn, env.name, name)
-        if row is not None and row.get("status") not in scheduler.ACTIVE and not agent_process.is_live(row):
-            return ended_verdict(row, answer_text(env.run_dir(name)))
-        sleep(5)
-    return "unavailable", "the check agent did not end in time"
+    return name, ""

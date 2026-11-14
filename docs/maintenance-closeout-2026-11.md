@@ -328,3 +328,10 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - Bound the response queue to 32 entries, use deadline-aware backpressure and stop enqueueing during cleanup. The reader owns stdout so cleanup cannot block on another thread's read lock.
 - Bound every helper wait, including after kill. Only the metadata helper created by this request is terminated.
 - Three focused regressions failed before the fix (deadline bypass, unbounded queue and unbounded final wait). Isolated real helper processes additionally verify notification floods, silent output, successful handshakes and reader/process cleanup; no live provider or running application process is used.
+
+## A-23: Resume pending ready-check attempts
+
+- Persist the pending checker per project and normalized plan. Observation timeouts retain it; subsequent calls observe that runner before considering provider availability or starting another checker.
+- Serialize lookup and registration in a write transaction, releasing it before observation. Concurrent callers register only one attempt. Legacy live checkers also block duplicate starts.
+- Deliver the completed attempt's verdict only after its runner exits. Bind retained results to the request, completeness text, working directory and HEAD; changed or unknown scopes require a fresh check after the old one ends. Owner-stop results remain aborted.
+- Three regression tests reproduced duplicate starts and discarded results before the fix. Twenty-one focused tests pass, including concurrent database connections, resumed success/failure, changed requirements, legacy attempts, terminal-but-live runners, existing answer-file handling and start-block rules. No real agents were launched.
