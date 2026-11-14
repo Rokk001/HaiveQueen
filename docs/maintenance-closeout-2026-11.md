@@ -90,3 +90,11 @@ worker reject configured or offered repositories that differ from the installati
 origin before acquiring the update lock or stopping processes. HTTPS and SSH
 origins normalize to the same repository. Two regressions failed before the fix;
 27 focused update tests and four origin tests pass. No update worker was started.
+
+## A-13 atomic question answers
+
+Resolved: ordinary answers validate every rejected package against the question's
+plan before writing. Answer, decision, events and all package changes share one
+transaction. A later write failure rolls everything back. Owner-check answers
+remain notes and do not reject packages. Regressions reproduced both invalid IDs
+and partial writes before the fix; focused answer and terminology tests pass.
