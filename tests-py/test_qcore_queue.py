@@ -172,6 +172,30 @@ class SpeculativeQueue(OrchCase):
     def test_red_check_replays_running_check(self):
         self.fail_and_replay("Check", "Check")
 
+    def test_access_failure_invalidates_speculative_followers(self):
+        self.tick()
+        self.assert_contains(self.second, 'first.txt', 'second.txt')
+        orchestrator._red(self.conn, self.env(), REL, self.state(),
+                          'Check', 'remote check: HTTP 403 forbidden')
+        self.assertEqual(self.state()['phase'], 'blocked')
+        self.assertTrue(self.state(OTHER).get('replay'))
+        self.tick()
+        self.assertFalse((self.second / 'first.txt').exists())
+        self.assertEqual(self.started[OTHER, 'Check'], 2)
+        self.assertEqual(self.state()['phase'], 'blocked')
+
+    def test_access_failure_after_publication_keeps_followers(self):
+        self.tick()
+        self.finish_step(REL, 'Check')
+        self.finish_step(REL, 'Build')
+        self.assertEqual(self.state()['step'], 'Deploy')
+        orchestrator._red(self.conn, self.env(), REL, self.state(),
+                          'Deploy', 'deployment: HTTP 403 forbidden')
+        self.assertFalse(self.state(OTHER).get('replay'))
+        self.tick()
+        self.assert_contains(self.second, 'first.txt', 'second.txt')
+        self.assertEqual(self.started[OTHER, 'Check'], 1)
+
     def test_repaired_plan_joins_behind_all_current_queue_members(self):
         self.tick()
         self.failed.add((REL, "Check"))

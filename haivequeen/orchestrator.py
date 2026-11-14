@@ -975,6 +975,8 @@ def authentication_failure(error):
 
 def _access_wait(conn, env, plan, state, step, error):
     """Require an owner answer before retrying this exact step; keep completed work."""
+    if step in ('Merge', 'Check', 'Build', 'Push'):
+        _replay_followers(conn, env, plan)
     item = 'integration-access-' + step.lower()
     pending = runtime.list_questions(conn, env.name, status='open', plan=plan, item=item)
     qid = pending[0]['id'] if pending else db.add_question(

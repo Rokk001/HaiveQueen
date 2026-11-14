@@ -190,3 +190,17 @@ settings without registering a project twice.
 Three regressions failed before the fix and now pass: settings-write failure,
 journal-preparation failure and publication recovery. Two focused compatibility
 tests also pass for secret preservation and workflow settings round-tripping.
+
+## Speculative queue: access failures
+
+An authentication failure before publication previously released the predecessor's
+queue reservation without invalidating speculative successors. They could retain
+code from the blocked plan. Access failures at Merge, Check, Build or Push now
+use the same durable cancellation/replay path as other pre-publication failures.
+Successors merge again without the blocked plan and continue independently.
+Access failures after publication keep successor checks intact.
+
+The pre-publication regression failed before this fix. Focused coverage also
+checks post-publication access failure, normal failed-check replay, cumulative
+parallel merges and checks, and parallel builds with ordered publication.
+This does not serialize the queue or make successors wait for the repair.
