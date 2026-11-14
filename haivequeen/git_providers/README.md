@@ -51,8 +51,8 @@ All operations take the repository first and an optional token last.
 `release_tag(tag, commit, token)` creates a tag or verifies the existing tag's
 commit. `release_state(tag, commit, token)` returns `pending`, `success`, or
 `failure` for that tag's workflows only. Missing evidence remains pending.
-GitHub, GitLab, Gitea/Forgejo and Azure implement these operations. Bitbucket
-has no release resource and does not advertise release completion.
+GitHub, GitLab and Gitea/Forgejo implement these operations. Azure and
+Bitbucket do not advertise repository release completion. Azure retains Git tags.
 
 Local releases use `release_prepare(tag, commit, token)` to create or recover a
 prerelease and return `{id, assets: [{name, ...}]}` with every asset page.
@@ -71,8 +71,8 @@ local prerelease attachments, so local publication is skipped with a reason.
 `release_history(token)` returns all pages as records with `tag`, `version`,
 `date`, `commit`, `prerelease` and `full_tag`. Resolve annotated tags to exact
 commit IDs; a release's target branch is not its commit. `full_tag` is empty
-when a tag is not a supported versioned prerelease. Azure lists version tag
-workflows; Bitbucket has no release history API.
+when a tag is not a supported versioned prerelease. Azure and Bitbucket do not
+advertise repository release history or promotion.
 
 Local promotion reads `release_snapshot(tag, commit, token)` without creating
 the source release, then `release_download(release, asset, token)` for each

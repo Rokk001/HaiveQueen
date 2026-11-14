@@ -28,6 +28,8 @@ def listing(conn, project):
 
 def promote(provider, mode, selected):
     """Use provider-owned source metadata, never a browser-supplied commit or URL."""
+    if 'release_history' not in provider.capabilities:
+        raise ValueError('This provider does not support release history or promotion.')
     token = provider.credential()
     rows = provider.call('release_history', token)
     source = next((row for row in rows if row['tag'] == selected), None)

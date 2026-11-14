@@ -40,6 +40,17 @@ class WebApiTests(RoundCase):
         self.assertEqual(view['git_workflow']['provider'], '')
         self.assertFalse(any(view['git_workflow']['supported'].values()))
 
+    def test_azure_workflow_disables_release_but_keeps_git_and_pipeline(self):
+        from haivequeen import git_provider, projsettings
+        from haivequeen.git_providers import azure
+        provider = git_provider.Provider('azure', azure, ('org', 'project', 'repo'))
+        with mock.patch.object(projsettings, '_git', return_value='https://dev.azure.com/org/project/_git/repo'), \
+             mock.patch.object(git_provider, 'discover', return_value=(provider, [])):
+            supported = web_api.settings_view(self.conn, 'testproj')['git_workflow']['supported']
+        self.assertTrue(supported['merge'])
+        self.assertTrue(supported['check'])
+        self.assertFalse(supported['release'])
+
     def test_snapshot_reports_when_paused_plan_has_fully_stopped(self):
         row = {'apiary': 'testproj', 'plan_path': REL, 'paused': True}
         with mock.patch.object(dashboard_data, 'snapshot', return_value={'hives': [row]}), \
