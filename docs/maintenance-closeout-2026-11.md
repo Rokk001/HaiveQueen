@@ -367,3 +367,9 @@ Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pu
 - A new journal write separates an interrupted previous record before appending. Existing bytes are preserved; an already recorded terminal result is not replaced or duplicated.
 - Paged reads advance through oversized damaged records without an unbounded response or a stuck cursor. Terminal metadata validates long messages and falls back past malformed trailing records instead of inventing a successful result.
 - Regression tests reproduce lost output, terminal-write exceptions, hidden corruption, premature acceptance of unfinished records and invalid terminal metadata. Verification uses isolated journals and the existing isolated output-drain helper only.
+
+## A-29: Keep step definitions and progress in the same attempt
+
+- Already fixed by `1330d20`: package details select the newest agent's prompt and restrict progress notes to that agent. A predecessor's completion count cannot mark replacement instructions as done, even when both prompts have the same number of steps.
+- Reverified all three `test_web_plan_details` tests. The replacement regression checks unknown progress before the new agent reports, then current/pending states after its own first report; the other tests cover package metadata and explicit step completion.
+- No runtime state or running agents were changed for this verification.
