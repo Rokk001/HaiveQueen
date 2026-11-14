@@ -53,6 +53,22 @@ class PromotionTests(TestCase):
         self.assertEqual(self.calls, [])
         self.module.release_download.assert_not_called()
 
+    def test_git_promotion_carries_selected_source_when_supported(self):
+        self.module.CAPABILITIES.add('release_promotion_tag')
+        self.module.release_promotion_tag = mock.Mock()
+        web_releases.promote(self.provider, 'git', PRE)
+        self.module.release_promotion_tag.assert_called_once_with('team/repo', FULL, SHA, PRE, None)
+        self.module.release_tag.assert_not_called()
+
+    def test_github_annotated_promotion_tag_carries_source_and_commit(self):
+        from urllib.error import HTTPError
+        missing = HTTPError('https://api.github.com', 404, 'missing', {}, None)
+        self.addCleanup(missing.close)
+        with mock.patch.object(github, '_request', side_effect=[missing, {'sha': 'b' * 40}, {}]) as request:
+            github.release_promotion_tag('team/repo', FULL, SHA, PRE, 'token')
+        self.assertEqual(request.call_args_list[1].args[3], {'tag': FULL, 'message': 'HaiveQueen prerelease: ' + PRE, 'object': SHA, 'type': 'commit'})
+        self.assertEqual(request.call_args_list[2].args[3]['sha'], 'b' * 40)
+
     def test_retry_verifies_existing_files_without_duplicate_upload(self):
         self.target['assets'] = [{'name': 'original build.zip'}]
         web_releases.promote(self.provider, 'local', PRE)

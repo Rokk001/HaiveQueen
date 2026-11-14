@@ -251,7 +251,7 @@ def pr_status(repository, number, token=None):
     return _request(repository, "/pulls/" + quote(str(number), safe=""), token)
 
 
-CAPABILITIES |= {'release_tag', 'release_state', 'release_prepare', 'release_upload', 'release_asset_digest'}
+CAPABILITIES |= {'release_promotion_tag', 'release_tag', 'release_state', 'release_prepare', 'release_upload', 'release_asset_digest'}
 
 
 def release_tag(repository, name, commit, token=None):
@@ -268,6 +268,30 @@ def release_tag(repository, name, commit, token=None):
         obj = _request(repository, '/git/tags/' + obj['sha'], token)['object']
     if obj.get('type') != 'commit' or obj.get('sha') != commit:
         raise ValueError('release tag points at a different commit')
+
+
+
+def release_promotion_tag(repository, name, commit, source, token=None):
+    """Tag the selected source so the release workflow can reuse its assets."""
+    from urllib.error import HTTPError
+    message = 'HaiveQueen prerelease: ' + source
+    try:
+        ref = _request(repository, '/git/ref/tags/' + quote(name, safe=''), token)
+    except HTTPError as exc:
+        if exc.code != 404:
+            raise
+        obj = _request(repository, '/git/tags', token,
+                       {'tag': name, 'message': message, 'object': commit, 'type': 'commit'})
+        _request(repository, '/git/refs', token,
+                 {'ref': 'refs/tags/' + name, 'sha': obj['sha']})
+        return
+    obj = ref['object']
+    if obj.get('type') != 'tag':
+        raise ValueError('existing release tag has no promotion source')
+    annotated = _request(repository, '/git/tags/' + obj['sha'], token)
+    target = annotated.get('object', {})
+    if annotated.get('message') != message or target.get('type') != 'commit' or target.get('sha') != commit:
+        raise ValueError('existing release tag has a different promotion source or commit')
 
 
 def release_state(repository, name, commit, token=None):

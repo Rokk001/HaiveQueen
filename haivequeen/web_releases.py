@@ -41,7 +41,10 @@ def promote(provider, mode, selected):
     if not re.fullmatch(r'[0-9a-fA-F]{40,64}', commit):
         raise ValueError('Pre-release has no exact commit')
     if mode == 'git':
-        provider.call('release_tag', tag, commit, token)
+        if 'release_promotion_tag' in provider.capabilities:
+            provider.call('release_promotion_tag', tag, commit, source['tag'], token)
+        else:
+            provider.call('release_tag', tag, commit, token)
         return {'tag': tag, 'commit': commit, 'message': 'Tag set; the provider workflow publishes the release.'}
     required = {'release_prepare', 'release_snapshot', 'release_download', 'release_upload', 'release_asset_digest'}
     if mode != 'local' or not required <= provider.capabilities:
