@@ -1,3 +1,4 @@
+require('./dashboard_loading_test.cjs');
 const assert = require('node:assert/strict');
 const {hiveCounts,isPackagePlaceholder}=require('../haivequeen/web-client.js');
 const hiveExample=[{kind:'queen',name:'Queen'},{kind:'bee',name:'–',agent:null,status:'waiting'},

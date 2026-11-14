@@ -1,3 +1,17 @@
+function dashboardLoading(document,t) {
+  const make=(tag,cls,text)=>{const node=document.createElement(tag);node.className=cls;if(text)node.textContent=t(text);return node;};
+  const root=make('section','dashboard-loading');root.setAttribute('aria-busy','true');
+  const status=make('div','loading-status','Loading your hive…');status.setAttribute('role','status');
+  const emblem=make('span','loading-honeycomb');emblem.setAttribute('aria-hidden','true');status.append(emblem);root.append(status);
+  const placeholders=make('div','loading-placeholders');placeholders.setAttribute('aria-hidden','true');
+  const metrics=make('div','loading-metrics');
+  for(let i=0;i<7;i++){const tile=make('div','loading-metric');tile.append(make('span','loading-block'),make('span','loading-line'));metrics.append(tile);}
+  const columns=make('div','loading-columns'),main=make('div','loading-panel'),side=make('div','loading-sidebar');
+  main.append(make('span','loading-line loading-title'));
+  for(let i=0;i<5;i++)main.append(make('div','loading-row'));
+  for(let i=0;i<3;i++){const panel=make('div','loading-panel');panel.append(make('span','loading-line loading-title'),make('div','loading-row'));side.append(panel);}
+  columns.append(main,side);placeholders.append(metrics,columns);root.append(placeholders);return root;
+}
 function orchestrationFor(row,hives=[]) {
   if(row.kind!=='orch')return null;
   const info=row.orch||hives.find(plan=>plan.apiary===(row.apiary||row.project)&&plan.plan_path===row.plan_path)?.orch;
@@ -782,7 +796,7 @@ function mount(document, bootstrap) {
   }
   function renderDashboard() {
     const state=client.state;
-    if(!state){view.append(el('p',t('Loading…')));return;}
+    if(!state){view.append(dashboardLoading(document,t));return;}
     const filtered=dashboardRows(state,dashboardFilter);
     if(dashboardFilter){
       const filterBar=el('div',undefined,'dashboard-filter');filterBar.setAttribute('role','status');
@@ -1462,5 +1476,5 @@ function mount(document, bootstrap) {
   render();void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));
