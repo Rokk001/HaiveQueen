@@ -166,6 +166,7 @@ class BrowserTests(unittest.TestCase):
             {'project':'demo','plan_path':'draft.md','title':'Draft plan','status':'DRAFT'}]}
         state['bees'][0].update(kind='bee', plan_path='mock.md')
         state['bees'].insert(0, {'kind':'queen','name':'Test Queen','apiary':'demo','project':'demo','plan_path':'mock.md','hive':'Mock','task':'Queen'})
+        state['bees'].append({'kind':'orch','name':'HQ','apiary':'demo','project':'demo','plan_path':'mock.md','status':'running','orch':{'chain':[['Merge','done'],['Check','done'],['Build','running'],['Push','todo'],['Deploy','todo']]}})
         state['limits'] = [{'name': name, 'model': 'test-model', 'reserve': {'text': '+10 %', 'level': 'ok'},
                             'slots': {'total': 8, 'used': 2}, 'weekly': {'pct': 32, 'text': '7d 32 % · 18.11. 11:10'},
                             'five': '5h 12 % · 23:10'} for name in ('Claude', 'Codex', 'Local')]
@@ -250,7 +251,7 @@ class BrowserTests(unittest.TestCase):
         thread.start()
         try:
             with tempfile.TemporaryDirectory() as profile:
-                command=[browser,*flags,'--user-data-dir='+profile,
+                command=[browser,*flags,'--window-size=1500,1000','--user-data-dir='+profile,
                          '--dump-dom','--virtual-time-budget=60000','http://127.0.0.1:'+str(server.server_port)]
                 result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=90,
                                       env=self.browser_environment(profile),

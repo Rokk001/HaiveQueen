@@ -157,6 +157,15 @@ window.addEventListener('load', async () => {
     assert(!document.querySelector('.hives-list table'),'Nested tables remain');
 
     assert(document.querySelector('.hive-tree-heading').children.length===7,'Shared columns missing');
+    assert(document.querySelector('.hive-tree-row .hq-steps'),'HQ integration steps missing');
+    assert(!document.querySelector('.hive-tree-orch [data-column=status] .hq-steps'),'HQ steps duplicated in status');
+    if(innerWidth>1100){
+      for(const row of document.querySelectorAll('.hive-tree-row:not([hidden])'))assert(row.getBoundingClientRect().height<=44,'Desktop tree row wastes vertical space: '+row.className+' '+row.getBoundingClientRect().height);
+      for(const steps of document.querySelectorAll('.hive-tree-row .hq-steps')){
+        const tops=[...steps.children].map(node=>Math.round(node.getBoundingClientRect().top));
+        assert(new Set(tops).size<=1,'Integration steps must stay on one line');
+      }
+    }
     const projectToggle=document.querySelector('.hive-tree-project .hive-tree-toggle');projectToggle.click();
     assert(document.querySelector('.hive-tree-plan').hidden,'Project collapse must hide descendants');await wait(()=>!document.querySelector('.hive-tree-project .hive-tree-toggle').disabled);document.querySelector('.hive-tree-project .hive-tree-toggle').click();
     assert(!document.querySelector('.hive-tree-plan').hidden,'Project expand must restore descendants');

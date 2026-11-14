@@ -957,22 +957,30 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .hives-list { overflow:auto; scrollbar-gutter:stable; }
 /* A single aligned list, with hierarchy carried by indentation rather than nested tables. */
 .hives-tree { list-style:none; margin:0; padding:0; }
-.hive-tree-heading,.hive-tree-cells > div > div > div { display:grid; grid-template-columns:minmax(210px,2fr) 75px minmax(160px,1.6fr) 65px 75px minmax(100px,1fr) 75px; gap:12px; align-items:center; }
-.hive-tree-heading { position:sticky; top:0; z-index:1; padding:12px 8px; background:#0d171c; color:#9db2bb; font-size:11px; }
-.hive-tree-row { position:relative; border-bottom:1px solid #26383f; min-width:900px; }
+.hive-tree-heading,.hive-tree-cells > div > div > div { display:grid; grid-template-columns:minmax(180px,1.5fr) 55px minmax(310px,2fr) 45px 65px minmax(90px,1fr) 65px; gap:8px; align-items:center; }
+.hive-tree-heading { position:sticky; top:0; z-index:1; padding:7px 8px; background:#0d171c; color:#9db2bb; font-size:11px; }
+.hive-tree-row { position:relative; border-bottom:1px solid #26383f; min-width:875px; }
 .hive-tree-row[hidden] { display:none; }
-.hive-tree-cells > div > div > div { padding:10px 8px; min-height:44px; }
-.hive-tree-cells [data-column=name] { padding-left:calc(var(--depth)*18px + 24px); position:relative; min-width:0; }
-.hive-tree-cells [data-column=name]::before { content:''; position:absolute; left:calc(var(--depth)*18px + 8px); top:-10px; height:calc(50% + 10px); width:10px; border-left:1px solid #3b5059; border-bottom:1px solid #3b5059; }
+.hive-tree-cells > div > div > div { padding:4px 8px; min-height:34px; }
+.hive-tree-cells [data-column=name] { padding-left:calc(var(--depth)*12px + 20px); position:relative; min-width:0; }
+.hive-tree-cells [data-column=name]::before { content:''; position:absolute; left:calc(var(--depth)*12px + 8px); top:-5px; height:calc(50% + 5px); width:10px; border-left:1px solid #3b5059; border-bottom:1px solid #3b5059; }
 .hive-tree-cells [data-column] { min-width:0; overflow-wrap:anywhere; }
-.hive-tree-cells .row-name { white-space:normal; }
+.hive-tree-cells .row-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
 .hive-tree-cells .tree-branch { color:#9db2bb; }
-.hive-tree-toggle { position:absolute; left:calc(var(--depth)*18px); top:7px; z-index:1; width:28px; height:30px; min-height:30px; padding:0; border:0; background:transparent; color:#a9bec7; }
-.hive-tree-project { display:flex; align-items:center; gap:16px; padding:14px 12px 14px 32px; background:#102027; }
+.hive-tree-toggle { position:absolute; left:calc(var(--depth)*12px); top:2px; z-index:1; width:24px; height:30px; min-height:30px; padding:0; border:0; background:transparent; color:#a9bec7; }
+.hive-tree-project { display:flex; align-items:center; gap:12px; padding:5px 8px 5px 28px; min-height:34px; background:#102027; }
 .hive-project-name { font-weight:700; }.hive-project-count { font-size:12px; }
 .hive-tree-plan { background:#0c171c; }
 .hive-tree-queen { background:#171e15; }
-.hive-tree-cells .orchestration { flex-wrap:wrap; }
+.hive-tree-cells .hq-pipeline,.hive-tree-cells .hq-steps { flex-wrap:nowrap; }
+.hive-tree-cells .hq-pipeline { gap:5px; overflow-x:auto; scrollbar-width:thin; }
+.hive-tree-cells .hq-steps { flex-shrink:0; }
+.hive-tree-cells .hq-step-count { flex-shrink:0; font-size:10px; }
+.hive-tree-cells [data-column=status] { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+@media(min-width:701px) and (pointer:fine) {
+ .hive-tree-cells .hq-step { min-height:24px; padding:2px 3px; font-size:10px; }
+ .hive-tree-cells .row-menu { min-height:24px; }
+}
 .workflow-overall { display:flex; align-items:center; gap:16px; padding:8px 0 18px; font-size:13px; }
 .workflow-overall select { width:auto; min-width:200px; }
 .workflow-step.is-off { padding:10px 0; grid-template-columns:76px 80px minmax(0,1fr); }
@@ -1001,7 +1009,7 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .hive-tree-plan [data-column=model],.hive-tree-plan [data-column=ctx],.hive-tree-plan [data-column=tokens] { visibility:hidden; }
 @media(max-width:700px) { .hive-tree-plan [data-column=model],.hive-tree-plan [data-column=ctx],.hive-tree-plan [data-column=tokens] { display:none; } }
 
-.hive-tree-heading { min-width:900px; }
+.hive-tree-heading { min-width:875px; }
 .hive-tree-cells [data-column=name] { display:flex; align-items:center; gap:5px; }
 .hive-tree-cells .row-menu { flex-shrink:0; }
 .hive-tree-cells { font-size:12px; }
