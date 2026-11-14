@@ -4,7 +4,8 @@ const assert=require('node:assert/strict');
 (async()=>{
  const [debug,preview]=process.argv.slice(2);
  const tabs=await(await fetch(`http://127.0.0.1:${debug}/json`)).json();
- const ws=new WebSocket(tabs[0].webSocketDebuggerUrl);await new Promise(r=>ws.onopen=r);
+ const page=tabs.find(tab=>tab.type==='page');assert(page,'No isolated browser page');
+ const ws=new WebSocket(page.webSocketDebuggerUrl);await new Promise(r=>ws.onopen=r);
  let id=0;const pending=new Map();ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=pending.get(m.id);pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}};
  const send=(method,params={})=>new Promise((resolve,reject)=>{const key=++id;pending.set(key,{resolve,reject});ws.send(JSON.stringify({id:key,method,params}));});
  const evaluate=async expression=>{const result=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(result.exceptionDetails)throw Error(result.exceptionDetails.text);return result.result.value;};
@@ -15,7 +16,8 @@ const assert=require('node:assert/strict');
    await send('Page.navigate',{url:`http://127.0.0.1:${preview}`});await wait(`!!document.querySelector('.model-limit')`);
    const sizes=await evaluate(`JSON.stringify({width:innerWidth,scroll:document.documentElement.scrollWidth,plans:document.querySelector('[data-panel="Hives"]').getBoundingClientRect().top,limits:document.querySelector('[data-panel="Limits"]').getBoundingClientRect().top,wrap:getComputedStyle(document.querySelector('.hives-list')).maxHeight,card:document.querySelector('.hive-tree-plan').getBoundingClientRect().height})`);
    const metrics=JSON.parse(sizes);assert(metrics.scroll<=width,JSON.stringify(metrics));
-   if(width<=700){assert(metrics.plans<metrics.limits);assert.equal(metrics.wrap,'none');assert(metrics.card<320,'Plan card is unnecessarily tall');}
+   if(width<=700){assert(metrics.plans<metrics.limits);assert.equal(metrics.wrap,'none');assert(metrics.card<320,'Plan card is unnecessarily tall');
+    assert(await evaluate(`(()=>{const strip=document.querySelector('.tiles');return strip.scrollHeight<=strip.clientHeight+1})()`),'Metric strip has a vertical scrollbar');}
    await evaluate(`document.querySelector('#settings-toggle').click()`);await wait(`!document.querySelector('#settings-subnav').hidden`);
    assert(await evaluate(`(()=>{const r=document.querySelector('#settings-subnav').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth})()`),'Settings menu outside viewport');
    await evaluate(`document.querySelector('[data-tab="Providers"]').click()`);await wait(`!!document.querySelector('.git-connection')`);

@@ -211,7 +211,7 @@ window.addEventListener('load', async () => {
     metric.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'}));
     assert(document.querySelector('#tile-preview').hidden,'Metric hover must not open details');
 
-    metric.click();await wait(()=>document.querySelector('#detail').open);
+    document.querySelector('[data-tile="bees"]').click();await wait(()=>document.querySelector('#detail').open);
 
     assert(document.querySelector('#detail .tile-content'),'Metric detail content missing');
 

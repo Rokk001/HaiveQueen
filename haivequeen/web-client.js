@@ -311,6 +311,20 @@ function mount(document, bootstrap) {
       confirmation.showModal();cancel.focus();
     });
   }
+  function requestInput(message){
+    const dialog=el('dialog',undefined,'confirmation-dialog'),form=el('form');
+    const label=el('label',message),input=el('input');input.type='text';input.id='setting-input';label.htmlFor=input.id;
+    dialog.setAttribute('aria-label',message);
+    const footer=el('div',undefined,'confirmation-actions'),cancel=el('button',t('Cancel')),save=el('button',t('Save'));
+    cancel.type='button';save.type='submit';save.className='confirm-primary';footer.append(cancel,save);
+    form.append(label,input,footer);dialog.append(form);document.body.append(dialog);
+    return new Promise(resolve=>{
+      let settled=false;const finish=value=>{if(settled)return;settled=true;dialog.close();dialog.remove();resolve(value);};
+      form.onsubmit=event=>{event.preventDefault();finish(input.value);};cancel.onclick=()=>finish(null);
+      dialog.addEventListener('cancel',event=>{event.preventDefault();finish(null);});
+      dialog.addEventListener('close',()=>finish(null));dialog.showModal();input.focus();
+    });
+  }
   function animateHeader(){
     const canvas=$('honeycomb');if(!canvas)return;
     const context=canvas.getContext('2d');if(!context)return;
@@ -412,8 +426,22 @@ function mount(document, bootstrap) {
   let previewTimer, scrollingPreview=false;
   function hideTilePreview(){clearTimeout(previewTimer);tilePreview.hidden=true;}
   // A stationary pointer must not activate help as content scrolls beneath it.
-  document.addEventListener('scroll',()=>{scrollingPreview=true;hideTilePreview();},{capture:true,passive:true});
+  function retainHelp(node){if(node.title){node.dataset.hoverHelp=node.title;node.removeAttribute('title');}}
+  function scrollingHelp(){scrollingPreview=true;hideTilePreview();for(const node of document.querySelectorAll('[title]'))retainHelp(node);}
+  document.addEventListener('scroll',scrollingHelp,{capture:true,passive:true});
+  document.addEventListener('wheel',scrollingHelp,{capture:true,passive:true});
+  document.addEventListener('touchmove',scrollingHelp,{capture:true,passive:true});
   document.addEventListener('pointermove',()=>{scrollingPreview=false;},{passive:true});
+  document.addEventListener('pointerover',event=>{
+    const node=event.target.closest?.('[title],[data-hover-help]');if(!node)return;
+    retainHelp(node);if(scrollingPreview||event.pointerType!=='mouse')return;
+    clearTimeout(previewTimer);previewTimer=setTimeout(()=>{
+      if(scrollingPreview||!node.isConnected)return;
+      tilePreview.replaceChildren(el('p',node.dataset.hoverHelp));tilePreview.hidden=false;
+      const r=node.getBoundingClientRect();tilePreview.style.left=Math.max(8,Math.min(r.left,window.innerWidth-tilePreview.offsetWidth-8))+'px';tilePreview.style.top=Math.max(8,Math.min(r.bottom+6,window.innerHeight-tilePreview.offsetHeight-8))+'px';
+    },600);
+  });
+  document.addEventListener('pointerout',event=>{if(event.target.closest?.('[data-hover-help]'))hideTilePreview();});
   function closeTilePreview(){clearTimeout(previewTimer);previewTimer=setTimeout(()=>{tilePreview.hidden=true;},180);}
   tilePreview.onpointerenter=()=>clearTimeout(previewTimer);tilePreview.onpointerleave=closeTilePreview;
   document.addEventListener('keydown',event=>{if(event.key==='Escape')hideTilePreview();});
@@ -900,7 +928,7 @@ function mount(document, bootstrap) {
       breakdown.append(el('summary',t('Individual steps')+(item.substeps?.length?' · '+item.substeps.length:'')));
       const list=el('ol');
       for(const step of item.substeps||[]){
-        const line=el('li',undefined,step.status),label={done:'Completed',pending:'Not yet reported complete',unknown:'No matching progress report'}[step.status]||step.status;
+        const line=el('li',undefined,step.status),label={done:'Completed',current:'Current step',pending:'Not yet reported complete',unknown:'No matching progress report'}[step.status]||step.status;
         line.append(el('span',step.status==='done'?'✓':String(step.number),'substep-number'),el('span',step.text),el('small',t(label)));list.append(line);
       }
       breakdown.append(item.substeps?.length?list:el('p',t('No saved step descriptions available for this package.'),'dim'));card.append(breakdown);
@@ -1197,7 +1225,7 @@ function mount(document, bootstrap) {
           number.oninput=()=>{provider.capabilityThresholds ||= {};provider.capabilityThresholds[row.name]=number.value.trim()===''?'':Number(number.value);changed();};
           draw();capabilities.append(line);
         }
-        capabilities.append(button('Add own',()=>{const name=prompt(t('Capability name'));if(name?.trim()){provider.capabilities=effectiveCapabilities(provider);if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));use.append(capabilities);
+        capabilities.append(button('Add own',async()=>{const name=await requestInput(t('Capability name'));if(name?.trim()){provider.capabilities=effectiveCapabilities(provider);if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));use.append(capabilities);
         const setup=group('Tool connections');
         const verified=new Set(status?.mcp?.available||[]),native=new Set(['Coding','Queen','Build','Deploy','Confidential data']);
         for(const capability of effectiveCapabilities(provider).filter(name=>!native.has(name))){
@@ -1348,9 +1376,9 @@ function mount(document, bootstrap) {
       label.append(input);const help=bootstrap.fieldHelp?.[tab]?.[name] || bootstrap.help[name] || bootstrap.defaultHelp?.[tab];if(help)label.append(el('small',t(help)));parent.append(label);
     }
     if(!allowAdd)return;
-    const add=button('Add setting',()=>{
-      const name=prompt(t('Setting name'));if(!name || ['__proto__','constructor','prototype','password'].includes(name) || Object.hasOwn(object,name))return;
-      const value=prompt(t('Value (JSON, or plain text)'));if(value===null)return;
+    const add=button('Add setting',async()=>{
+      const name=await requestInput(t('Setting name'));if(!name || ['__proto__','constructor','prototype','password'].includes(name) || Object.hasOwn(object,name))return;
+      const value=await requestInput(t('Value (JSON, or plain text)'));if(value===null)return;
       let parsed;try{parsed=JSON.parse(value);}catch{parsed=value;}
       object[name]=parsed;changed();render();
     });parent.append(add);

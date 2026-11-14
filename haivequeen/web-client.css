@@ -455,6 +455,8 @@ tr[data-kind='queen'] .row-name, tr[data-kind='orch'] .row-name { color: var(--g
 .confirmation-dialog { width: min(480px,calc(100vw - 32px)); padding: 26px; border: 1px solid #61727a; border-top: 3px solid var(--gold); box-shadow: 0 20px 80px #000c; }
 
 .confirmation-dialog h2 { font-size: 20px; }.confirmation-dialog p { font-family: system-ui,sans-serif; font-size: 15px; line-height: 1.7; margin: 20px 0 26px; }
+.confirmation-dialog form { display: grid; gap: 16px; }
+.confirmation-dialog form input { width: 100%; min-width: 0; box-sizing: border-box; }
 
 .confirmation-actions { display: flex; justify-content: flex-end; gap: 10px; }.confirmation-actions button { padding: 10px 18px; min-height: 44px; }.confirm-primary { background: var(--gold); border-color: var(--gold); color: #071014; font-weight: bold; }
 
@@ -749,6 +751,7 @@ progress.ok::-moz-progress-bar { background: #79df9b; }progress.bad::-moz-progre
 .package-substeps li { display: grid; grid-template-columns: 25px minmax(0,1fr); gap: 5px 9px; padding: 10px 0; border-top: 1px solid #233139; line-height: 1.5; }
 .package-substeps li small { grid-column: 2; color: var(--muted); }
 .substep-number { color: var(--gold); }.package-substeps .done .substep-number,.package-substeps .done small { color: #79df9b; }
+.package-substeps .current small { color: var(--gold); }
 
 .model-limit progress { border-radius: 0; -webkit-mask-image: repeating-linear-gradient(to right,#000 0,#000 calc(10% - 2px),transparent calc(10% - 2px),transparent 10%); mask-image: repeating-linear-gradient(to right,#000 0,#000 calc(10% - 2px),transparent calc(10% - 2px),transparent 10%); }
 
@@ -910,7 +913,7 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .git-connection summary .access-status { display:flex; width:fit-content; margin:9px 0 4px 16px; }
 .provider-section > .access-status { margin-right:12px; }
 @media(max-width:700px) {
-  .tiles button { height:94px; min-height:94px; }
+  .tiles button { height:auto; min-height:94px; }
   .dashboard-primary td[data-column='status'] { grid-column:auto; }
   .dashboard-primary td[data-column='status']:has(.hq-steps) { grid-column:1/-1; }
   .dashboard-primary td[data-column='runtime'] { justify-content:flex-start; }
