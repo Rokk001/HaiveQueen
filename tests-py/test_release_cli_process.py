@@ -45,6 +45,9 @@ class ReleaseCliProcessTest(RoundCase):
     def test_web_api_install_and_force_reach_worker(self):
         self._compatible_switch(public=True, incompatible=True, force=True, web=True)
 
+    def test_tray_confirmation_and_force_reach_worker(self):
+        self._compatible_switch(public=True, incompatible=True, force=True, web='tray')
+
     def test_shared_settings_change_waits_for_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True, reason="shared settings format change")
 
@@ -247,7 +250,7 @@ class ReleaseCliProcessTest(RoundCase):
                                           {'phase': 'pipeline', 'steps': {step: 'running'},
                                            'job': {'step': step, 'pid': job.pid, 'file': str(result)}})
                 updates.save_state({'available': {'version': '2.0.0', 'url': 'https://example.invalid/release'}})
-                if web:
+                if web is True:
                     # Exercise the real API against the installed version and
                     # the detached worker, with an isolated data directory.
                     code = ("import json,sys; sys.path.insert(0,sys.argv[1]); "
@@ -260,7 +263,7 @@ class ReleaseCliProcessTest(RoundCase):
                     command = [sys.executable, '-I', str(root / 'launcher.py'), 'update', '--install', '2.0.0']
                 request = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
                 self.assertEqual(request.returncode, 0, request.stdout + request.stderr)
-                if web:
+                if web is True:
                     self.assertIn(json.loads(request.stdout)['how'], ('detached', 'schtasks'))
                 else:
                     self.assertEqual(json.loads(request.stdout)['installing'], '2.0.0')
@@ -291,7 +294,14 @@ class ReleaseCliProcessTest(RoundCase):
                                      {'Queen', 'Agent', 'Build', 'Deploy'} if force else {'Queen', 'Agent'})
                     self.assertTrue(all(job.poll() is None for job in jobs))
                     if force:
-                        if web:
+                        if web == 'tray':
+                            code = ("import sys; sys.path.insert(0,sys.argv[1]); "
+                                    "from haivequeen import selfupdate,tray; "
+                                    "tray.confirm=lambda:False; tray.invoke(8); "
+                                    "assert not selfupdate.release_force_path().exists(); "
+                                    "tray.confirm=lambda:True; tray.invoke(8); print('confirmed')")
+                            command = [sys.executable, '-I', '-c', code, str(root / 'versions' / '1.0.0')]
+                        elif web:
                             code = ("import json,sys; sys.path.insert(0,sys.argv[1]); "
                                     "from haivequeen import config,db,web_api; "
                                     "c=db.connect(config.db_path()); "
@@ -301,9 +311,12 @@ class ReleaseCliProcessTest(RoundCase):
                             command = [sys.executable, '-I', str(root / 'launcher.py'), 'update', '--force']
                         forced = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
                         self.assertEqual(forced.returncode, 0, forced.stdout + forced.stderr)
-                        if not web:
-                            self.assertIn(force_stop.WARNING, forced.stdout)
-                        self.assertTrue(json.loads(forced.stdout.splitlines()[-1])['force_requested'])
+                        if web == 'tray':
+                            self.assertIn('confirmed', forced.stdout)
+                        else:
+                            if not web:
+                                self.assertIn(force_stop.WARNING, forced.stdout)
+                            self.assertTrue(json.loads(forced.stdout.splitlines()[-1])['force_requested'])
                     else:
                         (self.base / 'finish-agents').touch()
                     for job in jobs:
