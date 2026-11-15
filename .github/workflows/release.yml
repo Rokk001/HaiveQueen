@@ -1,6 +1,16 @@
 name: release
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing full-version tag to publish
+        required: true
+        type: string
+      source_tag:
+        description: Prerelease whose verified assets are promoted
+        required: true
+        type: string
   push:
     tags:
       - 'v*'
@@ -10,7 +20,7 @@ permissions:
 
 jobs:
   release:
-    if: contains(github.ref_name, '-')
+    if: github.event_name == 'push' && contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -64,7 +74,10 @@ jobs:
           gh release upload "$RELEASE_TAG" dist/* --clobber
 
   full-release:
-    if: ${{ !contains(github.ref_name, '-') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
+    concurrency:
+      group: full-release-${{ inputs.release_tag || github.ref_name }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -73,7 +86,8 @@ jobs:
       - name: Identify maintenance tags
         id: tag-kind
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          EXPLICIT_PROMOTION: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           python - <<'PY'
           import os
@@ -83,7 +97,7 @@ jobs:
           tag = os.environ['RELEASE_TAG']
           kind = subprocess.check_output(['git', 'cat-file', '-t', 'refs/tags/' + tag], text=True).strip()
           # Maintenance pushes use lightweight tags; promotion creates annotated tags.
-          publish = kind == 'tag'
+          publish = kind == 'tag' or os.environ.get('EXPLICIT_PROMOTION') == 'true'
           with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
               output.write('publish=' + str(publish).lower() + '\n')
           if not publish:
@@ -95,7 +109,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
         shell: bash
         run: |
           if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
@@ -103,7 +118,7 @@ jobs:
             exit 1
           fi
           message=$(git for-each-ref --format='%(contents)' "refs/tags/$RELEASE_TAG")
-          source=${message#HaiveQueen prerelease: }
+          source=${SOURCE_TAG:-${message#HaiveQueen prerelease: }}
           if [[ "$source" == "$message" || ! "$source" =~ ^${RELEASE_TAG//./\.}-[A-Za-z0-9]+(-[A-Za-z0-9]+)*\.(0|[1-9][0-9]*)$ ]]; then
             echo "Full release tag lacks a valid pre-release source" >&2
             exit 1

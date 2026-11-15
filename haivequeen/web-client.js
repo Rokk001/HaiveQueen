@@ -249,6 +249,21 @@ class QuestionDetails {
   }
   retry(question){this.entries.delete(question.id);return this.load(question);}
 }
+function releaseJobStatus(job){
+  if(job.error)return {text:job.error,error:true,busy:false};
+  if(job.running)return {text:job.progress||'Publishing release...',error:false,busy:true};
+  return {text:job.result?.message||'Release publication finished.',error:false,busy:false};
+}
+async function startReleasePromotion(client,project,row,onProgress,warning){
+  if(!await client.confirm(warning||'Publish as full release '+row.full_tag+'?'))return null;
+  const pending={key:'release-promotion:'+project,running:true,progress:'Starting release publication...',started:Date.now()/1000};
+  onProgress(pending);
+  try{
+    const job=await client.action('releases/promote',{project,tag:row.tag,confirmed:true});
+    if(!job)throw Error('Publication request was not accepted.');
+    onProgress(job);return job;
+  }catch(error){onProgress({...pending,running:false,error:error.message});return null;}
+}
 class Client {
   constructor(options = {}) {
     Object.assign(this, {csrf:'', fetch:(...args)=>fetch(...args), confirm:()=>false, notice:()=>{}, onState:()=>{}, onError:()=>{}, project:'', loading:false, refreshWanted:false}, options);
@@ -482,6 +497,7 @@ function mount(document, bootstrap) {
     onUnauthorized:()=>{location.href='/login';}, onError:error=>client.notice(error.message,true),onState:renderState});
   const renderGate=new RenderGate(()=>renderStateNow(client.state));
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
+  const releasePromotions=new Map();
   const questionDrafts=new Map();
   const questionDetails=new QuestionDetails(route=>client.request(route));
   const planFilters={search:'',project:'',status:''};
@@ -915,6 +931,8 @@ function mount(document, bootstrap) {
     const toolbar=el('div',undefined,'release-toolbar'),label=el('label',t('Project'));
     label.append(projectSelect(value=>{releaseProject=value;void loadReleases();},releaseProject,false));
     toolbar.append(label,button('Reload',loadReleases));box.append(toolbar);
+    const promotion=releasePromotions.get(releaseProject);
+    if(promotion){const status=releaseJobStatus(promotion),feedback=el('p',t(status.text),status.error?'bad':'notice');feedback.setAttribute('role',status.error?'alert':'status');feedback.setAttribute('aria-live','polite');feedback.setAttribute('aria-busy',String(status.busy));box.append(feedback);}
     const empty=(title,message,bad=false)=>{const state=el('div',undefined,'release-empty');state.setAttribute('role',bad?'alert':'status');state.append(el('h3',t(title)),el('p',t(message),'dim'));box.append(state);};
     if(!releaseProject){empty('Select a project','Choose a project to see its published releases.');return;}
     if(releaseError){empty('Could not load releases',releaseError,true);box.append(button('Try again',loadReleases));return;}
@@ -929,10 +947,11 @@ function mount(document, bootstrap) {
       heading.append(el('h3',row.version||row.tag),el('span',t(row.prerelease?'Prerelease':'Stable'),row.prerelease?'release-badge warn':'release-badge ok'));card.append(heading);
       const facts=el('dl',undefined,'release-facts');facts.append(el('dt',t('Date')),el('dd',row.date||'–'),el('dt',t('Commit')));
       const commit=el('dd',row.commit||'–','release-commit');facts.append(commit);card.append(facts);
-      if(row.prerelease&&row.full_tag)card.append(button('Publish as full release',async()=>{
-        const job=await client.action('releases/promote',{project:releaseProject,tag:row.tag,confirmed:true},t('Publish as full release')+' '+row.full_tag+'?');
+      if(row.prerelease&&row.full_tag){const publish=button('Publish as full release',async()=>{
+        const project=releaseProject;
+        const job=await startReleasePromotion(client,project,row,status=>{releasePromotions.set(project,status);if(tab==='Releases')render();},t('Publish as full release')+' '+row.full_tag+'?');
         if(job){job.title='Publish as full release';jobs.set(job.id,job);renderJob(job);}
-      }));
+      });publish.disabled=publish.disabled||!!promotion?.running;card.append(publish);}
       list.append(card);
     }
   }
@@ -1915,6 +1934,14 @@ function mount(document, bootstrap) {
     if(!run.running){links.append(el('p',t('Login finished')+' ('+run.exit+')'));panel.append(button('Close',()=>{panel.remove();loginRuns.delete(run.id);}));}
   }
   function renderJob(job) {
+    if(job.key?.startsWith('release-promotion:')){
+      const project=job.key.slice('release-promotion:'.length),previous=releasePromotions.get(project);
+      if(!previous||previous.id===job.id||Number(job.started)>=Number(previous.started)){
+        releasePromotions.set(project,job);
+        if(tab==='Releases')render();
+      }
+      return;
+    }
     let panel=$('job-'+job.id);if(!panel){panel=el('section');panel.id='job-'+job.id;$('live').append(panel);}
     panel.replaceChildren(el('h2',t(job.title || job.key || 'Owner action')),valueView(job));
     if(!job.running)panel.append(button('Close',()=>{jobs.delete(job.id);panel.remove();}));
@@ -1943,11 +1970,11 @@ function mount(document, bootstrap) {
   render();
   void client.request('jobs/status').then(history=>{
     const previous=el('details');previous.append(el('summary',t('Previous owner actions')));
-    for(const job of history){if(!jobs.has(job.id)){jobs.set(job.id,job);renderJob(job);if(!job.running)previous.append($('job-'+job.id));}}
+    for(const job of history){if(!jobs.has(job.id)){jobs.set(job.id,job);renderJob(job);if(!job.running && $('job-'+job.id))previous.append($('job-'+job.id));}}
     if(previous.children.length>1)$('live').append(previous);
   }).catch(error=>client.notice(error.message,true));
   void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={QuestionDetails,settingsCategory,workflowSummary,testTimingNotice,LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={startReleasePromotion,releaseJobStatus,QuestionDetails,settingsCategory,workflowSummary,testTimingNotice,LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

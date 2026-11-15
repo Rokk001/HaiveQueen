@@ -28,8 +28,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_full_release_job_does_not_run_distribution_build(self):
         prerelease, full = self.workflow.split('  full-release:', 1)
-        self.assertIn("if: contains(github.ref_name, '-')", prerelease)
-        self.assertIn("if: ${{ !contains(github.ref_name, '-') }}", full)
+        self.assertIn("if: github.event_name == 'push' && contains(github.ref_name, '-')", prerelease)
+        self.assertIn("if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}", full)
         self.assertNotIn('Build distributions', full)
         self.assertNotIn('pip wheel', full)
         self.assertIn('gh release create "$RELEASE_TAG" --verify-tag', full)
@@ -52,14 +52,53 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 'tag', '-a', 'v0.2.25', '-m', 'HaiveQueen prerelease: v0.2.25-rc.1')
             output = Path(folder) / 'output'
             summary = Path(folder) / 'summary'
-            for tag, expected in [('v0.2.24', 'false'), ('v0.2.25', 'true')]:
+            for tag, explicit, expected in [('v0.2.24', 'false', 'false'), ('v0.2.25', 'false', 'true'), ('v0.2.24', 'true', 'true')]:
                 output.write_text('')
                 result = subprocess.run([sys.executable, '-c', script], cwd=folder,
-                    env=dict(os.environ, RELEASE_TAG=tag, GITHUB_OUTPUT=str(output),
+                    env=dict(os.environ, RELEASE_TAG=tag, EXPLICIT_PROMOTION=explicit, GITHUB_OUTPUT=str(output),
                              GITHUB_STEP_SUMMARY=str(summary)), capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output.read_text().strip(), 'publish=' + expected)
             self.assertIn('Maintenance tag', summary.read_text())
+
+    def test_explicit_promotion_checks_source_and_commit_before_copying(self):
+        import shutil
+        git_path = Path(shutil.which('git'))
+        bash = git_path.parent.parent / 'bin' / 'bash.exe' if os.name == 'nt' else Path(shutil.which('bash') or '/missing')
+        if not bash.is_file(): self.skipTest('Bash required for workflow regression')
+        full = self.workflow.split('      - name: Publish full release without rebuilding', 1)[1]
+        block = full.split('        run: |\n', 1)[1]
+        script = '\n'.join(line[10:] for line in block.splitlines())
+        for mismatch in (False, True):
+            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as folder:
+                def git(*args):
+                    subprocess.run(['git', *args], cwd=folder, check=True, capture_output=True)
+                git('init')
+                git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','--allow-empty','-m','fixture')
+                git('tag','v1.2.3')
+                if mismatch:
+                    git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','--allow-empty','-m','other')
+                git('tag','v1.2.3-alpha.1')
+                stub = """set -e
+ gh() {
+   if [[ "$1 $2" == 'release view' ]]; then
+     if [[ "$3" == "$SOURCE_TAG" ]]; then echo true; return 0; fi
+     return 1
+   fi
+   echo "$1 $2" >> calls
+   if [[ "$2" == download ]]; then echo fixture > dist/build.zip; fi
+ }
+"""
+                path = Path(folder)/'workflow.sh';path.write_text(stub+script,encoding='utf-8')
+                result = subprocess.run([str(bash),str(path)],cwd=folder,env=dict(os.environ,RELEASE_TAG='v1.2.3',SOURCE_TAG='v1.2.3-alpha.1'),capture_output=True,text=True)
+                calls=Path(folder)/'calls'
+                if mismatch:
+                    self.assertNotEqual(result.returncode,0)
+                    self.assertIn('commits differ',result.stderr)
+                    self.assertFalse(calls.exists())
+                else:
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertEqual(calls.read_text().splitlines(),['release download','release create','release upload'])
 
     def test_tag_version_is_used_for_package_and_invalid_tags_fail(self):
         block = self.workflow.split("          python - <<'PY'\n", 1)[1].split('\n          PY', 1)[0]

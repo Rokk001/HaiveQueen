@@ -209,7 +209,7 @@ def execute(conn, action, data):
             raise ValueError('Confirm publication of the selected pre-release as a full release')
         provider, working = web_releases.context(conn, project)
         return web_jobs.start('release-promotion:' + project,
-                              lambda _progress: web_releases.promote(provider, working['releaseMode'], data['tag']))
+                              lambda progress: web_releases.promote(provider, working['releaseMode'], data['tag'], progress))
     if action == 'git-login/providers':
         from . import git_provider
         return git_provider.login_options()

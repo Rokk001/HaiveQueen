@@ -1024,3 +1024,13 @@ GERMAN.update({'Draft': 'Entwurf',
  'Needs attention': 'Prüfung nötig'})
 
 GERMAN.update({'Your review needed':'Deine Abnahme nötig','Your answer needed':'Deine Antwort nötig','Review result':'Ergebnis prüfen','Review %s results':'%s Ergebnisse prüfen','Answer question':'Frage beantworten','Answer %s questions':'%s Fragen beantworten','Plan issue':'Problem mit dem Plan','Loading plans…':'Pläne werden geladen…'})
+
+GERMAN.update({
+ 'Starting release publication...': 'Release-Veröffentlichung wird gestartet...',
+ 'Publishing release...': 'Release wird veröffentlicht...',
+ 'Checking selected prerelease...': 'Ausgewähltes Pre-Release wird geprüft...',
+ 'Requesting release publication...': 'Release-Veröffentlichung wird angefordert...',
+ 'Verifying and copying release assets...': 'Release-Dateien werden geprüft und kopiert...',
+ 'Publication requested; the provider workflow must still finish.': 'Veröffentlichung angefordert; der Provider-Workflow muss noch abschließen.',
+ 'Release publication finished.': 'Release-Veröffentlichung abgeschlossen.',
+ 'Publication request was not accepted.': 'Veröffentlichungsauftrag wurde nicht angenommen.'})

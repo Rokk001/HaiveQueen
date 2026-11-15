@@ -286,6 +286,16 @@ def release_promotion_tag(repository, name, commit, source, token=None):
                  {'ref': 'refs/tags/' + name, 'sha': obj['sha']})
         return
     obj = ref['object']
+    if obj.get('type') == 'commit':
+        if obj.get('sha') != commit:
+            raise ValueError('release tag points at a different commit')
+        # A maintenance tag is immutable. Explicit dispatch supplies the selected
+        # prerelease without deleting or moving the existing ref.
+        repository_info = _request(repository, '', token)
+        _request(repository, '/actions/workflows/release.yml/dispatches', token,
+                 {'ref': repository_info['default_branch'],
+                  'inputs': {'release_tag': name, 'source_tag': source}})
+        return
     if obj.get('type') != 'tag':
         raise ValueError('existing release tag has no promotion source')
     annotated = _request(repository, '/git/tags/' + obj['sha'], token)

@@ -26,10 +26,12 @@ def listing(conn, project):
     return {'releases': provider.call('release_history', provider.credential()), 'reason': ''}
 
 
-def promote(provider, mode, selected):
+def promote(provider, mode, selected, progress=None):
     """Use provider-owned source metadata, never a browser-supplied commit or URL."""
     if 'release_history' not in provider.capabilities:
         raise ValueError('This provider does not support release history or promotion.')
+    progress = progress or (lambda text: None)
+    progress('Checking selected prerelease...')
     token = provider.credential()
     rows = provider.call('release_history', token)
     source = next((row for row in rows if row['tag'] == selected), None)
@@ -41,14 +43,16 @@ def promote(provider, mode, selected):
     if not re.fullmatch(r'[0-9a-fA-F]{40,64}', commit):
         raise ValueError('Pre-release has no exact commit')
     if mode == 'git':
+        progress('Requesting release publication...')
         if 'release_promotion_tag' in provider.capabilities:
             provider.call('release_promotion_tag', tag, commit, source['tag'], token)
         else:
             provider.call('release_tag', tag, commit, token)
-        return {'tag': tag, 'commit': commit, 'message': 'Tag set; the provider workflow publishes the release.'}
+        return {'tag': tag, 'commit': commit, 'message': 'Publication requested; the provider workflow must still finish.'}
     required = {'release_prepare', 'release_snapshot', 'release_download', 'release_upload', 'release_asset_digest'}
     if mode != 'local' or not required <= provider.capabilities:
         raise ValueError('This provider does not support copying local release assets')
+    progress('Verifying and copying release assets...')
     original = provider.call('release_snapshot', source['tag'], commit, token)
     contents = {}
     for asset in original['assets']:
