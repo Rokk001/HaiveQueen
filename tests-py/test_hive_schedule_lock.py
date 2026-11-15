@@ -166,6 +166,60 @@ class HiveScheduleLockTests(unittest.TestCase):
             self.assertEqual(backups[0].read_bytes(), damaged)
             self.assertFalse(path.exists())
 
+    def test_empty_and_truncated_preboot_metadata_recover(self):
+        from datetime import datetime
+        for damaged in (b'', b'{"pid":', bytes(44)):
+            with self.subTest(damaged=damaged), tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {'BZZ_DATA_DIR': directory}):
+                path = Path(directory) / 'hive-schedule.lock'
+                path.write_bytes(damaged)
+                old = time.time() - 120
+                os.utime(path, (old, old))
+                with mock.patch.object(loop, 'system_boot_time', return_value=datetime.fromtimestamp(old + 30)):
+                    with loop.hive_schedule_lock(timeout=0):
+                        with self.assertRaises(TimeoutError):
+                            with loop.hive_schedule_lock(timeout=0):
+                                self.fail('Concurrent recovery entered the protected section')
+                archived = list(Path(directory).glob('*.recovered-*'))
+                self.assertEqual(len(archived), 1)
+                self.assertEqual(archived[0].read_bytes(), damaged)
+
+    def test_two_threads_cannot_recover_the_same_lock_concurrently(self):
+        import threading
+        from datetime import datetime
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {'BZZ_DATA_DIR': directory}):
+            path = Path(directory) / 'hive-schedule.lock'
+            path.write_bytes(bytes(44))
+            old = time.time() - 120
+            os.utime(path, (old, old))
+            entered, release = threading.Event(), threading.Event()
+            errors = []
+            def recover():
+                try:
+                    with loop.hive_schedule_lock(timeout=0):
+                        entered.set()
+                        if not release.wait(3):
+                            raise AssertionError('Test did not release first recovery')
+                except Exception as exc:
+                    errors.append(exc)
+                    entered.set()
+            with mock.patch.object(loop, 'system_boot_time', return_value=datetime.fromtimestamp(old + 30)):
+                worker = threading.Thread(target=recover)
+                worker.start()
+                try:
+                    self.assertTrue(entered.wait(3))
+                    self.assertFalse(errors)
+                    with self.assertRaises(TimeoutError):
+                        with loop.hive_schedule_lock(timeout=0):
+                            self.fail('Second recovery entered')
+                finally:
+                    release.set()
+                    worker.join(3)
+                self.assertFalse(worker.is_alive())
+                self.assertFalse(errors)
+                with loop.hive_schedule_lock(timeout=0):
+                    pass
+            self.assertEqual(len(list(Path(directory).glob('*.recovered-*'))), 1)
+
     def test_corrupt_metadata_without_reboot_proof_is_preserved(self):
         from datetime import datetime
         for boot in (None, datetime.fromtimestamp(time.time() - 300)):

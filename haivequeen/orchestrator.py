@@ -882,6 +882,7 @@ def _command(conn, env, plan, state, folder, step, free_mb):
         return None
     if result == "lost":   # the process of the command is gone without a result (HaiveQueen ended): run the step again
         state.pop("job", None)
+        state["steps"].pop(step, None)
         save(conn, env.name, plan, state)
         return "next"
     code, output = result
@@ -907,6 +908,8 @@ def _harvest(conn, env, plan, state):
             return None
         JOBS.pop((env.name, plan), None)
         save_step_log(conn, env.name, plan, job["step"], result["exit"], result.get("output", ""))
+        if result.get("aborted"):
+            return "lost"  # interrupted infrastructure: retry this stage, not a code repair
         return result["exit"], result.get("output", "")
     key = (env.name, plan)
     j = JOBS.get(key)

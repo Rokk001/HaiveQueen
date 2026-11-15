@@ -1,4 +1,5 @@
 """Append-only action journals: a start, uncut output, and a terminal result."""
+import os
 import collections
 import logging
 import threading
@@ -32,6 +33,8 @@ def start(project, plan, step):
     with path.open("x", encoding="utf-8") as stream:
         stream.write(json.dumps({"event": "start", "project": project, "plan": plan, "step": step,
                                  "started_at": started, "result": "running"}) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
     return str(path)
 
 
@@ -52,6 +55,9 @@ def _write(path, record):
                         if stream.read(1) != b'\n':
                             stream.write(b'\n')  # isolate an interrupted previous write
                     stream.write((json.dumps(record) + '\n').encode('utf-8'))
+                    if record.get('event') == 'end':
+                        stream.flush()
+                        os.fsync(stream.fileno())
                 return
             except OSError as exc:
                 message = 'Log storage error: %s. Only a bounded in-memory output tail is available; it is not durable.\n' % exc

@@ -162,7 +162,7 @@ class CheckRecoveryTests(DetachedCompileCase):
         with mock.patch.dict(os.environ, self.env):
             result = self.wait_for(lambda: orchestrator._harvest(self.conn, env, 'plan', state))
             self.assertFalse(integration._live_holders(self.data / 'compile-check.lock'))
-        self.assertNotEqual(result[0], 0)
+        self.assertEqual(result, 'lost')
         stored = json.loads(runtime.kv_get(self.conn, 'project', 'orch-check:plan'))
         self.assertTrue(stored['aborted'])
         self.assertEqual(stored['commit'], integration.head_commit(str(self.base)))

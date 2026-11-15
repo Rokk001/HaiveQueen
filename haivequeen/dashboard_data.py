@@ -353,6 +353,12 @@ def orch_info(conn, env, hive, now=None) -> dict:
     stopping = bool(state.get("stopping"))
     if stopping:
         task = tr("Stopping") + ": " + str(step)
+    job = state.get("job") or {}
+    interrupted = bool(job.get("pid")) and not orchestrator.agent_process.recorded_alive(job["pid"], job.get("identity"))
+    if interrupted and not state.get("provider"):
+        waiting = True
+        task = "Integration: %s awaiting recovery" % step
+        chain = [(name, 'waiting' if name == step else status) for name, status in chain]
     running = state["phase"] == "pipeline" and not waiting
     reason = "owner rejection" if fix.get("reason") == "owner" else "%s red" % fix.get("step")
     return {"phase": state["phase"], "step": step, "chain": chain, "n": n, "m": len(steps), "task": task, "stopping": stopping, "status": "stopping" if stopping else "running" if running else "waiting",
