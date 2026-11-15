@@ -42,13 +42,22 @@ const {resolvePlanActions,Client}=require('../haivequeen/web-client.js');
  const body=source.slice(source.indexOf('  function renderControls()'),source.indexOf("  document.addEventListener('click',event=>{const menu="));
  const el=(tag,text='',className='')=>({tag,text,className,children:[],classList:{add(){}},append(...nodes){this.children.push(...nodes);}});
  const root=el('div');root.querySelector=()=>null;root.replaceChildren=(...nodes)=>{root.children=nodes;};
+ const controlClient={state:{orchestrator:{label:'RUNNING'}}};
  const render=new Function('client','el','$','t','button','actions','orchestratorDisabled',body+'return renderControls;')(
-  {state:{orchestrator:{label:'RUNNING'}}},el,()=>root,x=>x,(text,click)=>({...el('button',text),click}),
+  controlClient,el,()=>root,x=>x,(text,click)=>({...el('button',text),click}),
   {'start':'Start','stop-gracefully':'Stop gracefully','force-stop':'Force stop','resume':'Resume'},()=>false);
  render();
  const all=node=>[node,...node.children.flatMap(all)];
  const group=all(root).find(node=>node.className==='control-group'&&node.children[0]?.text==='PLANS');
  assert(group,'Controls must contain a PLANS section');
  assert.deepEqual(group.children.slice(1).map(node=>node.text),['Stop gracefully','Force stop','Resume']);
+ const planButtons=()=>all(root).find(node=>node.className==='control-group'&&node.children[0]?.text==='PLANS').children.slice(1);
+ assert(planButtons().every(node=>node.disabled),'Missing eligibility must disable all bulk actions');
+ controlClient.state.controls={plans:{'stop-gracefully':2,'force-stop':2,resume:0}};render();
+ assert.deepEqual(planButtons().map(node=>!!node.disabled),[false,false,true]);
+ controlClient.state.controls.plans={'stop-gracefully':0,'force-stop':0,resume:1};render();
+ assert.deepEqual(planButtons().map(node=>!!node.disabled),[true,true,false]);
+ controlClient.state.controls.plans.resume=0;render();
+ assert(planButtons().every(node=>node.disabled),'Polling must disable Resume again after the last plan resumed');
  console.log('Dashboard plan actions use canonical lifecycle state');
 })().catch(error=>{console.error(error);process.exitCode=1;});
