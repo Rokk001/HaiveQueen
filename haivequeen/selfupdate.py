@@ -415,8 +415,15 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
             raise RuntimeError('installed release could not be independently verified')
         # Byte identity alone does not establish live-process, dependency or
         # shared-state compatibility, nor exclude a launch during activation.
-        # Until those proofs exist, every release must use the drain gate.
+        # Until those proofs exist, activation must be deferred.
         info = {'compatible': False, 'reason': release_compat.UNKNOWN_REASON}
+        # Immutable legacy launchers and version-local code do not honour a
+        # new admission gate. Even an empty locked snapshot cannot rule out a
+        # legacy caller queued on the lock or one that launches later. Do not
+        # drain or publish the pointer until that exclusion can be proved.
+        note = 'update deferred: cannot exclude legacy launches during activation'
+        end_row(conn, row, old, 'failed', note)
+        return {'result': 'deferred', 'note': note, 'old': old, 'new': old}
         if not info['compatible']:
             status = release_compat.begin_wait(conn, target, jobs=jobs, decision=info)
             while True:

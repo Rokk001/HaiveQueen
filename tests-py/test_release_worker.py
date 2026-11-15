@@ -66,6 +66,40 @@ class ReleaseWorkerTests(unittest.TestCase):
                 self.assertEqual(self.active(), '1.0.0')
                 activate.assert_not_called()
 
+    def test_unproven_drain_defers_with_legacy_reservation_waiting(self):
+        # A preserved version-local implementation can queue on the lifetime
+        # lock without publishing a lease, then reserve after activation.
+        import shutil
+        from haivequeen import stable_launcher
+        legacy = self.root / 'versions' / '1.0.0' / 'haivequeen'
+        shutil.copy2(Path(stable_launcher.__file__), self.root / 'launcher.py')
+        from haivequeen import version_leases
+        shutil.copytree(Path(version_leases.__file__).parent, legacy, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        code = "import sys; sys.path.insert(0, sys.argv[1]); from haivequeen import version_leases; print('ready', flush=True); version_leases.reserve(sys.argv[2], '1.0.0'); print('reserved', flush=True)"
+        with stable_launcher.lifetime_lock(self.root):
+            child = subprocess.Popen([sys.executable, '-I', '-c', code, str(legacy.parent), str(self.root)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            ready = child.stdout.readline().strip()
+            activate = mock.Mock(return_value=True)
+            with mock.patch('haivequeen.release_staging.verify_installed', return_value=True):
+                result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', jobs=lambda c: [], loop_pid=lambda: 0, activate=activate, start=lambda: True)
+        out, err = child.communicate(timeout=10)
+        self.assertEqual(ready, 'ready', err)
+        self.assertEqual(child.returncode, 0, err)
+        self.assertIn('reserved', out)
+        self.assertEqual(result['result'], 'deferred')
+        self.assertEqual(self.active(), '1.0.0')
+        activate.assert_not_called()
+
+    def test_unproven_drain_defers_for_unknown_survivor(self):
+        activate = mock.Mock(return_value=True)
+        with mock.patch('haivequeen.release_staging.verify_installed', return_value=True), \
+             mock.patch('haivequeen.process_scan.scan', return_value=None):
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', jobs=lambda c: [], loop_pid=lambda: 0, activate=activate)
+        self.assertEqual(result['result'], 'deferred')
+        self.assertEqual(self.active(), '1.0.0')
+        activate.assert_not_called()
+
     def test_versioned_entry_point_selects_release_worker(self):
         with mock.patch.object(selfupdate, 'run_release_update', return_value={'result': 'ok'}) as run:
             result = selfupdate.run_update(self.conn, live=self.root / 'versions' / '1.0.0', version='2.0.0')
