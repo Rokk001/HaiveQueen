@@ -30,6 +30,27 @@ class PackageDiagnosis(RoundCase):
         path.write_text(json.dumps(report), encoding='utf-8')
         return path
 
+    def test_memory_recovery_closes_only_resource_wait_without_changing_scope(self):
+        from haivequeen import db
+        env = self.env()
+        scope = self.scope()
+        self.review.accept(self.conn, env.name, REL, 'P1', self.report(scope), scope, 'medium', ['medium'])
+        text = ('The P1 retry diagnosis has remained pending for several minutes while free physical memory is below the configured 2 GiB start threshold. '
+                'Can you free enough memory for the diagnosis and subsequent agent to start?')
+        qid = db.add_question(self.conn, env.name, REL, 'P1-memory', text, '')
+        product = db.add_question(self.conn, env.name, REL, 'P1-memory', 'Should we lower the memory limit?', '')
+        other = db.add_question(self.conn, env.name, 'other.md', 'P1-memory', text, '')
+        with mock.patch('haivequeen.loop._min_ram', return_value=2):
+            self.review.resolve_memory_wait(env, REL, 'P1', 1024)
+            self.assertEqual(self.conn.execute('SELECT status FROM questions WHERE id=?', (qid,)).fetchone()[0], 'open')
+            self.review.resolve_memory_wait(env, REL, 'P1', 4096)
+        self.assertEqual(self.conn.execute('SELECT status FROM questions WHERE id=?', (qid,)).fetchone()[0], 'answered')
+        for untouched in (product, other):
+            self.assertEqual(self.conn.execute('SELECT status FROM questions WHERE id=?', (untouched,)).fetchone()[0], 'open')
+        self.assertEqual(scope, self.scope())
+        self.assertIsNotNone(self.review.authorization(self.conn, env.name, REL, 'P1', scope))
+        self.assertEqual(bees.failure_count(self.conn, env.name, REL, 'P1', 'medium'), 1)
+
     def test_authorization_is_single_use_and_keeps_failure_history(self):
         scope = self.scope()
         self.review.accept(self.conn, 'testproj', REL, 'P1', self.report(scope), scope,
@@ -217,6 +238,30 @@ class PackageDiagnosisLifecycle(PackageDiagnosis):
             runtime.upsert_agent(self.conn, 'testproj', state['agent'], {'status': 'done', 'pid': None})
             self.review.advance(env, 16384, alive=lambda pid: False)
             self.assertIsNotNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', self.scope()))
+
+    def test_recovered_memory_wakes_plan_with_existing_authorization(self):
+        from haivequeen import db, hives
+        self.plan('WAITING', [{'id': 'P1', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'codex', '123456')
+        question = db.add_question(self.conn, 'testproj', REL, 'P1-memory',
+            'The P1 retry diagnosis has remained pending for several minutes while free physical memory is below the configured 2 GiB start threshold. '
+            'Can you free enough memory for the diagnosis and subsequent agent to start?', '')
+        self.conn.execute("UPDATE hives SET state='answer',questions_json=? WHERE project=? AND plan_path=?",
+                          (json.dumps([question]), 'testproj', REL))
+        scope = self.scope()
+        self.review.accept(self.conn, 'testproj', REL, 'P1', self.report(scope), scope, 'medium', ['medium'])
+        state = self.review._load(self.conn, 'testproj', REL, 'P1')
+        state.update(phase='authorized', current_class='medium')
+        runtime.kv_set(self.conn, 'testproj', self.review._key(REL, 'P1'), json.dumps(state))
+        with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-1'), \
+             mock.patch('haivequeen.loop._min_ram', return_value=2):
+            self.round(alive=lambda pid: False, free_ram=lambda: 1)
+            self.assertEqual(self.conn.execute('SELECT status FROM questions WHERE id=?', (question,)).fetchone()[0], 'open')
+            self.round(alive=lambda pid: False, free_ram=lambda: 4)
+        self.assertEqual(self.conn.execute('SELECT status FROM questions WHERE id=?', (question,)).fetchone()[0], 'answered')
+        self.assertNotEqual(self.conn.execute('SELECT state FROM hives WHERE project=? AND plan_path=?', ('testproj', REL)).fetchone()[0], 'answer')
+        self.assertIsNotNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', scope))
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'medium'), 1)
 
     def test_pending_review_runs_while_scheduler_question_is_open(self):
         from haivequeen import db, hives

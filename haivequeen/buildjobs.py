@@ -301,7 +301,7 @@ def reserve_agent_build(env, name):
         return planned
 
 
-def plan_build(env, free_mb: float = None, cores: int = None, exclude: str | tuple = None, host: str = None) -> dict:
+def plan_build(env, free_mb: float = None, cores: int = None, exclude: str | tuple = None, host: str = None, step: str = "Build") -> dict:
     """Job count the next build of this project gets, computed now: {Jobs, Why, PerJobMB, Parallel, EnvVar, ParallelVar, MinRamVar, MinFreeGB,
     FreeMB, Environment}, or None when the project has no build block. Jobs is zero while the shared core budget cannot fit a job.
     Builds and compile checks that run now share the chosen cores (`exclude` = the asking agent or external integration pair).
@@ -309,6 +309,10 @@ def plan_build(env, free_mb: float = None, cores: int = None, exclude: str | tup
     bj = settings_from(env.settings.get("buildJobs"))
     if bj is None:
         return None
+    # Deploy runs one command, not a fan-out of parallel compilation targets.
+    # Keep its lane in the shared budget and pass the same limit to children.
+    if step == 'Deploy':
+        bj = {**bj, 'Parallel': 1}
     free = float(osplat.free_ram_mb() if free_mb is None else free_mb)
     cores = cores or osplat.logical_cores()
     running = running_builds(env.conn, exclude)
@@ -317,6 +321,8 @@ def plan_build(env, free_mb: float = None, cores: int = None, exclude: str | tup
                      concurrent=len(running) + checks)
     available = core_limit(bj, cores) - allocated_cores(running) - checks
     calc["Jobs"] = min(calc["Jobs"], max(0, available // bj["Parallel"]))
+    if step == "Deploy":
+        calc["Jobs"] = min(1, calc["Jobs"])
     if calc["Jobs"] == 0:
         calc["Why"] = "cores"
     calc.update({"EnvVar": bj["EnvVar"], "ParallelVar": bj["ParallelVar"], "MinRamVar": bj["MinRamVar"], "MinFreeGB": bj["MinFreeGB"],

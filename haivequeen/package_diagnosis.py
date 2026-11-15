@@ -1,6 +1,8 @@
 """Evidence-bound package diagnosis and one-use retry authorization."""
 import hashlib
 import json
+import math
+import re
 
 from . import bees, db, repair_review, roles, runtime
 
@@ -154,6 +156,33 @@ def current_commit(env, plan, package):
     return integration.head_commit(folder) if folder else ''
 
 
+def resolve_memory_wait(env, plan, package, free_mb):
+    """Retire a legacy RAM-only question once its observable prerequisite recovers.
+
+    Do not infer intent from arbitrary questions mentioning memory. Only the
+    old diagnostic wait template is recognized, within this package and plan.
+    This is a resource observation, not a new owner decision or retry grant.
+    """
+    from . import loop
+    if not math.isfinite(free_mb) or free_mb / 1024 < loop._min_ram(env):
+        return
+    pattern = (r'The ' + re.escape(package) + r' retry diagnosis has remained pending for several minutes '
+               r'while free physical memory is below the configured ([0-9]+(?:\.[0-9]+)?) GiB start threshold\. '
+               r'Can you free enough memory for the diagnosis and subsequent agent to start\?')
+    for question in runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=package + '-memory'):
+        match = re.fullmatch(pattern, question['question'])
+        if not match or free_mb / 1024 < float(match[1]):
+            continue
+        text = 'The observed free memory now meets the start threshold. Normal scheduling and retry guards remain in force.'
+        with db.transaction(env.conn):
+            changed = env.conn.execute(
+                "UPDATE questions SET status='answered', answer=?, answered_by='auto', answered_at=? WHERE id=? AND status='open'",
+                (text, db.now(), question['id'])).rowcount
+            if changed:
+                db.add_event(env.conn, env.name, 'answer', text,
+                             data={'question_id': question['id'], 'by': 'auto', 'reason': 'memory_recovered'})
+
+
 def advance(env, free_mb, alive=None):
     """Start or harvest package reviews independently of a Queen's lifetime."""
     from . import agent_process, hives, loop, plans as plan_model, platform, scheduler
@@ -166,6 +195,8 @@ def advance(env, free_mb, alive=None):
             continue
         if not any(p['id'] == package for p in env.packages(plan)):
             continue
+        if state.get('phase') in ('pending', 'running', 'authorized'):
+            resolve_memory_wait(env, plan, package, free_mb)
         if bees.package_done(conn, env.name, plan, package):
             completed(env, plan, package)
             continue

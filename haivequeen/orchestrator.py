@@ -817,7 +817,7 @@ def _command(conn, env, plan, state, folder, step, free_mb):
                     _blocker(conn, env, plan, "waiting for the %s: %s" % (step.lower(), low))
                     _set_status(conn, env, plan, "WAITING")
                     return None
-                planned = buildjobs.plan_build(env, free_mb=free_mb) if bj is not None else None
+                planned = buildjobs.plan_build(env, free_mb=free_mb, step=step) if bj is not None else None
                 if planned is not None and planned["Jobs"] == 0:
                     _blocker(conn, env, plan, "waiting for the %s: waiting for build cores" % step.lower())
                     _set_status(conn, env, plan, "WAITING")

@@ -2,6 +2,7 @@
 import json
 import sys
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +20,43 @@ def settings(**extra):
 
 class BuildJobsTest(RoundCase):
     """All numbers are invented."""
+
+    def test_deploy_reserves_one_lane_and_leaves_check_capacity(self):
+        env = self.env()
+        env.settings['buildJobs'] = {'cores': 10, 'parallel': 2, 'perJobMB': 100}
+        with mock.patch.object(bj, 'running_builds', return_value=[]), mock.patch.object(bj, '_running_checks', return_value=0):
+            deploy = bj.plan_build(env, free_mb=32000, cores=16, step='Deploy')
+            build = bj.plan_build(env, free_mb=32000, cores=16)
+        self.assertEqual((deploy['Jobs'], deploy['Parallel']), (1, 1))
+        self.assertGreater(build['Jobs'] * build['Parallel'], 1)
+        from haivequeen import integration
+        with mock.patch('haivequeen.integration.osplat.free_ram_mb', return_value=32000), mock.patch('haivequeen.integration.osplat.logical_cores', return_value=16):
+            self.assertIsNone(integration._slot_wait(env.settings, [], lambda: deploy['Jobs'] * deploy['Parallel']))
+        self.assertEqual(deploy['Environment']['BUILD_JOBS'], '1')
+        self.assertEqual(deploy['Environment']['BUILD_PARALLEL'], '1')
+        with mock.patch.object(bj, 'running_builds', return_value=[{'jobs': 10, 'parallel': 1}]), mock.patch.object(bj, '_running_checks', return_value=0):
+            self.assertEqual(bj.plan_build(env, free_mb=32000, cores=16, step='Deploy')['Jobs'], 0)
+
+    def test_orchestrator_publishes_deploy_lane_before_command(self):
+        from haivequeen import orchestrator
+        env = self.env()
+        env.settings['buildJobs'] = {'cores': 10, 'parallel': 2, 'perJobMB': 100}
+        env.settings['deployCommand'] = 'unused-test-command'
+        state = {'steps': {}}
+        observed = []
+        def work(settings, job, step, command, folder, extra, result):
+            observed.append((state['job']['buildJobs'], state['job']['buildParallel'], extra['BUILD_JOBS']))
+            job.started.set()
+        self.addCleanup(orchestrator.JOBS.pop, (env.name, REL), None)
+        with mock.patch.object(orchestrator.integration, 'head_commit', return_value='head'), \
+             mock.patch.object(orchestrator, '_start_log', return_value=str(self.base / 'deploy.log')), \
+             mock.patch.object(orchestrator, '_work', side_effect=work), \
+             mock.patch.object(orchestrator, '_harvest', return_value=None), \
+             mock.patch.object(orchestrator, '_async', return_value=False), \
+             mock.patch.object(bj, 'running_builds', return_value=[]), \
+             mock.patch.object(bj, '_running_checks', return_value=0):
+            orchestrator._command(self.conn, env, REL, state, self.repo, 'Deploy', 32000)
+        self.assertEqual(observed, [(1, 1, '1')])
 
     def test_defaults(self):
         """Defaults when the block only names the variable; no block = no build jobs."""
