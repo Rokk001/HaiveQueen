@@ -68,6 +68,8 @@ Values shown are application defaults. Explicit machine settings override them; 
 
 The labels include legacy fields that can appear in migrated configurations. `repository` and `plansFolder` are browser folder selectors; `codeRepo` stores the code repository. Slim-project migration records removed keys in `removed-settings.md`.
 
+Project Basics shows a single **Plan files (patterns, one per line)** field. It combines legacy `planGlobs` and `planExclude` into `plans`, prefixing exclusions with `!`. Opening settings does not rewrite the file; saving stores the combined field. A populated `plans` field retains its existing precedence over legacy keys. An empty `plans` field uses the legacy patterns and exclusions, or the default `docs/plans/*.md`, so opening, saving and migration preserve effective plan discovery.
+
 | Key | Meaning |
 | --- | --- |
 | `allowedTools` | Commands agents of this Project may run without asking. |

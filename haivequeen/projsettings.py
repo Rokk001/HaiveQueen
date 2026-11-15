@@ -217,6 +217,15 @@ def globs_to_plans(globs, exclude) -> list:
     return [str(g) for g in globs or []] + ["!" + str(e) for e in exclude or []]
 
 
+def plan_field_settings(project: dict) -> dict:
+    """Present effective discovery patterns in one editable field, without changing the source."""
+    result = dict(project)
+    result["plans"] = globs_to_plans(*plans_to_globs(project))
+    result.pop("planGlobs", None)
+    result.pop("planExclude", None)
+    return result
+
+
 # ---------------------------------------------------------------- migration of one project file
 
 def is_claude(provider: dict) -> bool:
@@ -268,7 +277,7 @@ def migrate_data(data: dict, workspace, general: dict) -> tuple:
         for key in ("planGlobs", "planExclude"):
             if key in old:
                 removed.append((key, old[key], REMOVED_NOTES[key]))
-        new["plans"] = old["plans"] if "plans" in old else globs_to_plans(globs, exclude)
+        new["plans"] = old["plans"] if old.get("plans") else globs_to_plans(globs, exclude)
     prompts = old.get("prompts")
     if isinstance(prompts, dict):
         if "integrator" in prompts:
