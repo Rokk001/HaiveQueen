@@ -1216,7 +1216,7 @@ function mount(document, bootstrap) {
   function renderUpdates() {
     const box=$('update-status');box.replaceChildren();
     let label='',colour='dim';
-    if(updateState.installing){label=t('installing version %s – waiting for running agents').replace('%s',updateState.installing);colour='warn';}
+    if(updateState.installing){label=t('installing version %s – waiting for running agents').replace('%s',updateState.installing.version || '');colour='warn';}
     else if(updateState.failed){label=t('update to %s failed, see STATUS').replace('%s',updateState.failed);colour='bad';}
     else if(updateState.error){label=t('update check failed');colour='bad';}
     else if(updateState.available?.version){label='';}
