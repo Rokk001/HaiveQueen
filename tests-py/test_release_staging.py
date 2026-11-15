@@ -4,7 +4,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from haivequeen import release_staging
+from haivequeen import release_staging, updates, version_layout
 
 
 def archive(entries):
@@ -16,6 +16,22 @@ def archive(entries):
 
 
 class ReleaseStagingTests(unittest.TestCase):
+    def test_staged_identity_survives_activation_and_rollback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data = archive([('project/haivequeen/cli.py', 'code'),
+                            ('project/pyproject.toml', '[project]\nversion = "2.0.0"\n'),
+                            ('project/.haivequeen-release-version', '9.9.9')])
+            fetch = lambda _: data
+            old = release_staging.stage_release(temp, 'example/project', '2.1.0', fetch)
+            new = release_staging.stage_release(temp, 'example/project', '2.2.0', fetch)
+            no_git = lambda *args: (1, '')
+            version_layout.set_active(temp, '2.2.0')
+            self.assertEqual(updates.installed_version(old, no_git), '2.1.0')
+            self.assertEqual(updates.installed_version(new, no_git), '2.2.0')
+            version_layout.set_active(temp, '2.1.0')
+            self.assertEqual(updates.installed_version(old, no_git), '2.1.0')
+            self.assertEqual(updates.installed_version(new, no_git), '2.2.0')
+
     def test_stages_release_without_changing_active_version(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

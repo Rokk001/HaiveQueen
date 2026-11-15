@@ -90,6 +90,12 @@ def installed_version(live=None, run=None) -> str:
     from . import selfupdate
     run = run or selfupdate.run_command
     live = Path(live or selfupdate.live_folder())
+    try:
+        release = (live / '.haivequeen-release-version').read_text(encoding='utf-8').strip()
+        if re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', release):
+            return release
+    except (OSError, UnicodeError):
+        pass
     code, out = run(["git", "-C", str(live), "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD"], live)
     tag = out.strip()
     if code == 0 and re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag):

@@ -54,4 +54,8 @@ def stage_release(root, repository, version, fetch=None):
                 with archive.open(entry) as source, target.open("wb") as output:
                     import shutil
                     shutil.copyfileobj(source, output)
-        return version_layout.install_version(root, version, destination / next(iter(root_names)))
+        source = destination / next(iter(root_names))
+        # This identity belongs to the archive being installed, not the mutable
+        # active pointer and not any marker supplied inside the archive.
+        (source / '.haivequeen-release-version').write_text(str(version) + '\n', encoding='utf-8')
+        return version_layout.install_version(root, version, source)
