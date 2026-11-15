@@ -228,13 +228,17 @@ def execute(conn, action, data):
         return web_login.send(data['id'], data['text'])
     if action == 'updates':
         settled = updates.settle_install(db.last_self_update(conn))
-        return {**updates.load_state(), 'restart_required': settled == 'ok'}
+        return {**updates.load_state(), 'waiting': updates.waiting_status(), 'restart_required': settled == 'ok'}
     if action == 'updates/check':
         return updates.check(config.load_config(), manual=data.get('automatic') is not True)
     if action == 'updates/install':
         if data.get('confirmed') is not True:
             raise ValueError(updates.TEXT_CONFIRM % data.get('version', ''))
         return updates.request_install(data['version'])
+    if action == 'updates/force':
+        if data.get('confirmed') is not True:
+            raise ValueError(FORCE_WARNING)
+        return updates.force_waiting_update()
     if action == 'plan/providers':
         return queen_providers(conn, project, plan)[1]
     if action in ('plan/start', 'plan/back-to-draft', 'plan/stop-gracefully', 'plan/force-stop', 'plan/resume', 'plan/cancel', 'plan/restart-queen'):

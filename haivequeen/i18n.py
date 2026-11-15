@@ -505,6 +505,9 @@ GERMAN = {
     "Check now": "Jetzt prüfen", "checking for updates…": "suche nach Updates…", "New version available: %s – Update": "Neue Version verfügbar: %s – Aktualisieren",
     "Install version %s now? HaiveQueen starts no new Queen or Agent, waits until every running agent has ended, installs the new version and restarts.":
         'Version %s jetzt installieren? HaiveQueen startet keine neue Queen und keinen neuen Agenten mehr, wartet, bis jeder laufende Agent beendet ist, installiert die neue Version und startet neu.',
+    "Install version %s now? Compatible updates keep running work active. Incompatible updates wait for running work to finish.":
+        'Version %s jetzt installieren? Bei kompatiblen Updates läuft die Arbeit weiter. Inkompatible Updates warten, bis laufende Arbeit beendet ist.',
+    "Update waiting": "Update wartet", "Installing update": "Update wird installiert", "Force update": "Update erzwingen",
     "installing version %s – waiting for running agents": "installiere Version %s – warte auf laufende Agenten", "update to %s failed, see STATUS": "Update auf %s fehlgeschlagen, siehe STATUS",
     "up to date": "aktuell", "update check failed": "Update-Prüfung fehlgeschlagen", "no release published yet": "noch kein Release veröffentlicht",
     "%s: letters, digits and . / - _ are expected, starting with a letter or digit": "%s: Buchstaben, Ziffern und . / - _ werden erwartet, am Anfang ein Buchstabe oder eine Ziffer",

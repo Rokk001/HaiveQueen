@@ -211,6 +211,29 @@ def match_sub(queen, name):
 
 
 # Describe one Hive for the active-hives table.
+def path_version(path):
+    """Return the immutable release name for a version directory."""
+    from pathlib import Path
+    folder = Path(path or '')
+    return folder.name if folder.parent.name == 'versions' else ''
+
+
+def agent_version(agent):
+    """Match the agent's process identity to its version lease."""
+    from pathlib import Path
+    from . import agent_process, version_leases
+    folder = Path(__file__).resolve().parent.parent
+    if folder.parent.name != 'versions':
+        return ''
+    try:
+        records = version_leases._load(folder.parent.parent)
+        return next((r['version'] for r in records.values()
+                     if r.get('pid') == agent.get('pid') and r.get('identity')
+                     and r['identity'] == agent_process._identity(agent)), '')
+    except (OSError, ValueError, KeyError, TypeError):
+        return ''
+
+
 def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None, rejected=None, waiting=None, embedded=None, plan_rejected=None, orch=None) -> dict:
     """Row of one Plan: name, project, queen with context and tokens, Agents busy/assigned, progress (finished packages of all packages), status and runtime.
 
@@ -254,6 +277,7 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     return {"name": hive_name(hive["plan_path"]), "apiary": hive["project"], "plan_path": hive["plan_path"],
             "queen": "Orch." if (orch or {}).get(key) and not (live or is_rejected or is_paused) else str((queen or {}).get("person") or (queen or {}).get("name") or "–") if live else "–", "queen_agent": (queen or {}).get("name"),   # a Queen that has ended no longer holds her name
             "queen_model": overview.model_short(queen.get("provider"), queen.get("model"), queen.get("effort")) if live else "",
+            "queen_version": agent_version(queen) if live else "",
             "queen_ctx": int((queen or {}).get("ctxTokens") or 0) if live else 0, "queen_ctx_limit": int(ctx_limit(queen)) if live and ctx_limit else 0,
             "queen_tin": qin, "queen_tout": qout, "hive_tin": hin, "hive_tout": hout,
             "steps": {b["name"]: b["step"] for b in hive.get("bees", []) if b.get("step")},
@@ -345,14 +369,15 @@ def orch_info(conn, env, hive, now=None) -> dict:
     running = state["phase"] == "pipeline" and not waiting
     reason = "owner rejection" if fix.get("reason") == "owner" else "%s red" % fix.get("step")
     return {"phase": state["phase"], "step": step, "chain": chain, "n": n, "m": len(steps), "task": task, "status": "running" if running else "waiting",
-            "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started")}
+            "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started"),
+            "version": path_version((state.get('job') or {}).get('version_path')) if step in ('Build', 'Deploy') else ''}
 
 
 # Build the Orchestrator row and the fix agent row of a plan.
 def orch_rows(hive, info, agents, now, ctx_limit=None) -> list:
     """The "Orchestrator" row (kind "orch") of a plan in the pipeline and, below it, its running fix agent (kind "fix")."""
     rows = [{"kind": "orch", "name": "Orchestrator", "agent": None, "project": hive["apiary"], "plan_path": hive["plan_path"], "model": "–", "hive": hive["name"],
-             "apiary": hive["apiary"], "task": info["task"], "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": info["status"], "runtime": hive["runtime"] or "–"}]
+             "apiary": hive["apiary"], "task": info["task"], "version": info.get('version', ''), "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": info["status"], "runtime": hive["runtime"] or "–"}]
     agent = next((a for a in agents if info["fix_agent"] and a.get("name") == info["fix_agent"] and a.get("phase") == "fix"), None)
     if agent and agent.get("status") in runtime.ACTIVE_STATUSES:
         row = bee_row(agent, now, None, ctx_limit)

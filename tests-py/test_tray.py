@@ -36,6 +36,15 @@ class TrayTests(unittest.TestCase):
             tray.invoke(4)
             run.assert_called_once_with(['stop', '--force'])
 
+    def test_waiting_update_force_requires_confirmation(self):
+        self.assertIn((8, 'Force update', True), tray.menu('Stopping', True, update_waiting=True))
+        with patch.object(tray, 'run_command') as run, patch.object(tray, 'confirm', return_value=False):
+            tray.invoke(8)
+            run.assert_not_called()
+        with patch.object(tray, 'run_command') as run, patch.object(tray, 'confirm', return_value=True):
+            tray.invoke(8)
+            run.assert_called_once_with(['update', '--force'])
+
     def test_other_commands(self):
         with patch.object(tray, 'run_command') as run, patch.object(tray.web_service, 'open_browser') as browser:
             for number in (1, 2, 3, 5, 6, 7):

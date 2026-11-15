@@ -23,7 +23,7 @@ DEFAULT_REPOSITORY = "Rokk001/HaiveQueen"   # the public repository; an install 
 TEXT_CHECK_NOW = N_("Check now")
 TEXT_CHECKING = N_("checking for updates…")
 TEXT_AVAILABLE = N_("New version available: %s – Update")
-TEXT_CONFIRM = N_("Install version %s now? HaiveQueen starts no new Queen or Agent, waits until every running agent has ended, installs the new version and restarts.")
+TEXT_CONFIRM = N_("Install version %s now? Compatible updates keep running work active. Incompatible updates wait for running work to finish.")
 TEXT_INSTALLING = N_("installing version %s – waiting for running agents")
 TEXT_FAILED = N_("update to %s failed, see STATUS")
 TEXT_CURRENT = N_("up to date")
@@ -265,21 +265,36 @@ def started_by_update_worker(parent=None) -> bool:
 
 # ---- command line ----
 
+def waiting_status():
+    """Read the current incompatible update and its blockers."""
+    from . import selfupdate
+    try:
+        status = json.loads(selfupdate.release_status_path().read_text(encoding='utf-8'))
+        return status if isinstance(status, dict) and status.get('waiting') else None
+    except (OSError, ValueError):
+        return None
+
+
+def force_waiting_update():
+    """Request force only while an incompatible update is waiting."""
+    from . import selfupdate
+    waiting = waiting_status()
+    if not waiting:
+        raise ValueError('No incompatible update is waiting')
+    selfupdate.release_force_path().write_text('confirmed', encoding='utf-8')
+    return {'ok': True, 'force_requested': True, **waiting}
+
 def cmd_update(args, conn) -> int:
     """`bzz update`: check now (default) or, with --install X, install the offered release X (the same as the update button)."""
     from . import config
     from . import selfupdate, force_stop
-    try:
-        waiting = json.loads(selfupdate.release_status_path().read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        waiting = None
+    waiting = waiting_status()
     if getattr(args, 'force', False):
         if not waiting:
             print(json.dumps({'ok': False, 'error': 'No incompatible update is waiting'}))
             return 1
         print(force_stop.WARNING)
-        selfupdate.release_force_path().write_text('confirmed', encoding='utf-8')
-        print(json.dumps({'ok': True, 'force_requested': True, **waiting}))
+        print(json.dumps(force_waiting_update()))
         return 0
     if waiting:
         print(json.dumps({'ok': True, **waiting}))
