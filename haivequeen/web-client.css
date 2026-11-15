@@ -1079,3 +1079,22 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 
 /* Keep necessary scrolling unobtrusive without hiding overflow or controls. */
 .table-scroll,.queue-list,.model-limits,.log,textarea { scrollbar-width:thin; scrollbar-color:var(--edge) transparent; }
+
+/* Plan authoring and the central question/acceptance view. */
+.plan-editor{display:grid;gap:10px;min-width:0}
+.plan-editor select,.plan-editor input,.plan-editor textarea{width:100%;box-sizing:border-box;min-width:0}
+.plan-markdown{min-height:45vh;resize:vertical;font-family:monospace}
+.plan-questions{display:grid;gap:8px;margin-top:18px}
+.plan-questions button,.question>button{white-space:normal;text-align:left;overflow-wrap:anywhere}
+.question{max-width:100%;min-width:0;box-sizing:border-box}
+.question pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:none}
+.question-summary{font-size:1.05rem;line-height:1.6;overflow-wrap:anywhere}
+.question>textarea{width:100%;box-sizing:border-box;min-height:100px;margin:12px 0}
+.question>input{width:100%;box-sizing:border-box;margin:10px 0}
+.question details{margin:12px 0;padding:10px;border:1px solid var(--edge);border-radius:6px}
+.question summary{cursor:pointer}
+.question .dim{line-height:1.5}
+.question-packages{display:flex;flex-wrap:wrap;gap:12px}
+.question label{display:inline-flex;align-items:center;gap:6px}
+.question [type=checkbox]{width:auto}
+@media(max-width:650px){.question{padding:12px}.question>button{max-width:100%;margin-bottom:8px}.plan-editor .actions{display:flex;flex-wrap:wrap}.plan-editor .actions button{flex:1 1 45%}}

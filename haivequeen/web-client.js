@@ -469,6 +469,8 @@ function mount(document, bootstrap) {
     onUnauthorized:()=>{location.href='/login';}, onError:error=>client.notice(error.message,true),onState:renderState});
   const renderGate=new RenderGate(()=>renderStateNow(client.state));
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
+  const questionDrafts=new Map();
+  let questionFilter='open', questionFocus=null, planDraft=null;
   let releaseProject='', releaseData=null, releaseError='', releaseRequest=0;
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
   let lastAutomaticCheck=0, automaticChecking=false;
@@ -1173,13 +1175,19 @@ function mount(document, bootstrap) {
       if(!target.contains(reader))return;
       text.replaceChildren(planDocument(result.body??result.text??t('No plan text available.')));if(result.text){const source=el('details',undefined,'plan-raw');source.append(el('summary',t('Plan source')),el('pre',result.text,'plan-source'));technical.append(source);}
       frame.content.querySelector('.package-loading')?.remove();frame.content.append(packageCards(result.packages||[]));
+      const pending=el('section',undefined,'plan-questions');pending.append(el('h3',t('Open questions and acceptance')));
+      for(const question of result.open_questions||[])pending.append(button('#'+question.id+' · '+t(questionKind(question)),()=>showQuestion(question)));
+      if(!result.open_questions?.length)pending.append(el('p',t('No open questions for this plan.'),'dim'));
+      frame.summary.append(pending);
+      if(row.status==='DRAFT')frame.actions.append(button('Edit draft',()=>openPlanEditor(row,result)));
+
     }).catch(error=>{if(target.contains(reader)){text.textContent=error.message;frame.content.querySelector('.package-loading')?.remove();}});
     try {
       const available=await resolvePlanActions(row,route=>client.request(route));
       if(!target.contains(bar))return;
       for(const action of available)bar.append(button(actions[action],()=>act('plan/'+action,key(row),t(actions[action])+' '+row.name+'?')));
     } catch(error) {if(target.contains(bar))bar.append(el('span',error.message,'bad'));}
-    if(row.status!=='DONE')bar.append(button('Release',()=>act('owner/release',key(row),t('Release')+'?')));
+    if(row.status!=='DONE')bar.append(button('Release readiness gate',()=>act('owner/release',key(row),t('Allow this plan past the readiness check? This does not publish a release.'))));
     let providers;try{providers=await client.request('plan/providers?'+new URLSearchParams(key(row)));}catch(error){if(target.contains(bar))bar.append(el('span',error.message,'bad'));return;}
     if(target!==$('detail-body') || !target.contains(bar))return;
     for(const provider of providers){
@@ -1188,30 +1196,89 @@ function mount(document, bootstrap) {
       bar.append(node);
     }
   }
+  function showQuestion(question) {
+    questionFocus=Number(question.id);questionFilter='open';$('detail').close();void selectTab('Questions');
+  }
+  async function openPlanEditor(row=null,result=null,fresh=false) {
+    const replacing=fresh || (row && planDraft && (planDraft.plan!==row.plan_path || planDraft.project!==(row.apiary||row.project)));
+    if(replacing && planDraft?.dirty && !await requestConfirm(t('Discard unsaved changes?')))return;
+    if(fresh)planDraft=null;
+    if(row && row.status!=='DRAFT')return;
+    planDraft=row && (!planDraft || planDraft.plan!==row.plan_path || planDraft.project!==(row.apiary||row.project))?{project:row.apiary||row.project,plan:row.plan_path,filename:row.plan_path,content:result.text||'',revision:result.revision,dirty:false}:planDraft||{project:client.state.projects?.[0]?.name||'',filename:'',content:'',dirty:false};
+    detail(t(row?'Edit draft':'New plan'),{});const body=$('detail-body');body.replaceChildren();
+    const current=planDraft,form=el('div',undefined,'plan-editor');body.append(form);
+    form.append(el('p',t('Save Markdown as a draft, then submit it explicitly to start preparation.')));
+    const project=el('select');project.setAttribute('aria-label',t('Project'));
+    for(const item of client.state.projects||[]){const option=el('option',item.name);option.value=item.name;project.append(option);}project.value=current.project;project.disabled=!!current.plan;
+    const filename=el('input');filename.value=current.filename;filename.setAttribute('aria-label',t('Plan file'));filename.placeholder='example-PLAN.md';filename.disabled=!!current.plan;
+    const hint=el('p',undefined,'dim');
+    function projectHint(){const item=client.state.projects?.find(item=>item.name===current.project);hint.textContent=t('Plan files')+': '+(item?.plan_globs||[]).join(', ');if(!current.filename || current.autoFilename){current.filename=(item?.suggested_plan_folder?item.suggested_plan_folder+'/':'')+'new-PLAN.md';current.autoFilename=true;filename.value=current.filename;}}
+    project.onchange=()=>{current.project=project.value;current.dirty=true;projectHint();};projectHint();
+    filename.oninput=()=>{current.autoFilename=false;current.filename=filename.value;current.dirty=true;};
+    const content=el('textarea');content.value=current.content;content.className='plan-markdown';content.setAttribute('aria-label',t('Plan Markdown'));content.oninput=()=>{current.content=content.value;current.dirty=true;};
+    const imported=el('input');imported.type='file';imported.accept='.md,text/markdown';imported.setAttribute('aria-label',t('Import Markdown'));
+    imported.onchange=async()=>{const file=imported.files?.[0];if(!file)return;if(!/\.md$/i.test(file.name)){client.notice(t('Choose a Markdown (.md) file.'),true);return;}try{const value=await file.text();if(current!==planDraft)return;current.content=value;content.value=value;current.dirty=true;submit.disabled=true;}catch(error){client.notice(error.message,true);}};
+    const status=el('p','', 'dim'),controls=el('div',undefined,'actions');
+    status.setAttribute('role','status');
+    const submit=button('Submit plan',async()=>{if(current.dirty||!current.plan){client.notice(t('Save the draft before submitting.'),true);return;}const result=await act('plan/start',{project:current.project,plan:current.plan},t('Submit this draft for preparation?'));if(result){planDraft=null;$('detail').close();}});
+    const save=button('Save draft',async()=>{const sent={project:current.project,filename:current.filename,plan:current.plan,content:current.content,revision:current.revision};const result=await client.action(current.plan?'plans/save':'plans/create',sent);if(!result)return;current.plan=result.plan;current.revision=result.revision;current.dirty=current.content!==sent.content||current.filename!==sent.filename;project.disabled=true;filename.disabled=true;submit.disabled=current.dirty;status.textContent=t(current.dirty?'Saved. Newer edits are still unsaved.':'Draft saved. Submit when ready.');void refreshLists();});
+    submit.disabled=submit.disabled||!current.plan||current.dirty;content.addEventListener('input',()=>{submit.disabled=true;});filename.addEventListener('input',()=>{submit.disabled=true;});
+    controls.append(save,submit);form.append(el('label',t('Project')),project,hint,el('label',t('Plan file')),filename,imported,content,controls,status);
+  }
   function renderPlans() {
-    const box=section('Plans');box.append(table(plans.map(row=>({...row,started:t(row.has_hive?'yes':'no')})),['apiary','name','status','started','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));
+    const box=section('Plans');box.append(button('New plan',()=>openPlanEditor(null,null,true)));if(planDraft)box.append(button('Continue draft',()=>openPlanEditor()));box.append(table(plans.map(row=>({...row,started:t(row.has_hive?'yes':'no')})),['apiary','name','status','started','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));
+  }
+  function questionKind(question) {
+    if(question.kind==='acceptance' || question.item==='owner-check' || String(question.item).startsWith('owner-check-'))return 'Acceptance';
+    return question.kind==='decision'?'Decision':'Question';
+  }
+  function questionAnswered(question) {
+    return question.status?question.status==='answered':!!question.answered_at;
   }
   function renderQuestions() {
-    const box=section('Questions');
-    if(!questions.length)box.append(el('p',t('none open')));
-    for(const question of questions){
+    const box=section('Questions'),filters=el('div',undefined,'actions');
+    for(const [value,label] of [['open','Open'],['answered','Answered history']]){const control=button(label,()=>{questionFilter=value;questionFocus=null;renderQuestionsPage();});control.setAttribute('aria-pressed',String(questionFilter===value));filters.append(control);}box.append(filters);
+    if(questionFocus)box.append(button('Show all questions',()=>{questionFocus=null;renderQuestionsPage();}));
+    const visible=questions.filter(q=>(questionFilter==='answered')===questionAnswered(q)&&(!questionFocus||Number(q.id)===questionFocus));
+    if(!visible.length)box.append(el('p',t(questionFilter==='open'?'none open':'No answered questions yet.')));
+    for(const question of visible){
+      const answered=questionAnswered(question),kind=questionKind(question),check=kind==='Acceptance';
       const card=el('article',undefined,'card question');card.dataset.question=question.id;
-      card.append(el('h3','#'+question.id+' '+question.project+' · '+question.plan_path),el('small',question.created_at || ''),el('pre',question.text || question.question || question.item));
-      if(question.recommendation){card.append(el('h3',t('Recommendation')),el('pre',question.recommendation));}
-      const answer=el('textarea');answer.setAttribute('aria-label',t('Answer'));card.append(answer);
-      if(question.recommendation)card.append(button('Use recommendation',()=>{answer.value=question.recommendation;}));
-      const apiary=el('input');apiary.type='checkbox';const label=el('label',t('Apply to Project'));label.prepend(apiary);card.append(label);
-      const check=question.item==='owner-check' || (String(question.item).startsWith('owner-check-') && question.item!=='owner-check-answered');
-      card.append(button(check?'Save note':'Answer',()=>act('questions/answer',{id:question.id,text:answer.value,apiary:apiary.checked})));
+      card.append(el('small',t(kind)+' · '+t(answered?'Answered':'Open')),el('h3','#'+question.id+' · '+question.project),el('small',question.created_at||''));
+      if(question.plan_path)card.append(button('Plan · '+question.plan_path,()=>openQueuedPlan({project:question.project,plan_path:question.plan_path})));
+      const message=String(question.text||question.question||question.item||'');
+      const lines=message.split(/\r?\n/),brief=lines.find(line=>line.trim())||message;
+      card.append(el('p',brief.slice(0,320)+(brief.length>320?'…':''),'question-summary'));
       if(check){
-        const packages=el('input');packages.placeholder=t('Rejected packages (comma separated)');card.append(packages);
-        const packageList=el('div');for(const name of question.packages || []){const label=el('label',name),toggle=el('input');toggle.type='checkbox';toggle.dataset.package=name;toggle.onchange=()=>{packages.value=[...packageList.querySelectorAll('input:checked')].map(node=>node.dataset.package).join(', ');};label.prepend(toggle);packageList.append(label);}card.append(packageList);
-        card.append(button('Accept',()=>act('owner/accept',{...key(question),text:answer.value},t('Accept')+'?')),
-          button('Reject',()=>act('owner/reject',{...key(question),text:answer.value,packages:packages.value.split(',').map(x=>x.trim()).filter(Boolean)},t('Reject')+'?')));
+        const facts=el('dl',undefined,'package-facts');
+        for(const [label,prefixes] of [['Integrated commit',['Integrated commit:','Integrierter Commit:']],['Steps that ran',['Steps that ran:','Ausgeführte Schritte:']]] ){
+          const reportIndex=lines.findIndex(line=>/^(Report of the (Queen|fix agent)|Bericht (der Queen|des Fix-Agenten)):$/.test(line));
+          const line=(reportIndex<0?lines:lines.slice(0,reportIndex)).find(line=>prefixes.some(prefix=>line.startsWith(prefix)));
+          if(line)facts.append(el('dt',t(label)),el('dd',line.slice(line.indexOf(':')+1).trim()));
+        }
+        if(facts.children.length)card.append(facts);
+        if(question.owner_check_result)card.append(el('strong',t(question.owner_check_result==='accepted'?'Accepted':'Rejected')));
+      }
+      if(message!==brief || brief.length>320){const full=el('details');full.append(el('summary',t('Full question and report')),el('pre',message));card.append(full);}
+      card.append(el('p',t(answered?'This entry is preserved as history.':check?'Review the result. Save note records feedback; only Accept or Reject decides the outcome.':'Your answer is recorded for the plan so work can continue.'),'dim'));
+      if(question.evidence && Object.values(question.evidence).some(value=>Array.isArray(value)?value.length:!!value)){const evidence=el('details');evidence.append(el('summary',t('Context and evidence')),valueView(question.evidence));card.append(evidence);}
+      if(question.recommendation){const recommendation=el('details');recommendation.append(el('summary',t('Recommendation')),el('pre',question.recommendation));card.append(recommendation);}
+      if(!answered && question.answer)card.append(el('h4',t('Saved note')),el('pre',question.answer));
+      if(answered){card.append(el('h4',t('Answer')),el('pre',question.answer||'–'),el('small',[question.answered_at,question.answered_by].filter(Boolean).join(' · ')));box.append(card);continue;}
+      const draft=questionDrafts.get(Number(question.id))||{text:'',checked:false,packages:''};questionDrafts.set(Number(question.id),draft);
+      const answer=el('textarea');answer.value=draft.text;answer.setAttribute('aria-label',t(check?'Note or acceptance feedback':'Answer'));answer.oninput=()=>{draft.text=answer.value;};card.append(answer);
+      if(question.recommendation)card.append(button('Use recommendation',()=>{answer.value=question.recommendation;draft.text=answer.value;}));
+      const apiary=el('input');apiary.type='checkbox';apiary.checked=draft.checked;apiary.onchange=()=>{draft.checked=apiary.checked;};const label=el('label',t('Apply answer to the whole project'));label.prepend(apiary);if(!check)card.append(label,el('p',t('Unchecked: this plan only. Checked: store a project decision for future work.'),'dim'));
+      card.append(button(check?'Save note':'Answer',async()=>{const sent=answer.value;const result=await act('questions/answer',{id:question.id,text:sent,apiary:apiary.checked});if(result && draft.text===sent){draft.text='';answer.value='';}}));
+      if(check){
+        const packages=el('input');packages.value=draft.packages;packages.placeholder=t('Rejected packages (comma separated)');packages.setAttribute('aria-label',t('Rejected packages (comma separated)'));packages.oninput=()=>{draft.packages=packages.value;};card.append(packages);
+        const packageList=el('div',undefined,'question-packages');for(const name of question.packages||[]){const label=el('label',name),toggle=el('input');toggle.type='checkbox';toggle.dataset.package=name;toggle.checked=draft.packages.split(',').map(x=>x.trim()).includes(name);toggle.onchange=()=>{const selected=new Set(packages.value.split(',').map(x=>x.trim()).filter(Boolean));if(toggle.checked)selected.add(name);else selected.delete(name);packages.value=[...selected].join(', ');draft.packages=packages.value;};label.prepend(toggle);packageList.append(label);}card.append(packageList,el('p',t('Select the packages needing rework. Leave empty to reject the overall result.'),'dim'));
+        card.append(button('Accept',()=>act('owner/accept',{...key(question),text:answer.value},t('Accept the plan result?'))),button('Reject',()=>act('owner/reject',{...key(question),text:answer.value,packages:packages.value.split(',').map(x=>x.trim()).filter(Boolean)},t('Reject the result and request rework?'))));
       }
       box.append(card);
     }
   }
+  function renderQuestionsPage(){view.replaceChildren();renderQuestions();}
   function renderUpdates() {
     const box=$('update-status');box.replaceChildren();
     let label='Check now',colour='dim';
@@ -1650,11 +1717,8 @@ function mount(document, bootstrap) {
   async function refreshLists() {
     const tasks=[];
     if(tab==='Plans'&&!planLoading){planLoading=true;tasks.push(client.request('plans').then(value=>{plans=value;if(tab==='Plans')render();}).finally(()=>planLoading=false));}
-    if(tab==='Questions'&&!questionLoading){questionLoading=true;tasks.push(client.request('questions').then(value=>{
-      if(JSON.stringify(questions)!==JSON.stringify(value)){// Keep drafts for surviving questions during a live update.
-        const drafts=new Map([...view.querySelectorAll('[data-question]')].map(card=>[Number(card.dataset.question),{text:card.querySelector('textarea').value,checked:card.querySelector('input[type=checkbox]').checked,packages:card.querySelector('input:not([type=checkbox])')?.value}]));
-        questions=value;if(tab==='Questions'){render();for(const card of view.querySelectorAll('[data-question]')){const draft=drafts.get(Number(card.dataset.question));if(draft){card.querySelector('textarea').value=draft.text;card.querySelector('input[type=checkbox]').checked=draft.checked;const packages=card.querySelector('input:not([type=checkbox])');if(packages)packages.value=draft.packages||'';}}}
-      }
+    if(tab==='Questions'&&!questionLoading){questionLoading=true;tasks.push(client.request('questions?history=1').then(value=>{
+      if(JSON.stringify(questions)!==JSON.stringify(value)){questions=value;if(tab==='Questions')render();}
     }).finally(()=>questionLoading=false));}
     if(tab==='Providers'&&!providerLoading){providerLoading=true;tasks.push(client.request('providers').then(value=>{if(JSON.stringify(value)!==JSON.stringify(providerStates)){providerStates=value;if(tab==='Providers'&&!editor?.dirty)render();}}).finally(()=>providerLoading=false));}
     if(tab==='Dashboard'&&!updateLoading){updateLoading=true;tasks.push(client.request('updates').then(value=>{updateState=value;renderUpdates();}).finally(()=>updateLoading=false));}
@@ -1669,7 +1733,7 @@ function mount(document, bootstrap) {
       ...Array.from(loginRuns.values()).filter(run=>run.running&&!run.loading).map(async run=>{run.loading=true;try{const next=await client.request('login/status?id='+encodeURIComponent(run.id));loginRuns.set(run.id,next);renderLogin(next);if(!next.running){providerStates=await client.request('providers');if(tab==='Providers'&&!editor?.dirty)render();}}catch(error){client.notice(error.message,true);}finally{run.loading=false;}}),
       ...Array.from(jobs.values()).filter(job=>job.running&&!job.loading).map(async job=>{job.loading=true;try{const next=await client.request('jobs/status?id='+encodeURIComponent(job.id));next.title=job.title;jobs.set(job.id,next);renderJob(next);}finally{job.loading=false;}})]);
   }
-  window.addEventListener('beforeunload',event=>{if(editor?.dirty){event.preventDefault();event.returnValue='';}});
+  window.addEventListener('beforeunload',event=>{if(editor?.dirty || planDraft?.dirty || [...questionDrafts.values()].some(draft=>draft.text||draft.packages)){event.preventDefault();event.returnValue='';}});
   if(typeof MutationObserver!=='undefined')installCopyButtons(document,window.navigator,t,(...args)=>client.notice(...args));
   render();
   void client.request('jobs/status').then(history=>{

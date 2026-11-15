@@ -1,0 +1,30 @@
+"""Focused executable UI regression for plan authoring and central Questions."""
+import shutil
+import subprocess
+import unittest
+from pathlib import Path
+
+from bzztest import ROOT
+from haivequeen import i18n
+
+
+class PlanQuestionsUITests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'), 'Node required for UI regression')
+    def test_plan_questions_controls(self):
+        script = Path(__file__).with_name('web_plan_questions_test.cjs')
+        result = subprocess.run(['node', str(script)], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_assets_are_utf8(self):
+        for name in ('web-client.js', 'web-client.css', 'i18n.py'):
+            (ROOT / 'haivequeen' / name).read_text(encoding='utf-8')
+
+    def test_new_workflow_labels_are_translated(self):
+        for label in ('New plan', 'Save draft', 'Submit plan', 'Acceptance',
+                      'Answered history', 'Release readiness gate', 'Saved note'):
+            self.assertNotEqual(i18n.tr(label, language='German'), label)
+
+
+if __name__ == '__main__':
+    unittest.main()
+

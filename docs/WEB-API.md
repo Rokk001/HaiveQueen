@@ -195,3 +195,31 @@ Additional authenticated endpoints use the same session and CSRF rules:
 | POST `releases/promote` | Confirm promotion of a selected prerelease tag. |
 
 Git device sign-in is not implemented; the interface uses access tokens. [Release semantics](OPERATIONS.md#releases) and [MCP/benchmark behavior](PROFILE.md#tools-mcp-and-start-context-measurement) are documented separately.
+
+## Plan authoring and central Questions workflow
+
+Plans offers **New plan**: choose a project, enter a project-relative `.md` filename
+matching its displayed plan patterns, and type Markdown or import a local `.md`
+file. Import reads the content only; it does not upload or submit automatically.
+**Save draft** creates a DRAFT; **Submit plan** explicitly invokes the existing
+`plan/start` transition to SENT. Existing DRAFT plans offer **Edit draft** in their
+detail view. Running plans are not editable. Unsaved content survives list polling
+and closing/reopening the editor in the current page; leaving the page warns about
+unsaved content. A save uses the server revision to reject concurrent changes.
+
+Plan details link relevant open questions and acceptance checks to the central
+Questions view. Each question links back to its plan. Questions separates open
+items from answered history, including saved answer, author and date. Kind labels
+use actual question metadata (acceptance checks, decisions when supplied, ordinary
+questions otherwise); arbitrary item names are not presented as decisions.
+The first view shows a short preview; **Full question and report** retains the
+entire original text, and **Context and evidence** exposes available evidence.
+
+Answers, project scope and rejected package selections survive polling and view
+changes in the current page. Project scope is explicitly opt-in: unchecked applies
+to the plan, checked stores a project decision for future work. Acceptance **Save
+note** records feedback without accepting the result. **Accept** and **Reject**
+remain separate confirmed actions; rejection optionally identifies packages for
+rework, with an empty package list rejecting the overall result. The plan action
+**Release readiness gate** explicitly overrides the readiness check; it does not
+publish a software release. Existing owner command semantics remain unchanged.

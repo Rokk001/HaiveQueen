@@ -900,3 +900,68 @@ GERMAN.update({'Repository default':'Repository-Vorgabe','Application default':'
 GERMAN.update({'Minimum free RAM for agent starts (GiB)':'Freier RAM für Agent-Starts (GiB)','Overrides the legacy agent RAM reserve; independent of the build RAM threshold.':'Ersetzt die alte Agent-RAM-Reserve; unabhängig von der Build-RAM-Grenze.'})
 
 GERMAN['When changes take effect'] = 'Wann Änderungen wirksam werden'
+
+GERMAN.update({'Release readiness gate': 'Bereitschaftsprüfung freigeben',
+ 'Allow this plan past the readiness check? This does not publish a release.': 'Diesen Plan trotz '
+                                                                               'Bereitschaftsprüfung '
+                                                                               'freigeben? Dies '
+                                                                               'veröffentlicht kein Release.',
+ 'Open questions and acceptance': 'Offene Fragen und Abnahme',
+ 'No open questions for this plan.': 'Keine offenen Fragen zu diesem Plan.',
+ 'Edit draft': 'Entwurf bearbeiten',
+ 'New plan': 'Neuer Plan',
+ 'Continue draft': 'Entwurf fortsetzen',
+ 'Save Markdown as a draft, then submit it explicitly to start preparation.': 'Markdown als Entwurf '
+                                                                              'speichern und anschließend '
+                                                                              'ausdrücklich einreichen, um '
+                                                                              'die Vorbereitung zu starten.',
+ 'Plan files': 'Plandateien',
+ 'Plan Markdown': 'Plan als Markdown',
+ 'Import Markdown': 'Markdown importieren',
+ 'Choose a Markdown (.md) file.': 'Eine Markdown-Datei (.md) auswählen.',
+ 'Submit plan': 'Plan einreichen',
+ 'Save the draft before submitting.': 'Den Entwurf vor dem Einreichen speichern.',
+ 'Submit this draft for preparation?': 'Diesen Entwurf zur Vorbereitung einreichen?',
+ 'Save draft': 'Entwurf speichern',
+ 'Draft saved. Submit when ready.': 'Entwurf gespeichert. Bei Bereitschaft einreichen.',
+ 'Acceptance': 'Abnahme',
+ 'Decision': 'Entscheidung',
+ 'Question': 'Frage',
+ 'Open': 'Offen',
+ 'Answered history': 'Antwortverlauf',
+ 'Show all questions': 'Alle Fragen anzeigen',
+ 'No answered questions yet.': 'Noch keine beantworteten Fragen.',
+ 'Answered': 'Beantwortet',
+ 'Full question and report': 'Vollständige Frage und Bericht',
+ 'This entry is preserved as history.': 'Dieser Eintrag bleibt im Verlauf erhalten.',
+ 'Review the result. Save note records feedback; only Accept or Reject decides the outcome.': 'Ergebnis '
+                                                                                              'prüfen. Notiz '
+                                                                                              'speichern '
+                                                                                              'hält '
+                                                                                              'Rückmeldungen '
+                                                                                              'fest; nur '
+                                                                                              'Annehmen oder '
+                                                                                              'Ablehnen '
+                                                                                              'entscheidet '
+                                                                                              'über das '
+                                                                                              'Ergebnis.',
+ 'Your answer is recorded for the plan so work can continue.': 'Deine Antwort wird für den Plan gespeichert, '
+                                                               'damit die Arbeit weitergehen kann.',
+ 'Context and evidence': 'Kontext und Nachweise',
+ 'Note or acceptance feedback': 'Notiz oder Rückmeldung zur Abnahme',
+ 'Apply answer to the whole project': 'Antwort für das gesamte Projekt übernehmen',
+ 'Unchecked: this plan only. Checked: store a project decision for future work.': 'Ohne Häkchen: nur dieser '
+                                                                                  'Plan. Mit Häkchen: eine '
+                                                                                  'Projektentscheidung für '
+                                                                                  'künftige Arbeiten '
+                                                                                  'speichern.',
+ 'Select the packages needing rework. Leave empty to reject the overall result.': 'Pakete auswählen, die '
+                                                                                  'nachgebessert werden '
+                                                                                  'müssen. Leer lassen, um '
+                                                                                  'das Gesamtergebnis '
+                                                                                  'abzulehnen.',
+ 'Accept the plan result?': 'Das Planergebnis annehmen?',
+ 'Reject the result and request rework?': 'Das Ergebnis ablehnen und Nachbesserung anfordern?',
+ 'Saved note': 'Gespeicherte Notiz'})
+
+GERMAN.update({'Integrated commit':'Integrierter Commit','Steps that ran':'Ausgef\u00fchrte Schritte','Accepted':'Angenommen'})
