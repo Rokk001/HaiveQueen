@@ -1,5 +1,6 @@
 """Windows notification-area controls for the local service and orchestrator."""
 import os
+import hashlib
 import subprocess
 import threading
 import time
@@ -140,6 +141,17 @@ def load_icon(user):
                            user.GetSystemMetrics(49), user.GetSystemMetrics(50), 0x10)
 
 
+def mutex_name():
+    """One tray per runtime, shared across code versions using the same data."""
+    directory = os.path.normcase(str(config.data_dir().resolve()))
+    defaults = {key: value for key, value in os.environ.items() if key != 'BZZ_DATA_DIR'}
+    default_directory = os.path.normcase(str(osplat.data_dir(env=defaults).resolve()))
+    # Keep the legacy production name while an older tray may still be running.
+    if directory == default_directory:
+        return 'Local\\HaiveQueenTray'
+    return 'Local\\HaiveQueenTray-' + hashlib.sha256(directory.encode('utf-8')).hexdigest()
+
+
 def main():
     if os.name != 'nt':
         return
@@ -149,7 +161,7 @@ def main():
     kernel.CreateMutexW.argtypes = [ctypes.c_void_p, w.BOOL, w.LPCWSTR]
     kernel.CreateMutexW.restype = w.HANDLE
     kernel.CloseHandle.argtypes = [w.HANDLE]
-    mutex = kernel.CreateMutexW(None, False, 'Local\\HaiveQueenTray')
+    mutex = kernel.CreateMutexW(None, False, mutex_name())
     if kernel.GetLastError() == 183:
         kernel.CloseHandle(mutex)
         return
