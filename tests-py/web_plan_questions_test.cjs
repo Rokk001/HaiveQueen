@@ -70,7 +70,7 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  await api.openPlanEditor();assert.equal(all(dialog,'TEXTAREA')[0].value,'# Imported\n\nRequirement','Closing and reopening preserves draft');
  const previousConfirmations=confirmations;await api.openPlanEditor(null,null,true);assert.equal(all(dialog,'TEXTAREA')[0].value,'','A saved draft does not prevent creating another plan');assert.equal(confirmations,previousConfirmations,'Saved draft needs no discard confirmation');
  api.setPlans([{apiary:'Demo',plan_path:'multi.md',name:'Readable plan title',status:'WAITING'}]);
- api.setQuestions([{id:10,status:'open',project:'Demo',plan_path:'multi.md',question:'First pending'},{id:11,status:'open',project:'Demo',plan_path:'multi.md',question:'Second pending'},{id:12,status:'answered',project:'Other',plan_path:'done.md',question:'Finished question',answer:'Recorded response'}]);
+ api.setQuestions([{id:10,status:'open',project:'Demo',plan_path:'multi.md',question:'First pending'},{id:11,status:'open',project:'Demo',plan_path:'multi.md',question:'Second pending'},{id:13,status:'open',project:'Second complete project name',plan_path:'second.md',question:'Second project needs answer'},{id:12,status:'answered',project:'Other',plan_path:'done.md',question:'Finished question',answer:'Recorded response'}]);
  api.showQuestion({id:10,project:'Demo',plan_path:'multi.md'});api.renderQuestions();
  assert.equal(all(section,'TEXTAREA').length,1,'Messenger must mount only one actionable composer');
  assert(content(section).includes('Readable plan title'));const chooser=all(section,'SELECT')[0];assert.equal(chooser.children.length,2);chooser.value='11';chooser.onchange();assert.equal(all(section,'TEXTAREA').length,1);assert(content(section).includes('Second pending'));
@@ -79,9 +79,12 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  const chooserAgain=all(section,'SELECT')[0];chooserAgain.value='11';chooserAgain.onchange();assert.equal(all(section,'TEXTAREA')[0].value,'Preserved second answer');
  all(section,'BUTTON').find(node=>node.textContent==='Completed').onclick();assert(!content(section).includes('First pending'),'Completed filter must not retain an invisible pending conversation');assert(content(section).includes('Recorded response'));assert.equal(all(section,'TEXTAREA').length,0);
  all(section,'BUTTON').find(node=>node.textContent==='Needs you').onclick();
- all(section,'BUTTON').find(node=>node.className==='messenger-thread').onclick();api.renderQuestions();
+ all(section,'BUTTON').filter(node=>node.className==='messenger-thread')[1].onclick();api.renderQuestions();
  assert.equal(all(section,'BUTTON').find(node=>node.textContent==='Needs you').attrs['aria-pressed'],'true','Selecting an inbox thread preserves Needs you filter');
  assert(!content(section).includes('Finished question'),'Sidebar selection must not reveal unrelated completed conversations');
- all(section,'BUTTON').find(node=>node.textContent==='All conversations').onclick();assert.equal(section.dataset.mobileChat,'false','Mobile back returns to the conversation list');
+ assert.equal(all(section,'BUTTON').find(node=>node.className==='messenger-back').textContent,'Back to Needs you','Mobile back names the actual active filter');
+ const chatHeader=all(section,'HEADER')[0];assert(content(chatHeader).includes('ProjectSecond complete project name'));assert(content(chatHeader).includes('Plansecond'));assert(content(chatHeader).includes('View: Needs you'));
+ api.renderQuestions();assert.equal(all(section,'BUTTON').find(node=>node.className==='messenger-back').textContent,'Back to Needs you','Polling retains visible filter context');
+ all(section,'BUTTON').find(node=>node.className==='messenger-back').onclick();assert.equal(all(section,'BUTTON').find(node=>node.textContent==='Needs you').attrs['aria-pressed'],'true');assert.equal(section.dataset.mobileChat,'false','Mobile back returns to the conversation list');
  console.log('Question draft, history, acceptance and plan editor behavior passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

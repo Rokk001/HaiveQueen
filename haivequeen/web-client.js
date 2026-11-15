@@ -1313,12 +1313,12 @@ function mount(document, bootstrap) {
     for(const [value,label] of [['open','Needs you'],['all','All'],['answered','Completed']]){const control=button(label,()=>{questionFilter=value;selectedThread=null;conversationMobile=false;renderQuestionsPage();});control.setAttribute('aria-pressed',String(questionFilter===value));filters.append(control);}heading.append(filters);inbox.append(heading);
     for(const project of [...new Set(shown.map(thread=>thread.project))]){
       const group=el('section',undefined,'messenger-project'),projectCount=shown.filter(thread=>thread.project===project).reduce((sum,thread)=>sum+thread.pending.length,0);
-      group.append(el('h3',project+' · '+projectCount+' '+t('pending')));
+      const projectHeading=el('h3',undefined,'messenger-project-heading');projectHeading.append(el('small',t('Project')),el('strong',project),el('span',projectCount+' '+t('pending')));group.append(projectHeading);
       for(const thread of shown.filter(thread=>thread.project===project)){
         const target=thread.pending[0]||thread.questions.at(-1),preview=String(target?.text||target?.question||target?.item||'').split(/\r?\n/).find(line=>line.trim())||t('No recorded questions.');
-        const row=button('',()=>openConversation(thread.project,thread.plan,null,true));row.className='messenger-thread';row.setAttribute('aria-pressed',String(thread.id===selectedThread));row.setAttribute('aria-label',thread.name+' · '+thread.pending.length+' '+t('pending'));
+        const row=button('',()=>openConversation(thread.project,thread.plan,null,true));row.className='messenger-thread';row.setAttribute('aria-pressed',String(thread.id===selectedThread));row.setAttribute('aria-label',t('Project')+' '+thread.project+' · '+t('Plan')+' '+thread.name+' · '+thread.pending.length+' '+t('pending'));
         const title=el('span',undefined,'messenger-thread-title');title.append(el('strong',thread.name));if(thread.pending.length)title.append(el('span',thread.pending.length,'messenger-count'));
-        row.append(title,el('span',preview,'messenger-preview'),el('small',thread.pending.length?t(questionKind(thread.pending[0]))+' · '+t('Needs you'):t(thread.status||'Recorded history')));group.append(row);
+        row.append(el('small',t('Plan'),'messenger-field-label'),title,el('span',preview,'messenger-preview'),el('small',thread.pending.length?t(questionKind(thread.pending[0]))+' · '+t('Needs you'):t(thread.status||'Recorded history')));group.append(row);
       }
       inbox.append(group);
     }
@@ -1326,8 +1326,10 @@ function mount(document, bootstrap) {
     const conversation=el('div',undefined,'messenger-conversation');box.append(inbox,conversation);
     if(!selected){conversation.append(el('p',t('Choose a plan conversation.'),'messenger-empty'));return;}
     const head=el('header',undefined,'messenger-chat-head'),title=el('h2',selected.name);title.tabIndex=-1;title.id='conversation-title';
-    const back=button('All conversations',()=>{conversationMobile=false;renderQuestionsPage();});back.className='messenger-back';
-    const identity=el('div');identity.append(el('small',selected.project),title);head.append(back,identity);
+    const filterLabel=t({open:'Needs you',all:'All',answered:'Completed'}[questionFilter]);
+    const back=button(t('Back to %s').replace('%s',filterLabel),()=>{conversationMobile=false;renderQuestionsPage();});back.className='messenger-back';
+    const identity=el('div',undefined,'messenger-identity'),projectIdentity=el('div',undefined,'messenger-project-identity'),planIdentity=el('div',undefined,'messenger-plan-identity');
+    projectIdentity.append(el('small',t('Project')),el('strong',selected.project));planIdentity.append(el('small',t('Plan')),title);identity.append(projectIdentity,planIdentity,el('small',t('View')+': '+filterLabel,'messenger-filter-context'));head.append(back,identity);
     if(plans.some(row=>(row.project||row.apiary)===selected.project&&row.plan_path===selected.plan))head.append(button('Plan',()=>openQueuedPlan({project:selected.project,plan_path:selected.plan})));conversation.append(head);
     const active=selected.pending.find(question=>Number(question.id)===questionFocus)||selected.pending[0];
     if(active)questionFocus=Number(active.id);

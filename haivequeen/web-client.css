@@ -1135,3 +1135,16 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 @media(max-width:700px){.editor-view>.questions-messenger{display:block}.questions-messenger .messenger-conversation{display:none}.questions-messenger[data-mobile-chat=true] .messenger-inbox{display:none}.questions-messenger[data-mobile-chat=true] .messenger-conversation{display:flex}.messenger-inbox{border:0}.messenger-back{display:block;font-size:.75rem}.messenger-chat-head{flex-wrap:wrap}.messenger-chat-head>div{flex-basis:60%}.messenger-thread{padding:13px}.messenger-message{max-width:94%}.messenger-request{padding:10px}.messenger-request label{font-size:.8rem}.messenger-timeline{max-height:30vh}}
 
 .messenger-decision-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.messenger-decision-actions .messenger-primary{background:#f4c62d;color:#102027;border-color:#f4c62d;font-weight:700}.messenger-request details input:not([type=checkbox]){width:100%;box-sizing:border-box;margin:8px 0}
+
+/* Explicit scope remains readable when the conversation list is hidden on mobile. */
+.messenger-project-heading{display:grid;gap:4px;padding:10px 7px 5px}
+.messenger-project-heading small,.messenger-field-label,.messenger-identity small{font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;color:#a7bac3}
+.messenger-project-heading strong{font-size:.9rem;line-height:1.4;color:#e4edf1;white-space:normal;overflow-wrap:anywhere}
+.messenger-project-heading>span{font-size:.7rem;font-weight:400}
+.messenger-identity{display:grid;gap:9px;min-width:0}
+.messenger-project-identity,.messenger-plan-identity{display:grid;gap:3px;min-width:0}
+.messenger-project-identity strong{font-size:.95rem;color:#e4edf1;line-height:1.4;white-space:normal;overflow-wrap:anywhere}
+.messenger-plan-identity h2{white-space:normal;overflow-wrap:anywhere}
+.messenger-identity .messenger-filter-context{text-transform:none;letter-spacing:0;font-size:.75rem;color:#c4b77e}
+.messenger-back{white-space:normal;text-align:left}
+@media(max-width:700px){.messenger-chat-head .messenger-back{flex:0 0 auto;max-width:100%}.messenger-chat-head .messenger-identity{flex-basis:100%;order:2}}

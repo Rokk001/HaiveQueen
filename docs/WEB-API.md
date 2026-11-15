@@ -253,4 +253,8 @@ label open the same conversation as Questions; plans without pending questions
 can open their recorded history. Questions and Plans share the existing
 `questions?history=1` response. The plan link is offered only when that plan exists
 in the current plan list. On narrow screens, selecting a thread replaces the list
-with the conversation; **All conversations** returns to the list.
+with the conversation. The back button names the active filter (for example,
+**Back to Needs you**) and returns to that same filtered list; the conversation
+header also displays the active view. Explicit **Project** and **Plan** labels
+identify the full real names in the sidebar and conversation header, wrapping
+long names instead of hiding the scope.

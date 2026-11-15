@@ -987,3 +987,5 @@ GERMAN.update({'Messages': 'Nachrichten',
  'Specific packages': 'Bestimmte Pakete',
  'Request changes': 'Nachbesserung anfordern',
  'Latest recorded answer': 'Zuletzt gespeicherte Antwort'})
+
+GERMAN.update({'Back to %s':'Zurück zu %s','View':'Ansicht'})
