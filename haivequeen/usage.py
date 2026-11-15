@@ -171,7 +171,7 @@ def claude_refresh_error(conn, project=GLOBAL_PROJECT, provider=None) -> str:
     return str(_claude_snapshot(conn, project, provider).get('refresh_error') or '')
 
 
-RETAIN_HOURS = 6   # a verified Claude reading younger than this still counts for starts and ranking while the newest check failed
+RETAIN_HOURS = 6   # historical display retention; never authorizes starts after a failed refresh
 
 
 # The last verified Claude reading while a failed check must not block every start.
@@ -221,6 +221,34 @@ def retained_five_hour(conn, project=GLOBAL_PROJECT, provider=None):
 CLAUDE_USAGE_TIMEOUT = 60   # seconds the claude -p /usage call may take (start-up alone needs far more than 20 s while many Claude processes run)
 USAGE_INTERVAL = 60              # seconds between usage checks of a model provider
 USAGE_UNREACHABLE_INTERVAL = 600   # seconds between usage checks of a provider whose last check failed (not reachable)
+
+
+def quota_verified(conn, provider, now=None):
+    """Start eligibility requires a successful reading from this refresh period.
+
+    Historical readings remain available for display, never as a start permit.
+    The existing scheduled refresh supplies the next observation without an
+    additional synchronous provider request for each prospective agent.
+    """
+    if conn is None:
+        return False
+    source = provider.get('limit')
+    key = _claude_key(provider) if source == 'claude' else CODEX_USAGE_KEY + ':' + str(provider['name'])
+    now = time.time() if now is None else now
+    try:
+        snapshot = json.loads(runtime.kv_get(conn, GLOBAL_PROJECT, key) or '{}')
+        if not isinstance(snapshot, dict) or snapshot.get('refresh_error'):
+            return False
+        saved = datetime.fromisoformat(snapshot.get('saved') or '')
+        if saved.tzinfo is None:
+            saved = saved.astimezone()
+        if not 0 <= now - saved.timestamp() < USAGE_INTERVAL:
+            return False
+        windows = [_claude_window(snapshot[key], True, int(now))
+                   for key in ('fiveHour', 'sevenDay') if snapshot.get(key)]
+        return bool(windows) and all(window and window.get('pct') is not None for window in windows)
+    except (ValueError, TypeError, AttributeError, KeyError, OverflowError):
+        return False
 
 
 # Choose how often the usage status of a model provider is asked for.

@@ -108,10 +108,18 @@ def read(path):
 
 
 def finish(path, code, result=None, message=""):
-    if not path or any(r["event"] == "end" for r in read(path)):
+    if not path:
         return
+    records = read(path)
+    if any(r["event"] == "end" for r in records):
+        return
+    from . import log_snapshots
+    try:
+        log_snapshots.capture(path, records, message)
+    except OSError as exc:
+        message += '\nReferenced log archival failed: ' + str(exc)
     _write(path, {"event": "end", "ended_at": _now(), "exit_code": code,
-                  "result": result or ("succeeded" if code == 0 else "failed"), "message": message})
+                  "result": result or ("succeeded" if code == 0 else "failed"), "references_snapshot": True, "message": message})
 
 
 def output(path):

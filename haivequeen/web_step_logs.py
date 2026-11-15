@@ -67,7 +67,7 @@ def read(conn, project, plan, step, *, page_request=None):
         from . import web_log_pages
         return web_log_pages.response(conn, project, plan, step, record, journal, summary, page_request)
     console = record.get('output', '')
-    references = referenced_logs(conn, project, plan, console + '\n' + reason)
+    references = referenced_logs(conn, project, plan, console + '\n' + reason, journal=journal['path'] if journal else None)
     output = console
     for item in references:
         output += '\n\n--- ' + item['path'] + ' ---\n' + (item.get('content') or item.get('error', ''))
@@ -93,7 +93,21 @@ def reference_root(conn, project, plan):
     return root
 
 
-def referenced_logs(conn, project, plan, text, *, content=True):
+def reference_path(conn, project, plan, name, journal=None):
+    from . import log_snapshots
+    archived = log_snapshots.resolve(journal, name)
+    if archived is not None:
+        return archived, True
+    root = reference_root(conn, project, plan)
+    if root is None:
+        raise ValueError('Plan worktree unavailable')
+    path = (root / name).resolve()
+    if not path.is_relative_to(root / 'out') or '..' in Path(name).parts:
+        raise ValueError('Path outside plan output folder')
+    return path, False
+
+
+def referenced_logs(conn, project, plan, text, *, content=True, journal=None):
     """Read only explicitly named log files inside this plan's worktree."""
     names = list(dict.fromkeys(match.group(1).replace('\\', '/')
         for match in re.finditer(r"(?i)\b(?:see|log)\s+[\"']?(out[\\/][^\r\n\"']*?\.(?:txt|log))(?=[\s\"']|$)", text)))
@@ -101,16 +115,11 @@ def referenced_logs(conn, project, plan, text, *, content=True):
         return []
     if not content:
         names = [name for name in names if len(name) <= 1024][:16]
-    root = reference_root(conn, project, plan)
     result = []
     for name in names:
         item = {'path':name}
         try:
-            if root is None:
-                raise ValueError('Plan worktree unavailable')
-            path = (root / name).resolve()
-            if not path.is_relative_to(root / 'out') or '..' in Path(name).parts:
-                raise ValueError('Path outside plan output folder')
+            path, item['archived'] = reference_path(conn, project, plan, name, journal)
             stat = path.stat()
             item['modified_at'] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
             item['size'] = stat.st_size

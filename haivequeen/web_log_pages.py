@@ -82,18 +82,13 @@ def response(conn, project, plan, step, record, journal, summary, request):
     if source:
         summary = dict(summary, test_timings={'unavailable': True})
         name = _name(scope, source)
-        root = web_step_logs.reference_root(conn, project, plan)
-        if root is None:
-            raise ValueError('Plan worktree unavailable')
-        path = (root / name).resolve()
-        if not path.is_relative_to(root / 'out') or '..' in Path(name).parts:
-            raise ValueError('Path outside plan output folder')
         try:
+            path, archived = web_step_logs.reference_path(conn, project, plan, name, journal['path'] if journal else None)
             page = file_page(path, cursor)
             from . import test_timings
             summary['test_timings'] = test_timings.file_summary(path, summary['slow_test_seconds'],
                 finished=bool(summary.get('ended_at')))
-        except OSError:
+        except (OSError, ValueError):
             page = {'output': 'Referenced log unavailable: ' + name, 'cursor': cursor or [0, 0], 'more': False}
     else:
         if journal:
@@ -115,7 +110,7 @@ def response(conn, project, plan, step, record, journal, summary, request):
         context = carry + page['output']
         continuation = _token(scope + ['continuation'], [page['cursor'], context[-1024:]])
         for item in web_step_logs.referenced_logs(conn, project, plan,
-                context + '\n' + summary['reason'][:8192], content=False):
+                context + '\n' + summary['reason'][:8192], content=False, journal=journal['path'] if journal else None):
             item['source'] = _token(scope, item['path'])
             references.append(item)
     # One payload only, no repeated console/file content in metadata.

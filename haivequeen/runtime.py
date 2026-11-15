@@ -443,6 +443,9 @@ def _workspace(conn, project, override=None) -> Path:
 @filetxn.coordinated
 def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
     """Read the plan files of a project into plans/packages and return the plans and the startable packages (rule 11)."""
+    blocked = filetxn.recovery_block_reason(conn, project)
+    if blocked:
+        return {'plans': list_plans(conn, project), 'startable': [], 'blocked': blocked}
     ws = _workspace(conn, project, workspace)
     pcfg = config.load_project(ws)
     found = plan_mod.discover_plans(str(ws), pcfg["planGlobs"], pcfg["planExclude"])
@@ -495,8 +498,16 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
 def list_plans(conn, project=None) -> list:
     """List plans, optionally for one project."""
     if project:
-        return db.rows(conn, "SELECT * FROM plans WHERE project=? ORDER BY path", (project,))
-    return db.rows(conn, "SELECT * FROM plans ORDER BY project, path")
+        rows = db.rows(conn, "SELECT * FROM plans WHERE project=? ORDER BY path", (project,))
+    else:
+        rows = db.rows(conn, "SELECT * FROM plans ORDER BY project, path")
+    return [dict(row, missing=plan_missing(conn, row['project'], row['path'])) for row in rows]
+
+
+def plan_missing(conn, project, plan):
+    """File availability is separate from lifecycle state and retained results."""
+    row = conn.execute('SELECT workspace FROM projects WHERE name=?', (project,)).fetchone()
+    return bool(row and row[0] and not (Path(row[0]) / plan).is_file())
 
 
 def list_packages(conn, project=None, plan=None) -> list:

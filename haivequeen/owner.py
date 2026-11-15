@@ -135,6 +135,9 @@ def provider_settings(name):
 @filetxn.coordinated
 def apply(conn, action, project=None, plan=None, **fields):
     """Perform one checked owner action and return its public result."""
+    blocked = filetxn.recovery_block_reason(conn, project)
+    if blocked:
+        raise filetxn.RecoveryError(blocked)
     if action in ("accept", "reject"):
         with filetxn.transaction(conn):
             return _apply(conn, action, project, plan, **fields)

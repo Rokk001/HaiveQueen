@@ -184,7 +184,7 @@ function withTools(args, tools) {
   return out;
 }
 function planActions(row) {
-  if (row.status === 'DONE') return [];
+  if (row.status === 'DONE' || row.missing || row.recovery_error) return [];
   const out = [];
   if (row.status === 'PAUSED' && row.stopped) out.push('resume');
   if (['DRAFT', 'CANCELLED'].includes(row.status)) out.push('start');
@@ -590,7 +590,7 @@ function mount(document, bootstrap) {
       timingNotice.open=timings.firstElementChild?.open||false;timings.replaceChildren(timingNotice);
       const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
       const text=([pager.text,!file&&latest.reason&&!pager.text.includes(latest.reason)?latest.reason:''].filter(Boolean).join('\n\n')||t('No log output available yet.'));
-      fileInfo.textContent=(file?file.path+' · '+t('File updated')+': '+date(file.modified_at)+' · '+t('File currently on disk; not an archived snapshot.'):t('Recorded console output for the selected run.'))+' · '+t('Recent output is limited; use Start of log and Next page for full history.');
+      fileInfo.textContent=(file?file.path+' · '+t('File updated')+': '+date(file.modified_at)+' · '+t(file.archived?'Archived snapshot from this run.':'File currently on disk; not an archived snapshot.'):t('Recorded console output for the selected run.'))+' · '+t('Recent output is limited; use Start of log and Next page for full history.');
       nextPage.disabled=!pager.more;followLive.setAttribute('aria-pressed',String(following));
       if(output.textContent!==text){output.textContent=text;if(follow)output.scrollTop=output.scrollHeight;}
     }
@@ -769,6 +769,7 @@ function mount(document, bootstrap) {
       else if(key==='task' && row.kind==='orch' && orchestrationFor(row,client.state.hives)){td.append(orchestrationView(orchestrationFor(row,client.state.hives),row));}
       else if(key==='task' && row.step){td.classList.add('task-progress');const inline=el('div',undefined,'task-inline');inline.append(el('span',row.task),meter((row.step_frac||0)*100,100,row.step),el('small',row.step,'cyan'));td.append(inline);}
       else if(key==='progress' && Number.isFinite(Number(row[key]))){td.append(planProgress(row));}else if(key==='ctx'){td.classList.add('context-cell');td.append(row.ctx_limit?meter(100*(row.ctx||0)/row.ctx_limit,100,t('CONTEXT')):missingValue('No context value available'));if(row.ctx_limit)td.append(el('small',Math.round(100*(row.ctx||0)/row.ctx_limit)+'%'));td.title=tokens(row.ctx)+' / '+tokens(row.ctx_limit);}
+      else if(key==='status' && row.missing){td.append(el('span',t('Plan file missing'),'warn'));}
       else if(key==='status' && row.orch?.chain && !row.paused && !options.hierarchy){td.append(orchestrationView(row.orch,row));}
       else if(key==='status'){const state=String(row[key]||'');const tone=/^(running|active)$/i.test(state)?'running':/fail|error|reject/i.test(state)?'error':/wait|paus|stop|pending/i.test(state)?'waiting':'neutral';td.append(el('span',t(state),'state-badge state-'+tone));
         if(row.paused && !options.hierarchy){const resume=button('Resume',async()=>{
@@ -1087,7 +1088,7 @@ function mount(document, bootstrap) {
     detail(row.name,row);$('detail').classList.add('entity-dialog');
     const body=$('detail-body');body.replaceChildren();body.className='';
     const header=el('div',undefined,'entity-header'),heading=el('h2',row.name);heading.id='detail-title';
-    header.append(el('small',t(kind)+' · '+(row.apiary||row.project||'')),heading,el('span',t(row.status||'–'),'entity-status'));
+    header.append(el('small',t(kind)+' · '+(row.apiary||row.project||'')),heading,el('span',t(row.missing?'Plan file missing':row.status||'–'),'entity-status'));
     const actions=el('div',undefined,'entity-actions');
     const layout=el('div',undefined,'entity-layout'),summary=el('div',undefined,'entity-summary'),content=el('div',undefined,'entity-content');
     const facts=el('dl',undefined,'entity-facts');

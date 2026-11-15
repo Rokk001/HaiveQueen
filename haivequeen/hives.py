@@ -92,11 +92,17 @@ def context_limit(conn, project, plan):
 def start_block_reason(conn, project, plan=None):
     """Return why starting is blocked ('stopped', 'paused' or 'plan paused'), or '' when none is. Running Agents are never touched by this check."""
     from . import loop, runstate
+    from . import filetxn
+    recovery = filetxn.recovery_block_reason(conn, project)
+    if recovery:
+        return recovery
     if loop.stop_flag().exists():
         return 'stopped'
     if not runstate.starts_allowed(conn):
         return 'paused'
     if plan is not None:
+        if runtime.plan_missing(conn, project, plan):
+            return 'plan file missing'
         row = conn.execute("SELECT status FROM plans WHERE project=? AND path=?", (project, plan)).fetchone()
         if row is not None and row[0] == 'PAUSED':
             return 'plan paused'

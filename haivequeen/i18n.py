@@ -519,6 +519,8 @@ GERMAN = {
     "Waiting for owner check": "Wartet auf Owner-Prüfung", "Waiting for answer": "Wartet auf Antwort", "No active Queen": "Keine aktive Queen", "; open questions %s": "; offene Fragen %s", "Done": "Fertig", "Resting until %s": "Ruht bis %s",
     "Queenless": "Ohne Queen", "Waiting for Codex": "Wartet auf Codex", "Waiting for provider": "Wartet auf Anbieter", "Handoff": "Übergabe", "Waiting to start": "Wartet auf Start",
     "Plan rejected": "Plan abgelehnt", "Running, plan paused": "Läuft, Plan pausiert", "Plan paused": "Plan pausiert", "Running": "Läuft", "Idle": "Untätig",
+    "Plan file missing": "Plandatei fehlt", "Recovery blocked": "Wiederherstellung blockiert",
+    "Archived snapshot from this run.": "Archivierte Kopie dieses Laufs.",
     # ---- limits and status panel
     "resets %s": "Rücksetzung %s", "new window": "neues Fenster", "no medium model": "kein Medium-Modell",
     "Agent slots of %s: %d of %d in use. A filled cell is a running agent, an empty cell a free slot.": "Agent-Slots von %s: %d von %d belegt. Eine volle Wabe ist ein laufender Agent, eine leere ein freier Slot.",

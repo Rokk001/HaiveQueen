@@ -13,6 +13,26 @@ class ActionLogRetentionTests(unittest.TestCase):
     setUp = test_retention.RetentionTest.setUp
     touch = test_retention.RetentionTest.touch
 
+    def test_snapshot_uses_journal_retention_including_disabled_cleanup(self):
+        from haivequeen import log_snapshots
+        path = self.journal('snapshot', self.records())
+        folder = log_snapshots.folder(path)
+        folder.mkdir()
+        evidence = folder / 'evidence.log'
+        evidence.write_bytes(b'original bytes')
+        self.assertEqual(self.clean(0)['logs'], 0)
+        self.assertTrue(evidence.exists())
+        self.assertEqual(self.clean(10)['logs'], 1)
+        self.assertFalse(folder.exists())
+
+    def test_failed_snapshot_cleanup_keeps_owning_journal_for_retry(self):
+        from haivequeen import log_snapshots
+        path = self.journal('snapshot', self.records())
+        log_snapshots.folder(path).mkdir()
+        with mock.patch.object(retention, '_remove_tree', return_value=0):
+            self.assertEqual(self.clean()['logs'], 0)
+        self.assertTrue(path.exists())
+
     def journal(self, name, records, age=40):
         path = self.data / 'orchestrator/logs/project/plan' / (name + '.jsonl')
         self.touch(path, age)

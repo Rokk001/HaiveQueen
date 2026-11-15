@@ -220,6 +220,9 @@ def process_inbox(env) -> dict:
     An invalid file moves to failed/ with <name>.error.txt next to it and a warning event. Other file endings (.tmp) are ignored.
     """
     result = {"done": [], "failed": []}
+    blocked = filetxn.recovery_block_reason(env.conn, env.name)
+    if blocked:
+        return dict(result, blocked=blocked)
     folder = inbox_dir(env.workspace)
     if not folder.is_dir():
         return result

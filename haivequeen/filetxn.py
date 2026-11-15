@@ -10,6 +10,7 @@ import base64
 import functools
 import errno
 import json
+import hashlib
 import os
 import sqlite3
 import stat
@@ -123,8 +124,21 @@ def _publish(journal, record):
 
 
 def _recover():
+    _local.recovery_faults = []
     for journal in sorted(_journals().glob('*.json')):
-        record = json.loads(journal.read_text(encoding='utf-8'))
+        try:
+            record = json.loads(journal.read_text(encoding='utf-8'))
+            _validate_record(record, journal)
+        except (ValueError, TypeError, KeyError, OSError) as exc:
+            scope = _read_scope(journal)
+            _local.recovery_faults.append((journal, scope))
+            note = journal.with_suffix('.error.txt')
+            if not note.exists():
+                try:
+                    atomic_write(note, ('Recovery blocked; original journal preserved. Inspect the journal, receipt and target files before restoring it.\n' + str(exc)).encode())
+                except OSError:
+                    pass  # read-only diagnostics must still work when storage is full
+            continue
         # Opening through db.connect would recurse into this recovery operation.
         with closing(sqlite3.connect(Path(record['database']).as_uri() + '?mode=rw', uri=True, timeout=10)) as conn:
             table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inbox_receipts'").fetchone()
@@ -133,6 +147,77 @@ def _recover():
             finish((journal, record))
         else:
             journal.unlink()  # no user files were published before commit
+        journal.with_suffix('.scope').unlink(missing_ok=True)
+        journal.with_suffix('.error.txt').unlink(missing_ok=True)
+
+
+def _validate_record(record, journal):
+    sidecar = journal.with_suffix('.scope')
+    if sidecar.exists():
+        scope = json.loads(sidecar.read_text(encoding='utf-8'))
+        if scope['digest'] != hashlib.sha256(json.dumps(record).encode()).hexdigest():
+            raise ValueError('Recovery journal checksum mismatch')
+    if record['id'] != journal.stem or not Path(record['database']).is_absolute() or not isinstance(record['files'], list):
+        raise ValueError('Invalid recovery journal identity or files')
+    for entry in record['files']:
+        if not Path(entry['path']).is_absolute():
+            raise ValueError('Invalid recovery target')
+        for key in ('before', 'after'):
+            if entry[key] is not None:
+                base64.b64decode(entry[key], validate=True)
+    ack = record['ack']
+    if ack is not None:
+        for key in ('source', 'target', 'claim', 'replacement'):
+            if not Path(ack[key]).is_absolute():
+                raise ValueError('Invalid recovery acknowledgement')
+        base64.b64decode(ack['contents'], validate=True)
+
+
+def _read_scope(journal):
+    try:
+        value = json.loads(journal.with_suffix('.scope').read_text(encoding='utf-8'))
+        if not isinstance(value['projects'], dict) or not value['projects'] or not Path(value['database']).is_absolute():
+            return None
+        if any(not isinstance(name, str) or not Path(root).is_absolute() for name, root in value['projects'].items()):
+            return None
+        return value
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def recovery_block_reason(conn, project=None):
+    """Unknown scope blocks starts globally; verified scope blocks its projects."""
+    with locked():
+        database = conn.execute('PRAGMA database_list').fetchone()[2]
+        for journal, scope in getattr(_local, 'recovery_faults', []):
+            if scope is None or (str(Path(database).resolve()) == scope['database'] and
+                                 (project is None or project in scope['projects'])):
+                return 'recovery journal requires inspection: ' + journal.name
+    return ''
+
+
+def _guard_write(path):
+    for journal, scope in getattr(_local, 'recovery_faults', []):
+        if scope is None or any(Path(path).is_relative_to(Path(root)) for root in scope['projects'].values()):
+            raise RecoveryError('Recovery evidence must be resolved before writing: ' + journal.name)
+
+
+def _prepare_scope(conn, record, journal):
+    # A separately durable scope survives damage to the redo payload. Targets
+    # outside project roots affect shared settings and cannot be isolated safely.
+    roots = {name: str(Path(root).resolve()) for name, root in conn.execute('SELECT name, workspace FROM projects') if root}
+    targets = [entry['path'] for entry in record['files']]
+    if record['ack']:
+        targets.append(record['ack']['source'])
+    affected = {}
+    for path in targets:
+        matches = {name: root for name, root in roots.items() if Path(path).is_relative_to(Path(root))}
+        if not matches:
+            affected = {}
+            break
+        affected.update(matches)
+    atomic_write(journal.with_suffix('.scope'), json.dumps({'database': record['database'], 'projects': affected,
+        'digest': hashlib.sha256(json.dumps(record).encode()).hexdigest()}).encode())
 
 
 @contextmanager
@@ -175,6 +260,7 @@ def locked():
                 yield
             finally:
                 _local.depth = 0
+                _local.recovery_faults = []
                 handle.seek(0)
                 if os.name == 'nt':
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
@@ -201,6 +287,7 @@ def read(path):
 
 def write(path, contents):
     path = str(Path(path).resolve())
+    _guard_write(path)
     stage = getattr(_local, 'stage', None)
     if stage is None:
         atomic_write(path, contents)
@@ -239,6 +326,7 @@ class Batch:
                             for path, after in self.after.items()],
                   'ack': ack}
         # Durable prepare precedes the receipt; the receipt commits with ALL SQL.
+        _prepare_scope(conn, record, journal)
         atomic_write(journal, json.dumps(record).encode('utf-8'))
         conn.execute('CREATE TABLE IF NOT EXISTS inbox_receipts (id TEXT PRIMARY KEY)')
         conn.execute('INSERT INTO inbox_receipts VALUES (?)', (ident,))
@@ -260,6 +348,8 @@ def staging():
 def finish(prepared):
     try:
         _publish(*prepared)
+        prepared[0].with_suffix('.scope').unlink(missing_ok=True)
+        prepared[0].with_suffix('.error.txt').unlink(missing_ok=True)
     except (OSError, ValueError) as exc:
         raise RecoveryError('Committed inbox operation awaits recovery: %s' % prepared[0]) from exc
 

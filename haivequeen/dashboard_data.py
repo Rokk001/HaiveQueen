@@ -717,6 +717,13 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         if info:
             orch[(h["project"], h["plan_path"])] = info
     hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected, waiting, embedded, plan_rejected, orch) for h in hive_data]
+    from . import filetxn
+    for row in hive_rows:
+        recovery = filetxn.recovery_block_reason(conn, row['apiary'])
+        if runtime.plan_missing(conn, row['apiary'], row['plan_path']):
+            row.update(status=tr('Plan file missing'), missing=True, kind='wait')
+        elif recovery:
+            row.update(status=tr('Recovery blocked'), recovery_error=recovery, kind='wait')
     orch_table = {(h["apiary"], h["plan_path"]): orch_rows(h, h["orch"], agents, now, ctx_limit) for h in hive_rows if h.get("orch")}
     live = [a for a in agents if a.get("status") in runtime.ACTIVE_STATUSES]
     queens = [a for a in live if a.get("phase") == "queen"]

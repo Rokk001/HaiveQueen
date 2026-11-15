@@ -216,7 +216,7 @@ def execute(conn, action, data):
         if not source.is_relative_to(workspace):
             raise ValueError('Plan is outside the project workspace')
         from . import plans as plan_files, web_plan_details
-        text = source.read_text(encoding='utf-8-sig')
+        text = '' if row.get('missing') else source.read_text(encoding='utf-8-sig')
         return {'plan': row, 'text': text, 'body': plan_files.split_front_matter(text)[1],
                 'packages': web_plan_details.packages(conn, project, plan, text),
                 'hive': hives.get(conn, project, plan)}

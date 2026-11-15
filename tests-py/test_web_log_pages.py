@@ -146,6 +146,7 @@ class WebLogPagesTests(RoundCase):
         folder.mkdir(exist_ok=True)
         (folder / 'checks.txt').write_text('noise\n' * 10000 + '25s call tests/test_last.py::test_slow\n', encoding='utf-8')
         path = action_logs.start('testproj', REL, 'Build')
+        action_logs._write(path, {'event': 'execution', 'cwd': str(self.wt)})
         action_logs.append(path, 'see out/checks.txt\n')
         action_logs.finish(path, 0)
         console = self.request()

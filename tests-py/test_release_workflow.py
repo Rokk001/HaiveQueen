@@ -20,7 +20,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.workflow = WORKFLOW.read_text(encoding='utf-8-sig')
 
     def test_build_and_publish_configuration(self):
-        for part in ("tags:\n      - 'v*'", 'contents: write', 'actions/checkout@v4',
+        for part in ("tags:\n      - 'v*'", 'contents: write', 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
                      'setuptools.build_meta.build_sdist', 'python -m pip wheel --no-deps', 'gh release view "$RELEASE_TAG"',
                      'gh release create "$RELEASE_TAG" --verify-tag',
                      'prerelease=(--prerelease)', 'gh release upload "$RELEASE_TAG" dist/* --clobber'):

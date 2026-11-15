@@ -114,6 +114,7 @@ class StepLogsTests(RoundCase):
         folder.mkdir(exist_ok=True)
         (folder / 'build-old.log').write_text('compiler error\n', encoding='utf-16')
         path = action_logs.start('testproj', REL, 'Build')
+        action_logs._write(path, {'event': 'execution', 'cwd': str(self.wt)})
         action_logs.append(path, 'log out/build-old.log\nlog out/build-old.log\nsee out/missing.txt')
         action_logs.finish(path, 1)
         result = self.request()

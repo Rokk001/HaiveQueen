@@ -1,6 +1,7 @@
 const assert=require('node:assert/strict');
 const {resolvePlanActions,Client}=require('../haivequeen/web-client.js');
 (async()=>{
+ assert.deepEqual(await resolvePlanActions({status:'RUNNING',missing:true,has_hive:true},()=>{}),[]);
  const plan={apiary:'A',plan_path:'p.md',status:'Plan paused',paused:true};
  const requests=[];
  const request=async route=>{requests.push(route);return [

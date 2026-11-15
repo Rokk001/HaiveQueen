@@ -309,6 +309,11 @@ def advance(conn, env, plan, free_mb, alive=None):
     if not hive or hive["state"] == "done":
         return None
     state = load(conn, env.name, plan)
+    from . import filetxn
+    if filetxn.recovery_block_reason(conn, env.name) or runtime.plan_missing(conn, env.name, plan):
+        if state:
+            _harvest_only(conn, env, plan, state)
+        return None
     if state is None:
         if not takeover_due(conn, env, plan, hive, alive):
             return None

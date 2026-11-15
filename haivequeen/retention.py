@@ -108,6 +108,10 @@ def cleanup(conn, machine=None, *, now=None, data_dir=None, runs_dir=None, proje
     if cutoff:
         for path in _action_journals(data_dir / "orchestrator" / "logs"):
             if _expired_action_journal(path, cutoff):
+                from . import log_snapshots
+                snapshots = log_snapshots.folder(path)
+                if snapshots.exists() and not _remove_tree(snapshots):
+                    continue  # retain the owning journal so a later cleanup can retry
                 counts["logs"] += _remove_file(path)
         log_dirs = {data_dir / "logs" / (p.get("name") or "_") for p in projects}
         log_dirs.update(runtime.mirror_dir(p.get("name")) for p in projects if p.get("name"))

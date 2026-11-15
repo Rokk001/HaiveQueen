@@ -394,13 +394,19 @@ def provider_reserve(provider: dict, conn=None, limits=None, now=None):
     """The quota reserve of a provider from both usage windows: weekly quota x 5-hour quota (the 5-hour one counts at most 1.0).
 
     None for a provider without limit (+99 %); a used-up window gives 0 (no new work until it resets, capability packages included).
-    A passed reset counts as reset; an unknown reading counts as a full week free. A kept reading of a failed Claude check counts with both windows.
+    Real quota-managed providers require a fresh successful observation before
+    historical percentages can authorize starts. Explicit test limits and the
+    isolated runtime override retain their synthetic quota behavior.
     `now` is the one clock reading a ranking shares, so equal usage gives exactly equal reserves."""
     from . import reserve
     source = str(provider.get("limit") or "") if not isinstance(provider.get("limit"), dict) else str((provider.get("limit") or {}).get("source", ""))
     p = {**provider, "limit": source}
     if without_limit(p):
         return None
+    if source in ('claude', 'codex') and limits is None and not os.environ.get('BZZ_PROVIDER_LIMITS_FILE') and not os.environ.get('BZZ_RUNTIME_OVERRIDE'):
+        from . import usage
+        if not usage.quota_verified(conn, p, now):
+            return 0.0
     lim = provider_limit(p, conn, limits)
     now = time.time() if now is None else now
     weekly = reserve.window_quota(lim["FreePct"], reset_epoch=now + float(lim["Hours"]) * 3600.0, now=now)

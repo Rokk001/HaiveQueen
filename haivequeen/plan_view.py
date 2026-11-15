@@ -1,7 +1,7 @@
 """Plan listing and actions shared by browser clients."""
 import os
 
-from . import config, db, dashboard_data, hives, loop, runtime
+from . import config, db, dashboard_data, hives, loop, runtime, filetxn
 from . import plans as plan_mod
 from .i18n import N_, tr
 
@@ -38,8 +38,11 @@ def plan_rows(conn) -> list:
     for key in sorted(set(found) | set(known)):
         status = known.get(key) or found.get(key) or "DRAFT"
         stopped = status == "PAUSED" and key in known and hives.is_stopped(conn, *key)
+        recovery = filetxn.recovery_block_reason(conn, key[0])
         rows.append({"apiary": key[0], "plan_path": key[1], "name": dashboard_data.hive_name(key[1]), "status": status,
-                     "has_hive": key in hive_keys, "stopped": stopped, "error": errors.get(key, ""),
+                     "missing": runtime.plan_missing(conn, *key),
+                     "has_hive": key in hive_keys, "stopped": stopped,
+                     "error": recovery or errors.get(key, ""), "recovery_error": recovery,
                      "waiting_for": hives.waiting_for(conn, *key) if status == "WAITING" else ""})
     return rows
 
@@ -47,6 +50,8 @@ def plan_rows(conn) -> list:
 # The text of the status column.
 def status_text(row) -> str:
     """The status in lower case; a header error is shown instead of a silent status, a WAITING plan says what it waits for."""
+    if row.get('missing'):
+        return tr('Plan file missing')
     if row.get("error"):
         return tr("error: %s", row["error"])
     if row.get("waiting_for"):
@@ -59,6 +64,8 @@ def actions(row) -> list:
     """(label, action) for a row: start for a draft, a paused or a cancelled plan; pause for a sent, prepared or running plan;
     cancel for a draft or a stopped Plan; back to draft for a stopped or cancelled plan; nothing for DONE."""
     status, stopped = row["status"], row.get("stopped")
+    if row.get('missing') or row.get('recovery_error'):
+        return []
     names = []
     if status in ("DRAFT", "PAUSED", "CANCELLED"):
         names.append("start")
