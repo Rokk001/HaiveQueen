@@ -3,8 +3,9 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
-from haivequeen import release_staging, updates, version_layout
+from haivequeen import dashboard_data, release_staging, releases, selfupdate, updates, version_layout
 
 
 def archive(entries):
@@ -16,6 +17,35 @@ def archive(entries):
 
 
 class ReleaseStagingTests(unittest.TestCase):
+    def test_running_identity_drives_display_and_release_comparison_across_rollback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data = archive([('project/haivequeen/cli.py', 'code'),
+                            ('project/pyproject.toml', '[project]\nversion = "2.0.0"\n')])
+            old = release_staging.stage_release(temp, 'example/project', '2.1.0', lambda _: data)
+            new = release_staging.stage_release(temp, 'example/project', '2.2.0', lambda _: data)
+
+            class Response(io.BytesIO):
+                pass
+
+            def latest(_request, timeout):
+                return Response(b'{"tag_name":"v2.2.0","html_url":"release"}')
+
+            with patch.object(releases, 'urlopen', latest), \
+                 patch.object(updates, 'state_path', return_value=Path(temp) / 'check.json'), \
+                 patch.object(selfupdate, 'live_folder', return_value=old):
+                for active in ('2.2.0', '2.1.0'):
+                    version_layout.set_active(temp, active)
+                    dashboard_data._VERSION_CACHE.clear()
+                    self.assertEqual(dashboard_data._version(), '2.1.0')
+                    state = updates.check({'update': {'repository': 'example/project'}}, manual=True)
+                    self.assertEqual(state['available']['version'], '2.2.0')
+                with patch.object(selfupdate, 'live_folder', return_value=new):
+                    dashboard_data._VERSION_CACHE.clear()
+                    self.assertEqual(dashboard_data._version(), '2.2.0')
+                    state = updates.check({'update': {'repository': 'example/project'}}, manual=True)
+                    self.assertIsNone(state['available'])
+            dashboard_data._VERSION_CACHE.clear()
+
     def test_staged_identity_survives_activation_and_rollback(self):
         with tempfile.TemporaryDirectory() as temp:
             data = archive([('project/haivequeen/cli.py', 'code'),
