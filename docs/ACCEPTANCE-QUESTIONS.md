@@ -1,0 +1,11 @@
+# Owner acceptance questions
+
+After integration, HQ prepares the acceptance description asynchronously before opening the owner question. `roles/acceptance.md` is a read-only review role using the existing `readyCheckClass` and provider capacity. It does not run another build or test suite. Independent plans continue while the description is prepared.
+
+The reviewer retrieves an evidence index through `bzz kv get`: the submitted and current plan, state file, all package result references, active plan/project decisions, previous owner answers and recorded integration state. The prompt contains references rather than copies of histories. A scope hash caches the description; changed requirements, decisions, results or delivery evidence invalidate it. Moving the plan to REVIEW does not invalidate it.
+
+The question separates concrete remaining owner checks (package ID, action and expected visible result), previously accepted work, open/unshipped requirements, evidenced automatic technical checks and a short repair addendum. Later corrections take precedence. Partial acceptance must be supported by an owner answer or decision, never inferred from silence. Mixed packages list only the remaining checks and retain missing requirements separately. A final repair report cannot replace the plan-wide description.
+
+HQ checks package coverage, decision coverage, concrete manual steps and evidence references before publishing. Natural-language evidence interpretation remains the review agent's responsibility: structure validation alone cannot prove semantic correctness. Missing or contradictory evidence must be disclosed. A recorded deployment commit is labelled as such; it does not assert that the current installation was independently inspected. Merely running a Build or Deploy stage does not prove success.
+
+Malformed descriptions receive one corrective review with the precise validation finding. Repeated failure becomes an operational fault through the existing fault-check path, rather than an incomplete acceptance question or an unchanged retry loop. Review state and the finding are stored in `acceptance-review:<plan>`; an evidence change permits a new review. Existing answered questions and owner decisions are never rewritten or reopened by this mechanism.

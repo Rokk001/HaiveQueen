@@ -1,3 +1,4 @@
+from unittest import mock
 """Gap 3c: a real loop run (run_loop, several rounds) over a throw-away project, headless, with the real agent runner and a fake provider CLI.
 
 A READY plan starts one Queen in its plan worktree; the fake provider registers and integrates its branch.
@@ -92,7 +93,8 @@ class FullLoopTest(RoundCase):
         super().tearDown()
 
     # Verify that a Queen starts and integrates her own plan.
-    def test_plan_to_integrated(self):
+    @mock.patch("haivequeen.acceptance.prepare", return_value="Prepared acceptance description")
+    def test_plan_to_integrated(self, prepared):
         """READY plan: one Queen integrates her branch and the plan becomes DONE."""
         round_kwargs = {"free_ram": lambda: 16.0, "settle": 0}
         code = loop.run_loop(self.conn, self.machine, rounds=8, round_minutes=0.05, wait_seconds=0.3, round_kwargs=round_kwargs)

@@ -23,6 +23,9 @@ class NothingLeftCase(RoundCase):
 
     def setUp(self):
         super().setUp()
+        brief = mock.patch("haivequeen.acceptance.prepare", return_value="Prepared acceptance description")
+        brief.start()
+        self.addCleanup(brief.stop)
         self.plan("READY", [{"id": "P1", "title": "First"}])
         (self.repo / REL).write_text((self.repo / REL).read_text(encoding="utf-8") + BODY, encoding="utf-8")
         runtime.record_submission(self.conn, "testproj", REL, (self.repo / REL).read_text(encoding="utf-8"))   # the plan as submitted is the reference of the ready check

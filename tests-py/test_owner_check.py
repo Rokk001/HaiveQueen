@@ -1,3 +1,4 @@
+from unittest import mock
 """Owner check after integration: a Plan whose plan has points only the owner can check stays open in the state 'owner_check'."""
 import subprocess
 
@@ -44,7 +45,8 @@ class OwnerCheckTests(RoundCase):
         """All Queen rows of the dummy plan."""
         return [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen"]
 
-    def test_preparing_integrated_passed_plan_reaches_owner_check(self):
+    @mock.patch("haivequeen.acceptance.prepare", return_value="Prepared acceptance description")
+    def test_preparing_integrated_passed_plan_reaches_owner_check(self, prepared):
         qid = self.integrated_hive_with_question()
         self.conn.execute('DELETE FROM questions WHERE id=?', (qid,))
         hives.set_completion(self.conn, 'testproj', REL, 'passed')

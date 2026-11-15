@@ -36,6 +36,14 @@ class BrowserTests(unittest.TestCase):
         for label in ('Questions', 'Limits', 'Queue', 'Clear', 'Resume', 'Update', 'Live'):
             self.assertNotEqual(i18n.tr(label, language='German'), label, label)
 
+    def test_update_version_labels(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required for update label tests')
+        result = subprocess.run([node, str(Path(__file__).with_name('web_update_labels_test.cjs'))],
+                                cwd=ROOT, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_slow_test_notice(self):
         node = shutil.which('node')
         if not node:

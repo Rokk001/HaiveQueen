@@ -261,3 +261,9 @@ with the conversation. The back button names the active filter (for example,
 header also displays the active view. Explicit **Project** and **Plan** labels
 identify the full real names in the sidebar and conversation header, wrapping
 long names instead of hiding the scope.
+
+### Update header labels
+
+The header labels the running version as `Running v<version>`. When an update is available, the action reads `Update to v<version>`; the target version is not repeated as a separate status label. Version labels normalize an existing `v` prefix without changing the version sent to the install API. Installation, failure and current-version status messages remain visible.
+
+While installation is pending, the header reads the target from `updates.installing.version`. The `installing` object also contains scheduling metadata and must not be rendered as text. The update action remains hidden and checking remains disabled until installation finishes.

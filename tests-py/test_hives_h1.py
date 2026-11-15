@@ -1,3 +1,4 @@
+from unittest import mock
 """Tests for the Plan configuration and plan parsing."""
 import unittest
 
@@ -1000,7 +1001,8 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "RUNNING")
 
     # Only integration of the Queen's registered row completes her plan.
-    def test_own_integrated_ready_row_finishes_plan(self):
+    @mock.patch("haivequeen.acceptance.prepare", return_value="Prepared acceptance description")
+    def test_own_integrated_ready_row_finishes_plan(self, prepared):
         """Only integration of the Queen's registered row completes her plan."""
         import argparse
         import contextlib

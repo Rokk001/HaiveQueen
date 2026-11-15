@@ -811,11 +811,12 @@ function mount(document, bootstrap) {
     if(event.key==='Escape'){settingsMenu.hidden=true;settingsToggle.setAttribute('aria-expanded','false');}
   });
   settingsMenu.addEventListener('keydown',event=>{if(event.key==='Escape'){settingsMenu.hidden=true;settingsToggle.setAttribute('aria-expanded','false');settingsToggle.focus();}});
+  function displayVersion(version) { return 'v'+String(version || '0').replace(/^v/i,''); }
   function renderState(state) {
     renderGate.render();
   }
   function renderStateNow(state) {
-    $('version').textContent=state.version || '';
+    $('version').textContent=t('Running %s').replace('%s',displayVersion(state.version));
     renderControls();renderUpdates();
     const questionTab=$('tabs').querySelector('[data-tab="Questions"]');
     const count=Math.max(0,Number(state.queue?.open??state.queue?.questions??0));
@@ -1366,15 +1367,15 @@ function mount(document, bootstrap) {
   function renderQuestionsPage(){view.replaceChildren();renderQuestions();}
   function renderUpdates() {
     const box=$('update-status');box.replaceChildren();
-    let label='Check now',colour='dim';
-    if(updateState.installing){label=t('installing version %s – waiting for running agents').replace('%s',updateState.installing);colour='warn';}
+    let label='',colour='dim';
+    if(updateState.installing){label=t('installing version %s – waiting for running agents').replace('%s',updateState.installing.version || '');colour='warn';}
     else if(updateState.failed){label=t('update to %s failed, see STATUS').replace('%s',updateState.failed);colour='bad';}
     else if(updateState.error){label=t('update check failed');colour='bad';}
-    else if(updateState.available?.version){label=updateState.available.version;colour='warn';}
+    else if(updateState.available?.version){label='';}
     else if(updateState.no_release){label=t('no release published yet');}
     else if(updateState.last_check){label=t('up to date');colour='ok';}
-    box.append(el('span',t(label),colour));
-    if(updateState.available?.version && !updateState.installing)box.append(button('Update',async()=>{await act('updates/install',{version:updateState.available.version},t(bootstrap.updateConfirm).replace('%s',updateState.available.version));}));
+    if(label)box.append(el('span',t(label),colour));
+    if(updateState.available?.version && !updateState.installing)box.append(button(t('Update to %s').replace('%s',displayVersion(updateState.available.version)),async()=>{await act('updates/install',{version:updateState.available.version},t(bootstrap.updateConfirm).replace('%s',updateState.available.version));}));
     const check=button('Check now',async()=>{updateState=await client.action('updates/check');renderUpdates();});check.disabled=check.disabled||!!updateState.installing;check.classList.add('update-check');box.append(check);
   }
   async function loadEditor(project='') {
