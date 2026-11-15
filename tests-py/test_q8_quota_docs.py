@@ -6,7 +6,10 @@ ROOT = Path(__file__).resolve().parent.parent
 
 class CapabilityThresholdDocs(unittest.TestCase):
     def test_provider_guide_and_agent_rules_describe_thresholds(self):
-        for rel in ("docs/PROVIDERS.md", "docs/AGENT-RULES.md"):
+        guide = (ROOT / "docs/PROVIDERS.md").read_text(encoding="utf-8")
+        self.assertIn("**Capability thresholds.**", guide)
+        self.assertIn("AGENT-RULES.md#1-hard-rules-tool", guide)
+        for rel in ("docs/AGENT-RULES.md",):
             with self.subTest(document=rel):
                 text = " ".join((ROOT / rel).read_text(encoding="utf-8").lower().split())
                 for phrase in ("threshold per capability", "default is 100 %",

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from bzztest import REL, RoundCase
-from haivequeen import bees, roles, runtime
+from haivequeen import bees, roles, runtime, projsettings
 
 ROOT = Path(__file__).resolve().parent.parent
 REMOVED = ("buildEnabled", "deployEnabled", "compileCheckEnabled", "buildFlowDoc", "integratorInstructions", "INTEGRATION-BUILD", "INTEGRATION-DEPLOY",
@@ -90,6 +90,10 @@ class FlowDocs(unittest.TestCase):
     def test_no_removed_switch_field_or_step_package_is_mentioned(self):
         for name, text in self.texts().items():
             for word in REMOVED:
+                # The later CI/CD workflow restored explicit Build/Deploy switches.
+                # Keep checking obsolete names, but never ban a current schema key.
+                if word in projsettings.KEPT_KEYS:
+                    continue
                 self.assertNotIn(word, text, "%s mentions %s" % (name, word))
 
     def test_operations_guide_describes_the_new_flow(self):

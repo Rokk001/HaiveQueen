@@ -6,7 +6,7 @@
 - at least one of the supported CLIs: [Claude Code](https://claude.com/claude-code) (`claude`), the Codex CLI (`codex`), [OpenCode](https://opencode.ai) (`opencode`) or [Kilo Code](https://kilo.ai) (`kilo`)
 - Git (Plans work in worktrees)
 
-Follow the [README installation and first-start steps](../README.md#installation-and-first-start) for virtual-environment commands on Windows and Linux. Keep that checkout in place for future updates.
+Follow the [README installation and first-start steps](../README.md#install-and-start) for virtual-environment commands on Windows and Linux. Keep that checkout in place for future updates.
 
 Each Project’s `.haivequeen/` folder contains machine-local settings and runtime files; keep it local to each machine and do not commit it. `bzz init` and `bzz register` add it to the project folder’s `.gitignore` and warn if it is already tracked.
 

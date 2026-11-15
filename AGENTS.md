@@ -2,6 +2,8 @@
 
 - Follow the two quality goals in docs/AGENT-RULES.md rule 10: token economy first, context conservation second. Give agents only the material they need and keep their starting context minimal; provide references for targeted retrieval instead of embedding whole plans or histories. Reuse existing evidence and decisions, avoid unchanged retries, and require a reasoned diagnosis before increasing model cost. Preserve correctness, required verification and safety constraints.
 
+- Every product change (function, command, setting, interface or behaviour) must be documented in docs/ in the same change. Update README.md too when its purpose, quality goals, installation, technology, command list or documentation links are affected.
+
 - Work only in your own worktree and branch. Never change the folder a running HaiveQueen is installed in; it is updated only by its update process.
 - Commit with explicit file lists, never `git add -A`.
 - Before every commit check the diff: no private path, no personal name, no quote of the owner, and no control characters 0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F.

@@ -558,7 +558,7 @@ class UpdateDocumentationTests(unittest.TestCase):
 
     def test_installation_guide_documents_release_checkout(self):
         text = (Path(__file__).resolve().parent.parent / "docs/GETTING-STARTED.md").read_text(encoding="utf-8")
-        self.assertIn("git checkout v", text)
+        self.assertIn("git checkout <release-tag>", text)
 
     def test_operations_guide_documents_updates(self):
         text = (Path(__file__).resolve().parent.parent / "docs/OPERATIONS.md").read_text(encoding="utf-8")

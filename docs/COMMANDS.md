@@ -1,6 +1,6 @@
 # Command reference
 
-Run `bzz --help` for groups and `bzz <command> --help` for exact options and defaults. Commands return JSON except explicitly human-readable views. [Runtime API](RUNTIME-API.md) defines low-level state operations.
+Run `bzz --help` for groups and `bzz <command> --help` for exact options and defaults. Command responses are generally JSON; this describes terminal output, not exported file formats. `bzz export` creates a SQLite database backup when due (`--force` runs it immediately); `bzz views` writes Markdown files. [Runtime API](RUNTIME-API.md) defines low-level state operations.
 
 `bzz agent` is the standard package-agent command; `bzz bee` remains a compatibility alias. Existing settings and machine-readable field names keep their spelling. Free-text answers to owner-check questions are notes and leave the check open.
 
@@ -55,8 +55,8 @@ The inventory includes compatibility aliases. Required inputs are marked; option
 | `bzz integration` | `--project (required)`, `--plan (required)`, `--owner-pid` |
 | `bzz integration acquire` | `--project (required)`, `--plan (required)`, `--owner-pid` |
 | `bzz integration release` | `--project (required)`, `--plan (required)`, `--owner-pid` |
-| `bzz dequeen` | `hive (required)` |
-| `bzz requeen` | `hive (required)`, `provider` |
+| `bzz dequeen` | `plan (required)` |
+| `bzz requeen` | `plan (required)`, `provider` |
 | `bzz done` | `--agent (required)`, `--result (required)` |
 | `bzz ready` | `--project (required)`, `--branch (required)`, `--tip (required)`, `--plan (required)`, `--note` |
 | `bzz compile-check` | `--project (required)`, `--plan (required)`, `--worktree` |
@@ -143,7 +143,7 @@ The inventory includes compatibility aliases. Required inputs are marked; option
 | `bzz export`, `bzz views --project p` | owner | export the state, write the Markdown views |
 | `bzz import-legacy ...` | owner | import the state of version 1 (see [v1 migration](MIGRATION-v1.md)) |
 | `bzz agent force-stop <name>` | owner | Force stop the one running Agent (`bzz agent stop` remains a compatibility alias; the same action as the dashboard button and an inbox `[[stop_agent]]` entry with `name`). A subagent of the Queen is refused with the reason (use the plan stop controls), the Queen is stoppable only by `bzz dequeen`, and agents cannot use the command. The package stays stopped and waits for an explicit owner instruction; the Queen is told by an owner message |
-| `bzz dequeen <plan>` / `bzz requeen <plan> [provider]` | owner | leave a Plan queenless or start a new Queen, optionally on another provider |
+| `bzz dequeen <plan>` / `bzz requeen <plan> [provider]` | owner | stop the plan Queen and separate agents, leaving it queenless; or restart with a new Queen, optionally on another provider |
 | `bzz agent start`, `bzz agent result`, `bzz agent wait` | Queen | start an Agent (a refused start answers `waiting` with a `reason`), record an attempt or wait for its provider; a failed result needs evidence (`--open-requirements` or `--error`) or `--blocked-by question\|build\|owner\|package\|provider` (a question also needs `--blocked-ref <id>`), which is no failure and sets the package to waiting |
 | `bzz package --project p --plan f --package id --state working\|waiting\|implemented\|done\|rejected [--reason ...]` | Queen | report the progress of a package; `waiting` needs `--reason` (`question:<id>`, `build`, `owner`, `package` or `provider`); the dashboard progress bar counts the done ones |
 | `bzz integration acquire` / `release` | runtime compatibility | coordinate the per-project integration place for runtime compatibility; an external caller supplies a stable owner process id. This is not permission for Queens to integrate |
