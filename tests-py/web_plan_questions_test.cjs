@@ -58,6 +58,8 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  const markdown=all(dialog,'TEXTAREA')[0];markdown.value='# New plan\n\nRequirement';markdown.oninput();
  allowDiscard=false;await api.openPlanEditor({status:'DRAFT',apiary:'Demo',plan_path:'another.md'},{text:'# Different',revision:'different'});assert.equal(all(dialog,'TEXTAREA')[0].value,'# New plan\n\nRequirement','Refusing replacement retains new draft');assert.equal(confirmations,1);allowDiscard=true;
  await all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();assert.equal(requests[0][0],'plans/create');assert.equal(requests[0][1].content,'# New plan\n\nRequirement');assert.equal(actions.length,0,'Saving must not submit');
+ markdown.value+=' edited';markdown.oninput();assert(all(dialog,'P').some(node=>node.textContent==='Unsaved changes'),'Editing a saved draft must replace saved status');
+ await all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();
  await all(dialog,'BUTTON').find(node=>node.textContent==='Submit plan').onclick();assert.deepEqual(actions.pop(),['plan/start',{project:'Demo',plan:'docs/plans/new-PLAN.md'}]);
  await api.openPlanEditor({status:'DRAFT',apiary:'Demo',plan_path:'p.md'},{text:'# Existing',revision:'old'});
  const imported=all(dialog,'INPUT').find(node=>node.type==='file');imported.files=[{name:'import.md',text:async()=>'# Imported\n\nRequirement'}];await imported.onchange();

@@ -965,3 +965,5 @@ GERMAN.update({'Release readiness gate': 'Bereitschaftsprüfung freigeben',
  'Saved note': 'Gespeicherte Notiz'})
 
 GERMAN.update({'Integrated commit':'Integrierter Commit','Steps that ran':'Ausgef\u00fchrte Schritte','Accepted':'Angenommen'})
+
+GERMAN['Unsaved changes'] = 'Ungespeicherte Änderungen'
