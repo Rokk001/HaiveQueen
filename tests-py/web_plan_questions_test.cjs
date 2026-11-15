@@ -123,7 +123,8 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  await api.openPlanEditor(null,null,true);assert.equal(all(dialog,'SELECT')[0].value,'Demo','Startup opens with a loaded registered project');
  const readyDialog=dialog.children;client.state={projects:[]};let projectNotice='';client.notice=message=>projectNotice=message;await api.openPlanEditor(null,null,true);assert.equal(dialog.children,readyDialog,'No registered projects must not open an empty-project editor');assert(projectNotice.includes('project'));client.state=loadedState;
  const stateHandler=source.slice(source.indexOf('  function renderStateNow('),source.indexOf('  function renderControls('));let plansRedraw=0;
- new Function('tab','$','renderControls','renderUpdates','render','overlay','renderDetail','el','t',stateHandler+'renderStateNow({});')('Plans',()=>({querySelector:()=>({querySelector:()=>null,setAttribute(){}})}),()=>{},()=>{},()=>plansRedraw++,null,()=>{},el,x=>x);
+ const versionHelper=source.match(/  function displayVersion\(version\) \{[^\n]+\}/)?.[0]||'';
+ new Function('tab','$','renderControls','renderUpdates','render','overlay','renderDetail','el','t',versionHelper+stateHandler+'renderStateNow({});')('Plans',()=>({querySelector:()=>({querySelector:()=>null,setAttribute(){}})}),()=>{},()=>{},()=>plansRedraw++,null,()=>{},el,x=>x);
  assert.equal(plansRedraw,1,'Arrival of startup state redraws Plans to unlock New plan');
  console.log('Question draft, history, acceptance and plan editor behavior passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
