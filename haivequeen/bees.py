@@ -313,9 +313,6 @@ def stopping_embedded(conn, project, plan=None, package=None):
 def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', verify='code', force_failure=False):
     """Record an attempt once. A failed attempt counts only when the same error came again or, for a package closed by code, the same requirement stayed open. A package in state implemented never counts; for a package closed by build or owner open requirements alone never count."""
     ensure_attempts(conn)
-    if outcome == 'succeeded':
-        conn.execute('INSERT OR IGNORE INTO bee_completed VALUES(?,?,?)', (project, plan, package))
-        set_package_state(conn, project, plan, package, 'done')
     if outcome == 'interrupted':
         return
     with db.transaction(conn):
@@ -328,6 +325,16 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
                     conn.execute('DELETE FROM bee_completed WHERE project=? AND plan_path=? AND package=?', (project, plan, package))
                     set_package_state(conn, project, plan, package, 'working', attempt)
             return
+        if outcome == 'succeeded':
+            conn.execute('INSERT OR IGNORE INTO bee_completed VALUES(?,?,?)', (project, plan, package))
+            set_package_state(conn, project, plan, package, 'done')
+            from . import package_diagnosis
+            state = package_diagnosis._load(conn, project, plan, package)
+            if state and 'completion_generation' not in state:
+                state['completion_generation'] = package_diagnosis.completion_generation(conn, project, plan, package)
+                runtime.kv_set(conn, project, package_diagnosis._key(plan, package), json.dumps(state))
+            key = package_diagnosis.completion_key(plan, package)
+            runtime.kv_set(conn, project, key, str(package_diagnosis.completion_generation(conn, project, plan, package) + 1))
         if attempt:
             epoch = retry_epoch(conn, project, plan, package)
             previous = conn.execute('SELECT open_requirements,error FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND class=? AND rowid>? ORDER BY rowid DESC LIMIT 1', (project, plan, package, cls, epoch or 0)).fetchone()

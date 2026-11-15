@@ -268,21 +268,11 @@ class Client {
     if(this.pending.has(lock))return null;
     this.pending.set(lock,true);
     try {
-      const rows=await this.request('plans'),seen=new Set();
-      const selected=rows.filter(row=>{
-        const key=JSON.stringify([row.apiary||row.project,row.plan_path]);
-        if(seen.has(key)||!planActions(row).includes(action))return false;
-        seen.add(key);return true;
-      });
+      const selected=await this.request('plans/control-preview',{operation:action});
       if(!selected.length)return {count:0};
-      const names=selected.map(row=>(row.apiary||row.project)+' / '+(row.name||row.plan_path)).join('\n');
+      const names=selected.map(row=>row.project+' / '+row.plan).join('\n');
       if(!await this.confirm(warning(selected.length)+'\n\n'+names))return null;
-      let count=0;
-      for(const row of selected){
-        await this.action('plan/'+action,{project:row.apiary||row.project,plan:row.plan_path,confirmed:true});
-        count++;
-      }
-      return {count};
+      return await this.request('plans/control',{operation:action,targets:selected,confirmed:true});
     } finally {this.pending.delete(lock);}
   }
   async refresh() {

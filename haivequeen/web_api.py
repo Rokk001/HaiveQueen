@@ -147,8 +147,56 @@ def dispatch(action, data):
         return execute(conn, action, data)
 
 
+def plan_control_targets(conn, operation):
+    """Server-owned selection; old or individually paused plans never join Resume."""
+    if operation not in ('stop-gracefully', 'force-stop', 'resume'):
+        raise ValueError('Unknown plan control operation')
+    targets = []
+    for row in plan_view.plan_rows(conn):
+        project, plan = row['apiary'], row['plan_path']
+        status = row['status']
+        if row.get('missing') or row.get('error') or status in ('DONE', 'CANCELLED', 'DRAFT'):
+            continue
+        marker = runtime.kv_get(conn, project, 'global-plan-stop:' + plan)
+        before = runtime.kv_get(conn, project, 'plan-prepause:' + plan)
+        eligible = (status == 'PAUSED' and row.get('stopped') and marker and marker == before
+                    and before in hives.plan_mod.QUEEN_STATUSES) if operation == 'resume' else (
+            status in hives.plan_mod.QUEEN_STATUSES or
+            operation == 'force-stop' and status == 'PAUSED' and marker and not row.get('stopped'))
+        if eligible:
+            targets.append({'project': project, 'plan': plan, 'status': status, 'before': before or '',
+                            'marker': marker or ''})
+    return targets
+
+
+def control_plans(conn, data):
+    operation = data.get('operation')
+    if data.get('confirmed') is not True:
+        raise ValueError('Confirm the listed plans first')
+    with loop.hive_schedule_lock():
+        targets = plan_control_targets(conn, operation)
+        if targets != data.get('targets'):
+            raise ValueError('Plan selection changed; review the plans again')
+        for row in targets:
+            project, plan = row['project'], row['plan']
+            with filetxn.transaction(conn):
+                if operation == 'resume':
+                    hives.start_again(conn, project, plan)
+                else:
+                    (hives.pause_plan if operation == 'stop-gracefully' else hives.stop_hive)(conn, project, plan)
+                    runtime.kv_set(conn, project, 'global-plan-stop:' + plan,
+                                   runtime.kv_get(conn, project, 'plan-prepause:' + plan))
+                db.add_event(conn, project, 'plan-control', 'Global plan control: ' + operation,
+                             data={'plan': plan, 'previous_status': row['status'], 'source': 'web-controls'})
+        return {'ok': True, 'count': len(targets)}
+
+
 def execute(conn, action, data):
     project, plan = data.get('project'), data.get('plan')
+    if action == 'plans/control-preview':
+        return plan_control_targets(conn, data.get('operation'))
+    if action == 'plans/control':
+        return control_plans(conn, data)
     if action == 'releases':
         from . import web_releases
         return web_releases.listing(conn, project)

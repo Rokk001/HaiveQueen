@@ -20,31 +20,20 @@ const {resolvePlanActions,Client}=require('../haivequeen/web-client.js');
  assert.deepEqual(await resolvePlanActions(plan,async()=>[]),[],'Missing plans must not acquire actions');
  await assert.rejects(resolvePlanActions(plan,async()=>{throw Error('offline');}),/offline/);
  const sent=[],confirmations=[];
- const listed=[{apiary:'A',plan_path:'pause',status:'PAUSED',stopped:true},
-  {apiary:'A',plan_path:'run',status:'RUNNING',has_hive:true},
-  {apiary:'A',plan_path:'done',status:'DONE'},
-  {apiary:'A',plan_path:'draft',status:'DRAFT'},
-  {apiary:'A',plan_path:'cancel',status:'CANCELLED'},
-  {apiary:'A',plan_path:'draining',status:'PAUSED',stopped:false,has_hive:true}];
+ const selected=[{project:'A',plan:'pause',status:'PAUSED',before:'RUNNING',marker:'RUNNING'}];
  const client=new Client({confirm:async text=>{confirmations.push(text);return true;}});
- client.request=async(route,data)=>{if(route==='plans')return listed;sent.push([route,data]);return {ok:true};};
+ client.request=async(route,data)=>{if(route==='plans/control-preview')return selected;sent.push([route,data]);return {ok:true,count:1};};
  await client.plansAction('resume',count=>'Resume '+count+' paused plans?');
- assert.deepEqual(sent,[['plan/resume',{project:'A',plan:'pause',confirmed:true}]]);
+ assert.deepEqual(sent,[['plans/control',{operation:'resume',targets:selected,confirmed:true}]]);
  assert(confirmations[0].startsWith('Resume 1 paused plans?'));assert(confirmations[0].includes('A / pause'));
- sent.length=0;
- await client.plansAction('stop-gracefully',count=>'Stop '+count+' plans?');
- assert.deepEqual(sent.map(x=>x[1].plan),['run']);
- sent.length=0;
- await client.plansAction('force-stop',count=>'Force '+count+' plans?');
- assert.deepEqual(sent.map(x=>x[1].plan),['run','draining']);
  sent.length=0;client.confirm=async()=>false;
  await client.plansAction('resume',String);assert.equal(sent.length,0);
  client.confirm=async()=>true;
- client.request=async(route,data)=>{if(route==='plans')return listed;throw Error('server refusal');};
+ client.request=async(route,data)=>{if(route==='plans/control-preview')return selected;throw Error('server refusal');};
  await assert.rejects(client.plansAction('resume',String),/server refusal/);
  assert.equal(client.pending.size,0);
  let releaseBatch;
- client.request=async route=>{if(route==='plans')return listed;return new Promise(resolve=>{releaseBatch=resolve;});};
+ client.request=async route=>{if(route==='plans/control-preview')return selected;return new Promise(resolve=>{releaseBatch=resolve;});};
  const first=client.plansAction('resume',String);
  while(!releaseBatch)await Promise.resolve();
  assert.equal(await client.plansAction('force-stop',String),null,'Do not overlap bulk actions');

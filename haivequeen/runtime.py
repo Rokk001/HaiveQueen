@@ -598,6 +598,7 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
     with db.transaction(conn):
         conn.execute("UPDATE plans SET status=?, updated_at=? WHERE project=? AND path=?",
                      (status, db.now(), project, plan))
+        kv_delete(conn, project, 'global-plan-stop:' + plan)
     if status == "SENT":
         record_submission(conn, project, plan, nl.join(lines))
     if status in ENDED_WAIT_STATUSES:

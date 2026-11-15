@@ -200,6 +200,51 @@ class PackageDiagnosisLifecycle(PackageDiagnosis):
         self.review.request(env, REL, 'P1', 'medium')
         self.assertEqual(self.review._load(self.conn, 'testproj', REL, 'P1')['phase'], 'pending')
 
+    def test_historical_success_does_not_cancel_new_review(self):
+        self.plan(packages=[{'id': 'P1', 'class': 'medium'}])
+        env = self.env()
+        bees.report_attempt(env, REL, 'P1', 'medium', 'succeeded', 'old-success')
+        self.review.request(env, REL, 'P1', 'medium')
+        with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-1'), \
+             mock.patch('haivequeen.bees.plan_worktree', return_value=('branch', self.wt)), \
+             mock.patch('haivequeen.loop._min_ram', return_value=0):
+            self.review.advance(env, 16384, alive=lambda pid: False)
+        self.assertEqual(self.review._load(self.conn, env.name, REL, 'P1')['phase'], 'running')
+        self.assertTrue(bees.package_done(self.conn, env.name, REL, 'P1'))
+
+    def test_duplicate_success_cannot_cancel_requested_review(self):
+        self.plan(packages=[{'id': 'P1', 'class': 'medium'}])
+        env = self.env()
+        bees.report_attempt(env, REL, 'P1', 'medium', 'succeeded', 'old-success')
+        self.review.request(env, REL, 'P1', 'medium')
+        bees.report_attempt(env, REL, 'P1', 'medium', 'succeeded', 'old-success')
+        self.assertEqual(self.review._load(self.conn, env.name, REL, 'P1')['phase'], 'pending')
+        self.assertTrue(self.review.waiting(env, REL))
+        bees.report_attempt(env, REL, 'P1', 'medium', 'succeeded', 'new-success')
+        self.assertEqual(self.review._load(self.conn, env.name, REL, 'P1')['phase'], 'completed')
+
+    def test_legacy_pending_review_preserves_history_and_runs(self):
+        self.plan(packages=[{'id': 'P1', 'class': 'medium'}])
+        env = self.env()
+        bees.report_attempt(env, REL, 'P1', 'medium', 'succeeded', 'old-success')
+        runtime.kv_set(self.conn, env.name, self.review._key(REL, 'P1'),
+                       json.dumps({'phase': 'pending', 'current_class': 'medium', 'accepted': ['old-signature']}))
+        with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-1'), \
+             mock.patch('haivequeen.bees.plan_worktree', return_value=('branch', self.wt)), \
+             mock.patch('haivequeen.loop._min_ram', return_value=0):
+            self.review.advance(env, 16384, alive=lambda pid: False)
+        state = self.review._load(self.conn, env.name, REL, 'P1')
+        self.assertEqual(state['phase'], 'running')
+        self.assertEqual(state['accepted'], ['old-signature'])
+
+    def test_new_success_supersedes_legacy_review_before_next_round(self):
+        self.plan(packages=[{'id': 'P1', 'class': 'medium'}])
+        env = self.env()
+        runtime.kv_set(self.conn, env.name, self.review._key(REL, 'P1'),
+                       json.dumps({'phase': 'pending', 'current_class': 'medium'}))
+        bees.report_attempt(env, REL, 'P1', 'medium', 'succeeded', 'new-success')
+        self.assertEqual(self.review._load(self.conn, env.name, REL, 'P1')['phase'], 'completed')
+
     def test_verified_package_cancels_pending_diagnosis(self):
         self.plan(packages=[{'id': 'P1', 'class': 'medium'}])
         env = self.env()

@@ -25,7 +25,8 @@ def scope(conn, project, plan, package, commit):
             digest.update(json.dumps(list(row)).encode('utf-8'))
             digest.update(b'\n')
     return {'commit': commit, 'failure_log': 'package-attempts:' + digest.hexdigest(),
-            'decisions': _digest(known)}
+            'decisions': _digest(known),
+            'completion_generation': completion_generation(conn, project, plan, package)}
 
 
 def _load(conn, project, plan, package):
@@ -100,7 +101,20 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
         'history': json.dumps(history) + sources,
     }) + '\nCurrent repair class: %s\nAvailable repair classes: %s\n' % (current_class, json.dumps(offered))
 
+def completion_key(plan, package):
+    return 'package-completion-generation:' + json.dumps([plan, package], separators=(',', ':'))
+
+
+def completion_generation(conn, project, plan, package):
+    return int(runtime.kv_get(conn, project, completion_key(plan, package)) or 0)
+
+
 def request(env, plan, package, current_class):
+    with db.transaction(env.conn):
+        _request(env, plan, package, current_class)
+
+
+def _request(env, plan, package, current_class):
     """Queue a scoped diagnosis without asking the owner or resetting attempts."""
     state = _load(env.conn, env.name, plan, package)
     if state.get('phase') in ('pending', 'running'):
@@ -110,15 +124,29 @@ def request(env, plan, package, current_class):
                                     (state['question'], env.name, plan, package)).fetchone()
         if question and question[0] == 'open':
             return
-    state.update(phase='pending', current_class=current_class, authorization=None)
+    state.update(phase='pending', current_class=current_class, authorization=None,
+                 completion_generation=completion_generation(env.conn, env.name, plan, package))
     runtime.kv_set(env.conn, env.name, _key(plan, package), json.dumps(state))
 
 
 def completed(env, plan, package):
-    state = _load(env.conn, env.name, plan, package)
-    if state:
+    """Only a success recorded after this diagnosis request can supersede it."""
+    with db.transaction(env.conn):
+        state = _load(env.conn, env.name, plan, package)
+        if not state or state.get('phase') == 'completed':
+            return False
+        generation = completion_generation(env.conn, env.name, plan, package)
+        if 'completion_generation' not in state:
+            # Legacy reviews have no ordering evidence: retain them, never infer
+            # that a historical success supersedes an explicitly queued review.
+            state['completion_generation'] = generation
+            runtime.kv_set(env.conn, env.name, _key(plan, package), json.dumps(state))
+            return False
+        if generation <= state['completion_generation']:
+            return False
         state.update(phase='completed', authorization=None)
         runtime.kv_set(env.conn, env.name, _key(plan, package), json.dumps(state))
+        return True
 
 
 def reviews(env, plan):
@@ -133,7 +161,7 @@ def waiting(env, plan):
     blocked = {key for key, state in active.items() if state.get('phase') in ('pending', 'running', 'owner')}
     if not blocked:
         return False
-    pending = [p for p in env.packages(plan) if not bees.package_done(env.conn, env.name, plan, p['id'])]
+    pending = [p for p in env.packages(plan) if p['id'] in blocked or not bees.package_done(env.conn, env.name, plan, p['id'])]
     while True:
         dependent = {p['id'] for p in pending if any(dep in blocked for dep in p['depends'])}
         if dependent <= blocked:
@@ -197,9 +225,9 @@ def advance(env, free_mb, alive=None):
             continue
         if state.get('phase') in ('pending', 'running', 'authorized'):
             resolve_memory_wait(env, plan, package, free_mb)
-        if bees.package_done(conn, env.name, plan, package):
-            completed(env, plan, package)
+        if completed(env, plan, package):
             continue
+        state = _load(conn, env.name, plan, package)
         if state.get('phase') == 'owner':
             request(env, plan, package, state['current_class'])
             state = _load(conn, env.name, plan, package)

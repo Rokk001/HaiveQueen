@@ -821,7 +821,7 @@ def start_plan(conn, project, plan):
 
 # Start a paused or rejected plan again.
 def start_again(conn, project, plan):
-    """A PAUSED plan gets the status it had before the pause (QUEUED when unknown), a CANCELLED plan becomes DRAFT."""
+    """A PAUSED plan requires a known active status from before the pause, a CANCELLED plan becomes DRAFT."""
     status = _plan_status(conn, project, plan)
     if status == 'CANCELLED':
         runtime.set_plan_status(conn, project, plan, 'DRAFT')
@@ -829,7 +829,9 @@ def start_again(conn, project, plan):
     elif status == 'PAUSED':
         before = runtime.kv_get(conn, project, 'plan-prepause:' + plan)
         before = plan_mod.normalize_status(before) if plan_mod.status_known(before) else ''
-        runtime.set_plan_status(conn, project, plan, before if before and before not in ('PAUSED', 'CANCELLED') else 'QUEUED')
+        if before not in plan_mod.QUEEN_STATUSES:
+            raise ValueError('Previous plan status is unknown; explicitly submit or start the plan instead')
+        runtime.set_plan_status(conn, project, plan, before)
         runtime.kv_delete(conn, project, 'plan-prepause:' + plan)
     else:
         raise ValueError('the plan is neither paused nor cancelled')
