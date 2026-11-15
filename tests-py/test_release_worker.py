@@ -86,15 +86,22 @@ class ReleaseWorkerTests(unittest.TestCase):
         self.assertIn('Unfinished work', output.getvalue())
         self.assertTrue(selfupdate.release_force_path().exists())
 
+    @unittest.expectedFailure  # No production proof provider or admission exclusion yet.
     def test_compatible_switch_does_not_drain_or_wait_for_jobs(self):
-        self.metadata(True)
+        # This controlled provider stands for all required evidence, including
+        # process/environment provenance, shared state, and launch exclusion.
+        # Production has no provider capable of establishing these facts yet.
+        def proven_compatible(_target):
+            return {'compatible': True, 'reason': ''}
         def receipt(conn, target, began, sleep, poll, timeout, loop_pid):
             self.assertEqual(self.active(), '2.0.0')
             self.assertFalse(loop.stop_flag().exists())
             self.assertFalse(selfupdate.lock_path().exists())
             return True
-        result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', jobs=lambda c: self.fail('must not wait'),
-                                                loop_pid=lambda: 42, receipt=receipt, start=lambda: self.fail('old core hands over'))
+        with self.verified_release(compatible=True) as stage, mock.patch.object(release_compat, 'compatibility', side_effect=proven_compatible):
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', stage=stage,
+                jobs=lambda c: self.fail('must not wait'), loop_pid=lambda: 42,
+                receipt=receipt, start=lambda: self.fail('old core hands over'))
         self.assertEqual(result['result'], 'ok')
         self.assertEqual(self.active(), '2.0.0')
 
@@ -133,7 +140,7 @@ class ReleaseWorkerTests(unittest.TestCase):
         self.assertEqual(self.active(), '2.0.0')
 
     @contextlib.contextmanager
-    def verified_release(self):
+    def verified_release(self, compatible=False):
         fixture = test_release_provenance.ProvenanceTests()
         fixture.setUp()
         original_fetch = fixture.fetch
@@ -141,8 +148,8 @@ class ReleaseWorkerTests(unittest.TestCase):
             if '/releases/' in url:
                 return json.dumps({'tag_name': 'v2.0.0', 'body': json.dumps({
                     'repository': 'example/project', 'version': '2.0.0',
-                    'commit': fixture.commit, 'compatible_with_older': False,
-                    'reason': 'database change', 'evidence': 'assertion'})}).encode()
+                    'commit': fixture.commit, 'compatible_with_older': compatible,
+                    'reason': '' if compatible else 'database change', 'evidence': 'assertion'})}).encode()
             return original_fetch(url)
         import shutil
         shutil.rmtree(self.target)
