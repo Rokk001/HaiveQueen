@@ -1148,3 +1148,9 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .messenger-identity .messenger-filter-context{text-transform:none;letter-spacing:0;font-size:.75rem;color:#c4b77e}
 .messenger-back{white-space:normal;text-align:left}
 @media(max-width:700px){.messenger-chat-head .messenger-back{flex:0 0 auto;max-width:100%}.messenger-chat-head .messenger-identity{flex-basis:100%;order:2}}
+
+.plan-list-filters{display:grid;grid-template-columns:minmax(220px,2fr) minmax(150px,1fr) minmax(140px,1fr) auto;align-items:end;gap:12px;margin:18px 0 8px}
+.plan-list-filters label{display:grid;gap:6px;min-width:0;font-size:.82rem;color:#b7c9d1}
+.plan-list-filters input,.plan-list-filters select{width:100%;min-width:0;box-sizing:border-box;min-height:38px}
+.plan-list-filters>button{min-height:38px}.plan-filter-count{font-size:.8rem;color:#a7bac3;margin:9px 0 14px}
+@media(max-width:850px){.plan-list-filters{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.plan-list-filters>label:first-child{grid-column:1/-1}.plan-list-filters>button{grid-column:1/-1}}

@@ -21,6 +21,12 @@ class PlanQuestionsUITests(unittest.TestCase):
         result = subprocess.run(['node', str(script)], capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    @unittest.skipUnless(shutil.which('node'), 'Node required for UI regression')
+    def test_plans_filters(self):
+        script = Path(__file__).with_name('web_plans_filters_test.cjs')
+        result = subprocess.run(['node', str(script)], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_localized_new_plan_template_is_valid_draft(self):
         from haivequeen import plans, web_drafts
         template = next(key for key in i18n.GERMAN if key.startswith('# Plan title\n'))
@@ -37,7 +43,8 @@ class PlanQuestionsUITests(unittest.TestCase):
 
     def test_new_workflow_labels_are_translated(self):
         for label in ('New plan', 'Save draft', 'Submit plan', 'Acceptance',
-                      'Answered history', 'Release readiness gate', 'Saved note'):
+                      'Answered history', 'Release readiness gate', 'Saved note',
+                      'Search plans', 'All projects', 'All statuses', 'Clear filters'):
             self.assertNotEqual(i18n.tr(label, language='German'), label)
 
 

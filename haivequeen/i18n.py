@@ -994,3 +994,5 @@ GERMAN.update({'Back to %s':'Zurück zu %s','View':'Ansicht'})
 GERMAN['# Plan title\n\nDescribe what should change and the result you expect.\n'] = '# Plantitel\n\nBeschreibe, was sich ändern soll und welches Ergebnis du erwartest.\n'
 
 GERMAN['Add a project before creating a plan.'] = 'Vor dem Erstellen eines Plans ein Projekt hinzufügen.'
+
+GERMAN.update({'Search plan name, path or project':'Planname, Pfad oder Projekt suchen','Search plans':'Pläne suchen','All projects':'Alle Projekte','All statuses':'Alle Status','Clear filters':'Filter zurücksetzen','%s of %s plans':'%s von %s Plänen','No plans match these filters.':'Keine Pläne passen zu diesen Filtern.','No plans available.':'Keine Pläne vorhanden.'})

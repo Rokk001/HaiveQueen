@@ -275,3 +275,16 @@ long names instead of hiding the scope.
 The header labels the running version as `Running v<version>`. When an update is available, the action reads `Update to v<version>`; the target version is not repeated as a separate status label. Version labels normalize an existing `v` prefix without changing the version sent to the install API. Installation, failure and current-version status messages remain visible.
 
 While installation is pending, the header reads the target from `updates.installing.version`. The `installing` object also contains scheduling metadata and must not be rendered as text. The update action remains hidden and checking remains disabled until installation finishes.
+
+
+### Filtering the Plans overview
+
+Plans provides case-insensitive search across the plan name, project-relative
+path and project name, combined with **Project** and **Status** selectors.
+The result count shows matching plans out of all loaded plans; an empty result
+explains that no plans match. **Clear filters** resets all three controls and
+returns focus to search. Existing Plan and Messages actions retain their behavior.
+Search and selections persist across polling and tab switches within the current
+page. Polling preserves focus and the search text selection; an active input
+composition finishes before the list is redrawn. Filter options retain a selected
+value even when it temporarily has no matching plans.
