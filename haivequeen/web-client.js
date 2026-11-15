@@ -1221,30 +1221,31 @@ function mount(document, bootstrap) {
     const current=planDraft,form=el('div',undefined,'plan-editor');body.append(form);
     form.append(el('p',t('Save Markdown as a draft, then submit it explicitly to start preparation.')));
     const project=el('select');project.setAttribute('aria-label',t('Project'));
-    for(const item of client.state.projects||[]){const option=el('option',item.name);option.value=item.name;project.append(option);}project.value=current.project;project.disabled=!!current.plan;
-    const filename=el('input');filename.value=current.filename;filename.setAttribute('aria-label',t('Plan file'));filename.placeholder='example-PLAN.md';filename.disabled=!!current.plan;
+    for(const item of client.state.projects||[]){const option=el('option',item.name);option.value=item.name;project.append(option);}project.value=current.project;project.disabled=!!current.plan||!!current.saving;
+    const filename=el('input');filename.value=current.filename;filename.setAttribute('aria-label',t('Plan file'));filename.placeholder='example-PLAN.md';filename.disabled=!!current.plan||!!current.saving;
     const hint=el('p',undefined,'dim');
-    function projectHint(){const item=client.state.projects?.find(item=>item.name===current.project);hint.textContent=t('Plan files')+': '+(item?.plan_globs||[]).join(', ');if(!current.filename || current.autoFilename){current.filename=(item?.suggested_plan_folder?item.suggested_plan_folder+'/':'')+'new-PLAN.md';current.autoFilename=true;filename.value=current.filename;}}
-    project.onchange=()=>{current.project=project.value;markDirty();projectHint();};projectHint();
-    filename.oninput=()=>{current.autoFilename=false;current.filename=filename.value;markDirty();};
+    function projectHint(){const item=client.state.projects?.find(item=>item.name===current.project);hint.textContent=t('Plan files')+': '+(item?.plan_globs||[]).join(', ');if(!current.saving && !current.plan && (!current.filename || current.autoFilename)){current.filename=(item?.suggested_plan_folder?item.suggested_plan_folder+'/':'')+'new-PLAN.md';current.autoFilename=true;filename.value=current.filename;}}
+    project.onchange=()=>{if(current.saving)return;current.project=project.value;markDirty();projectHint();};projectHint();
+    filename.oninput=()=>{if(current.saving)return;current.autoFilename=false;current.filename=filename.value;markDirty();};
     const content=el('textarea');content.value=current.content;content.className='plan-markdown';content.setAttribute('aria-label',t('Plan Markdown'));content.oninput=()=>{current.content=content.value;markDirty();};
     const imported=el('input');imported.type='file';imported.accept='.md,text/markdown';imported.setAttribute('aria-label',t('Import Markdown'));
     imported.onchange=async()=>{const file=imported.files?.[0];if(!file)return;if(!/\.md$/i.test(file.name)){client.notice(t('Choose a Markdown (.md) file.'),true);return;}try{const value=await file.text();if(current!==planDraft)return;current.content=value;content.value=value;markDirty();submit.disabled=true;}catch(error){client.notice(error.message,true);}};
     const status=el('p',current.dirty?t('Unsaved changes'):'', 'dim'),controls=el('div',undefined,'actions');
     status.setAttribute('role','status');
-    function markDirty(){current.dirty=true;submit.disabled=true;status.textContent=t('Unsaved changes');}
-    const submit=button('Submit plan',async()=>{if(current.dirty||!current.plan){client.notice(t('Save the draft before submitting.'),true);return;}const result=await act('plan/start',{project:current.project,plan:current.plan},t('Submit this draft for preparation?'));if(result){planDraft=null;$('detail').close();}});
+    function markDirty(){current.dirty=true;current.saveStatus='Unsaved changes';current.syncEditor?.();}
+    const submit=button('Submit plan',async()=>{if(current.saving||current.dirty||!current.plan){client.notice(t('Save the draft before submitting.'),true);return;}const result=await act('plan/start',{project:current.project,plan:current.plan},t('Submit this draft for preparation?'));if(result){planDraft=null;$('detail').close();}});
     const save=button('Save draft',async()=>{
+      if(current.saving)return;
       const sent={project:current.project,filename:current.filename,plan:current.plan,content:current.content,revision:current.revision};
-      const previousLocks={project:project.disabled,filename:filename.disabled};let saved=false;
-      project.disabled=true;filename.disabled=true;
+      current.saving=true;current.syncEditor?.();
       try{
         const result=await client.action(current.plan?'plans/save':'plans/create',sent);if(!result)return;
-        saved=true;current.plan=result.plan;current.revision=result.revision;current.dirty=current.content!==sent.content||current.filename!==sent.filename;
-        submit.disabled=current.dirty;status.textContent=t(current.dirty?'Saved. Newer edits are still unsaved.':'Draft saved. Submit when ready.');void refreshLists();
-      }finally{if(!saved){project.disabled=previousLocks.project;filename.disabled=previousLocks.filename;}}
+        current.plan=result.plan;current.revision=result.revision;current.dirty=current.content!==sent.content||current.filename!==sent.filename;
+        current.saveStatus=current.dirty?'Saved. Newer edits are still unsaved.':'Draft saved. Submit when ready.';void refreshLists();
+      }finally{current.saving=false;current.syncEditor?.();}
     });
-    submit.disabled=submit.disabled||!current.plan||current.dirty;content.addEventListener('input',()=>{submit.disabled=true;});filename.addEventListener('input',()=>{submit.disabled=true;});
+    current.syncEditor=()=>{project.disabled=!!current.plan||!!current.saving;filename.disabled=project.disabled;save.disabled=!!current.saving;submit.disabled=!!current.saving||!current.plan||current.dirty;status.textContent=t(current.saveStatus||(current.dirty?'Unsaved changes':''));};
+    current.syncEditor();
     controls.append(save,submit);form.append(el('label',t('Project')),project,hint,el('label',t('Plan file')),filename,imported,content,controls,status);
   }
   function renderPlans() {

@@ -211,7 +211,10 @@ and closing/reopening the editor in the current page. Further edits replace the
 saved message with **Unsaved changes** and disable submission until saved again; leaving the page warns about
 unsaved content. A save uses the server revision to reject concurrent changes.
 Project and filename are locked while a save is in flight, so its response stays
-attached to the original target. A failed save restores their prior editability;
+attached to the original target. The in-flight lock belongs to the draft and
+survives closing/reopening its editor, blocking a duplicate save. Completion
+updates the currently open editor without reopening a closed dialog or replacing
+newer text. A failed save restores their prior editability;
 Markdown edits made during saving remain unsaved and must be saved before submission.
 
 Plan details link relevant open questions and acceptance checks to the central
