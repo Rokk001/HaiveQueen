@@ -133,6 +133,81 @@ class PackageDiagnosis(RoundCase):
                                self.report(current, repair_class='heavy', class_reason=42),
                                current, 'medium', ['medium', 'heavy'])
 
+    def repeat_scope(self):
+        previous = self.scope()
+        self.review.accept(self.conn, 'testproj', REL, 'P1', self.report(previous), previous,
+                           'medium', ['medium'])
+        self.review.consume(self.conn, 'testproj', REL, 'P1', previous)
+        self.record('no-progress')
+        return self.scope()
+
+    def experiment(self, name='probe.txt', output='caller reproduction: exit 1'):
+        (self.base / name).write_text(output, encoding='utf-8')
+        return dict(question='Which caller fails?', command='focused caller probe', exit=1,
+                    finding='The second caller reproduces the defect.', log=name)
+
+    def test_paraphrase_after_no_progress_cannot_authorize_retry(self):
+        current = self.repeat_scope()
+        with self.assertRaisesRegex(ValueError, 'experiment'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1',
+                self.report(current, next_action='Repair the incorrect caller with a test.'),
+                current, 'medium', ['medium'])
+        self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
+        prompt = self.review.prompt(self.conn, 'testproj', REL, 'P1', 'head-1',
+                                   self.base / 'diagnosis.json', 'medium', ['medium'])
+        self.assertIn('UNCHANGED CODE', prompt)
+        self.assertIn('experiment:', prompt)
+        self.assertLess(len(prompt), 7000)
+
+    def test_new_probe_justifies_same_approach_and_reaches_repair_agent(self):
+        current = self.repeat_scope()
+        self.review.accept(self.conn, 'testproj', REL, 'P1',
+            self.report(current, experiment=self.experiment()), current, 'medium', ['medium'])
+        instruction = self.review.authorization(self.conn, 'testproj', REL, 'P1', current)['instruction']
+        self.assertIn('second caller', instruction)
+        self.assertIn('probe.txt', instruction)
+        self.assertTrue(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
+        self.record('no-progress-again')
+        current = self.scope()
+        with self.assertRaisesRegex(ValueError, 'already'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1',
+                self.report(current, next_action='Different wording', experiment=self.experiment('renamed.txt')),
+                current, 'medium', ['medium'])
+
+    def test_probe_requires_real_local_output_and_exit_code(self):
+        current = self.repeat_scope()
+        valid = self.experiment()
+        for change in ({'log': 'missing.txt'}, {'log': '../outside.txt'}, {'exit': True}, {'finding': ''}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.review.accept(self.conn, 'testproj', REL, 'P1',
+                    self.report(current, experiment={**valid, **change}), current, 'medium', ['medium'])
+        self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
+
+    def test_changed_code_can_receive_new_diagnosis_without_probe(self):
+        self.repeat_scope()
+        current = self.scope('head-2')
+        self.review.accept(self.conn, 'testproj', REL, 'P1', self.report(current), current, 'medium', ['medium'])
+        self.assertIsNotNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
+
+    def test_real_external_prerequisite_still_reaches_owner_after_no_progress(self):
+        current = self.repeat_scope()
+        result = self.review.accept(self.conn, 'testproj', REL, 'P1',
+            self.report(current, kind='external', evidence=['probe: missing authorized test device'],
+                        question='Provide the required test device?', why_owner='No authorized device is available.',
+                        recommendation='Connect the test device.'), current, 'medium', ['medium'])
+        self.assertEqual(result['kind'], 'external')
+        self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
+
+    def test_legacy_accepted_report_does_not_reset_no_progress_protection(self):
+        current = self.repeat_scope()
+        state = self.review._load(self.conn, 'testproj', REL, 'P1')
+        state.pop('consumed_scopes')
+        runtime.kv_set(self.conn, 'testproj', self.review._key(REL, 'P1'), json.dumps(state))
+        with self.assertRaisesRegex(ValueError, 'experiment'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1',
+                self.report(current, next_action='Same repair paraphrased after upgrade'),
+                current, 'medium', ['medium'])
+
 class PackageDiagnosisLifecycle(PackageDiagnosis):
     def test_cancelled_plan_never_starts_queued_diagnosis(self):
         self.plan('CANCELLED', [{'id': 'P1', 'class': 'medium'}])

@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import re
+from pathlib import Path
 
 from . import bees, db, repair_review, roles, runtime
 
@@ -34,6 +35,41 @@ def _load(conn, project, plan, package):
     return json.loads(raw) if raw else {}
 
 
+def unchanged_retry(state, current):
+    """A new attempt or new prose is not implementation progress."""
+    consumed = state.get('consumed_scopes', [])
+    if any(item.get('commit') == current['commit'] and item.get('decisions') == current['decisions'] for item in consumed):
+        return True
+    # Existing installations have accepted reports but no consumption ledger.
+    # Treat these conservatively instead of resetting protection at upgrade.
+    old = state.get('scope', {})
+    return bool(state.get('accepted') and old.get('commit') == current['commit']
+                and old.get('decisions') == current['decisions'])
+
+
+def experiment_evidence(report, path, state):
+    """Require a fresh local observation, not a renamed report or attempt counter."""
+    experiment = report.get('experiment')
+    if not isinstance(experiment, dict):
+        raise ValueError('unchanged package requires new experiment evidence before another retry')
+    for key in ('question', 'command', 'finding', 'log'):
+        if not isinstance(experiment.get(key), str) or not experiment[key].strip():
+            raise ValueError('experiment requires question, command, finding and log')
+    if type(experiment.get('exit')) is not int:
+        raise ValueError('experiment requires its actual integer exit code')
+    relative = Path(experiment['log'])
+    root = Path(path).resolve().parent
+    log = (root / relative).resolve()
+    if relative.is_absolute() or not log.is_relative_to(root) or not log.is_file():
+        raise ValueError('experiment log must exist inside this diagnosis run directory')
+    if log.stat().st_size == 0 or log.stat().st_size > 4 * 1024 * 1024:
+        raise ValueError('experiment log must be nonempty and at most 4 MiB')
+    digest = hashlib.sha256(log.read_bytes()).hexdigest()
+    if digest in state.get('experiment_digests', []):
+        raise ValueError('this experiment evidence already authorized a retry; collect a different observation')
+    return digest
+
+
 def accept(conn, project, plan, package, path, expected, current_class, offered):
     """Validate a diagnosis; a technical report grants one scoped retry only."""
     if scope(conn, project, plan, package, expected['commit']) != expected:
@@ -50,11 +86,20 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
     with db.transaction(conn):
         state = _load(conn, project, plan, package)
         accepted = state.get('accepted', [])
-        if signature in accepted:
+        if signature in accepted and not (report['kind'] == 'technical' and report.get('experiment')):
             raise ValueError('this diagnosis has already authorized a retry')
+        experiment = None
+        if report['kind'] == 'technical' and (unchanged_retry(state, expected) or report.get('experiment')):
+            experiment = experiment_evidence(report, path, state)
+        if experiment:
+            signature = _digest([signature, experiment])
+            state['experiment_digests'] = [*state.get('experiment_digests', []), experiment]
+            state['experiment_log'] = str((Path(path).parent / report['experiment']['log']).resolve())
+        instruction = '\n'.join(report[k] for k in ('analysis', 'next_action', 'why_new')) if report['kind'] == 'technical' else ''
+        if experiment:
+            instruction += '\nNew observation: ' + report['experiment']['finding'] + '\nEvidence: ' + state['experiment_log']
         state.update(scope=expected, report=report, accepted=[*accepted, signature],
-                     authorization={'class': selected, 'instruction': '\n'.join(
-                         report[k] for k in ('analysis', 'next_action', 'why_new'))}
+                     authorization={'class': selected, 'instruction': instruction}
                      if report['kind'] == 'technical' else None)
         runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
     return report
@@ -75,6 +120,10 @@ def consume(conn, project, plan, package, current):
         state = _load(conn, project, plan, package)
         if state.get('scope') != current or not state.get('authorization'):
             return False
+        scopes = state.setdefault('consumed_scopes', [])
+        basis = {k: current[k] for k in ('commit', 'decisions')}
+        if basis not in scopes:
+            scopes.append(basis)
         state['authorization'] = None
         runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
         return True
@@ -94,6 +143,19 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
             for k in ('analysis', 'next_action', 'why_new') if k in previous})
         sources += '\nFull previous diagnosis: bzz kv get --project %s --key %s\n' % (
             json.dumps(project), json.dumps(_key(plan, package)))
+    state = _load(conn, project, plan, package)
+    if unchanged_retry(state, current):
+        sources += ('\nUNCHANGED CODE AFTER AN AUTHORIZED REPAIR: another history entry, renamed agent, '
+                    'paraphrased approach or higher model class is not new evidence. Do not authorize '
+                    'the same broad task again. Investigate why the previous repair produced no verified '
+                    'progress and perform one narrow, safe experiment (focused reproduction, coordination '
+                    'probe or execution-environment check). Preserve project files and running processes. '
+                    'Record its actual output in this diagnosis run directory. For a technical retry, add '
+                    'experiment: {question, command, exit: integer, finding, log: relative filename} to '
+                    'the JSON. Explain in why_new how this observation changes the next bounded repair '
+                    'step and name its focused verification. Do not fabricate an experiment or just copy '
+                    'a previous report. If blocked by an actual external prerequisite, identify that '
+                    'prerequisite; exhausted attempts alone remain a technical problem.\n')
     return roles.role_text('diagnosis', {
         'output_path': output_path, 'commit': commit, 'failure_log': current['failure_log'],
         'decision_ids': json.dumps([d['id'] for d in known]),
