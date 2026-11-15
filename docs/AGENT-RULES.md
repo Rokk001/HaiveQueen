@@ -54,4 +54,6 @@ The CLI may load instructions itself: Claude loads `CLAUDE.md`; Codex and OpenCo
 
 `roles/fix.md`, `roles/diagnosis.md`, `roles/ready-check.md` and `roles/acceptance.md` serve other agent roles; they are not additional normal Queen/Agent startup files. The acceptance role and its evidence-scoped loading are described in [ACCEPTANCE-QUESTIONS.md](ACCEPTANCE-QUESTIONS.md).
 
+Follow-up package diagnoses additionally load `roles/package-continuation.md` through `package_diagnosis.prompt` and `roles.role_text`, only when a previous report exists. It requests the latest repair assessment and bounded next step; normal Queen and Bee starts do not load this file. See [PACKAGE-DIAGNOSIS-PROGRESS.md](PACKAGE-DIAGNOSIS-PROGRESS.md).
+
 Implementation references: `haivequeen/roles.py` (`role_text`), `haivequeen/bees.py` (`bee_prompt`, `queen_instructions`, `_start_process_locked`), `haivequeen/hives.py` (`schedule_round`), `haivequeen/profile.py` (`rule_entries`, `project_rules`, `queen_load`), `haivequeen/plans.py` (`state_file_path`), `haivequeen/loop.py` (`_do_start`), and `haivequeen/agent_runner.py` (`report_prompt` and rules-file construction). Recheck these paths when changing the startup contract; keep this section aligned with the implementation.

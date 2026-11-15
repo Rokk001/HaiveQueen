@@ -1154,7 +1154,9 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         if not review_grant:
             package_diagnosis.request(env, plan, package, exhausted or base_class)
             return refuse(env, package, 'waiting for evidence-based package diagnosis before another repair attempt')
-        task += '\n\nDIAGNOSED REPAIR APPROACH\n' + review_grant['instruction']
+        task = 'DIAGNOSED REPAIR APPROACH\n' + review_grant['instruction']
+        if review_grant.get('steps'):
+            steps = review_grant['steps']
         cls = review_grant['class']
     if review_grant:
         current = review_grant['class']

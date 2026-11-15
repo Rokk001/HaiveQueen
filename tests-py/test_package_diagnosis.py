@@ -25,6 +25,13 @@ class PackageDiagnosis(RoundCase):
                       analysis='The previous attempt changed the wrong caller.',
                       next_action='Correct the caller and run its regression.',
                       why_new='The actual failing caller has now been identified.')
+        previous = self.review._load(self.conn, 'testproj', REL, 'P1').get('report')
+        if previous:
+            latest = bees.attempt_history(self.conn, 'testproj', REL, 'P1', limit=1)['attempts'][0]['attempt']
+            report['continuation'] = dict(previous=self.review._digest(previous), attempt=latest,
+                outcome='partial', reason='The fixture is repaired; the caller still fails.',
+                target='caller.py', change='Correct the caller prerequisite identified by ' + latest,
+                verification='Run the caller regression, red before the change and green after it.')
         report.update(overrides)
         path = self.base / 'diagnosis.json'
         path.write_text(json.dumps(report), encoding='utf-8')
@@ -189,6 +196,50 @@ class PackageDiagnosis(RoundCase):
         self.review.accept(self.conn, 'testproj', REL, 'P1', self.report(current), current, 'medium', ['medium'])
         self.assertIsNotNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
 
+    def test_fresh_probe_without_repair_postmortem_cannot_restart_work(self):
+        current = self.repeat_scope()
+        with self.assertRaisesRegex(ValueError, 'continuation'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1',
+                self.report(current, experiment=self.experiment(), continuation=None), current, 'medium', ['medium'])
+        self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
+
+    def test_changed_commit_does_not_bypass_last_attempt_review(self):
+        self.repeat_scope()
+        current = self.scope('fixture-only-commit')
+        path = self.report(current)
+        report = json.loads(path.read_text())
+        report['continuation']['attempt'] = 'obsolete-attempt'
+        path.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ValueError, 'latest repair attempt'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1', path, current, 'medium', ['medium'])
+
+    def test_repeated_action_rejected_despite_fresh_output_and_incidental_commit(self):
+        current = self.repeat_scope()
+        path = self.report(current, experiment=self.experiment())
+        self.review.accept(self.conn, 'testproj', REL, 'P1', path, current, 'medium', ['medium'])
+        old = json.loads(path.read_text())['continuation']
+        self.review.consume(self.conn, 'testproj', REL, 'P1', current)
+        self.record('still-no-implementation')
+        current = self.scope('fixture-only-commit')
+        path = self.report(current, experiment=self.experiment(output='new timestamp; same defect'))
+        report = json.loads(path.read_text())
+        report['continuation'].update(outcome='no_progress', target=old['target'].upper(),
+                                      change='  ' + old['change'] + '  ')
+        path.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ValueError, 'already attempted'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1', path, current, 'medium', ['medium'])
+        self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
+        # A genuinely narrower prerequisite can progress without an owner question.
+        report['continuation']['change'] = 'Add admission-state validation before the caller spawns.'
+        path.write_text(json.dumps(report))
+        self.review.accept(self.conn, 'testproj', REL, 'P1', path, current, 'medium', ['medium'])
+        grant = self.review.authorization(self.conn, 'testproj', REL, 'P1', current)
+        self.assertIn('admission-state validation', grant['instruction'])
+        self.assertNotIn(report['next_action'], grant['instruction'])
+        self.assertTrue(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
+        self.assertFalse(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
+        self.assertEqual(runtime.list_questions(self.conn, 'testproj', status='open'), [])
+
     def test_same_probe_output_after_partial_fix_allows_one_scoped_repair(self):
         current = self.repeat_scope()
         self.review.accept(self.conn, 'testproj', REL, 'P1',
@@ -330,6 +381,7 @@ class PackageDiagnosisLifecycle(PackageDiagnosis):
         with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-1'):
             result = bees.start_process(env, REL, 'P1', 'Worker', 'medium', 'task', ['one'], [], [])
             self.assertTrue(result)
+            self.assertNotIn('Work only package P1: task', result['prompt'])
             self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', scope))
             bees.close_embedded(self.conn, 'testproj', REL, 'P1')
             self.assertFalse(bees.start_process(env, REL, 'P1', 'Next', 'medium', 'task', ['one'], [], []))
@@ -343,6 +395,25 @@ class PackageDiagnosisLifecycle(PackageDiagnosis):
         self.assertTrue(self.review.waiting(env, REL))
         self.plan('IN_PROGRESS', [{'id': 'P1', 'class': 'medium'}, {'id': 'P2', 'class': 'medium'}])
         self.assertFalse(self.review.waiting(env, REL))
+
+    def test_followup_start_uses_bounded_steps_instead_of_queen_package_task(self):
+        from haivequeen import hives
+        self.mock_agent_worktrees()
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'class': 'medium'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
+        current = self.repeat_scope()
+        self.review.accept(self.conn, 'testproj', REL, 'P1',
+            self.report(current, experiment=self.experiment()), current, 'medium', ['medium'])
+        with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-1'):
+            result = bees.start_process(self.env(), REL, 'P1', 'Worker', 'medium',
+                                        'Complete the entire package again', ['Repeat all investigation'], [], [])
+        self.assertTrue(result)
+        self.assertNotIn('Complete the entire package again', result['prompt'])
+        self.assertNotIn('Repeat all investigation', result['prompt'])
+        self.assertIn('Verify: Run the caller regression', result['prompt'])
+        self.assertIn('Why it stopped:', result['prompt'])
+        self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
 
     def test_authorized_package_wakes_without_an_owner_question(self):
         from haivequeen import hives

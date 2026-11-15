@@ -86,6 +86,29 @@ def experiment_evidence(report, path, state, expected):
     return identity
 
 
+def continuation(conn, project, plan, package, state, report, selected):
+    """A fresh observation is not a changed repair instruction."""
+    previous = state.get('report') or {}
+    if previous.get('kind') != 'technical' or report['kind'] != 'technical':
+        return None
+    follow = report.get('continuation')
+    history = bees.attempt_history(conn, project, plan, package, limit=1)['attempts']
+    if (not isinstance(follow, dict) or follow.get('previous') != _digest(previous)
+            or not history or follow.get('attempt') != history[0]['attempt']):
+        raise ValueError('continuation must review the last accepted diagnosis and latest repair attempt')
+    if follow.get('outcome') not in ('no_progress', 'partial'):
+        raise ValueError('continuation must distinguish no_progress from partial repair')
+    for field in ('reason', 'target', 'change', 'verification'):
+        if not isinstance(follow.get(field), str) or not follow[field].strip():
+            raise ValueError('continuation requires reason, target, change and focused verification')
+    normalize = lambda value: ' '.join(value.casefold().split())
+    action = _digest([normalize(follow['target']), normalize(follow['change']), selected])
+    # Keep this ledger across incidental commits and new experiment output.
+    if action in state.get('repair_actions', []) or normalize(follow['change']) == normalize(previous['next_action']):
+        raise ValueError('repair action already attempted; resolve its failed prerequisite or narrow the implementation step')
+    return follow, action
+
+
 def accept(conn, project, plan, package, path, expected, current_class, offered):
     """Validate a diagnosis; a technical report grants one scoped retry only."""
     if scope(conn, project, plan, package, expected['commit']) != expected:
@@ -107,6 +130,7 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
         experiment = None
         if report['kind'] == 'technical' and (unchanged_retry(state, expected) or report.get('experiment')):
             experiment = experiment_evidence(report, path, state, expected)
+        follow = continuation(conn, project, plan, package, state, report, selected)
         if experiment:
             signature = _digest([signature, experiment])
             if 'experiment_scopes' not in state:
@@ -118,6 +142,14 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
             state['experiment_scopes'].append(experiment)
             state['experiment_log'] = str((Path(path).parent / report['experiment']['log']).resolve())
         instruction = '\n'.join(report[k] for k in ('analysis', 'next_action', 'why_new')) if report['kind'] == 'technical' else ''
+        steps = None
+        if follow:
+            detail, action = follow
+            steps = ['Implement %s: %s' % (detail['target'], detail['change']),
+                     'Verify: ' + detail['verification'],
+                     'Report verified changes and remaining requirements; commit only verified work.']
+            instruction = ('Continue after attempt %s (%s). Why it stopped: %s\n%s' %
+                           (detail['attempt'], detail['outcome'], detail['reason'], '\n'.join(steps)))
         if experiment:
             instruction += '\nNew observation: ' + report['experiment']['finding'] + '\nEvidence: ' + state['experiment_log']
         if report['kind'] == 'technical':
@@ -127,7 +159,8 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
                             'boundary and evidence if only partial progress is possible; do not substitute '
                             'a broader package task for this scoped repair.')
         state.update(scope=expected, report=report, accepted=[*accepted, signature],
-                     authorization={'class': selected, 'instruction': instruction}
+                     authorization={'class': selected, 'instruction': instruction, 'steps': steps,
+                                    'action': follow[1] if follow else None}
                      if report['kind'] == 'technical' else None)
         if report['kind'] == 'technical':
             state['accepted_scope'] = dict(expected)
@@ -154,6 +187,9 @@ def consume(conn, project, plan, package, current):
         basis = {k: current[k] for k in ('commit', 'decisions')}
         if basis not in scopes:
             scopes.append(basis)
+        action = state['authorization'].get('action')
+        if action:
+            state.setdefault('repair_actions', []).append(action)
         state['authorization'] = None
         runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
         return True
@@ -169,6 +205,7 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
                'bzz decisions list --project %s\n' % tuple(json.dumps(v) for v in (project, plan, package, project)))
     previous = _load(conn, project, plan, package).get('report', {})
     if previous:
+        sources += '\n' + roles.role_text('package-continuation', {'previous': json.dumps(_digest(previous))}) + '\n'
         sources += '\nPrevious diagnosis preview: ' + json.dumps({k: str(previous[k])[:300]
             for k in ('analysis', 'next_action', 'why_new') if k in previous})
         sources += '\nFull previous diagnosis: bzz kv get --project %s --key %s\n' % (

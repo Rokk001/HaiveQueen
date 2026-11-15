@@ -16,7 +16,7 @@ its focused verification. The repair agent receives the finding and log referenc
 HQ rejects missing evidence and previously used output bytes at the same commit
 and decision scope, even with a new filename or different prose. Reproducing the
 same output on a new commit is valid evidence that a defect persists. A fresh observation can justify the same repair
-approach. New attempt records alone do not count as progress. Consumed scopes
+approach only with the follow-up assessment described below. New attempt records alone do not count as progress. Consumed scopes
 and evidence digests persist across restarts; legacy accepted reports retain
 protection. Changed code or decisions allow a fresh diagnosis under the existing
 scope checks. Real product decisions or external prerequisites remain eligible
@@ -46,3 +46,37 @@ diagnosis is not treated as successful implementation or verification.
 
 Only the retry needing this investigation receives the additional instructions.
 Existing logs and history stay referenced rather than copied into every prompt.
+
+## Repair continuation after an unsuccessful authorized attempt
+
+Previously the gate validated fresh experiment output, but did not require a
+structured assessment of the repair that followed the last accepted diagnosis.
+The next agent could receive essentially the same broad task, appended to the
+Queen's package instructions, even after an attempt without implementation or tests.
+
+Every follow-up technical report now binds `continuation.previous` to the digest
+of the retained diagnosis and `continuation.attempt` to the latest recorded attempt.
+It distinguishes `no_progress` from `partial`, explains why that attempt stopped,
+and supplies a specific `target`, bounded `change` and focused `verification`.
+Missing or stale assessments cannot authorize another repair, even on a new commit.
+Target/change/class fingerprints persist across restarts and incidental commits;
+repeating an already authorized action with fresh log bytes is rejected. A class
+change still requires the existing diagnosis justification and configured class.
+
+The follow-up task and steps replace broad Queen-supplied instructions. No failure
+counter is reset, no package is marked complete, and no larger model is selected
+automatically. The existing bounded report-correction path handles invalid reports;
+genuine product or external prerequisites retain their existing question path.
+Unrelated packages remain runnable.
+
+Only follow-up diagnoses load `roles/package-continuation.md`, through
+`package_diagnosis.prompt` and `roles.role_text`. Queens and ordinary Bees do not
+receive this protocol text. Repair agents receive the resulting bounded task,
+with evidence references, rather than a copied investigation history.
+
+Regression coverage includes fresh output without assessment, stale attempt IDs,
+incidental commits with repeated actions, and a narrower repair reaching a single-use
+grant. Structural validation cannot prove that differently worded proposals are
+semantically different or that an agent will implement them successfully; that
+judgment remains the diagnosis agent's responsibility and completion still needs
+verification. This change does not claim to complete any live project plan.
