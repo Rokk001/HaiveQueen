@@ -1048,3 +1048,8 @@ GERMAN.update({
 })
 
 GERMAN['Starting update to %s'] = 'Update auf %s wird gestartet'
+
+GERMAN.update({'Orchestrator stopped': 'Orchestrator gestoppt',
+               'Orchestrator stopping': 'Orchestrator wird gestoppt',
+               'Orchestrator paused': 'Orchestrator pausiert',
+               'Waiting for scheduler reassessment': 'Wartet auf erneute Startprüfung'})

@@ -1199,6 +1199,13 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                         not_started(env, plan['path'], 'Plan state "answer" (questions %s)' % ', '.join(str(i) for i in open_questions))
                         continue
                 if hive and hive['state'] in ('codex_wait', 'provider_wait'):
+                    wait_table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bee_provider_wait'").fetchone()
+                    if not wait_table or not conn.execute('SELECT 1 FROM bee_provider_wait WHERE project=? AND plan_path=?', (env.name, plan['path'])).fetchone():
+                        if not dry_run:
+                            conn.execute("UPDATE hives SET state='waiting',reset_at=NULL WHERE project=? AND plan_path=?", (env.name, plan['path']))
+                            runtime.kv_set(conn, env.name, 'hive-blocker:' + plan['path'], '')
+                        hive = dict(hive, state='waiting')
+                if hive and hive['state'] in ('codex_wait', 'provider_wait'):
                     from . import bees
                     wait = conn.execute('SELECT provider FROM bee_provider_wait WHERE project=? AND plan_path=?', (env.name, plan['path'])).fetchone()
                     provider = sch.get_provider(env.providers, wait[0]) if wait else None

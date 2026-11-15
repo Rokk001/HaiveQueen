@@ -853,6 +853,7 @@ def provider_available(conn, project, plan, provider, free, limited, other=None)
     with db.transaction(conn):
         conn.execute('DELETE FROM bee_provider_wait WHERE project=? AND plan_path=?', (project, plan))
         conn.execute("UPDATE hives SET state='waiting',reset_at=NULL WHERE project=? AND plan_path=?", (project, plan))
+        runtime.kv_set(conn, project, 'hive-blocker:' + plan, '')
     return True
 
 

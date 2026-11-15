@@ -139,11 +139,17 @@ def status_text(hive) -> str:
         return (tr("Waiting for owner check") if state == "owner_check" else tr("Waiting for answer")) + suffix
     if state == "answer" and not questions:
         state = "waiting"   # old snapshots may still refer to an answered question
+    scheduler_state = hive.get('scheduler_state')
+    if state in ('waiting', 'starting', 'requeen', 'codex_wait', 'provider_wait', 'running') and scheduler_state in ('STOPPED', 'STOPPING', 'PAUSED', 'STOP'):
+        return tr({'STOPPED': N_('Orchestrator stopped'), 'STOP': N_('Orchestrator stopped'),
+                   'STOPPING': N_('Orchestrator stopping'), 'PAUSED': N_('Orchestrator paused')}[scheduler_state])
     blocker = hive.get("blocker")
     if not questions and str(blocker or '').startswith('Plan state "answer"'):
         blocker = None
     if blocker and state in ("running", "waiting", "starting", "requeen", "codex_wait", "provider_wait", "integration_wait"):
         return blocker_text(blocker) + suffix
+    if state in ('codex_wait', 'provider_wait'):
+        return tr('Waiting for scheduler reassessment')
     if state == "running":
         return tr("No active Queen") + (tr("; open questions %s", "#" + ", #".join(map(str, questions))) if questions else "")
     if state == "done":
@@ -727,6 +733,13 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
             info = None
         if info:
             orch[(h["project"], h["plan_path"])] = info
+    try:
+        from . import loop
+        orchestrator = orchestrator_state(d["run"]["state"], loop.loop_running(), loop.stop_flag().exists())
+    except Exception:   # a broken lock file must not stop the window: show the run state alone
+        orchestrator = orchestrator_state(d["run"]["state"], 1, False)
+    for hive in hive_data:
+        hive['scheduler_state'] = orchestrator['label']
     hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected, waiting, embedded, plan_rejected, orch) for h in hive_data]
     from . import filetxn
     for row in hive_rows:
@@ -756,11 +769,7 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     kept = [e for e in events if not is_noise(e)][:LOG_LINES]   # the newest LOG_LINES events that carry news, plus the noise that is newer than the oldest of them
     floor = kept[-1]["id"] if kept else 0
     events = [e for e in events if e["id"] >= floor]
-    try:
-        from . import loop
-        orchestrator = orchestrator_state(d["run"]["state"], loop.loop_running(), loop.stop_flag().exists())
-    except Exception:   # a broken lock file must not stop the window: show the run state alone
-        orchestrator = orchestrator_state(d["run"]["state"], 1, False)
+
     shown = [h for h in hive_rows if not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done]
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     overlays, start_tile = dashboard_overlays.build(conn, d["usage"], agents_all, shown, bees, apiaries, day, [str(p.get("name")) for p in cfg.get("providers") or [] if p.get("name")])

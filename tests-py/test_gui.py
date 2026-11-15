@@ -94,6 +94,19 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual([(b["name"], b["hive"], b["model"], b["task"]) for b in waiting], [("–", "AI-LEVELS", "–", "P4")])   # no name and no stored provider before the Bee starts
 
     # A plan whose status is PAUSED shows as paused in its Hive row, without a Queen and with one.
+    def test_provider_wait_uses_current_scheduler_gate(self):
+        self.conn.execute("UPDATE agents SET status='done'")
+        self.conn.execute("UPDATE hives SET state='codex_wait'")
+        with mock.patch('haivequeen.loop.loop_running', return_value=None), mock.patch('haivequeen.loop.stop_flag') as stop:
+            stop.return_value.exists.return_value = False
+            snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        self.assertEqual(snap['hives'][0]['status'], 'Orchestrator stopped')
+        self.assertEqual(hives.get(self.conn, 'ODP', 'docs/plans/AI-LEVELS-PLAN.md')['state'], 'codex_wait')
+        with mock.patch('haivequeen.loop.loop_running', return_value=123), mock.patch('haivequeen.loop.stop_flag') as stop:
+            stop.return_value.exists.return_value = False
+            snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        self.assertEqual(snap['hives'][0]['status'], 'Waiting for scheduler reassessment')
+
     def test_paused_plan_shows_in_the_hive_row(self):
         """The Plan row of a PAUSED plan is flagged and says so; a plan that is not paused keeps its normal status."""
         self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','PAUSED','2026-11-01T12:00:00')")
