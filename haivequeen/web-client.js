@@ -1234,7 +1234,16 @@ function mount(document, bootstrap) {
     status.setAttribute('role','status');
     function markDirty(){current.dirty=true;submit.disabled=true;status.textContent=t('Unsaved changes');}
     const submit=button('Submit plan',async()=>{if(current.dirty||!current.plan){client.notice(t('Save the draft before submitting.'),true);return;}const result=await act('plan/start',{project:current.project,plan:current.plan},t('Submit this draft for preparation?'));if(result){planDraft=null;$('detail').close();}});
-    const save=button('Save draft',async()=>{const sent={project:current.project,filename:current.filename,plan:current.plan,content:current.content,revision:current.revision};const result=await client.action(current.plan?'plans/save':'plans/create',sent);if(!result)return;current.plan=result.plan;current.revision=result.revision;current.dirty=current.content!==sent.content||current.filename!==sent.filename;project.disabled=true;filename.disabled=true;submit.disabled=current.dirty;status.textContent=t(current.dirty?'Saved. Newer edits are still unsaved.':'Draft saved. Submit when ready.');void refreshLists();});
+    const save=button('Save draft',async()=>{
+      const sent={project:current.project,filename:current.filename,plan:current.plan,content:current.content,revision:current.revision};
+      const previousLocks={project:project.disabled,filename:filename.disabled};let saved=false;
+      project.disabled=true;filename.disabled=true;
+      try{
+        const result=await client.action(current.plan?'plans/save':'plans/create',sent);if(!result)return;
+        saved=true;current.plan=result.plan;current.revision=result.revision;current.dirty=current.content!==sent.content||current.filename!==sent.filename;
+        submit.disabled=current.dirty;status.textContent=t(current.dirty?'Saved. Newer edits are still unsaved.':'Draft saved. Submit when ready.');void refreshLists();
+      }finally{if(!saved){project.disabled=previousLocks.project;filename.disabled=previousLocks.filename;}}
+    });
     submit.disabled=submit.disabled||!current.plan||current.dirty;content.addEventListener('input',()=>{submit.disabled=true;});filename.addEventListener('input',()=>{submit.disabled=true;});
     controls.append(save,submit);form.append(el('label',t('Project')),project,hint,el('label',t('Plan file')),filename,imported,content,controls,status);
   }

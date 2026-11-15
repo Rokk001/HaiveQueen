@@ -67,6 +67,7 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  const imported=all(dialog,'INPUT').find(node=>node.type==='file');imported.files=[{name:'import.md',text:async()=>'# Imported\n\nRequirement'}];await imported.onchange();
  assert.equal(all(dialog,'TEXTAREA')[0].value,'# Imported\n\nRequirement');
  saveFails=true;await all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();assert.equal(all(dialog,'TEXTAREA')[0].value,'# Imported\n\nRequirement','Validation errors must preserve the imported text');
+ assert.equal(all(dialog,'SELECT')[0].disabled,true,'An existing draft stays project-locked after failed save');
  saveFails=false;await all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();assert.equal(requests.at(-1)[0],'plans/save');assert.equal(requests.at(-1)[1].revision,'old');
  await api.openPlanEditor();assert.equal(all(dialog,'TEXTAREA')[0].value,'# Imported\n\nRequirement','Closing and reopening preserves draft');
  const previousConfirmations=confirmations;await api.openPlanEditor(null,null,true);assert.equal(all(dialog,'TEXTAREA')[0].value,initialTemplate,'Fresh creation offers template without changing saved draft');assert.equal(confirmations,previousConfirmations,'Saved draft needs no discard confirmation');
@@ -87,5 +88,22 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  const chatHeader=all(section,'HEADER')[0];assert(content(chatHeader).includes('ProjectSecond complete project name'));assert(content(chatHeader).includes('Plansecond'));assert(content(chatHeader).includes('View: Needs you'));
  api.renderQuestions();assert.equal(all(section,'BUTTON').find(node=>node.className==='messenger-back').textContent,'Back to Needs you','Polling retains visible filter context');
  all(section,'BUTTON').find(node=>node.className==='messenger-back').onclick();assert.equal(all(section,'BUTTON').find(node=>node.textContent==='Needs you').attrs['aria-pressed'],'true');assert.equal(section.dataset.mobileChat,'false','Mobile back returns to the conversation list');
+ await api.openPlanEditor(null,null,true);
+ const racingProject=all(dialog,'SELECT')[0],racingFile=all(dialog,'INPUT').find(node=>node.attrs['aria-label']==='Plan file'),racingContent=all(dialog,'TEXTAREA')[0];
+ const originalAction=client.action;let finishCreate,createSnapshot;
+ client.action=(route,data)=>{assert.equal(route,'plans/create');createSnapshot=data;return new Promise(resolve=>finishCreate=resolve);};
+ const pendingSave=all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();
+ assert.equal(racingProject.disabled,true,'Project must be locked while create is in flight');assert.equal(racingFile.disabled,true,'Filename must be locked while create is in flight');
+ // A user change only dispatches from an enabled control. Attempt to switch project/path.
+ if(!racingProject.disabled){racingProject.value='Other';racingProject.onchange();}
+ if(!racingFile.disabled){racingFile.value='other.md';racingFile.oninput();}
+ racingContent.value='# Newer unsaved content';racingContent.oninput();
+ finishCreate({plan:createSnapshot.filename,revision:'created'});await pendingSave;
+ assert.equal(racingProject.value,createSnapshot.project);assert.equal(racingFile.value,createSnapshot.filename);
+ assert.equal(racingContent.value,'# Newer unsaved content');assert.equal(all(dialog,'BUTTON').find(node=>node.textContent==='Submit plan').disabled,true,'Edits during create must remain unsaved');
+ assert(content(dialog).includes('Saved. Newer edits are still unsaved.'));
+ client.action=originalAction;await all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();assert.equal(requests.at(-1)[1].project,createSnapshot.project);assert.equal(requests.at(-1)[1].revision,'created');
+ await api.openPlanEditor(null,null,true);const failingProject=all(dialog,'SELECT')[0],failingFile=all(dialog,'INPUT').find(node=>node.attrs['aria-label']==='Plan file');
+ client.action=()=>new Promise(resolve=>finishCreate=resolve);const failingSave=all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();assert(failingProject.disabled&&failingFile.disabled);finishCreate(null);await failingSave;assert.equal(failingProject.disabled,false);assert.equal(failingFile.disabled,false,'Failed creation must unlock its original controls');client.action=originalAction;
  console.log('Question draft, history, acceptance and plan editor behavior passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
