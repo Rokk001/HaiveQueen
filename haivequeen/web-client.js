@@ -1933,8 +1933,8 @@ function mount(document, bootstrap) {
     panel.querySelector('input').disabled=!run.running;panel.querySelector('form button').disabled=!run.running;
     if(!run.running){links.append(el('p',t('Login finished')+' ('+run.exit+')'));panel.append(button('Close',()=>{panel.remove();loginRuns.delete(run.id);}));}
   }
-  function renderJob(job) {
-    if(job.key?.startsWith('release-promotion:')){
+  function renderJob(job,historical=false) {
+    if(job.key?.startsWith('release-promotion:') && (!historical || job.running)){
       const project=job.key.slice('release-promotion:'.length),previous=releasePromotions.get(project);
       if(!previous||previous.id===job.id||Number(job.started)>=Number(previous.started)){
         releasePromotions.set(project,job);
@@ -1970,7 +1970,7 @@ function mount(document, bootstrap) {
   render();
   void client.request('jobs/status').then(history=>{
     const previous=el('details');previous.append(el('summary',t('Previous owner actions')));
-    for(const job of history){if(!jobs.has(job.id)){jobs.set(job.id,job);renderJob(job);if(!job.running && $('job-'+job.id))previous.append($('job-'+job.id));}}
+    for(const job of history){if(!jobs.has(job.id)){jobs.set(job.id,job);renderJob(job,true);if(!job.running && $('job-'+job.id))previous.append($('job-'+job.id));}}
     if(previous.children.length>1)$('live').append(previous);
   }).catch(error=>client.notice(error.message,true));
   void tick();setInterval(()=>void tick(),2000);

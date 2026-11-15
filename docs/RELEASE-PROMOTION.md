@@ -16,6 +16,9 @@ for the same tag are serialized without cancelling a running publication.
 
 Immediately after confirmation, the Releases panel shows the publication request
 as starting and prevents another promotion for that project while it runs. Progress
-and errors appear in the same panel and survive navigation through the existing
-owner-action history. An accepted Git-provider request explicitly states that the
+and errors for the current action appear in the same panel and survive tab
+navigation. On page reload, only running promotions are restored as current
+feedback. Previously completed actions, including failures, remain under
+"Previous owner actions" and are not presented as new errors while releases load.
+A restored running action still reports its eventual success or failure inline. An accepted Git-provider request explicitly states that the
 provider workflow still needs to finish; it is not reported as a published release.

@@ -21,5 +21,23 @@ const {startReleasePromotion,releaseJobStatus}=require('../haivequeen/web-client
    new Function('section','el','t','releasePromotions','releaseProject','projectSelect','button','loadReleases','releaseError','releaseData','releaseJobStatus',render+'renderReleases();')(()=>el('section'),el,x=>x,new Map([['demo',job]]),'demo',()=>el('select'),()=>el('button'),()=>{},'',null,releaseJobStatus);
    assert(nodes.some(n=>n.text===(job.error||job.progress)&&n.attrs.role===(job.error?'alert':'status')),'Progress/error must be in the Releases panel');
  }
+ const jobRenderer=source.slice(source.indexOf('  function renderJob('),source.indexOf('  async function refreshLists()'));
+ const nodes=new Map(),promotions=new Map();let redraws=0;
+ const node=()=>({children:[],append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;},remove(){}});
+ const live=node();nodes.set('live',live);
+ const renderJob=new Function('$','el','t','valueView','button','jobs','releasePromotions','render',"const tab='Releases';"+jobRenderer+'return renderJob;')(id=>nodes.get(id),(tag,text)=>{const n=node();Object.defineProperty(n,'id',{set(id){nodes.set(id,n);}});return n;},x=>x,x=>x,()=>node(),new Map(),promotions,()=>redraws++);
+ const old={id:'old',key:'release-promotion:demo',running:false,error:'Old failure',started:1};
+ renderJob(old,true);
+ assert.equal(promotions.size,0,'Completed history must not become current release feedback');
+ assert(nodes.has('job-old'),'Previous error remains available as historical evidence');
+ renderJob({...old,id:'running',running:true,error:'',started:2},true);
+ assert.equal(promotions.get('demo').id,'running','Restore running promotion after page reload');
+ renderJob({...old,id:'running',started:2,error:'Current failure'});
+ assert.equal(promotions.get('demo').error,'Current failure','Failure of restored active job stays visible');
+ renderJob({...old,id:'new',started:3,error:'Fresh failure'});
+ renderJob(old,true);
+ assert.equal(promotions.get('demo').error,'Fresh failure','Late history must not replace current feedback');
+ assert(redraws>=3);
+ assert(source.includes('renderJob(job,true);'),'History loading must identify historical jobs');
  console.log('Immediate promotion feedback, errors, completion and cancellation passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});
