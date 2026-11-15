@@ -30,6 +30,14 @@ class OrchCase(RoundCase):
     def setUp(self):
         super().setUp()
         self.addCleanup(setattr, orchestrator, "ASYNC", None)
+        # Pipeline tests use a completed reviewer; asynchronous review has its own tests.
+        def reviewed(conn, env, plan):
+            info = orchestrator.last_info(conn, env.name, plan)
+            reports = ["Report of fix agent: " + path.read_text(encoding="utf-8") for path in env.run_dir("").glob("*/final.txt")]
+            return "Plan acceptance\n" + str(info.get("commit", "")) + "\n" + ", ".join(info.get("steps", [])) + "\n" + "\n".join(reports)
+        reviewer = mock.patch("haivequeen.acceptance.prepare", side_effect=reviewed)
+        reviewer.start()
+        self.addCleanup(reviewer.stop)
         self.remote = self.base / "remote.git"
         sh("git", "init", "-q", "--bare", "-b", "main", str(self.remote))
         self.git("init", "-q", "-b", "main")

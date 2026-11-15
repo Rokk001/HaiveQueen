@@ -982,7 +982,7 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .hive-tree-cells .hq-steps { flex-shrink:1; }
 .hive-tree-cells .hq-step-count { flex-shrink:0; font-size:10px; }
 .hive-tree-cells [data-column=status] { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-@media(min-width:701px) and (pointer:fine) {
+@media(min-width:701px) {
  .hive-tree-cells .hq-step { min-height:24px; padding:2px 3px; font-size:10px; }
  .hive-tree-cells .row-menu { min-height:24px; }
 }

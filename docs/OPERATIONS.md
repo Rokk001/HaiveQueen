@@ -88,4 +88,19 @@ Package diagnosis requests capture a completion generation. Historical successes
 
 ## Dashboard scrolling
 
-On desktop, Hives uses the currently visible viewport height, including space freed by scrolling past the header. Its vertical scrollbar appears only when the expanded rows exceed that space. Tablet and mobile retain natural page height. Pipeline buttons wrap within their task column instead of creating horizontal scrollbars in every process row. Hives columns adapt to the panel width; necessary scrollbars in lists, logs and text areas use a thin, subdued style without hiding content.
+On desktop, `Hives` uses the currently visible viewport height, including space freed by scrolling past the header. Its vertical scrollbar appears only when the expanded rows exceed that space. Tablet and mobile retain natural page height. Pipeline buttons wrap within their task column instead of creating horizontal scrollbars in every process row. `Hives` columns adapt to the panel width; necessary scrollbars in lists, logs and text areas use a thin, subdued style without hiding content.
+
+
+### Focused CI verification
+
+Desktop pipeline controls remain compact on both mouse and touch-capable desktops.
+Steps wrap when their task column is narrow, without horizontal scrolling; tests
+bound row height by the actual number of wrapped lines rather than requiring one
+line regardless of available width. The standalone Linux layout fixture uses the
+same sandbox-free headless execution needed by the CI runner, with a temporary
+browser profile and only generated local HTML.
+
+Pipeline regressions supply a completed acceptance reviewer at the review boundary;
+the dedicated acceptance tests cover scheduling, validation and caching. Update API
+tests check the displayed state after refresh, not the raw refresh return value.
+Draft creation, draft saving and global plan actions have German log translations.

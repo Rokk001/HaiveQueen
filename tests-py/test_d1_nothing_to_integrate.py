@@ -306,7 +306,7 @@ class CheckTests(NothingLeftCase):
     def test_rejection_sends_the_plan_back_without_a_loop(self):
         asked = self.close_normally()
         self.assertEqual(len(asked), 1)
-        self.assertTrue(asked[0]["question"].startswith("Check the result of the plan"))
+        self.assertEqual(asked[0]["question"], "Prepared acceptance description")
         count = len(self.queens())
         self.answer_check("rejected")
         self.round(alive=lambda pid: False)

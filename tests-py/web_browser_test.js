@@ -160,10 +160,12 @@ window.addEventListener('load', async () => {
     assert(document.querySelector('.hive-tree-row .hq-steps'),'HQ integration steps missing');
     assert(!document.querySelector('.hive-tree-orch [data-column=status] .hq-steps'),'HQ steps duplicated in status');
     if(innerWidth>1100){
-      for(const row of document.querySelectorAll('.hive-tree-row:not([hidden])'))assert(row.getBoundingClientRect().height<=44,'Desktop tree row wastes vertical space: '+row.className+' '+row.getBoundingClientRect().height);
+      for(const row of document.querySelectorAll('.hive-tree-row:not([hidden]):not(.hive-tree-orch)'))assert(row.getBoundingClientRect().height<=44,'Desktop tree row wastes vertical space: '+row.className+' '+row.getBoundingClientRect().height);
       for(const steps of document.querySelectorAll('.hive-tree-row .hq-steps')){
         const tops=[...steps.children].map(node=>Math.round(node.getBoundingClientRect().top));
-        assert(new Set(tops).size<=1,'Integration steps must stay on one line');
+        assert(steps.scrollWidth<=steps.clientWidth,'Integration steps must fit without horizontal scrolling');
+        for(const button of steps.children)assert(button.getBoundingClientRect().height<=24,'Desktop step buttons must remain compact');
+        assert(steps.closest('.hive-tree-row').getBoundingClientRect().height<=new Set(tops).size*28+24,'Wrapped pipeline has excessive vertical spacing');
       }
     }
     const projectToggle=document.querySelector('.hive-tree-project .hive-tree-toggle');projectToggle.click();
@@ -390,15 +392,16 @@ window.addEventListener('load', async () => {
 
     await click('Answer');
 
+    await wait(()=>buttons('Accept').some(button=>!button.disabled));
     await click('Accept');
 
     await wait(()=>!document.querySelector('[data-tab="Questions"] .question-badge'));
 
-    await click('Plans');await wait(()=>buttons('Plan').length);
+    await click('Plans');await wait(()=>buttons('View plan').length);
 
-    assert([...document.querySelectorAll('th,.hive-tree-heading span')].some(node=>node.textContent==='Started'),'Desktop plan Started column missing');
+    assert(document.querySelector('.plan-status-tabs') && document.querySelector('.plan-overview-card'),'Plan status tabs and cards missing');
 
-    await click('Plan');
+    await click('View plan');
 
     await wait(()=>document.querySelector('.plan-document h2')?.textContent==='Mock plan');
 

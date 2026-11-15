@@ -165,9 +165,11 @@ class WebApiTests(RoundCase):
             web_api.execute(self.conn, 'settings', {'project': '../private'})
 
     def test_update_and_provider_login_actions(self):
-        with mock.patch.object(updates, 'check', return_value={'available': True}) as check:
+        with mock.patch.object(updates, 'check', return_value={'available': False}) as check, \
+             mock.patch.object(updates, 'display_state', return_value={'available': True}) as display:
             self.assertTrue(web_api.execute(self.conn, 'updates/check', {})['available'])
             self.assertTrue(check.call_args.kwargs['manual'])
+            display.assert_called_once_with()
         with mock.patch.object(updates, 'request_install', return_value={'ok': True}) as install:
             with self.assertRaises(ValueError):
                 web_api.execute(self.conn, 'updates/install', {'version': 'v1'})

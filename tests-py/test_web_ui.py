@@ -214,6 +214,8 @@ class BrowserTests(unittest.TestCase):
             self.skipTest('The DOM smoke test requires a Chromium browser with working headless DOM output')
         self_test = self
         actions = []
+        questions = [{'id':1,'project':'demo','plan_path':'mock.md','text':'Proceed?','item':'question'},
+                     {'id':2,'project':'demo','plan_path':'mock.md','text':'Review?','item':'owner-check','packages':['P1']}]
         live_reads = []
         browser_language = ['English']
         git_method = ['']
@@ -275,8 +277,7 @@ class BrowserTests(unittest.TestCase):
                        '/api/plan/providers':[{'name':'mock','current':True,'selectable':False},
                                               {'name':'excluded','current':False,'selectable':False},
                                               {'name':'available','current':False,'selectable':True}],
-                       '/api/questions':[{'id':1,'project':'demo','plan_path':'mock.md','text':'Proceed?','item':'question'},
-                                         {'id':2,'project':'demo','plan_path':'mock.md','text':'Review?','item':'owner-check','packages':['P1']}],
+                       '/api/questions':questions,
                        '/api/live':{'lines':[['green','live milestone']]},
                        '/test-actions':actions}.get(route,{})
                 self.send(value)
@@ -288,6 +289,12 @@ class BrowserTests(unittest.TestCase):
                     return self.send({'error':'missing CSRF'},status=403)
                 if action in ('questions/answer', 'owner/accept'):
                     state['queue']['open'] = max(0, state['queue']['open'] - 1)
+                    target = payload.get('id') if action == 'questions/answer' else 2
+                    for question in questions:
+                        if question['id'] == target:
+                            question.update(status='answered', answer=payload.get('text', 'Accepted'))
+                            if action == 'owner/accept':
+                                question['owner_check_result'] = 'accepted'
                 if action=='settings/save':
                     if sum(row['action']==action for row in actions)==1:
                         return self.send({'error':'Settings changed since loading; reload before saving'},status=400)
