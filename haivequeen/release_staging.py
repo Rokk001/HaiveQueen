@@ -8,7 +8,7 @@ import tempfile
 from urllib.request import Request, urlopen
 import zipfile
 
-from . import releases, version_layout, release_compat
+from . import releases, version_layout, release_compat, release_tree
 
 
 def stage_release(root, repository, version, fetch=None):
@@ -28,24 +28,37 @@ def stage_release(root, repository, version, fetch=None):
             request = Request(address, headers={"User-Agent": "HaiveQueen", "Accept": "application/vnd.github+json"})
             with urlopen(request, timeout=60) as response:
                 return response.read()
-    # The archive may contain an inherited declaration. Only the release body,
-    # checked against the actual lightweight tag, supplies the release decision.
-    decision = None
+    # Resolve the lightweight tag through the configured repository before
+    # fetching either the commit tree or the archive. Never fall back to a tag
+    # archive: the tag can move between requests.
+    base = "https://api.github.com/repos/%s" % repository
     try:
-        base = "https://api.github.com/repos/%s" % repository
         ref = json.loads(fetch(base + "/git/ref/tags/v" + str(version)))
         obj = ref["object"]
         commit = obj["sha"]
-        if obj["type"] != "commit" or not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+        if obj["type"] != "commit" or not re.fullmatch(r"[0-9a-f]{40}", commit):
             raise ValueError("unverifiable tag")
+        commit_data = json.loads(fetch(base + "/git/commits/" + commit))
+        if commit_data["sha"] != commit:
+            raise ValueError("commit response mismatch")
+        tree = commit_data["tree"]["sha"]
+        if not re.fullmatch(r"[0-9a-f]{40}", tree):
+            raise ValueError("invalid tree identity")
+        tree_data = json.loads(fetch(base + "/git/trees/" + tree + "?recursive=1"))
+        if tree_data["sha"] != tree or tree_data["truncated"] is not False or not isinstance(tree_data["tree"], list):
+            raise ValueError("incomplete tree")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise ValueError("cannot establish release tree") from exc
+    decision = None
+    try:
         release = json.loads(fetch(base + "/releases/tags/v" + str(version)))
         candidate = json.loads(release["body"])
         if (release.get("tag_name") == "v" + str(version) and not release.get("draft")
                 and not release.get("prerelease") and releases.valid_decision(candidate, repository, str(version), commit)):
             decision = candidate
-            url = base + "/zipball/" + commit
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         pass
+    url = base + "/zipball/" + commit
     data = fetch(url)
     with zipfile.ZipFile(io.BytesIO(data)) as archive, tempfile.TemporaryDirectory(prefix="hq-release-") as temp:
         root_names = set()
@@ -74,6 +87,14 @@ def stage_release(root, repository, version, fetch=None):
                     import shutil
                     shutil.copyfileobj(source, output)
         source = destination / next(iter(root_names))
+        if not release_tree.verify_tree(source, tree_data["tree"], tree):
+            raise ValueError("release archive does not match commit tree")
+        # This record is an audit trail, not an authority: installation copies
+        # may omit files and both the record and installed files can be changed.
+        (source / '.haivequeen-release-provenance.json').write_text(json.dumps({
+            "schema": 1, "repository": repository, "commit": commit,
+            "tree": tree, "installed_trust": "unknown"
+        }, sort_keys=True), encoding="utf-8")
         # This identity belongs to the archive being installed, not the mutable
         # active pointer and not any marker supplied inside the archive.
         (source / release_compat.METADATA).write_text(json.dumps(decision or {
