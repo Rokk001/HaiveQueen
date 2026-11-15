@@ -11,7 +11,7 @@ import zipfile
 from unittest.mock import patch
 
 from bzztest import RoundCase
-from haivequeen import db, loop, orchestrator, platform, runtime, scheduler, selfupdate, updates, version_layout, web_service
+from haivequeen import db, force_stop, loop, orchestrator, platform, runtime, scheduler, selfupdate, updates, version_layout, web_service
 
 
 class ReleaseCliProcessTest(RoundCase):
@@ -30,7 +30,10 @@ class ReleaseCliProcessTest(RoundCase):
     def test_incompatible_public_install_waits_for_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True)
 
-    def _compatible_switch(self, public, download=False, rollback=False, incompatible=False):
+    def test_incompatible_public_install_forces_jobs_then_switches(self):
+        self._compatible_switch(public=True, incompatible=True, force=True)
+
+    def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -160,12 +163,26 @@ class ReleaseCliProcessTest(RoundCase):
                     self.assertEqual(reported['reason'], status['reason'])
                     self.assertEqual({j['kind'] for j in reported['jobs']}, {'Queen', 'Agent'})
                     self.assertTrue(all(job.poll() is None for job in jobs))
-                    (self.base / 'finish-agents').touch()
+                    if force:
+                        for job, _, _, result in detached:
+                            step = 'Build' if 'build' in job.token else 'Deploy'
+                            orchestrator.save(self.conn, 'testproj', 'force-' + step,
+                                              {'phase': 'pipeline', 'steps': {step: 'running'},
+                                               'job': {'step': step, 'pid': job.pid, 'file': str(result)}})
+                        forced = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'), 'update', '--force'],
+                                                env=env, capture_output=True, text=True, timeout=30)
+                        self.assertEqual(forced.returncode, 0, forced.stdout + forced.stderr)
+                        self.assertIn(force_stop.WARNING, forced.stdout)
+                        self.assertTrue(json.loads(forced.stdout.splitlines()[-1])['force_requested'])
+                    else:
+                        (self.base / 'finish-agents').touch()
                     for job in jobs:
                         job.wait(timeout=30)
                     for job, _, finish, _ in detached:
                         finish.touch()
                         job.process.wait(timeout=20)
+                        if force:
+                            self.assertNotEqual(job.process.returncode, 0)
                 deadline = time.monotonic() + 90
                 row = None
                 while time.monotonic() < deadline:
@@ -173,7 +190,7 @@ class ReleaseCliProcessTest(RoundCase):
                     if row and row['ended']:
                         break
                     time.sleep(.1)
-                self.assertTrue(row and row['ended'], 'release worker did not finish')
+                self.assertTrue(row and row['ended'], 'release worker did not finish: row=%r status=%r pointer=%s pid=%r jobs=%r' % (dict(row) if row else None, status if incompatible else None, (root / 'active-version').read_text(), loop.loop_running(), [job.poll() for job in jobs]))
                 self.assertEqual(row['result'], 'rollback' if rollback else 'ok', str(dict(row)))
             else:
                 worker = subprocess.run([sys.executable, '-I', str(root / 'versions' / '1.0.0' / 'haivequeen' / 'cli.py'),
@@ -204,8 +221,9 @@ class ReleaseCliProcessTest(RoundCase):
             for job, _, finish, result in detached:
                 finish.touch()
                 job.process.wait(timeout=20)
-                self.assertEqual(job.process.returncode, 0)
-                self.assertTrue(result.exists())
+                if not force:
+                    self.assertEqual(job.process.returncode, 0)
+                    self.assertTrue(result.exists())
         finally:
             if server is not None:
                 server.shutdown()
