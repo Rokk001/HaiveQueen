@@ -76,6 +76,67 @@ def release(root, token):
         _save(root, leases)
 
 
+def live_snapshot(root):
+    """Snapshot possible users under the lifetime lock without changing leases.
+
+    ``complete`` describes enumeration only, not artifact provenance or shared
+    state compatibility. A positive compatibility decision needs both as well.
+    """
+    root = Path(root)
+    with lifetime_lock(root):
+        active = _version((root / 'active-version').read_text(encoding='utf-8').strip())
+        leases = _load(root)
+        versions = {active}
+        uncertain, unresolved = set(), set()
+        directory = root / 'versions'
+        try:
+            paths = list(directory.iterdir())
+        except OSError:
+            return {'versions': sorted(versions), 'unresolved': sorted(leases),
+                    'uncertain': ['versions directory'], 'complete': False}
+        scans = {}
+        for path in paths:
+            try:
+                version = _version(path.name)
+                if not path.is_dir() or path.is_symlink():
+                    uncertain.add(path.name)
+                    continue
+                result = process_scan.scan(path)
+            except (OSError, ValueError):
+                uncertain.add(path.name)
+                continue
+            scans[version] = result
+            if result is not False:
+                versions.add(version)
+            if result is None:
+                uncertain.add(version)
+        if active not in scans:
+            uncertain.add(active)
+        for token, record in leases.items():
+            try:
+                version = _version(record['version'])
+                if version not in scans:
+                    uncertain.add(version)
+                pid, identity = record.get('pid'), record.get('identity')
+                if record.get('installation'):
+                    # An installation reservation does not identify a user.
+                    unresolved.add(token)
+                elif pid and identity:
+                    current = platform.process_identity(pid)
+                    if current == identity:
+                        versions.add(version)
+                    elif current is None and not platform.process_absent(pid):
+                        unresolved.add(token)
+                elif (pid and not platform.process_absent(pid)) or scans.get(version) is not False:
+                    unresolved.add(token)
+                if token in unresolved:
+                    versions.add(version)
+            except (KeyError, TypeError, ValueError, OSError):
+                unresolved.add(token)
+        return {'versions': sorted(versions), 'unresolved': sorted(unresolved),
+                'uncertain': sorted(uncertain), 'complete': not (unresolved or uncertain)}
+
+
 def collect(root):
     """Remove unused versions, conservatively retaining unverifiable leases.
 
