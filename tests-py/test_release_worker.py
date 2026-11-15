@@ -191,7 +191,6 @@ class ReleaseWorkerTests(unittest.TestCase):
         self.assertEqual(result['result'], 'ok')
 
     def test_real_stalled_successor_yields_before_verified_old_restart(self):
-        self.metadata(True)
         lock = Path(self.temp.name) / 'loop.lock'
         code = ("import os,sys,time,pathlib; p=pathlib.Path(sys.argv[1]); "
                 "lock=pathlib.Path(sys.argv[2]); lock.write_text(str(os.getpid())); "
@@ -216,15 +215,17 @@ class ReleaseWorkerTests(unittest.TestCase):
             self.assertEqual(self.active(), '1.0.0')
             return not pid()
         try:
-            with mock.patch.object(selfupdate, 'file_fault_rollback') as fault, \
+            with self.verified_release() as stage, \
+                 mock.patch.object(selfupdate, 'file_fault_rollback') as fault, \
                  mock.patch.object(selfupdate, 'wait_successor_round', side_effect=receipt), \
                  mock.patch.object(selfupdate, 'run_command', return_value=(0, '')):
+                stage(self.root, 'example/project', '2.0.0')
                 result = selfupdate.run_update(self.conn, live=self.root / 'versions' / '1.0.0', version='2.0.0',
                     poll=.01, round_timeout=3, loop_pid=pid, sleep=time.sleep)
         finally:
             if child:
                 child.wait(timeout=5)
-        self.assertEqual(result['result'], 'rollback')
+        self.assertEqual(result['result'], 'rollback', result)
         self.assertEqual(calls[0], '2.0.0')
         self.assertIn('1.0.0', calls)
         fault.assert_called_once()
@@ -237,8 +238,9 @@ class ReleaseWorkerTests(unittest.TestCase):
             if target.name == '2.0.0':
                 raise RuntimeError('receipt failed')
             return True
-        result = selfupdate.run_release_update(self.conn, self.root, '2.0.0',
-                  loop_pid=lambda: 0, start=lambda: True, receipt=receipt)
+        with self.verified_release() as stage:
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', stage=stage,
+                      loop_pid=lambda: 0, start=lambda: True, receipt=receipt)
         self.assertEqual(result['result'], 'failed')
         self.assertEqual(seen, ['2.0.0', '1.0.0'])
         self.assertEqual(self.active(), '1.0.0')
@@ -269,9 +271,9 @@ class ReleaseWorkerTests(unittest.TestCase):
 
     def test_failed_successor_restores_pointer_and_reports(self):
         self.metadata(True)
-        with mock.patch.object(selfupdate, 'file_fault_rollback') as fault:
-            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', loop_pid=lambda: 42, timeout=0,
-                                                   receipt=lambda *a, **k: False)
+        with self.verified_release() as stage, mock.patch.object(selfupdate, 'file_fault_rollback') as fault:
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', stage=stage, loop_pid=lambda: 0,
+                                                   start=lambda: True, timeout=0, receipt=lambda *a, **k: False)
         self.assertEqual(result['result'], 'failed')
         self.assertIn('restart was not verified', result['note'])
         self.assertEqual(self.active(), '1.0.0')
