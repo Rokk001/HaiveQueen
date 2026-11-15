@@ -58,6 +58,18 @@ class BrowserTests(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_hives_scroll_only_when_content_exceeds_available_space(self):
+        node = shutil.which('node')
+        browser = (os.environ.get('HQ_TEST_BROWSER') or shutil.which('chromium')
+                   or shutil.which('google-chrome') or shutil.which('chromium-browser')
+                   or 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe')
+        if not node or not Path(browser).is_file():
+            self.skipTest('Node and Chromium are required for layout measurements')
+        result = subprocess.run([node, str(Path(__file__).with_name('web_scroll_layout_test.cjs'))],
+                                cwd=ROOT, capture_output=True, text=True, timeout=40,
+                                env={**os.environ, 'HQ_TEST_BROWSER': browser})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_tooltips_do_not_interrupt_scrolling(self):
         node = shutil.which('node')
         if not node:

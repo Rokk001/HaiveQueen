@@ -993,9 +993,13 @@ function mount(document, bootstrap) {
     const list=primary?.querySelector('.hives-list');
     if(!list)return;
     primary.style.height='';
-    list.style.maxHeight=window.innerWidth<=1100?'':Math.max(340,window.innerHeight-(list.getBoundingClientRect().top+window.scrollY)-16)+'px';
+    list.style.maxHeight=window.innerWidth<=1100?'':Math.max(200,window.innerHeight-Math.max(0,list.getBoundingClientRect().top)-16)+'px';
   }
   window.addEventListener('resize',fitDashboard);
+  let dashboardScrollFrame=0;
+  window.addEventListener('scroll',()=>{
+    if(!dashboardScrollFrame)dashboardScrollFrame=requestAnimationFrame(()=>{dashboardScrollFrame=0;fitDashboard();});
+  },{passive:true});
   const dashboardResize=new ResizeObserver(()=>requestAnimationFrame(fitDashboard));
   for(const node of [document.querySelector('header'),$('tabs'),$('notice')])dashboardResize.observe(node);
   function logRows() {

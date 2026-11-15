@@ -957,12 +957,12 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .queue-state { flex-shrink:0; font-size:12px; }
 
 .hives-panel { min-width:0; }
-.hives-list { overflow:auto; scrollbar-gutter:stable; }
+.hives-list { overflow:auto; scrollbar-gutter:auto; scrollbar-width:thin; scrollbar-color:var(--edge) transparent; }
 /* A single aligned list, with hierarchy carried by indentation rather than nested tables. */
 .hives-tree { list-style:none; margin:0; padding:0; }
-.hive-tree-heading,.hive-tree-cells > div > div > div { display:grid; grid-template-columns:minmax(180px,1.5fr) 64px minmax(230px,2fr) 90px 104px minmax(90px,1fr) 65px; gap:8px; align-items:center; }
+.hive-tree-heading,.hive-tree-cells > div > div > div { display:grid; grid-template-columns:minmax(140px,1.5fr) 64px minmax(0,2fr) 70px 90px minmax(70px,1fr) 65px; gap:8px; align-items:center; }
 .hive-tree-heading { position:sticky; top:0; z-index:1; padding:7px 8px; background:#0d171c; color:#9db2bb; font-size:11px; }
-.hive-tree-row { position:relative; border-bottom:1px solid #26383f; min-width:875px; }
+.hive-tree-row { position:relative; border-bottom:1px solid #26383f; min-width:0; }
 .hive-tree-row[hidden] { display:none; }
 .hive-tree-cells > div > div > div { padding:4px 8px; min-height:34px; }
 .hive-tree-cells [data-column=name] { padding-left:calc(var(--depth)*12px + 20px); position:relative; min-width:0; }
@@ -977,9 +977,9 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .hive-project-name { font-weight:700; }.hive-project-count { font-size:12px; }
 .hive-tree-plan { background:#0c171c; }
 .hive-tree-queen { background:#171e15; }
-.hive-tree-cells .hq-pipeline,.hive-tree-cells .hq-steps { flex-wrap:nowrap; }
-.hive-tree-cells .hq-pipeline { gap:5px; overflow-x:auto; scrollbar-width:thin; }
-.hive-tree-cells .hq-steps { flex-shrink:0; }
+.hive-tree-cells .hq-pipeline,.hive-tree-cells .hq-steps { flex-wrap:wrap; min-width:0; max-width:100%; }
+.hive-tree-cells .hq-pipeline { gap:4px 5px; overflow:visible; }
+.hive-tree-cells .hq-steps { flex-shrink:1; }
 .hive-tree-cells .hq-step-count { flex-shrink:0; font-size:10px; }
 .hive-tree-cells [data-column=status] { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 @media(min-width:701px) and (pointer:fine) {
@@ -1014,7 +1014,7 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .hive-tree-plan [data-column=model],.hive-tree-plan [data-column=ctx],.hive-tree-plan [data-column=tokens] { visibility:hidden; }
 @media(max-width:700px) { .hive-tree-plan [data-column=model],.hive-tree-plan [data-column=ctx],.hive-tree-plan [data-column=tokens] { display:none; } }
 
-.hive-tree-heading { min-width:875px; }
+.hive-tree-heading { min-width:0; }
 .hive-tree-cells [data-column=name] { display:flex; align-items:center; gap:5px; }
 .hive-tree-cells .row-menu { flex-shrink:0; }
 .hive-tree-cells { font-size:12px; }
@@ -1076,3 +1076,6 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .settings-impact summary{cursor:pointer;padding:6px}
 .settings-impact p{line-height:1.5;overflow-wrap:anywhere}
 .settings-savebar>button:first-child{background:#f4c62d;color:#071013;border-color:#f4c62d;font-weight:600}
+
+/* Keep necessary scrolling unobtrusive without hiding overflow or controls. */
+.table-scroll,.queue-list,.model-limits,.log,textarea { scrollbar-width:thin; scrollbar-color:var(--edge) transparent; }
