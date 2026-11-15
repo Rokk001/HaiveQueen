@@ -259,9 +259,9 @@ under **Answer options**, and optional rejected package selection is under
 **Accept** and **Save note** retain their distinct semantics. Records not open are
 read-only. There is no invented agent dialogue or free-message backend.
 
-The Plans table has a visible **Messages** column. Its pending count and acceptance
-label open the same conversation as Questions; plans without pending questions
-can open their recorded history. Questions and Plans share the existing
+Plans cards have visible **Messages** actions with pending question and acceptance
+counts. They open the same conversation as Questions; plans without pending
+questions can open their recorded history when one exists. Questions and Plans share the existing
 `questions?history=1` response. The plan link is offered only when that plan exists
 in the current plan list. On narrow screens, selecting a thread replaces the list
 with the conversation. The back button names the active filter (for example,
@@ -277,14 +277,31 @@ The header labels the running version as `Running v<version>`. When an update is
 While installation is pending, the header reads the target from `updates.installing.version`. The `installing` object also contains scheduling metadata and must not be rendered as text. The update action remains hidden and checking remains disabled until installation finishes.
 
 
-### Filtering the Plans overview
+### Plans overview
 
-Plans provides case-insensitive search across the plan name, project-relative
-path and project name, combined with **Project** and **Status** selectors.
-The result count shows matching plans out of all loaded plans; an empty result
-explains that no plans match. **Clear filters** resets all three controls and
-returns focus to search. Existing Plan and Messages actions retain their behavior.
-Search and selections persist across polling and tab switches within the current
-page. Polling preserves focus and the search text selection; an active input
-composition finishes before the list is redrawn. Filter options retain a selected
-value even when it temporarily has no matching plans.
+Plans is an actionable list. Each card shows the real Markdown title (falling back
+to its file name), the explicitly labelled project, and a readable lifecycle status.
+Technical fields such as Started, Waiting and Error remain available in plan details;
+a WAITING plan also shows its recorded waiting reason on its card. Completed means
+the plan is DONE, with no additional claim about publication or deployment.
+
+Search covers title, file name, path and project without case sensitivity. Visible
+status chips combine with compact project chips: All, Needs you, Drafts, In progress,
+Review and Completed. Paused and Cancelled appear when present. In progress groups
+SENT, PREPARING, QUEUED, RUNNING and WAITING; Needs you uses actual open questions
+matching both project and plan, not plan status. Chip counts reflect the current
+search and project. Until question data arrives, message state is shown as loading
+and Needs you is unavailable, rather than implying zero open questions.
+
+Pending questions and acceptance counts open the existing plan conversation.
+Recorded history remains accessible; plans with no questions have quiet text rather
+than an empty conversation button. **Edit draft** fetches the current plan detail
+and revision before editing; a plan that is no longer an editable draft opens its
+details instead. Missing or recovery-blocked plans offer details, not editing.
+**View result** opens review plan details; other plans offer **View plan**.
+
+The result count and empty state reflect the combined filters. **Clear filters**
+resets search, project and status. Values persist across polling and tab switches
+within the page, search focus and text selection survive polling, and an active
+input composition finishes before redraw. Long plan and project names wrap, and
+cards and action buttons adapt to narrow screens.

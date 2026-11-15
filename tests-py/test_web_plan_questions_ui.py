@@ -44,7 +44,8 @@ class PlanQuestionsUITests(unittest.TestCase):
     def test_new_workflow_labels_are_translated(self):
         for label in ('New plan', 'Save draft', 'Submit plan', 'Acceptance',
                       'Answered history', 'Release readiness gate', 'Saved note',
-                      'Search plans', 'All projects', 'All statuses', 'Clear filters'):
+                      'Search plans', 'All projects', 'All statuses', 'Clear filters',
+                      'View result', 'View plan', 'Drafts', 'Ready for review'):
             self.assertNotEqual(i18n.tr(label, language='German'), label)
 
 
