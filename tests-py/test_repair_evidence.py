@@ -108,7 +108,8 @@ class RepairEvidence(OrchCase):
         self.assertEqual(orchestrator._attempts(self.conn, self.env(), REL)['n'], 1)
 
 
-class TargetedVerification(OrchCase):
+class TargetedVerificationFixture(OrchCase):
+    """Prepare a committed repair with its original failed integration log."""
     def setUp(self):
         self.check = 'git ls-files --error-unmatch repaired.txt'
         super().setUp()
@@ -127,6 +128,10 @@ class TargetedVerification(OrchCase):
                     'reason': 'Verify the tracked repair for the original missing-file failure.'}
         (self.env().run_dir(self.agent['name']) / 'repair-verification.json').write_text(
             json.dumps(evidence), encoding='utf-8')
+
+
+class TargetedVerification(TargetedVerificationFixture):
+    """Targeted checks must pass before the complete pipeline can restart."""
 
     def test_missing_verification_does_not_restart_pipeline(self):
         self.end_fixer(self.agent, verification=False)
@@ -214,3 +219,96 @@ class TargetedVerification(OrchCase):
         self.round()
         self.assertEqual(self.plan_status(), 'REVIEW')
 
+
+class VerificationCommandRetry(TargetedVerificationFixture):
+    """A corrected command can verify the same committed repair without a dummy commit."""
+
+    def prepare_retry(self, command=None, **previous):
+        """Keep a failed check in durable history and end an unchanged repair attempt."""
+        state = self.state()
+        state['fix']['agent'] = self.agent['name']
+        state['fix'].pop('diagnosis', None)
+        state['fix']['head'] = self.git('rev-parse', 'HEAD', cwd=self.pwt)
+        orchestrator.save(self.conn, 'testproj', REL, state)
+        orchestrator._record_repair(self.conn, 'testproj', REL, 'targeted-verification',
+            **dict({'commit': state['fix']['head'], 'failure_log': self.failure_log,
+                    'command': 'echo failed && exit 9', 'exit_code': 9}, **previous))
+        self.end_with_evidence(command or self.check)
+        return self.state()
+
+    def advance(self, state):
+        """Exercise just the repair gate, leaving the normal pipeline to its own tests."""
+        return orchestrator._advance_fix(self.conn, self.env(), REL, state, 100000, lambda pid: False)
+
+    def test_changed_command_runs_at_same_commit(self):
+        """A durable failed command permits a valid replacement and real RepairCheck."""
+        state = self.prepare_retry()
+        self.advance(state)
+        results = [e for e in orchestrator.repair_history(self.conn, 'testproj', REL)
+                   if e['event'] == 'targeted-verification']
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[-1]['exit_code'], 0)
+        self.assertEqual(results[-1]['commit'], results[0]['commit'])
+        self.assertEqual(results[-1]['failure_log'], self.failure_log)
+        self.assertEqual(state['phase'], 'pipeline')
+        self.assertEqual(action_logs.latest('testproj', REL, 'Check')['path'], self.check_log)
+
+    def test_same_failed_command_is_rejected(self):
+        """Whitespace cannot disguise an already failed command on the same repair."""
+        state = self.prepare_retry('  echo failed && exit 9  ')
+        with mock.patch.object(orchestrator, '_verify_repair') as verify:
+            self.advance(state)
+        verify.assert_not_called()
+        self.assertIn('already failed', state['fix']['instruction'])
+
+    def test_failed_command_cannot_be_reused_after_another_failure(self):
+        """All failed commands in the scope remain excluded, not just the latest."""
+        state = self.prepare_retry('echo failed && exit 9')
+        orchestrator._record_repair(self.conn, 'testproj', REL, 'targeted-verification',
+            commit=state['fix']['head'], failure_log=self.failure_log,
+            command='echo second && exit 8', exit_code=8)
+        with mock.patch.object(orchestrator, '_verify_repair') as verify:
+            self.advance(state)
+        verify.assert_not_called()
+
+    def test_other_commit_or_failure_or_success_does_not_authorize_retry(self):
+        """Only a failed RepairCheck for this HEAD and original failure opens the gate."""
+        for previous in ({'commit': '0' * 40}, {'failure_log': 'other-log'}, {'exit_code': 0}):
+            with self.subTest(previous=previous):
+                runtime = orchestrator.runtime
+                runtime.kv_set(self.conn, 'testproj', 'orch-repair-history:' + REL, '[]')
+                state = self.prepare_retry(**previous)
+                with mock.patch.object(orchestrator, '_verify_repair') as verify:
+                    self.advance(state)
+                verify.assert_not_called()
+
+    def test_dirty_tree_does_not_authorize_command_retry(self):
+        """Tracked and untracked changes both prevent an unchanged-commit retry."""
+        for filename in ('repaired.txt', 'untracked.txt'):
+            with self.subTest(filename=filename):
+                state = self.prepare_retry()
+                path = self.pwt / filename
+                original = path.read_text() if path.exists() else None
+                path.write_text('dirty', encoding='utf-8')
+                with mock.patch.object(orchestrator, '_verify_repair') as verify:
+                    self.advance(state)
+                verify.assert_not_called()
+                if original is None:
+                    path.unlink()
+                else:
+                    path.write_text(original, encoding='utf-8')
+
+    def test_invalid_replacement_keeps_validation(self):
+        """Command retries retain commit, failure, reason, command and size validation."""
+        for field, value in (('commit', '0' * 40), ('failure_log', 'other-log'),
+                             ('reason', ''), ('command', ''), ('reason', 'x' * 65536)):
+            with self.subTest(field=field, value=value[:40]):
+                state = self.prepare_retry()
+                path = self.env().run_dir(self.agent['name']) / 'repair-verification.json'
+                evidence = json.loads(path.read_text(encoding='utf-8'))
+                evidence[field] = value
+                path.write_text(json.dumps(evidence), encoding='utf-8')
+                with mock.patch.object(orchestrator, '_verify_repair') as verify:
+                    self.advance(state)
+                verify.assert_not_called()
+                self.assertIn('invalid repair verification', state['fix']['instruction'])

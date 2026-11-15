@@ -1226,6 +1226,7 @@ def _fix_prompt(env, plan, state, owner_text=""):
 
 
 def _advance_fix(conn, env, plan, state, free_mb, alive):
+    """Accept committed repairs or a new scoped command after failed verification."""
     fix = state["fix"]
     if fix.get('verification'):
         return _verify_repair(conn, env, plan, state)
@@ -1254,7 +1255,7 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
         _record_repair(conn, env.name, plan, 'attempt-ended', agent=fix['agent'],
                        before=fix.get('head', ''), after=head, report=report,
                        changed=changed, conditions_changed=conditions_changed)
-        if not changed and not conditions_changed:
+        if not changed and not conditions_changed and not (env.run_dir(fix['agent']) / 'repair-verification.json').is_file():
             fix['review_required'] = True
             if (env.run_dir(fix['agent']) / 'repair-diagnosis.json').is_file():
                 return _finish_review(conn, env, plan, state)
@@ -1278,8 +1279,30 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
                 raise ValueError('explain how this regression covers the original failure')
         except (OSError, ValueError) as exc:
             return _repair_diagnosis(conn, env, plan, state, 'Missing or invalid repair verification: ' + str(exc))
+        failed_checks = [entry for entry in repair_history(conn, env.name, plan)
+                         if entry.get('event') == 'targeted-verification' and
+                         entry.get('commit') == head and
+                         entry.get('failure_log') == evidence['failure_log'] and
+                         entry.get('exit_code') not in (None, 0)]
+        repeated = any(entry.get('command', '').strip() == evidence['command'].strip()
+                       for entry in failed_checks)
+        if repeated:
+            return _repair_diagnosis(conn, env, plan, state,
+                                    'This targeted command already failed for the same repair and original failure')
+        verification_changed = bool(failed_checks and status_code == 0 and not status_output.strip())
+        if not changed and not conditions_changed and not verification_changed:
+            fix['review_required'] = True
+            if (env.run_dir(fix['agent']) / 'repair-diagnosis.json').is_file():
+                return _finish_review(conn, env, plan, state)
+            fix['agent'] = None
+            fix['instruction'] = ('The previous attempt provided no committed repair or changed command. '
+                                  'Continue diagnosis using the complete history; do not repeat the unchanged pipeline.')
+            save(conn, env.name, plan, state)
+            return None
         fix['verification'] = {**evidence, 'retry_reason':
-                               'committed tree changed' if changed else 'configured command changed'}
+                               'committed tree changed' if changed else
+                               'configured command changed' if conditions_changed else
+                               'targeted verification command changed after failed RepairCheck'}
         save(conn, env.name, plan, state)
         return _verify_repair(conn, env, plan, state)
     return _start_fix(conn, env, plan, state, free_mb, alive, str(fix.get("instruction") or ""))
