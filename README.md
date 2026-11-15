@@ -116,17 +116,13 @@ bzz register /path/to/my-project      # adds the project to config.toml and the 
 Each Project’s `.haivequeen/` folder contains machine-local settings and runtime files; keep it local to each machine and do not commit it. `bzz init` and `bzz register` add it to the project folder’s `.gitignore` and warn if it is already tracked.
 
 
-To install a particular release instead of the newest code, check out its tag after cloning (for example `git checkout v2.0.1`) before `pip install -e .`. Keep the clone where it is: the update function below installs new versions into that folder.
+To install a particular release instead of the newest code, check out its tag after cloning (for example `git checkout v2.0.1`) before `pip install -e .`. Release updates use the side-by-side layout described in [Updates](docs/UPDATES.md).
 
 ### Updates
 
-HaiveQueen updates itself the same way for every user:
+HaiveQueen checks GitHub releases daily by default and when you choose **Check now** or run `bzz update`. Select **Update** and confirm, or run `bzz update --install X` for the offered version. A compatible release is installed beside the current version and the core switches without waiting for running work. Fixed launchers continue to select the active version. If the first round fails, HaiveQueen rolls back and reports the failure.
 
-- Once a day (`update.checkHours` in `config.toml`, default 24; `0` or the environment variable `BZZ_NO_UPDATE_CHECK=1` switches the daily check off) and whenever you click **Check now** in the header of the dashboard, HaiveQueen asks GitHub whether a newer release exists. `bzz update` does the same check on the command line. A failed check (offline, rate limit) is shown in the header and tried again after the interval or with Check now.
-- When one exists, the header shows **New version available: X – Update**. Nothing is installed until you click it and confirm.
-- After the confirmation HaiveQueen starts no new Queen or Agent, waits until every running agent of every Project has ended (it ends none), fast-forwards the clone to the release tag `vX`, runs `pip install -e .` again when `pyproject.toml` changed and starts again; the dashboard reopens with the new version. If the new version does not start, it goes back to the previous one and files a question. `bzz update --install X` does the same for the offered version X.
-- The header shows the installed version: the release tag of the clone (without one, the version in `pyproject.toml`).
-- The releases come from the GitHub repository of the clone's `origin` remote; `update.repository = "owner/name"` in `config.toml` names another one. Local commits on the clone's branch stop the fast-forward; the update then fails and keeps the installed version.
+An incompatible release waits for running work to finish and prevents new work from starting. The dashboard shows the reason and jobs; you can wait or explicitly confirm a force update. `bzz update` reports a waiting update, while `bzz update --force` confirms forcing it. Force stops running work immediately and unfinished work is repeated. See [the update guide](docs/UPDATES.md) for the layout, version visibility, and wait and force controls.
 
 **Log in once per CLI, in the HaiveQueen profile.** Do this for every CLI you want to use, after `bzz register`. The agents never read your own login (see [Why](#why)), so each CLI needs its login in the profile folder `<data folder>/profile/<cli>` (data folder: `%LOCALAPPDATA%\HaiveQueen` on Windows, `${XDG_DATA_HOME:-~/.local/share}/HaiveQueen` on Linux). Set the variable(s) that point the CLI to that folder, then run its login command:
 
@@ -334,7 +330,7 @@ Existing `[[decision]]` entries with `item = "owner-release"` continue to work.
 | `bzz agent start`, `bzz agent result`, `bzz agent wait` | Queen | start an Agent (a refused start answers `waiting` with a `reason`), record an attempt or wait for its provider; a failed result needs evidence (`--open-requirements` or `--error`) or `--blocked-by question\|build\|owner\|package\|provider` (a question also needs `--blocked-ref <id>`), which is no failure and sets the package to waiting |
 | `bzz package --project p --plan f --package id --state working\|waiting\|implemented\|done\|rejected [--reason ...]` | Queen | report the progress of a package; `waiting` needs `--reason` (`question:<id>`, `build`, `owner`, `package` or `provider`); the window's progress bar counts the done ones |
 | `bzz integration acquire` / `release` | Queen or external window | acquire or release the per-project integration place; external windows provide a stable owner process id |
-| `bzz update [--install X]` | owner | check GitHub for a newer release now, or install the offered release X (see [Updates](#updates)) |
+| `bzz update [--install X] [--force]` | owner | check for a release, install the offered X, report a waiting update, or explicitly force a waiting incompatible update (see [Updates](#updates)) |
 | `bzz self-update` | owner | one-time transition to the release updates only: for a HaiveQueen checkout that is itself a project named HaiveQueen, waits until all agents have ended, then fast-forwards its `main` from `origin/<integrationBranch>` of that project's settings (default `main`); refused once a release was published for that project or the checkout is at a release tag – then use `bzz update` |
 | `bzz done`, `bzz ready`, `bzz ask`, `bzz note` | agents | final report, branch ready for integration, question, note ([`docs/RUNTIME-API.md`](docs/RUNTIME-API.md)) |
 

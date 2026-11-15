@@ -14,6 +14,15 @@ from bzztest import RoundCase
 from haivequeen import db, force_stop, hives, loop, orchestrator, platform, release_compat, releases, runtime, scheduler, selfupdate, updates, version_layout, web_service
 
 
+def read_line(process):
+    import queue
+    q = queue.Queue()
+    threading.Thread(target=lambda: q.put(process.stdout.readline().strip()), daemon=True).start()
+    try:
+        return q.get(timeout=140)
+    except queue.Empty:
+        raise AssertionError('browser milestone timed out')
+
 class ReleaseCliProcessTest(RoundCase):
     def test_compatible_worker_switches_real_core_without_ending_jobs(self):
         self._compatible_switch(public=False)
@@ -48,6 +57,15 @@ class ReleaseCliProcessTest(RoundCase):
     def test_incompatible_public_install_waits_for_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True)
 
+    def test_web_api_install_and_force_reach_worker(self):
+        self._compatible_switch(public=True, incompatible=True, force=True, web=True)
+
+    def test_browser_install_and_confirmed_force_reach_worker(self):
+        self._compatible_switch(public=True, incompatible=True, force=True, web='browser')
+
+    def test_tray_confirmation_and_force_reach_worker(self):
+        self._compatible_switch(public=True, incompatible=True, force=True, web='tray')
+
     def test_shared_settings_change_waits_for_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True, reason="shared settings format change")
 
@@ -57,8 +75,52 @@ class ReleaseCliProcessTest(RoundCase):
     def test_shared_settings_change_forces_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True, force=True, reason="shared settings format change")
 
+    def _browser_prepare(self, root):
+        from haivequeen import web_auth
+        candidates = [shutil.which(name) for name in ('msedge', 'chromium', 'google-chrome')]
+        for var in ('PROGRAMFILES(X86)', 'PROGRAMFILES'):
+            if os.environ.get(var):
+                candidates.append(str(Path(os.environ[var]) / 'Microsoft/Edge/Application/msedge.exe'))
+        browser = next((p for p in candidates if p and Path(p).is_file()), None)
+        if not browser:
+            self.skipTest('Chromium is required')
+        import socket
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0))
+            port = sock.getsockname()[1]
+        web_auth.setup(self.base / 'cfg' / 'config.toml', 'test', 'test', '127.0.0.1', port, '', '')
+        web_auth.off(self.base / 'cfg' / 'config.toml')
+        package = root / 'versions' / '1.0.0' / 'haivequeen'
+        access = package / 'web_access.py'
+        with access.open('a', encoding='utf-8') as f:
+            f.write("\n_original_page = page\ndef page(*args, **kwargs):\n    return _original_page(*args, **kwargs).replace('</body>', " + repr("<script>fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'test',password:'test'})}).then(()=>location.href='/')</script>") + "+'</body>')\n")
+        return browser
+
+    def _browser_force(self, browser, jobs, detached):
+        status = web_service.control('status')
+        self.assertTrue(status and status['running'], str(status))
+        profile = self.base / 'browser-profile'
+        driver = Path(__file__).with_name('browser_update_driver.cjs')
+        if not shutil.which('node'):
+            self.skipTest('Node is required')
+        log = (self.base / 'browser-driver.log').open('w', encoding='utf-8')
+        process = subprocess.Popen(['node', str(driver), browser, status['url']+'/login', str(profile)],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
+        try:
+            self.assertEqual(read_line(process), 'CANCELLED')
+            self.assertTrue(all(job.poll() is None for job in jobs))
+            self.assertTrue(all(job.process.poll() is None for job, _, _, _ in detached))
+            process.stdin.write('continue\n'); process.stdin.flush()
+            self.assertEqual(read_line(process), 'CONFIRMED')
+            out, err = process.communicate(timeout=30)
+            self.assertEqual(process.returncode, 0, str(out))
+        finally:
+            if process.poll() is None:
+                process.terminate(); process.wait(timeout=10)
+            log.close()
+
     def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False,
-                           reason="shared schema change", adoption=False, launched=False, scheduling=False, resume=False):
+                           reason="shared schema change", adoption=False, launched=False, scheduling=False, resume=False, web=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -152,12 +214,14 @@ class ReleaseCliProcessTest(RoundCase):
                 % command.as_posix(), encoding='utf-8')
             os.environ['TEST_LIVE_BASE'] = str(self.base)
             self.addCleanup(os.environ.pop, 'TEST_LIVE_BASE', None)
+        browser = self._browser_prepare(root) if web == 'browser' else None
         env = dict(os.environ, BZZ_NO_DESKTOP='1')
         if scheduling or resume:
             env.pop('BZZ_TEST_NOSTART', None)
         jobs = []
         detached = []
         core = None
+        status = None
         old_queen = None
         try:
             if launched:
@@ -262,12 +326,37 @@ class ReleaseCliProcessTest(RoundCase):
                                           {'phase': 'pipeline', 'steps': {step: 'running'},
                                            'job': {'step': step, 'pid': job.pid, 'file': str(result)}})
                 updates.save_state({'available': {'version': '2.0.0', 'url': 'https://example.invalid/release'}})
-                request = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'),
-                                          'update', '--install', '2.0.0'], env=env,
-                                         capture_output=True, text=True, timeout=30)
-                self.assertEqual(request.returncode, 0, request.stdout + request.stderr)
-                self.assertEqual(json.loads(request.stdout)['installing'], '2.0.0')
-                if incompatible:
+                if web == 'browser':
+                    self._browser_force(browser, jobs, detached)
+                    request = None
+                elif web is True:
+                    # Exercise the real API against the installed version and
+                    # the detached worker, with an isolated data directory.
+                    code = ("import json,sys; sys.path.insert(0,sys.argv[1]); "
+                            "from haivequeen import config,db,web_api; "
+                            "c=db.connect(config.db_path()); "
+                            "print(json.dumps(web_api.execute(c,'updates/install',"
+                            "{'version':'2.0.0','confirmed':True})))")
+                    command = [sys.executable, '-I', '-c', code, str(root / 'versions' / '1.0.0')]
+                else:
+                    command = [sys.executable, '-I', str(root / 'launcher.py'), 'update', '--install', '2.0.0']
+                if web != 'browser':
+                    request = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(request.returncode, 0, request.stdout + request.stderr)
+                if web == 'browser':
+                    pass
+                elif web is True:
+                    self.assertIn(json.loads(request.stdout)['how'], ('detached', 'schtasks'))
+                else:
+                    self.assertEqual(json.loads(request.stdout)['installing'], '2.0.0')
+                if incompatible and web == 'browser':
+                    for job in jobs:
+                        job.wait(timeout=30)
+                    for job, _, finish, _ in detached:
+                        finish.touch()
+                        job.process.wait(timeout=20)
+                        self.assertNotEqual(job.process.returncode, 0)
+                elif incompatible:
                     deadline = time.monotonic() + 30
                     status = None
                     while time.monotonic() < deadline:
@@ -294,11 +383,29 @@ class ReleaseCliProcessTest(RoundCase):
                                      {'Queen', 'Agent', 'Build', 'Deploy'} if force else {'Queen', 'Agent'})
                     self.assertTrue(all(job.poll() is None for job in jobs))
                     if force:
-                        forced = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'), 'update', '--force'],
-                                                env=env, capture_output=True, text=True, timeout=30)
+                        if web == 'tray':
+                            code = ("import sys; sys.path.insert(0,sys.argv[1]); "
+                                    "from haivequeen import selfupdate,tray; "
+                                    "tray.confirm=lambda:False; tray.invoke(8); "
+                                    "assert not selfupdate.release_force_path().exists(); "
+                                    "tray.confirm=lambda:True; tray.invoke(8); print('confirmed')")
+                            command = [sys.executable, '-I', '-c', code, str(root / 'versions' / '1.0.0')]
+                        elif web:
+                            code = ("import json,sys; sys.path.insert(0,sys.argv[1]); "
+                                    "from haivequeen import config,db,web_api; "
+                                    "c=db.connect(config.db_path()); "
+                                    "print(json.dumps(web_api.execute(c,'updates/force',{'confirmed':True})))")
+                            command = [sys.executable, '-I', '-c', code, str(root / 'versions' / '1.0.0')]
+                        else:
+                            command = [sys.executable, '-I', str(root / 'launcher.py'), 'update', '--force']
+                        forced = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
                         self.assertEqual(forced.returncode, 0, forced.stdout + forced.stderr)
-                        self.assertIn(force_stop.WARNING, forced.stdout)
-                        self.assertTrue(json.loads(forced.stdout.splitlines()[-1])['force_requested'])
+                        if web == 'tray':
+                            self.assertIn('confirmed', forced.stdout)
+                        else:
+                            if not web:
+                                self.assertIn(force_stop.WARNING, forced.stdout)
+                            self.assertTrue(json.loads(forced.stdout.splitlines()[-1])['force_requested'])
                     else:
                         (self.base / 'finish-agents').touch()
                     for job in jobs:
@@ -329,6 +436,14 @@ class ReleaseCliProcessTest(RoundCase):
                 self.assertEqual(len(requests), 3)
                 self.assertTrue(requests[-1][0].endswith('/zipball/' + ('a' * 40 if incompatible else 'v2.0.0')))
                 self.assertTrue(all(agent == 'HaiveQueen' for _, agent in requests))
+            if web == 'browser':
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    web_status = web_service.control('status')
+                    if web_status and web_status.get('running'):
+                        break
+                    time.sleep(.1)
+                self.assertTrue(web_status and web_status.get('running'), str(web_status))
             new_pid = loop.loop_running()
             self.assertTrue(new_pid)
             self.assertNotEqual(new_pid, old_pid)

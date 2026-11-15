@@ -1049,7 +1049,7 @@ function mount(document, bootstrap) {
 
     },{compact:true,labels:{number:'#',name:'PLAN',queen_version:'VERSION',bees_running:'AGENTS'}}));
 
-    const hiveRows=visibleHiveRows(filtered.bees),counts=hiveCounts(hiveRows);const agents=section('QUEENS AND AGENTS');agents.querySelector('h2').append(el('small',' · '+counts.queens+' '+t('QUEENS')+' · '+counts.agents+' '+t('Agents')));agents.append(table(hiveRows,['number','name','model','hive','task','ctx','tokens','status','runtime'],(cell,row)=>{
+    const hiveRows=visibleHiveRows(filtered.bees),counts=hiveCounts(hiveRows);const agents=section('QUEENS AND AGENTS');agents.querySelector('h2').append(el('small',' · '+counts.queens+' '+t('QUEENS')+' · '+counts.agents+' '+t('Agents')));agents.append(table(hiveRows,['number','name','model','hive','task','version','ctx','tokens','status','runtime'],(cell,row)=>{
 
       if(row.agent)cell.append(button('Live',()=>openLive(row)));
 
@@ -1459,11 +1459,12 @@ function mount(document, bootstrap) {
 
   function renderUpdates() {
 
-    const box=$('update-status');box.replaceChildren();
+    const box=$('update-status');box.replaceChildren();box.title='';
 
     let label='Check now',colour='dim';
 
-    if(updateState.installing){label=t('installing version %s – waiting for running agents').replace('%s',updateState.installing);colour='warn';}
+    if(updateState.waiting){label=t('Update waiting');colour='warn';box.title=[updateState.waiting.reason,...(updateState.waiting.jobs||[]).map(j=>[j.kind,j.name,j.project].filter(Boolean).join(' · '))].filter(Boolean).join('\n');}
+    else if(updateState.installing){label=t('Installing update');colour='warn';}
 
     else if(updateState.failed){label=t('update to %s failed, see STATUS').replace('%s',updateState.failed);colour='bad';}
 
@@ -1476,6 +1477,8 @@ function mount(document, bootstrap) {
     else if(updateState.last_check){label=t('up to date');colour='ok';}
 
     box.append(el('span',t(label),colour));
+
+    if(updateState.waiting)box.append(button('Force update',async()=>{await act('updates/force',{},t(bootstrap.forceWarning));}));
 
     if(updateState.available?.version && !updateState.installing)box.append(button('Update',async()=>{await act('updates/install',{version:updateState.available.version},t(bootstrap.updateConfirm).replace('%s',updateState.available.version));}));
 

@@ -5,18 +5,21 @@ import threading
 from contextlib import closing
 from pathlib import Path
 
-from . import config, db, force_stop, loop, version_leases, web_service
+from . import config, db, force_stop, loop, updates, version_leases, web_service
 from . import platform as osplat
 
 
-def menu(state, web_running, work_running=False):
-    return [(1, 'Open web interface', True),
+def menu(state, web_running, work_running=False, update_waiting=False):
+    entries = [(1, 'Open web interface', True),
             (2, 'Start', state == 'Stopped'),
             (3, 'Stop gracefully', state == 'Running'),
             (4, 'Force stop', state != 'Stopped' or work_running),
             (5, 'Start', not web_running),
             (6, 'Stop', web_running),
             (7, 'Restart', web_running)]
+    if update_waiting:
+        entries.append((8, 'Force update', True))
+    return entries
 
 
 def work_running():
@@ -45,9 +48,9 @@ def confirm():
 def invoke(number):
     if number == 1:
         web_service.open_browser()
-    elif number == 4:
+    elif number in (4, 8):
         if confirm():
-            run_command(['stop', '--force'])
+            run_command(['update', '--force'] if number == 8 else ['stop', '--force'])
     else:
         commands = {2: ['start'], 3: ['stop'], 5: ['web', 'start'],
                     6: ['web', 'stop'], 7: ['web', 'restart']}
@@ -153,7 +156,7 @@ def main():
             return 0
         if msg == 0x8001 and lp in (0x205, 0x202):
             popup = user.CreatePopupMenu()
-            entries = menu(current['state'], current['web'], current['work'])
+            entries = menu(current['state'], current['web'], current['work'], bool(updates.waiting_status()))
             for index, (number, label, enabled) in enumerate(entries):
                 if index in (1, 4):
                     user.AppendMenuW(popup, 0x800, 0, None)

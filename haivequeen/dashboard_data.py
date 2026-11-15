@@ -383,7 +383,7 @@ def orch_info(conn, env, hive, now=None) -> dict:
 def orch_rows(hive, info, agents, now, ctx_limit=None) -> list:
     """The "Orchestrator" row (kind "orch") of a plan in the pipeline and, below it, its running fix agent (kind "fix")."""
     rows = [{"kind": "orch", "name": "Orchestrator", "agent": None, "project": hive["apiary"], "plan_path": hive["plan_path"], "model": "–", "hive": hive["name"],
-             "apiary": hive["apiary"], "task": info["task"], "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": info["status"], "runtime": hive["runtime"] or "–"}]
+             "apiary": hive["apiary"], "task": info["task"], "version": info.get('version', ''), "ctx": 0, "ctx_limit": 0, "tin": 0, "tout": 0, "status": info["status"], "runtime": hive["runtime"] or "–"}]
     agent = next((a for a in agents if info["fix_agent"] and a.get("name") == info["fix_agent"] and a.get("phase") == "fix"), None)
     if agent and agent.get("status") in runtime.ACTIVE_STATUSES:
         row = bee_row(agent, now, None, ctx_limit)

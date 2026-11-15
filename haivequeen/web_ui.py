@@ -3,7 +3,7 @@ import base64
 import json
 from pathlib import Path
 
-from . import cli_presets, config, settings, provider_labels, i18n, projsettings, updates
+from . import cli_presets, config, force_stop, settings, provider_labels, i18n, projsettings, updates
 from . import scheduler as sch
 
 
@@ -37,7 +37,7 @@ def page(csrf, language=None):
                  'presets': cli_presets.PRESETS,
                  'accessClis': {access: cli_presets.keys_for_access(access) for access in ('subscription', 'api', 'llm')},
                  'cliModels': {key: {'models': cli_presets.model_list(key), 'efforts': cli_presets.effort_list(key)} for key in cli_presets.PRESETS},
-                 'updateConfirm': updates.TEXT_CONFIRM}
+                 'updateConfirm': updates.TEXT_CONFIRM, 'forceWarning': force_stop.WARNING}
     favicon = 'data:image/png;base64,' + base64.b64encode(Path(__file__).with_name('web-icon.png').read_bytes()).decode('ascii')
     logo = 'data:image/png;base64,' + base64.b64encode(Path(__file__).with_name('web-login-logo.png').read_bytes()).decode('ascii')
     branding = ('<div class="header-identity"><img class="header-queen" alt="" src="' + logo + '">'

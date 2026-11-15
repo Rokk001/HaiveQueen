@@ -125,6 +125,90 @@ class WebApiTests(RoundCase):
             web_api.execute(self.conn, 'login/input', {'id': 'run', 'text': 'code'})
             send.assert_called_once_with('run', 'code')
 
+    def test_waiting_update_requires_force_confirmation(self):
+        waiting = {'waiting': True, 'reason': 'schema', 'jobs': [{'kind': 'Queen', 'name': 'Q', 'project': 'P'}]}
+        with mock.patch.object(updates, 'waiting_status', return_value=waiting), \
+             mock.patch.object(updates, 'force_waiting_update', return_value=waiting) as force:
+            self.assertEqual(web_api.execute(self.conn, 'updates', {})['waiting'], waiting)
+            with self.assertRaises(ValueError):
+                web_api.execute(self.conn, 'updates/force', {})
+            force.assert_not_called()
+            web_api.execute(self.conn, 'updates/force', {'confirmed': True})
+            force.assert_called_once()
+
+    def test_force_update_writes_request_only_for_waiting_update(self):
+        import json
+        from haivequeen import selfupdate
+        status, request = self.base / 'status.json', self.base / 'force'
+        with mock.patch.object(selfupdate, 'release_status_path', return_value=status), \
+             mock.patch.object(selfupdate, 'release_force_path', return_value=request):
+            with self.assertRaises(ValueError):
+                web_api.execute(self.conn, 'updates/force', {'confirmed': True})
+            self.assertFalse(request.exists())
+            status.write_text(json.dumps({'waiting': True, 'reason': 'schema', 'jobs': [{'kind': 'Build', 'name': 'B'}]}))
+            self.assertEqual(web_api.execute(self.conn, 'updates', {})['waiting']['reason'], 'schema')
+            with self.assertRaises(ValueError):
+                web_api.execute(self.conn, 'updates/force', {'confirmed': False})
+            self.assertFalse(request.exists())
+            self.assertTrue(web_api.execute(self.conn, 'updates/force', {'confirmed': True})['force_requested'])
+            self.assertEqual(request.read_text(), 'confirmed')
+
+    def test_plan_and_build_version_are_shown_from_running_process(self):
+        from datetime import datetime
+        queen = {'name': 'Q', 'person': 'Q', 'status': 'running', 'pid': 31}
+        hive = {'project': 'testproj', 'plan_path': REL, 'queen': queen, 'bees': []}
+        with mock.patch.object(dashboard_data, 'agent_version', return_value='v1'):
+            row = dashboard_data.hive_row(hive, [], {}, datetime.now())
+        self.assertEqual(row['queen_version'], 'v1')
+        with mock.patch('haivequeen.orchestrator.load', return_value={'phase': 'pipeline', 'step': 'Build', 'job': {'version_path': 'versions/v2'}}), \
+             mock.patch.object(dashboard_data, 'path_version', return_value='v2'):
+            info = dashboard_data.orch_info(self.conn, None, hive)
+        self.assertEqual(info['version'], 'v2')
+
+    def test_live_lease_and_detached_job_versions_reach_dashboard(self):
+        import subprocess
+        import sys
+        from datetime import datetime
+        from pathlib import Path
+        from haivequeen import orchestrator, platform, version_layout, version_leases
+
+        root = self.base / 'installation'
+        old = root / 'versions' / '1.0.0'
+        new = root / 'versions' / '2.0.0'
+        old.mkdir(parents=True)
+        new.mkdir(parents=True)
+        (new / 'haivequeen').mkdir()
+        (new / 'haivequeen' / 'cli.py').touch()
+        version_layout.set_active(root, '2.0.0')
+        process = version_leases.launch(old, subprocess.Popen,
+                                        [sys.executable, '-c', 'import time; time.sleep(60)'])
+        try:
+            identity = platform.process_identity(process.pid)
+            self.assertTrue(identity)
+            queen = {'name': 'Q', 'person': 'Q', 'status': 'running', 'pid': process.pid,
+                     'processIdentity': identity}
+            hive = {'project': 'testproj', 'plan_path': REL, 'queen': queen, 'bees': []}
+            with mock.patch.object(dashboard_data, '__file__', str(new / 'haivequeen' / 'dashboard_data.py')):
+                row = dashboard_data.hive_row(hive, [], {}, datetime.now())
+            self.assertEqual(row['queen_version'], '1.0.0')
+            for step in ('Build', 'Deploy'):
+                orchestrator.save(self.conn, 'testproj', REL,
+                                  {'phase': 'pipeline', 'step': step, 'steps': {step: 'running'},
+                                   'job': {'version_path': str(old)}})
+                info = dashboard_data.orch_info(self.conn, None, hive)
+                self.assertEqual(info['version'], '1.0.0')
+        finally:
+            process.terminate()
+            process.wait(timeout=10)
+
+    def test_agent_version_uses_matching_lease_identity(self):
+        from haivequeen import version_leases
+        lease = {'x': {'pid': 31, 'identity': 'birth', 'version': 'v1'}}
+        with mock.patch.object(dashboard_data, '__file__', str(self.base / 'versions' / 'v2' / 'haivequeen' / 'dashboard_data.py')), \
+             mock.patch.object(version_leases, '_load', return_value=lease):
+            self.assertEqual(dashboard_data.agent_version({'pid': 31, 'processIdentity': 'birth'}), 'v1')
+            self.assertEqual(dashboard_data.agent_version({'pid': 31, 'processIdentity': 'different'}), '')
+
     def test_live_view_uses_registered_agent_not_arbitrary_path(self):
         with self.assertRaisesRegex(ValueError, 'Unknown Agent'):
             web_api.execute(self.conn, 'live', {'project': 'testproj', 'agent': '../../private'})
