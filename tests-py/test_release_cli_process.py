@@ -1,4 +1,6 @@
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
 import os
 from pathlib import Path
 import shutil
@@ -30,6 +32,8 @@ class ReleaseCliProcessTest(RoundCase):
             shutil.copytree(source / 'haivequeen', dest / 'haivequeen',
                             ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
             shutil.copytree(source / 'roles', dest / 'roles')
+        server = None
+        requests = []
         if download:
             archive = self.base / 'release.zip'
             with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as release:
@@ -38,12 +42,28 @@ class ReleaseCliProcessTest(RoundCase):
                         if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc':
                             release.write(path, 'release/' + path.relative_to(source).as_posix())
                 release.writestr('release/haivequeen-update.json', '{"compatible_with_older": true}')
-            # Replace only the network boundary in the isolated old installation;
-            # the detached worker still performs archive validation and staging.
+            payload = archive.read_bytes()
+
+            class ReleaseHandler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    requests.append((self.path, self.headers.get('User-Agent')))
+                    self.send_response(200)
+                    self.send_header('Content-Length', str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+
+                def log_message(self, format, *args):
+                    pass
+
+            server = ThreadingHTTPServer(('127.0.0.1', 0), ReleaseHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            # Redirect only the URL in this isolated installation; Request and
+            # urlopen execute unchanged in the detached release worker.
             staging = root / 'versions' / '1.0.0' / 'haivequeen' / 'release_staging.py'
             code = staging.read_text(encoding='utf-8')
-            code = code.replace('with urlopen(request, timeout=60) as response:\n                return response.read()',
-                                'return Path(%r).read_bytes()' % str(archive))
+            code = code.replace('https://api.github.com/repos/',
+                                'http://127.0.0.1:%s/repos/' % server.server_port)
             staging.write_text(code, encoding='utf-8')
         else:
             (root / 'versions' / '2.0.0' / 'haivequeen-update.json').write_text(
@@ -113,6 +133,9 @@ class ReleaseCliProcessTest(RoundCase):
             self.assertEqual((root / 'active-version').read_text().strip(), '2.0.0')
             if download:
                 self.assertTrue((root / 'versions' / '2.0.0' / 'haivequeen' / 'cli.py').is_file())
+                self.assertEqual(len(requests), 1)
+                self.assertTrue(requests[0][0].endswith('/zipball/v2.0.0'))
+                self.assertEqual(requests[0][1], 'HaiveQueen')
             new_pid = loop.loop_running()
             self.assertTrue(new_pid)
             self.assertNotEqual(new_pid, old_pid)
@@ -128,6 +151,10 @@ class ReleaseCliProcessTest(RoundCase):
                 self.assertEqual(job.process.returncode, 0)
                 self.assertTrue(result.exists())
         finally:
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=10)
             for job, _, finish, _ in detached:
                 finish.touch()
                 if job.process.poll() is None:
