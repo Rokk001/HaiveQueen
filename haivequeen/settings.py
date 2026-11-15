@@ -44,7 +44,7 @@ SETTING_LABELS = {
     "deployCommand": N_("Deploy command (empty: no deploy)"), "claudeTools": N_("Tools available to Claude agents"), "protectedWorktrees": N_("Protected worktrees (one per line)"),
     "onEvent": N_("Command after each event"), "onEvent.command": N_("Command"), "onEvent.workDir": N_("Working folder"), "onEvent.timeoutSeconds": N_("Time limit (seconds)"),
     "views": N_("Generated overviews"), "views.queue": N_("Queue overview file"), "views.questions": N_("Open questions file"), "views.decisions": N_("Decisions file"),
-    "prompts": N_("Own prompt texts"), "prompts.integrator": N_("Instructions of the integrating Queen"),
+    "prompts": N_("Own prompt texts"), "prompts.integrator": N_("Legacy integration prompt"),
 }
 # One line of explanation per field of the Apiary page (owner decision 741 (3)).
 SETTING_HELP = {
@@ -70,12 +70,12 @@ SETTING_HELP = {
     "onEvent.timeoutSeconds": N_("The command is stopped after this many seconds."),
     "upstreamRules": N_("Reads AGENTS.md and CLAUDE.md of the Git remote named upstream (last fetch) or of the upstream folder."), "views.queue": N_("A Markdown file that shows the queue."),
     "views.questions": N_("A Markdown file that shows the open questions."), "views.decisions": N_("A Markdown file that shows the decisions."),
-    "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
+    "prompts.integrator": N_("Legacy field; integration is controlled by the Orchestrator, not a Queen."),
 }
 GENERAL_LABELS = {"slowTestSeconds": N_("Slow test threshold (seconds)"), "language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model"),
                   "owner": N_("Owner name"), "queenClass": N_("Queen class"), "diagnosisClass": N_("Question / diagnosis agent class"), "beesPerQueen": N_("Agents per Queen"),
                   "maxConcurrentCompileChecks": N_("Max concurrent compile checks")}
-GENERAL_HELP = {"slowTestSeconds": N_("Show measured individual tests at or above this duration in log details; advisory only, no automatic retry or blocking."), "language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class."),
+GENERAL_HELP = {"slowTestSeconds": N_("Show measured individual tests at or above this duration in log details; advisory only, no automatic retry or blocking."), "language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("Failed attempts trigger diagnosis before another attempt or a more expensive model is authorized."),
                 "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("The model class of the Queens (light, medium or heavy)."),
                 "diagnosisClass": N_("The class used to review technical questions; model and effort come from the provider settings for this class."),
                 "beesPerQueen": N_("How many Agents a Queen may have running at the same time."),
@@ -569,3 +569,6 @@ def parse_typed(text, like=None):
             except ValueError:
                 pass
     return text
+
+GENERAL_LABELS["ramReserveMb"] = N_("Minimum free RAM for agent starts (MiB)")
+GENERAL_HELP["ramReserveMb"] = N_("Agent starts wait below this threshold. Builds have a separate RAM threshold. An explicit minFreeRamGB value overrides this fallback.")

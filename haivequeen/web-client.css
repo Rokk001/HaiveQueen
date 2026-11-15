@@ -1043,3 +1043,36 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .test-timing-notice { margin: .5rem 0; font-size: .85rem; }
 .test-timing-notice summary { cursor: pointer; }
 .test-timing-notice li { overflow-wrap: anywhere; }
+
+/* Task-oriented settings; category contents remain mounted to preserve edits. */
+.settings-editor{max-width:1100px;margin-inline:auto}
+.settings-savebar{position:sticky;top:0;z-index:5;background:#0c171d;border:1px solid #30434a;border-radius:6px;padding:10px;flex-wrap:wrap}
+.settings-savebar small{flex-basis:100%;color:#a9bcc4}
+.settings-scope{color:#a9bcc4;font-size:.85rem;margin:8px 0 12px}
+.settings-workflow-summary{padding:12px 16px;border-left:3px solid #f9cf26;background:#102128;line-height:1.7;overflow-wrap:anywhere}
+.settings-search{width:100%;box-sizing:border-box;margin:12px 0;min-height:40px}
+.settings-categories{display:flex;flex-wrap:wrap;gap:6px;padding:0 0 16px;border-bottom:1px solid #30434a;margin-bottom:12px}
+.settings-categories button{border-radius:5px;padding:9px 12px;background:transparent}
+.settings-categories button[aria-pressed=true]{background:#292710;border-color:#f9cf26;color:#f9cf26}
+.settings-category[hidden]{display:none!important}
+.settings-category>h3{margin:16px 0 10px;font-size:1rem}
+.settings-category>.field{padding:14px 0}
+.settings-category fieldset{margin:12px 0;border-radius:6px}
+.settings-category .provider-section{border:0;padding:8px 0}
+.settings-category .provider-section h3{font-size:.9rem;color:#abc2ca}
+.settings-category .workflow-overall{display:block;margin:12px 0}
+.settings-category .workflow-overall summary{cursor:pointer}
+.settings-category .workflow-overall select{max-width:240px;margin:8px 10px 8px 0}
+.settings-category .field small{max-width:65ch;line-height:1.5}
+.settings-category .provider-advanced{border:0}
+@media(max-width:650px){.settings-savebar{position:static}.settings-categories button{flex:1 1 42%;white-space:normal}.settings-editor .provider-layout{display:block}.settings-editor .provider-list{display:flex;flex-wrap:wrap;margin-bottom:12px}.settings-editor .provider-choice{flex:1 1 30%;min-width:0}.settings-category .field{display:flex;flex-direction:column;gap:6px}.settings-category input,.settings-category textarea,.settings-category select{max-width:100%;box-sizing:border-box}.settings-category .workflow-step{grid-template-columns:1fr}.settings-category .workflow-command{min-width:0}}
+
+.settings-category{border:0;padding:0;margin:0;background:transparent}
+.editor-view > .settings-savebar{padding:10px;background:#0c171d}
+.settings-savebar small{min-width:0;overflow-wrap:anywhere}
+@media(max-width:650px){.editor-view > .settings-savebar{position:static}}
+
+.settings-impact{flex:1 1 200px;font-size:.85rem;color:#a9bcc4;min-width:0}
+.settings-impact summary{cursor:pointer;padding:6px}
+.settings-impact p{line-height:1.5;overflow-wrap:anywhere}
+.settings-savebar>button:first-child{background:#f4c62d;color:#071013;border-color:#f4c62d;font-weight:600}

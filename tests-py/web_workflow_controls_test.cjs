@@ -23,10 +23,10 @@ const modes=step=>find(row(step),n=>n.role==='radio');
 const input=step=>find(row(step),n=>n.tag==='input'&&n.type!=='checkbox')[0];
 render();assert.equal(find(root,n=>n.role==='group').length,5);assert.equal(find(root,n=>n.role==='switch').length,4);assert.equal(input('merge'),undefined);
 const select=()=>find(root,n=>n.tag==='select')[0];
-select().value='git';select().onchange();assert(steps.every(s=>data[s+'Mode']==='git'));assert(steps.slice(1).every(s=>input(s)===undefined));
+select().value='git';find(root,n=>n.textContent==='Apply template')[0].onclick();assert(steps.every(s=>data[s+'Mode']==='git'));assert(steps.slice(1).every(s=>input(s)===undefined));
 modes('check')[0].onclick();assert.equal(data.wayOfWorking,'custom');assert(input('check').required&&!input('check').disabled);
 const toggle=find(row('check'),n=>n.role==='switch')[0];toggle.checked=false;toggle.onchange();assert.equal(input('check'),undefined);assert.equal(data.compileCheck,'check');
-capability.supported.build=false;render();assert(modes('build').every(n=>n.disabled));assert.equal(data.buildMode,'git');assert.equal(data.wayOfWorking,'custom');
+capability.supported.build=false;render();assert(!modes('build')[0].disabled&&modes('build')[1].disabled);assert.equal(data.buildMode,'git');assert.equal(data.wayOfWorking,'custom');
 capability.provider=null;render();assert(select().children.slice(1).every(n=>n.disabled));
 capability.provider='github';capability.supported.build=true;data.checkEnabled=true;render();
 const local=modes('check')[0];assert.equal(local.tabIndex,0);assert.equal(modes('check')[1].tabIndex,-1);
@@ -34,3 +34,5 @@ let prevented=false;local.onkeydown({key:'ArrowRight',preventDefault(){prevented
 assert(prevented);assert.equal(data.checkMode,'git');assert(modes('check')[1].focused);assert.equal(data.compileCheck,'check');
 modes('check')[1].onkeydown({key:'Home',preventDefault(){}});assert.equal(data.checkMode,'local');assert(modes('check')[0].focused);
 assert(changes>=5);console.log('Workflow modes, switches, fields, unsupported steps and keyboard navigation passed');
+
+capability.supported.build=false;data.buildMode='local';render();modes('build')[0].onkeydown({key:'ArrowRight',preventDefault(){}});assert.equal(data.buildMode,'local','Keyboard must not select unsupported provider execution');

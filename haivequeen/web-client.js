@@ -347,6 +347,30 @@ function installCopyButtons(document,navigator,t,notice) {
   const observer=new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node.nodeType===1)decorate(node);});
   observer.observe(document.body,{childList:true,subtree:true});return observer;
 }
+function settingsCategory(scope,key) {
+  const groups=scope==='Projects'?{
+    'Basics':['name','colour','priority'],
+    'Agent rules':['ownerTopics'],
+    'Git and cleanup':['integrationBranch','worktreeLocation','worktreePrefix','deleteFinishedWorktrees','deleteIntegratedBranches'],
+    'Workflow and checks':['nextVersion','releasePostfix','slowTestSeconds'],
+  }:{
+    'Resources':['slots','buildJobs','ramReserveMb','minFreeRamGB','maxConcurrentCompileChecks'],
+    'Agent control':['queenClass','diagnosisClass','beesPerQueen','escalateAfter','roundMinutes','hives','excludedProviders','providerRecheckMinutes'],
+    'Web access':['web'],
+    'Data and retention':['retention','exportDir','slowTestSeconds'],
+    'Updates':['update'],
+    'Basics':['language','owner'],
+  };
+  return Object.keys(groups).find(group=>groups[group].includes(key))||'Advanced';
+}
+function workflowSummary(data, t=x=>x) {
+  const parts=[t('Merge')+': '+t(data.mergeMode==='git'?'Git provider':'Local')];
+  for(const [key,title] of [['check','Check'],['build','Build']])if(data[key+'Enabled'])parts.push(t(title)+': '+t(data[key+'Mode']==='git'?'Git provider':'Local'));
+  parts.push(t('Push')+': '+(data.integrationBranch||t('default branch')));
+  for(const [key,title] of [['deploy','Deploy'],['release','Release']])if(data[key+'Enabled'])parts.push(t(title)+': '+t(data[key+'Mode']==='git'?'Git provider':'Local'));
+  return parts.join(' → ');
+}
+
 function mount(document, bootstrap) {
   const $ = id => document.getElementById(id);
   const t = text => bootstrap.translations[text] || text;
@@ -768,12 +792,12 @@ function mount(document, bootstrap) {
     if(editor?.dirty && !await requestConfirm(t('Discard unsaved changes?')))return;
     generation++;editor=null;tab=name;
     for(const node of $('tabs').querySelectorAll('[data-tab]'))node.setAttribute('aria-selected',String(node.dataset.tab===tab));
-    const inSettings=['General','Providers','Projects'].includes(tab);
+    const inSettings=['Projects','Providers','Git connections','General'].includes(tab);
     settingsToggle.classList.toggle('active',inSettings);
     settingsMenu.hidden=true;settingsToggle.setAttribute('aria-expanded','false');
     render();void refreshLists();
     if(tab==='Releases'){releaseProject ||= client.state?.projects?.[0]?.name || '';void loadReleases();}
-    if(['General','Providers','Projects'].includes(tab))void loadEditor(tab==='Projects' ? (project??client.state?.projects?.[0]?.name) : '');
+    if(['Projects','Providers','Git connections','General'].includes(tab))void loadEditor(tab==='Projects' ? (project??client.state?.projects?.[0]?.name) : '');
   }
   for(const name of ['Dashboard','Plans','Questions','Logs','Releases']){
     const node=button(name,()=>selectTab(name));node.dataset.tab=name;node.setAttribute('role','tab');node.setAttribute('aria-selected',String(name===tab));$('tabs').append(node);
@@ -784,8 +808,8 @@ function mount(document, bootstrap) {
   });
   settingsToggle.id='settings-toggle';settingsToggle.setAttribute('aria-expanded','false');settingsToggle.setAttribute('aria-controls','settings-subnav');
   const settingsGroup=el('div',undefined,'settings-menu');settingsGroup.append(settingsToggle,settingsMenu);$('tabs').append(settingsGroup);
-  for(const name of ['General','Providers','Projects']){
-    const node=button(name,()=>selectTab(name));node.dataset.tab=name;node.setAttribute('role','tab');node.setAttribute('aria-selected','false');settingsMenu.append(node);
+  for(const name of ['Projects','Providers','Git connections','General']){
+    const node=button(({General:'System',Providers:'AI providers'})[name]||name,()=>selectTab(name));node.dataset.tab=name;node.setAttribute('role','tab');node.setAttribute('aria-selected','false');settingsMenu.append(node);
   }
   document.addEventListener('click',event=>{if(!settingsGroup.contains(event.target)){settingsMenu.hidden=true;settingsToggle.setAttribute('aria-expanded','false');}});
   settingsToggle.addEventListener('keydown',event=>{
@@ -850,7 +874,7 @@ function mount(document, bootstrap) {
     if(tab==='Plans')renderPlans();
     if(tab==='Questions')renderQuestions();
     if(tab==='Releases')renderReleases();
-    if(['General','Providers','Projects'].includes(tab))renderEditor();
+    if(['Projects','Providers','Git connections','General'].includes(tab))renderEditor();
     [...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].forEach((node,index)=>{if(positions[index] && node.tagName==='DETAILS')node.open=positions[index].open;});
     fitDashboard();
     [...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].forEach((node,index)=>{const position=positions[index];if(position){node.scrollLeft=position.left;if(!node.classList.contains('log')||!logFollow)node.scrollTop=position.top;}});
@@ -1213,7 +1237,7 @@ function mount(document, bootstrap) {
     try {
       const loaded=await client.request('settings/view'+(project?'?project='+encodeURIComponent(project):''));
       if(token!==generation || pageTab!==tab)return;
-      editor={...loaded,project,dirty:false};
+      editor={...loaded,project,dirty:false,storedKeys:Object.keys(loaded.data||{})};
       if(!project)editor.data=mergeDefaults(bootstrap.general,editor.data);
       client.notice('');render();
     }catch(error){client.notice(error.message,true);}
@@ -1236,23 +1260,29 @@ function mount(document, bootstrap) {
     if(!editor){view.append(el('p',t(tab==='Projects' && !(client.state?.projects || []).length?'Add Project':'Loading…')));return;}
     const toolbar=el('div',undefined,'toolbar');view.append(toolbar);
     toolbar.append(button('Save',saveEditor),button('Reload',async()=>{if(!editor.dirty || await requestConfirm(t('Discard unsaved changes?')))return loadEditor(editor.project);}));
-    const form=section(tab), data=editor.data;
+    const form=section(({General:'System',Providers:'AI providers'})[tab]||tab), data=editor.data;
+    form.classList.add('settings-editor');
+    toolbar.classList.add('settings-savebar');
+    const impact=el('details',undefined,'settings-impact');impact.append(el('summary',t('When changes take effect')),el('p',t('Save applies to this page. Running agents keep their current configuration; new starts use saved settings.')));toolbar.append(impact);
+    if(tab==='General')impact.append(el('p',t('Web settings can reconfigure the web listener when saved. Resource limits apply at the next scheduling decision.')));
+    if(tab==='Git connections'){toolbar.hidden=true;form.append(el('p',t('Credentials are saved separately for each connection and shared across projects.')));}
+
     if(tab==='General'){
       const defaults=bootstrap.general;
       for(const [key,value] of Object.entries(defaults))if(!['providers','projects'].includes(key) && data[key]===undefined)data[key]=copy(value);
       if(editor.build){
         const build=el('fieldset');build.append(el('legend',t('Build')));
         const values={buildJobs:{...(typeof data.buildJobs==='object'?data.buildJobs:{}),...editor.build}};
-        fields(build,values.buildJobs,['buildJobs'],values);
+        fields(build,values.buildJobs,['buildJobs'],values,new Set(),false);
         for(const input of build.querySelectorAll('input,select'))input.addEventListener('change',()=>{
           const next=values.buildJobs;
           if(!Number.isInteger(next.cores)||next.cores<1||next.cores>editor.cores||!Number.isInteger(next.parallel)||next.parallel<1||next.minFreeRamGB<=0){client.notice(t('Invalid build settings'),true);return;}
           delete next.coreShare;delete next.fixed;data.buildJobs=copy(next);changed();
         });form.append(build);
       }
-      fields(form,data,[],data,new Set(['providers','projects','buildJobs']));
+      fields(form,data,[],data,new Set(['providers','projects','buildJobs',...(data.minFreeRamGB!==undefined?['ramReserveMb']:[])]));
       form.append(button('Install /bzz',async()=>{const job=await client.action('tools/install');if(job){job.title='Install /bzz';jobs.set(job.id,job);renderJob(job);}}));
-    } else if(tab==='Providers') {
+    } else if(tab==='Git connections') {
       const git=el('details',undefined,'git-connections');git.append(el('summary',t('Git provider login')),
         el('p',t('One access token is shared by all projects for each Git provider.')));form.append(git);
       client.request('git-login/providers').then(providers=>{
@@ -1269,6 +1299,7 @@ function mount(document, bootstrap) {
           grid.append(card);
         }
       }).catch(error=>client.notice(error.message,true));
+    } else if(tab==='Providers') {
       data.providers ||= [];
       editor.providerIndex=Math.min(editor.providerIndex||0,Math.max(0,data.providers.length-1));
       const layout=el('div',undefined,'provider-layout'),list=el('div',undefined,'provider-list');
@@ -1300,6 +1331,7 @@ function mount(document, bootstrap) {
         if(cliKey==='custom')selected(cli,customFields);
         const source=group(access==='subscription'?'Login':access==='api'?'API key':'Local LLM');
         const saved=!editor.dirty;
+        source.append(el('small',t('Save changes before using connection actions.')));
         const savedAction=(title,fn,parent=source,ready=true)=>{const node=button(title,fn);node.disabled=node.disabled||!saved||!ready;node.dataset.savedOnly='true';parent.append(node);return node;};
         const cliUpdate=status?.cli_update;
         if(cliUpdate){
@@ -1355,7 +1387,7 @@ function mount(document, bootstrap) {
         const advanced=el('details',undefined,'provider-advanced');advanced.append(el('summary',t('Advanced')));card.append(advanced);
         provider.allowedTools=toolsFromArgs(provider.args);
         selected(use,['contextLimit','beeMode']);
-        selected(advanced,['allowedTools','args',...(provider.protocol==='claude'?['claudeTools']:[])]);
+        selected(advanced,['args',...(provider.protocol==='claude'?['claudeTools']:[])]);
         const handled=new Set(['enabled','name','nameEdited','access','apiKey','address','contextWindow','slots','use','classes','limit','capabilities','capabilityThresholds','capabilitiesVersion','beeMode','contextLimit','allowedTools','args','claudeTools',...customFields]);
         fields(advanced,provider,path,data,handled);
         if(provider.limit&&typeof provider.limit==='object'){const limits=el('details');limits.append(el('summary',t('Usage check')));fields(limits,provider.limit,[...path,'limit'],data,new Set(['source']));advanced.append(limits);}
@@ -1369,11 +1401,11 @@ function mount(document, bootstrap) {
       editor.data=mergeDefaults({...bootstrap.project,...editor.project_defaults},data);
       if(data.upstreamRules===undefined && editor.upstream)editor.data.upstreamRules=editor.upstream.on;
       editor.place ||= {repository:editor.repository || '',plansFolder:''};
-      fields(form,editor.place,[],editor.place);
+      fields(form,editor.place,[],editor.place,new Set(),false);
       workflowFields(form,editor.data,editor.git_workflow);
       fields(form,editor.data,[],editor.data,new Set(['codeRepo','repo','rulesOff','upstreamRules','publishReleases','wayOfWorking','mergeMode','checkMode','buildMode','deployMode','releaseMode','checkEnabled','buildEnabled','deployEnabled','releaseEnabled','compileCheck','buildCommand','deployCommand','releaseFolder']));
       const knowledge=el('fieldset');knowledge.append(el('legend',t('Knowledge base')));
-      knowledge.append(el('p',t('The rule files every agent of this Project gets. A switched-off file is given to no agent.')));
+      knowledge.append(el('p',t('These files are supplied by HQ. A CLI may still load its own rules when HQ injection is disabled.')));
       for(const rule of editor.rules || []){
         const label=el('label',undefined,'field'),toggle=el('input');toggle.type='checkbox';toggle.checked=!(editor.data.rulesOff || []).includes(rule.label);
         toggle.onchange=()=>{const off=new Set(editor.data.rulesOff || []);if(toggle.checked)off.delete(rule.label);else off.add(rule.label);editor.data.rulesOff=[...off];changed();};
@@ -1387,10 +1419,69 @@ function mount(document, bootstrap) {
         toggle.onchange=()=>{editor.data.upstreamRules=toggle.checked;changed();};label.append(el('span',t(bootstrap.labels.upstreamRules)),toggle);knowledge.append(label);
         if(editor.upstream.note)knowledge.append(el('p',t(editor.upstream.note)));
       }
-      knowledge.append(el('p',t("HaiveQueen's own role texts are always added.")));form.prepend(knowledge);
+      knowledge.append(el('p',t("HaiveQueen's own role texts are always added.")));form.append(knowledge);
     }
+    organizeSettings(form);
     // The unsaved marker survives live dashboard reads.
     const marker=el('span',editor.dirty?t('Unsaved changes'):'');marker.id='dirty-marker';toolbar.append(marker);
+  }
+  function organizeSettings(form) {
+    if(tab==='Git connections')return;
+    const host=tab==='Providers'?form.querySelector('.provider-form'):form;
+    if(!host)return;
+    const order=tab==='Projects'?['Basics','Workflow and checks','Agent rules','Git and cleanup','Advanced']:
+      tab==='Providers'?['Connection','Models and effort','Use and limits','Tools and MCP','Advanced']:
+      ['Basics','Resources','Agent control','Web access','Data and retention','Updates','Advanced'];
+    const sections=new Map(order.map(name=>{const box=el('section',undefined,'settings-category');box.dataset.category=name;box.setAttribute('aria-label',t(name));box.append(el('h3',t(name)));return [name,box];}));
+    const providerGroups={'Providers':'Connection','CLI':'Connection','Login':'Connection','API key':'Connection','Local LLM':'Connection','Models':'Models and effort','Use':'Use and limits','Tool connections':'Tools and MCP'};
+    for(const node of [...host.children]){
+      if(node.tagName==='H2')continue;
+      const heading=node.querySelector('legend,h3,summary')?.textContent;
+      const pathNode=node.matches?.('[data-path]')?node:node.querySelector('[data-path]');
+      const key=pathNode?JSON.parse(pathNode.dataset.path)[0]:null;
+      let category=tab==='Providers'?Object.keys(providerGroups).find(name=>t(name)===heading):null;
+      category=tab==='Providers'?(providerGroups[category]||'Advanced'):settingsCategory(tab,key);
+      if(tab==='Projects'){
+        if(node.classList.contains('workflow-settings'))category='Workflow and checks';
+        if(heading===t('Knowledge base'))category='Agent rules';
+        if(['repository','plansFolder','plans','planGlobs','planExclude'].includes(key))category='Basics';
+      }
+      if(tab==='General'&&heading===t('Build'))category='Resources';
+      if(node.classList.contains('provider-footer'))category='Advanced';
+      if(node.tagName==='BUTTON'&&node.textContent===t('Add setting')){
+        // Only the advanced category exposes raw configuration extensions.
+        if(sections.get('Advanced').querySelector('.settings-add')){node.remove();continue;}
+        node.classList.add('settings-add');
+      }
+      sections.get(category).append(node);
+    }
+    const navigation=el('nav',undefined,'settings-categories');navigation.setAttribute('aria-label',t('Settings sections'));
+    const search=el('input');search.type='search';search.className='settings-search';search.placeholder=t('Search settings');search.setAttribute('aria-label',t('Search settings'));search.value=editor.search||'';
+    const empty=el('p',t('No matching settings'),'settings-empty');empty.hidden=true;
+    const active=order.includes(editor.settingsCategory)?editor.settingsCategory:order[0];editor.settingsCategory=active;
+    const buttons=new Map();
+    const apply=()=>{
+      const query=search.value.trim().toLocaleLowerCase();let matches=0;
+      for(const [name,box] of sections){
+        const found=!query||box.textContent.toLocaleLowerCase().includes(query)||[...box.querySelectorAll('input,textarea')].some(input=>String(input.value).toLocaleLowerCase().includes(query));
+        box.hidden=query?!found:name!==(editor.settingsCategory||active);
+        if(!box.hidden){matches++;if(query)for(const details of box.querySelectorAll('details'))details.open=true;}
+        buttons.get(name).setAttribute('aria-pressed',String(!query&&!box.hidden));
+      }
+      empty.hidden=matches>0;
+    };
+    for(const [name,box] of sections){
+      const control=button(name,()=>{editor.settingsCategory=name;editor.search='';search.value='';apply();});buttons.set(name,control);navigation.append(control);
+      host.append(box);
+    }
+    search.oninput=()=>{editor.search=search.value;apply();};
+    host.prepend(navigation);host.prepend(search);host.append(empty);
+    if(tab==='Projects'){
+      const summary=el('p',workflowSummary(editor.data,t),'settings-workflow-summary');host.prepend(summary);
+      const source=el('p',t('Scope: this project. Models, agent resources and access are configured in AI providers and System.'),'settings-scope');host.prepend(source);
+    }else if(tab==='General')host.prepend(el('p',t('Scope: all projects on this installation.'),'settings-scope'));
+    const heading=host.querySelector(':scope > h2');if(heading)host.prepend(heading);
+    apply();
   }
   function workflowFields(parent,data,capabilities) {
     const steps=[['merge','Merge'],['check','Check','compileCheck','Compile check command'],['build','Build','buildCommand','Build command'],['deploy','Deploy','deployCommand','Deploy command'],['release','Release','releaseFolder','Release folder']];
@@ -1399,7 +1490,9 @@ function mount(document, bootstrap) {
     if(!supported)group.append(el('p',t('Git provider is not supported for this remote. Only Local is available.')));
     const select=el('select');select.setAttribute('aria-label',t('Way of working'));
     for(const [value,label] of [['local','Local'],['git','Git provider'],['custom','Custom']]){const option=el('option',t(label));option.value=value;if(value!=='local'&&!supported)option.disabled=true;select.append(option);}
-    select.value=data.wayOfWorking;select.onchange=()=>{data.wayOfWorking=select.value;if(select.value!=='custom')for(const [step] of steps)data[step+'Mode']=select.value;changed();render();};const overall=el('label',undefined,'workflow-overall');overall.append(el('span',t('Execution mode')),select);group.append(overall);
+    select.value='custom';
+    const apply=el('button',t('Apply template'));apply.type='button';apply.onclick=()=>{if(select.value==='custom')return;data.wayOfWorking=select.value;for(const [step] of steps)data[step+'Mode']=select.value;changed();render();};
+    const overall=el('details',undefined,'workflow-overall');overall.append(el('summary',t('Apply execution template')),el('p',t('Replaces the location of every step. Enabled steps and commands are preserved.')),select,apply);group.append(overall);
     for(const [step,label,field,fieldLabel] of steps){
       const enabled=!field||!!data[step+'Enabled'];
       const row=el('div',undefined,'workflow-step'+(enabled?'':' is-off'));row.dataset.workflowStep=step;row.setAttribute('role','group');row.setAttribute('aria-label',t(label));row.append(el('h3',t(label)));
@@ -1408,9 +1501,9 @@ function mount(document, bootstrap) {
       const unavailable=supported&&data[step+'Mode']==='git'&&!capabilities.supported[step];
       const mode=el('div',undefined,'workflow-location');mode.setAttribute('role','radiogroup');mode.setAttribute('aria-label',t(label+' location'));
       for(const [value,text] of [['local','Local'],['git','Git provider']]){
-        const choice=el('button',t(text));choice.type='button';choice.dataset.mode=value;choice.setAttribute('role','radio');choice.setAttribute('aria-checked',String(data[step+'Mode']===value));choice.disabled=!supported||unavailable;
-        choice.tabIndex=data[step+'Mode']===value?0:-1;
-        const choose=(next,keyboard=false)=>{data[step+'Mode']=next;const modes=new Set(steps.map(([name])=>data[name+'Mode']));data.wayOfWorking=modes.size===1?[...modes][0]:'custom';changed();render();if(keyboard)view.querySelector('[data-workflow-step="'+step+'"] [data-mode="'+next+'"]')?.focus({preventScroll:true});};
+        const choice=el('button',t(text));choice.type='button';choice.dataset.mode=value;choice.setAttribute('role','radio');choice.setAttribute('aria-checked',String(data[step+'Mode']===value));choice.disabled=value==='git'&&(!supported||!capabilities.supported[step]);
+        choice.tabIndex=data[step+'Mode']===value||(value==='local'&&(!supported||unavailable))?0:-1;
+        const choose=(next,keyboard=false)=>{if(next==='git'&&(!supported||!capabilities.supported[step]))return;data[step+'Mode']=next;const modes=new Set(steps.map(([name])=>data[name+'Mode']));data.wayOfWorking=modes.size===1?[...modes][0]:'custom';changed();render();if(keyboard)view.querySelector('[data-workflow-step="'+step+'"] [data-mode="'+next+'"]')?.focus({preventScroll:true});};
         choice.onclick=()=>choose(value);
         choice.onkeydown=event=>{if(choice.disabled)return;let next;if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))next=value==='local'?'git':'local';else if(event.key==='Home')next='local';else if(event.key==='End')next='git';else return;event.preventDefault();choose(next,true);};
         mode.append(choice);
@@ -1456,15 +1549,15 @@ function mount(document, bootstrap) {
       if(['password','capabilitiesVersion'].includes(name)||omit.has(name))continue;
       const full=[...path,name];
       if(value && typeof value==='object' && !Array.isArray(value)){
-        const group=el('details');group.open=['web','classes','buildJobs'].includes(name);group.append(el('summary',pretty(name)));fields(group,value,full,root);parent.append(group);continue;
+        const group=el('details');group.open=['web','classes','buildJobs'].includes(name);group.append(el('summary',pretty(name)));fields(group,value,full,root,new Set(),false);parent.append(group);continue;
       }
       if(Array.isArray(value) && (value.some(item=>typeof item==='object') || ['providers','projects'].includes(name))){arrayEditor(parent,object,name,path,{},root);continue;}
-      const label=el('label',undefined,'field');label.append(el('span',t(bootstrap.fieldLabels?.[tab]?.[name] || bootstrap.labels[name] || pretty(name))));
+      const label=el('label',undefined,'field');label.append(el('span',t((tab==='General'&&path.length===0&&name==='minFreeRamGB'?'Minimum free RAM for agent starts (GiB)':null) || bootstrap.fieldLabels?.[tab]?.[name] || bootstrap.labels[name] || pretty(name))));
       const choices=bootstrap.choices[name] || (name==='access'?['subscription','api','llm']:name==='language'&&tab==='General'?['English','German']:null);
       let input;
       if(choices){input=el('select');for(const choice of [...new Set([...choices,value])]){const option=el('option',t(bootstrap.choiceLabels?.[name]?.[choice] || choice));option.value=choice;input.append(option);}input.value=value;}
       else if(Array.isArray(value)||String(value).includes('\n')){input=el('textarea');input.value=Array.isArray(value)?value.join('\n'):value;}
-      else {input=el('input');input.type=typeof value==='boolean'?'checkbox':typeof value==='number'?'number':/apiKey|providerKey/i.test(name)?'password':'text';if(input.type==='checkbox')input.checked=value;else input.value=value ?? '';if(input.type==='number')input.step='any';}
+      else {input=el('input');input.type=typeof value==='boolean'?'checkbox':typeof value==='number'?'number':/apiKey|providerKey/i.test(name)?'password':'text';if(input.type==='checkbox')input.checked=value;else input.value=value ?? '';if(input.type==='number')input.step='any';if(['cores','parallel','port','maxConcurrentCompileChecks'].includes(name)){input.min='1';input.step='1';input.required=true;}if(name==='port')input.max='65535';if(name==='slowTestSeconds'){input.required=true;}}
       input.oninput=input.onchange=()=>{let next=input.value;if(typeof value==='boolean')next=input.checked;else if(typeof value==='number'){if(!input.value.trim()||!Number.isFinite(Number(input.value)))return;next=Number(input.value);}else if(Array.isArray(value))next=name==='args'?input.value.split('\n'):input.value.split('\n').filter(x=>x!=='');setValue(root,full,next);
         if(path[0]==='providers'){
           const provider=root.providers[path[1]];
@@ -1480,7 +1573,7 @@ function mount(document, bootstrap) {
             if(Array.isArray(offered)){const entry=provider.classes[path[3]];if(offered.includes(next))delete entry.customModel;else entry.customModel=true;}
           }
         }
-        changed();};
+        label.querySelector('.settings-origin')?.remove();changed();};
       input.dataset.path=JSON.stringify(full);
       if(name==='model'||name==='effort'){
         const provider=path[0]==='providers'?root.providers[path[1]]:null;
@@ -1488,7 +1581,12 @@ function mount(document, bootstrap) {
         const items=name==='model'?offered.models:offered.efforts;
         if(items?.length){const list=el('datalist');list.id='choices-'+Math.random().toString(36).slice(2);for(const item of items){const option=el('option');option.value=typeof item==='string'?item:item.id||item.name;list.append(option);}input.setAttribute('list',list.id);label.append(list);}
       }
-      label.append(input);const help=bootstrap.fieldHelp?.[tab]?.[name] || bootstrap.help[name] || bootstrap.defaultHelp?.[tab];if(help)label.append(el('small',t(help)));parent.append(label);
+      label.append(input);
+      if(path.length===0&&root===editor.data&&!editor.storedKeys?.includes(name)){
+        const origin=editor.project_defaults&&Object.hasOwn(editor.project_defaults,name)?'Repository default':'Application default';
+        label.append(el('small',t(origin),'settings-origin'));
+      }
+      const help=(tab==='General'&&path.length===0&&name==='minFreeRamGB'?'Overrides the legacy agent RAM reserve; independent of the build RAM threshold.':null) || bootstrap.fieldHelp?.[tab]?.[name] || bootstrap.help[name] || bootstrap.defaultHelp?.[tab];if(help)label.append(el('small',t(help)));parent.append(label);
     }
     if(!allowAdd)return;
     const add=button('Add setting',async()=>{
@@ -1506,7 +1604,11 @@ function mount(document, bootstrap) {
   }
   async function saveEditor() {
     const current=editor;
-    for(const input of view.querySelectorAll('.capability-threshold input[type="number"]'))if(!input.disabled && !input.reportValidity())return;
+    for(const input of view.querySelectorAll('input,select,textarea'))if(!input.disabled && !input.checkValidity()){
+      const category=input.closest('.settings-category');if(category){for(const box of view.querySelectorAll('.settings-category'))box.hidden=box!==category;editor.settingsCategory=category.dataset.category;}
+      for(let parent=input.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
+      input.reportValidity();return;
+    }
     const sent=JSON.stringify([current.data,current.place]);
     const data=copy(current.data);
     if(!current.project)for(const provider of data.providers || []){
@@ -1518,7 +1620,7 @@ function mount(document, bootstrap) {
     if(!loaded)return;
     if(current!==editor)return;
     if(JSON.stringify([current.data,current.place])!==sent){current.revision=loaded.revision;current.dirty=true;client.notice(t('Saved. Newer edits are still unsaved.'));return;}
-    editor={...loaded,project:current.project,dirty:false,rules:current.rules,upstream:current.upstream,workspace:current.workspace,place:current.place,project_defaults:current.project_defaults,git_workflow:current.git_workflow,provider_models:current.provider_models,benchmark:current.benchmark,build:current.build,cores:current.cores};
+    editor={...loaded,project:current.project,settingsCategory:current.settingsCategory,search:current.search,storedKeys:Object.keys(loaded.data||{}),dirty:false,rules:current.rules,upstream:current.upstream,workspace:current.workspace,place:current.place,project_defaults:current.project_defaults,git_workflow:current.git_workflow,provider_models:current.provider_models,benchmark:current.benchmark,build:current.build,cores:current.cores};
     if(!current.project && current.data.language && current.data.language!==bootstrap.language){location.reload();return;}
     render();void client.refresh();
     client.notice(t(current.data.web?'Saved. Applying web settings.':'Saved.'));
@@ -1583,5 +1685,5 @@ function mount(document, bootstrap) {
   void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={testTimingNotice,LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={settingsCategory,workflowSummary,testTimingNotice,LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

@@ -866,3 +866,35 @@ GERMAN.update({
     'No individual test durations available in this excerpt': 'Keine Einzeltest-Laufzeiten in diesem Ausschnitt verfügbar',
     'Measured durations in the loaded log excerpt only. A long duration does not prove unnecessary waiting. No additional tests are started.': 'Gemessene Laufzeiten nur aus dem geladenen Logausschnitt. Eine lange Laufzeit belegt keine unnötige Wartezeit. Es werden keine zusätzlichen Tests gestartet.',
 })
+
+# Task-oriented settings navigation.
+GERMAN.update({
+    'System':'System', 'AI providers':'KI-Anbieter', 'Git connections':'Git-Verbindungen',
+    'Basics':'Grundlagen', 'Workflow and checks':'Ablauf und Prüfungen', 'Agent rules':'Agent-Regeln',
+    'Git and cleanup':'Git und Aufräumen', 'Resources':'Ressourcen', 'Agent control':'Agent-Steuerung',
+    'Web access':'Webzugriff', 'Data and retention':'Daten und Aufbewahrung', 'Updates':'Updates',
+    'Connection':'Verbindung', 'Models and effort':'Modelle und Effort', 'Use and limits':'Einsatz und Limits',
+    'Tools and MCP':'Tools und MCP', 'Settings sections':'Einstellungsbereiche',
+    'Search settings':'Einstellungen suchen', 'No matching settings':'Keine passenden Einstellungen',
+    'default branch':'Standardbranch', 'Apply template':'Vorlage anwenden',
+    'Apply execution template':'Ausführungsvorlage anwenden',
+    'Replaces the location of every step. Enabled steps and commands are preserved.':'Ändert den Ausführungsort aller Schritte. Aktivierte Schritte und Befehle bleiben erhalten.',
+    'Save applies to this page. Running agents keep their current configuration; new starts use saved settings.':'Speichern gilt für diese Seite. Laufende Agents behalten ihre Konfiguration; neue Starts verwenden die gespeicherten Einstellungen.',
+    'Web settings can reconfigure the web listener when saved. Resource limits apply at the next scheduling decision.':'Webeinstellungen können beim Speichern den Webserver umkonfigurieren. Ressourcenlimits gelten bei der nächsten Zuteilung.',
+    'Credentials are saved separately for each connection and shared across projects.':'Zugangsdaten werden pro Verbindung separat gespeichert und projektübergreifend verwendet.',
+    'Save changes before using connection actions.':'Änderungen vor dem Anmelden oder Prüfen der Verbindung speichern.',
+    'These files are supplied by HQ. A CLI may still load its own rules when HQ injection is disabled.':'HQ gibt diese Dateien mit. Eine CLI kann ihre eigenen Regeln auch bei ausgeschalteter HQ-Einbindung laden.',
+    'Scope: this project. Models, agent resources and access are configured in AI providers and System.':'Gilt für dieses Projekt. Modelle, Agent-Ressourcen und Zugänge stehen unter KI-Anbieter und System.',
+    'Scope: all projects on this installation.':'Gilt für alle Projekte dieser Installation.',
+    'Legacy integration prompt':'Veralteter Integrationsprompt',
+    'Legacy field; integration is controlled by the Orchestrator, not a Queen.':'Altlast: Die Integration steuert der Orchestrator, keine Queen.',
+    'Failed attempts trigger diagnosis before another attempt or a more expensive model is authorized.':'Nach fehlgeschlagenen Versuchen prüft eine Diagnose, ob ein neuer Versuch oder ein teureres Modell begründet ist.',
+    'Minimum free RAM for agent starts (MiB)':'Freier RAM für Agent-Starts (MiB)',
+    'Agent starts wait below this threshold. Builds have a separate RAM threshold. An explicit minFreeRamGB value overrides this fallback.':'Agent-Starts warten unter dieser Grenze. Builds haben eine separate RAM-Grenze. Ein expliziter minFreeRamGB-Wert hat Vorrang vor diesem Rückfallwert.',
+})
+
+GERMAN.update({'Repository default':'Repository-Vorgabe','Application default':'Anwendungsvorgabe'})
+
+GERMAN.update({'Minimum free RAM for agent starts (GiB)':'Freier RAM für Agent-Starts (GiB)','Overrides the legacy agent RAM reserve; independent of the build RAM threshold.':'Ersetzt die alte Agent-RAM-Reserve; unabhängig von der Build-RAM-Grenze.'})
+
+GERMAN['When changes take effect'] = 'Wann Änderungen wirksam werden'

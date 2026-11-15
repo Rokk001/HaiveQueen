@@ -51,7 +51,7 @@ window.addEventListener('load', async () => {
 
     if(document.documentElement.lang==='de'){
 
-      assert(buttons('Allgemein').length && buttons('Anbieter').length && buttons('Projekte').length,'Language change did not translate tabs');
+      assert(buttons('System').length && buttons('KI-Anbieter').length && buttons('Projekte').length,'Language change did not translate tabs');
 
       await wait(()=>buttons('Sofort stoppen').length);
 
@@ -71,7 +71,7 @@ window.addEventListener('load', async () => {
 
       await click('Einstellungen');
 
-      await click('Anbieter');await wait(()=>field(['providers',0,'access']));
+      await click('KI-Anbieter');await wait(()=>field(['providers',0,'access']));
 
       const access=field(['providers',0,'access']);
 
@@ -97,7 +97,7 @@ window.addEventListener('load', async () => {
 
     await click('Settings');
 
-    assert(!settingsMenu.hidden && settingsMenu.querySelectorAll('[data-tab]').length===3,'Settings children missing');
+    assert(!settingsMenu.hidden && settingsMenu.querySelectorAll('[data-tab]').length===4,'Settings children missing');
 
     assert(getComputedStyle(settingsMenu).position==='absolute','Settings must open as an overlay dropdown');
 
@@ -238,6 +238,7 @@ window.addEventListener('load', async () => {
     if(document.querySelector('#settings-subnav').hidden)await click('Settings');
 
     await click('General');await wait(()=>field(['web','port']));
+    await click('Web access');
 
     input(['web','port'],'9494');await click('Save');
 
@@ -261,8 +262,7 @@ window.addEventListener('load', async () => {
 
     if(document.querySelector('#settings-subnav').hidden)await click('Settings');
 
-    await click('Providers');await wait(()=>buttons('Login').length);
-    await wait(()=>buttons('Save access token').length);
+    await click('Git connections');await wait(()=>buttons('Save access token').length);
     assert(!document.querySelector('.git-connections').open,'Git credentials must start compact');
     document.querySelector('.git-connections').open=true;
     document.querySelector('.git-connection').open=true;
@@ -278,6 +278,9 @@ window.addEventListener('load', async () => {
     assert(!requests.some(row=>row.action==='git-login/start'||row.action==='git-login/poll'),'Deferred Git device endpoint was used');
     assert(document.querySelector('[aria-label="Access token"]').value==='','Saved token remains in the form');
 
+    if(document.querySelector('#settings-subnav').hidden)await click('Settings');
+    await click('Providers');await wait(()=>buttons('Login').length);
+    assert(!document.querySelector('.git-connections'),'Git credentials must not be mixed with AI settings');
     await click('Login');await wait(()=>document.querySelector('[id^=login-] a'));
 
     const panel=document.querySelector('[id^=login-]');
@@ -292,11 +295,11 @@ window.addEventListener('load', async () => {
 
     input(['providers',0,'classes','medium','model'],'own-model');
 
-    input(['providers',0,'allowedTools'],'Read\nBash(cmd(a,b))');
+    assert(!field(['providers',0,'allowedTools']),'Duplicate tool editor remains');
 
     const args=field(['providers',0,'args']);
 
-    input(['providers',0,'args'],args.value+'\n--extra');
+    input(['providers',0,'args'],args.value+'\n--allowedTools\nRead,Bash(cmd(a,b))\n--extra');
 
     assert(buttons('Login')[0].disabled,'Unsaved provider still offers login');
 
@@ -317,6 +320,23 @@ window.addEventListener('load', async () => {
     if(document.querySelector('#settings-subnav').hidden)await click('Settings');
 
     await click('Projects');await wait(()=>field(['compileCheck']));
+    assert(field(['name']).closest('.settings-category').dataset.category==='Basics','Name is not under Basics');
+    assert(field(['integrationBranch']).closest('.settings-category').hidden,'Advanced categories should start hidden');
+    const search=document.querySelector('.settings-search');search.value='integration';search.dispatchEvent(new Event('input'));
+    assert(!field(['integrationBranch']).closest('.settings-category').hidden,'Search did not find integration settings');
+    await click('Workflow and checks');
+    const command=field(['compileCheck']);const original=command.value;
+    input(['compileCheck'],'');await click('Basics');
+    const beforeInvalid=(await (await fetch('/test-actions')).json()).filter(row=>row.action==='settings/save').length;
+    await click('Save');
+    assert(!field(['compileCheck']).closest('.settings-category').hidden,'Invalid field category must be shown');
+    const afterInvalid=(await (await fetch('/test-actions')).json()).filter(row=>row.action==='settings/save').length;
+    assert(beforeInvalid===afterInvalid,'Invalid command was saved');input(['compileCheck'],original);
+    await click('Workflow and checks');
+    for(const name of ['Basics','Workflow and checks','Agent rules','Git and cleanup','Advanced']){
+      await click(name);assert(document.documentElement.scrollWidth<=innerWidth,'Settings overflow in '+name);
+    }
+    await click('Workflow and checks');
     const way=document.querySelector('[aria-label="Way of working"]');
     assert(way && way.options.length===3,'Workflow choices missing');
     assert([...document.querySelectorAll('.workflow-step h3')].filter(node=>['Merge','Check','Build','Deploy','Release'].includes(node.textContent)).length===5,'Workflow rows missing');
@@ -326,12 +346,14 @@ window.addEventListener('load', async () => {
     assert(!field(['buildCommand']),'Disabled build must not show an empty command');
     assert(document.querySelector('[data-workflow-step=build] .workflow-location').hidden,'Disabled step must be compact');
     way.value='git';way.dispatchEvent(new Event('change'));
+    assert(field(['compileCheck']),'Template selection applied without explicit action');
+    await click('Apply template');
     assert(!field(['compileCheck']),'Provider check must not show a local command');
-    assert([...document.querySelectorAll('[aria-label="Release location"] button')].every(button=>button.disabled),'Unsupported provider release must be greyed');
-    assert(document.querySelector('[aria-label="Way of working"]').value==='git','Unsupported step must not change the choice');
+    assert(document.querySelector('[aria-label="Release location"] [data-mode=git]').disabled,'Unsupported provider release must be greyed');
+    assert(document.querySelector('.settings-workflow-summary').textContent.includes('Git provider'),'Effective workflow missing');
     document.querySelector('[aria-label="Check location"] [data-mode=local]').click();
     assert(document.querySelector('[aria-label="Way of working"]').value==='custom','Manual change must select Custom');
-    document.querySelector('[aria-label="Way of working"]').value='local';document.querySelector('[aria-label="Way of working"]').dispatchEvent(new Event('change'));
+    document.querySelector('[aria-label="Way of working"]').value='local';await click('Apply template');
 
     assert(field(['integrationBranch']).value==='develop','Repository default branch was replaced');
 
@@ -348,11 +370,11 @@ window.addEventListener('load', async () => {
 
     assert(project.place.plansFolder==='demo-plans','Project place missing');
     await click('Reload');await wait(()=>document.getElementById('dirty-marker').textContent==='');
-    assert(document.querySelector('[aria-label="Way of working"]').value==='local','Saved workflow choice was not reloaded');
+    assert(document.querySelector('[aria-label="Check location"] [data-mode=local]').getAttribute('aria-checked')==='true','Saved workflow choice was not reloaded');
     const selectProject=document.querySelector('[aria-label="Project"]');selectProject.value='local-only';selectProject.dispatchEvent(new Event('change'));
     await wait(()=>document.body.textContent.includes('Only Local is available.'));
     assert([...document.querySelector('[aria-label="Way of working"]').options].filter(option=>option.value!=='local').every(option=>option.disabled),'Unsupported remote offers nonlocal choice');
-    assert(['Merge','Check','Build','Deploy','Release'].every(name=>[...document.querySelectorAll('[aria-label="'+name+' location"] button')].every(button=>button.disabled)),'Unsupported remote offers provider toggles');
+    assert(['Merge','Check','Build','Deploy','Release'].every(name=>document.querySelector('[aria-label="'+name+' location"] [data-mode=git]').disabled),'Unsupported remote offers provider toggles');
     await click('Releases');await wait(()=>buttons('Publish as full release').length);
     assert(buttons('Publish as full release').length===1,'Full release must not offer promotion');
     for(const value of ['v2.0.1-dev.3','2026-01-02','a'.repeat(40),'Prerelease'])assert(document.body.textContent.includes(value),'Missing release metadata '+value);

@@ -44,6 +44,12 @@ class BrowserTests(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_settings_navigation(self):
+        if not shutil.which('node'):
+            self.skipTest('Node is required for settings regression tests')
+        result = subprocess.run(['node', str(Path(__file__).with_name('web_settings_navigation_test.cjs'))], cwd=ROOT, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_client_behaviour(self):
         node = shutil.which('node')
         if not node:
@@ -153,13 +159,18 @@ class BrowserTests(unittest.TestCase):
             for text in data[group].values():
                 self.assertIn(text, data['translations'], (group, text))
 
+    def test_settings_mobile_browser(self):
+        self.browser_script = 'web_settings_browser_test.js'
+        self.browser_size = '400,843'
+        self.test_real_browser_controls_settings_conflict_login_questions_updates_and_live()
+
     def test_real_browser_controls_settings_conflict_login_questions_updates_and_live(self):
         candidates = [shutil.which(name) for name in ('msedge', 'chromium', 'google-chrome')]
         for variable in ('PROGRAMFILES(X86)', 'PROGRAMFILES'):
             if os.environ.get(variable):
                 for executable in ('Microsoft/Edge/Application/msedge.exe', 'Google/Chrome/Application/chrome.exe'):
                     candidates.append(str(Path(os.environ[variable]) / executable))
-        flags = ['--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+        flags = ['--headless', '--force-device-scale-factor=1', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
                  '--disable-extensions', '--disable-background-networking']
         process_options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
         browser = None
@@ -181,6 +192,7 @@ class BrowserTests(unittest.TestCase):
                 break
         if not browser:
             self.skipTest('The DOM smoke test requires a Chromium browser with working headless DOM output')
+        self_test = self
         actions = []
         live_reads = []
         browser_language = ['English']
@@ -218,7 +230,7 @@ class BrowserTests(unittest.TestCase):
                     html=web_ui.page('test-csrf',language=browser_language[0])
                     return self.send(html.replace('</body>', '<script src="/test.js"></script></body>'),'text/html')
                 if route=='/test.js':
-                    return self.send(Path(__file__).with_name('web_browser_test.js').read_text(encoding='utf-8'),'text/javascript')
+                    return self.send(Path(__file__).with_name(getattr(self_test, 'browser_script', 'web_browser_test.js')).read_text(encoding='utf-8'),'text/javascript')
                 if route in ('/web-client.js','/web-client.css'):
                     return self.send(web_ui.asset(route[1:]),'text/javascript' if route.endswith('.js') else 'text/css')
                 if route=='/api/plan/detail':
@@ -283,7 +295,7 @@ class BrowserTests(unittest.TestCase):
         thread.start()
         try:
             with tempfile.TemporaryDirectory() as profile:
-                command=[browser,*flags,'--window-size=1500,1000','--user-data-dir='+profile,
+                command=[browser,*flags,'--window-size='+getattr(self, 'browser_size', '1500,1000'),'--user-data-dir='+profile,
                          '--dump-dom','--virtual-time-budget=60000','http://127.0.0.1:'+str(server.server_port)]
                 result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=90,
                                       env=self.browser_environment(profile),
