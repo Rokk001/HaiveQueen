@@ -99,7 +99,12 @@ def _check_agents(env) -> None:
     seen = set(json.loads(raw)) if raw else set()
     first = raw is None
     from . import interrupt
-    for a in env.agents("all"):
+    # Archived runs are history, not newly ended work. Retain identities for
+    # every remaining run instead of evicting them by alphabetical position.
+    agents = env.agents("active")
+    current = {"%s|%s" % (a["name"], a.get("started_at") or "") for a in agents if a.get("name")}
+    seen.intersection_update(current)
+    for a in agents:
         if a.get("status") not in ("done", "failed") or not a.get("name") or interrupt.is_interrupted(a):
             continue
         key = "%s|%s" % (a["name"], a.get("started_at") or "")
@@ -117,7 +122,7 @@ def _check_agents(env) -> None:
             kind, what = "agent_no_result", "it ended (%s) without a final result" % a["status"]
         if not first:
             file_fault(conn, env.name, kind, "Agent %s of Project %s: %s." % (a["name"], env.name, what))
-    runtime.kv_set(conn, env.name, SEEN_KEY, json.dumps(sorted(seen)[-500:]))
+    runtime.kv_set(conn, env.name, SEEN_KEY, json.dumps(sorted(seen)))
 
 
 def _check_idle(env, started: int, can_start: bool) -> None:
