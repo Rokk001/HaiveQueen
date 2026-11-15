@@ -139,8 +139,11 @@ def status_text(hive) -> str:
         return (tr("Waiting for owner check") if state == "owner_check" else tr("Waiting for answer")) + suffix
     if state == "answer" and not questions:
         state = "waiting"   # old snapshots may still refer to an answered question
-    if hive.get("blocker") and state in ("running", "waiting", "starting", "requeen", "codex_wait", "provider_wait", "integration_wait"):
-        return blocker_text(hive["blocker"]) + suffix
+    blocker = hive.get("blocker")
+    if not questions and str(blocker or '').startswith('Plan state "answer"'):
+        blocker = None
+    if blocker and state in ("running", "waiting", "starting", "requeen", "codex_wait", "provider_wait", "integration_wait"):
+        return blocker_text(blocker) + suffix
     if state == "running":
         return tr("No active Queen") + (tr("; open questions %s", "#" + ", #".join(map(str, questions))) if questions else "")
     if state == "done":

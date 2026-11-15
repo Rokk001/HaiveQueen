@@ -849,6 +849,7 @@ function mount(document, bootstrap) {
           if(result)client.notice(t('Plans processed: %s').replace('%s',result.count));
         } finally {void client.refresh();void refreshLists();}
       });
+      node.disabled=node.disabled||!(state.controls?.plans?.[action]>0);
       if(action==='force-stop')node.classList.add('danger-action');planControls.append(node);
     }
     const web=el('div',undefined,'control-group');web.append(el('h3',t('Web server')),

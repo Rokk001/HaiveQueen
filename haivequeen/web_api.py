@@ -147,12 +147,12 @@ def dispatch(action, data):
         return execute(conn, action, data)
 
 
-def plan_control_targets(conn, operation):
+def plan_control_targets(conn, operation, rows=None):
     """Server-owned selection; old or individually paused plans never join Resume."""
     if operation not in ('stop-gracefully', 'force-stop', 'resume'):
         raise ValueError('Unknown plan control operation')
     targets = []
-    for row in plan_view.plan_rows(conn):
+    for row in plan_view.plan_rows(conn) if rows is None else rows:
         project, plan = row['apiary'], row['plan_path']
         status = row['status']
         if row.get('missing') or row.get('error') or status in ('DONE', 'CANCELLED', 'DRAFT'):
@@ -237,6 +237,9 @@ def execute(conn, action, data):
         for row in state.get('hives', []):
             row['stopped'] = bool(row.get('paused')) and hives.is_stopped(conn, row['apiary'], row['plan_path'])
         state['controls'] = {'orchestrator': ['Start', 'Stop gracefully', 'Force stop'], 'web': ['Stop', 'Restart'], 'force_warning': FORCE_WARNING}
+        plan_rows = plan_view.plan_rows(conn)
+        state['controls']['plans'] = {operation: len(plan_control_targets(conn, operation, plan_rows))
+                                      for operation in ('stop-gracefully', 'force-stop', 'resume')}
         state['projects'] = db.rows(conn, 'SELECT name,workspace,colour,priority FROM projects ORDER BY name')
         from . import web_drafts
         for row in state['projects']:
@@ -345,9 +348,10 @@ def execute(conn, action, data):
         return web_login.send(data['id'], data['text'])
     if action == 'updates':
         settled = updates.settle_install(db.last_self_update(conn))
-        return {**updates.load_state(), 'restart_required': settled == 'ok'}
+        return {**updates.display_state(), 'restart_required': settled == 'ok'}
     if action == 'updates/check':
-        return updates.check(config.load_config(), manual=data.get('automatic') is not True)
+        updates.check(config.load_config(), manual=data.get('automatic') is not True)
+        return updates.display_state()
     if action == 'updates/install':
         if data.get('confirmed') is not True:
             raise ValueError(updates.TEXT_CONFIRM % data.get('version', ''))

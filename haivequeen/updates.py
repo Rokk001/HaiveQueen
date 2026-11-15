@@ -82,6 +82,23 @@ def load_state() -> dict:
         return {}
 
 
+def display_state():
+    """Hide superseded offers/failures without rewriting installation history."""
+    state = dict(load_state())
+    current = tuple(map(int, installed_version().split('.')))
+    def older(value, inclusive=False):
+        match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', str(value or ''))
+        if not match:
+            return False
+        version = tuple(map(int, match.groups()))
+        return version <= current if inclusive else version < current
+    if not state.get('installing') and older(state.get('failed')):
+        state.pop('failed', None)
+    if older((state.get('available') or {}).get('version'), inclusive=True):
+        state['available'] = None
+    return state
+
+
 def save_state(state: dict) -> None:
     """Write the state atomically."""
     with _state_lock():
@@ -267,6 +284,22 @@ def settle_install(last_row) -> str:
 def _settle_install(last_row):
     state = load_state()
     done = install_finished(state, last_row)
+    started = state.get('installing')
+    if not done and started and last_row and int(last_row.get('id') or 0) > int(started.get('after_row') or 0):
+        # A started worker can die before closing its history row. Observing it
+        # must never kill a process, run rollback, or claim successful installation.
+        from . import selfupdate
+        try:
+            pid = int(selfupdate.lock_path().read_text(encoding='ascii').strip())
+        except (OSError, ValueError):
+            pid = None
+        if pid is not None and pid > 0:
+            if not osplat.process_alive(pid):
+                done = 'failed'
+            else:
+                command = osplat.process_command_line(pid)
+                if command is not None and not selfupdate.is_update_worker(command):
+                    done = 'failed'
     if done:
         started = state.pop("installing")
         if done == "failed":
