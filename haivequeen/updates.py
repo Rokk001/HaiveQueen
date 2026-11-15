@@ -267,6 +267,22 @@ def settle_install(last_row) -> str:
 def _settle_install(last_row):
     state = load_state()
     done = install_finished(state, last_row)
+    started = state.get('installing')
+    if not done and started and last_row and int(last_row.get('id') or 0) > int(started.get('after_row') or 0):
+        # A started worker can die before closing its history row. Observing it
+        # must never kill a process, run rollback, or claim successful installation.
+        from . import selfupdate
+        try:
+            pid = int(selfupdate.lock_path().read_text(encoding='ascii').strip())
+        except (OSError, ValueError):
+            pid = None
+        if pid is not None and pid > 0:
+            if not osplat.process_alive(pid):
+                done = 'failed'
+            else:
+                command = osplat.process_command_line(pid)
+                if command is not None and not selfupdate.is_update_worker(command):
+                    done = 'failed'
     if done:
         started = state.pop("installing")
         if done == "failed":

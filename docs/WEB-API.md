@@ -275,3 +275,5 @@ long names instead of hiding the scope.
 The header labels the running version as `Running v<version>`. When an update is available, the action reads `Update to v<version>`; the target version is not repeated as a separate status label. Version labels normalize an existing `v` prefix without changing the version sent to the install API. Installation, failure and current-version status messages remain visible.
 
 While installation is pending, the header reads the target from `updates.installing.version`. The `installing` object also contains scheduling metadata and must not be rendered as text. The update action remains hidden and checking remains disabled until installation finishes.
+
+Update status polling also detects a worker that died after creating its history row but before recording completion. A dead lock PID, or a PID now belonging to another command, ends the displayed installation as failed and enables checking again. A live worker with an unreadable command line is left alone. This reconciliation never stops processes, changes update history or claims successful installation.
