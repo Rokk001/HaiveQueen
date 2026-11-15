@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import time
+import zipfile
 from unittest.mock import patch
 
 from bzztest import RoundCase
@@ -18,16 +19,35 @@ class ReleaseCliProcessTest(RoundCase):
     def test_public_install_starts_compatible_release_worker(self):
         self._compatible_switch(public=True)
 
-    def _compatible_switch(self, public):
+    def test_public_install_stages_downloaded_archive(self):
+        self._compatible_switch(public=True, download=True)
+
+    def _compatible_switch(self, public, download=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
-        for version in ('1.0.0', '2.0.0'):
+        for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
             dest = root / 'versions' / version
             shutil.copytree(source / 'haivequeen', dest / 'haivequeen',
                             ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
             shutil.copytree(source / 'roles', dest / 'roles')
-        (root / 'versions' / '2.0.0' / 'haivequeen-update.json').write_text(
-            '{"compatible_with_older": true}', encoding='utf-8')
+        if download:
+            archive = self.base / 'release.zip'
+            with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as release:
+                for folder in ('haivequeen', 'roles'):
+                    for path in (source / folder).rglob('*'):
+                        if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc':
+                            release.write(path, 'release/' + path.relative_to(source).as_posix())
+                release.writestr('release/haivequeen-update.json', '{"compatible_with_older": true}')
+            # Replace only the network boundary in the isolated old installation;
+            # the detached worker still performs archive validation and staging.
+            staging = root / 'versions' / '1.0.0' / 'haivequeen' / 'release_staging.py'
+            code = staging.read_text(encoding='utf-8')
+            code = code.replace('with urlopen(request, timeout=60) as response:\n                return response.read()',
+                                'return Path(%r).read_bytes()' % str(archive))
+            staging.write_text(code, encoding='utf-8')
+        else:
+            (root / 'versions' / '2.0.0' / 'haivequeen-update.json').write_text(
+                '{"compatible_with_older": true}', encoding='utf-8')
         version_layout.install_launcher(root)
         version_layout.set_active(root, '1.0.0')
         (self.base / 'cfg' / 'config.toml').write_text(
@@ -91,6 +111,8 @@ class ReleaseCliProcessTest(RoundCase):
                 self.assertEqual(worker.returncode, 0, worker.stdout + worker.stderr)
                 self.assertEqual(json.loads(worker.stdout)['result'], 'ok')
             self.assertEqual((root / 'active-version').read_text().strip(), '2.0.0')
+            if download:
+                self.assertTrue((root / 'versions' / '2.0.0' / 'haivequeen' / 'cli.py').is_file())
             new_pid = loop.loop_running()
             self.assertTrue(new_pid)
             self.assertNotEqual(new_pid, old_pid)
