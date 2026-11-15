@@ -98,13 +98,13 @@ class VersionLeasesTests(unittest.TestCase):
             old.touch()
             (root / 'active-version').write_text('old', encoding='utf-8')
             with patch.object(config, 'config_dir', return_value=base / 'data'):
-                version_layout.install_version(root, 'new', source)
+                _, token = version_layout.install_version(root, 'new', source, return_token=True)
                 record = next(iter(version_leases._load(root).values()))
                 self.assertEqual(record['installer_pid'], os.getpid())
                 self.assertEqual(record['installer_identity'], version_leases.platform.process_identity(os.getpid()))
                 self.assertEqual(version_leases.collect(root), [])
                 self.assertTrue((root / 'versions' / 'new').exists())
-                version_layout.set_active(root, 'new')
+                version_layout.set_active(root, 'new', installation_token=token)
                 self.assertEqual(version_leases._load(root), {})
                 self.assertEqual(version_leases.collect(root), ['old'])
 

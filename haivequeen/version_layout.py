@@ -25,7 +25,7 @@ def version_dir(root, version):
     return Path(root) / "versions" / _version(version)
 
 
-def install_version(root, version, source, verify=None):
+def install_version(root, version, source, verify=None, return_token=False):
     """Copy a complete release into its own directory, never replace a release."""
     from . import version_leases
     from .stable_launcher import lifetime_lock
@@ -61,21 +61,30 @@ def install_version(root, version, source, verify=None):
     finally:
         if staging is not None and staging.exists():
             shutil.rmtree(staging)
-    return target
+    return (target, token) if return_token else target
 
 
-def set_active(root, version):
+def set_active(root, version, installation_token=None):
     """Atomically change the version selected by the stable launcher."""
     from .stable_launcher import lifetime_lock
     with lifetime_lock(root):
-        _set_active_locked(root, version)
+        _set_active_locked(root, version, installation_token=installation_token)
 
 
-def _set_active_locked(root, version):
+def _set_active_locked(root, version, installation_token=None):
     """Publish the active pointer while holding the lifetime coordination lock."""
     root, version = Path(root), _version(version)
     if not (version_dir(root, version) / "haivequeen" / "cli.py").is_file():
         raise FileNotFoundError("version is not installed: " + version)
+    from . import version_leases
+    leases = version_leases._load(root)
+    if installation_token is not None:
+        record = leases.get(installation_token, {})
+        if (not record.get('installation') or record.get('version') != version
+                or record.get('installer_pid') != os.getpid()
+                or not record.get('installer_identity')
+                or record.get('installer_identity') != version_leases.platform.process_identity(os.getpid())):
+            raise ValueError("installation reservation does not belong to this installer and version")
     root.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".active-", dir=root)
     try:
@@ -84,13 +93,10 @@ def _set_active_locked(root, version):
             f.flush()
             os.fsync(f.fileno())
         os.replace(name, root / "active-version")
-        # The active pointer now protects this version, so installation
-        # reservations for it are no longer needed.
-        from . import version_leases
-        leases = version_leases._load(root)
-        leases = {key: record for key, record in leases.items()
-                  if not (record.get('installation') and record.get('version') == version)}
-        version_leases._save(root, leases)
+        # Only the installer that owns a reservation may consume it.
+        if installation_token is not None:
+            leases.pop(installation_token)
+            version_leases._save(root, leases)
     finally:
         if os.path.exists(name):
             os.unlink(name)

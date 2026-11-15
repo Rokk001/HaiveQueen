@@ -387,6 +387,7 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
     """Stage and switch an immutable release; retain running work when compatible."""
     from . import release_activation, release_compat, release_staging, updates, version_layout
     root = Path(root)
+    default_stage = stage is None
     stage = stage or release_staging.stage_release
     jobs = jobs or release_compat.running_jobs
     activate = activate or release_activation.activate
@@ -404,8 +405,12 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
         row = start_row(conn, old)
         target = version_layout.version_dir(root, version)
         repository = updates.repository(config.load_config())
+        installation_token = None
         if not target.exists():
-            target = stage(root, repository, version)
+            if default_stage:
+                target, installation_token = stage(root, repository, version, return_token=True)
+            else:
+                target = stage(root, repository, version)
         if not release_staging.verify_installed(target, repository, version):
             raise RuntimeError('installed release could not be independently verified')
         # Byte identity alone does not establish live-process, dependency or
@@ -457,7 +462,11 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
                                        sleep, poll, timeout, loop_pid=loop_pid)
         if not release_staging.verify_installed(target, repository, version):
             raise RuntimeError('installed release changed before activation')
-        passed = activate(root, version, first_round, after_rollback=recover_old)
+        if installation_token is None:
+            passed = activate(root, version, first_round, after_rollback=recover_old)
+        else:
+            passed = activate(root, version, first_round, after_rollback=recover_old,
+                              installation_token=installation_token)
         if passed:
             result, note = 'ok', 'updated to version ' + version
         else:

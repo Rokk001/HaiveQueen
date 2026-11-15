@@ -72,7 +72,7 @@ def verify_installed(directory, repository, version, fetch=None):
         return False
 
 
-def stage_release(root, repository, version, fetch=None):
+def stage_release(root, repository, version, fetch=None, return_token=False):
     """Download the source archive for a release tag and install it atomically.
 
     Reject paths and links that could escape the private staging directory. The
@@ -149,4 +149,4 @@ def stage_release(root, repository, version, fetch=None):
         generated_bytes = {name: (source / name).read_bytes() for name in generated}
         def verify_copy(path):
             return release_tree.verify_installation(path, tree_data["tree"], tree, generated_bytes)
-        return version_layout.install_version(root, version, source, verify=verify_copy)
+        return version_layout.install_version(root, version, source, verify=verify_copy, return_token=return_token)

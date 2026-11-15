@@ -5,7 +5,7 @@ from . import version_layout, version_leases
 from .stable_launcher import lifetime_lock
 
 
-def activate(root, version, first_round, after_rollback=None):
+def activate(root, version, first_round, after_rollback=None, installation_token=None):
     """Switch the pointer and restore it if the successor fails its first round.
 
     The caller must establish compatibility before calling and ensure that
@@ -18,7 +18,7 @@ def activate(root, version, first_round, after_rollback=None):
         old = (root / 'active-version').read_text(encoding='utf-8').strip()
         token = version_leases._reserve_locked(root, old)
         try:
-            version_layout._set_active_locked(root, version)
+            version_layout._set_active_locked(root, version, installation_token=installation_token)
         except BaseException:
             leases = version_leases._load(root)
             leases.pop(token, None)
