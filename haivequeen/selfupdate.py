@@ -462,8 +462,11 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
         return {'result': result, 'note': note, 'old': old, 'new': version if passed else old}
     except Exception as exc:
         note = 'release update failed: ' + str(exc)
-        if old and (root / 'active-version').read_text(encoding='utf-8').strip() == old and not loop_pid():
-            start()
+        try:
+            if old and (root / 'active-version').read_text(encoding='utf-8').strip() == old and not loop_pid():
+                start()
+        except Exception as recovery_exc:
+            note += '; old core recovery failed: ' + str(recovery_exc)
         if row is not None:
             end_row(conn, row, old, 'failed', note)
         return {'result': 'failed', 'note': note, 'old': old, 'new': old}

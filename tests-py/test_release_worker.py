@@ -162,6 +162,17 @@ class ReleaseWorkerTests(unittest.TestCase):
         self.assertEqual(self.active(), '1.0.0')
         self.assertFalse(selfupdate.release_lock_path().exists())
 
+    def test_recovery_start_exception_is_reported_and_lock_released(self):
+        self.metadata(True)
+        def fail_start():
+            raise RuntimeError('restart unavailable')
+        result = selfupdate.run_release_update(self.conn, self.root, '2.0.0',
+                  loop_pid=lambda: 0, start=fail_start)
+        self.assertEqual(result['result'], 'failed')
+        self.assertIn('restart unavailable', result['note'])
+        self.assertEqual(self.active(), '1.0.0')
+        self.assertFalse(selfupdate.release_lock_path().exists())
+
     def test_missing_pointer_releases_update_lock(self):
         (self.root / 'active-version').unlink()
         result = selfupdate.run_release_update(self.conn, self.root, '2.0.0')
