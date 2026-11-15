@@ -1,5 +1,6 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
+const {startUpdateInstall}=require('../haivequeen/web-client.js');
 const source=fs.readFileSync(require.resolve('../haivequeen/web-client.js'),'utf8');
 const helpers=source.slice(source.indexOf('  function displayVersion('),source.indexOf('  function renderState(state)'));
 const renderBody=source.slice(source.indexOf('  function renderUpdates()'),source.indexOf('  async function loadEditor('));
@@ -11,12 +12,15 @@ async function check(version,target){
  const $=id=>id==='version'?header:box;
  const act=async(...args)=>calls.push(args);
  new Function('$','t','state',helpers+headerBody)($,x=>x,state);
- new Function('$','t','updateState','el','button','act','bootstrap','client',helpers+renderBody+'renderUpdates();')($,x=>x,updateState,(_,text)=>node(text),(text,click)=>Object.assign(node(text),{click}),act,{updateConfirm:'Install %s?'},{});
+ const client={confirm:async()=>true,action:async(...args)=>{calls.push(args);return {ok:true};}};
+ new Function('$','t','updateState','el','button','act','bootstrap','client','startUpdateInstall','let updateSubmitting=false,updateRevision=0;'+helpers+renderBody+'renderUpdates();')($,x=>x,updateState,(_,text)=>node(text),(text,click)=>Object.assign(node(text),{click}),act,{updateConfirm:'Install %s?'},client,startUpdateInstall);
  assert.equal(header.textContent,'Running v0.2.44');
  assert.deepEqual(box.children.map(x=>x.textContent),['Update to v0.2.45','Check now']);
  await box.children[0].click();
  assert.equal(calls[0][0],'updates/install');
  assert.equal(calls[0][1].version,target,'Preserve the original API version');
+ assert.equal(calls[0][1].confirmed,true);
+ assert.equal(box.children[0].textContent,`installing version ${target} – waiting for running agents`);
 }
 function checkInstalling(){
  const box=node('');

@@ -123,14 +123,21 @@ class SnapshotTest(unittest.TestCase):
 
     # Active Hives show running and waiting Hives only.
     def test_rejected_and_done_hives_are_not_active(self):
-        """A Plan of a REJECTED or DONE plan, also one set in the plan file and synced, is absent from the active list; a done Plan state too."""
+        """Finished plans disappear only after their remaining agents have ended."""
         plan = "docs/plans/AI-LEVELS-PLAN.md"
         def active():
             snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
             return snap["hives"], snap["tiles"]["hives"]
         self.assertEqual(len(active()[0]), 1)
         for status in ("CANCELLED", "DONE"):
+            self.conn.execute("UPDATE agents SET status='running' WHERE phase='queen'")
             self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP',?,'AI',?,'2026-11-01T12:00:00')", (plan, status))
+            self.conn.commit()
+            visible, count = active()
+            self.assertEqual(len(visible), 1, status)
+            self.assertEqual(count, 0, status)
+            self.assertEqual(self.conn.execute('SELECT status FROM plans WHERE path=?', (plan,)).fetchone()[0], status)
+            self.conn.execute("UPDATE agents SET status='done'")
             self.conn.commit()
             self.assertEqual(active(), ([], 0), status)
         self.conn.execute("UPDATE plans SET status='QUEUED'")
