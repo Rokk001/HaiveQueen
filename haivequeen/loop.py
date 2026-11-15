@@ -565,7 +565,9 @@ def _do_start(c, a, forced_pick=None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     pf = run_dir / "prompt.md"
     hf = run_dir / "HANDOFF"
-    if phase == "fix":   # the fix agent has no role file of its own: its task is the whole prompt
+    if pkg == "OWNER-ACCEPTANCE" and phase == "verify":
+        hdr = "You prepare an acceptance description from existing evidence. Read-only; do not update plan state.\n\n"
+    elif phase == "fix":   # the fix agent has no role file of its own: its task is the whole prompt
         hdr = "You are the fix agent %s. Language: write all free text for the owner in %s.\n\nTASK\n\n" % (nm, roles.language(env.settings))
     elif phase in ("bee", "queen"):   # the role text (queen.md, bee.md) is the start of the prompt itself
         hdr = ""
@@ -582,6 +584,8 @@ def _do_start(c, a, forced_pick=None) -> int:
     if phase == "queen":
         handoff = ("After each completed step check %s. When it exists, do not start new Agents, "
                    "wait for running Agents, finish your current step, record the handoff in the plan state and end." % hf)
+    elif pkg == "OWNER-ACCEPTANCE" and phase == "verify":
+        handoff = "If %s exists, end without changing any project file or owner decision." % hf
     predecessors = [x for x in runtime.list_agents(env.conn, env.name, 'all') if x.get('phase') == 'queen' and x.get('plan_path') == plan and x.get('person')]
     loaded = ""
     if phase in ("bee", "queen", "fix"):   # what a Queen and a Bee load is defined in profile.py; the project rules are complete, never a selection

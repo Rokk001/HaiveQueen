@@ -487,27 +487,12 @@ def owner_check_wanted(env, plan):
 
 # Ask the owner to accept an integrated plan.
 def file_owner_check(conn, env, plan, integrated=True):
-    """File the owner check question of an integrated plan (the configured text or its default, with the final report of its last Queen) and park the Plan until the owner answers; returns the question id."""
-    final = ''
-    from . import orchestrator
-    info = orchestrator.last_info(conn, env.name, plan) if conn is not None else {}
-    last = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all')) if a.get('plan_path') == plan and a.get('phase') == 'queen'), None)
-    fixer = next((a for a in reversed(runtime.list_agents(conn, env.name, 'all')) if a.get('plan_path') == plan and a.get('phase') == 'fix' and a.get('name') == info.get('fix_agent')), None) if info.get('fix_agent') else None
-    if fixer:   # a fix agent ran after the Queen: its current report replaces the outdated report of the Queen
-        last = fixer
-    if last:
-        try:
-            final = (env.run_dir(last['name']) / 'final.txt').read_text(encoding='utf-8', errors='replace').strip()[:800]
-        except OSError:
-            final = ''
-    language = roles.language(env.settings)
-    text = tr('Check the integrated result' if integrated else 'Check the result of the plan', language=language)   # the default text; the decision is taken by buttons
-    if info.get('commit'):
-        text += tr('\n\nIntegrated commit: ', language=language) + str(info['commit'])[:12]
-    if info.get('steps'):
-        text += tr('\nSteps that ran: ', language=language) + ', '.join(info['steps'])
-    if final:
-        text += (tr('\n\nReport of the fix agent:\n', language=language) if fixer else tr('\n\nReport of the Queen:\n', language=language)) + final
+    """Prepare a complete evidence-based acceptance description before filing the question."""
+    from . import acceptance
+    text = acceptance.prepare(conn, env, plan)
+    if text is None:
+        wait_for_owner_check(conn, env.name, plan, [])
+        return None
     qid = db.add_question(conn, env.name, plan, 'owner-check', text, '')
     wait_for_owner_check(conn, env.name, plan, [qid])
     return qid

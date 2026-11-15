@@ -222,24 +222,18 @@ class StartTextTests(IntegrationCase):
 
 
 class OwnerCheckTextTests(IntegrationCase):
-    """The configured text is the question; the default follows the language; the Queen's report stays."""
-
-    def test_default_follows_the_language(self):
-        env = SimpleNamespace(name="p", settings={"language": "German"})
-        with mock.patch.object(hives.runtime, "list_agents", return_value=[]), mock.patch.object(hives.db, "add_question", return_value=7) as add, mock.patch.object(hives, "wait_for_owner_check"):
-            hives.file_owner_check(None, env, "plan.md")
-        self.assertEqual(add.call_args.args[4], "Das integrierte Ergebnis prüfen")
-
-    def test_report_of_the_queen_stays_below_the_default_text(self):
+    def test_prepared_question_is_filed_without_appending_last_report(self):
         env = self.hive()
-        runtime.upsert_agent(self.conn, "testproj", "Ada", {"status": "done", "phase": "queen", "plan_path": REL})
-        folder = env.run_dir("Ada")
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / "final.txt").write_text("All merged", encoding="utf-8")
-        qid = hives.file_owner_check(self.conn, env, REL)
+        with mock.patch("haivequeen.acceptance.prepare", return_value="Verified acceptance description"):
+            qid = hives.file_owner_check(self.conn, env, REL)
         text = next(q for q in runtime.list_questions(self.conn, "testproj") if q["id"] == qid)["question"]
-        self.assertTrue(text.startswith("Check the integrated result"))
-        self.assertIn("All merged", text)
+        self.assertEqual(text, "Verified acceptance description")
+
+    def test_preparation_parks_the_plan_without_a_premature_question(self):
+        env = self.hive()
+        with mock.patch("haivequeen.acceptance.prepare", return_value=None), mock.patch.object(hives.db, "add_question") as add:
+            self.assertIsNone(hives.file_owner_check(self.conn, env, REL))
+        add.assert_not_called()
 
 
 class MigrationTests(unittest.TestCase):

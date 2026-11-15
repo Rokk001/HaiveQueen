@@ -285,7 +285,7 @@ def _launch_check_agent(env, queen, request):
     existing = [a["name"] for a in runtime.list_agents(env.conn, env.name, "all")]
     state = {"names": existing, "busy": [], "plan_status": {scheduler.norm_plan(plan): "RUNNING"}, "by_path": {scheduler.norm_plan(plan): {"path": plan}}}
     ctx = {"env": env, "state": state, "pool": loop.Pool(free, 0), "report": [], "dry": False, "settle": 0}
-    action = {"name": "%s-ready-check" % re.sub(r"-\d+$", "", str(queen["name"])), "type": provider, "phase": "verify", "plan": plan, "package": "READY-CHECK",
+    action = {"name": "%s-ready-check" % re.sub(r"-\d+$", "", str(queen["name"])), "type": provider, "phase": "verify", "plan": plan, "package": request.get("package", "READY-CHECK"),
               "cwd": request["cwd"], "prompt": request["prompt"], "class": cls}
     if not loop._do_start(ctx, action, forced_pick=scheduler.get_provider(env.providers, provider)):
         return None, "the agent runner could not start the check agent"

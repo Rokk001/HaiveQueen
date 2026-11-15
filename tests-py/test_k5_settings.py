@@ -6,7 +6,7 @@ from haivequeen import hives
 class OwnerCheckSettingsTests(unittest.TestCase):
     def test_default_text_is_question(self):
         env = SimpleNamespace(name='p', settings={'ownerCheckText': 'ignored', 'language': 'English'})
-        with patch.object(hives.runtime, 'list_agents', return_value=[]), patch.object(hives.db, 'add_question', return_value=7) as add, patch.object(hives, 'wait_for_owner_check'):
+        with patch('haivequeen.acceptance.prepare', return_value='Check the integrated result'), patch.object(hives.db, 'add_question', return_value=7) as add, patch.object(hives, 'wait_for_owner_check'):
             hives.file_owner_check(None, env, 'plan.md')
         self.assertEqual(add.call_args.args[4], 'Check the integrated result')
 
