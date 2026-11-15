@@ -36,30 +36,17 @@ class MergeRepairScenario(OrchCase):
                 state = self.state(plan)
                 fix = state['fix']
                 if fix.get('diagnosis'):
-                    conflicted = self.git('diff', '--name-only', '--diff-filter=U', cwd=folder)
-                    self.assertIn('RenderManager.cpp', conflicted)
-                    ours = self.git('show', ':2:RenderManager.cpp', cwd=folder)
-                    theirs = self.git('show', ':3:RenderManager.cpp', cwd=folder)
-                    self.assertEqual(ours.splitlines()[1:], theirs.splitlines()[1:])
-                    known = repair_review.decisions(self.conn, 'testproj', plan)
-                    report = dict(kind='technical', commit=integration.head_commit(folder),
-                        failure_log=fix.get('log_file', ''), reviewed_decisions=[d['id'] for d in known],
-                        evidence=['RenderManager.cpp stages 2 and 3: implementation identical, only comment differs'],
-                        analysis='The remaining conflict has no product behavior difference.',
-                        next_action='Retain both comment explanations and run the unchanged checks.',
-                        why_new='The unmerged Git stages were inspected after the unsuccessful attempt.')
-                    (self.env().run_dir(agent['name']) / 'repair-diagnosis.json').write_text(json.dumps(report), encoding='utf-8')
+                    self.diagnose(agent, folder, fix)
                     self.end_fixer(agent, verification=False)
                     diagnosed.add(plan)
                 elif fix['step'] == 'Merge' and plan not in failed_once:
                     self.end_fixer(agent, 'No repair was produced.', verification=False)
                     failed_once.add(plan)
                 elif fix['step'] == 'Merge':
-                    self.commit(folder, 'RenderManager.cpp',
-                        '// retain brighter material; reuse the bright variant\nint getBrighterMaterial() { return 1; }\n')
+                    self.repair(agent, folder, fix)
                     self.end_fixer(agent, verification_command=self.check)
                 elif fix['step'] == 'Build':
-                    self.commit(folder, 'index.txt', 'verified fixture\n')
+                    self.repair(agent, folder, fix)
                     self.end_fixer(agent, verification_command=self.build)
                     repaired.add(plan)
                 else:
@@ -75,3 +62,25 @@ class MergeRepairScenario(OrchCase):
             verified = [r for r in orchestrator.repair_history(self.conn, 'testproj', plan) if r['event'] == 'verified']
             self.assertTrue(verified)
             self.assertIn('Build', verified[-1]['steps'])
+
+    def diagnose(self, agent, folder, fix):
+        conflicted = self.git('diff', '--name-only', '--diff-filter=U', cwd=folder)
+        self.assertIn('RenderManager.cpp', conflicted)
+        ours = self.git('show', ':2:RenderManager.cpp', cwd=folder)
+        theirs = self.git('show', ':3:RenderManager.cpp', cwd=folder)
+        self.assertEqual(ours.splitlines()[1:], theirs.splitlines()[1:])
+        known = repair_review.decisions(self.conn, 'testproj', agent['plan_path'])
+        report = dict(kind='technical', commit=integration.head_commit(folder),
+            failure_log=fix.get('log_file', ''), reviewed_decisions=[d['id'] for d in known],
+            evidence=['RenderManager.cpp stages 2 and 3: implementation identical, only comment differs'],
+            analysis='The remaining conflict has no product behavior difference.',
+            next_action='Retain both comment explanations and run the unchanged checks.',
+            why_new='The unmerged Git stages were inspected after the unsuccessful attempt.')
+        (self.env().run_dir(agent['name']) / 'repair-diagnosis.json').write_text(json.dumps(report), encoding='utf-8')
+
+    def repair(self, agent, folder, fix):
+        if fix['step'] == 'Merge':
+            self.commit(folder, 'RenderManager.cpp',
+                '// retain brighter material; reuse the bright variant\nint getBrighterMaterial() { return 1; }\n')
+        else:
+            self.commit(folder, 'index.txt', 'verified fixture\n')
