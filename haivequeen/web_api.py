@@ -345,9 +345,10 @@ def execute(conn, action, data):
         return web_login.send(data['id'], data['text'])
     if action == 'updates':
         settled = updates.settle_install(db.last_self_update(conn))
-        return {**updates.load_state(), 'restart_required': settled == 'ok'}
+        return {**updates.display_state(), 'restart_required': settled == 'ok'}
     if action == 'updates/check':
-        return updates.check(config.load_config(), manual=data.get('automatic') is not True)
+        updates.check(config.load_config(), manual=data.get('automatic') is not True)
+        return updates.display_state()
     if action == 'updates/install':
         if data.get('confirmed') is not True:
             raise ValueError(updates.TEXT_CONFIRM % data.get('version', ''))

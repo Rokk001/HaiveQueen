@@ -277,3 +277,5 @@ The header labels the running version as `Running v<version>`. When an update is
 While installation is pending, the header reads the target from `updates.installing.version`. The `installing` object also contains scheduling metadata and must not be rendered as text. The update action remains hidden and checking remains disabled until installation finishes.
 
 Update status polling also detects a worker that died after creating its history row but before recording completion. A dead lock PID, or a PID now belonging to another command, ends the displayed installation as failed and enables checking again. A live worker with an unreadable command line is left alone. This reconciliation never stops processes, changes update history or claims successful installation.
+
+The update status hides failed attempts targeting an older version than the installed checkout, while preserving their history. Offers at or below the installed version are hidden. A plan with no pending questions also ignores an obsolete answer-state blocker; this display correction does not start the plan.

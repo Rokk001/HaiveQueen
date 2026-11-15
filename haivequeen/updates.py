@@ -82,6 +82,23 @@ def load_state() -> dict:
         return {}
 
 
+def display_state():
+    """Hide superseded offers/failures without rewriting installation history."""
+    state = dict(load_state())
+    current = tuple(map(int, installed_version().split('.')))
+    def older(value, inclusive=False):
+        match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', str(value or ''))
+        if not match:
+            return False
+        version = tuple(map(int, match.groups()))
+        return version <= current if inclusive else version < current
+    if not state.get('installing') and older(state.get('failed')):
+        state.pop('failed', None)
+    if older((state.get('available') or {}).get('version'), inclusive=True):
+        state['available'] = None
+    return state
+
+
 def save_state(state: dict) -> None:
     """Write the state atomically."""
     with _state_lock():
