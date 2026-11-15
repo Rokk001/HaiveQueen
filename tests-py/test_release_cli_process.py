@@ -21,6 +21,9 @@ class ReleaseCliProcessTest(RoundCase):
     def test_public_install_starts_compatible_release_worker(self):
         self._compatible_switch(public=True)
 
+    def test_public_install_preserves_launched_agents(self):
+        self._compatible_switch(public=True, launched=True)
+
     def test_public_install_successor_harvests_detached_jobs(self):
         self._compatible_switch(public=True, adoption=True)
 
@@ -39,8 +42,11 @@ class ReleaseCliProcessTest(RoundCase):
     def test_incompatible_public_install_forces_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True, force=True)
 
+    def test_shared_settings_change_forces_jobs_then_switches(self):
+        self._compatible_switch(public=True, incompatible=True, force=True, reason="shared settings format change")
+
     def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False,
-                           reason="shared schema change", adoption=False):
+                           reason="shared schema change", adoption=False, launched=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -101,11 +107,49 @@ class ReleaseCliProcessTest(RoundCase):
         version_layout.set_active(root, '1.0.0')
         (self.base / 'cfg' / 'config.toml').write_text(
             'roundMinutes = 0.01\n[web]\nport = 0\n', encoding='utf-8')
+        real_names = ('TestQueen', 'TestAgent')
+        if launched:
+            fake = self.base / 'provider.py'
+            fake.write_text('import json,os,time\nfrom pathlib import Path\n'
+                            'base=Path(os.environ["TEST_LIVE_BASE"])\n'
+                            '(base / (os.environ["BZZ_AGENT"] + "-started")).write_text(os.environ["BZZ_AGENT_CLI"])\n'
+                            'while not (base / "release-runners").exists(): time.sleep(.05)\n'
+                            'print(json.dumps({"type":"result","is_error":False,"result":"Done."}))\n', encoding='utf-8')
+            command = self.base / ('provider.cmd' if os.name == 'nt' else 'provider.sh')
+            if os.name == 'nt':
+                command.write_text('@"%s" "%s" %%*\r\n' % (sys.executable, fake), encoding='utf-8')
+            else:
+                command.write_text('#!/bin/sh\nexec "%s" "%s" "$@"\n' % (sys.executable, fake), encoding='utf-8')
+                command.chmod(0o755)
+            (self.base / 'cfg' / 'config.toml').write_text(
+                "roundMinutes=0.01\nslots=4\nramReserveMb=0\n[web]\nport=0\n"
+                "[[providers]]\nname='claude'\nprotocol='claude'\ncommand='%s'\nargs=[]\nslots=4\n"
+                "capabilities=['Coding','Queen']\n[providers.classes.medium]\nmodel='test'\neffort='medium'\n"
+                % command.as_posix(), encoding='utf-8')
+            os.environ['TEST_LIVE_BASE'] = str(self.base)
+            self.addCleanup(os.environ.pop, 'TEST_LIVE_BASE', None)
         env = dict(os.environ, BZZ_NO_DESKTOP='1')
         jobs = []
         detached = []
         core = None
         try:
+            if launched:
+                prompt = self.base / 'runner-prompt.md'
+                prompt.write_text('TASK\nTest work\n', encoding='utf-8')
+                for name, phase in zip(real_names, ('queen', 'bee')):
+                    runtime.upsert_agent(self.conn, 'testproj', name,
+                                         {'status': 'starting', 'phase': phase, 'provider': 'claude',
+                                          'class': 'medium', 'person': name})
+                    spec = {'name': name, 'provider': 'claude', 'protocol': 'claude', 'plan': '',
+                            'package': '', 'phase': phase, 'cwd': str(self.repo), 'prompt_file': str(prompt)}
+                    self.env().run_dir(name).mkdir(parents=True, exist_ok=True)
+                    with patch.object(loop, 'TOOLS_DIR', root / 'versions' / '1.0.0'):
+                        loop.launch_headless(self.env(), spec)
+                deadline = time.monotonic() + 40
+                while not all((self.base / (name + '-started')).exists() for name in real_names) and time.monotonic() < deadline:
+                    time.sleep(.05)
+                self.assertTrue(all((self.base / (name + '-started')).exists() for name in real_names))
+                identities = {name: runtime.get_agent(self.conn, 'testproj', name)['pid'] for name in real_names}
             for phase in ('queen', 'bee'):
                 code = ('import time,sys; from pathlib import Path\n'
                         'while not Path(sys.argv[1]).exists(): time.sleep(.05)')
@@ -237,6 +281,21 @@ class ReleaseCliProcessTest(RoundCase):
                 self.assertIn('rolled back', row['note'])
                 fault = json.loads(runtime.kv_get(self.conn, scheduler.GLOBAL, 'global-fault:self_update_rollback'))
                 self.assertIn('rolled back', fault['text'])
+            if launched:
+                for name, pid in identities.items():
+                    row = runtime.get_agent(self.conn, 'testproj', name)
+                    self.assertEqual(row['pid'], pid)
+                    self.assertEqual(row['status'], 'running')
+                    self.assertTrue(platform.process_alive(pid))
+                    self.assertEqual(Path((self.base / (name + '-started')).read_text()),
+                                     root / 'versions' / '1.0.0' / 'haivequeen' / 'cli.py')
+                (self.base / 'release-runners').touch()
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    if all(runtime.get_agent(self.conn, 'testproj', name)['status'] != 'running' for name in real_names):
+                        break
+                    time.sleep(.05)
+                self.assertTrue(all(runtime.get_agent(self.conn, 'testproj', name)['status'] == 'done' for name in real_names))
             if not incompatible:
                 self.assertTrue(all(job.poll() is None for job in jobs))
                 self.assertTrue(all(job.process.poll() is None for job, _, _, _ in detached))
@@ -263,6 +322,14 @@ class ReleaseCliProcessTest(RoundCase):
                     self.assertEqual(state['step'], 'Close')
                 self.assertEqual(states[1]['deployed'], 'old-revision')
         finally:
+            if launched:
+                (self.base / 'release-runners').touch()
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    rows = [runtime.get_agent(self.conn, 'testproj', name) for name in real_names]
+                    if all(not row or not row.get('pid') or not platform.process_alive(row['pid']) for row in rows):
+                        break
+                    time.sleep(.05)
             if server is not None:
                 server.shutdown()
                 server.server_close()
