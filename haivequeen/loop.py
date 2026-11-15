@@ -350,7 +350,35 @@ def _acquire_hive_guard(path: Path, deadline: float):
         raise
 
 
-def _try_hive_lock(path: Path, reason: str):
+def _recover_preboot_hive_lock(path: Path, boot) -> bool:
+    """Archive unchanged unreadable metadata predating boot, under the OS guard.
+
+    A missing heartbeat or an old timestamp alone is insufficient. The reboot
+    proves the previous owner cannot survive; the guard excludes current owners.
+    Recent/valid metadata and unavailable boot evidence remain protected.
+    """
+    if boot is None:
+        return False
+    try:
+        before = path.stat()
+        if before.st_mtime >= boot.timestamp():
+            return False
+        raw = path.read_bytes()
+        if _read_hive_lock(path) is not None:
+            return False
+        after = path.stat()
+        if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+            return False
+        if path.read_bytes() != raw:
+            return False
+        import uuid
+        path.rename(path.with_name(path.name + '.recovered-' + uuid.uuid4().hex))
+        return True
+    except OSError:
+        return False
+
+
+def _try_hive_lock(path: Path, reason: str, boot=None):
     """Try once to take the scheduling lock. Returns None on success, else (pid, reason) of the holder (pid -1: unreadable)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     for _ in range(3):
@@ -360,6 +388,8 @@ def _try_hive_lock(path: Path, reason: str):
             held = _read_hive_lock(path)
             if held is None:
                 if not path.exists():
+                    continue
+                if _recover_preboot_hive_lock(path, boot):
                     continue
                 return -1, ""   # unknown ownership must not authorize recovery
             pid, why, age = held
@@ -374,6 +404,8 @@ def _try_hive_lock(path: Path, reason: str):
             continue
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps({"pid": os.getpid(), "reason": reason}))
+            handle.flush()
+            os.fsync(handle.fileno())
         return None
     return -1, ""
 
@@ -392,7 +424,8 @@ def _hive_heartbeat(path: Path, stop: threading.Event) -> None:
 def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
     """Serialize Plan scheduling; the lock holds the holder's process id, its reason and a heartbeat.
 
-    Only a dead holder is recovered. An OS guard serializes recovery and the whole
+    A dead holder or unreadable metadata proven to predate boot is recovered.
+    An OS guard serializes recovery and the whole
     scheduling section; a wait that gives up names the holder and what it is doing."""
     path = osplat.data_dir() / "hive-schedule.lock"
     if not reason:
@@ -412,6 +445,7 @@ def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
     guard = None
     try:
         guard = _acquire_hive_guard(path, deadline)
+        boot = system_boot_time()
         while True:
             if path in _abandoned_hive_locks:
                 try:
@@ -423,11 +457,13 @@ def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
                     _abandoned_hive_locks.discard(path)
                 except OSError:
                     pass
-            holder = _try_hive_lock(path, reason)
+            holder = _try_hive_lock(path, reason, boot=boot)
             if holder is None:
                 break
             if time.monotonic() >= deadline:
                 pid, why = holder
+                if pid == -1:
+                    raise TimeoutError("Plan scheduling blocked: lock metadata is unreadable; ownership cannot be verified")
                 raise TimeoutError("Plan scheduling is busy: the lock is held by process %s%s" % (
                     pid if pid != -1 else "unknown", " (%s)" % why if why else ""))
             time.sleep(0.1)

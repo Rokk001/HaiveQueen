@@ -148,6 +148,79 @@ class HiveScheduleLockTests(unittest.TestCase):
             self.assertIn("removing integrated worktrees", str(caught.exception))
             self.assertTrue(path.exists())
 
+    def test_zero_filled_lock_from_before_boot_is_archived_and_recovered(self):
+        from datetime import datetime
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {'BZZ_DATA_DIR': directory}):
+            path = Path(directory) / 'hive-schedule.lock'
+            damaged = bytes(44)
+            path.write_bytes(damaged)
+            old = time.time() - 120
+            os.utime(path, (old, old))
+            with mock.patch.object(loop, 'system_boot_time', return_value=datetime.fromtimestamp(old + 30)):
+                with loop.hive_schedule_lock(timeout=0, reason='regression'):
+                    self.assertEqual(loop._read_hive_lock(path)[:2], (os.getpid(), 'regression'))
+                with loop.hive_schedule_lock(timeout=0):
+                    pass
+            backups = list(Path(directory).glob('hive-schedule.lock.recovered-*'))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), damaged)
+            self.assertFalse(path.exists())
+
+    def test_corrupt_metadata_without_reboot_proof_is_preserved(self):
+        from datetime import datetime
+        for boot in (None, datetime.fromtimestamp(time.time() - 300)):
+            with self.subTest(boot=boot), tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {'BZZ_DATA_DIR': directory}), mock.patch.object(loop, 'system_boot_time', return_value=boot):
+                path = Path(directory) / 'hive-schedule.lock'
+                path.write_bytes(bytes(44))
+                with self.assertRaises(TimeoutError):
+                    with loop.hive_schedule_lock(timeout=0):
+                        self.fail('Corrupt metadata alone must not permit takeover')
+                self.assertEqual(path.read_bytes(), bytes(44))
+                self.assertEqual(list(Path(directory).glob('*.recovered-*')), [])
+
+    def test_preboot_corruption_does_not_bypass_active_os_guard(self):
+        from datetime import datetime
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {'BZZ_DATA_DIR': directory}):
+            path = Path(directory) / 'hive-schedule.lock'
+            path.write_bytes(bytes(44))
+            old = time.time() - 120
+            os.utime(path, (old, old))
+            guard = loop._acquire_hive_guard(path, time.monotonic())
+            try:
+                with mock.patch.object(loop, 'system_boot_time', return_value=datetime.fromtimestamp(old + 30)):
+                    with self.assertRaises(TimeoutError):
+                        with loop.hive_schedule_lock(timeout=0):
+                            self.fail('An active OS guard must prevent recovery')
+                self.assertEqual(path.read_bytes(), bytes(44))
+            finally:
+                os.close(guard)
+
+    def test_valid_live_holder_predating_boot_is_not_recovered(self):
+        from datetime import datetime
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {'BZZ_DATA_DIR': directory}):
+            path = Path(directory) / 'hive-schedule.lock'
+            self._foreign_lock(path, 4242, 'live holder', 120)
+            with mock.patch.object(loop, 'system_boot_time', return_value=datetime.fromtimestamp(time.time() - 30)), mock.patch.object(loop.osplat, 'process_alive', return_value=True):
+                with self.assertRaises(TimeoutError):
+                    with loop.hive_schedule_lock(timeout=0):
+                        self.fail('Valid live ownership takes precedence over timestamps')
+            self.assertEqual(loop._read_hive_lock(path)[0], 4242)
+
+    def test_changed_corrupt_metadata_is_not_archived(self):
+        from datetime import datetime
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'hive-schedule.lock'
+            path.write_bytes(bytes(44))
+            old = time.time() - 120
+            os.utime(path, (old, old))
+            def concurrent_write(_path):
+                path.write_bytes(b'new incomplete write')
+                return None
+            with mock.patch.object(loop, '_read_hive_lock', side_effect=concurrent_write):
+                self.assertFalse(loop._recover_preboot_hive_lock(path, datetime.fromtimestamp(old + 30)))
+            self.assertEqual(path.read_bytes(), b'new incomplete write')
+            self.assertEqual(list(Path(directory).glob('*.recovered-*')), [])
+
 
 if __name__ == "__main__":
     unittest.main()
