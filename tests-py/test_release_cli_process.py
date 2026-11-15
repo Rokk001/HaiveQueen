@@ -11,7 +11,7 @@ import zipfile
 from unittest.mock import patch
 
 from bzztest import RoundCase
-from haivequeen import db, loop, orchestrator, platform, runtime, scheduler, updates, version_layout, web_service
+from haivequeen import db, loop, orchestrator, platform, runtime, scheduler, selfupdate, updates, version_layout, web_service
 
 
 class ReleaseCliProcessTest(RoundCase):
@@ -27,7 +27,10 @@ class ReleaseCliProcessTest(RoundCase):
     def test_public_install_rolls_back_after_missing_successor_receipt(self):
         self._compatible_switch(public=True, rollback=True)
 
-    def _compatible_switch(self, public, download=False, rollback=False):
+    def test_incompatible_public_install_waits_for_jobs_then_switches(self):
+        self._compatible_switch(public=True, incompatible=True)
+
+    def _compatible_switch(self, public, download=False, rollback=False, incompatible=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -70,7 +73,8 @@ class ReleaseCliProcessTest(RoundCase):
             staging.write_text(code, encoding='utf-8')
         else:
             (root / 'versions' / '2.0.0' / 'haivequeen-update.json').write_text(
-                '{"compatible_with_older": true}', encoding='utf-8')
+                ('{"compatible_with_older": false, "reason": "shared schema change"}'
+                 if incompatible else '{"compatible_with_older": true}'), encoding='utf-8')
         if rollback:
             # The test version runs the real CLI and loop but cannot publish a
             # completed-round receipt. Shorten only the isolated worker timeout.
@@ -93,7 +97,9 @@ class ReleaseCliProcessTest(RoundCase):
         core = None
         try:
             for phase in ('queen', 'bee'):
-                proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'], env=env)
+                code = ('import time,sys; from pathlib import Path\n'
+                        'while not Path(sys.argv[1]).exists(): time.sleep(.05)')
+                proc = subprocess.Popen([sys.executable, '-c', code, str(self.base / 'finish-agents')], env=env)
                 jobs.append(proc)
                 db.add_agent(self.conn, 'testproj', name=phase, phase=phase, status='running', pid=proc.pid)
             if public:
@@ -130,6 +136,36 @@ class ReleaseCliProcessTest(RoundCase):
                                          capture_output=True, text=True, timeout=30)
                 self.assertEqual(request.returncode, 0, request.stdout + request.stderr)
                 self.assertEqual(json.loads(request.stdout)['installing'], '2.0.0')
+                if incompatible:
+                    deadline = time.monotonic() + 30
+                    status = None
+                    while time.monotonic() < deadline:
+                        try:
+                            status = json.loads(selfupdate.release_status_path().read_text(encoding='utf-8'))
+                            if status['waiting'] and len(status['jobs']) >= 2:
+                                break
+                        except (OSError, ValueError):
+                            pass
+                        time.sleep(.05)
+                    self.assertTrue(status and status['waiting'], str(status))
+                    self.assertEqual(status['reason'], 'shared schema change')
+                    self.assertEqual({j['kind'] for j in status['jobs']}, {'Queen', 'Agent'})
+                    self.assertEqual((root / 'active-version').read_text().strip(), '1.0.0')
+                    self.assertTrue(loop.stop_flag().exists())
+                    self.assertTrue(all(job.poll() is None for job in jobs))
+                    query = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'), 'update'],
+                                           env=env, capture_output=True, text=True, timeout=30)
+                    reported = json.loads(query.stdout)
+                    self.assertTrue(reported['waiting'])
+                    self.assertEqual(reported['reason'], status['reason'])
+                    self.assertEqual({j['kind'] for j in reported['jobs']}, {'Queen', 'Agent'})
+                    self.assertTrue(all(job.poll() is None for job in jobs))
+                    (self.base / 'finish-agents').touch()
+                    for job in jobs:
+                        job.wait(timeout=30)
+                    for job, _, finish, _ in detached:
+                        finish.touch()
+                        job.process.wait(timeout=20)
                 deadline = time.monotonic() + 90
                 row = None
                 while time.monotonic() < deadline:
@@ -162,8 +198,9 @@ class ReleaseCliProcessTest(RoundCase):
                 self.assertIn('rolled back', row['note'])
                 fault = json.loads(runtime.kv_get(self.conn, scheduler.GLOBAL, 'global-fault:self_update_rollback'))
                 self.assertIn('rolled back', fault['text'])
-            self.assertTrue(all(job.poll() is None for job in jobs))
-            self.assertTrue(all(job.process.poll() is None for job, _, _, _ in detached))
+            if not incompatible:
+                self.assertTrue(all(job.poll() is None for job in jobs))
+                self.assertTrue(all(job.process.poll() is None for job, _, _, _ in detached))
             for job, _, finish, result in detached:
                 finish.touch()
                 job.process.wait(timeout=20)
