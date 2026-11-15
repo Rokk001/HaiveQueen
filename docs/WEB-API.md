@@ -198,7 +198,9 @@ Git device sign-in is not implemented; the interface uses access tokens. [Releas
 
 ## Plan authoring and central Questions workflow
 
-Plans offers **New plan**: choose a project, enter a project-relative `.md` filename
+Plans offers **New plan** once startup project data is available; the control
+stays disabled until that state arrives. With no registered projects, it asks you
+to add one rather than opening an empty project target. Choose a project, enter a project-relative `.md` filename
 matching its displayed plan patterns, and type Markdown or import a local `.md`
 file. Fresh new plans offer a short template in the interface language: a Markdown
 title and one line prompting the goal and desired result. Replace these with your

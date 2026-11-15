@@ -992,3 +992,5 @@ GERMAN.update({'Messages': 'Nachrichten',
 GERMAN.update({'Back to %s':'Zurück zu %s','View':'Ansicht'})
 
 GERMAN['# Plan title\n\nDescribe what should change and the result you expect.\n'] = '# Plantitel\n\nBeschreibe, was sich ändern soll und welches Ergebnis du erwartest.\n'
+
+GERMAN['Add a project before creating a plan.'] = 'Vor dem Erstellen eines Plans ein Projekt hinzufügen.'

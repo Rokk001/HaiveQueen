@@ -823,7 +823,7 @@ function mount(document, bootstrap) {
     questionTab.querySelector('.question-badge')?.remove();
     if(count){const badge=el('span',count,'question-badge');questionTab.append(badge);}
     questionTab.setAttribute('aria-label',t('Questions')+' ('+count+')');
-    if(tab==='Dashboard' || tab==='Logs')render();
+    if(tab==='Dashboard' || tab==='Logs' || tab==='Plans')render();
     if(overlay?.tile){overlay.value=state.overlays?.[overlay.tile];renderDetail();}
   }
   function renderControls() {
@@ -1212,6 +1212,8 @@ function mount(document, bootstrap) {
     const node=button(label,()=>openConversation(row.project||row.apiary,row.plan_path));node.className='plan-message-button'+(pending.length?' needs-you':'');node.setAttribute('aria-label',t('Messages')+' · '+row.name+' · '+label);return node;
   }
   async function openPlanEditor(row=null,result=null,fresh=false) {
+    if(!client.state?.projects){client.notice(t('Loading…'));return;}
+    if(!client.state?.projects?.length){client.notice(t('Add a project before creating a plan.'),true);return;}
     const replacing=fresh || (row && planDraft && (planDraft.plan!==row.plan_path || planDraft.project!==(row.apiary||row.project)));
     if(replacing && planDraft?.dirty && !await requestConfirm(t('Discard unsaved changes?')))return;
     if(fresh)planDraft=null;
@@ -1249,7 +1251,7 @@ function mount(document, bootstrap) {
     controls.append(save,submit);form.append(el('label',t('Project')),project,hint,el('label',t('Plan file')),filename,imported,content,controls,status);
   }
   function renderPlans() {
-    const box=section('Plans');box.append(button('New plan',()=>openPlanEditor(null,null,true)));if(planDraft)box.append(button('Continue draft',()=>openPlanEditor()));box.append(table(plans.map(row=>({...row,started:t(row.has_hive?'yes':'no')})),['apiary','name','status','messages','started','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));
+    const box=section('Plans'),create=button('New plan',()=>openPlanEditor(null,null,true));create.disabled=create.disabled||!client.state?.projects?.length;box.append(create);if(planDraft)box.append(button('Continue draft',()=>openPlanEditor()));box.append(table(plans.map(row=>({...row,started:t(row.has_hive?'yes':'no')})),['apiary','name','status','messages','started','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));
   }
   function questionKind(question) {
     if(question.kind==='acceptance' || question.item==='owner-check' || String(question.item).startsWith('owner-check-'))return 'Acceptance';
