@@ -200,7 +200,10 @@ Git device sign-in is not implemented; the interface uses access tokens. [Releas
 
 Plans offers **New plan**: choose a project, enter a project-relative `.md` filename
 matching its displayed plan patterns, and type Markdown or import a local `.md`
-file. Import reads the content only; it does not upload or submit automatically.
+file. Fresh new plans offer a short template in the interface language: a Markdown
+title and one line prompting the goal and desired result. Replace these with your
+plan; the title heading is required. Continuing or editing a draft and importing
+a file preserve their existing content instead of inserting the template. Import reads the content only; it does not upload or submit automatically.
 **Save draft** creates a DRAFT; **Submit plan** explicitly invokes the existing
 `plan/start` transition to SENT. Existing DRAFT plans offer **Edit draft** in their
 detail view. Running plans are not editable. Unsaved content survives list polling

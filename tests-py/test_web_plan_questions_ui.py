@@ -21,6 +21,16 @@ class PlanQuestionsUITests(unittest.TestCase):
         result = subprocess.run(['node', str(script)], capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_localized_new_plan_template_is_valid_draft(self):
+        from haivequeen import plans, web_drafts
+        template = next(key for key in i18n.GERMAN if key.startswith('# Plan title\n'))
+        for language in ('English', 'German'):
+            text = i18n.tr(template, language=language)
+            draft = plans.parse_plan_text(web_drafts.draft_text(text))
+            self.assertTrue(draft.title)
+            self.assertEqual(draft.status, 'DRAFT')
+            self.assertEqual(draft.errors, [])
+
     def test_assets_are_utf8(self):
         for name in ('web-client.js', 'web-client.css', 'i18n.py'):
             (ROOT / 'haivequeen' / name).read_text(encoding='utf-8')
