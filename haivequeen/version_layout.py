@@ -25,7 +25,7 @@ def version_dir(root, version):
     return Path(root) / "versions" / _version(version)
 
 
-def install_version(root, version, source):
+def install_version(root, version, source, verify=None):
     """Copy a complete release into its own directory, never replace a release."""
     from . import version_leases
     from .stable_launcher import lifetime_lock
@@ -48,6 +48,8 @@ def install_version(root, version, source):
     try:
         staging = Path(tempfile.mkdtemp(prefix=".install-", dir=target.parent))
         shutil.copytree(source, staging, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', '__pycache__', '*.pyc'))
+        if verify is not None and not verify(staging):
+            raise ValueError("installed release does not match authority")
         # A version is immutable. Rename only after the complete copy succeeds.
         if target.exists():
             raise FileExistsError(str(target))

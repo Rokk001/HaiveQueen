@@ -80,8 +80,7 @@ class ReleaseStagingTests(unittest.TestCase):
     def test_staged_identity_survives_activation_and_rollback(self):
         with tempfile.TemporaryDirectory() as temp:
             data = archive([('project/haivequeen/cli.py', 'code'),
-                            ('project/pyproject.toml', '[project]\nversion = "2.0.0"\n'),
-                            ('project/.haivequeen-release-version', '9.9.9')])
+                            ('project/pyproject.toml', '[project]\nversion = "2.0.0"\n')])
             fetch = authenticated_fetch(data)
             old = release_staging.stage_release(temp, 'example/project', '2.1.0', fetch)
             new = release_staging.stage_release(temp, 'example/project', '2.2.0', fetch)
@@ -92,6 +91,13 @@ class ReleaseStagingTests(unittest.TestCase):
             version_layout.set_active(temp, '2.1.0')
             self.assertEqual(updates.installed_version(old, no_git), '2.1.0')
             self.assertEqual(updates.installed_version(new, no_git), '2.2.0')
+
+    def test_rejects_generated_marker_in_authenticated_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data = archive([('project/haivequeen/cli.py', 'code'),
+                            ('project/.haivequeen-release-version', '9.9.9')])
+            with self.assertRaisesRegex(ValueError, 'collides'):
+                release_staging.stage_release(temp, 'example/project', '2.1.0', authenticated_fetch(data))
 
     def test_stages_release_without_changing_active_version(self):
         with tempfile.TemporaryDirectory() as temp:
