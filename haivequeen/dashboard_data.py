@@ -255,6 +255,8 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     elif (orch or {}).get(key):   # the Orchestrator integrates the plan: its chain and counter are drawn in the table
         info = orch[key]
         status, kind = (tr("Fix agent running") if info["phase"] == "fix" else tr("Integration %d/%d", info["n"], info["m"])), "ok"
+        if info['phase'] == 'diagnosing':
+            status, kind = info['task'], 'error'
     else:
         status = status_text(hive)
         kind = "wait" if status else "idle"
@@ -341,7 +343,7 @@ def orch_info(conn, env, hive, now=None) -> dict:
     {phase, step, chain: [(step, "done"|"running"|"red"|"todo")], n, m, task, status, fix_agent, fix_task, started}; a step without a command is not part of the chain and not counted."""
     from . import orchestrator
     state = orchestrator.load(conn, hive["project"], hive["plan_path"])
-    if not state or state.get("phase") not in ("pipeline", "fix"):
+    if not state or state.get("phase") not in ("pipeline", "fix", "diagnosing"):
         return None
     steps = orchestrator.chain(env) if env is not None else list(orchestrator.STEPS)
     done = state.get("steps") or {}
@@ -358,12 +360,17 @@ def orch_info(conn, env, hive, now=None) -> dict:
             chain = [(name, 'waiting' if name == step else status) for name, status in chain]
         word = 'waiting'
     task = "Integration: %s %s" % (step, word) if step in steps else ("Integration: owner rejection" if fix.get("reason") == "owner" else "Integration: Close")
+    if state['phase'] == 'diagnosing':
+        from . import check_events
+        task = check_events.summary(state.get('job', {}).get('checks', {}))
+        task += ' ' + (tr('Integration place released; diagnostic resources remain reserved.') if state.get('diagnosis_released') else
+                       tr('Integration place retained: %s', state.get('diagnosis_release_reason', '')))
     stopping = bool(state.get("stopping"))
     if stopping:
         task = tr("Stopping") + ": " + str(step)
     job = state.get("job") or {}
     interrupted = bool(job.get("pid")) and not orchestrator.agent_process.recorded_alive(job["pid"], job.get("identity"))
-    if interrupted and not state.get("provider"):
+    if interrupted and not state.get("provider") and state['phase'] != 'diagnosing':
         waiting = True
         task = "Integration: %s awaiting recovery" % step
         chain = [(name, 'waiting' if name == step else status) for name, status in chain]

@@ -306,7 +306,13 @@ def plan_build(env, free_mb: float = None, cores: int = None, exclude: str | tup
     FreeMB, Environment}, or None when the project has no build block. Jobs is zero while the shared core budget cannot fit a job.
     Builds and compile checks that run now share the chosen cores (`exclude` = the asking agent or external integration pair).
     When starting a build, hold reservation_guard across this calculation and publication of the allocation."""
+    from . import check_events
+    diagnostic_wait = check_events.resource_wait(env.conn, env.settings.get('integrationStepResources', {}).get(step),
+                                                exclude=exclude if isinstance(exclude, tuple) else None)
     bj = settings_from(env.settings.get("buildJobs"))
+    if diagnostic_wait:
+        bj = bj or settings_from(0)
+        return {'Jobs': 0, 'Parallel': bj['Parallel'], 'Why': diagnostic_wait, 'Environment': build_environment(bj, 0)}
     if bj is None:
         return None
     # Deploy runs one command, not a fan-out of parallel compilation targets.

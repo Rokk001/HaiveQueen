@@ -24,6 +24,7 @@ from pathlib import Path
 
 from . import action_logs, agent_process, buildjobs, db, git_provider, hives, integration, platform as osplat, roles, runtime, scheduler as sch
 from . import plans as plan_mod
+from . import check_events
 
 KEY = "orch:"              # + plan: the state of the pipeline of a plan while the Orchestrator integrates it
 LAST_KEY = "orch-last:"    # + plan: what the last pipeline did (commit, steps, last fix agent, push and deploy done for a commit)
@@ -335,7 +336,9 @@ def advance(conn, env, plan, free_mb, alive=None):
     result = None
     for _ in range(4):   # a red step starts its fix agent, an ended fix agent lets the pipeline start again: in the same round
         before = (state["phase"], bool((state.get("fix") or {}).get("agent")))
-        if state["phase"] == "fix":
+        if state['phase'] == 'diagnosing':
+            result = _drain_checks(conn, env, plan, state)
+        elif state["phase"] == "fix":
             result = _advance_fix(conn, env, plan, state, free_mb, alive)
         elif state['phase'] == 'shared-repair':
             result = _advance_shared_repair(conn, env, plan, state)
@@ -423,6 +426,8 @@ def _replay_followers(conn, env, plan):
 
 def _advance_pipeline(conn, env, plan, state, free_mb):
     from . import projsettings
+    if state.get('phase') == 'diagnosing':
+        return _drain_checks(conn, env, plan, state)
     settings = projsettings.working_settings(env.settings)
     if settings["mergeMode"] == "git" or any(settings[s.lower() + "Enabled"] and settings[s.lower() + "Mode"] == "git" for s in COMMAND_STEPS):
         provider, errors = git_provider.for_project(env)
@@ -465,6 +470,12 @@ def _advance_pipeline(conn, env, plan, state, free_mb):
     _set_status(conn, env, plan, "RUNNING")
     for _ in range(4 * (len(STEPS) + 2)):   # inline steps follow each other in one round (also after a moved remote); a running command ends the round
         step = state["step"]
+        if step in COMMAND_STEPS and not state.get('job'):
+            reason = _diagnostic_resource_wait(conn, env, plan, step)
+            if reason:
+                _blocker(conn, env, plan, reason)
+                _set_status(conn, env, plan, 'WAITING')
+                return None
         ahead = _ahead(conn, env.name, plan)
         if step == "Build" and settings.get("serialIntegrationBuild") and ahead and not state.get("job"):
             _blocker(conn, env, plan, "waiting for earlier plans to finish integration before building")
@@ -834,13 +845,16 @@ def _command(conn, env, plan, state, folder, step, free_mb):
             j.log_file = _start_log(conn, env, plan, state, step)
             JOBS[key] = j
             state["job"] = {"step": step, "token": token, "file": str(result_file), "pid": None, "head": head}
+            state['job'].update(check_events=str(result_file) + '.checks.jsonl', check_run=token, cwd=str(folder))
+            check_environment = check_events.environment(state['job']['check_events'], token, head)
+            extra = {**(extra or {}), **check_environment}
             if planned:
                 state['job'].update(owner_pid=os.getpid(), buildJobs=planned['Jobs'], buildParallel=planned['Parallel'])
             state["steps"][step] = "running"
             save(conn, env.name, plan, state)
         _log(env, "%s: %s started %s" % (_short(plan), step, _counter(env, step)))
         if step == "Check":
-            compile_job = integration.start_compile_check(env, {"name": token}, cwd=str(folder), key="orch-check:" + plan, poll=POLL, milestones=False, log_file=j.log_file)
+            compile_job = integration.start_compile_check(env, {"name": token}, cwd=str(folder), key="orch-check:" + plan, poll=POLL, milestones=False, log_file=j.log_file, check_environment=check_environment)
             j.token = compile_job["token"]
             j.pid = compile_job["pid"]
             j.identity = compile_job.get("identity")
@@ -877,15 +891,30 @@ def _command(conn, env, plan, state, folder, step, free_mb):
                 save(conn, env.name, plan, state)
             if not _async():
                 j.thread.join()
+    if _observe_checks(conn, env, plan, state):
+        return _drain_checks(conn, env, plan, state)
     result = _harvest(conn, env, plan, state)
     if result is None:
         return None
+    instrumented = bool(state['job'].get('checks', {}).get('suite')) or bool(
+        state['job'].get('check_events') and Path(state['job']['check_events']).exists())
+    if result == 'lost' and instrumented:
+        result = (143, 'worker ended without a completion result')
     if result == "lost":   # the process of the command is gone without a result (HaiveQueen ended): run the step again
         state.pop("job", None)
         state["steps"].pop(step, None)
         save(conn, env.name, plan, state)
         return "next"
     code, output = result
+    if instrumented:
+        report = check_events.finish(state['job'], code, output)
+        reason = check_events.verify(state['job'], folder, integration.head_commit(folder))
+        if reason:
+            report['failures']['provenance'] = reason
+        _save_check_report(conn, env, plan, state, report)
+        if report['failures']:
+            code = code or 1
+            output = _check_failure_text(report)
     state.pop("job", None)
     JOBS.pop(key, None)
     if code != 0:
@@ -895,6 +924,76 @@ def _command(conn, env, plan, state, folder, step, free_mb):
         state["deployed"] = head
         _save_last(conn, env.name, plan, deployed=head)
     return _done(conn, env, plan, state, step)
+
+
+def _diagnostic_resource_wait(conn, env, plan, step):
+    # Undeclared footprints are not assumed disjoint. Named resources are
+    # machine-wide (ports, game instances and output folders cross projects).
+    required = env.settings.get('integrationStepResources', {}).get(step)
+    return check_events.resource_wait(conn, required, exclude=(env.name, plan))
+
+
+def _save_check_report(conn, env, plan, state, report):
+    job = state['job']
+    key = 'orch-check-report:' + job.get('check_run', job['token'])
+    runtime.kv_set(conn, env.name, key, json.dumps(dict(report, plan=plan, commit=job.get('head'),
+                                                    log_file=state.get('log_file'), events=job.get('check_events'))))
+    state['check_report'] = key
+
+
+def _check_failure_text(report):
+    return 'Required check failures:\n' + '\n'.join('%s: %s' % item for item in report['failures'].items()) + '\n' + report.get('output', '')
+
+
+def _observe_checks(conn, env, plan, state):
+    job = state.get('job')
+    if not job:
+        return False
+    checks = check_events.consume(job)
+    save(conn, env.name, plan, state)  # cursor and final failures survive a restart
+    if not checks['failures']:
+        return False
+    if state['phase'] != 'diagnosing':
+        state['phase'] = 'diagnosing'
+        state['steps'][job['step']] = 'red'
+        state['diagnosis_released'] = False
+        save(conn, env.name, plan, state)
+        if job['step'] in ('Check', 'Build'):
+            _replay_followers(conn, env, plan)
+    folder = job.get('cwd')
+    reason = state.get('diagnosis_release_reason', '') if state.get('diagnosis_released') else (
+        check_events.release_reason(job, folder, integration.head_commit(folder)) if folder else 'checked worktree is unknown')
+    state['diagnosis_release_reason'] = reason
+    if not reason and not state.get('diagnosis_released'):
+        # This removes queue ordering only. The job, compile slot and core
+        # reservation remain until the real worker has ended.
+        hives.release_integration(conn, env.name, plan)
+        state.update(placed=False, diagnosis_released=True)
+    _blocker(conn, env, plan, check_events.summary(checks) + ' ' + (
+        'Integration place released; diagnostic resources remain reserved.' if state.get('diagnosis_released') else
+        'Integration place retained: ' + reason))
+    _save_check_report(conn, env, plan, state, checks)
+    save(conn, env.name, plan, state)
+    return True
+
+
+def _drain_checks(conn, env, plan, state):
+    """Observe the existing worker only: never push, deploy, reset or start a fix here."""
+    _observe_checks(conn, env, plan, state)
+    result = _harvest(conn, env, plan, state)
+    if result is None:
+        return None
+    code, output = (143, 'worker ended without a completion result') if result == 'lost' else result
+    job = state['job']
+    report = check_events.finish(job, code, output)
+    reason = check_events.verify(job, job['cwd'], integration.head_commit(job['cwd']))
+    if reason:
+        report['failures']['provenance'] = reason
+    _save_check_report(conn, env, plan, state, report)
+    state.pop('job')
+    JOBS.pop((env.name, plan), None)
+    # Even an exit 0 cannot undo a final required failure from this run.
+    return _red(conn, env, plan, state, job['step'], _check_failure_text(report))
 
 
 def _harvest(conn, env, plan, state):
@@ -955,6 +1054,9 @@ def _harvest(conn, env, plan, state):
 
 def _harvest_only(conn, env, plan, state):
     """A paused plan: take over the result of a command that has ended, start nothing."""
+    if state.get('phase') == 'diagnosing' or _observe_checks(conn, env, plan, state):
+        _drain_checks(conn, env, plan, state)
+        return
     if state.get("phase") != "pipeline" or not state.get("job"):
         return
     result = _harvest(conn, env, plan, state)

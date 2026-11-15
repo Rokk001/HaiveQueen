@@ -1055,3 +1055,6 @@ GERMAN.update({'Orchestrator stopped': 'Orchestrator gestoppt',
                'Waiting for scheduler reassessment': 'Wartet auf erneute Startprüfung'})
 
 GERMAN['Diagnosis running: %s'] = 'Diagnose l\u00e4uft: %s'
+GERMAN['Integration failed: %d checks red. Further checks running for diagnosis: %d/%s completed.'] = 'Integration fehlgeschlagen: %d Checks rot. Weitere Checks laufen zur Fehlerdiagnose: %d/%s abgeschlossen.'
+GERMAN['Integration place released; diagnostic resources remain reserved.'] = 'Integrationsplatz freigegeben; Diagnose-Ressourcen bleiben reserviert.'
+GERMAN['Integration place retained: %s'] = 'Integrationsplatz bleibt belegt: %s'

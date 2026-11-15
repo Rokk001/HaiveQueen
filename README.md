@@ -196,6 +196,7 @@ Most day-to-day controls are also in the browser. Expand the reference for every
 | [Agent rules](docs/AGENT-RULES.md) | Read the coordination and verification contract. |
 | [Branch attribution](docs/BRANCH-ATTRIBUTION.md) | Understand worktree assignment and commit auditing. |
 | [Runtime API](docs/RUNTIME-API.md) | Integrate tools with stored runtime state. |
+| [Integration diagnostics](docs/INTEGRATION-DIAGNOSTIC-DRAIN.md) | Report final check failures while remaining checks continue safely. |
 | [Version 1 migration](docs/MIGRATION-v1.md) | Move from the former PowerShell version. |
 | [Development](docs/DEVELOPMENT.md) | Work on HaiveQueen and run focused checks. |
 | [Documentation map](docs/DOCUMENTATION-MAP.md) | Trace moved material and find supporting references. |

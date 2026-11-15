@@ -200,7 +200,16 @@ def _acquire_compile_slot(settings, poll, builds=None, owner=None):
     while True:
         with _compile_lock_guard(path, poll):
             holders = _live_holders(path)
-            if _slot_wait(settings, holders, builds) is None:
+            from . import check_events, config
+            database = owner.get('database') if owner else str(config.db_path())
+            diagnostic_wait = ''
+            if database and Path(database).is_file():
+                check_conn = db.connect(database)
+                try:
+                    diagnostic_wait = check_events.resource_wait(check_conn, settings.get('integrationStepResources', {}).get('Check'))
+                finally:
+                    check_conn.close()
+            if not diagnostic_wait and _slot_wait(settings, holders, builds) is None:
                 token = uuid.uuid4().hex
                 path.write_text(json.dumps({"holders": holders + [{**(owner or {}), "token": token, "pid": os.getpid()}]}), encoding="utf-8")
                 return token
@@ -325,7 +334,7 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
 
 # Run the compile check of the project for a Queen or an Agent.
 def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, store=True, owner=None,
-                           acquired_slot=None, on_start=None, log_file=None):
+                           acquired_slot=None, on_start=None, log_file=None, check_environment=None):
     """Run the setting compileCheck in the worktree `cwd` (default: that of `queen`, the row of the caller), store {ok, exit, commit, time, seconds, command} under
     `key` (default: the result of the Queen's run that `bzz ready` reads), add the live line to the milestones of the caller and return the result with the end of the
     output under "output". At most the setting maxConcurrentCompileChecks checks run at the same time per machine, and only while RAM and cores are free: waiting counts for neither limit. The settings compileStallMinutes (10) and
@@ -344,6 +353,8 @@ def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones
             options = {"on_start": on_start} if on_start else {}
             if log_file:
                 options["log_file"] = log_file
+            if check_environment:
+                options['env'] = check_environment
             code, output = _watch_compile(command, cwd, stall, longest, poll, **options)
         except OSError as exc:
             code, output = 127, "the compile check could not start: %s" % exc
@@ -384,7 +395,7 @@ def _database_path(conn):
     return str(conn.execute("PRAGMA database_list").fetchone()[2]) if conn is not None else str(config.db_path())
 
 
-def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, log_file=None):
+def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, log_file=None, check_environment=None):
     """Start an independent supervisor and return its durable result address and PID."""
     import uuid
     token = uuid.uuid4().hex
@@ -396,6 +407,7 @@ def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=Tr
                    "poll": POLL_SECONDS if poll is None else poll,
                    "milestones": str(env.run_dir(queen["name"])) if milestones else ""}
         request["log_file"] = log_file
+        request['check_environment'] = check_environment
         request["commit"] = head_commit(request["cwd"])
         runtime.kv_set(conn, env.name, COMPILE_REQUEST_KEY + token, json.dumps(request))
     finally:
@@ -450,7 +462,8 @@ def compile_supervisor(database, project, token):
                 else:
                     result = _execute_compile_check(env, {"name": request["name"]}, cwd=request["cwd"],
                                                     key=COMPILE_RUN_KEY + token, poll=request["poll"], milestones=bool(request["milestones"]), store=False,
-                                                    acquired_slot=slot, on_start=started, log_file=request.get("log_file"))
+                                                    acquired_slot=slot, on_start=started, log_file=request.get("log_file"),
+                                                    check_environment=request.get('check_environment'))
         except Exception as exc:
             if not _end_orphan(request):
                 return   # leave the holder discoverable until recovery can end the command

@@ -36,6 +36,18 @@ class StepLogsTests(RoundCase):
         self.assertEqual(result['exit_code'], 1)
         self.assertFalse(result['historical'])
 
+    def test_failed_integration_stays_red_while_journal_is_running(self):
+        path = action_logs.start('testproj', REL, 'Build')
+        action_logs.append(path, 'remaining checks still running\n')
+        self.state(phase='diagnosing', log_file=path, steps={'Build':'red'},
+                   job={'step':'Build', 'checks':{'failures':{'menu':'exit 1'}}})
+        runtime.kv_set(self.conn, 'testproj', 'hive-blocker:'+REL, 'Further checks running for diagnosis')
+        result = self.request()
+        self.assertEqual(result['status'], 'red')
+        self.assertIn('menu: exit 1', result['error'])
+        self.assertIn('Further checks', result['reason'])
+        self.assertIn('remaining checks', result['output'])
+
     def test_every_step_and_project_is_isolated(self):
         for step in orchestrator.STEPS:
             path = action_logs.start('testproj', REL, step)
