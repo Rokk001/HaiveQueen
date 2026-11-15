@@ -211,6 +211,37 @@ def match_sub(queen, name):
 
 
 # Describe one Hive for the active-hives table.
+def queen_version(queen):
+    """Identify the runner by both PID and birth identity in the shared leases."""
+    if not queen or not queen.get('pid') or not queen.get('processIdentity'):
+        return '–'
+    folder = Path(__file__).resolve().parent.parent
+    if folder.parent.name != 'versions':
+        return '–'
+    try:
+        from . import version_leases
+        matches = {r['version'] for r in version_leases._load(folder.parent.parent).values()
+                   if r.get('pid') == queen['pid'] and r.get('identity') == queen['processIdentity'] and r.get('version')}
+        return next(iter(matches)) if len(matches) == 1 else '–'
+    except (OSError, ValueError, KeyError, TypeError):
+        return '–'
+
+
+def job_version(state):
+    """Read a running job's own version, never the current core's version."""
+    path = (state.get('job') or {}).get('version_path')
+    if not path or str(state.get('step', '')).lower() not in ('build', 'deploy'):
+        return '–'
+    try:
+        folder = Path(path).resolve()
+        root = Path(__file__).resolve().parent.parent.parent
+        if folder.parent != root or root.name != 'versions':
+            return '–'
+        return (folder / '.haivequeen-release-version').read_text(encoding='utf-8').strip() or folder.name
+    except OSError:
+        return folder.name if folder.is_dir() else '–'
+
+
 def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None, rejected=None, waiting=None, embedded=None, plan_rejected=None, orch=None) -> dict:
     """Row of one Plan: name, project, queen with context and tokens, Agents busy/assigned, progress (finished packages of all packages), status and runtime.
 
@@ -253,7 +284,7 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     hout = sum(agent_tokens(a)[1] for a in (agents_all if agents_all is not None else agents) if (a.get("project"), a.get("plan_path")) == key)
     return {"name": hive_name(hive["plan_path"]), "apiary": hive["project"], "plan_path": hive["plan_path"],
             "queen": "Orch." if (orch or {}).get(key) and not (live or is_rejected or is_paused) else str((queen or {}).get("person") or (queen or {}).get("name") or "–") if live else "–", "queen_agent": (queen or {}).get("name"),   # a Queen that has ended no longer holds her name
-            "queen_model": overview.model_short(queen.get("provider"), queen.get("model"), queen.get("effort")) if live else "",
+            "queen_model": overview.model_short(queen.get("provider"), queen.get("model"), queen.get("effort")) if live else "", "queen_version": queen_version(queen) if live else '–',
             "queen_ctx": int((queen or {}).get("ctxTokens") or 0) if live else 0, "queen_ctx_limit": int(ctx_limit(queen)) if live and ctx_limit else 0,
             "queen_tin": qin, "queen_tout": qout, "hive_tin": hin, "hive_tout": hout,
             "steps": {b["name"]: b["step"] for b in hive.get("bees", []) if b.get("step")},
@@ -345,7 +376,7 @@ def orch_info(conn, env, hive, now=None) -> dict:
     running = state["phase"] == "pipeline" and not waiting
     reason = "owner rejection" if fix.get("reason") == "owner" else "%s red" % fix.get("step")
     return {"phase": state["phase"], "step": step, "chain": chain, "n": n, "m": len(steps), "task": task, "status": "running" if running else "waiting",
-            "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started")}
+            "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started"), "version": job_version(state)}
 
 
 # Build the Orchestrator row and the fix agent row of a plan.

@@ -589,7 +589,7 @@ function mount(document, bootstrap) {
       const step=el('button',({done:'✓ ',running:'▶ ',red:'✕ ',todo:'○ ',waiting:'◷ '}[state]||'')+t(name),'hq-step '+state);
       step.type='button';step.title=t(name)+' · '+t(label);step.setAttribute('aria-label',step.title);step.onclick=()=>showStepLog(step,row,name);chain.append(step);
     }
-    box.append(chain,el('small',`${info.n} / ${info.m}`+(info.phase==='fix'?' · '+t('Fix Agent'):''),'hq-step-count'));return box;
+    box.append(chain,el('small',`${info.n} / ${info.m}`+(info.phase==='fix'?' · '+t('Fix Agent'):'')+(['Build','Deploy'].includes(info.step)&&info.status==='running'?' · '+t('Version')+': '+(info.version||'–'):''),'hq-step-count'));return box;
   }
 
   function limitsView(rows) {
@@ -1039,7 +1039,7 @@ function mount(document, bootstrap) {
 
     view.append(tiles);
 
-    const active=section('ACTIVE PLANS');active.append(table(filtered.hives,['number','name','apiary','queen','bees_running','progress','status','runtime'],(cell,row)=>{
+    const active=section('ACTIVE PLANS');active.append(table(filtered.hives,['number','name','apiary','queen','queen_version','bees_running','progress','status','runtime'],(cell,row)=>{
 
       cell.append(button('Plan',()=>openPlan(row)),button('Details',()=>detail(row.name,row)));
 
@@ -1047,7 +1047,7 @@ function mount(document, bootstrap) {
 
       cell.append(button('Filter log',()=>{selectedPlan=row.name;selectedAgent='';$('detail').close();selectTab('Logs');}));
 
-    },{compact:true,labels:{number:'#',name:'PLAN',bees_running:'AGENTS'}}));
+    },{compact:true,labels:{number:'#',name:'PLAN',queen_version:'VERSION',bees_running:'AGENTS'}}));
 
     const hiveRows=visibleHiveRows(filtered.bees),counts=hiveCounts(hiveRows);const agents=section('QUEENS AND AGENTS');agents.querySelector('h2').append(el('small',' · '+counts.queens+' '+t('QUEENS')+' · '+counts.agents+' '+t('Agents')));agents.append(table(hiveRows,['number','name','model','hive','task','ctx','tokens','status','runtime'],(cell,row)=>{
 
