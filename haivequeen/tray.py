@@ -78,8 +78,13 @@ class StatusCache:
             self.closed = True
 
 
+def display_name():
+    """Allow isolated runtimes to identify their native controls explicitly."""
+    return os.environ.get('BZZ_TRAY_LABEL', '').strip()[:64] or 'HaiveQueen'
+
+
 def status_tip(current):
-    return 'HaiveQueen - ' + current['state'] + (' (status outdated)' if current['stale'] else '')
+    return display_name() + ' - ' + current['state'] + (' (status outdated)' if current['stale'] else '')
 
 
 def work_running():
@@ -102,7 +107,7 @@ def run_command(args):
 
 def confirm():
     import ctypes
-    return ctypes.windll.user32.MessageBoxW(None, force_stop.WARNING, 'HaiveQueen', 0x24 | 0x10000) == 6
+    return ctypes.windll.user32.MessageBoxW(None, force_stop.WARNING, display_name(), 0x24 | 0x10000) == 6
 
 
 def invoke(number):
@@ -131,13 +136,17 @@ def ensure_started():
     threading.Thread(target=process.wait, daemon=True).start()
 
 
+def icon_path():
+    return Path(__file__).with_name('app-test.ico' if display_name() != 'HaiveQueen' else 'app.ico')
+
+
 def load_icon(user):
     """Load our packaged ICO at the Windows notification-area icon size."""
     import ctypes
     from ctypes import wintypes as w
     user.LoadImageW.argtypes = [w.HINSTANCE, w.LPCWSTR, w.UINT, ctypes.c_int, ctypes.c_int, w.UINT]
     user.LoadImageW.restype = w.HANDLE
-    return user.LoadImageW(None, str(Path(__file__).with_name('app.ico')), 1,
+    return user.LoadImageW(None, str(icon_path()), 1,
                            user.GetSystemMetrics(49), user.GetSystemMetrics(50), 0x10)
 
 
@@ -219,6 +228,8 @@ def main():
             return 0
         if msg == 0x8001 and lp in (0x205, 0x202):
             popup = user.CreatePopupMenu()
+            user.AppendMenuW(popup, 0x1, 0, display_name())
+            user.AppendMenuW(popup, 0x800, 0, None)
             current.update(cache.snapshot())
             entries = menu(current['state'], current['web'], current['work'], current['stale'])
             for index, (number, label, enabled) in enumerate(entries):
@@ -247,10 +258,10 @@ def main():
     instance = kernel.GetModuleHandleW(None)
     cls = WNDCLASS(0, window, 0, 0, instance, None, None, None, None, 'HaiveQueenTrayWindow')
     user.RegisterClassW(ctypes.byref(cls))
-    hwnd = user.CreateWindowExW(0, cls.name, 'HaiveQueen', 0, 0, 0, 0, 0, None, None, instance, None)
+    hwnd = user.CreateWindowExW(0, cls.name, display_name(), 0, 0, 0, 0, 0, None, None, instance, None)
     if hwnd:
         icon.window = hwnd
-        icon.tip = 'HaiveQueen - Checking status'
+        icon.tip = display_name() + ' - Checking status'
         shell.Shell_NotifyIconW(0, ctypes.byref(icon))
         refresh(hwnd)
         user.SetTimer(hwnd, 1, 2000, None)

@@ -1449,6 +1449,8 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
                          'HQ runs this command itself, then the unchanged full integration pipeline. '
                          'A passing report alone is insufficient. Do not weaken existing checks.\n' %
                          (env.run_dir(name) / 'repair-verification.json', json.dumps(fix.get('log_file', ''))))
+    action['prompt'] += ('Verification command runs in cmd.exe: use double quotes for paths, not PowerShell & or single-quote syntax.\n'
+                         if os.name == 'nt' else 'Verification command runs in /bin/sh; use POSIX shell syntax.\n')
     action['prompt'] += repair_review.failure_report_prompt(
         env.run_dir(name) / 'repair-diagnosis.json', before_head,
         fix.get('log_file', ''), fix['review_decisions'], project=env.name, plan=plan)

@@ -1,4 +1,5 @@
 """Repair decisions require evidence rather than an agent merely ending."""
+import os
 import json
 import sys
 import time
@@ -144,6 +145,12 @@ class TargetedVerificationFixture(OrchCase):
 
 class TargetedVerification(TargetedVerificationFixture):
     """Targeted checks must pass before the complete pipeline can restart."""
+
+    def test_verification_prompt_identifies_host_shell(self):
+        prompt = (self.env().run_dir(self.agent['name']) / 'prompt.md').read_text(encoding='utf-8')
+        self.assertIn('cmd.exe' if os.name == 'nt' else '/bin/sh', prompt)
+        if os.name == 'nt':
+            self.assertIn('double quotes', prompt)
 
     def test_missing_verification_does_not_restart_pipeline(self):
         self.end_fixer(self.agent, verification=False)
