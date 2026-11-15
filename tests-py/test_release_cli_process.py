@@ -11,7 +11,7 @@ import zipfile
 from unittest.mock import patch
 
 from bzztest import RoundCase
-from haivequeen import db, force_stop, hives, loop, orchestrator, platform, runtime, scheduler, selfupdate, updates, version_layout, web_service
+from haivequeen import db, force_stop, hives, loop, orchestrator, platform, release_compat, releases, runtime, scheduler, selfupdate, updates, version_layout, web_service
 
 
 class ReleaseCliProcessTest(RoundCase):
@@ -35,6 +35,12 @@ class ReleaseCliProcessTest(RoundCase):
 
     def test_public_install_stages_downloaded_archive(self):
         self._compatible_switch(public=True, download=True)
+
+    def test_published_unknown_waits_for_jobs(self):
+        self._compatible_switch(public=True, download=True, incompatible=True, reason=release_compat.UNKNOWN_REASON)
+
+    def test_published_unknown_forces_jobs(self):
+        self._compatible_switch(public=True, download=True, incompatible=True, force=True, reason=release_compat.UNKNOWN_REASON)
 
     def test_public_install_rolls_back_after_missing_successor_receipt(self):
         self._compatible_switch(public=True, rollback=True)
@@ -75,10 +81,19 @@ class ReleaseCliProcessTest(RoundCase):
             class ReleaseHandler(BaseHTTPRequestHandler):
                 def do_GET(self):
                     requests.append((self.path, self.headers.get('User-Agent')))
+                    sha = 'a' * 40
+                    if incompatible and '/git/ref/tags/' in self.path:
+                        data = json.dumps({'object': {'type': 'commit', 'sha': sha}}).encode()
+                    elif incompatible and '/releases/tags/' in self.path:
+                        repository = self.path.split('/repos/', 1)[1].split('/releases/', 1)[0]
+                        decision = releases.release_decision(repository, '2.0.0', sha)
+                        data = json.dumps({'tag_name': 'v2.0.0', 'body': json.dumps(decision)}).encode()
+                    else:
+                        data = payload
                     self.send_response(200)
-                    self.send_header('Content-Length', str(len(payload)))
+                    self.send_header('Content-Length', str(len(data)))
                     self.end_headers()
-                    self.wfile.write(payload)
+                    self.wfile.write(data)
 
                 def log_message(self, format, *args):
                     pass
@@ -93,6 +108,9 @@ class ReleaseCliProcessTest(RoundCase):
             code = code.replace('https://api.github.com/repos/',
                                 'http://127.0.0.1:%s/repos/' % server.server_port)
             staging.write_text(code, encoding='utf-8')
+            worker = root / 'versions' / '1.0.0' / 'haivequeen' / 'selfupdate.py'
+            code = worker.read_text(encoding='utf-8').replace('poll=5.0,\n                       timeout=ROUND_TIMEOUT', 'poll=0.1,\n                       timeout=ROUND_TIMEOUT')
+            worker.write_text(code, encoding='utf-8')
         else:
             (root / 'versions' / '2.0.0' / 'haivequeen-update.json').write_text(
                 (json.dumps({'compatible_with_older': False, 'reason': reason})
@@ -308,9 +326,9 @@ class ReleaseCliProcessTest(RoundCase):
             self.assertEqual((root / 'active-version').read_text().strip(), '1.0.0' if rollback else '2.0.0')
             if download:
                 self.assertTrue((root / 'versions' / '2.0.0' / 'haivequeen' / 'cli.py').is_file())
-                self.assertEqual(len(requests), 1)
-                self.assertTrue(requests[0][0].endswith('/zipball/v2.0.0'))
-                self.assertEqual(requests[0][1], 'HaiveQueen')
+                self.assertEqual(len(requests), 3)
+                self.assertTrue(requests[-1][0].endswith('/zipball/' + ('a' * 40 if incompatible else 'v2.0.0')))
+                self.assertTrue(all(agent == 'HaiveQueen' for _, agent in requests))
             new_pid = loop.loop_running()
             self.assertTrue(new_pid)
             self.assertNotEqual(new_pid, old_pid)

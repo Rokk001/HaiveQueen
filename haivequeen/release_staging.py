@@ -29,7 +29,7 @@ def stage_release(root, repository, version, fetch=None):
             with urlopen(request, timeout=60) as response:
                 return response.read()
     # The archive may contain an inherited declaration. Only the release body,
-    # checked against the actual lightweight tag, can authorize compatibility.
+    # checked against the actual lightweight tag, supplies the release decision.
     decision = None
     try:
         base = "https://api.github.com/repos/%s" % repository

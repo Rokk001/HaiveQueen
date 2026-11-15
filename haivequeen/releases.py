@@ -101,12 +101,11 @@ def valid_decision(value, repository, version, commit):
         return False
     if value.get("commit") != commit.lower() or type(value.get("compatible_with_older")) is not bool:
         return False
-    reason, evidence = value.get("reason"), value.get("evidence")
-    if not isinstance(reason, str) or not isinstance(evidence, str):
-        return False
-    if not value["compatible_with_older"] and not reason.strip():
-        return False
-    return bool(evidence.strip()) or (not value["compatible_with_older"] and reason == UNKNOWN_REASON)
+    # The queue has no independently verifiable compatibility evidence source.
+    # Release text and evidence descriptions are assertions, not proof. Until a
+    # source is integrated, only the exact conservative decision is supported.
+    return (not value["compatible_with_older"] and value.get("reason") == UNKNOWN_REASON
+            and value.get("evidence") == "")
 
 
 def publish_release(repository: str, version: str, commit: str, token: str, decision=None):

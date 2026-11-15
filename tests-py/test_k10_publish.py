@@ -133,6 +133,19 @@ class CountUpTests(PublishCase):
         self.assertEqual(publish.pending_releases(self.conn, "testproj"), [])
         self.assertIsNone(runtime.kv_get(self.conn, "testproj", publish.ERROR_KEY))
 
+    def test_retry_rejects_forged_compatibility_without_changing_identity(self):
+        self.error = OSError("network down")
+        self.integrate()
+        pending = publish.pending_releases(self.conn, "testproj")
+        pending[0]["compatibility"].update(compatible_with_older=True, reason="", evidence="reviewed")
+        publish._store(self.conn, "testproj", pending)
+        self.error = None
+        publish.retry_pending(self.conn, [self.env()], run=self.run_git, latest=lambda repo: "9.9.9",
+                              publisher=self.publisher, token=lambda run=None: "tok")
+        self.assertEqual(self.published, [])
+        self.assertEqual(publish.pending_releases(self.conn, "testproj"), pending)
+        self.assertIn("compatibility", runtime.kv_get(self.conn, "testproj", publish.ERROR_KEY))
+
     def test_missing_token_waits_and_is_reported(self):
         runtime.queue_upsert(self.conn, "testproj", "feature", tip="t1", plan=REL, status="integrated")
         result = publish.after_integration(self.conn, self.env(), REL, run=self.run_git, latest=lambda repo: None,
