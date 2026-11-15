@@ -42,6 +42,9 @@ class ReleaseCliProcessTest(RoundCase):
     def test_incompatible_public_install_waits_for_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True)
 
+    def test_web_api_install_and_force_reach_worker(self):
+        self._compatible_switch(public=True, incompatible=True, force=True, web=True)
+
     def test_shared_settings_change_waits_for_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True, reason="shared settings format change")
 
@@ -52,7 +55,7 @@ class ReleaseCliProcessTest(RoundCase):
         self._compatible_switch(public=True, incompatible=True, force=True, reason="shared settings format change")
 
     def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False,
-                           reason="shared schema change", adoption=False, launched=False, scheduling=False, resume=False):
+                           reason="shared schema change", adoption=False, launched=False, scheduling=False, resume=False, web=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -244,11 +247,23 @@ class ReleaseCliProcessTest(RoundCase):
                                           {'phase': 'pipeline', 'steps': {step: 'running'},
                                            'job': {'step': step, 'pid': job.pid, 'file': str(result)}})
                 updates.save_state({'available': {'version': '2.0.0', 'url': 'https://example.invalid/release'}})
-                request = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'),
-                                          'update', '--install', '2.0.0'], env=env,
-                                         capture_output=True, text=True, timeout=30)
+                if web:
+                    # Exercise the real API against the installed version and
+                    # the detached worker, with an isolated data directory.
+                    code = ("import json,sys; sys.path.insert(0,sys.argv[1]); "
+                            "from haivequeen import config,db,web_api; "
+                            "c=db.connect(config.db_path()); "
+                            "print(json.dumps(web_api.execute(c,'updates/install',"
+                            "{'version':'2.0.0','confirmed':True})))")
+                    command = [sys.executable, '-I', '-c', code, str(root / 'versions' / '1.0.0')]
+                else:
+                    command = [sys.executable, '-I', str(root / 'launcher.py'), 'update', '--install', '2.0.0']
+                request = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
                 self.assertEqual(request.returncode, 0, request.stdout + request.stderr)
-                self.assertEqual(json.loads(request.stdout)['installing'], '2.0.0')
+                if web:
+                    self.assertIn(json.loads(request.stdout)['how'], ('detached', 'schtasks'))
+                else:
+                    self.assertEqual(json.loads(request.stdout)['installing'], '2.0.0')
                 if incompatible:
                     deadline = time.monotonic() + 30
                     status = None
@@ -276,10 +291,18 @@ class ReleaseCliProcessTest(RoundCase):
                                      {'Queen', 'Agent', 'Build', 'Deploy'} if force else {'Queen', 'Agent'})
                     self.assertTrue(all(job.poll() is None for job in jobs))
                     if force:
-                        forced = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'), 'update', '--force'],
-                                                env=env, capture_output=True, text=True, timeout=30)
+                        if web:
+                            code = ("import json,sys; sys.path.insert(0,sys.argv[1]); "
+                                    "from haivequeen import config,db,web_api; "
+                                    "c=db.connect(config.db_path()); "
+                                    "print(json.dumps(web_api.execute(c,'updates/force',{'confirmed':True})))")
+                            command = [sys.executable, '-I', '-c', code, str(root / 'versions' / '1.0.0')]
+                        else:
+                            command = [sys.executable, '-I', str(root / 'launcher.py'), 'update', '--force']
+                        forced = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
                         self.assertEqual(forced.returncode, 0, forced.stdout + forced.stderr)
-                        self.assertIn(force_stop.WARNING, forced.stdout)
+                        if not web:
+                            self.assertIn(force_stop.WARNING, forced.stdout)
                         self.assertTrue(json.loads(forced.stdout.splitlines()[-1])['force_requested'])
                     else:
                         (self.base / 'finish-agents').touch()

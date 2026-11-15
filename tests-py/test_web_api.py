@@ -165,6 +165,42 @@ class WebApiTests(RoundCase):
             info = dashboard_data.orch_info(self.conn, None, hive)
         self.assertEqual(info['version'], 'v2')
 
+    def test_live_lease_and_detached_job_versions_reach_dashboard(self):
+        import subprocess
+        import sys
+        from datetime import datetime
+        from pathlib import Path
+        from haivequeen import orchestrator, platform, version_layout, version_leases
+
+        root = self.base / 'installation'
+        old = root / 'versions' / '1.0.0'
+        new = root / 'versions' / '2.0.0'
+        old.mkdir(parents=True)
+        new.mkdir(parents=True)
+        (new / 'haivequeen').mkdir()
+        (new / 'haivequeen' / 'cli.py').touch()
+        version_layout.set_active(root, '2.0.0')
+        process = version_leases.launch(old, subprocess.Popen,
+                                        [sys.executable, '-c', 'import time; time.sleep(60)'])
+        try:
+            identity = platform.process_identity(process.pid)
+            self.assertTrue(identity)
+            queen = {'name': 'Q', 'person': 'Q', 'status': 'running', 'pid': process.pid,
+                     'processIdentity': identity}
+            hive = {'project': 'testproj', 'plan_path': REL, 'queen': queen, 'bees': []}
+            with mock.patch.object(dashboard_data, '__file__', str(new / 'haivequeen' / 'dashboard_data.py')):
+                row = dashboard_data.hive_row(hive, [], {}, datetime.now())
+            self.assertEqual(row['queen_version'], '1.0.0')
+            for step in ('Build', 'Deploy'):
+                orchestrator.save(self.conn, 'testproj', REL,
+                                  {'phase': 'pipeline', 'step': step, 'steps': {step: 'running'},
+                                   'job': {'version_path': str(old)}})
+                info = dashboard_data.orch_info(self.conn, None, hive)
+                self.assertEqual(info['version'], '1.0.0')
+        finally:
+            process.terminate()
+            process.wait(timeout=10)
+
     def test_agent_version_uses_matching_lease_identity(self):
         from haivequeen import version_leases
         lease = {'x': {'pid': 31, 'identity': 'birth', 'version': 'v1'}}
