@@ -11,7 +11,7 @@ import zipfile
 from unittest.mock import patch
 
 from bzztest import RoundCase
-from haivequeen import db, force_stop, loop, orchestrator, platform, runtime, scheduler, selfupdate, updates, version_layout, web_service
+from haivequeen import db, force_stop, hives, loop, orchestrator, platform, runtime, scheduler, selfupdate, updates, version_layout, web_service
 
 
 class ReleaseCliProcessTest(RoundCase):
@@ -20,6 +20,9 @@ class ReleaseCliProcessTest(RoundCase):
 
     def test_public_install_starts_compatible_release_worker(self):
         self._compatible_switch(public=True)
+
+    def test_public_install_successor_harvests_detached_jobs(self):
+        self._compatible_switch(public=True, adoption=True)
 
     def test_public_install_stages_downloaded_archive(self):
         self._compatible_switch(public=True, download=True)
@@ -37,7 +40,7 @@ class ReleaseCliProcessTest(RoundCase):
         self._compatible_switch(public=True, incompatible=True, force=True)
 
     def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False,
-                           reason="shared schema change"):
+                           reason="shared schema change", adoption=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -124,6 +127,18 @@ class ReleaseCliProcessTest(RoundCase):
                     with patch.object(orchestrator, '__file__', str(root / 'versions' / '1.0.0' / 'haivequeen' / 'orchestrator.py')):
                         orchestrator._start_detached_work(job, {}, step, command, self.wt, None, result)
                     detached.append((job, started, finish, result))
+                if adoption:
+                    for job, _, _, result in detached:
+                        step = 'Build' if 'build' in job.token else 'Deploy'
+                        plan = 'docs/plans/%s/%s-PLAN.md' % (step.lower(), step.upper())
+                        self.plan('PAUSED', rel=plan, branch='feature', worktree=str(self.wt))
+                        hives.create(self.conn, 'testproj', plan, 'claude', '123456')
+                        self.conn.execute("UPDATE hives SET state='integrating' WHERE project=? AND plan_path=?", ('testproj', plan))
+                        orchestrator.save(self.conn, 'testproj', plan,
+                                          {'phase': 'pipeline', 'step': step, 'placed': True,
+                                           'ran': [], 'steps': {step: 'running'},
+                                           'job': {'step': step, 'token': job.token, 'pid': job.pid,
+                                                   'file': str(result), 'head': 'old-revision'}})
                 deadline = time.monotonic() + 20
                 while not all(started.exists() for _, started, _, _ in detached) and time.monotonic() < deadline:
                     time.sleep(.05)
@@ -137,6 +152,12 @@ class ReleaseCliProcessTest(RoundCase):
             old_pid = loop.loop_running()
             self.assertTrue(old_pid, 'old core did not start')
             if public:
+                if force:
+                    for job, _, _, result in detached:
+                        step = 'Build' if 'build' in job.token else 'Deploy'
+                        orchestrator.save(self.conn, 'testproj', 'force-' + step,
+                                          {'phase': 'pipeline', 'steps': {step: 'running'},
+                                           'job': {'step': step, 'pid': job.pid, 'file': str(result)}})
                 updates.save_state({'available': {'version': '2.0.0', 'url': 'https://example.invalid/release'}})
                 request = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'),
                                           'update', '--install', '2.0.0'], env=env,
@@ -149,14 +170,15 @@ class ReleaseCliProcessTest(RoundCase):
                     while time.monotonic() < deadline:
                         try:
                             status = json.loads(selfupdate.release_status_path().read_text(encoding='utf-8'))
-                            if status['waiting'] and len(status['jobs']) >= 2:
+                            if status['waiting'] and len(status['jobs']) >= (4 if force else 2):
                                 break
                         except (OSError, ValueError):
                             pass
                         time.sleep(.05)
                     self.assertTrue(status and status['waiting'], str(status))
                     self.assertEqual(status['reason'], reason)
-                    self.assertEqual({j['kind'] for j in status['jobs']}, {'Queen', 'Agent'})
+                    self.assertEqual({j['kind'] for j in status['jobs']},
+                                     {'Queen', 'Agent', 'Build', 'Deploy'} if force else {'Queen', 'Agent'})
                     self.assertEqual((root / 'active-version').read_text().strip(), '1.0.0')
                     self.assertTrue(loop.stop_flag().exists())
                     self.assertTrue(all(job.poll() is None for job in jobs))
@@ -165,14 +187,10 @@ class ReleaseCliProcessTest(RoundCase):
                     reported = json.loads(query.stdout)
                     self.assertTrue(reported['waiting'])
                     self.assertEqual(reported['reason'], status['reason'])
-                    self.assertEqual({j['kind'] for j in reported['jobs']}, {'Queen', 'Agent'})
+                    self.assertEqual({j['kind'] for j in reported['jobs']},
+                                     {'Queen', 'Agent', 'Build', 'Deploy'} if force else {'Queen', 'Agent'})
                     self.assertTrue(all(job.poll() is None for job in jobs))
                     if force:
-                        for job, _, _, result in detached:
-                            step = 'Build' if 'build' in job.token else 'Deploy'
-                            orchestrator.save(self.conn, 'testproj', 'force-' + step,
-                                              {'phase': 'pipeline', 'steps': {step: 'running'},
-                                               'job': {'step': step, 'pid': job.pid, 'file': str(result)}})
                         forced = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'), 'update', '--force'],
                                                 env=env, capture_output=True, text=True, timeout=30)
                         self.assertEqual(forced.returncode, 0, forced.stdout + forced.stderr)
@@ -228,6 +246,22 @@ class ReleaseCliProcessTest(RoundCase):
                 if not force:
                     self.assertEqual(job.process.returncode, 0)
                     self.assertTrue(result.exists())
+            if adoption:
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    states = [orchestrator.load(self.conn, 'testproj',
+                              'docs/plans/%s/%s-PLAN.md' % (step.lower(), step.upper()))
+                              for step in ('Build', 'Deploy')]
+                    if all(state and state['steps'].get(step) == 'done'
+                           for state, step in zip(states, ('Build', 'Deploy'))):
+                        break
+                    time.sleep(.05)
+                for state, step in zip(states, ('Build', 'Deploy')):
+                    self.assertIsNotNone(state)
+                    self.assertEqual(state['steps'][step], 'done')
+                    self.assertNotIn('job', state)
+                    self.assertEqual(state['step'], 'Close')
+                self.assertEqual(states[1]['deployed'], 'old-revision')
         finally:
             if server is not None:
                 server.shutdown()
