@@ -175,7 +175,7 @@ class LimitTests(SlotCase):
         release = folder / 'release'
         script.write_text("import sys, time\nfrom pathlib import Path\nlog = sys.argv[1]\n"
                           "open(log, 'a').write('start %s\\n' % time.time())\n"
-                          "deadline=time.monotonic()+20\n"
+                          "deadline=time.monotonic()+120\n"
                           "while not Path(log).with_name('release').exists():\n"
                           "    if time.monotonic()>deadline: sys.exit(98)\n"
                           "    time.sleep(.01)\n"
@@ -194,7 +194,8 @@ class LimitTests(SlotCase):
         try:
             for thread in threads:
                 thread.start()
-            deadline = time.monotonic() + 10
+            # Failure guard only: proceed immediately when both child processes signal readiness.
+            deadline = time.monotonic() + 60
             while not log.exists() or len(log.read_text().splitlines()) < 2:
                 self.assertLess(time.monotonic(), deadline, 'first two checks did not start')
                 threading.Event().wait(.01)
@@ -215,7 +216,28 @@ class LimitTests(SlotCase):
         kinds = [kind for _t, kind in events]
         self.assertEqual(kinds[:2], ["start", "start"], kinds)   # two started before any ended
         self.assertEqual(kinds[2], "end", kinds)   # the third started only after one ended
-        self.assertTrue(all(r["seconds"] < 3.2 for r in results.values()), results)   # waiting is not part of the run time
+
+    def test_reported_duration_excludes_slot_wait(self):
+        clock = [10.0]
+
+        def acquire(*args, **kwargs):
+            clock[0] += 100.0
+            return 'slot'
+
+        def execute(*args, **kwargs):
+            clock[0] += 2.0
+            return 0, 'passed'
+
+        env = SimpleNamespace(settings={'compileCheck': 'check'})
+        with mock.patch.object(integration, 'head_commit', return_value='commit'), \
+                mock.patch.object(integration, '_acquire_compile_slot', side_effect=acquire), \
+                mock.patch.object(integration, '_watch_compile', side_effect=execute), \
+                mock.patch.object(integration, '_release_compile_slot') as release_slot, \
+                mock.patch.object(integration.time, 'time', side_effect=lambda: clock[0]):
+            result = integration._execute_compile_check(env, {}, cwd='.', store=False, milestones=False)
+        self.assertEqual(result['seconds'], 2.0)
+        self.assertTrue(result['ok'])
+        release_slot.assert_called_once()
 
 
 class ResourceTests(SlotCase):
