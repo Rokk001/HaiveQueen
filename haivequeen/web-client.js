@@ -1,3 +1,22 @@
+function testTimingNotice(document,t,text,threshold) {
+  const make=(tag,text)=>{const node=document.createElement(tag);node.textContent=text;return node;};
+  const rows=[];
+  for(const line of text.split(/\r?\n/)){
+    // Only explicit duration records, never overall run times or arbitrary status text.
+    let m=line.match(/^\s*(\d+(?:\.\d+)?)s\s+(call|setup|teardown)\s+(.+)$/);
+    if(m){rows.push({name:m[3]+' ('+m[2]+')',seconds:Number(m[1])});continue;}
+    m=line.match(/^\s*(\d+(?:\.\d+)?)s\s+(test\S+\s+\(.+\))\s*$/);
+    if(m){rows.push({name:m[2],seconds:Number(m[1])});continue;}
+    m=line.match(/^\s*(\S+\.py)\s+exit=-?\d+\s+seconds=(\d+(?:\.\d+)?)\s*$/);
+    if(m)rows.push({name:m[1],seconds:Number(m[2])});
+  }
+  const slow=rows.filter(row=>Number.isFinite(row.seconds)&&row.seconds>=threshold).sort((a,b)=>b.seconds-a.seconds);
+  const box=document.createElement('details');box.className='test-timing-notice';
+  box.append(make('summary',slow.length?t('Slow tests')+': '+slow.length+' · ≥ '+threshold+' s':t(rows.length?'No tests above the threshold in this excerpt':'No individual test durations available in this excerpt')));
+  box.append(make('p',t('Measured durations in the loaded log excerpt only. A long duration does not prove unnecessary waiting. No additional tests are started.')));
+  if(slow.length){const list=document.createElement('ul');for(const row of slow)list.append(make('li',row.name+' · '+row.seconds+' s'));box.append(list);}
+  return box;
+}
 class LogPager {
   constructor(){this.run='';this.source='';this.restart();}
   restart(cursor=null){const carry=cursor&&cursor===this.cursor?this.continuation:'';this.cursor=cursor;this.text='';this.more=false;this.continuation=carry||'';}
@@ -529,6 +548,7 @@ function mount(document, bootstrap) {
     sources.append(el('label','Log source'),sourceSelect);body.insertBefore(runInfo,panel);panel.insertBefore(sources,output);panel.insertBefore(fileInfo,output);
     let latest=null, selected='',following=true,loading=false,revision=0,autoSource=true;
     const pager=new LogPager(),knownSources=new Map();
+    const timings=el('div');panel.insertBefore(timings,output);
     const paging=el('div',undefined,'step-log-sources'),firstPage=el('button',t('Start of log')),nextPage=el('button',t('Next page')),followLive=el('button',t('Follow live'));
     for(const button of [firstPage,nextPage,followLive])button.type='button';
     paging.append(firstPage,nextPage,followLive);panel.insertBefore(paging,output);
@@ -536,6 +556,8 @@ function mount(document, bootstrap) {
     function display(){
       if(!latest)return;
       const file=knownSources.get(selected);
+      const timingNotice=testTimingNotice(document,t,pager.text,latest.slow_test_seconds);
+      timingNotice.open=timings.firstElementChild?.open||false;timings.replaceChildren(timingNotice);
       const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
       const text=([pager.text,!file&&latest.reason&&!pager.text.includes(latest.reason)?latest.reason:''].filter(Boolean).join('\n\n')||t('No log output available yet.'));
       fileInfo.textContent=(file?file.path+' · '+t('File updated')+': '+date(file.modified_at)+' · '+t('File currently on disk; not an archived snapshot.'):t('Recorded console output for the selected run.'))+' · '+t('Recent output is limited; use Start of log and Next page for full history.');
@@ -1555,5 +1577,5 @@ function mount(document, bootstrap) {
   void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={testTimingNotice,LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

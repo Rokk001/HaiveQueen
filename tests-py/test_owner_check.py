@@ -44,6 +44,32 @@ class OwnerCheckTests(RoundCase):
         """All Queen rows of the dummy plan."""
         return [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["phase"] == "queen"]
 
+    def test_preparing_integrated_passed_plan_reaches_owner_check(self):
+        qid = self.integrated_hive_with_question()
+        self.conn.execute('DELETE FROM questions WHERE id=?', (qid,))
+        hives.set_completion(self.conn, 'testproj', REL, 'passed')
+        runtime.set_plan_status(self.conn, 'testproj', REL, 'PREPARING', str(self.repo))
+        hives.reconcile_completed(self.conn, self.env())
+        self.assertEqual(self.status(), 'REVIEW')
+        questions = runtime.list_questions(self.conn, 'testproj', status='open', plan=REL)
+        self.assertEqual(len([q for q in questions if q['item'].startswith('owner-check')]), 1)
+        hives.reconcile_completed(self.conn, self.env())
+        self.assertEqual(len(runtime.list_questions(self.conn, 'testproj', status='open', plan=REL)), 1)
+
+    def test_preparing_without_integrated_tip_stays_preparing(self):
+        self.plan('PREPARING', [{'id': 'P1', 'title': 'First'}])
+        hives.create(self.conn, 'testproj', REL, 'claude', '123456')
+        hives.set_completion(self.conn, 'testproj', REL, 'passed')
+        hives.reconcile_completed(self.conn, self.env())
+        self.assertEqual(self.status(), 'PREPARING')
+        self.assertEqual(runtime.list_questions(self.conn, 'testproj', status='open', plan=REL), [])
+
+    def test_paused_integrated_plan_is_not_resumed_by_reconciliation(self):
+        self.integrated_hive_with_question()
+        runtime.set_plan_status(self.conn, 'testproj', REL, 'PAUSED', str(self.repo))
+        hives.reconcile_completed(self.conn, self.env())
+        self.assertEqual(self.status(), 'PAUSED')
+
     def test_owner_check_requires_contained_integrated_tip(self):
         """A linked integrated row cannot justify an owner check for an unknown tip."""
         self.integrated_hive_with_question()

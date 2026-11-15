@@ -1039,3 +1039,7 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 @media(prefers-reduced-motion:reduce){.loading-honeycomb,.loading-row{animation:none}}
 
 .plan-resume{margin-left:.5rem;padding:.15rem .5rem;font-size:inherit;white-space:nowrap}
+
+.test-timing-notice { margin: .5rem 0; font-size: .85rem; }
+.test-timing-notice summary { cursor: pointer; }
+.test-timing-notice li { overflow-wrap: anywhere; }

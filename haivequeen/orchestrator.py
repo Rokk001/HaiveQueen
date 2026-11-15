@@ -1383,6 +1383,9 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
     from . import bees, loop, repair_review
     fix = state["fix"]
     diagnosis = False
+    if fix.get('review_required'):
+        fix.pop('review_authorized', None)
+        fix.pop('review_class', None)
     if fix.get('review_authorized') and fix['review_authorized'] != _review_scope(conn, env, plan, fix):
         fix.pop('review_authorized', None)
         fix.pop('review_class', None)

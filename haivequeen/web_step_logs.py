@@ -4,7 +4,14 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import action_logs, orchestrator, runtime, plans
+from . import action_logs, orchestrator, runtime, plans, config
+
+
+def timing_threshold():
+    """Use the owner's setting without changing any test execution."""
+    import math
+    value = config.load_config().get('slowTestSeconds', 10)
+    return value if type(value) in (int, float) and math.isfinite(value) and value > 0 else 10
 
 
 def read(conn, project, plan, step, *, page_request=None):
@@ -45,7 +52,7 @@ def read(conn, project, plan, step, *, page_request=None):
     if waiting:
         status, reason = 'waiting', blocker
     fix = state.get('fix') or {}
-    summary = {'step': step, 'status': status, 'phase': state.get('phase', ''),
+    summary = {'slow_test_seconds': timing_threshold(), 'step': step, 'status': status, 'phase': state.get('phase', ''),
                'exit_code': record.get('exit_code'),
                'error': fix.get('error', '') if fix.get('step') == step else '',
                'reason': reason, 'historical': historical,
@@ -58,7 +65,7 @@ def read(conn, project, plan, step, *, page_request=None):
     output = console
     for item in references:
         output += '\n\n--- ' + item['path'] + ' ---\n' + (item.get('content') or item.get('error', ''))
-    return {'console_output':console, 'references':references, 'step':step, 'status':status, 'phase':state.get('phase', ''),
+    return {'slow_test_seconds': summary['slow_test_seconds'], 'console_output':console, 'references':references, 'step':step, 'status':status, 'phase':state.get('phase', ''),
             'exit_code':record.get('exit_code'), 'output':output,
             'error':fix.get('error', '') if fix.get('step') == step else '',
             'reason':reason, 'historical':historical,

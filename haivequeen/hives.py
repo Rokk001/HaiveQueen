@@ -306,7 +306,9 @@ def reconcile_completed(conn, env, alive=None, plan_files=None):
             finish_hive(conn, env.name, plan['path'])
             continue
         if plan['status'] not in plan_mod.STARTABLE_STATUSES:
-            continue
+            # A persisted cut status must not hide an already integrated result.
+            if plan['status'] != 'PREPARING' or not integrated_ready(conn, env, hive):
+                continue
         if orchestrator.active(conn, env.name, plan['path']):
             continue   # the Orchestrator integrates the plan (pipeline, fix agent or waiting for the owner)
         integrated = integrated_ready(conn, env, hive)

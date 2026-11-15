@@ -15,6 +15,15 @@ class WebLogPagesTests(RoundCase):
         return web_api.execute(self.conn, 'plan/step-log',
                                {'project': 'testproj', 'plan': REL, 'step': 'Build', **data})
 
+    def test_configured_timing_threshold_reaches_log_details(self):
+        from haivequeen import config
+        path = action_logs.start('testproj', REL, 'Build')
+        action_logs.append(path, '12.5s call tests/test_example.py::test_work\n')
+        with mock.patch.object(config, 'load_config', return_value={'slowTestSeconds': 23}):
+            result = self.request()
+        self.assertEqual(result['slow_test_seconds'], 23)
+        self.assertIn('12.5s call', result['output'])
+
     def test_console_payload_is_bounded_not_duplicated_and_consumed_output_is_not_read_again(self):
         path = action_logs.start('testproj', REL, 'Build')
         for _ in range(100):

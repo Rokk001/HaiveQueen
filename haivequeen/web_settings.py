@@ -30,6 +30,10 @@ def save(path, settings, revision, *, project=False, conn=None):
     if not project:
         for provider in settings.get('providers', []):
             scheduler.capability_thresholds(provider)
+    if 'slowTestSeconds' in settings:
+        errors = settings_store.check({'slowTestSeconds': settings['slowTestSeconds']})
+        if errors:
+            raise ValueError('; '.join(errors))
     data.clear()
     data.update(settings)
     if project and conn is not None:

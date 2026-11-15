@@ -72,10 +72,10 @@ SETTING_HELP = {
     "views.questions": N_("A Markdown file that shows the open questions."), "views.decisions": N_("A Markdown file that shows the decisions."),
     "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
 }
-GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model"),
+GENERAL_LABELS = {"slowTestSeconds": N_("Slow test threshold (seconds)"), "language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model"),
                   "owner": N_("Owner name"), "queenClass": N_("Queen class"), "diagnosisClass": N_("Question / diagnosis agent class"), "beesPerQueen": N_("Agents per Queen"),
                   "maxConcurrentCompileChecks": N_("Max concurrent compile checks")}
-GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class."),
+GENERAL_HELP = {"slowTestSeconds": N_("Show measured individual tests at or above this duration in log details; advisory only, no automatic retry or blocking."), "language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class."),
                 "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("The model class of the Queens (light, medium or heavy)."),
                 "diagnosisClass": N_("The class used to review technical questions; model and effort come from the provider settings for this class."),
                 "beesPerQueen": N_("How many Agents a Queen may have running at the same time."),
@@ -334,6 +334,9 @@ def check(data, machine=True) -> list:
     for key, label in (("remoteName", "Remote name"), ("integrationBranch", "Integration branch")):
         if data.get(key) and not re.fullmatch(r"[\w][\w./-]*", str(data[key])):
             problems.append(tr("%s: letters, digits and . / - _ are expected, starting with a letter or digit", tr(label)))
+    duration = data.get("slowTestSeconds", 10)
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration <= 0:
+        problems.append(tr("Slow test threshold: a finite number above zero is required"))
     limit = data.get("maxConcurrentCompileChecks")
     if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
         problems.append(tr("%s: a whole number from %d up is expected", tr(N_("Max concurrent compile checks")), 1))

@@ -36,6 +36,14 @@ class BrowserTests(unittest.TestCase):
         for label in ('Questions', 'Limits', 'Queue', 'Clear', 'Resume', 'Update', 'Live'):
             self.assertNotEqual(i18n.tr(label, language='German'), label, label)
 
+    def test_slow_test_notice(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required to execute browser regression tests')
+        result = subprocess.run([node, str(Path(__file__).with_name('test_timing_notice.cjs'))],
+                                cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_client_behaviour(self):
         node = shutil.which('node')
         if not node:

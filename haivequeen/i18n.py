@@ -852,3 +852,13 @@ GERMAN.update({
     "Progress / Task": "Fortschritt / Aufgabe",
     "Expand or collapse": "Auf- oder zuklappen",
 })
+
+GERMAN.update({
+    'Slow tests': 'Langsame Tests',
+    'Slow test threshold (seconds)': 'Schwelle für langsame Tests (Sekunden)',
+    'Show measured individual tests at or above this duration in log details; advisory only, no automatic retry or blocking.': 'Einzeltests ab dieser gemessenen Dauer in den Logdetails anzeigen; nur ein Hinweis, keine automatische Wiederholung oder Blockade.',
+    'Slow test threshold: a finite number above zero is required': 'Testlaufzeit-Schwelle: Eine endliche Zahl größer als null ist erforderlich',
+    'No tests above the threshold in this excerpt': 'Keine Tests ab der Schwelle in diesem Ausschnitt',
+    'No individual test durations available in this excerpt': 'Keine Einzeltest-Laufzeiten in diesem Ausschnitt verfügbar',
+    'Measured durations in the loaded log excerpt only. A long duration does not prove unnecessary waiting. No additional tests are started.': 'Gemessene Laufzeiten nur aus dem geladenen Logausschnitt. Eine lange Laufzeit belegt keine unnötige Wartezeit. Es werden keine zusätzlichen Tests gestartet.',
+})

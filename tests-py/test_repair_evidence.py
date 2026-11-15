@@ -28,6 +28,18 @@ class RepairEvidence(OrchCase):
         self.assertIn('No repair was made; inspect the shared fixture next.', prompt)
         self.assertIn(log, prompt)
 
+    def test_used_authorization_cannot_bypass_new_diagnosis(self):
+        self.round()
+        state = self.state()
+        state['fix']['review_authorized'] = orchestrator._review_scope(self.conn, self.env(), REL, state['fix'])
+        state['fix']['review_class'] = 'medium'
+        orchestrator.save(self.conn, 'testproj', REL, state)
+        self.end_fixer(self.fixers()[0], 'No progress; the same resource is still occupied.', verification=False)
+        self.round()
+        self.round()
+        self.assertTrue(self.state()['fix']['diagnosis'])
+        self.assertNotIn('review_authorized', self.state()['fix'])
+
     def test_empty_commit_is_not_repair_evidence(self):
         self.round()
         log = action_logs.latest('testproj', REL, 'Check')['path']

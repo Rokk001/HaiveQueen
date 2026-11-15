@@ -8,6 +8,7 @@ from . import filetxn, credential_store
 APP = "HaiveQueen"
 
 DEFAULT_CONFIG = {
+    "slowTestSeconds": 10,  # advisory threshold for measured individual test durations
     "providers": [],
     "slots": 2,
     "weeklyLimitSources": [],
