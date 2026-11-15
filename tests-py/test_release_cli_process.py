@@ -24,7 +24,10 @@ class ReleaseCliProcessTest(RoundCase):
     def test_public_install_stages_downloaded_archive(self):
         self._compatible_switch(public=True, download=True)
 
-    def _compatible_switch(self, public, download=False):
+    def test_public_install_rolls_back_after_missing_successor_receipt(self):
+        self._compatible_switch(public=True, rollback=True)
+
+    def _compatible_switch(self, public, download=False, rollback=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -68,6 +71,18 @@ class ReleaseCliProcessTest(RoundCase):
         else:
             (root / 'versions' / '2.0.0' / 'haivequeen-update.json').write_text(
                 '{"compatible_with_older": true}', encoding='utf-8')
+        if rollback:
+            # The test version runs the real CLI and loop but cannot publish a
+            # completed-round receipt. Shorten only the isolated worker timeout.
+            target_loop = root / 'versions' / '2.0.0' / 'haivequeen' / 'loop.py'
+            code = target_loop.read_text(encoding='utf-8')
+            code = code.replace('            record_completed_round(conn)', '            pass  # simulate a failed first round')
+            target_loop.write_text(code, encoding='utf-8')
+            worker_code = root / 'versions' / '1.0.0' / 'haivequeen' / 'selfupdate.py'
+            code = worker_code.read_text(encoding='utf-8')
+            code = code.replace('ROUND_TIMEOUT = 1800.0', 'ROUND_TIMEOUT = 8.0')
+            code = code.replace('poll: float = 5.0, round_timeout:', 'poll: float = 0.1, round_timeout:')
+            worker_code.write_text(code, encoding='utf-8')
         version_layout.install_launcher(root)
         version_layout.set_active(root, '1.0.0')
         (self.base / 'cfg' / 'config.toml').write_text(
@@ -123,14 +138,14 @@ class ReleaseCliProcessTest(RoundCase):
                         break
                     time.sleep(.1)
                 self.assertTrue(row and row['ended'], 'release worker did not finish')
-                self.assertEqual(row['result'], 'ok', str(dict(row)))
+                self.assertEqual(row['result'], 'rollback' if rollback else 'ok', str(dict(row)))
             else:
                 worker = subprocess.run([sys.executable, '-I', str(root / 'versions' / '1.0.0' / 'haivequeen' / 'cli.py'),
                                          'self-update', '--worker', '--version', '2.0.0'],
                                         env=env, capture_output=True, text=True, timeout=90)
                 self.assertEqual(worker.returncode, 0, worker.stdout + worker.stderr)
                 self.assertEqual(json.loads(worker.stdout)['result'], 'ok')
-            self.assertEqual((root / 'active-version').read_text().strip(), '2.0.0')
+            self.assertEqual((root / 'active-version').read_text().strip(), '1.0.0' if rollback else '2.0.0')
             if download:
                 self.assertTrue((root / 'versions' / '2.0.0' / 'haivequeen' / 'cli.py').is_file())
                 self.assertEqual(len(requests), 1)
@@ -142,7 +157,11 @@ class ReleaseCliProcessTest(RoundCase):
             receipt = json.loads(runtime.kv_get(self.conn, scheduler.GLOBAL, 'loop-completed-round'))
             self.assertEqual(receipt['pid'], new_pid)
             self.assertEqual(receipt['identity'], platform.process_identity(new_pid))
-            self.assertEqual(Path(receipt['code_path']), root / 'versions' / '2.0.0')
+            self.assertEqual(Path(receipt['code_path']), root / 'versions' / ('1.0.0' if rollback else '2.0.0'))
+            if rollback:
+                self.assertIn('rolled back', row['note'])
+                fault = json.loads(runtime.kv_get(self.conn, scheduler.GLOBAL, 'global-fault:self_update_rollback'))
+                self.assertIn('rolled back', fault['text'])
             self.assertTrue(all(job.poll() is None for job in jobs))
             self.assertTrue(all(job.process.poll() is None for job, _, _, _ in detached))
             for job, _, finish, result in detached:
