@@ -27,6 +27,9 @@ class ReleaseCliProcessTest(RoundCase):
     def test_public_install_successor_schedules_startable_plan(self):
         self._compatible_switch(public=True, launched=True, scheduling=True)
 
+    def test_forced_update_resumes_existing_plan(self):
+        self._compatible_switch(public=True, incompatible=True, force=True, resume=True)
+
     def test_public_install_successor_harvests_detached_jobs(self):
         self._compatible_switch(public=True, adoption=True)
 
@@ -49,7 +52,7 @@ class ReleaseCliProcessTest(RoundCase):
         self._compatible_switch(public=True, incompatible=True, force=True, reason="shared settings format change")
 
     def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False,
-                           reason="shared schema change", adoption=False, launched=False, scheduling=False):
+                           reason="shared schema change", adoption=False, launched=False, scheduling=False, resume=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -111,7 +114,7 @@ class ReleaseCliProcessTest(RoundCase):
         (self.base / 'cfg' / 'config.toml').write_text(
             'roundMinutes = 0.01\n[web]\nport = 0\n', encoding='utf-8')
         real_names = ('TestQueen', 'TestAgent')
-        if launched:
+        if launched or resume:
             fake = self.base / 'provider.py'
             fake.write_text('import json,os,time\nfrom pathlib import Path\n'
                             'base=Path(os.environ["TEST_LIVE_BASE"])\n'
@@ -132,11 +135,12 @@ class ReleaseCliProcessTest(RoundCase):
             os.environ['TEST_LIVE_BASE'] = str(self.base)
             self.addCleanup(os.environ.pop, 'TEST_LIVE_BASE', None)
         env = dict(os.environ, BZZ_NO_DESKTOP='1')
-        if scheduling:
+        if scheduling or resume:
             env.pop('BZZ_TEST_NOSTART', None)
         jobs = []
         detached = []
         core = None
+        old_queen = None
         try:
             if launched:
                 prompt = self.base / 'runner-prompt.md'
@@ -192,6 +196,38 @@ class ReleaseCliProcessTest(RoundCase):
                 while not all(started.exists() for _, started, _, _ in detached) and time.monotonic() < deadline:
                     time.sleep(.05)
                 self.assertTrue(all(started.exists() for _, started, _, _ in detached))
+            if resume:
+                plan_path = 'docs/plans/next/NEXT-PLAN.md'
+                self.plan('RUNNING', [{'id': 'P1', 'class': 'medium'}], rel=plan_path,
+                          branch='feature', worktree=str(self.base / 'next-worktree'))
+                def git(*args):
+                    return subprocess.run(['git', '-C', str(self.repo), *args], check=True,
+                                          capture_output=True, text=True)
+                git('init', '-q', '-b', 'main')
+                git('config', 'user.name', 'Test')
+                git('config', 'user.email', 'test@example.invalid')
+                git('add', '--', '.haivequeen/project.toml', plan_path)
+                git('commit', '-qm', 'Create isolated plan')
+                git('branch', 'feature')
+            if resume:
+                hives.create(self.conn, 'testproj', plan_path, 'claude', '123456')
+                name = 'PriorQueen'
+                runtime.upsert_agent(self.conn, 'testproj', name,
+                                     {'status': 'starting', 'phase': 'queen', 'provider': 'claude',
+                                      'plan_path': plan_path, 'class': 'medium', 'person': name})
+                prompt = self.base / 'prior-prompt.md'
+                prompt.write_text('TASK\nTest work\n', encoding='utf-8')
+                spec = {'name': name, 'provider': 'claude', 'protocol': 'claude', 'plan': plan_path,
+                        'package': '', 'phase': 'queen', 'cwd': str(self.repo), 'prompt_file': str(prompt)}
+                self.env().run_dir(name).mkdir(parents=True, exist_ok=True)
+                with patch.object(loop, 'TOOLS_DIR', root / 'versions' / '1.0.0'):
+                    loop.launch_headless(self.env(), spec)
+                deadline = time.monotonic() + 40
+                while not (self.base / (name + '-started')).exists() and time.monotonic() < deadline:
+                    time.sleep(.05)
+                self.assertTrue((self.base / (name + '-started')).exists(), 'prior Queen did not start')
+                old_queen = runtime.get_agent(self.conn, 'testproj', name)
+                self.assertEqual(Path((self.base / (name + '-started')).read_text()), root / 'versions' / '1.0.0' / 'haivequeen' / 'cli.py')
             core = subprocess.Popen([sys.executable, '-I', str(root / 'launcher.py'), 'start',
                                      '--foreground'], env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -301,6 +337,23 @@ class ReleaseCliProcessTest(RoundCase):
                         break
                     time.sleep(.05)
                 self.assertTrue(all(runtime.get_agent(self.conn, 'testproj', name)['status'] == 'done' for name in real_names))
+            if resume:
+                self.assertFalse(platform.process_alive(old_queen['pid']))
+                (self.base / 'release-runners').touch()
+                deadline = time.monotonic() + 50
+                scheduled = None
+                while time.monotonic() < deadline:
+                    rows = self.conn.execute("SELECT name FROM agents WHERE project=? AND plan_path=? AND phase='queen' AND name != ?", ('testproj', plan_path, old_queen['name'])).fetchall()
+                    if rows:
+                        scheduled = runtime.get_agent(self.conn, 'testproj', rows[-1]['name'])
+                        marker = self.base / (scheduled['name'] + '-started')
+                        if marker.exists() and scheduled['status'] == 'done':
+                            break
+                    time.sleep(.1)
+                self.assertIsNotNone(scheduled, 'successor did not resume existing plan')
+                self.assertTrue(marker.exists(), 'successor Queen did not start')
+                self.assertEqual(Path(marker.read_text()), root / 'versions' / '2.0.0' / 'haivequeen' / 'cli.py')
+                self.assertEqual(scheduled['status'], 'done')
             if scheduling:
                 plan_path = 'docs/plans/next/NEXT-PLAN.md'
                 self.plan('RUNNING', [{'id': 'P1', 'class': 'medium'}], rel=plan_path,
@@ -362,6 +415,11 @@ class ReleaseCliProcessTest(RoundCase):
                     self.assertEqual(state['step'], 'Close')
                 self.assertEqual(states[1]['deployed'], 'old-revision')
         finally:
+            if resume:
+                (self.base / 'release-runners').touch()
+                deadline = time.monotonic() + 30
+                while old_queen and platform.process_alive(old_queen['pid']) and time.monotonic() < deadline:
+                    time.sleep(.05)
             if launched:
                 (self.base / 'release-runners').touch()
                 deadline = time.monotonic() + 30
