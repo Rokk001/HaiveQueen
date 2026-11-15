@@ -155,6 +155,23 @@ def reviews(env, plan):
             and state.get('phase') != 'completed'}
 
 
+def running_packages(conn, project, plan, packages, alive=None):
+    """Read confirmed running diagnosis agents; never advance or repair state."""
+    from . import agent_process
+    result = []
+    for package in sorted(packages):
+        try:
+            state = _load(conn, project, plan, package)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(state, dict) or state.get('phase') != 'running' or not state.get('agent'):
+            continue
+        agent = runtime.get_agent(conn, project, state['agent'])
+        if agent and agent.get('plan_path') == plan and agent_process.is_live(agent, alive):
+            result.append(package)
+    return result
+
+
 def waiting(env, plan):
     """Do not churn Queens while all remaining work awaits diagnosis or its answer."""
     active = reviews(env, plan)

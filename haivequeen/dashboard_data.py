@@ -139,6 +139,8 @@ def status_text(hive) -> str:
         return (tr("Waiting for owner check") if state == "owner_check" else tr("Waiting for answer")) + suffix
     if state == "answer" and not questions:
         state = "waiting"   # old snapshots may still refer to an answered question
+    if hive.get('running_diagnoses'):
+        return tr('Diagnosis running: %s', ', '.join(hive['running_diagnoses']))
     scheduler_state = hive.get('scheduler_state')
     if state in ('waiting', 'starting', 'requeen', 'codex_wait', 'provider_wait', 'running') and scheduler_state in ('STOPPED', 'STOPPING', 'PAUSED', 'STOP'):
         return tr({'STOPPED': N_('Orchestrator stopped'), 'STOP': N_('Orchestrator stopped'),

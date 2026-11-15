@@ -1053,3 +1053,5 @@ GERMAN.update({'Orchestrator stopped': 'Orchestrator gestoppt',
                'Orchestrator stopping': 'Orchestrator wird gestoppt',
                'Orchestrator paused': 'Orchestrator pausiert',
                'Waiting for scheduler reassessment': 'Wartet auf erneute Startprüfung'})
+
+GERMAN['Diagnosis running: %s'] = 'Diagnose l\u00e4uft: %s'

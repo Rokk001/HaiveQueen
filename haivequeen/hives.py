@@ -936,6 +936,8 @@ def hive_data(conn, project, agents, plan=None):
         hive['bees'] = list(bees.values())
         hive['package_steps'] = package_steps(conn, hive['project'], hive['plan_path'], packages, active, step_notes)
         hive['blocker'] = runtime.kv_get(conn, hive['project'], 'hive-blocker:' + hive['plan_path'])
+        from . import package_diagnosis
+        hive['running_diagnoses'] = package_diagnosis.running_packages(conn, hive['project'], hive['plan_path'], packages)
         hive['pending_questions'] = [q['id'] for q in runtime.list_questions(conn, hive['project'], plan=hive['plan_path']) if q['status'] in ('open', 'triage') and not str(q['item']).upper().startswith('STALL-')]
     return rows
 

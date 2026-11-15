@@ -13,3 +13,10 @@ provider reason is displayed, such as exhausted quota, unknown usage or no free
 slot. Without a recorded reason the UI says `Waiting for scheduler reassessment`,
 not `Waiting for Codex`. Reading the dashboard never wakes a plan or changes the
 database. Recovery runs only in the normal scheduler.
+
+An active package diagnosis is shown as `Diagnosis running: <package>` (German:
+`Diagnose läuft: <package>`), replacing the generic remaining-packages message.
+The display requires a running diagnosis record and its matching live agent for
+the same project and plan. Multiple running diagnoses name each package. Pending,
+completed or stale diagnoses are not reported as running. This is read-only;
+owner questions, plan pauses and active Queen/integration statuses keep priority.
