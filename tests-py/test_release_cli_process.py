@@ -30,10 +30,14 @@ class ReleaseCliProcessTest(RoundCase):
     def test_incompatible_public_install_waits_for_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True)
 
+    def test_shared_settings_change_waits_for_jobs_then_switches(self):
+        self._compatible_switch(public=True, incompatible=True, reason="shared settings format change")
+
     def test_incompatible_public_install_forces_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True, force=True)
 
-    def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False):
+    def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False,
+                           reason="shared schema change"):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -76,7 +80,7 @@ class ReleaseCliProcessTest(RoundCase):
             staging.write_text(code, encoding='utf-8')
         else:
             (root / 'versions' / '2.0.0' / 'haivequeen-update.json').write_text(
-                ('{"compatible_with_older": false, "reason": "shared schema change"}'
+                (json.dumps({'compatible_with_older': False, 'reason': reason})
                  if incompatible else '{"compatible_with_older": true}'), encoding='utf-8')
         if rollback:
             # The test version runs the real CLI and loop but cannot publish a
@@ -151,7 +155,7 @@ class ReleaseCliProcessTest(RoundCase):
                             pass
                         time.sleep(.05)
                     self.assertTrue(status and status['waiting'], str(status))
-                    self.assertEqual(status['reason'], 'shared schema change')
+                    self.assertEqual(status['reason'], reason)
                     self.assertEqual({j['kind'] for j in status['jobs']}, {'Queen', 'Agent'})
                     self.assertEqual((root / 'active-version').read_text().strip(), '1.0.0')
                     self.assertTrue(loop.stop_flag().exists())
