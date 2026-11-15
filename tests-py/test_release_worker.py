@@ -132,8 +132,27 @@ class ReleaseWorkerTests(unittest.TestCase):
         self.assertEqual(observed[0]['jobs'][0]['name'], 'Q')
         self.assertEqual(self.active(), '2.0.0')
 
+    @contextlib.contextmanager
+    def verified_release(self):
+        fixture = test_release_provenance.ProvenanceTests()
+        fixture.setUp()
+        original_fetch = fixture.fetch
+        def fetch(url):
+            if '/releases/' in url:
+                return json.dumps({'tag_name': 'v2.0.0', 'body': json.dumps({
+                    'repository': 'example/project', 'version': '2.0.0',
+                    'commit': fixture.commit, 'compatible_with_older': False,
+                    'reason': 'database change', 'evidence': 'assertion'})}).encode()
+            return original_fetch(url)
+        import shutil
+        shutil.rmtree(self.target)
+        def stage(root, repository, version):
+            return release_staging.stage_release(root, repository, version, fetch)
+        with mock.patch.object(updates, 'repository', return_value='example/project'), \
+             mock.patch.object(release_staging, '_fetch', side_effect=fetch):
+            yield stage
+
     def test_incompatible_waits_for_jobs_and_old_core(self):
-        self.metadata(False, 'database change')
         live = [True]
         observed = []
         def jobs(conn):
@@ -144,14 +163,14 @@ class ReleaseWorkerTests(unittest.TestCase):
             self.assertEqual(self.active(), '1.0.0')
             self.assertTrue(loop.stop_flag().exists())
             live[0] = False
-        result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', jobs=jobs, sleep=sleep,
-                    loop_pid=lambda: 42 if live[0] else 0, start=lambda: True, receipt=lambda *a, **k: True)
+        with self.verified_release() as stage:
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', stage=stage, jobs=jobs, sleep=sleep,
+                        loop_pid=lambda: 42 if live[0] else 0, start=lambda: True, receipt=lambda *a, **k: True)
         self.assertEqual(result['result'], 'ok')
-        self.assertEqual(observed[0]['reason'], 'database change')
+        self.assertEqual(observed[0]['reason'], release_compat.UNKNOWN_REASON)
         self.assertEqual(observed[0]['jobs'][0]['name'], 'Q')
 
     def test_force_requires_request_and_stops_before_activation(self):
-        self.metadata(False, 'shared configuration change')
         live = [True]
         calls = []
         def jobs(conn):
@@ -161,11 +180,12 @@ class ReleaseWorkerTests(unittest.TestCase):
             self.assertEqual(self.active(), '1.0.0')
             selfupdate.release_force_path().write_text('confirmed', encoding='utf-8')
         def stop(conn):
+            self.assertEqual(self.active(), '1.0.0')
             calls.append('stop')
             live[0] = False
             return {'ok': True}
-        with mock.patch('haivequeen.force_stop.stop', side_effect=stop):
-            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', jobs=jobs, sleep=sleep,
+        with self.verified_release() as stage, mock.patch('haivequeen.force_stop.stop', side_effect=stop):
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', stage=stage, jobs=jobs, sleep=sleep,
                         loop_pid=lambda: 42 if live[0] else 0, start=lambda: True, receipt=lambda *a, **k: True)
         self.assertEqual(calls, ['stop'])
         self.assertEqual(result['result'], 'ok')
