@@ -378,6 +378,8 @@ def answer_question(conn, qid: int, text: str, by: str, apiary: bool = False) ->
         add_event(conn, row["project"], "answer", text, data={"question_id": qid, "by": by})
         from . import bees
         bees.answer_failure_question(conn, row, by)
+        from . import hives
+        hives.reconcile_answer_waits(conn, row['project'], row['plan_path'])
     return {"id": qid, "project": row["project"], "answered_by": by}
 
 

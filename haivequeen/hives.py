@@ -81,6 +81,26 @@ def wait_for_answers(conn, project, plan, questions):
         conn.execute("DELETE FROM hive_integration WHERE project=? AND plan_path=?", (project, plan))
 
 
+def reconcile_answer_waits(conn, project, plan=None):
+    """Clear obsolete answer waits without starting work or changing pause/acceptance state."""
+    sql = "SELECT plan_path,questions_json FROM hives WHERE project=? AND state='answer'"
+    args = [project]
+    if plan is not None:
+        sql += " AND plan_path=?"
+        args.append(plan)
+    with db.transaction(conn):
+        for hive in db.rows(conn, sql, args):
+            questions = runtime.list_questions(conn, project, plan=hive['plan_path'])
+            ids = json.loads(hive['questions_json'] or '[]')
+            # One answered question permits the Queen to handle that answer while
+            # independent questions remain open, as in the existing scheduler.
+            answered = any(q['id'] in ids and q['status'] == 'answered' for q in questions)
+            pending = any(q['status'] != 'answered' for q in questions)
+            if answered or not pending:
+                conn.execute("UPDATE hives SET state='waiting',questions_json=NULL WHERE project=? AND plan_path=? AND state='answer'",
+                             (project, hive['plan_path']))
+
+
 # Mark a Hive as handing off without starting any more Bees.
 def context_limit(conn, project, plan):
     """Mark a Plan as handing off without starting any more Agents."""
@@ -973,6 +993,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
         offline.apply_state(env.providers, conn)   # the lists of a running loop follow the offline state (another process sets it) and the switch Enabled
     if not dry_run:
         for env in envs:
+            reconcile_answer_waits(conn, env.name)
             reconcile_completed(conn, env, alive=alive, plan_files=plan_files)
         for env in envs:   # the Orchestrator integrates the plans whose Queen is done (no language model)
             if not (loop.stop_flag().exists() or not runstate.starts_allowed(conn)):

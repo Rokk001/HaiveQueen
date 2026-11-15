@@ -137,6 +137,8 @@ def status_text(hive) -> str:
     suffix = " (#" + ", #".join(map(str, questions)) + ")" if questions else ""
     if state in ("answer", "owner_check") and questions:
         return (tr("Waiting for owner check") if state == "owner_check" else tr("Waiting for answer")) + suffix
+    if state == "answer" and not questions:
+        state = "waiting"   # old snapshots may still refer to an answered question
     if hive.get("blocker") and state in ("running", "waiting", "starting", "requeen", "codex_wait", "provider_wait", "integration_wait"):
         return blocker_text(hive["blocker"]) + suffix
     if state == "running":
