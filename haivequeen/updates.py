@@ -4,12 +4,11 @@ default 24 h, 0 switches the daily check off) and when the owner presses "Check 
 On confirmation the detached self-update worker installs the release: it stops the loop, waits until no agent of any Project runs (no Queen or Agent
 starts meanwhile), fast-forwards the install folder to the release tag, installs the package again when pyproject.toml changed and starts
 HaiveQueen again. The result of the last check is kept in update-check.json of the data folder, so a restart neither forgets an offer nor asks early.
-The installed version is the release tag of the install folder (pyproject.toml without one).
+The installed version comes only from reachable stable Git tags; without one it is 0.0.0.
 """
 import json
 import os
 import re
-import tomllib
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -119,24 +118,18 @@ def repository(machine, live=None, run=None) -> str:
 
 
 def installed_version(live=None, run=None) -> str:
-    """The installed version: the nearest release tag vX.Y.Z of the commit of the install folder, else the version of its pyproject.toml, else '–'."""
+    """Highest stable version tag reachable from this checkout, or 0.0.0.
+
+    Package metadata is not an installed-release identity. Ignore prerelease,
+    malformed and unrelated-branch tags without hiding earlier stable tags.
+    """
     from . import selfupdate
     run = run or selfupdate.run_command
     live = Path(live or selfupdate.live_folder())
-    code, out = run(["git", "-C", str(live), "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD"], live)
-    tag = out.strip()
-    if code == 0 and re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag):
-        return tag[1:]
-    try:
-        with open(live / "pyproject.toml", "rb") as handle:
-            return str(tomllib.load(handle)["project"]["version"])
-    except (OSError, KeyError, tomllib.TOMLDecodeError):
-        pass
-    try:
-        from importlib.metadata import version
-        return version("haivequeen")
-    except Exception:
-        return "–"
+    code, out = run(["git", "-C", str(live), "tag", "--merged", "HEAD", "--list", "v[0-9]*"], live)
+    versions = [tuple(map(int, tag[1:].split('.'))) for tag in out.splitlines()
+                if re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag)] if code == 0 else []
+    return '.'.join(map(str, max(versions))) if versions else '0.0.0'
 
 
 def validate_install_repository(version, *, offer=None, live=None, run=None):

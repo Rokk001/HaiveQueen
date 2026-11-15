@@ -119,7 +119,7 @@ class CheckTests(RoundCase):
 
 
 class VersionTests(unittest.TestCase):
-    """The installed version is the release tag of the install folder; without one, the version of pyproject.toml."""
+    """Only reachable stable Git tags identify an installed release."""
 
     def git(self, *args):
         subprocess.run(["git", "-C", self.dir, *args], check=True, capture_output=True)
@@ -135,8 +135,36 @@ class VersionTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_without_tag_the_pyproject_version(self):
-        self.assertEqual(updates.installed_version(self.dir), "2.0.0")
+    def test_without_tag_version_is_zero_despite_pyproject(self):
+        self.assertEqual(updates.installed_version(self.dir), "0.0.0")
+
+    def test_untagged_install_offers_published_release_despite_pyproject(self):
+        from io import BytesIO
+        from haivequeen.git_providers import github
+        response = b'{"tag_name":"v0.2.43","html_url":"https://example.invalid/release","draft":false,"prerelease":false}'
+        found = github.check_latest('example/project', updates.installed_version(self.dir),
+                                    _urlopen=lambda *args, **kwargs: BytesIO(response))
+        self.assertEqual(found['version'], '0.2.43')
+
+    def test_prerelease_does_not_hide_reachable_stable_tag(self):
+        self.git('tag', 'v0.2.43')
+        self.git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                 'commit', '--allow-empty', '-m', 'next')
+        self.git('tag', 'v0.2.44-alpha.1')
+        self.assertEqual(updates.installed_version(self.dir), '0.2.43')
+
+    def test_unreachable_release_is_not_installed(self):
+        self.git('checkout', '-b', 'future')
+        self.git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                 'commit', '--allow-empty', '-m', 'future')
+        self.git('tag', 'v9.0.0')
+        self.git('checkout', 'HEAD~1')
+        self.assertEqual(updates.installed_version(self.dir), '0.0.0')
+
+    def test_failed_git_never_uses_installed_package_metadata(self):
+        with mock.patch('importlib.metadata.version', return_value='2.0.0') as metadata:
+            self.assertEqual(updates.installed_version(self.dir, run=lambda *args: (1, 'failed')), '0.0.0')
+        metadata.assert_not_called()
 
     def test_release_tag(self):
         self.git("tag", "v2.0.3")
