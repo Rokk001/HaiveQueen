@@ -1,3 +1,5 @@
+> Archive: TRAY-RUNNER-ACCEPTANCE. Current user guidance: [documentation map](DOCUMENTATION-MAP.md).
+
 # Native tray and real runner acceptance
 
 Verified on 2026-11-15 in the existing isolated test installation.

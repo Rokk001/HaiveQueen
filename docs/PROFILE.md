@@ -1,6 +1,6 @@
 # HaiveQueen profile
 
-All agents work with one profile folder, `<data folder>/profile/<protocol>`, and never with the owner's private files (global instructions, memory, settings). Each CLI is started with its config-dir variable pointing there. The profile stays almost empty: the login and a few settings.
+HaiveQueen points each CLI at a lean profile in `<data folder>/profile/<protocol>`, containing its login and a few settings. This reduces automatically loaded personal instructions, memory and configuration. It is not a security sandbox: filesystem permissions, provider-native instruction discovery, inherited environment and tools still determine what an agent can access.
 
 | Provider | Variable | Login file (made once by the owner) | Settings HaiveQueen writes | Private files it would load otherwise |
 |---|---|---|---|---|
@@ -9,13 +9,13 @@ All agents work with one profile folder, `<data folder>/profile/<protocol>`, and
 | OpenCode | `OPENCODE_CONFIG_DIR`, `XDG_*_HOME`, `OPENCODE_DISABLE_CLAUDE_CODE=1` | `data/opencode/auth.json` (`opencode auth login`) | none | global `AGENTS.md`, `~/.claude` fallbacks, `~/.local/share/opencode` |
 | Kilo Code | `KILO_CONFIG_DIR`, `XDG_*_HOME` | `data/kilo/auth.json` (`kilo auth login`) | none | `~/.config/kilo`, `~/.local/share/kilo` (credentials, `kilo.db` sessions) |
 
-- Log in through the provider settings in the web interface; HaiveQueen runs the login command in the isolated profile.
+- Log in through the provider settings in the web interface; HaiveQueen runs the login command in the lean profile.
 - Kilo Code keeps its sessions in the database `data/kilo/kilo.db`; HaiveQueen never removes it (only the log folder `data/kilo/log` is pruned).
 - In the web interface each provider page shows "Login present" or "Login missing" and a **Login** button. The page displays the command output and clickable links, and passes entered text to the CLI. Codex uses device login with a link and code; Claude can request a code from the browser. Login status is refreshed afterwards.
 - A CLI HaiveQueen does not know brings its own values in its provider entry in `config.toml`: `profileEnv` (table: variable = value, `{home}` is the profile folder `<data folder>/profile/<protocol>`), `loginCommand` (the full command line of the login) and `loginFiles` (login files, relative to that folder). They are used for the profile, the login status and the Login button. Without `profileEnv` or without `loginFiles` the rule below applies (the provider cannot be kept to the profile). Claude, Codex, OpenCode and Kilo Code keep their built-in values. A custom CLI is accepted only with `outputFormat` set to a format HaiveQueen reads (`claude`, `codex` or `opencode`); otherwise it is rejected with a message naming the three.
 - A provider without a login in the profile has no free slot: its packages wait, others go on; the window tells the owner once.
 - A provider whose CLI cannot be kept to the profile is not started; its package stops and a question is filed.
-- Every start of a Claude Queen writes `claude-integration-settings.json` in its run folder and passes it with `--settings` (a `--settings` file or JSON of the provider entry is merged, its rules and hooks are kept). It adds exact allow rules for `integration acquire`/`release` of its plan and `git push <remote> HEAD:<integration branch>`, and a PreToolUse hook (`haivequeen/claude_hook.py` with the run's `claude-hive-policy.json`). The hook allows a Bash or PowerShell command only when it is one simple `bzz` command (or the HaiveQueen Python CLI) of the own-Plan list with exactly that Queen's project, plan and agent id, and for `ready` and `queue upsert` her own plan branch (the branch the plan or its state file names, else the branch of her worktree at the start; never the integration branch). A branch that does not match the start value is looked up again when the hook runs: the branch the plan or state file names now, else the branch checked out in the worktree she recorded as her cwd; it is refused when it is the integration branch, when a queue entry belongs to another plan, or when an active agent of another plan has the same cwd. When none is known the hook allows neither. `agents update-fields` is allowed only for her own name with exactly one of `--cwd '<absolute existing folder>'` (the form the Queen prompt asks for; it works in Bash, PowerShell 7 and Windows PowerShell 5.1) or `--fields '{"cwd": "<absolute existing folder>"}'` (single quotes, nothing else in the object; a double quote is accepted only in that value; Windows PowerShell 5.1 strips those inner quotes, so this form fails there without a change); the folder has no `..` part and no trailing backslash. Every allowed command uses exact option names, each once, no extra words, and only quoting that Bash and PowerShell read alike (no `;`, `|`, `&&`, redirection, `$`, backticks, globs or PowerShell number literals). Any other command gets no hook decision, so Claude's own rules (deny, ask, the owner's prompt) decide. `bzz decisions update`, `answer`, `kv` and the commands outside the Plan are never allowed by the hook.
+- Every start of a Claude Queen writes `claude-integration-settings.json` in its run folder and passes it with `--settings` (a `--settings` file or JSON of the provider entry is merged, its rules and hooks are kept). The compatibility policy includes exact allow rules for `integration acquire`/`release` and `git push <remote> HEAD:<integration branch>`; these are not authorization for a Queen to integrate or push. The current workflow assigns integration exclusively to the Orchestrator. It also installs a PreToolUse hook (`haivequeen/claude_hook.py` with the run's `claude-hive-policy.json`). The hook allows a Bash or PowerShell command only when it is one simple `bzz` command (or the HaiveQueen Python CLI) of the own-Plan list with exactly that Queen's project, plan and agent id, and for `ready` and `queue upsert` her own plan branch (the branch the plan or its state file names, else the branch of her worktree at the start; never the integration branch). A branch that does not match the start value is looked up again when the hook runs: the branch the plan or state file names now, else the branch checked out in the worktree she recorded as her cwd; it is refused when it is the integration branch, when a queue entry belongs to another plan, or when an active agent of another plan has the same cwd. When none is known the hook allows neither. `agents update-fields` is allowed only for her own name with exactly one of `--cwd '<absolute existing folder>'` (the form the Queen prompt asks for; it works in Bash, PowerShell 7 and Windows PowerShell 5.1) or `--fields '{"cwd": "<absolute existing folder>"}'` (single quotes, nothing else in the object; a double quote is accepted only in that value; Windows PowerShell 5.1 strips those inner quotes, so this form fails there without a change); the folder has no `..` part and no trailing backslash. Every allowed command uses exact option names, each once, no extra words, and only quoting that Bash and PowerShell read alike (no `;`, `|`, `&&`, redirection, `$`, backticks, globs or PowerShell number literals). Any other command gets no hook decision, so Claude's own rules (deny, ask, the owner's prompt) decide. `bzz decisions update`, `answer`, `kv` and the commands outside the Plan are never allowed by the hook.
 - Session logs stay 8 days (the usage table and the Codex limit read them), then they are removed. Nothing is copied from a private folder.
 
 ## Sources per CLI
@@ -97,3 +97,41 @@ The browser settings page lists a CLI only when HaiveQueen can really run it: it
 | ZCode | No model flag; the profile needs a `HOME` override; login file is encrypted | [repository](https://github.com/zai-org/ZCode) |
 | Cline | `~/.agents` and `~/Documents/Cline` are not moved by `CLINE_DIR`; the profile would need a `HOME` override, which breaks git and ssh for the agents | [CLI docs](https://docs.cline.bot/cline-cli), [repository](https://github.com/cline/cline) |
 | GitHub Copilot CLI | Login is kept in the OS keychain; the JSON schema of `-p --output-format json` is not documented | [CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference), [authentication](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli) |
+
+## Manual subscription login
+
+The following commands use the default data directory. Adapt it when `BZZ_DATA_DIR` is set. Alternatively use the browser Login button described above.
+
+PowerShell (Windows):
+
+```powershell
+# Claude
+$env:CLAUDE_CONFIG_DIR = "$env:LOCALAPPDATA\HaiveQueen\profile\claude"; claude auth login
+# Codex
+$env:CODEX_HOME = "$env:LOCALAPPDATA\HaiveQueen\profile\codex"; codex login
+# OpenCode
+$p = "$env:LOCALAPPDATA\HaiveQueen\profile\opencode"; $env:OPENCODE_CONFIG_DIR = "$p\config"; $env:XDG_CONFIG_HOME = "$p\config"; $env:XDG_DATA_HOME = "$p\data"; $env:XDG_STATE_HOME = "$p\state"; $env:XDG_CACHE_HOME = "$p\cache"; opencode auth login
+# Kilo Code
+$p = "$env:LOCALAPPDATA\HaiveQueen\profile\kilo"; $env:KILO_CONFIG_DIR = "$p\config"; $env:XDG_CONFIG_HOME = "$p\config"; $env:XDG_DATA_HOME = "$p\data"; $env:XDG_STATE_HOME = "$p\state"; $env:XDG_CACHE_HOME = "$p\cache"; kilo auth login
+```
+
+bash (Linux):
+
+```bash
+# Claude
+CLAUDE_CONFIG_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/claude" claude auth login
+# Codex
+CODEX_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/codex" codex login
+# OpenCode
+p="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/opencode"; OPENCODE_CONFIG_DIR="$p/config" XDG_CONFIG_HOME="$p/config" XDG_DATA_HOME="$p/data" XDG_STATE_HOME="$p/state" XDG_CACHE_HOME="$p/cache" opencode auth login
+# Kilo Code
+p="${XDG_DATA_HOME:-$HOME/.local/share}/HaiveQueen/profile/kilo"; KILO_CONFIG_DIR="$p/config" XDG_CONFIG_HOME="$p/config" XDG_DATA_HOME="$p/data" XDG_STATE_HOME="$p/state" XDG_CACHE_HOME="$p/cache" kilo auth login
+```
+
+## Tools, MCP and start-context measurement
+
+In AI providers, save the provider before running connection actions. **Tools and MCP → Import and verify** accepts JSON with exactly `mcpServers` and `capabilities`. Servers use either a stdio `command` with optional `args` and `env`, or an HTTP(S) `url` with optional `headers`. Each capability maps to an existing `server` and a nonempty list of `tools`. The confirmation explains that supplied servers will start: verification initializes them and lists their tools without calling the tools or installing packages automatically. Verified capability evidence and configuration stay in the HaiveQueen CLI profile.
+
+**Benchmark Start Context** compares normal and lean startup per project, launching the saved, ready provider CLI twice per project after confirmation. It consumes provider login tokens and reports progress as a job; dashboard Start Context displays the retained measurements, or no benchmark when absent. This measures startup overhead, not a guarantee of usable model capacity.
+
+**Check for CLI updates** reads the installed CLI version and available-version notice. This is separate from updating HaiveQueen itself. **Install /bzz** installs the personal inbox command described above.

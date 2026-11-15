@@ -1,3 +1,5 @@
+> Archive: maintenance-findings-2026-11. Current user guidance: [documentation map](DOCUMENTATION-MAP.md).
+
 # Verified maintenance findings
 
 Review baseline: `24b47b07147d2dd14f047660fa9997845df39196`.

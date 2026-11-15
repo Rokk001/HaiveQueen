@@ -1,3 +1,5 @@
+> Archive: maintenance-closeout-2026-11. Current user guidance: [documentation map](DOCUMENTATION-MAP.md).
+
 # Maintenance delivery inventory
 
 Verified against local and remote main at `983e53216a6fc66cbe3ef6cbce75cb476ffdceb9`.

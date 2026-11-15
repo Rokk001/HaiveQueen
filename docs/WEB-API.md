@@ -139,7 +139,7 @@ always names an eligible provider and includes the current provider among the
 choices. The interface labels are Start, Stop gracefully, Force stop, Resume,
 Cancel plan, Restart Queen on provider, and web Stop/Restart.
 
-Provider logins run in the existing isolated profile with captured stdout and
+Provider logins run in the lean profile with captured stdout and
 stdin. Codex uses device login. Claude uses its login command, and browser
 launches are returned as URLs for the remote user. Custom CLIs retain their
 configured login command. Render output as text and links as HTTP(S) anchors.
@@ -167,3 +167,31 @@ The upstream connection can use HTTP. HaiveQueen uses a single `X-Forwarded-Prot
 Provider settings use the same access-aware form for adding and editing: Subscription shows shared login, API key shows the masked key, and Local LLM shows address, optional key, context window and connection test. Models, Use and a closed Advanced section follow. Switching access type retains type-specific drafts until save/reload; only the selected type is saved. Each enabled capability has its own 1–100 percent used-quota threshold beside its switch.
 
 Codex quota refresh reads account metadata using `account/rateLimits/read` without creating a model turn. A fallback session reading retains its observation time rather than appearing freshly measured. Dashboard usage labels distinguish used and remaining quota from the time-adjusted quota reserve. The metadata refresh runs in the background even when the orchestration loop is stopped.
+
+## Dashboard and live output
+
+The dashboard presents projects, plans, Queens, Agents, model limits, token totals, system load, questions and logs. Plan rows open plan details and the provider-specific restart menu. Git connections have their own page, storing credentials independently per connection. Releases show published versions and integration results.
+
+`Enter` on a Plan row opens a read-only window with the last 300 lines of the running Queen of that Plan (the latest one when none runs); on a Queen or Agent row it shows that agent. The window reloads every 2 seconds, follows the end of the text, and opening the same agent again focuses its window. The text is `milestones.txt` in the agent's run folder (`<data>/runs/<project>/<agent>/`); `runner.log` next to it holds the plain runner output.
+
+Settings workflows and every field are in [Settings reference](SETTINGS.md). Provider authentication, connection tests, benchmarks and profile setup use the shared backend described in [Profile](PROFILE.md).
+
+## Additional browser operations
+
+Plan details include packages, requirements, pipeline steps and repair history. Open a step to inspect its bounded, paginated log; logs retain execution identity and exit information. Log filters, copy buttons and live output are read-only views. Long operations expose job status and failures without blocking the page.
+
+Additional authenticated endpoints use the same session and CSRF rules:
+
+| Route | Purpose |
+| --- | --- |
+| GET `plan/detail`, `plan/step-log` | Plan evidence and paginated pipeline output. |
+| GET `settings/view` | Editable view metadata, rules, defaults and provider models. |
+| GET `git-login/providers` | Available Git connections and supported authentication. |
+| POST `git-login/token` | Save a connection's token; Gitea also requires an HTTPS origin. |
+| POST `provider/mcp` | Confirm, import and verify the provider's MCP configuration. |
+| POST `provider/updates` | Check the installed provider CLI for updates. |
+| POST `tools/install` | Install the personal /bzz inbox command as a background job. |
+| GET `releases` | Release history for the selected project. |
+| POST `releases/promote` | Confirm promotion of a selected prerelease tag. |
+
+Git device sign-in is not implemented; the interface uses access tokens. [Release semantics](OPERATIONS.md#releases) and [MCP/benchmark behavior](PROFILE.md#tools-mcp-and-start-context-measurement) are documented separately.
