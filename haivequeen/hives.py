@@ -1034,6 +1034,8 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                 env.log('ended subagent Agents not closed: %s' % exc)
             technical_start_faults(conn, env.name)
             package_diagnosis.advance(env, int(free_ram() * 1024), alive=alive)
+            from . import triage
+            triage.advance(env, int(free_ram() * 1024), alive=alive)
             runtime.archive_agents(conn, env.name, 12)
     all_active = runtime.list_agents(conn, None, 'active')
     is_alive = alive or osplat.process_alive

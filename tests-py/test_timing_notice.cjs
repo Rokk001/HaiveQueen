@@ -13,3 +13,8 @@ assert.match(flatten(testTimingNotice(doc,x=>x,'0.20s call test.py::test_ok',10)
 assert.match(flatten(testTimingNotice(doc,x=>x,'12.3s call <script>alert(1)<\/script>',10)),/<script>/);
 assert.equal(notice.tag,'details');
 console.log('Test timing notice checks passed');
+
+const all={rows:[{name:'outside_loaded_page',seconds:22}],count:1,measured:2,complete:true,omitted:0};
+assert.match(flatten(testTimingNotice(doc,x=>x,'unrelated tail',10,all)),/outside_loaded_page/);
+assert.match(flatten(testTimingNotice(doc,x=>x,'',10,all)),/entire recorded/);
+assert.doesNotMatch(flatten(testTimingNotice(doc,x=>x,'',10,all)),/excerpt only/);

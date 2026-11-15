@@ -855,6 +855,10 @@ GERMAN.update({
 
 GERMAN.update({
     'Slow tests': 'Langsame Tests',
+    'Measured durations from the entire recorded console output.': 'Gemessene Laufzeiten aus der gesamten gespeicherten Konsolenausgabe.',
+    'Indexing recorded test durations…': 'Gespeicherte Testlaufzeiten werden ausgewertet…',
+    'No individual test durations available': 'Keine Einzeltest-Laufzeiten verfügbar',
+    'Additional measurements remain in the original log': 'Weitere Messungen stehen im ursprünglichen Protokoll',
     'Slow test threshold (seconds)': 'Schwelle für langsame Tests (Sekunden)',
     'Show measured individual tests at or above this duration in log details; advisory only, no automatic retry or blocking.': 'Einzeltests ab dieser gemessenen Dauer in den Logdetails anzeigen; nur ein Hinweis, keine automatische Wiederholung oder Blockade.',
     'Slow test threshold: a finite number above zero is required': 'Testlaufzeit-Schwelle: Eine endliche Zahl größer als null ist erforderlich',

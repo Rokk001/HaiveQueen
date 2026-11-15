@@ -14,7 +14,7 @@ def _snapshot(conn, env, plan):
     fix = state.get('fix') or {}
     folder = orch._worktree(env, plan)
     head = integration.head_commit(folder) if folder else ''
-    if not head or fix.get('step') not in ('Check', 'Build'):
+    if not head or fix.get('step') not in ('Merge', 'Check', 'Build', 'Deploy'):
         return None
     evidence = {'commit': head, 'log': fix.get('log_file'), 'error': fix.get('error'),
                 'step': fix['step'], 'commands': orch.commands(env),

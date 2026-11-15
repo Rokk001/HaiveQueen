@@ -906,9 +906,9 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(len(active), 1)
         self.assertNotEqual(active[0]["name"], original[0]["name"])
 
-    # Questions created by Queens reach the owner without a triage agent.
-    def test_ask_command_opens_owner_question_without_triage(self):
-        """Questions created by Queens reach the owner without a triage agent."""
+    # Questions created by Queens reach the owner after evidence review.
+    def test_ask_command_queues_question_for_triage(self):
+        """Questions created by Queens reach the owner after evidence review."""
         import argparse
         import contextlib
         import io
@@ -917,7 +917,7 @@ class HiveRoundTests(RoundCase):
         args = argparse.Namespace(project="testproj", plan=REL, item="P1", question="Which?", recommendation="A")
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(cli.cmd_ask(args, self.conn), 0)
-        questions = runtime.list_questions(self.conn, "testproj", status="open")
+        questions = runtime.list_questions(self.conn, "testproj", status="triage")
         self.assertEqual(len(questions), 1)
         self.assertEqual(questions[0]["question"], "Which?")
 

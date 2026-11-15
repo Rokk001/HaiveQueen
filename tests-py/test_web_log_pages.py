@@ -107,3 +107,36 @@ class WebLogPagesTests(RoundCase):
         with mock.patch.object(Path, 'open', side_effect=AssertionError('unchanged metadata reread')):
             cached = action_logs.metadata(path)
         self.assertEqual(cached[-1]['exit_code'], 7)
+
+    def test_durations_outside_loaded_page_remain_visible_after_reopening(self):
+        path = action_logs.start('testproj', REL, 'Build')
+        action_logs.append(path, '12.5s call tests/test_first.py::test_slow\n' + 'noise\n' * 20000)
+        action_logs.append(path, '14.5s call tests/test_last.py::test_slow\n')
+        action_logs.finish(path, 0)
+        first = self.request()
+        self.assertNotIn('test_last', first['output'])
+        result = first
+        for _ in range(8):
+            if result.get('test_timings', {}).get('complete'):
+                break
+            result = self.request()
+        summary = result['test_timings']
+        self.assertEqual(summary['count'], 2)
+        self.assertEqual({r['name'] for r in summary['rows']},
+                         {'tests/test_first.py::test_slow (call)', 'tests/test_last.py::test_slow (call)'})
+        from haivequeen import test_timings
+        test_timings.clear_cache()
+        self.assertEqual(self.request()['test_timings']['count'], 2)
+
+    def test_timing_index_is_incremental_and_threshold_changes_are_applied(self):
+        from haivequeen import test_timings
+        path = action_logs.start('testproj', REL, 'Build')
+        action_logs.append(path, '12.5s call tests/test_a.py::')
+        self.assertEqual(test_timings.summary(path, 10)['count'], 0)
+        action_logs.append(path, 'test_slow\n')
+        self.assertEqual(test_timings.summary(path, 10)['count'], 1)
+        with mock.patch.object(action_logs, 'page', side_effect=AssertionError('unchanged reread')):
+            self.assertEqual(test_timings.summary(path, 10)['count'], 1)
+        self.assertEqual(test_timings.summary(path, 20)['count'], 0)
+        action_logs.append(path, '30.0s call tests/test_b.py::test_slow\n')
+        self.assertEqual(test_timings.summary(path, 20)['count'], 1)

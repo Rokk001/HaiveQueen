@@ -1518,11 +1518,19 @@ def _finish_review(conn, env, plan, state):
             signature = ''
     except (OSError, ValueError, KeyError) as exc:
         _record_repair(conn, env.name, plan, 'diagnosis-rejected', agent=agent, reason=str(exc))
+        message = repair_review.reject(fix, _review_scope(conn, env, plan, fix), str(exc), agent)
         fix.update(agent=None, instruction='Correct the structured diagnosis: ' + str(exc))
+        if message:
+            qid = db.add_question(conn, env.name, plan, 'fix-escalation', message,
+                                  'Restore valid diagnosis output; preserve attempts and verification requirements.')
+            state.update(phase='blocked', blocked={'kind': 'diagnosis', 'question': qid})
+            hives.release_integration(conn, env.name, plan)
+            _set_status(conn, env, plan, 'WAITING')
         save(conn, env.name, plan, state)
         return None
     _record_repair(conn, env.name, plan, 'diagnosis-accepted', agent=agent,
                    review=review, signature=signature)
+    fix.pop('review_rejection', None)
     fix.update(agent=None, diagnosis=False, review_required=False)
     if shared:
         shared_diagnosis.attach(conn, env, plan, state, shared)

@@ -21,13 +21,13 @@ HaiveQueen creates or reuses the package worktree at Agent start. Its branch is 
 
 A plan that changes no tracked file of the code repo has no plan branch and no queue row on purpose; a plan whose branch is already fully in the integration branch has nothing left to integrate either. Such a plan closes the same way as an integrated one, without integration: the Queen reports with `bzz ready` (no new queue row, no compile check, no Build or Deploy step) and ends. A fresh check agent passes the report, then the owner check asks to check the result of the plan (unless the plan header says `owner_check = "none"`), and acceptance sets DONE. No "queen-ended" question is filed. A failed check or a rejection sends the plan back to a new Queen with the open points.
 
-## Queen and Bee startup context: files and load paths
+## Queen and Agent startup context: files and load paths
 
-This section documents the existing startup contract for maintenance and planning. Token economy comes first, context conservation second: consult the named loader functions before changing instructions; do not add duplicate rules or assume that a referenced document is automatically embedded. This document is not automatically embedded by the normal Queen/Bee startup loaders. A project instruction may reference it for subsequent reading.
+This section documents the existing startup contract for maintenance and planning. Token economy comes first, context conservation second: consult the named loader functions before changing instructions; do not add duplicate rules or assume that a referenced document is automatically embedded. This document is not automatically embedded by the normal Queen/Agent startup loaders. A project instruction may reference it for subsequent reading.
 
 ### Markdown source files
 
-| Source | Queen | Bee (separate process) |
+| Source | Queen | Agent (separate process) |
 | --- | --- | --- |
 | `roles/queen.md` | Rendered role text on every start | Not loaded |
 | `roles/bee.md` | Not loaded as her role | Rendered role text on every start |
@@ -50,8 +50,8 @@ The CLI may load instructions itself: Claude loads `CLAUDE.md`; Codex and OpenCo
 3. For the Queen, `profile.queen_load` appends the plan, state and predecessor handoff, active plan/project decisions, and older owner answers not already represented by decisions. Decisions and answers come from runtime data, not extra `.md` files. The start task also includes open questions and applicable integration/provider settings.
 4. For non-Claude process providers, additional project rule text is included in `prompt.md`. For Claude, `agent_runner` writes it to `<run directory>/rules.md`, exposed through the provider's `{rules}` argument for system-prompt delivery. Files the CLI loads itself are excluded from this copied text.
 5. `agent_runner.report_prompt` gives the CLI a short instruction to read `prompt.md` completely, plus reporting commands. Thus plan and state contents embedded there are read after the initial invocation; they are not merely optional path references.
-6. For a native subagent, `bees._start_process_locked` returns the rendered Bee prompt, assigned worktree/branch and Git environment to the Queen for forwarding. This branch does not use `loop._do_start` or generate separate `prompt.md`/`rules.md` files. Provider-native inherited context is separate from this returned payload.
+6. For a native subagent, `bees._start_process_locked` returns the rendered Agent prompt, assigned worktree/branch and Git environment to the Queen for forwarding. This branch does not use `loop._do_start` or generate separate `prompt.md`/`rules.md` files. Provider-native inherited context is separate from this returned payload.
 
-`roles/fix.md`, `roles/diagnosis.md` and `roles/ready-check.md` serve other agent roles; they are not additional normal Queen/Bee startup files.
+`roles/fix.md`, `roles/diagnosis.md` and `roles/ready-check.md` serve other agent roles; they are not additional normal Queen/Agent startup files.
 
 Implementation references: `haivequeen/roles.py` (`role_text`), `haivequeen/bees.py` (`bee_prompt`, `queen_instructions`, `_start_process_locked`), `haivequeen/hives.py` (`schedule_round`), `haivequeen/profile.py` (`rule_entries`, `project_rules`, `queen_load`), `haivequeen/plans.py` (`state_file_path`), `haivequeen/loop.py` (`_do_start`), and `haivequeen/agent_runner.py` (`report_prompt` and rules-file construction). Recheck these paths when changing the startup contract; keep this section aligned with the implementation.

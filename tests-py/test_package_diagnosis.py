@@ -297,3 +297,23 @@ class PackageDiagnosisLifecycle(PackageDiagnosis):
         self.assertFalse(result)
         self.assertIn('diagnosis', bees.LAST_REFUSAL)
         launch.assert_not_called()
+
+    def test_invalid_reports_allow_one_correction_without_resetting_attempts(self):
+        self.plan(packages=[{'id': 'P1', 'class': 'medium'}])
+        env = self.env()
+        self.review.request(env, REL, 'P1', 'medium')
+        with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-1'), \
+             mock.patch('haivequeen.bees.plan_worktree', return_value=('branch', self.wt)):
+            for _ in range(2):
+                self.review.advance(env, 16384, alive=lambda pid: False)
+                state = self.review._load(self.conn, env.name, REL, 'P1')
+                self.assertEqual(state['phase'], 'running')
+                self.finish(state['agent'])  # Missing structured output, not a project repair.
+                self.review.advance(env, 16384, alive=lambda pid: False)
+            state = self.review._load(self.conn, env.name, REL, 'P1')
+            self.assertEqual(state['phase'], 'owner')
+            with mock.patch('haivequeen.loop._do_start') as launch:
+                self.review.advance(env, 16384, alive=lambda pid: False)
+            launch.assert_not_called()
+        self.assertEqual(bees.failure_count(self.conn, env.name, REL, 'P1', 'medium'), 1)
+        self.assertIsNone(state.get('authorization'))

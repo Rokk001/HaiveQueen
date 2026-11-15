@@ -199,3 +199,17 @@ class TechnicalDiagnosis(OrchCase):
         prompt = (self.env().run_dir(self.fixers()[-1]['name']) / 'prompt.md').read_text(encoding='utf-8')
         self.assertIn('repair-diagnosis.json', prompt)
         self.assertIn('Could not determine the cause.', prompt)
+
+    def test_repeated_invalid_diagnosis_stops_unchanged_agent_retries(self):
+        self.start_review()
+        self.finish_review(evidence=[])
+        self.round()
+        self.finish_review(evidence=[])
+        self.assertEqual(self.state()['phase'], 'blocked')
+        count = len(self.fixers())
+        self.round()
+        self.assertEqual(len(self.fixers()), count)
+        questions = self.question('fix-escalation')
+        self.assertEqual(len(questions), 1)
+        self.assertIn('structured diagnosis', questions[0]['question'])
+        self.assertNotIn('Give an instruction', questions[0]['question'])

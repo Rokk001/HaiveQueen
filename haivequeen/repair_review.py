@@ -69,3 +69,18 @@ def read(path, commit, failure_log, known):
     if not isinstance(evidence, list) or not evidence or any(not isinstance(e, str) or not e.strip() for e in evidence):
         raise ValueError('diagnosis lacks observed evidence')
     return data
+
+
+def reject(state, scope, reason, agent):
+    """Allow one protocol correction per evidence scope, never an endless review loop."""
+    rejection = state.get('review_rejection', {})
+    count = rejection.get('count', 0) if rejection.get('scope') == scope else 0
+    state['review_rejection'] = {'scope': scope, 'count': count + 1, 'reason': reason, 'agent': agent}
+    if count == 0:
+        return ''
+    return ('The configured diagnosis provider returned no valid structured diagnosis after a correction attempt. '
+            'The project repair is not verified and its retry guard remains active. '
+            'Please check the diagnosis provider configuration or arrange a HaiveQueen protocol repair, '
+            'then confirm when the prerequisite is restored. '
+            'Rejected report from agent %s: %s. The report and execution logs remain in that agent run directory.'
+            % (agent, reason))

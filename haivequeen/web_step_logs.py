@@ -57,6 +57,12 @@ def read(conn, project, plan, step, *, page_request=None):
                'error': fix.get('error', '') if fix.get('step') == step else '',
                'reason': reason, 'historical': historical,
                'started_at': record.get('started_at'), 'ended_at': record.get('ended_at')}
+    if journal:
+        from . import test_timings
+        try:
+            summary['test_timings'] = test_timings.summary(journal['path'], summary['slow_test_seconds'])
+        except (OSError, ValueError):
+            summary['test_timings'] = {'unavailable': True}
     if page_request is not None:
         from . import web_log_pages
         return web_log_pages.response(conn, project, plan, step, record, journal, summary, page_request)

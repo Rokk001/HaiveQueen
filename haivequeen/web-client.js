@@ -1,4 +1,4 @@
-function testTimingNotice(document,t,text,threshold) {
+function testTimingNotice(document,t,text,threshold,record=null) {
   const make=(tag,text)=>{const node=document.createElement(tag);node.textContent=text;return node;};
   const rows=[];
   for(const line of text.split(/\r?\n/)){
@@ -10,10 +10,16 @@ function testTimingNotice(document,t,text,threshold) {
     m=line.match(/^\s*(\S+\.py)\s+exit=-?\d+\s+seconds=(\d+(?:\.\d+)?)\s*$/);
     if(m)rows.push({name:m[1],seconds:Number(m[2])});
   }
+  if(record && !record.unavailable){rows.length=0;rows.push(...record.rows);}
   const slow=rows.filter(row=>Number.isFinite(row.seconds)&&row.seconds>=threshold).sort((a,b)=>b.seconds-a.seconds);
   const box=document.createElement('details');box.className='test-timing-notice';
-  box.append(make('summary',slow.length?t('Slow tests')+': '+slow.length+' · ≥ '+threshold+' s':t(rows.length?'No tests above the threshold in this excerpt':'No individual test durations available in this excerpt')));
-  box.append(make('p',t('Measured durations in the loaded log excerpt only. A long duration does not prove unnecessary waiting. No additional tests are started.')));
+  if(record && !record.unavailable){
+    box.append(make('summary',t('Slow tests')+': '+record.count+' · ≥ '+threshold+' s'));
+    box.append(make('p',t(record.complete?'Measured durations from the entire recorded console output.':'Indexing recorded test durations…')));
+    if(!record.measured)box.append(make('p',t('No individual test durations available')));
+    if(record.omitted)box.append(make('p',t('Additional measurements remain in the original log')+': '+record.omitted));
+  } else box.append(make('summary',slow.length?t('Slow tests')+': '+slow.length+' · ≥ '+threshold+' s':t(rows.length?'No tests above the threshold in this excerpt':'No individual test durations available in this excerpt')));
+  if(!record || record.unavailable)box.append(make('p',t('Measured durations in the loaded log excerpt only. A long duration does not prove unnecessary waiting. No additional tests are started.')));
   if(slow.length){const list=document.createElement('ul');for(const row of slow)list.append(make('li',row.name+' · '+row.seconds+' s'));box.append(list);}
   return box;
 }
@@ -556,7 +562,7 @@ function mount(document, bootstrap) {
     function display(){
       if(!latest)return;
       const file=knownSources.get(selected);
-      const timingNotice=testTimingNotice(document,t,pager.text,latest.slow_test_seconds);
+      const timingNotice=testTimingNotice(document,t,pager.text,latest.slow_test_seconds,pager.source?null:latest.test_timings);
       timingNotice.open=timings.firstElementChild?.open||false;timings.replaceChildren(timingNotice);
       const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
       const text=([pager.text,!file&&latest.reason&&!pager.text.includes(latest.reason)?latest.reason:''].filter(Boolean).join('\n\n')||t('No log output available yet.'));

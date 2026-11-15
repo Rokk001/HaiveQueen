@@ -224,6 +224,7 @@ def advance(env, free_mb, alive=None):
                                 env.run_dir(state['agent']) / 'package-diagnosis.json',
                                 state['scope'], state['current_class'], offered)
                 state = _load(conn, env.name, plan, package)
+                state.pop('review_rejection', None)
                 state['phase'] = 'authorized' if report['kind'] == 'technical' else 'owner'
                 if report['kind'] != 'technical':
                     text = '\n\n'.join((report['question'], report['why_owner'], report['analysis'], '\n'.join(report['evidence'])))
@@ -233,7 +234,14 @@ def advance(env, free_mb, alive=None):
                         state['question'] = db.add_question(conn, env.name, plan, package, text, report['recommendation'])
                     bees.set_package_state(conn, env.name, plan, package, 'waiting', reason='question:%s' % state['question'])
             except (OSError, ValueError, KeyError) as exc:
+                current = scope(conn, env.name, plan, package, head)
+                message = repair_review.reject(state, current, str(exc), state.get('agent', ''))
                 state.update(phase='pending', feedback=str(exc))
+                if message:
+                    qid = db.add_question(conn, env.name, plan, package, message,
+                                          'Restore valid diagnosis output without clearing attempt history.')
+                    state.update(phase='owner', question=qid)
+                    bees.set_package_state(conn, env.name, plan, package, 'waiting', reason='question:%s' % qid)
             runtime.kv_set(conn, env.name, entry['key'], json.dumps(state))
             continue
         if bees.drain_refusal() or free_mb / 1024 < loop._min_ram(env):

@@ -144,3 +144,15 @@ class SemanticRepair(OrchCase):
         with self.assertRaisesRegex(ValueError, 'changed'):
             shared_diagnosis.validate(self.conn, self.env(), REL, self.state(), reverse_peers, reverse)
         self.assertEqual(self.state()['phase'], 'fix')
+
+    def test_merge_and_deploy_failures_are_diagnosis_candidates(self):
+        from haivequeen import shared_diagnosis
+        self.separate_failures()
+        for step in ('Merge', 'Deploy'):
+            with self.subTest(step=step):
+                leader = self.state()
+                leader['fix']['step'] = step
+                orchestrator.save(self.conn, 'testproj', REL, leader)
+                peers, proposal = self.proposal()
+                self.assertEqual(peers[0]['step'], step)
+                shared_diagnosis.validate(self.conn, self.env(), OTHER, self.state(OTHER), peers, proposal)

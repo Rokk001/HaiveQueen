@@ -165,21 +165,23 @@ def cmd_compile_check(args, conn) -> int:
 def cmd_ask(args, conn) -> int:
     """File a question for the owner."""
     from haivequeen import triage
-    open_questions = runtime.list_questions(conn, args.project, status="open", plan=args.plan, item=args.item)
+    open_questions = [q for q in runtime.list_questions(conn, args.project, plan=args.plan, item=args.item)
+                      if q["status"] in ("open", "triage")]
     if open_questions:
         qid = open_questions[-1]["id"]
         with db.transaction(conn):
-            conn.execute("UPDATE questions SET question=question || ? WHERE id=? AND status='open'", ("\n\n" + args.question, qid))
+            conn.execute("UPDATE questions SET question=question || ? WHERE id=? AND status IN ('open','triage')", ("\n\n" + args.question, qid))
             db.add_event(conn, args.project, "note", "Additional text for question %d: %s" % (qid, args.question), data={"question_id": qid})
-        out({"ok": True, "id": qid, "status": "open"})
+        out({"ok": True, "id": qid, "status": open_questions[-1]["status"]})
         return 0
     known = triage._known_answer(conn, args.project, args.plan, args.item)
     if known:
         qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation, status="triage")
         out(triage._close_with_reference(conn, qid, *known))
     else:
-        qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation)
-        out({"ok": True, "id": qid, "status": "open"})
+        status = "open" if triage.owner_check(args.item) else "triage"
+        qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation, status=status)
+        out({"ok": True, "id": qid, "status": status})
     return 0
 
 
