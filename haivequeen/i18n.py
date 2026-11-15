@@ -1037,3 +1037,14 @@ GERMAN.update({
  'Publication requested; the provider workflow must still finish.': 'Veröffentlichung angefordert; der Provider-Workflow muss noch abschließen.',
  'Release publication finished.': 'Release-Veröffentlichung abgeschlossen.',
  'Publication request was not accepted.': 'Veröffentlichungsauftrag wurde nicht angenommen.'})
+
+
+GERMAN.update({
+    'Publishing…': 'Wird veröffentlicht…',
+    'Publication failed': 'Veröffentlichung fehlgeschlagen',
+    'Promoted to %s': 'Als %s veröffentlicht',
+    'View full release': 'Vollrelease anzeigen',
+    'Waiting for full release confirmation': 'Wartet auf Bestätigung des Vollrelease',
+})
+
+GERMAN['Starting update to %s'] = 'Update auf %s wird gestartet'

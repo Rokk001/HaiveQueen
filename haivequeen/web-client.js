@@ -249,6 +249,16 @@ class QuestionDetails {
   }
   retry(question){this.entries.delete(question.id);return this.load(question);}
 }
+function releaseCardState(row,releases,job){
+  const selected=job && (job.source_tag||job.result?.source_tag)===row.tag;
+  if(selected){
+    if(job.publication?.state==='published'||job.result?.files)return {state:'promoted',url:job.publication?.url};
+    if(job.error||job.publication?.state==='failed')return {state:'failed',error:job.error||job.publication.error};
+    if(job.running||job.result?.pending)return {state:'publishing',error:job.verificationError};
+  }
+  const full=releases.find(r=>r.tag===row.full_tag&&!r.prerelease&&r.commit===row.commit);
+  return {state:full?'promoted':row.prerelease?'prerelease':'stable',url:full?.url};
+}
 function releaseJobStatus(job){
   if(job.error)return {text:job.error,error:true,busy:false};
   if(job.running)return {text:job.progress||'Publishing release...',error:false,busy:true};
@@ -256,13 +266,22 @@ function releaseJobStatus(job){
 }
 async function startReleasePromotion(client,project,row,onProgress,warning){
   if(!await client.confirm(warning||'Publish as full release '+row.full_tag+'?'))return null;
-  const pending={key:'release-promotion:'+project,running:true,progress:'Starting release publication...',started:Date.now()/1000};
+  const pending={key:'release-promotion:'+project,source_tag:row.tag,running:true,progress:'Starting release publication...',started:Date.now()/1000};
   onProgress(pending);
   try{
     const job=await client.action('releases/promote',{project,tag:row.tag,confirmed:true});
     if(!job)throw Error('Publication request was not accepted.');
-    onProgress(job);return job;
+    job.source_tag=row.tag;onProgress(job);return job;
   }catch(error){onProgress({...pending,running:false,error:error.message});return null;}
+}
+async function startUpdateInstall(client,version,onProgress,warning){
+  if(!await client.confirm(warning))return null;
+  onProgress({installing:{version,starting:true}});
+  try{
+    const result=await client.action('updates/install',{version,confirmed:true});
+    if(!result)throw Error('Update request was not accepted.');
+    onProgress({installing:{version}});return result;
+  }catch(error){onProgress({installing:null,failed:version,installError:error.message});return null;}
 }
 class Client {
   constructor(options = {}) {
@@ -496,6 +515,7 @@ function mount(document, bootstrap) {
   const client=new Client({csrf:bootstrap.csrf, confirm:text=>requestConfirm(t(text)), notice:(text,bad=false)=>{ $('notice').textContent=t(text);$('notice').className=bad?'bad':'';},
     onUnauthorized:()=>{location.href='/login';}, onError:error=>client.notice(error.message,true),onState:renderState});
   const renderGate=new RenderGate(()=>renderStateNow(client.state));
+  let updateRevision=0,updateSubmitting=false;
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
   const releasePromotions=new Map();
   const questionDrafts=new Map();
@@ -918,8 +938,8 @@ function mount(document, bootstrap) {
     for(const project of client.state?.projects || []){const option=el('option',project.name);option.value=project.name;select.append(option);}
     select.value=selected || '';select.onchange=()=>onchange(select.value);return select;
   }
-  async function loadReleases() {
-    const project=releaseProject,request=++releaseRequest;releaseData=null;releaseError='';
+  async function loadReleases(quiet=false) {
+    const project=releaseProject,request=++releaseRequest;if(!quiet)releaseData=null;releaseError='';
     if(tab==='Releases')render();
     if(!project)return;
     try{const data=await client.request('releases?'+new URLSearchParams({project}));if(request===releaseRequest)releaseData=data;}
@@ -930,9 +950,9 @@ function mount(document, bootstrap) {
     const box=section('Releases');box.classList.add('releases-panel');
     const toolbar=el('div',undefined,'release-toolbar'),label=el('label',t('Project'));
     label.append(projectSelect(value=>{releaseProject=value;void loadReleases();},releaseProject,false));
-    toolbar.append(label,button('Reload',loadReleases));box.append(toolbar);
+    toolbar.append(label,button('Reload',()=>loadReleases()));box.append(toolbar);
     const promotion=releasePromotions.get(releaseProject);
-    if(promotion){const status=releaseJobStatus(promotion),feedback=el('p',t(status.text),status.error?'bad':'notice');feedback.setAttribute('role',status.error?'alert':'status');feedback.setAttribute('aria-live','polite');feedback.setAttribute('aria-busy',String(status.busy));box.append(feedback);}
+    if(promotion&&!promotion.source_tag){const status=releaseJobStatus(promotion),feedback=el('p',t(status.text),status.error?'bad':'notice');feedback.setAttribute('role',status.error?'alert':'status');feedback.setAttribute('aria-live','polite');feedback.setAttribute('aria-busy',String(status.busy));box.append(feedback);}
     const empty=(title,message,bad=false)=>{const state=el('div',undefined,'release-empty');state.setAttribute('role',bad?'alert':'status');state.append(el('h3',t(title)),el('p',t(message),'dim'));box.append(state);};
     if(!releaseProject){empty('Select a project','Choose a project to see its published releases.');return;}
     if(releaseError){empty('Could not load releases',releaseError,true);box.append(button('Try again',loadReleases));return;}
@@ -944,15 +964,20 @@ function mount(document, bootstrap) {
     const list=el('div',undefined,'release-list');box.append(list);
     for(const row of releases){
       const card=el('article',undefined,'release-card'),heading=el('div',undefined,'release-heading');
-      heading.append(el('h3',row.version||row.tag),el('span',t(row.prerelease?'Prerelease':'Stable'),row.prerelease?'release-badge warn':'release-badge ok'));card.append(heading);
+      const state=releaseCardState(row,releases,promotion);
+      const badge=state.state==='publishing'?'Publishing…':state.state==='failed'?'Publication failed':state.state==='promoted'?t('Promoted to %s').replace('%s',row.full_tag):row.prerelease?'Prerelease':'Stable';
+      heading.append(el('h3',row.version||row.tag),el('span',t(badge),['promoted','stable'].includes(state.state)?'release-badge ok':'release-badge warn'));card.append(heading);
       const facts=el('dl',undefined,'release-facts');facts.append(el('dt',t('Date')),el('dd',row.date||'–'),el('dt',t('Commit')));
       const commit=el('dd',row.commit||'–','release-commit');facts.append(commit);card.append(facts);
-      if(row.prerelease&&row.full_tag){const publish=button('Publish as full release',async()=>{
+      if(state.state==='promoted'){const view=button('View full release',()=>{const target=document.getElementById('release-'+row.full_tag);target?.scrollIntoView({block:'center'});target?.focus();});card.append(view);}
+      else if(row.prerelease&&row.full_tag){const publish=button(state.state==='publishing'?'Publishing…':state.state==='failed'?'Retry':'Publish as full release',async()=>{
         const project=releaseProject;
         const job=await startReleasePromotion(client,project,row,status=>{releasePromotions.set(project,status);if(tab==='Releases')render();},t('Publish as full release')+' '+row.full_tag+'?');
-        if(job){job.title='Publish as full release';jobs.set(job.id,job);renderJob(job);}
-      });publish.disabled=publish.disabled||!!promotion?.running;card.append(publish);}
-      list.append(card);
+        if(job){job.title='Publish as full release';jobs.set(job.id,job);renderJob(job);if(job.result?.files)await loadReleases(true);}
+      });publish.disabled=publish.disabled||!!promotion?.running||!!(promotion?.result?.pending&&!['published','failed'].includes(promotion.publication?.state));card.append(publish);
+      if(state.error)card.append(el('p',state.error,'bad'));
+      if(state.state==='publishing'){const status=el('p',t(promotion?.running?promotion.progress:'Waiting for full release confirmation'),'dim');status.setAttribute('role','status');status.setAttribute('aria-live','polite');card.append(status);}}
+      card.id='release-'+row.tag;card.tabIndex=-1;list.append(card);
     }
   }
   function renderDashboard() {
@@ -1506,15 +1531,20 @@ function mount(document, bootstrap) {
   function renderUpdates() {
     const box=$('update-status');box.replaceChildren();
     let label='',colour='dim';
-    if(updateState.installing){label=t('installing version %s – waiting for running agents').replace('%s',updateState.installing.version || '');colour='warn';}
-    else if(updateState.failed){label=t('update to %s failed, see STATUS').replace('%s',updateState.failed);colour='bad';}
+    if(updateState.installing?.starting){label=t('Starting update to %s').replace('%s',displayVersion(updateState.installing.version));colour='warn';}
+    else if(updateState.installing){label=t('installing version %s – waiting for running agents').replace('%s',updateState.installing.version || '');colour='warn';}
+    else if(updateState.failed){label=updateState.installError||t('update to %s failed, see STATUS').replace('%s',updateState.failed);colour='bad';}
     else if(updateState.error){label=t('update check failed');colour='bad';}
     else if(updateState.available?.version){label='';}
     else if(updateState.no_release){label=t('no release published yet');}
     else if(updateState.last_check){label=t('up to date');colour='ok';}
     if(label)box.append(el('span',t(label),colour));
-    if(updateState.available?.version && !updateState.installing)box.append(button(t('Update to %s').replace('%s',displayVersion(updateState.available.version)),async()=>{await act('updates/install',{version:updateState.available.version},t(bootstrap.updateConfirm).replace('%s',updateState.available.version));}));
-    const check=button('Check now',async()=>{updateState=await client.action('updates/check');renderUpdates();});check.disabled=check.disabled||!!updateState.installing;check.classList.add('update-check');box.append(check);
+    if(updateState.available?.version && !updateState.installing)box.append(button(t('Update to %s').replace('%s',displayVersion(updateState.available.version)),async()=>{if(updateSubmitting)return;updateSubmitting=true;
+      const version=updateState.available.version;
+      try{await startUpdateInstall(client,version,state=>{updateRevision++;updateState={...updateState,...state};renderUpdates();},t(bootstrap.updateConfirm).replace('%s',version));}
+      finally{updateSubmitting=false;}
+    }));
+    const check=button('Check now',async()=>{const revision=updateRevision,value=await client.action('updates/check');if(value&&revision===updateRevision&&!updateSubmitting){updateState=value;renderUpdates();}});check.disabled=check.disabled||!!updateState.installing;check.classList.add('update-check');box.append(check);
   }
   async function loadEditor(project='') {
     if(tab==='Projects' && !project){client.notice(t('Add Project'));renderEditor();return;}
@@ -1934,11 +1964,13 @@ function mount(document, bootstrap) {
     if(!run.running){links.append(el('p',t('Login finished')+' ('+run.exit+')'));panel.append(button('Close',()=>{panel.remove();loginRuns.delete(run.id);}));}
   }
   function renderJob(job,historical=false) {
-    if(job.key?.startsWith('release-promotion:') && (!historical || job.running)){
+    if(job.key?.startsWith('release-promotion:') && (!historical || job.running || job.result?.pending)){
       const project=job.key.slice('release-promotion:'.length),previous=releasePromotions.get(project);
       if(!previous||previous.id===job.id||Number(job.started)>=Number(previous.started)){
+        job.source_tag=job.source_tag||job.result?.source_tag||previous?.source_tag;
         releasePromotions.set(project,job);
         if(tab==='Releases')render();
+        if(job.result?.files&&!previous?.result?.files&&project===releaseProject)void loadReleases(true);
       }
       return;
     }
@@ -1953,13 +1985,26 @@ function mount(document, bootstrap) {
       const changed=!questionsLoaded||JSON.stringify(questions)!==JSON.stringify(value);questionsLoaded=true;if(changed){questions=value;if(['Questions','Plans'].includes(tab))render();}
     }).finally(()=>questionLoading=false));}
     if(tab==='Providers'&&!providerLoading){providerLoading=true;tasks.push(client.request('providers').then(value=>{if(JSON.stringify(value)!==JSON.stringify(providerStates)){providerStates=value;if(tab==='Providers'&&!editor?.dirty)render();}}).finally(()=>providerLoading=false));}
-    if(tab==='Dashboard'&&!updateLoading){updateLoading=true;tasks.push(client.request('updates').then(value=>{updateState=value;renderUpdates();}).finally(()=>updateLoading=false));}
+    if(!updateLoading&&!updateSubmitting){updateLoading=true;const revision=updateRevision;tasks.push(client.request('updates').then(value=>{if(revision===updateRevision){updateState=value;renderUpdates();}}).finally(()=>updateLoading=false));}
     await Promise.allSettled(tasks).then(results=>{for(const result of results)if(result.status==='rejected')client.notice(result.reason.message,true);});
   }
+  async function pollReleasePromotions(){
+    for(const [project,job] of releasePromotions){
+      if(job.running||!job.result?.pending||job.publication?.state==='published'||job.publication?.state==='failed'||job.verifying||Date.now()-(job.checkedAt||0)<10000)continue;
+      job.verifying=true;job.checkedAt=Date.now();
+      try{
+        job.publication=await client.request('releases/promotion-status?'+new URLSearchParams({project,id:job.id}));
+        job.verificationError='';
+        if(job.publication.state==='published'&&project===releaseProject)await loadReleases(true);
+      }catch(error){job.verificationError=error.message;}
+      finally{job.verifying=false;if(tab==='Releases'&&project===releaseProject)render();}
+    }
+  }
   async function tick() {
+    void pollReleasePromotions();
     if(!automaticChecking && Date.now()-lastAutomaticCheck>60000){
       lastAutomaticCheck=Date.now();automaticChecking=true;
-      void client.request('updates/check',{automatic:true}).then(value=>{if(value)updateState=value;}).catch(error=>client.notice(error.message,true)).finally(()=>automaticChecking=false);
+      const revision=updateRevision;void client.request('updates/check',{automatic:true}).then(value=>{if(value&&revision===updateRevision&&!updateSubmitting){updateState=value;renderUpdates();}}).catch(error=>client.notice(error.message,true)).finally(()=>automaticChecking=false);
     }
     await Promise.allSettled([client.refresh(),refreshLists(),...Array.from(liveRuns.values(),pollLive),
       ...Array.from(loginRuns.values()).filter(run=>run.running&&!run.loading).map(async run=>{run.loading=true;try{const next=await client.request('login/status?id='+encodeURIComponent(run.id));loginRuns.set(run.id,next);renderLogin(next);if(!next.running){providerStates=await client.request('providers');if(tab==='Providers'&&!editor?.dirty)render();}}catch(error){client.notice(error.message,true);}finally{run.loading=false;}}),
@@ -1976,5 +2021,5 @@ function mount(document, bootstrap) {
   void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={startReleasePromotion,releaseJobStatus,QuestionDetails,settingsCategory,workflowSummary,testTimingNotice,LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={startUpdateInstall,releaseCardState,startReleasePromotion,releaseJobStatus,QuestionDetails,settingsCategory,workflowSummary,testTimingNotice,LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

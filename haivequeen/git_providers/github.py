@@ -302,6 +302,10 @@ def release_promotion_tag(repository, name, commit, source, token=None):
     target = annotated.get('object', {})
     if annotated.get('message') != message or target.get('type') != 'commit' or target.get('sha') != commit:
         raise ValueError('existing release tag has a different promotion source or commit')
+    repository_info = _request(repository, '', token)
+    _request(repository, '/actions/workflows/release.yml/dispatches', token,
+             {'ref': repository_info['default_branch'],
+              'inputs': {'release_tag': name, 'source_tag': source}})
 
 
 def release_state(repository, name, commit, token=None):
@@ -446,3 +450,43 @@ def pipeline_state(repo, commit, token=None):
             break
         page += 1
     return _normalized.pipeline(values)
+
+
+CAPABILITIES |= {'release_promotion_status'}
+
+
+def release_promotion_status(repository, name, source, commit, since, token=None):
+    """Confirm published files, or report the exact promotion workflow's failure."""
+    from urllib.error import HTTPError
+    from datetime import datetime, timezone
+    from urllib.parse import urlencode
+    try:
+        target = _request(repository, '/releases/tags/' + quote(name, safe=''), token)
+    except HTTPError as exc:
+        if exc.code != 404:
+            raise
+        target = None
+    if target and not target.get('draft') and not target.get('prerelease'):
+        if release_commit(repository, name, token) != commit:
+            return {'state': 'failed', 'error': 'Full release points at a different commit'}
+        original = release_snapshot(repository, source, commit, token)
+        published = _release_assets(repository, target, token, cleanup=False)
+        wanted = {a['name']: a for a in original['assets']}
+        actual = {a['name']: a for a in published['assets']}
+        if wanted and wanted.keys() == actual.keys() and all(
+                release_asset_digest(repository, original, asset, token) ==
+                release_asset_digest(repository, published, actual[name], token)
+                for name, asset in wanted.items()):
+            return {'state': 'published', 'url': target.get('html_url', '')}
+    created = datetime.fromtimestamp(float(since), timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    runs = _request(repository, '/actions/workflows/release.yml/runs?' + urlencode(
+        {'created': '>=' + created, 'per_page': 100}), token)['workflow_runs']
+    matches = [r for r in runs if (r.get('event') == 'workflow_dispatch' and
+               r.get('display_title') == 'Promote %s from %s' % (name, source)) or
+               (r.get('event') == 'push' and r.get('head_branch') == name and r.get('head_sha') == commit)]
+    latest = max(matches, key=lambda r: (r['id'], r.get('run_attempt', 1)), default=None)
+    if latest and latest.get('status') == 'completed':
+        return {'state': 'failed', 'error': 'Release workflow ended: ' + str(latest.get('conclusion')) +
+                ('. Published files could not be verified.' if latest.get('conclusion') == 'success' else ''),
+                'url': latest.get('html_url', '')}
+    return {'state': 'publishing'}

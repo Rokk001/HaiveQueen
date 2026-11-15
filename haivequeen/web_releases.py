@@ -1,6 +1,7 @@
 """Owner web release history and promotion; no plan or CLI publication entry."""
 import hashlib
 import re
+import time
 from types import SimpleNamespace
 
 from . import git_provider, projsettings, settings
@@ -43,12 +44,13 @@ def promote(provider, mode, selected, progress=None):
     if not re.fullmatch(r'[0-9a-fA-F]{40,64}', commit):
         raise ValueError('Pre-release has no exact commit')
     if mode == 'git':
+        requested_at = time.time()
         progress('Requesting release publication...')
         if 'release_promotion_tag' in provider.capabilities:
             provider.call('release_promotion_tag', tag, commit, source['tag'], token)
         else:
             provider.call('release_tag', tag, commit, token)
-        return {'tag': tag, 'commit': commit, 'message': 'Publication requested; the provider workflow must still finish.'}
+        return {'tag': tag, 'source_tag': selected, 'commit': commit, 'requested_at': requested_at, 'pending': True, 'message': 'Publication requested; the provider workflow must still finish.'}
     required = {'release_prepare', 'release_snapshot', 'release_download', 'release_upload', 'release_asset_digest'}
     if mode != 'local' or not required <= provider.capabilities:
         raise ValueError('This provider does not support copying local release assets')
@@ -75,3 +77,18 @@ def promote(provider, mode, selected, progress=None):
         if digest != hashlib.sha256(content).hexdigest():
             raise ValueError('Full release file differs from the pre-release: ' + name)
     return {'tag': tag, 'commit': commit, 'files': list(contents)}
+
+
+def promotion_status(conn, project, job):
+    """Only inspect a saved publication request belonging to this project."""
+    if job.get('key') != 'release-promotion:' + project:
+        raise ValueError('Publication request belongs to another project')
+    result = job.get('result') or {}
+    provider, _ = context(conn, project)
+    if 'release_promotion_status' in provider.capabilities:
+        return provider.call('release_promotion_status', result['tag'], result['source_tag'],
+                             result['commit'], result['requested_at'], provider.credential())
+    rows = provider.call('release_history', provider.credential())
+    if any(r['tag'] == result['tag'] and r['commit'] == result['commit'] and not r['prerelease'] for r in rows):
+        return {'state': 'published'}
+    return {'state': 'publishing'}

@@ -14,11 +14,25 @@ prerelease status, then copies the existing distributions without rebuilding.
 Ordinary maintenance pushes still do not publish releases. Full-release operations
 for the same tag are serialized without cancelling a running publication.
 
-Immediately after confirmation, the Releases panel shows the publication request
-as starting and prevents another promotion for that project while it runs. Progress
-and errors for the current action appear in the same panel and survive tab
-navigation. On page reload, only running promotions are restored as current
-feedback. Previously completed actions, including failures, remain under
-"Previous owner actions" and are not presented as new errors while releases load.
-A restored running action still reports its eventual success or failure inline. An accepted Git-provider request explicitly states that the
-provider workflow still needs to finish; it is not reported as a published release.
+Immediately after confirmation, the selected prerelease card changes its badge
+and disabled button to `Publishing…`. Acceptance of a provider request does not
+mean publication has finished. The UI checks the saved request every ten seconds,
+including after navigation or reload, until publication or workflow failure is
+confirmed. The GitHub workflow title identifies the source and target versions.
+A full release must have the requested commit and the same asset names and digests
+as its prerelease before it is reported as published. The alpha card then shows
+`Promoted to v…` and `View full release`, linking to the separate stable card.
+
+A failed publication shows `Publication failed`, the error and a `Retry` button.
+A retry dispatches the workflow again without moving the existing tag. Temporary
+verification connection errors keep publication pending and never resubmit it.
+Completed historical request errors remain under previous owner actions; saved
+provider requests awaiting confirmation are restored and verified after reload.
+
+The update banner also changes immediately after confirmation: it first shows
+`Starting update to v…`, then the installation/waiting state. Install and check
+buttons remain unavailable during installation. Request errors appear in the
+banner. Status refresh runs on every page, and responses started before a new
+installation cannot overwrite its immediate feedback. Installation success and
+failure still come from the existing update worker state; the UI does not infer
+success from accepting the request.

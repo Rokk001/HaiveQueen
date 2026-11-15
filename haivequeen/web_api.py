@@ -203,6 +203,9 @@ def execute(conn, action, data):
     if action == 'releases':
         from . import web_releases
         return web_releases.listing(conn, project)
+    if action == 'releases/promotion-status':
+        from . import web_releases
+        return web_releases.promotion_status(conn, project, web_jobs.status(data['id']))
     if action == 'releases/promote':
         from . import web_releases
         if data.get('confirmed') is not True:

@@ -203,7 +203,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if path in ('/web-client.js', '/web-client.css'):
             from . import web_ui
             return self.reply(200, web_ui.asset(path[1:]), content_type='text/javascript; charset=utf-8' if path.endswith('.js') else 'text/css; charset=utf-8')
-        if path not in ('/api/state', '/api/plans', '/api/plan/providers', '/api/plan/detail', '/api/plan/step-log', '/api/questions', '/api/questions/detail', '/api/settings', '/api/settings/view', '/api/providers', '/api/live', '/api/login/status', '/api/updates', '/api/benchmark', '/api/jobs/status', '/api/git-login/providers', '/api/releases'):
+        if path not in ('/api/state', '/api/plans', '/api/plan/providers', '/api/plan/detail', '/api/plan/step-log', '/api/questions', '/api/questions/detail', '/api/settings', '/api/settings/view', '/api/providers', '/api/live', '/api/login/status', '/api/updates', '/api/benchmark', '/api/jobs/status', '/api/git-login/providers', '/api/releases', '/api/releases/promotion-status'):
 
             return self.reply(404, {'error': 'Unknown route'})
         from urllib.parse import parse_qs

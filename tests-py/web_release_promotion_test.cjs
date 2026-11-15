@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {startReleasePromotion,releaseJobStatus}=require('../haivequeen/web-client.js');
+const {startUpdateInstall,releaseCardState,startReleasePromotion,releaseJobStatus}=require('../haivequeen/web-client.js');
 (async()=>{
  let resolve,requests=0;const states=[];
  const client={confirm:async()=>true,action:()=>{requests++;return new Promise(r=>resolve=r);}};
@@ -39,5 +39,34 @@ const {startReleasePromotion,releaseJobStatus}=require('../haivequeen/web-client
  assert.equal(promotions.get('demo').error,'Fresh failure','Late history must not replace current feedback');
  assert(redraws>=3);
  assert(source.includes('renderJob(job,true);'),'History loading must identify historical jobs');
+ const row={tag:'v1-alpha.1',full_tag:'v1',commit:'abc',prerelease:true};
+ const receipt={source_tag:row.tag,running:false,result:{pending:true}};
+ assert.equal(releaseCardState(row,[],receipt).state,'publishing','Accepted request is not a finished publication');
+ assert.equal(releaseCardState(row,[],{...receipt,publication:{state:'failed',error:'workflow failed'}}).state,'failed');
+ assert.equal(releaseCardState(row,[],{...receipt,publication:{state:'published'}}).state,'promoted');
+ assert.equal(releaseCardState(row,[],{source_tag:row.tag,result:{files:['a']}}).state,'promoted');
+ assert.equal(releaseCardState(row,[{tag:'v1',commit:'other',prerelease:false}],null).state,'prerelease');
+ assert.equal(releaseCardState(row,[{tag:'v1',commit:'abc',prerelease:false}],null).state,'promoted');
+ renderJob({id:'accepted',key:'release-promotion:demo',result:{pending:true,source_tag:row.tag},started:4},true);
+ assert.equal(promotions.get('demo').id,'accepted','Restore accepted workflow while it is still unconfirmed');
+ const updateStates=[];let finishUpdate;
+ const installation=startUpdateInstall({confirm:async()=>true,action:()=>new Promise(r=>finishUpdate=r)},'1.2.3',s=>updateStates.push(s),'Confirm');
+ await Promise.resolve();assert.deepEqual(updateStates[0],{installing:{version:'1.2.3',starting:true}});
+ finishUpdate({pid:42});await installation;
+ assert.deepEqual(updateStates.at(-1),{installing:{version:'1.2.3'}},'Accepted update must keep button unavailable');
+ await startUpdateInstall({confirm:async()=>true,action:async()=>{throw Error('Cannot launch worker');}},'1.2.3',s=>updateStates.push(s),'Confirm');
+ assert.equal(updateStates.at(-1).installing,null);assert.equal(updateStates.at(-1).installError,'Cannot launch worker');
+ let cancelled=false;
+ await startUpdateInstall({confirm:async()=>false,action:()=>{cancelled=true;}},'1.2.3',()=>{cancelled=true;},'Confirm');assert.equal(cancelled,false);
+ // Exercise the real polling function without sleeps or provider side effects.
+ const pollSource=source.slice(source.indexOf('  async function pollReleasePromotions()'),source.indexOf('  async function tick()'));
+ const waiting={id:'saved',result:{pending:true},checkedAt:0};const pendingMap=new Map([['demo',waiting]]);let response={state:'publishing'},reloads=0;
+ const poll=new Function('releasePromotions','client','loadReleases','render',"const tab='Releases',releaseProject='demo';"+pollSource+'return pollReleasePromotions;')(pendingMap,{request:async()=>{if(response instanceof Error)throw response;return response;}},async quiet=>{assert.equal(quiet,true);reloads++;},()=>{});
+ await poll();assert.equal(waiting.publication.state,'publishing');assert.equal(reloads,0);
+ waiting.checkedAt=0;response=Error('Temporary connection loss');await poll();assert.equal(waiting.publication.state,'publishing');assert.match(waiting.verificationError,/connection/);
+ waiting.checkedAt=0;response={state:'published'};await poll();assert.equal(reloads,1);assert.equal(waiting.verificationError,'');
+ await poll();assert.equal(reloads,1,'Confirmed release stops polling');
+ waiting.publication=null;waiting.checkedAt=0;response={state:'failed',error:'Workflow failure'};await poll();assert.equal(waiting.publication.state,'failed');
+ response={state:'published'};await poll();assert.equal(reloads,1,'Failed publication waits for explicit retry');
  console.log('Immediate promotion feedback, errors, completion and cancellation passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});

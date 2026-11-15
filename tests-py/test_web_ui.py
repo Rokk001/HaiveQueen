@@ -220,6 +220,7 @@ class BrowserTests(unittest.TestCase):
         browser_language = ['English']
         git_method = ['']
         saved_projects = {}
+        update_started = [False]
         state = {'version':'test', 'orchestrator':{'label':'RUNNING'}, 'controls':{'force_warning':'Force stop ends all running Queens, Agents, Builds and Deploys immediately. Unfinished work will be done again after Start.'},
                  'projects':[{'name':'demo'}, {'name':'local-only'}], 'tiles':{'bees':1}, 'hives':[],
                  'bees':[{'name':'mock-agent','agent':'mock-agent','plan_path':'mock.md','project':'demo','apiary':'demo','task':'P1','status':'running','model':'running'}]}
@@ -268,11 +269,12 @@ class BrowserTests(unittest.TestCase):
                                       'workspace':'demo-plans','project_defaults':{'integrationBranch':'develop'},'rules':[{'label':'AGENTS.md','path':'AGENTS.md','tokens':12,'native_clis':['Codex CLI']}],
                                       'upstream':{'on':False,'usable':False,'note':''}})
                 value={'/api/state':state, '/api/providers':[{'name':'mock','logged_in':True}],
+                       '/api/releases/promotion-status':{'state':'publishing'},
                        '/api/git-login/providers':[{'name':'example','method':git_method[0],'device':False}],
                        '/api/releases':{'releases':[{'tag':'v2.0.1-dev.3','version':'v2.0.1-dev.3','date':'2026-01-02','commit':'a'*40,'prerelease':True,'full_tag':'v2.0.1'},
                                                     {'tag':'v2.0.0','version':'v2.0.0','date':'2026-01-01','commit':'b'*40,'prerelease':False,'full_tag':''}]},
                        '/api/settings/view':{'data':data,'revision':'revision-1','provider_models':{'mock':{'models':['test'],'efforts':['medium']}}},
-                       '/api/updates':{'available':{'version':'v9.0.0'}},
+                       '/api/updates':({'installing':{'version':'v9.0.0'}} if update_started[0] else {'available':{'version':'v9.0.0'}}),
                        '/api/plans':[{'name':'Mock','apiary':'demo','plan_path':'mock.md','status':'RUNNING','has_hive':True}],
                        '/api/plan/providers':[{'name':'mock','current':True,'selectable':False},
                                               {'name':'excluded','current':False,'selectable':False},
@@ -309,9 +311,12 @@ class BrowserTests(unittest.TestCase):
                     git_method[0] = 'token'
                     return self.send({'ok':True})
                 if action=='releases/promote':
-                    return self.send({'id':'release-job', 'running':False, 'result':{'tag':'v2.0.1'}, 'error':''})
+                    return self.send({'id':'release-job', 'running':False, 'key':'release-promotion:demo', 'result':{'tag':'v2.0.1','source_tag':'v2.0.1-dev.3','pending':True}, 'error':''})
                 if action=='login/start':
                     return self.send({'id':'login-1','provider':'mock','running':True,'output':'ABCD-EFGH','links':['https://example.invalid/device']})
+                if action=='updates/install':
+                    update_started[0] = True
+                    return self.send({'ok':True})
                 if action=='updates/check':
                     return self.send({'available':{'version':'v9.0.0'}})
                 self.send({'ok':True})

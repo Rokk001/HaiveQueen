@@ -383,6 +383,8 @@ window.addEventListener('load', async () => {
     await click('Publish as full release');
     requests=await (await fetch('/test-actions')).json();
     const promotion=requests.find(row=>row.action==='releases/promote');
+    assert(document.querySelector('.release-card .release-badge').textContent==='Publishing\u2026','Card must show pending publication');
+    assert(buttons('Publishing\u2026')[0].disabled,'Pending promotion must stay disabled after acceptance');
     assert(promotion.data.tag==='v2.0.1-dev.3' && promotion.data.confirmed===true && !promotion.data.commit,'Promotion must send selected tag and confirmation only');
 
     await click('Questions');await wait(()=>document.querySelector('[data-question]'));
@@ -432,6 +434,9 @@ window.addEventListener('load', async () => {
     document.getElementById('close-detail').click();
 
     await click('Check now');await wait(()=>buttons('Update to v9.0.0').length);await click('Update to v9.0.0');
+    await wait(()=>document.getElementById('update-status').textContent.includes('installing version'));
+    assert(buttons('Update to v9.0.0').length===0,'Accepted update must not revert to an install offer');
+    assert(buttons('Check now')[0].disabled,'Update check must remain disabled while installing');
 
     requests=await (await fetch('/test-actions')).json();
 
