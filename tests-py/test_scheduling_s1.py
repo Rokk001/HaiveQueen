@@ -292,31 +292,31 @@ class SlotAndProviderChoiceTests(RoundCase):
 
 
 class SlotTextTests(unittest.TestCase):
-    """README, owner question texts and the Queen role text describe the slot and routing rules."""
+    """Provider guide, owner question texts and the Queen role text describe the slot and routing rules."""
 
     def texts(self):
-        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        providers = (ROOT / 'docs/PROVIDERS.md').read_text(encoding='utf-8')
         queen = roles.role_text('queen')
         german = '\n'.join('%s\n%s' % (k, v) for k, v in i18n.GERMAN.items()) if hasattr(i18n, 'GERMAN') else ''
-        return readme, queen, german
+        return providers, queen, german
 
     def test_texts_no_longer_promise_free_subagents_or_fixed_providers(self):
-        readme, queen, german = self.texts()
-        for text in (readme, queen, german):
+        providers, queen, german = self.texts()
+        for text in (providers, queen, german):
             self.assertNotIn('no extra slot', text)
             self.assertNotIn('need no slot of their own', text)
             self.assertNotIn('keinen eigenen Slot', text)
         self.assertNotIn('never silently change it', queen)
         self.assertNotIn('restart its package with the same class and provider', queen)
-        self.assertNotIn('Queen plus an Agent process', readme)
-        self.assertNotIn('restart the Queen (on the same provider', readme)
+        self.assertNotIn('Queen plus an Agent process', providers)
+        self.assertNotIn('restart the Queen (on the same provider', providers)
 
     def test_texts_describe_slots_and_provider_choice(self):
-        readme, queen, _ = self.texts()
-        self.assertIn('every Agent takes one slot', readme)
+        providers, queen, _ = self.texts()
+        self.assertIn('every Agent takes one slot', providers)
         self.assertIn('every Agent takes one slot', queen)
         self.assertIn('another provider', queen)
-        self.assertIn('chooses its provider by the normal provider choice', readme)
+        self.assertIn('chooses its provider by the normal provider choice', providers)
 
 
 if __name__ == '__main__':

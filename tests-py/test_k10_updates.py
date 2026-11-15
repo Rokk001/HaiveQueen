@@ -553,12 +553,21 @@ class TextTests(unittest.TestCase):
         self.assertFalse(settings.check({"update": {"checkHours": 12}}, True))
 
 
-class ReadmeTests(unittest.TestCase):
-    """The README describes installation and the update function for users."""
+class UpdateDocumentationTests(unittest.TestCase):
+    """Topical guides describe installation, updates and release configuration."""
 
-    def test_readme(self):
-        text = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
-        for part in ("### Updates", "Check now", "New version available", "checkHours", "git checkout v", "publishReleases", "nextVersion", "bzz update"):
+    def test_installation_guide_documents_release_checkout(self):
+        text = (Path(__file__).resolve().parent.parent / "docs/GETTING-STARTED.md").read_text(encoding="utf-8")
+        self.assertIn("git checkout v", text)
+
+    def test_operations_guide_documents_updates(self):
+        text = (Path(__file__).resolve().parent.parent / "docs/OPERATIONS.md").read_text(encoding="utf-8")
+        for part in ("Updates", "Check now", "New version available", "checkHours", "bzz update"):
+            self.assertIn(part, text)
+
+    def test_settings_guide_documents_release_configuration(self):
+        text = (Path(__file__).resolve().parent.parent / "docs/SETTINGS.md").read_text(encoding="utf-8")
+        for part in ("publishReleases", "nextVersion"):
             self.assertIn(part, text)
 
 

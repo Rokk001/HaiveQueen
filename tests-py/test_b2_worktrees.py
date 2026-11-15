@@ -126,9 +126,9 @@ class PackageWorktrees(GitCase):
         args = cli.build_parser().parse_args(['agent', 'start', '--project', 'testproj', '--plan', REL, '--package', 'P1', '--class', 'medium', '--name', 'A', '--task', 'work', '--steps', '["work"]'])
         self.assertFalse(args.cwd)
 
-    def test_readme_documents_naming(self):
-        readme = (Path(__file__).resolve().parents[1] / 'README.md').read_text(encoding='utf-8').lower()
-        self.assertIn('<plan branch>-<package', readme)
+    def test_branch_guide_documents_naming(self):
+        guide = (Path(__file__).resolve().parents[1] / 'docs' / 'BRANCH-ATTRIBUTION.md').read_text(encoding='utf-8').lower()
+        self.assertIn('<plan branch>-<package', guide)
 
 
     def test_branch_violation_survives_switch_back_and_counts_once(self):

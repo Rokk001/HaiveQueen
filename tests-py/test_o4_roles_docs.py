@@ -92,8 +92,8 @@ class FlowDocs(unittest.TestCase):
             for word in REMOVED:
                 self.assertNotIn(word, text, "%s mentions %s" % (name, word))
 
-    def test_readme_describes_the_new_flow(self):
-        text = (ROOT / "README.md").read_text(encoding="utf-8")
+    def test_operations_guide_describes_the_new_flow(self):
+        text = (ROOT / "docs/OPERATIONS.md").read_text(encoding="utf-8")
         for word in ("Orchestrator", "fix agent", "Build command", "Deploy command"):
             self.assertIn(word, text)
         self.assertNotIn("integrates (git", text)

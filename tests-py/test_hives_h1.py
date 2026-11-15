@@ -195,9 +195,9 @@ class HiveRoundTests(RoundCase):
         queens = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen"]
         self.assertEqual([a["provider"] for a in queens], ["codex"])
 
-    def test_readme_describes_embedded_bee_slot(self):
+    def test_provider_guide_describes_embedded_bee_slot(self):
         from pathlib import Path
-        text = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+        text = (Path(__file__).resolve().parent.parent / "docs/PROVIDERS.md").read_text(encoding="utf-8")
         self.assertNotIn("embedded, small context, no extra slot", text)
         self.assertIn("every Agent takes one slot", text)
 

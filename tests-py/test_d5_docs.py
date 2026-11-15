@@ -5,8 +5,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class DocsNothingToIntegrate(unittest.TestCase):
-    def test_readme(self):
-        t = (ROOT / "README.md").read_text(encoding="utf-8")
+    def test_operations_guide(self):
+        t = (ROOT / "docs/OPERATIONS.md").read_text(encoding="utf-8")
         self.assertIn("nothing left to integrate", t)
 
     def test_docs(self):
