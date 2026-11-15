@@ -259,8 +259,8 @@ under **Answer options**, and optional rejected package selection is under
 **Accept** and **Save note** retain their distinct semantics. Records not open are
 read-only. There is no invented agent dialogue or free-message backend.
 
-Plans cards have visible **Messages** actions with pending question and acceptance
-counts. They open the same conversation as Questions; plans without pending
+Plans cards show pending question and acceptance counts with direct **Answer question**
+or **Review result** actions. They open the same conversation as Questions; plans without pending
 questions can open their recorded history when one exists. Questions and Plans share the existing
 `questions?history=1` response. The plan link is offered only when that plan exists
 in the current plan list. On narrow screens, selecting a thread replaces the list
@@ -293,14 +293,21 @@ matching both project and plan, not plan status. Chip counts reflect the current
 search and project. Until question data arrives, message state is shown as loading
 and Needs you is unavailable, rather than implying zero open questions.
 
-Pending questions and acceptance counts open the existing plan conversation.
-Recorded history remains accessible; plans with no questions have quiet text rather
+Pending **Answer question(s)** and **Review result(s)** actions open the existing
+plan conversation at the relevant question. The card highlights **Your answer
+needed** or **Your review needed**, retaining the actual lifecycle status beside it;
+**View plan** is the secondary action. Recorded history remains accessible; plans with no questions have quiet text rather
 than an empty conversation button. **Edit draft** fetches the current plan detail
 and revision before editing; a plan that is no longer an editable draft opens its
-details instead. Missing or recovery-blocked plans offer details, not editing.
+details instead. Missing, recovery-blocked or invalid plans offer details, not editing. A **Needs
+attention** label and expandable exact error keep malformed header/class problems
+visible. Attention items and plans with real pending questions come before other
+plans, preserving the existing order within each group.
 **View result** opens review plan details; other plans offer **View plan**.
 
-The result count and empty state reflect the combined filters. **Clear filters**
+Before the first successful plan fetch, the overview shows **Loading plans**;
+only a successful empty response shows **No plans yet**. The result count and
+empty state reflect the combined filters. **Clear filters**
 resets search, project and status. Values persist across polling and tab switches
 within the page, search focus and text selection survive polling, and an active
 input composition finishes before redraw. Long plan and project names wrap, and

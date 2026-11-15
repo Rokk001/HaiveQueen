@@ -1022,3 +1022,5 @@ GERMAN.update({'Draft': 'Entwurf',
  'Create a plan to describe the result you want.': 'Erstelle einen Plan und beschreibe das gewünschte '
                                                    'Ergebnis.',
  'Needs attention': 'Prüfung nötig'})
+
+GERMAN.update({'Your review needed':'Deine Abnahme nötig','Your answer needed':'Deine Antwort nötig','Review result':'Ergebnis prüfen','Review %s results':'%s Ergebnisse prüfen','Answer question':'Frage beantworten','Answer %s questions':'%s Fragen beantworten','Plan issue':'Problem mit dem Plan','Loading plans…':'Pläne werden geladen…'})

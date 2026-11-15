@@ -471,7 +471,7 @@ function mount(document, bootstrap) {
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
   const questionDrafts=new Map();
   const planFilters={search:'',project:'',status:''};
-  let questionsLoaded=false;
+  let questionsLoaded=false,plansLoaded=false;
   let questionFilter='open', questionFocus=null, questionNavigation=false, selectedThread=null, conversationMobile=false, planDraft=null;
   let releaseProject='', releaseData=null, releaseError='', releaseRequest=0;
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
@@ -1267,11 +1267,16 @@ function mount(document, bootstrap) {
   }
   async function editPlanFromList(row) {
     const detail=await client.request('plan/detail?'+new URLSearchParams(key(row))),latest={...row,...detail.plan};
-    if(latest.status!=='DRAFT'||latest.missing||latest.recovery_error){await openPlan(latest);return;}
+    if(latest.status!=='DRAFT'||latest.missing||latest.recovery_error||latest.error){await openPlan(latest);return;}
     await openPlanEditor(latest,detail);
+  }
+  function prioritizePlanRows(rows,items) {
+    const rank=row=>row.error||row.missing||row.recovery_error?0:planQuestions(row,items).some(q=>q.status==='open')?1:2;
+    return rows.map((row,index)=>({row,index,rank:rank(row)})).sort((a,b)=>a.rank-b.rank||a.index-b.index).map(item=>item.row);
   }
   function renderPlans() {
     const box=section('Plans');box.className='plans-overview';
+    if(!plansLoaded){const loading=el('p',t('Loading plans…'),'plan-quiet');loading.setAttribute('role','status');box.append(loading);return;}
     const toolbar=el('div',undefined,'plans-toolbar'),search=el('input');search.type='search';search.value=planFilters.search;search.placeholder=t('Find a plan…');search.dataset.planFilter='search';search.setAttribute('aria-label',t('Search plans'));
     search.oncompositionstart=()=>{search.dataset.composing='true';};search.oncompositionend=()=>{search.dataset.composing='false';planFilters.search=search.value;render();};search.oninput=()=>{planFilters.search=search.value;render();};
     const searchLabel=el('label',t('Search plans'),'plans-search');searchLabel.append(search);toolbar.append(searchLabel);
@@ -1291,19 +1296,26 @@ function mount(document, bootstrap) {
     const filtered=filterPlanRows(plans,planFilters,questions),summary=el('div',undefined,'plan-results-summary'),count=el('span',t('%s of %s plans').replace('%s',filtered.length).replace('%s',plans.length));count.setAttribute('role','status');summary.append(count);
     if(planFilters.search||planFilters.project||planFilters.status)summary.append(button('Clear filters',()=>{planFilters.search='';planFilters.project='';planFilters.status='';render();view.querySelector('[data-plan-filter="search"]')?.focus({preventScroll:true});}));box.append(summary);
     const list=el('div',undefined,'plan-overview-list');box.append(list);
-    for(const row of filtered){
-      const card=el('article',undefined,'plan-overview-card'),identity=el('div',undefined,'plan-card-identity'),title=el('h3',row.title||row.name),status=el('span',planStatusLabel(row),'plan-card-status status-'+String(row.status||'').toLowerCase());card.dataset.plan=row.plan_path;
-      identity.append(el('small',t('Project')+' · '+(row.project||row.apiary),'plan-card-project'),title,status);
-      if(row.status==='WAITING'&&row.waiting_for)identity.append(el('p',row.waiting_for,'plan-card-context'));
-      if(row.missing||row.recovery_error)identity.append(el('p',t(row.missing?'Plan file missing':'Needs attention'),'warn'));
+    for(const row of prioritizePlanRows(filtered,questions)){
       const related=planQuestions(row,questions),pending=related.filter(question=>question.status==='open'),acceptance=pending.filter(question=>questionKind(question)==='Acceptance').length;
+      const attention=!!(row.error||row.missing||row.recovery_error),needs=questionsLoaded&&pending.length;
+      const card=el('article',undefined,'plan-overview-card'),identity=el('div',undefined,'plan-card-identity'),title=el('h3',row.title||row.name),status=el('span',attention?t('Needs attention'):needs?t(acceptance?'Your review needed':'Your answer needed'):planStatusLabel(row),'plan-card-status '+(attention?'needs-attention':needs?'needs-you':'status-'+String(row.status||'').toLowerCase()));card.dataset.plan=row.plan_path;
+      identity.append(el('small',t('Project')+' · '+(row.project||row.apiary),'plan-card-project'),title,status);
+      if(attention||needs)identity.append(el('span',t('Status')+' · '+planStatusLabel(row),'plan-lifecycle-meta'));
+      if(row.status==='WAITING'&&row.waiting_for)identity.append(el('p',row.waiting_for,'plan-card-context'));
+      if(row.missing)identity.append(el('p',t('Plan file missing'),'warn'));
+      if(row.error||row.recovery_error){const issue=el('details',undefined,'plan-card-issue');issue.append(el('summary',t('Plan issue')),el('pre',[row.error,row.recovery_error].filter(Boolean).join('\n')));identity.append(issue);}
       const actions=el('div',undefined,'plan-card-actions');
       if(!questionsLoaded)actions.append(el('span',t('Loading messages…'),'plan-quiet'));
-      else if(pending.length){const labels=[];if(pending.length-acceptance)labels.push(t(pending.length-acceptance===1?'1 question':'%s questions').replace('%s',pending.length-acceptance));if(acceptance)labels.push(t(acceptance===1?'1 acceptance':'%s acceptances').replace('%s',acceptance));const messages=button(t('Messages')+' · '+labels.join(' · '),()=>openConversation(row.project||row.apiary,row.plan_path));messages.className='plan-needs-answer';actions.append(messages);}
+      else if(pending.length){
+        const labels=[];if(pending.length-acceptance)labels.push(t(pending.length-acceptance===1?'1 question':'%s questions').replace('%s',pending.length-acceptance));if(acceptance)labels.push(t(acceptance===1?'1 acceptance':'%s acceptances').replace('%s',acceptance));actions.append(el('span',labels.join(' · '),'plan-pending-count'));
+        const target=pending.find(question=>questionKind(question)==='Acceptance')||pending[0],label=acceptance?t(acceptance===1?'Review result':'Review %s results').replace('%s',acceptance):t(pending.length===1?'Answer question':'Answer %s questions').replace('%s',pending.length);
+        const respond=button(label,()=>openConversation(row.project||row.apiary,row.plan_path,Number(target.id)));respond.className='plan-card-primary highlighted';actions.append(respond);
+      }
       else if(related.length){const history=button('View conversation',()=>openConversation(row.project||row.apiary,row.plan_path));history.className='plan-history-link';actions.append(history);}
       else actions.append(el('span',t('No open questions'),'plan-quiet'));
-      const editable=row.status==='DRAFT'&&!row.missing&&!row.recovery_error,label=editable?'Edit draft':row.status==='REVIEW'?'View result':'View plan';
-      const primary=button(label,()=>editable?editPlanFromList(row):openPlan(row));primary.className='plan-card-primary'+(editable||row.status==='REVIEW'?' highlighted':'');actions.append(primary);card.append(identity,actions);list.append(card);
+      const editable=row.status==='DRAFT'&&!attention,label=needs||attention?'View plan':editable?'Edit draft':row.status==='REVIEW'?'View result':'View plan';
+      const primary=button(label,()=>editable&&!needs?editPlanFromList(row):openPlan(row));primary.className=needs?'plan-history-link':'plan-card-primary'+(editable||row.status==='REVIEW'&&!attention?' highlighted':'');actions.append(primary);card.append(identity,actions);list.append(card);
     }
     if(!filtered.length){const empty=el('div',undefined,'plan-list-empty');empty.append(el('h3',t(plans.length?'No plans match these filters.':'No plans yet')),el('p',t(plans.length?'Try another search or clear the filters.':'Create a plan to describe the result you want.')));list.append(empty);}
   }
@@ -1868,7 +1880,7 @@ function mount(document, bootstrap) {
   }
   async function refreshLists() {
     const tasks=[];
-    if(['Plans','Questions'].includes(tab)&&!planLoading){planLoading=true;tasks.push(client.request('plans').then(value=>{if(JSON.stringify(plans)!==JSON.stringify(value)){plans=value;if(['Plans','Questions'].includes(tab))render();}}).finally(()=>planLoading=false));}
+    if(['Plans','Questions'].includes(tab)&&!planLoading){planLoading=true;tasks.push(client.request('plans').then(value=>{const changed=!plansLoaded||JSON.stringify(plans)!==JSON.stringify(value);plansLoaded=true;if(changed){plans=value;if(['Plans','Questions'].includes(tab))render();}}).finally(()=>planLoading=false));}
     if(['Questions','Plans'].includes(tab)&&!questionLoading){questionLoading=true;tasks.push(client.request('questions?history=1').then(value=>{
       const changed=!questionsLoaded||JSON.stringify(questions)!==JSON.stringify(value);questionsLoaded=true;if(changed){questions=value;if(['Questions','Plans'].includes(tab))render();}
     }).finally(()=>questionLoading=false));}

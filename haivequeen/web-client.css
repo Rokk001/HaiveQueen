@@ -1184,3 +1184,11 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .plan-quiet{font-size:.76rem;color:#89a2af}
 .plan-list-empty{padding:38px 20px;text-align:center;border:1px dashed var(--edge);border-radius:10px;color:#9eb5c0}.plan-list-empty h3{font-size:1.05rem;color:#d0dfe5}.plan-list-empty p{font-size:.85rem;line-height:1.6}
 @media(max-width:700px){.editor-view>.plans-overview{padding:16px 12px}.plans-toolbar{flex-wrap:wrap;gap:8px}.plans-search{flex-basis:100%}.plans-toolbar>button{flex:1}.plan-status-tabs{gap:4px}.plan-status-tabs button{padding:8px 9px;font-size:.78rem;gap:5px}.plan-overview-card{display:block;padding:16px}.plan-card-identity h3{font-size:1.08rem}.plan-card-actions{margin-top:16px;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}.plan-card-actions .plan-needs-answer{flex-basis:100%;text-align:left}.plan-card-primary{margin-left:auto}.plan-project-chips{gap:6px}.plan-project-chips button{font-size:.72rem}}
+
+.editor-view>.plans-overview>h2{font-size:1.5rem;line-height:1.3;margin:2px 0 16px}
+.plan-card-project{font-size:.88rem;color:#b7cbd5}.plan-card-identity h3{font-size:1.15rem}
+.plan-card-status.needs-you{color:#f4d26b;background:#332d1a}.plan-card-status.needs-attention{color:#efb8a2;background:#3b2923}
+.plan-lifecycle-meta{display:inline-block;margin-left:9px;font-size:.76rem;color:#9fb5c0}
+.plan-pending-count{font-size:.8rem;color:#c8bc8c}
+.plan-card-issue{margin-top:10px;font-size:.8rem;color:#d4b9ac}.plan-card-issue summary{cursor:pointer}.plan-card-issue pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}
+@media(max-width:700px){.plan-card-project{font-size:.86rem}.plan-card-identity h3{font-size:1.15rem}.plan-pending-count{flex-basis:100%}.plan-card-actions>.highlighted{margin-left:0}.plan-card-actions>.plan-history-link{margin-left:auto}}
