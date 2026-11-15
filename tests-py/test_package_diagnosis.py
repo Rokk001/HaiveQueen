@@ -209,6 +209,55 @@ class PackageDiagnosis(RoundCase):
                 current, 'medium', ['medium'])
 
 class PackageDiagnosisLifecycle(PackageDiagnosis):
+    def test_scheduler_keeps_accepted_baseline_across_new_review_and_restart(self):
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'class': 'medium'}])
+        env = self.env()
+        initial = self.scope()
+        self.review.accept(self.conn, env.name, REL, 'P1', self.report(initial), initial, 'medium', ['medium'])
+        self.review.consume(self.conn, env.name, REL, 'P1', initial)
+        self.record('partial-fix')
+        self.review.request(env, REL, 'P1', 'medium')
+        prompts = []
+
+        def launch(ctx, action, **kwargs):
+            prompts.append(action['prompt'])
+            ctx['state']['names'].append('review-new')
+            runtime.upsert_agent(self.conn, env.name, 'review-new',
+                                 dict(plan=REL, phase='fix', status='done', exitCode=0))
+            return True
+
+        with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-2'), \
+             mock.patch('haivequeen.bees.plan_worktree', return_value=('branch', self.wt)), \
+             mock.patch('haivequeen.loop._min_ram', return_value=0), \
+             mock.patch('haivequeen.loop._do_start', side_effect=launch):
+            self.review.advance(env, 16384, alive=lambda pid: False)
+            state = self.review._load(self.conn, env.name, REL, 'P1')
+            self.assertEqual(state['phase'], 'running')
+            self.assertEqual(state['scope']['commit'], 'head-2')
+            self.assertNotIn('UNCHANGED CODE', prompts[0])
+            output = env.run_dir('review-new') / 'package-diagnosis.json'
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(self.report(state['scope']).read_bytes())
+            # advance reloads persisted state, as after an orchestrator restart.
+            self.review.advance(env, 16384, alive=lambda pid: False)
+        state = self.review._load(self.conn, env.name, REL, 'P1')
+        self.assertEqual(state['phase'], 'authorized')
+        self.assertEqual(state['accepted_scope']['commit'], 'head-2')
+        self.assertIsNotNone(self.review.authorization(self.conn, env.name, REL, 'P1', self.scope('head-2')))
+        self.assertEqual(runtime.list_questions(self.conn, env.name, status='open'), [])
+
+    def test_legacy_running_review_uses_report_commit_not_running_scope(self):
+        previous = self.scope()
+        self.review.accept(self.conn, 'testproj', REL, 'P1', self.report(previous), previous, 'medium', ['medium'])
+        state = self.review._load(self.conn, 'testproj', REL, 'P1')
+        state.pop('accepted_scope', None)
+        state['scope'] = self.scope('head-2')
+        state['phase'] = 'running'
+        runtime.kv_set(self.conn, 'testproj', self.review._key(REL, 'P1'), json.dumps(state))
+        current = self.scope('head-2')
+        self.review.accept(self.conn, 'testproj', REL, 'P1', self.report(current), current, 'medium', ['medium'])
+        self.assertIsNotNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
+
     def test_cancelled_plan_never_starts_queued_diagnosis(self):
         self.plan('CANCELLED', [{'id': 'P1', 'class': 'medium'}])
         env = self.env()

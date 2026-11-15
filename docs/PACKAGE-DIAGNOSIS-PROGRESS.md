@@ -21,6 +21,13 @@ protection. Changed code or decisions allow a fresh diagnosis under the existing
 scope checks. Real product decisions or external prerequisites remain eligible
 for owner questions; exhausted attempts alone are not an owner decision.
 
+The last accepted technical diagnosis stores its own `accepted_scope`, separate
+from the running review's `scope`. Starting or restarting a review must not move
+that comparison baseline. A repair commit therefore permits a new diagnosis
+without being misclassified as an unchanged retry during result collection.
+For older records without this field, the retained accepted report supplies the
+commit; the running review's commit is never used as evidence of a prior grant.
+
 This is an evidence gate, not proof that a model's causal interpretation is
 correct. HQ validates the output file and its novelty; the diagnosis agent must
 evaluate its meaning. Existing bounded protocol correction handles invalid

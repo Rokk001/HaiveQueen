@@ -42,7 +42,13 @@ def unchanged_retry(state, current):
         return True
     # Existing installations have accepted reports but no consumption ledger.
     # Treat these conservatively instead of resetting protection at upgrade.
-    old = state.get('scope', {})
+    old = state.get('accepted_scope')
+    if old is None:
+        # scope belongs to the running review and is overwritten on every start.
+        # The retained report, unlike that scope, identifies the accepted commit.
+        report = state.get('report') or {}
+        old = {'commit': report.get('commit'),
+               'decisions': (state.get('scope') or {}).get('decisions')}
     return bool(state.get('accepted') and old.get('commit') == current['commit']
                 and old.get('decisions') == current['decisions'])
 
@@ -101,6 +107,8 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
         state.update(scope=expected, report=report, accepted=[*accepted, signature],
                      authorization={'class': selected, 'instruction': instruction}
                      if report['kind'] == 'technical' else None)
+        if report['kind'] == 'technical':
+            state['accepted_scope'] = dict(expected)
         runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
     return report
 
