@@ -403,11 +403,17 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
         old = (root / 'active-version').read_text(encoding='utf-8').strip()
         row = start_row(conn, old)
         target = version_layout.version_dir(root, version)
+        repository = updates.repository(config.load_config())
         if not target.exists():
-            target = stage(root, updates.repository(config.load_config()), version)
-        info = release_compat.compatibility(target)
+            target = stage(root, repository, version)
+        if not release_staging.verify_installed(target, repository, version):
+            raise RuntimeError('installed release could not be independently verified')
+        # Byte identity alone does not establish live-process, dependency or
+        # shared-state compatibility, nor exclude a launch during activation.
+        # Until those proofs exist, every release must use the drain gate.
+        info = {'compatible': False, 'reason': release_compat.UNKNOWN_REASON}
         if not info['compatible']:
-            status = release_compat.begin_wait(conn, target, jobs=jobs)
+            status = release_compat.begin_wait(conn, target, jobs=jobs, decision=info)
             while True:
                 status['jobs'] = jobs(conn)
                 status['waiting'] = bool(status['jobs'] or loop_pid())
@@ -449,6 +455,8 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
             if start():
                 recovered[0] = receipt(conn, version_layout.version_dir(root, old_version), began_old,
                                        sleep, poll, timeout, loop_pid=loop_pid)
+        if not release_staging.verify_installed(target, repository, version):
+            raise RuntimeError('installed release changed before activation')
         passed = activate(root, version, first_round, after_rollback=recover_old)
         if passed:
             result, note = 'ok', 'updated to version ' + version

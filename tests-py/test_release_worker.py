@@ -38,6 +38,33 @@ class ReleaseWorkerTests(unittest.TestCase):
     def active(self):
         return (self.root / 'active-version').read_text(encoding='utf-8').strip()
 
+    def test_unproven_positive_release_waits_for_live_job(self):
+        self.metadata(True)
+        live = [True]
+        def jobs(conn):
+            return [{'kind': 'Agent', 'name': 'child'}] if live[0] else []
+        def sleep(_):
+            self.assertEqual(self.active(), '1.0.0')
+            self.assertTrue(loop.stop_flag().exists())
+            status = json.loads(selfupdate.release_status_path().read_text(encoding='utf-8'))
+            self.assertIn('unknown', status['reason'])
+            live[0] = False
+        with mock.patch('haivequeen.release_staging.verify_installed', return_value=True):
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', jobs=jobs, sleep=sleep,
+                loop_pid=lambda: 42 if live[0] else 0, start=lambda: True, receipt=lambda *a, **k: True)
+        self.assertEqual(result['result'], 'ok')
+
+    def test_unverified_or_changed_release_never_activates(self):
+        self.metadata(True)
+        for checks in ([False], [True, False]):
+            with self.subTest(checks=checks), mock.patch('haivequeen.release_staging.verify_installed', side_effect=checks):
+                activate = mock.Mock()
+                result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', jobs=lambda c: [],
+                    loop_pid=lambda: 0, start=lambda: True, activate=activate)
+                self.assertEqual(result['result'], 'failed')
+                self.assertEqual(self.active(), '1.0.0')
+                activate.assert_not_called()
+
     def test_versioned_entry_point_selects_release_worker(self):
         with mock.patch.object(selfupdate, 'run_release_update', return_value={'result': 'ok'}) as run:
             result = selfupdate.run_update(self.conn, live=self.root / 'versions' / '1.0.0', version='2.0.0')

@@ -59,14 +59,14 @@ def running_jobs(conn):
     return jobs
 
 
-def begin_wait(conn, release, jobs=running_jobs):
+def begin_wait(conn, release, jobs=running_jobs, decision=None):
     """Stop new work before collecting blockers for an incompatible release.
 
     The caller persists and refreshes the returned status while it waits and
     must wait for the old core to exit before switching. This function never
     stops running jobs. Compatible releases leave scheduling untouched.
     """
-    info = compatibility(release)
+    info = decision if decision is not None else compatibility(release)
     if info['compatible']:
         return {'waiting': False, 'reason': '', 'jobs': []}
     with loop.hive_schedule_lock(reason='incompatible update'):

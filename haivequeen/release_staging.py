@@ -34,12 +34,19 @@ def resolve_tree(repository, version, fetch):
     return commit, tree, tree_data
 
 
-def verify_installed(directory, repository, version, fetch):
+def _fetch(address):
+    request = Request(address, headers={"User-Agent": "HaiveQueen", "Accept": "application/vnd.github+json"})
+    with urlopen(request, timeout=60) as response:
+        return response.read()
+
+
+def verify_installed(directory, repository, version, fetch=None):
     """Independently re-resolve authority and compare the installed projection.
 
     A true result is only an instant byte comparison; callers cannot infer
     live-process, dependency or shared-state compatibility from it.
     """
+    fetch = fetch or _fetch
     try:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(p in (".", "..") for p in repository.split("/")):
             return False
