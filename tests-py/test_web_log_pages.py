@@ -140,3 +140,16 @@ class WebLogPagesTests(RoundCase):
         self.assertEqual(test_timings.summary(path, 20)['count'], 0)
         action_logs.append(path, '30.0s call tests/test_b.py::test_slow\n')
         self.assertEqual(test_timings.summary(path, 20)['count'], 1)
+
+    def test_external_source_timings_include_unloaded_tail(self):
+        folder = self.wt / 'out'
+        folder.mkdir(exist_ok=True)
+        (folder / 'checks.txt').write_text('noise\n' * 10000 + '25s call tests/test_last.py::test_slow\n', encoding='utf-8')
+        path = action_logs.start('testproj', REL, 'Build')
+        action_logs.append(path, 'see out/checks.txt\n')
+        action_logs.finish(path, 0)
+        console = self.request()
+        result = self.request(run=console['run'], source=console['references'][0]['source'])
+        self.assertNotIn('test_last', result['output'])
+        self.assertEqual(result['test_timings']['count'], 1)
+        self.assertIn('test_last', result['test_timings']['rows'][0]['name'])

@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict');
 const source=require('node:fs').readFileSync(require.resolve('../haivequeen/web-client.js'),'utf8');
-const {LogPager}=require('../haivequeen/web-client.js');
+const {LogPager,testTimingNotice}=require('../haivequeen/web-client.js');
 class Element {
   constructor(tag,text=''){this.tag=tag;this.textContent=text;this.children=[];this.dataset={};this.isConnected=true;this.open=true;this.classList={add(){}};this.scrollTop=0;this.clientHeight=100;this.scrollHeight=100;}
   append(...nodes){this.children.push(...nodes);}
@@ -16,9 +16,9 @@ const nodes={'detail':el('dialog'),'detail-body':el('body')};
 const pending=[],timers=new Map();let timerId=0;
 const client={request(url){return new Promise((resolve,reject)=>pending.push({url,resolve,reject}));}};
 const body=source.slice(source.indexOf('  function showStepLog('),source.indexOf('  function orchestrationView('));
-const show=new Function('el','$','detail','t','client','key','LogPager','setTimeout','clearTimeout',
+const show=new Function('el','$','detail','t','client','key','LogPager','setTimeout','clearTimeout','testTimingNotice','document',
   'let stepLogTimer;'+body+'return showStepLog;')(el,id=>nodes[id],()=>{},x=>x,client,()=>({project:'demo',plan:'plan.md'}),LogPager,
-    fn=>{timers.set(++timerId,fn);return timerId;},id=>timers.delete(id));
+    fn=>{timers.set(++timerId,fn);return timerId;},id=>timers.delete(id),testTimingNotice,{createElement:el});
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const reply=(request,output,cursor,more=false,extra={})=>request.resolve({status:'running',reason:'',run:'run1',source:'',output,cursor,more,references:[],...extra});
 const tick=()=>{const entry=timers.entries().next().value;assert(entry,'poll timer expected');timers.delete(entry[0]);entry[1]();};

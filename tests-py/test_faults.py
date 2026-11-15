@@ -133,15 +133,16 @@ class FaultsTest(RoundCase):
         self.round()
         self.assertEqual(len(self.faults_of("agent_no_result")), 1)
 
-    # Verify no separate triage agent starts for any question.
-    def test_no_triage_agent_for_fault_or_normal_question(self):
-        """The Queen handles plan questions without launching triage agents."""
+    # Internal faults remain outside the plan-question diagnosis workflow.
+    def test_fault_does_not_block_normal_question_diagnosis(self):
+        """A synthetic fault path must not crash the round or suppress a real question."""
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         db.add_question(self.conn, "testproj", faults.FAULT_PLAN, "no_start", "[no_start] x", "", status="triage")
         db.add_question(self.conn, "testproj", REL, "N1", "Which?", "A", status="triage")
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["status"] == "running"]
-        self.assertTrue(all(a["phase"] != "triage" for a in active))
+        self.assertFalse([a for a in active if a["plan_path"] == faults.FAULT_PLAN])
+        self.assertTrue([a for a in active if a["plan_path"] == REL and a["name"].startswith("question-review-")])
 
     # Ensure an answered fault does not start a work agent.
     def test_no_work_agent_for_an_answered_fault_question(self):

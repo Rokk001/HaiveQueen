@@ -586,7 +586,7 @@ function mount(document, bootstrap) {
     function display(){
       if(!latest)return;
       const file=knownSources.get(selected);
-      const timingNotice=testTimingNotice(document,t,pager.text,latest.slow_test_seconds,pager.source?null:latest.test_timings);
+      const timingNotice=testTimingNotice(document,t,pager.text,latest.slow_test_seconds,latest.test_timings);
       timingNotice.open=timings.firstElementChild?.open||false;timings.replaceChildren(timingNotice);
       const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
       const text=([pager.text,!file&&latest.reason&&!pager.text.includes(latest.reason)?latest.reason:''].filter(Boolean).join('\n\n')||t('No log output available yet.'));

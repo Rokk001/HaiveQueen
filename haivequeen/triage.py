@@ -61,10 +61,12 @@ def _scope(env, question):
 def advance(env, free_mb, alive=None):
     """Review undecided agent questions, leaving product choices with the owner."""
     import json
-    from . import agent_process, bees, hives, loop, platform, repair_review, scheduler
+    from . import agent_process, bees, faults, hives, loop, platform, repair_review, scheduler
     conn = env.conn
     for question in runtime.list_questions(conn, env.name, status='triage'):
         plan, qid = question['plan_path'], question['id']
+        if plan == faults.FAULT_PLAN:
+            continue  # Internal operational faults have no plan file or worktree.
         key = 'question-review:' + str(qid)
         state = json.loads(runtime.kv_get(conn, env.name, key) or '{}')
         if state.get('blocked_question'):

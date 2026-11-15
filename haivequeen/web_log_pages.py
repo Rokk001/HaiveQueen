@@ -80,6 +80,7 @@ def response(conn, project, plan, step, record, journal, summary, request):
     references = []
     continuation = ''
     if source:
+        summary = dict(summary, test_timings={'unavailable': True})
         name = _name(scope, source)
         root = web_step_logs.reference_root(conn, project, plan)
         if root is None:
@@ -89,6 +90,9 @@ def response(conn, project, plan, step, record, journal, summary, request):
             raise ValueError('Path outside plan output folder')
         try:
             page = file_page(path, cursor)
+            from . import test_timings
+            summary['test_timings'] = test_timings.file_summary(path, summary['slow_test_seconds'],
+                finished=bool(summary.get('ended_at')))
         except OSError:
             page = {'output': 'Referenced log unavailable: ' + name, 'cursor': cursor or [0, 0], 'more': False}
     else:
