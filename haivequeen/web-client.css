@@ -1098,3 +1098,40 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .question label{display:inline-flex;align-items:center;gap:6px}
 .question [type=checkbox]{width:auto}
 @media(max-width:650px){.question{padding:12px}.question>button{max-width:100%;margin-bottom:8px}.plan-editor .actions{display:flex;flex-wrap:wrap}.plan-editor .actions button{flex:1 1 45%}}
+
+/* Project and plan conversations use real question records, one composer at a time. */
+.editor-view>.questions-messenger{display:grid;grid-template-columns:285px minmax(0,1fr);padding:0;border:1px solid var(--edge);border-radius:12px;overflow:hidden;min-width:0;background:#0b161c}
+.questions-messenger>h2{display:none}
+.messenger-inbox{min-width:0;border-right:1px solid var(--edge);background:#0e1b22}
+.messenger-inbox-head{padding:18px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.messenger-inbox-head h2{font-size:1.05rem;margin:0;flex:1}
+.messenger-count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;padding:2px 7px;border-radius:7px;background:#f4c62d;color:#102027;font-size:.75rem;font-weight:700}
+.messenger-filters{display:flex;flex-wrap:wrap;gap:5px;flex-basis:100%}
+.messenger-filters button{font-size:.75rem;padding:6px 9px;border-radius:20px;background:transparent}
+.messenger-filters button[aria-pressed=true]{background:#f4c62d;color:#102027;border-color:#f4c62d}
+.messenger-project{padding:0 8px 12px;border:0;border-radius:0;background:transparent}
+.messenger-project h3{font-size:.75rem;color:#a7bac3;overflow-wrap:anywhere;margin:6px 7px}
+.messenger-thread{display:grid;gap:6px;width:100%;min-width:0;text-align:left;padding:12px 10px;margin:3px 0;background:transparent;border:1px solid transparent;border-radius:9px;white-space:normal}
+.messenger-thread[aria-pressed=true]{background:#302c19;border-color:#716021}
+.messenger-thread-title{display:flex;gap:8px;justify-content:space-between;align-items:center;min-width:0}
+.messenger-thread-title strong{font-size:.9rem;overflow-wrap:anywhere}
+.messenger-preview{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#a7bac3;font-size:.78rem}
+.messenger-thread small{font-size:.72rem;color:#c4b77e}
+.messenger-conversation{min-width:0;display:flex;flex-direction:column}
+.messenger-chat-head{display:flex;gap:12px;justify-content:space-between;align-items:center;padding:16px 20px;background:#102027;border-bottom:1px solid var(--edge)}
+.messenger-chat-head>div{min-width:0;flex:1}.messenger-chat-head h2{font-size:1.1rem;overflow-wrap:anywhere;margin:3px 0}.messenger-chat-head small{color:#a7bac3}.messenger-chat-head button{flex-shrink:0}
+.messenger-chat-body{padding:16px 20px;min-width:0;display:grid;gap:12px;align-content:start}
+.messenger-history{border:1px solid var(--edge);padding:9px 12px;border-radius:8px}.messenger-history>summary{font-size:.82rem;color:#b9c9d0;cursor:pointer}
+.messenger-timeline{display:grid;gap:12px;margin-top:12px;max-height:38vh;overflow:auto;padding:5px;scrollbar-width:thin}
+.messenger-message{max-width:90%;border:1px solid var(--edge);border-radius:2px 12px 12px 12px;padding:10px 12px;background:#15252d;min-width:0}
+.messenger-message p{margin:5px 0;white-space:pre-wrap;overflow-wrap:anywhere}.messenger-message small{color:#a7bac3;font-size:.72rem}.messenger-message pre{white-space:pre-wrap;overflow-wrap:anywhere}.messenger-message details{font-size:.8rem;margin-top:8px}
+.messenger-answer{margin-left:auto;background:#302c19;border-radius:12px 2px 12px 12px}
+.messenger-pending{display:grid;gap:7px}.messenger-pending label{font-size:.8rem;color:#a7bac3}.messenger-pending select{width:100%;min-width:0;max-width:100%}
+.messenger-request{border:1px solid var(--edge);border-left:3px solid #f4c62d;border-radius:9px;padding:14px;background:#102027}
+.messenger-request h3{font-size:.8rem;color:#a7bac3;margin:7px 0}.messenger-request .question-summary{font-size:.95rem;line-height:1.5;margin:10px 0}.messenger-request .dim{font-size:.78rem}.messenger-request>textarea{min-height:75px;max-height:180px;margin:8px 0}.messenger-request>button{margin:5px 6px 0 0}.messenger-request>details{margin:8px 0;padding:7px;font-size:.8rem}
+.messenger-empty{padding:16px;color:#a7bac3;line-height:1.5}.messenger-back{display:none}
+.plan-message-button{white-space:normal;text-align:left;min-width:115px}.plan-message-button.needs-you{background:#302c19;color:#f4c62d;border-color:#716021}
+@media(max-width:1000px){.editor-view>.questions-messenger{grid-template-columns:245px minmax(0,1fr)}.messenger-chat-head,.messenger-chat-body{padding:14px}}
+@media(max-width:700px){.editor-view>.questions-messenger{display:block}.questions-messenger .messenger-conversation{display:none}.questions-messenger[data-mobile-chat=true] .messenger-inbox{display:none}.questions-messenger[data-mobile-chat=true] .messenger-conversation{display:flex}.messenger-inbox{border:0}.messenger-back{display:block;font-size:.75rem}.messenger-chat-head{flex-wrap:wrap}.messenger-chat-head>div{flex-basis:60%}.messenger-thread{padding:13px}.messenger-message{max-width:94%}.messenger-request{padding:10px}.messenger-request label{font-size:.8rem}.messenger-timeline{max-height:30vh}}
+
+.messenger-decision-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.messenger-decision-actions .messenger-primary{background:#f4c62d;color:#102027;border-color:#f4c62d;font-weight:700}.messenger-request details input:not([type=checkbox]){width:100%;box-sizing:border-box;margin:8px 0}

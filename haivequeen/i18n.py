@@ -967,3 +967,23 @@ GERMAN.update({'Release readiness gate': 'Bereitschaftsprüfung freigeben',
 GERMAN.update({'Integrated commit':'Integrierter Commit','Steps that ran':'Ausgef\u00fchrte Schritte','Accepted':'Angenommen'})
 
 GERMAN['Unsaved changes'] = 'Ungespeicherte Änderungen'
+
+GERMAN.update({'Messages': 'Nachrichten',
+ 'pending': 'offen',
+ 'Conversation': 'Unterhaltung',
+ 'Needs you': 'Braucht dich',
+ 'All': 'Alle',
+ 'Recorded history': 'Gespeicherter Verlauf',
+ 'No recorded questions.': 'Keine gespeicherten Fragen.',
+ 'No questions need your answer.': 'Keine Fragen brauchen deine Antwort.',
+ 'No conversations match this filter.': 'Keine Unterhaltungen passen zu diesem Filter.',
+ 'Choose a plan conversation.': 'Eine Planunterhaltung auswählen.',
+ 'All conversations': 'Alle Unterhaltungen',
+ 'Recorded questions and answers': 'Gespeicherte Fragen und Antworten',
+ 'Latest saved note': 'Zuletzt gespeicherte Notiz',
+ 'Full text': 'Vollständiger Text',
+ 'Choose the question to answer': 'Frage zum Beantworten auswählen',
+ 'Answer options': 'Antwortoptionen',
+ 'Specific packages': 'Bestimmte Pakete',
+ 'Request changes': 'Nachbesserung anfordern',
+ 'Latest recorded answer': 'Zuletzt gespeicherte Antwort'})

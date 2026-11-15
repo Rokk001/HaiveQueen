@@ -225,3 +225,30 @@ remain separate confirmed actions; rejection optionally identifies packages for
 rework, with an empty package list rejecting the overall result. The plan action
 **Release readiness gate** explicitly overrides the readiness check; it does not
 publish a software release. Existing owner command semantics remain unchanged.
+
+
+### Project and plan conversations
+
+Questions is a messenger-style master/detail view using the existing question
+records. The left side groups plans by project, showing pending counts and a
+preview. **Needs you**, **All**, and **Completed** filter the conversation list;
+Completed means every recorded question in that conversation is answered, not that
+the plan itself is DONE. Each conversation shows its real project, plan title and
+latest recorded answer where available. A compact expandable timeline orders the
+recorded questions and current answers by timestamp. Acceptance notes expose only
+the latest stored note; the interface does not imply a complete note history.
+
+One pending question at a time has a composer. A selector lists all pending questions
+of the selected plan, preserving independent answer drafts when switching. Full
+reports, recommendations and evidence remain expandable, project-wide scope is
+under **Answer options**, and optional rejected package selection is under
+**Specific packages**. **Request changes** uses the existing owner rejection action;
+**Accept** and **Save note** retain their distinct semantics. Records not open are
+read-only. There is no invented agent dialogue or free-message backend.
+
+The Plans table has a visible **Messages** column. Its pending count and acceptance
+label open the same conversation as Questions; plans without pending questions
+can open their recorded history. Questions and Plans share the existing
+`questions?history=1` response. The plan link is offered only when that plan exists
+in the current plan list. On narrow screens, selecting a thread replaces the list
+with the conversation; **All conversations** returns to the list.

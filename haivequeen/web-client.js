@@ -470,7 +470,7 @@ function mount(document, bootstrap) {
   const renderGate=new RenderGate(()=>renderStateNow(client.state));
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
   const questionDrafts=new Map();
-  let questionFilter='open', questionFocus=null, questionNavigation=false, planDraft=null;
+  let questionFilter='open', questionFocus=null, questionNavigation=false, selectedThread=null, conversationMobile=false, planDraft=null;
   let releaseProject='', releaseData=null, releaseError='', releaseRequest=0;
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
   let lastAutomaticCheck=0, automaticChecking=false;
@@ -714,6 +714,7 @@ function mount(document, bootstrap) {
     for(const [index,row] of rows.entries()){const tr=el(options.tree?'div':'tr');tr.dataset.kind=row.kind||'';for(const key of columns){const td=el(options.tree?'div':'td');td.dataset.column=key;td.dataset.label=t(options.labels?.[key]||pretty(key));
       if(options.tree && !options.hierarchy && ['model','ctx','tokens'].includes(key)){}
       else if(options.tree && key==='task' && !options.hierarchy)td.append(planProgress(row));
+      else if(key==='messages')td.append(planMessageButton(row));
       else if(key==='number')td.append(el('span',index+1));
       else if(options.hierarchy && isPackagePlaceholder(row) && key==='name'){
         const label=filterLink(t('Package'),'plan',row);label.prepend(el('span','└ ','tree-branch'));
@@ -1197,7 +1198,17 @@ function mount(document, bootstrap) {
     }
   }
   function showQuestion(question) {
-    questionFocus=Number(question.id);questionNavigation=true;questionFilter='open';$('detail').close();void selectTab('Questions');
+    openConversation(question.project,question.plan_path,Number(question.id));
+  }
+  function openConversation(project,plan,id=null) {
+    selectedThread=JSON.stringify([project,plan||'']);questionFocus=id;questionNavigation=true;questionFilter='all';conversationMobile=true;
+    $('detail').close();void selectTab('Questions');
+  }
+  function planMessageButton(row) {
+    const thread=questionThreads(questions,[row]).find(item=>item.project===(row.project||row.apiary)&&item.plan===(row.plan_path||''));
+    const pending=thread?.pending||[];
+    const label=pending.length?pending.length+' '+t('pending')+(pending.some(q=>questionKind(q)==='Acceptance')?' · '+t('Acceptance'):''):t('Conversation');
+    const node=button(label,()=>openConversation(row.project||row.apiary,row.plan_path));node.className='plan-message-button'+(pending.length?' needs-you':'');node.setAttribute('aria-label',t('Messages')+' · '+row.name+' · '+label);return node;
   }
   async function openPlanEditor(row=null,result=null,fresh=false) {
     const replacing=fresh || (row && planDraft && (planDraft.plan!==row.plan_path || planDraft.project!==(row.apiary||row.project)));
@@ -1227,7 +1238,7 @@ function mount(document, bootstrap) {
     controls.append(save,submit);form.append(el('label',t('Project')),project,hint,el('label',t('Plan file')),filename,imported,content,controls,status);
   }
   function renderPlans() {
-    const box=section('Plans');box.append(button('New plan',()=>openPlanEditor(null,null,true)));if(planDraft)box.append(button('Continue draft',()=>openPlanEditor()));box.append(table(plans.map(row=>({...row,started:t(row.has_hive?'yes':'no')})),['apiary','name','status','started','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));
+    const box=section('Plans');box.append(button('New plan',()=>openPlanEditor(null,null,true)));if(planDraft)box.append(button('Continue draft',()=>openPlanEditor()));box.append(table(plans.map(row=>({...row,started:t(row.has_hive?'yes':'no')})),['apiary','name','status','messages','started','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));
   }
   function questionKind(question) {
     if(question.kind==='acceptance' || question.item==='owner-check' || String(question.item).startsWith('owner-check-'))return 'Acceptance';
@@ -1236,17 +1247,30 @@ function mount(document, bootstrap) {
   function questionAnswered(question) {
     return question.status?question.status==='answered':!!question.answered_at;
   }
-  function renderQuestions() {
-    const box=section('Questions'),filters=el('div',undefined,'actions');
-    for(const [value,label] of [['open','Open'],['answered','Answered history']]){const control=button(label,()=>{questionFilter=value;questionFocus=null;renderQuestionsPage();});control.setAttribute('aria-pressed',String(questionFilter===value));filters.append(control);}box.append(filters);
-    if(questionFocus)box.append(button('Show all questions',()=>{questionFocus=null;renderQuestionsPage();}));
-    const visible=questions.filter(q=>(questionFilter==='answered')===questionAnswered(q)&&(!questionFocus||Number(q.id)===questionFocus));
-    if(!visible.length)box.append(el('p',t(questionFilter==='open'?'none open':'No answered questions yet.')));
-    for(const question of visible){
+  function questionThreads(items,planRows) {
+    const groups=new Map();
+    function ensure(project,plan,name='',status=''){
+      const id=JSON.stringify([project,plan||'']);
+      if(!groups.has(id))groups.set(id,{id,project,plan:plan||'',name:name||String(plan||'').split(/[\\/]/).pop().replace(/\.md$/i,'')||project,status,questions:[],pending:[]});
+      return groups.get(id);
+    }
+    for(const row of planRows)ensure(row.project||row.apiary,row.plan_path,row.name,row.status);
+    for(const question of items){const thread=ensure(question.project,question.plan_path);thread.questions.push(question);if(!question.status||question.status==='open')thread.pending.push(question);}
+    return [...groups.values()].sort((a,b)=>a.project.localeCompare(b.project)||a.name.localeCompare(b.name));
+  }
+  function questionTimeline(items) {
+    const events=[];
+    for(const question of items){
+      events.push({question,type:'question',at:question.created_at||'',text:String(question.text||question.question||question.item||'')});
+      if(question.answer)events.push({question,type:'answer',at:question.answered_at||question.created_at||'',text:question.answer});
+    }
+    return events.sort((a,b)=>a.at.localeCompare(b.at)||Number(a.question.id)-Number(b.question.id)||(a.type==='question'?-1:1));
+  }
+  function questionCard(question) {
       const answered=questionAnswered(question),kind=questionKind(question),check=kind==='Acceptance';
       const card=el('article',undefined,'card question');card.dataset.question=question.id;card.tabIndex=-1;card.setAttribute('aria-label',t(kind)+' #'+question.id+' '+question.project);
-      card.append(el('small',t(kind)+' · '+t(answered?'Answered':'Open')),el('h3','#'+question.id+' · '+question.project),el('small',question.created_at||''));
-      if(question.plan_path)card.append(button('Plan · '+question.plan_path,()=>openQueuedPlan({project:question.project,plan_path:question.plan_path})));
+      card.append(el('small',t(kind)+' #'+question.id+' · '+t(answered?'Answered':'Needs you')));
+
       const message=String(question.text||question.question||question.item||'');
       const lines=message.split(/\r?\n/),brief=lines.find(line=>line.trim())||message;
       card.append(el('p',brief.slice(0,320)+(brief.length>320?'…':''),'question-summary'));
@@ -1264,21 +1288,75 @@ function mount(document, bootstrap) {
       card.append(el('p',t(answered?'This entry is preserved as history.':check?'Review the result. Save note records feedback; only Accept or Reject decides the outcome.':'Your answer is recorded for the plan so work can continue.'),'dim'));
       if(question.evidence && Object.values(question.evidence).some(value=>Array.isArray(value)?value.length:!!value)){const evidence=el('details');evidence.append(el('summary',t('Context and evidence')),valueView(question.evidence));card.append(evidence);}
       if(question.recommendation){const recommendation=el('details');recommendation.append(el('summary',t('Recommendation')),el('pre',question.recommendation));card.append(recommendation);}
-      if(!answered && question.answer)card.append(el('h4',t('Saved note')),el('pre',question.answer));
-      if(answered){card.append(el('h4',t('Answer')),el('pre',question.answer||'–'),el('small',[question.answered_at,question.answered_by].filter(Boolean).join(' · ')));box.append(card);continue;}
+      if(!answered && question.answer){const note=el('details');note.append(el('summary',t('Latest saved note')),el('pre',question.answer));card.append(note);}
+      if(answered){card.append(el('h4',t('Answer')),el('pre',question.answer||'–'),el('small',[question.answered_at,question.answered_by].filter(Boolean).join(' · ')));return card;}
       const draft=questionDrafts.get(Number(question.id))||{text:'',checked:false,packages:''};questionDrafts.set(Number(question.id),draft);
       const answer=el('textarea');answer.value=draft.text;answer.setAttribute('aria-label',t(check?'Note or acceptance feedback':'Answer'));answer.oninput=()=>{draft.text=answer.value;};card.append(answer);
       if(question.recommendation)card.append(button('Use recommendation',()=>{answer.value=question.recommendation;draft.text=answer.value;}));
-      const apiary=el('input');apiary.type='checkbox';apiary.checked=draft.checked;apiary.onchange=()=>{draft.checked=apiary.checked;};const label=el('label',t('Apply answer to the whole project'));label.prepend(apiary);if(!check)card.append(label,el('p',t('Unchecked: this plan only. Checked: store a project decision for future work.'),'dim'));
+      const apiary=el('input');apiary.type='checkbox';apiary.checked=draft.checked;apiary.onchange=()=>{draft.checked=apiary.checked;};const label=el('label',t('Apply answer to the whole project'));label.prepend(apiary);if(!check){const options=el('details');options.append(el('summary',t('Answer options')),label,el('p',t('Unchecked: this plan only. Checked: store a project decision for future work.'),'dim'));card.append(options);}
       card.append(button(check?'Save note':'Answer',async()=>{const sent=answer.value;const result=await act('questions/answer',{id:question.id,text:sent,apiary:apiary.checked});if(result && draft.text===sent){draft.text='';answer.value='';}}));
       if(check){
-        const packages=el('input');packages.value=draft.packages;packages.placeholder=t('Rejected packages (comma separated)');packages.setAttribute('aria-label',t('Rejected packages (comma separated)'));packages.oninput=()=>{draft.packages=packages.value;};card.append(packages);
-        const packageList=el('div',undefined,'question-packages');for(const name of question.packages||[]){const label=el('label',name),toggle=el('input');toggle.type='checkbox';toggle.dataset.package=name;toggle.checked=draft.packages.split(',').map(x=>x.trim()).includes(name);toggle.onchange=()=>{const selected=new Set(packages.value.split(',').map(x=>x.trim()).filter(Boolean));if(toggle.checked)selected.add(name);else selected.delete(name);packages.value=[...selected].join(', ');draft.packages=packages.value;};label.prepend(toggle);packageList.append(label);}card.append(packageList,el('p',t('Select the packages needing rework. Leave empty to reject the overall result.'),'dim'));
-        card.append(button('Accept',()=>act('owner/accept',{...key(question),text:answer.value},t('Accept the plan result?'))),button('Reject',()=>act('owner/reject',{...key(question),text:answer.value,packages:packages.value.split(',').map(x=>x.trim()).filter(Boolean)},t('Reject the result and request rework?'))));
+        const packages=el('input');packages.value=draft.packages;packages.placeholder=t('Rejected packages (comma separated)');packages.setAttribute('aria-label',t('Rejected packages (comma separated)'));packages.oninput=()=>{draft.packages=packages.value;};const specific=el('details');specific.append(el('summary',t('Specific packages')),packages);card.append(specific);
+        const packageList=el('div',undefined,'question-packages');for(const name of question.packages||[]){const label=el('label',name),toggle=el('input');toggle.type='checkbox';toggle.dataset.package=name;toggle.checked=draft.packages.split(',').map(x=>x.trim()).includes(name);toggle.onchange=()=>{const selected=new Set(packages.value.split(',').map(x=>x.trim()).filter(Boolean));if(toggle.checked)selected.add(name);else selected.delete(name);packages.value=[...selected].join(', ');draft.packages=packages.value;};label.prepend(toggle);packageList.append(label);}specific.append(packageList,el('p',t('Select the packages needing rework. Leave empty to reject the overall result.'),'dim'));
+        const actions=el('div',undefined,'messenger-decision-actions'),accept=button('Accept',()=>act('owner/accept',{...key(question),text:answer.value},t('Accept the plan result?')));accept.className='messenger-primary';actions.append(accept,button('Request changes',()=>act('owner/reject',{...key(question),text:answer.value,packages:packages.value.split(',').map(x=>x.trim()).filter(Boolean)},t('Reject the result and request rework?'))));card.append(actions);
       }
-      box.append(card);
-      if(questionNavigation && Number(question.id)===questionFocus){questionNavigation=false;card.focus({preventScroll:true});card.scrollIntoView({block:'start'});}
+      return card;
+  }
+  function renderQuestions() {
+    const box=section('Questions');box.className='questions-messenger';box.dataset.mobileChat=String(conversationMobile);
+    const threads=questionThreads(questions,plans),shown=threads.filter(thread=>questionFilter==='all'||(questionFilter==='open'?thread.pending.length:thread.questions.length&&!thread.pending.length&&thread.questions.every(questionAnswered)));
+    if(!selectedThread && shown.length)selectedThread=shown[0].id;
+    const selected=shown.find(thread=>thread.id===selectedThread)||shown[0];if(selected)selectedThread=selected.id;
+    const inbox=el('aside',undefined,'messenger-inbox'),heading=el('div',undefined,'messenger-inbox-head');
+    heading.append(el('h2',t('Questions')),el('span',questions.filter(q=>!q.status||q.status==='open').length+' '+t('pending'),'messenger-count'));
+    const filters=el('div',undefined,'messenger-filters');
+    for(const [value,label] of [['open','Needs you'],['all','All'],['answered','Completed']]){const control=button(label,()=>{questionFilter=value;selectedThread=null;conversationMobile=false;renderQuestionsPage();});control.setAttribute('aria-pressed',String(questionFilter===value));filters.append(control);}heading.append(filters);inbox.append(heading);
+    for(const project of [...new Set(shown.map(thread=>thread.project))]){
+      const group=el('section',undefined,'messenger-project'),projectCount=shown.filter(thread=>thread.project===project).reduce((sum,thread)=>sum+thread.pending.length,0);
+      group.append(el('h3',project+' · '+projectCount+' '+t('pending')));
+      for(const thread of shown.filter(thread=>thread.project===project)){
+        const target=thread.pending[0]||thread.questions.at(-1),preview=String(target?.text||target?.question||target?.item||'').split(/\r?\n/).find(line=>line.trim())||t('No recorded questions.');
+        const row=button('',()=>openConversation(thread.project,thread.plan));row.className='messenger-thread';row.setAttribute('aria-pressed',String(thread.id===selectedThread));row.setAttribute('aria-label',thread.name+' · '+thread.pending.length+' '+t('pending'));
+        const title=el('span',undefined,'messenger-thread-title');title.append(el('strong',thread.name));if(thread.pending.length)title.append(el('span',thread.pending.length,'messenger-count'));
+        row.append(title,el('span',preview,'messenger-preview'),el('small',thread.pending.length?t(questionKind(thread.pending[0]))+' · '+t('Needs you'):t(thread.status||'Recorded history')));group.append(row);
+      }
+      inbox.append(group);
     }
+    if(!shown.length)inbox.append(el('p',t(questionFilter==='open'?'No questions need your answer.':'No conversations match this filter.'),'messenger-empty'));
+    const conversation=el('div',undefined,'messenger-conversation');box.append(inbox,conversation);
+    if(!selected){conversation.append(el('p',t('Choose a plan conversation.'),'messenger-empty'));return;}
+    const head=el('header',undefined,'messenger-chat-head'),title=el('h2',selected.name);title.tabIndex=-1;title.id='conversation-title';
+    const back=button('All conversations',()=>{conversationMobile=false;renderQuestionsPage();});back.className='messenger-back';
+    const identity=el('div');identity.append(el('small',selected.project),title);head.append(back,identity);
+    if(plans.some(row=>(row.project||row.apiary)===selected.project&&row.plan_path===selected.plan))head.append(button('Plan',()=>openQueuedPlan({project:selected.project,plan_path:selected.plan})));conversation.append(head);
+    const active=selected.pending.find(question=>Number(question.id)===questionFocus)||selected.pending[0];
+    if(active)questionFocus=Number(active.id);
+    const body=el('div',undefined,'messenger-chat-body');conversation.append(body);
+    const history=el('details',undefined,'messenger-history');history.append(el('summary',t('Recorded questions and answers')+' · '+selected.questions.length));
+    const timeline=el('div',undefined,'messenger-timeline');
+    for(const event of questionTimeline(selected.questions)){
+      const bubble=el('article',undefined,'messenger-message '+(event.type==='answer'?'messenger-answer':''));
+      const label=event.type==='answer'?(questionKind(event.question)==='Acceptance'&&!questionAnswered(event.question)?t('Latest saved note'):t('Answer')):t(questionKind(event.question))+' #'+event.question.id;
+      bubble.append(el('small',[label,event.type==='answer'?event.question.answered_by:'',event.at].filter(Boolean).join(' · ')));
+      const preview=event.text.split(/\r?\n/).find(line=>line.trim())||event.text;bubble.append(el('p',preview.slice(0,240)+(preview.length>240?'…':'')));
+      if(event.text!==preview||preview.length>240){const full=el('details');full.append(el('summary',t('Full text')),el('pre',event.text));bubble.append(full);}
+      if(event.type==='question' && event.question.evidence){const evidence=el('details');evidence.append(el('summary',t('Context and evidence')),valueView(event.question.evidence));bubble.append(evidence);}
+      if(event.type==='question' && event.question.recommendation){const recommendation=el('details');recommendation.append(el('summary',t('Recommendation')),el('pre',event.question.recommendation));bubble.append(recommendation);}
+      if(event.type==='answer' && event.question.owner_check_result)bubble.append(el('strong',t(event.question.owner_check_result==='accepted'?'Accepted':'Rejected')));
+      timeline.append(bubble);
+    }
+    history.append(timeline);if(selected.questions.length)body.append(history);
+    const latestAnswer=questionTimeline(selected.questions).filter(event=>event.type==='answer').at(-1);
+    if(latestAnswer){const latest=el('div',undefined,'messenger-message messenger-answer'),preview=String(latestAnswer.text).split(/\r?\n/).find(line=>line.trim())||'';latest.append(el('small',t(questionKind(latestAnswer.question)==='Acceptance'&&!questionAnswered(latestAnswer.question)?'Latest saved note':'Latest recorded answer')+' · '+(latestAnswer.question.answered_by||'')+' · '+latestAnswer.at),el('p',preview.slice(0,240)+(preview.length>240?'…':'')));body.append(latest);}
+
+    if(active){
+      const pending=el('div',undefined,'messenger-pending');pending.append(el('label',selected.pending.length+' '+t('pending')+' · '+t('Choose the question to answer')));
+      const choose=el('select');choose.setAttribute('aria-label',t('Choose the question to answer'));
+      for(const question of selected.pending){const option=el('option','#'+question.id+' · '+t(questionKind(question))+' · '+String(question.text||question.question||question.item||'').split(/\r?\n/)[0].slice(0,100));option.value=question.id;choose.append(option);}choose.value=active.id;
+      choose.onchange=()=>{questionFocus=Number(choose.value);questionNavigation=true;renderQuestionsPage();};pending.append(choose);body.append(pending);
+      const card=questionCard(active);card.className='question messenger-request';body.append(card);
+    }else body.append(el('p',t(selected.questions.length?'No open questions for this plan.':'No recorded questions.'),'messenger-empty'));
+    if(questionNavigation){questionNavigation=false;title.focus({preventScroll:true});head.scrollIntoView({block:'start'});}
   }
   function renderQuestionsPage(){view.replaceChildren();renderQuestions();}
   function renderUpdates() {
@@ -1718,9 +1796,9 @@ function mount(document, bootstrap) {
   }
   async function refreshLists() {
     const tasks=[];
-    if(tab==='Plans'&&!planLoading){planLoading=true;tasks.push(client.request('plans').then(value=>{plans=value;if(tab==='Plans')render();}).finally(()=>planLoading=false));}
-    if(tab==='Questions'&&!questionLoading){questionLoading=true;tasks.push(client.request('questions?history=1').then(value=>{
-      if(JSON.stringify(questions)!==JSON.stringify(value)){questions=value;if(tab==='Questions')render();}
+    if(['Plans','Questions'].includes(tab)&&!planLoading){planLoading=true;tasks.push(client.request('plans').then(value=>{if(JSON.stringify(plans)!==JSON.stringify(value)){plans=value;if(['Plans','Questions'].includes(tab))render();}}).finally(()=>planLoading=false));}
+    if(['Questions','Plans'].includes(tab)&&!questionLoading){questionLoading=true;tasks.push(client.request('questions?history=1').then(value=>{
+      if(JSON.stringify(questions)!==JSON.stringify(value)){questions=value;if(['Questions','Plans'].includes(tab))render();}
     }).finally(()=>questionLoading=false));}
     if(tab==='Providers'&&!providerLoading){providerLoading=true;tasks.push(client.request('providers').then(value=>{if(JSON.stringify(value)!==JSON.stringify(providerStates)){providerStates=value;if(tab==='Providers'&&!editor?.dirty)render();}}).finally(()=>providerLoading=false));}
     if(tab==='Dashboard'&&!updateLoading){updateLoading=true;tasks.push(client.request('updates').then(value=>{updateState=value;renderUpdates();}).finally(()=>updateLoading=false));}

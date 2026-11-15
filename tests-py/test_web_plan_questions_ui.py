@@ -15,6 +15,12 @@ class PlanQuestionsUITests(unittest.TestCase):
         result = subprocess.run(['node', str(script)], capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    @unittest.skipUnless(shutil.which('node'), 'Node required for UI regression')
+    def test_questions_messenger(self):
+        script = Path(__file__).with_name('web_questions_messenger_test.cjs')
+        result = subprocess.run(['node', str(script)], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_assets_are_utf8(self):
         for name in ('web-client.js', 'web-client.css', 'i18n.py'):
             (ROOT / 'haivequeen' / name).read_text(encoding='utf-8')

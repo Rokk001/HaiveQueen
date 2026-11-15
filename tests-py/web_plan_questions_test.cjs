@@ -38,19 +38,19 @@ const actions=[],requests=[],dialog=el('div'),view=el('div'),drafts=new Map();le
 let saveFails=false,allowDiscard=true,confirmations=0;
 const client={state:{projects:[{name:'Demo',plan_globs:['docs/plans/*.md'],suggested_plan_folder:'docs/plans'},{name:'Other',plan_globs:['plans/*.md'],suggested_plan_folder:'plans'}]},notice:()=>{},action:async(route,data)=>{requests.push([route,data]);if(saveFails)return null;return {plan:'docs/plans/new-PLAN.md',revision:'r1'};}};
 const setup=new Function('el','button','t','client','view','questionDrafts','$','detail','section','act','key','valueView','openQueuedPlan','selectTab','refreshLists','requestConfirm',
- "let planDraft=null,questionFilter='open',questionFocus=null,questionNavigation=false,questions=[],plans=[];"+body+"return {openPlanEditor,renderQuestions,showQuestion,setQuestions:value=>questions=value,setFilter:value=>{questionFilter=value;questionFocus=null;}};");
+ "let planDraft=null,questionFilter='open',questionFocus=null,questionNavigation=false,selectedThread=null,conversationMobile=false,questions=[],plans=[];"+body+"return {openPlanEditor,renderQuestions,showQuestion,planMessageButton,getThread:()=>selectedThread,setPlans:value=>plans=value,setQuestions:value=>questions=value,setFilter:value=>{questionFilter=value;questionFocus=null;selectedThread=null;}};");
 const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section=el('section');return section;},async(route,data)=>{actions.push([route,data]);return {ok:true};},q=>({project:q.project,plan:q.plan_path}),value=>el('pre',JSON.stringify(value)),()=>{},()=>{},()=>{},async()=>{confirmations++;return allowDiscard;});
 (async()=>{
  api.setQuestions([{id:1,item:'owner-check',status:'open',answer:'Previous note',answered_at:'today',project:'Demo',plan_path:'p.md',question:'Review result\n\nReport: still pending',packages:['P1','P2']}]);api.renderQuestions();
- assert(!all(section,'ARTICLE')[0].scrolled,'Background render must not move the viewport');
- api.showQuestion({id:1});api.renderQuestions();assert(all(section,'ARTICLE')[0].focused);assert(all(section,'ARTICLE')[0].scrolled,'Explicit question navigation scrolls to the target');
- api.renderQuestions();assert(!all(section,'ARTICLE')[0].scrolled,'Polling after navigation must not repeat scrolling');
+ assert(!all(section,'HEADER')[0].scrolled,'Background render must not move the viewport');
+ api.showQuestion({id:1});api.renderQuestions();assert(all(section,'H2').some(node=>node.focused));assert(all(section,'HEADER')[0].scrolled,'Explicit question navigation scrolls to the target');
+ api.renderQuestions();assert(!all(section,'HEADER')[0].scrolled,'Polling after navigation must not repeat scrolling');
  assert(content(section).includes('Previous note'));assert(content(section).includes('Report: still pending'));
  assert(!content(section).includes('Apply answer to the whole project'),'Scope is ignored for acceptance notes so must not be offered');
  const answer=all(section,'TEXTAREA')[0];answer.value='Check P2';answer.oninput();
  const packages=all(section,'INPUT').find(node=>node.attrs['aria-label']==='Rejected packages (comma separated)');packages.value='P2';packages.oninput();
  api.renderQuestions();assert.equal(all(section,'TEXTAREA')[0].value,'Check P2');assert.equal(all(section,'INPUT').find(node=>node.attrs['aria-label']==='Rejected packages (comma separated)').value,'P2');
- await all(section,'BUTTON').find(node=>node.textContent==='Reject').onclick();assert.deepEqual(actions.pop(),['owner/reject',{project:'Demo',plan:'p.md',text:'Check P2',packages:['P2']}]);
+ await all(section,'BUTTON').find(node=>node.textContent==='Request changes').onclick();assert.deepEqual(actions.pop(),['owner/reject',{project:'Demo',plan:'p.md',text:'Check P2',packages:['P2']}]);
  api.setQuestions([{id:2,status:'answered',answer:'Approved option B',answered_at:'today',project:'Demo',question:'Choose'}]);api.setFilter('answered');api.renderQuestions();assert(content(section).includes('Approved option B'));assert.equal(all(section,'TEXTAREA').length,0);
  await api.openPlanEditor();assert(all(dialog,'H2').some(node=>node.id==='detail-title'),'Editor dialog must retain its accessible title');const projectSelect=all(dialog,'SELECT')[0],filename=all(dialog,'INPUT').find(node=>node.attrs['aria-label']==='Plan file');
  projectSelect.value='Other';projectSelect.onchange();assert.equal(filename.value,'plans/new-PLAN.md','Automatic path follows selected project');
@@ -68,5 +68,15 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  saveFails=false;await all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();assert.equal(requests.at(-1)[0],'plans/save');assert.equal(requests.at(-1)[1].revision,'old');
  await api.openPlanEditor();assert.equal(all(dialog,'TEXTAREA')[0].value,'# Imported\n\nRequirement','Closing and reopening preserves draft');
  const previousConfirmations=confirmations;await api.openPlanEditor(null,null,true);assert.equal(all(dialog,'TEXTAREA')[0].value,'','A saved draft does not prevent creating another plan');assert.equal(confirmations,previousConfirmations,'Saved draft needs no discard confirmation');
+ api.setPlans([{apiary:'Demo',plan_path:'multi.md',name:'Readable plan title',status:'WAITING'}]);
+ api.setQuestions([{id:10,status:'open',project:'Demo',plan_path:'multi.md',question:'First pending'},{id:11,status:'open',project:'Demo',plan_path:'multi.md',question:'Second pending'},{id:12,status:'answered',project:'Other',plan_path:'done.md',question:'Finished question',answer:'Recorded response'}]);
+ api.showQuestion({id:10,project:'Demo',plan_path:'multi.md'});api.renderQuestions();
+ assert.equal(all(section,'TEXTAREA').length,1,'Messenger must mount only one actionable composer');
+ assert(content(section).includes('Readable plan title'));const chooser=all(section,'SELECT')[0];assert.equal(chooser.children.length,2);chooser.value='11';chooser.onchange();assert.equal(all(section,'TEXTAREA').length,1);assert(content(section).includes('Second pending'));
+ const selectedDraft=all(section,'TEXTAREA')[0];selectedDraft.value='Preserved second answer';selectedDraft.oninput();
+ api.planMessageButton({apiary:'Demo',plan_path:'multi.md',name:'Readable plan title'}).onclick();api.renderQuestions();assert.equal(api.getThread(),JSON.stringify(['Demo','multi.md']),'Plan messages route to same real conversation');
+ const chooserAgain=all(section,'SELECT')[0];chooserAgain.value='11';chooserAgain.onchange();assert.equal(all(section,'TEXTAREA')[0].value,'Preserved second answer');
+ all(section,'BUTTON').find(node=>node.textContent==='Completed').onclick();assert(!content(section).includes('First pending'),'Completed filter must not retain an invisible pending conversation');assert(content(section).includes('Recorded response'));assert.equal(all(section,'TEXTAREA').length,0);
+ all(section,'BUTTON').find(node=>node.textContent==='All conversations').onclick();assert.equal(section.dataset.mobileChat,'false','Mobile back returns to the conversation list');
  console.log('Question draft, history, acceptance and plan editor behavior passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
