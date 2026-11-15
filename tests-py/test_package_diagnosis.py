@@ -189,6 +189,54 @@ class PackageDiagnosis(RoundCase):
         self.review.accept(self.conn, 'testproj', REL, 'P1', self.report(current), current, 'medium', ['medium'])
         self.assertIsNotNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
 
+    def test_same_probe_output_after_partial_fix_allows_one_scoped_repair(self):
+        current = self.repeat_scope()
+        self.review.accept(self.conn, 'testproj', REL, 'P1',
+            self.report(current, experiment=self.experiment()), current, 'medium', ['medium'])
+        self.review.consume(self.conn, 'testproj', REL, 'P1', current)
+        self.record('partial-fixture-fix')
+        current = self.scope('head-2')
+        # The defect is still reproducible after an incidental code change.
+        self.review.accept(self.conn, 'testproj', REL, 'P1',
+            self.report(current, experiment=self.experiment('new-run.txt')), current, 'medium', ['medium'])
+        grant = self.review.authorization(self.conn, 'testproj', REL, 'P1', current)
+        self.assertIn('Supporting fixture changes alone do not complete', grant['instruction'])
+        self.assertIn('Correct the caller', grant['instruction'])
+        self.assertTrue(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
+        self.assertFalse(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
+        self.record('same-head-failed')
+        current = self.scope('head-2')
+        with self.assertRaisesRegex(ValueError, 'already'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1',
+                self.report(current, experiment=self.experiment('third-run.txt')), current, 'medium', ['medium'])
+        prompt = self.review.prompt(self.conn, 'testproj', REL, 'P1', 'head-2',
+                                   self.base / 'diagnosis.json', 'medium', ['medium'])
+        self.assertIn('Continue the unresolved repair objective', prompt)
+        self.assertLess(len(prompt), 7000)
+
+    def test_legacy_hash_is_not_a_global_ban_on_later_commits(self):
+        import hashlib
+        current = self.repeat_scope()
+        experiment = self.experiment()
+        digest = hashlib.sha256((self.base / experiment['log']).read_bytes()).hexdigest()
+        state = self.review._load(self.conn, 'testproj', REL, 'P1')
+        state['experiment_digests'] = [digest]
+        runtime.kv_set(self.conn, 'testproj', self.review._key(REL, 'P1'), json.dumps(state))
+        with self.assertRaisesRegex(ValueError, 'already'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1',
+                self.report(current, experiment=experiment), current, 'medium', ['medium'])
+        current = self.scope('head-2')
+        self.review.accept(self.conn, 'testproj', REL, 'P1',
+            self.report(current, experiment=experiment), current, 'medium', ['medium'])
+        state = self.review._load(self.conn, 'testproj', REL, 'P1')
+        self.assertEqual({x['commit'] for x in state['experiment_scopes']}, {'head-1', 'head-2'})
+        self.assertEqual(state['experiment_digests'], [digest])
+        # A return to the old commit does not reset its previous evidence guard.
+        current = self.scope('head-1')
+        with self.assertRaisesRegex(ValueError, 'already'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1',
+                self.report(current, experiment=experiment), current, 'medium', ['medium'])
+
     def test_real_external_prerequisite_still_reaches_owner_after_no_progress(self):
         current = self.repeat_scope()
         result = self.review.accept(self.conn, 'testproj', REL, 'P1',

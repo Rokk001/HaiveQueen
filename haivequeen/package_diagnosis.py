@@ -53,7 +53,7 @@ def unchanged_retry(state, current):
                 and old.get('decisions') == current['decisions'])
 
 
-def experiment_evidence(report, path, state):
+def experiment_evidence(report, path, state, expected):
     """Require a fresh local observation, not a renamed report or attempt counter."""
     experiment = report.get('experiment')
     if not isinstance(experiment, dict):
@@ -71,9 +71,19 @@ def experiment_evidence(report, path, state):
     if log.stat().st_size == 0 or log.stat().st_size > 4 * 1024 * 1024:
         raise ValueError('experiment log must be nonempty and at most 4 MiB')
     digest = hashlib.sha256(log.read_bytes()).hexdigest()
-    if digest in state.get('experiment_digests', []):
+    identity = {k: expected[k] for k in ('commit', 'decisions')}
+    identity['digest'] = digest
+    used = identity in state.get('experiment_scopes', [])
+    # Unscoped legacy hashes cannot prove use against a different commit.
+    # Retain their protection only at the last accepted report's commit.
+    old = state.get('accepted_scope') or {}
+    old_commit = old.get('commit') or (state.get('report') or {}).get('commit')
+    if ('experiment_scopes' not in state and old_commit == expected['commit']
+            and old.get('decisions', expected['decisions']) == expected['decisions']):
+        used = digest in state.get('experiment_digests', [])
+    if used:
         raise ValueError('this experiment evidence already authorized a retry; collect a different observation')
-    return digest
+    return identity
 
 
 def accept(conn, project, plan, package, path, expected, current_class, offered):
@@ -96,14 +106,26 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
             raise ValueError('this diagnosis has already authorized a retry')
         experiment = None
         if report['kind'] == 'technical' and (unchanged_retry(state, expected) or report.get('experiment')):
-            experiment = experiment_evidence(report, path, state)
+            experiment = experiment_evidence(report, path, state, expected)
         if experiment:
             signature = _digest([signature, experiment])
-            state['experiment_digests'] = [*state.get('experiment_digests', []), experiment]
+            if 'experiment_scopes' not in state:
+                old = state.get('accepted_scope') or {}
+                commit = old.get('commit') or (state.get('report') or {}).get('commit')
+                state['experiment_scopes'] = [dict(commit=commit,
+                    decisions=old.get('decisions', expected['decisions']), digest=digest)
+                    for digest in state.get('experiment_digests', []) if commit]
+            state['experiment_scopes'].append(experiment)
             state['experiment_log'] = str((Path(path).parent / report['experiment']['log']).resolve())
         instruction = '\n'.join(report[k] for k in ('analysis', 'next_action', 'why_new')) if report['kind'] == 'technical' else ''
         if experiment:
             instruction += '\nNew observation: ' + report['experiment']['finding'] + '\nEvidence: ' + state['experiment_log']
+        if report['kind'] == 'technical':
+            instruction += ('\nRepair the diagnosed boundary first, with a failing-before regression and '
+                            'focused passing verification. Supporting fixture changes alone do not complete '
+                            'this repair unless fixtures are the diagnosed cause. Report the exact remaining '
+                            'boundary and evidence if only partial progress is possible; do not substitute '
+                            'a broader package task for this scoped repair.')
         state.update(scope=expected, report=report, accepted=[*accepted, signature],
                      authorization={'class': selected, 'instruction': instruction}
                      if report['kind'] == 'technical' else None)
@@ -151,6 +173,10 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
             for k in ('analysis', 'next_action', 'why_new') if k in previous})
         sources += '\nFull previous diagnosis: bzz kv get --project %s --key %s\n' % (
             json.dumps(project), json.dumps(_key(plan, package)))
+        sources += ('Continue the unresolved repair objective from that diagnosis. Compare the latest '
+                    'repair result with its requested verification; incidental commits or fixture fixes '
+                    'do not prove that objective complete. Reuse applicable findings and narrow the next '
+                    'implementation step; repeat diagnosis only to resolve a concrete evidence gap.\n')
     state = _load(conn, project, plan, package)
     if unchanged_retry(state, current):
         sources += ('\nUNCHANGED CODE AFTER AN AUTHORIZED REPAIR: another history entry, renamed agent, '
