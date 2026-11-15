@@ -12,7 +12,8 @@ from pathlib import Path
 from unittest import mock
 
 import isolation  # noqa: F401
-from haivequeen import db, loop, selfupdate, updates, version_layout
+from haivequeen import db, loop, release_compat, release_staging, selfupdate, updates, version_layout
+import test_release_provenance
 
 
 class ReleaseWorkerTests(unittest.TestCase):
@@ -95,6 +96,40 @@ class ReleaseWorkerTests(unittest.TestCase):
         result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', jobs=lambda c: self.fail('must not wait'),
                                                 loop_pid=lambda: 42, receipt=receipt, start=lambda: self.fail('old core hands over'))
         self.assertEqual(result['result'], 'ok')
+        self.assertEqual(self.active(), '2.0.0')
+
+    def test_verified_staged_release_drains_with_unknown_reason(self):
+        # A release body claiming a database change is not evidence of it.
+        fixture = test_release_provenance.ProvenanceTests()
+        fixture.setUp()
+        original_fetch = fixture.fetch
+        def fetch(url):
+            if '/releases/' in url:
+                return json.dumps({'tag_name': 'v2.0.0', 'body': json.dumps({
+                    'repository': 'example/project', 'version': '2.0.0',
+                    'commit': fixture.commit, 'compatible_with_older': False,
+                    'reason': 'database change', 'evidence': 'assertion'})}).encode()
+            return original_fetch(url)
+        import shutil
+        shutil.rmtree(self.target)
+        live = [True]
+        observed = []
+        def sleep(_):
+            observed.append(json.loads(selfupdate.release_status_path().read_text(encoding='utf-8')))
+            self.assertEqual(self.active(), '1.0.0')
+            self.assertTrue(loop.stop_flag().exists())
+            live[0] = False
+        def stage(root, repository, version):
+            return release_staging.stage_release(root, repository, version, fetch)
+        with mock.patch.object(updates, 'repository', return_value='example/project'), \
+             mock.patch.object(release_staging, '_fetch', side_effect=fetch):
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', stage=stage,
+                jobs=lambda conn: [{'kind': 'Queen', 'name': 'Q'}] if live[0] else [],
+                sleep=sleep, loop_pid=lambda: 42 if live[0] else 0,
+                start=lambda: True, receipt=lambda *a, **k: True)
+        self.assertEqual(result['result'], 'ok')
+        self.assertEqual(observed[0]['reason'], release_compat.UNKNOWN_REASON)
+        self.assertEqual(observed[0]['jobs'][0]['name'], 'Q')
         self.assertEqual(self.active(), '2.0.0')
 
     def test_incompatible_waits_for_jobs_and_old_core(self):
