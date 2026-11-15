@@ -428,7 +428,7 @@ window.addEventListener('load', async () => {
 
     document.getElementById('close-detail').click();
 
-    await click('Check now');await wait(()=>buttons('Update').length);await click('Update');
+    await click('Check now');await wait(()=>buttons('Update to v9.0.0').length);await click('Update to v9.0.0');
 
     requests=await (await fetch('/test-actions')).json();
 

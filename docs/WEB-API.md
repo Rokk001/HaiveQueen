@@ -195,3 +195,7 @@ Additional authenticated endpoints use the same session and CSRF rules:
 | POST `releases/promote` | Confirm promotion of a selected prerelease tag. |
 
 Git device sign-in is not implemented; the interface uses access tokens. [Release semantics](OPERATIONS.md#releases) and [MCP/benchmark behavior](PROFILE.md#tools-mcp-and-start-context-measurement) are documented separately.
+
+### Update header labels
+
+The header labels the running version as `Running v<version>`. When an update is available, the action reads `Update to v<version>`; the target version is not repeated as a separate status label. Version labels normalize an existing `v` prefix without changing the version sent to the install API. Installation, failure and current-version status messages remain visible.

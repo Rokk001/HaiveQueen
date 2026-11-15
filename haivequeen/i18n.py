@@ -510,6 +510,7 @@ GERMAN = {
     "Publish release at integration": "Release bei der Integration veröffentlichen", "Next version (empty: count the last digit up)": "Nächste Version (leer: letzte Stelle hochzählen)",
     "Next version: three numbers like 2.1.0 are expected": "Nächste Version: drei Zahlen wie 2.1.0 erwartet",
     "update.checkHours: a number of hours from 0 up is expected (0 = no daily check)": "update.checkHours: eine Stundenzahl ab 0 erwartet (0 = keine tägliche Prüfung)",
+    "Running %s": "Läuft mit %s", "Update to %s": "Auf %s aktualisieren",
     "Check now": "Jetzt prüfen", "checking for updates…": "suche nach Updates…", "New version available: %s – Update": "Neue Version verfügbar: %s – Aktualisieren",
     "Install version %s now? HaiveQueen starts no new Queen or Agent, waits until every running agent has ended, installs the new version and restarts.":
         'Version %s jetzt installieren? HaiveQueen startet keine neue Queen und keinen neuen Agenten mehr, wartet, bis jeder laufende Agent beendet ist, installiert die neue Version und startet neu.',
