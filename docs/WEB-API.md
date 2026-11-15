@@ -208,7 +208,8 @@ and closing/reopening the editor in the current page; leaving the page warns abo
 unsaved content. A save uses the server revision to reject concurrent changes.
 
 Plan details link relevant open questions and acceptance checks to the central
-Questions view. Each question links back to its plan. Questions separates open
+Questions view. Following a question link scrolls to and focuses that question;
+background refreshes do not repeat this navigation. Each question links back to its plan. Questions separates open
 items from answered history, including saved answer, author and date. Kind labels
 use actual question metadata (acceptance checks, decisions when supplied, ordinary
 questions otherwise); arbitrary item names are not presented as decisions.

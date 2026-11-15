@@ -27,6 +27,8 @@ class Node {
  setAttribute(key,value){this.attrs[key]=value;}
  addEventListener(name,fn){this['listener_'+name]=fn;}
  close(){}
+ focus(){this.focused=true;}
+ scrollIntoView(){this.scrolled=true;}
 }
 const el=(tag,text)=>new Node(tag,text),all=(node,tag)=>[...(node.tagName===tag?[node]:[]),...node.children.flatMap(child=>all(child,tag))];
 const content=node=>node.textContent+node.children.map(content).join('');
@@ -36,10 +38,13 @@ const actions=[],requests=[],dialog=el('div'),view=el('div'),drafts=new Map();le
 let saveFails=false,allowDiscard=true,confirmations=0;
 const client={state:{projects:[{name:'Demo',plan_globs:['docs/plans/*.md'],suggested_plan_folder:'docs/plans'},{name:'Other',plan_globs:['plans/*.md'],suggested_plan_folder:'plans'}]},notice:()=>{},action:async(route,data)=>{requests.push([route,data]);if(saveFails)return null;return {plan:'docs/plans/new-PLAN.md',revision:'r1'};}};
 const setup=new Function('el','button','t','client','view','questionDrafts','$','detail','section','act','key','valueView','openQueuedPlan','selectTab','refreshLists','requestConfirm',
- "let planDraft=null,questionFilter='open',questionFocus=null,questions=[],plans=[];"+body+"return {openPlanEditor,renderQuestions,setQuestions:value=>questions=value,setFilter:value=>questionFilter=value};");
+ "let planDraft=null,questionFilter='open',questionFocus=null,questionNavigation=false,questions=[],plans=[];"+body+"return {openPlanEditor,renderQuestions,showQuestion,setQuestions:value=>questions=value,setFilter:value=>{questionFilter=value;questionFocus=null;}};");
 const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section=el('section');return section;},async(route,data)=>{actions.push([route,data]);return {ok:true};},q=>({project:q.project,plan:q.plan_path}),value=>el('pre',JSON.stringify(value)),()=>{},()=>{},()=>{},async()=>{confirmations++;return allowDiscard;});
 (async()=>{
  api.setQuestions([{id:1,item:'owner-check',status:'open',answer:'Previous note',answered_at:'today',project:'Demo',plan_path:'p.md',question:'Review result\n\nReport: still pending',packages:['P1','P2']}]);api.renderQuestions();
+ assert(!all(section,'ARTICLE')[0].scrolled,'Background render must not move the viewport');
+ api.showQuestion({id:1});api.renderQuestions();assert(all(section,'ARTICLE')[0].focused);assert(all(section,'ARTICLE')[0].scrolled,'Explicit question navigation scrolls to the target');
+ api.renderQuestions();assert(!all(section,'ARTICLE')[0].scrolled,'Polling after navigation must not repeat scrolling');
  assert(content(section).includes('Previous note'));assert(content(section).includes('Report: still pending'));
  assert(!content(section).includes('Apply answer to the whole project'),'Scope is ignored for acceptance notes so must not be offered');
  const answer=all(section,'TEXTAREA')[0];answer.value='Check P2';answer.oninput();

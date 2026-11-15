@@ -470,7 +470,7 @@ function mount(document, bootstrap) {
   const renderGate=new RenderGate(()=>renderStateNow(client.state));
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
   const questionDrafts=new Map();
-  let questionFilter='open', questionFocus=null, planDraft=null;
+  let questionFilter='open', questionFocus=null, questionNavigation=false, planDraft=null;
   let releaseProject='', releaseData=null, releaseError='', releaseRequest=0;
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
   let lastAutomaticCheck=0, automaticChecking=false;
@@ -856,7 +856,7 @@ function mount(document, bootstrap) {
   document.addEventListener('click',event=>{const menu=$('controls').querySelector('details');if(menu && !menu.contains(event.target))menu.open=false;});
   $('controls').addEventListener('keydown',event=>{if(event.key==='Escape'){const menu=$('controls').querySelector('details');if(menu){menu.open=false;menu.querySelector('summary').focus();}}});
   function render() {
-    const sameTab=view.dataset.tab===tab,pageX=window.scrollX,pageY=window.scrollY;
+    const sameTab=view.dataset.tab===tab,pageX=window.scrollX,pageY=window.scrollY,navigatingQuestion=tab==='Questions' && questionNavigation;
     const positions=sameTab?[...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].map(node=>({left:node.scrollLeft,top:node.scrollTop,open:node.open})):[];
     const focused=document.activeElement,selection=focused?.selectionStart,editingFilter=sameTab && focused?.placeholder===t('Filter');
     if(sameTab)view.style.minHeight=view.getBoundingClientRect().height+'px';
@@ -872,7 +872,7 @@ function mount(document, bootstrap) {
     fitDashboard();
     [...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].forEach((node,index)=>{const position=positions[index];if(position){node.scrollLeft=position.left;if(!node.classList.contains('log')||!logFollow)node.scrollTop=position.top;}});
     view.style.minHeight='';
-    if(sameTab)window.scrollTo({left:pageX,top:pageY,behavior:'instant'});
+    if(sameTab && !navigatingQuestion)window.scrollTo({left:pageX,top:pageY,behavior:'instant'});
     if(editingFilter){const input=view.querySelector('input[placeholder]');input?.focus({preventScroll:true});input?.setSelectionRange(selection,selection);}
   }
   function projectSelect(onchange, selected, all=true) {
@@ -1197,7 +1197,7 @@ function mount(document, bootstrap) {
     }
   }
   function showQuestion(question) {
-    questionFocus=Number(question.id);questionFilter='open';$('detail').close();void selectTab('Questions');
+    questionFocus=Number(question.id);questionNavigation=true;questionFilter='open';$('detail').close();void selectTab('Questions');
   }
   async function openPlanEditor(row=null,result=null,fresh=false) {
     const replacing=fresh || (row && planDraft && (planDraft.plan!==row.plan_path || planDraft.project!==(row.apiary||row.project)));
@@ -1243,7 +1243,7 @@ function mount(document, bootstrap) {
     if(!visible.length)box.append(el('p',t(questionFilter==='open'?'none open':'No answered questions yet.')));
     for(const question of visible){
       const answered=questionAnswered(question),kind=questionKind(question),check=kind==='Acceptance';
-      const card=el('article',undefined,'card question');card.dataset.question=question.id;
+      const card=el('article',undefined,'card question');card.dataset.question=question.id;card.tabIndex=-1;card.setAttribute('aria-label',t(kind)+' #'+question.id+' '+question.project);
       card.append(el('small',t(kind)+' · '+t(answered?'Answered':'Open')),el('h3','#'+question.id+' · '+question.project),el('small',question.created_at||''));
       if(question.plan_path)card.append(button('Plan · '+question.plan_path,()=>openQueuedPlan({project:question.project,plan_path:question.plan_path})));
       const message=String(question.text||question.question||question.item||'');
@@ -1276,6 +1276,7 @@ function mount(document, bootstrap) {
         card.append(button('Accept',()=>act('owner/accept',{...key(question),text:answer.value},t('Accept the plan result?'))),button('Reject',()=>act('owner/reject',{...key(question),text:answer.value,packages:packages.value.split(',').map(x=>x.trim()).filter(Boolean)},t('Reject the result and request rework?'))));
       }
       box.append(card);
+      if(questionNavigation && Number(question.id)===questionFocus){questionNavigation=false;card.focus({preventScroll:true});card.scrollIntoView({block:'start'});}
     }
   }
   function renderQuestionsPage(){view.replaceChildren();renderQuestions();}
