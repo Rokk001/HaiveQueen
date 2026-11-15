@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
-const {copyOutput}=require('../haivequeen/web-client.js');
+const {copyOutput,releaseCardState,releaseJobStatus,startReleasePromotion}=require('../haivequeen/web-client.js');
 const source=fs.readFileSync(require.resolve('../haivequeen/web-client.js'),'utf8');
 class Element {
  constructor(tag,text='',cls=''){this.tagName=tag.toUpperCase();this.textContent=text;this.children=[];this.className=cls;this.classList={add:value=>this.className+=' '+value};}
@@ -25,20 +25,20 @@ const text=node=>node.textContent+node.children.map(text).join('');
  document.execCommand=()=>false;removed=false;
  await assert.rejects(copyOutput({tagName:'PRE',textContent:'log',closest:()=>modal},document,{}),/Copy failed/);assert(removed);
  // Render actual release implementation with a minimal DOM, including empty/error states.
- const body=source.slice(source.indexOf('  async function loadReleases()'),source.indexOf('  function renderDashboard()'));
+ const body=source.slice(source.indexOf('  async function loadReleases('),source.indexOf('  function renderDashboard()'));
  const boxes=[],actions=[];
- const api=new Function('el','section','projectSelect','button','t','client','jobs','renderJob',`
+ const api=new Function('el','section','projectSelect','button','t','client','jobs','renderJob','releasePromotions','releaseCardState','releaseJobStatus','startReleasePromotion',`
  let releaseProject='demo',releaseData=null,releaseError='',releaseRequest=0,tab='Releases';
  function render(){renderReleases();}
  ${body}
- return {loadReleases,renderReleases,setData:value=>releaseData=value};`)(el,title=>{const box=el('section',title);boxes.push(box);return box;},()=>el('select'),(title,action)=>{const b=el('button',title);b.onclick=action;return b;},x=>x,{request:async()=>{throw Error('Service unavailable');},action:async(name,data)=>{actions.push([name,data]);return null;}},new Map(),()=>{});
+ return {loadReleases,renderReleases,setData:value=>releaseData=value};`)(el,title=>{const box=el('section',title);boxes.push(box);return box;},()=>el('select'),(title,action)=>{const b=el('button',title);b.onclick=action;return b;},x=>x,{confirm:async()=>true,request:async()=>{throw Error('Service unavailable');},action:async(name,data)=>{actions.push([name,data]);return null;}},new Map(),()=>{},new Map(),releaseCardState,releaseJobStatus,startReleasePromotion);
  await api.loadReleases();assert(text(boxes.at(-1)).includes('Could not load releases'));assert(text(boxes.at(-1)).includes('Service unavailable'));
  // A fresh view for release success states.
- const success=new Function('el','section','projectSelect','button','t','client','jobs','renderJob',`
+ const success=new Function('el','section','projectSelect','button','t','client','jobs','renderJob','releasePromotions','releaseCardState','releaseJobStatus','startReleasePromotion',`
  let releaseProject='demo',releaseData=null,releaseError='',releaseRequest=0,tab='Releases';function render(){renderReleases();}${body}
- return {loadReleases,setData:value=>releaseData=value,renderReleases};`)(el,title=>{const box=el('section',title);boxes.push(box);return box;},()=>el('select'),(title,action)=>{const b=el('button',title);b.onclick=action;return b;},x=>x,{request:async()=>({releases:[]}),action:async(name,data)=>{actions.push([name,data]);return null;}},new Map(),()=>{});
+ return {loadReleases,setData:value=>releaseData=value,renderReleases};`)(el,title=>{const box=el('section',title);boxes.push(box);return box;},()=>el('select'),(title,action)=>{const b=el('button',title);b.onclick=action;return b;},x=>x,{confirm:async()=>true,request:async()=>({releases:[]}),action:async(name,data)=>{actions.push([name,data]);return null;}},new Map(),()=>{},new Map(),releaseCardState,releaseJobStatus,startReleasePromotion);
  await success.loadReleases();assert(text(boxes.at(-1)).includes('No releases yet'));
- success.setData({releases:[{version:'v2-dev',tag:'v2-dev',full_tag:'v2',prerelease:true,commit:'abc',date:'2026-01-01'},{version:'v1',prerelease:false}]});success.renderReleases();
+ success.setData({releases:[{version:'v2-dev',tag:'v2-dev',full_tag:'v2',prerelease:true,commit:'abc',date:'2026-01-01'},{version:'v1',tag:'v1',full_tag:'',commit:'def',prerelease:false}]});success.renderReleases();
  assert.equal(all(boxes.at(-1),'ARTICLE').length,2);assert(text(boxes.at(-1)).includes('Stable'));assert(text(boxes.at(-1)).includes('Prerelease'));
  const promote=all(boxes.at(-1),'BUTTON').filter(b=>b.textContent==='Publish as full release');assert.equal(promote.length,1);await promote[0].onclick();assert.deepEqual(actions[0],['releases/promote',{project:'demo',tag:'v2-dev',confirmed:true}]);
  // Exercise the browser helper when a confirmation arrives later than 20 ms.
