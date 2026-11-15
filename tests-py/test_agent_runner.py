@@ -22,6 +22,14 @@ with open(os.environ["FAKE_RECORD"], "w", encoding="utf-8") as f:
 with open(os.environ["FAKE_STREAM"], encoding="utf-8") as f:
     sys.stdout.write(f.read())
 sys.stdout.flush()
+if os.environ.get("FAKE_RELEASE"):
+    import time
+    from pathlib import Path
+    deadline = time.monotonic() + 40
+    while not Path(os.environ["FAKE_RELEASE"]).exists():
+        if time.monotonic() >= deadline:
+            sys.exit(98)
+        time.sleep(.01)
 if os.environ.get("FAKE_HANG"):
     import time
     time.sleep(float(os.environ["FAKE_HANG"]))

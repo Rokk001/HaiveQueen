@@ -89,19 +89,28 @@ class SlotCase(unittest.TestCase):
         self.slots.append(slot)
         return slot
 
-    def try_take(self, wait=0.4, **settings):
+    def try_take(self, **settings):
         """Ask for a slot in a thread; returns (event set when it was granted, list that receives the slot)."""
         granted, box = threading.Event(), []
+        observed = threading.Event()
+        slot_wait = integration._slot_wait
+        def inspect_wait(*args):
+            reason = slot_wait(*args)
+            if reason:
+                observed.set()
+            return reason
 
         def run():
             slot = integration._acquire_compile_slot(settings, 0.01)
             self.slots.append(slot)
             box.append(slot)
             granted.set()
+            observed.set()
         thread = threading.Thread(target=run, daemon=True)
-        thread.start()
         self.threads.append(thread)
-        granted.wait(wait)
+        with mock.patch.object(integration, '_slot_wait', side_effect=inspect_wait):
+            thread.start()
+            self.assertTrue(observed.wait(5), 'slot request neither granted nor examined')
         return granted, box
 
 
@@ -163,7 +172,14 @@ class LimitTests(SlotCase):
         self.addCleanup(__import__("shutil").rmtree, str(folder), True)
         log = folder / "log.txt"
         script = folder / "check.py"
-        script.write_text("import sys, time\nlog = sys.argv[1]\nopen(log, 'a').write('start %s\\n' % time.time())\ntime.sleep(1.5)\nopen(log, 'a').write('end %s\\n' % time.time())\n", encoding="utf-8")
+        release = folder / 'release'
+        script.write_text("import sys, time\nfrom pathlib import Path\nlog = sys.argv[1]\n"
+                          "open(log, 'a').write('start %s\\n' % time.time())\n"
+                          "deadline=time.monotonic()+20\n"
+                          "while not Path(log).with_name('release').exists():\n"
+                          "    if time.monotonic()>deadline: sys.exit(98)\n"
+                          "    time.sleep(.01)\n"
+                          "open(log, 'a').write('end %s\\n' % time.time())\n", encoding="utf-8")
         results = {}
         from haivequeen import config, db
 
@@ -175,11 +191,23 @@ class LimitTests(SlotCase):
             finally:
                 conn.close()
         threads = [threading.Thread(target=run, args=(name,)) for name in ("alpha", "beta", "gamma")]
-        for thread in threads:
-            thread.start()
-            time.sleep(0.15)
-        for thread in threads:
-            thread.join(30)
+        try:
+            for thread in threads:
+                thread.start()
+            deadline = time.monotonic() + 10
+            while not log.exists() or len(log.read_text().splitlines()) < 2:
+                self.assertLess(time.monotonic(), deadline, 'first two checks did not start')
+                threading.Event().wait(.01)
+            lock = integration._compile_lock_path()
+            previous = lock.stat().st_mtime_ns
+            while lock.stat().st_mtime_ns == previous:
+                self.assertLess(time.monotonic(), deadline, 'third supervisor did not examine occupied slots')
+                threading.Event().wait(.01)
+            self.assertEqual([line.split()[0] for line in log.read_text().splitlines()], ['start', 'start'])
+        finally:
+            release.touch()
+            for thread in threads:
+                thread.join(30)
         self.assertEqual(len(results), 3, results)
         self.assertTrue(all(r["ok"] for r in results.values()), results)
         events = [(float(line.split()[1]), line.split()[0]) for line in log.read_text(encoding="utf-8").splitlines()]

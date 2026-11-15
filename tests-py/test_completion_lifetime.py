@@ -42,13 +42,20 @@ class CompletionLifetime(RoundCase):
             return proc
 
         script = self.base / 'late.py'
-        script.write_text('import time, sys\ntime.sleep(.3)\nsys.exit(7)\n')
+        release = self.base / 'release'
+        script.write_text("import time, sys\nfrom pathlib import Path\n"
+                          "deadline=time.monotonic()+15\n"
+                          "while not Path('release').exists():\n"
+                          "    if time.monotonic()>deadline: sys.exit(98)\n"
+                          "    time.sleep(.01)\nsys.exit(7)\n", encoding='utf-8')
         with mock.patch.object(integration.subprocess, 'Popen', side_effect=launch), \
              mock.patch.object(integration.proctree, 'tree_cpu_seconds', side_effect=RuntimeError('observer failed')):
             with self.assertRaisesRegex(RuntimeError, 'observer failed'):
                 integration._watch_compile('"%s" "%s"' % (sys.executable, script),
                                            str(self.base), 30, 30, .01, log_file=log)
         proc, completion = captured[0]
+        self.assertIsNone(proc.poll(), 'launcher must still be alive after observer failure')
+        release.touch()
         proc.wait(timeout=15)
         self.assertTrue(completion.exists(), 'Observer cleanup must not erase a running launcher destination')
         self.assertEqual(completion.read_text(encoding='ascii'), '7')

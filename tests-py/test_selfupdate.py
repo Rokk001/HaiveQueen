@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import queue
 import time
 import types
 import unittest
@@ -316,6 +317,18 @@ class WaitTest(SelfUpdateBase):
         self.agent("HaiveQueen", "Hq", 22)
         living = {21, 22}
         git = FakeGit()
+        waits = queue.Queue()
+        def observe_wait(_seconds):
+            waits.put(frozenset(living))
+            threading.Event().wait(.005)
+        def reached_wait(expected):
+            deadline = time.monotonic() + 5
+            while True:
+                snapshot = waits.get(timeout=max(.001, deadline - time.monotonic()))
+                if snapshot == frozenset(expected):
+                    return
+                if time.monotonic() >= deadline:
+                    self.fail('update did not reach the expected resource wait')
         out = {}
 
         def work():
@@ -323,22 +336,19 @@ class WaitTest(SelfUpdateBase):
             conn = db.connect(Path(self.tmp.name) / "haivequeen.db")
             git.conn = conn
             try:
-                out["res"] = selfupdate.run_update(conn, live=self.live, run=git, sleep=lambda s: time.sleep(0.005), poll=0.01, round_timeout=5.0,
+                out["res"] = selfupdate.run_update(conn, live=self.live, run=git, sleep=observe_wait, poll=0.01, round_timeout=5.0,
                                                    alive=lambda pid: pid in living, loop_pid=lambda: 4242 if git.started else 0)
             finally:
                 conn.close()
 
         t = threading.Thread(target=work)
         t.start()
-        deadline = time.time() + 5
-        while not loop.stop_flag().exists() and time.time() < deadline:
-            time.sleep(0.01)
+        reached_wait({21, 22})
         self.assertTrue(loop.stop_flag().exists())
-        time.sleep(0.2)
         self.assertEqual(git.words(), ["rev-parse"])
         self.assertTrue(selfupdate.lock_path().exists())
         living.discard(21)   # the ODP agent ends by itself; the other still runs
-        time.sleep(0.2)
+        reached_wait({22})
         self.assertEqual(git.words(), ["rev-parse"])
         self.assertIsNone(self.row()["result"])
         living.discard(22)
@@ -353,6 +363,18 @@ class WaitTest(SelfUpdateBase):
         integ = self.agent("HaiveQueen", "Integ", 32, phase="integrate")
         living = {31, 32}
         git = FakeGit()
+        waits = queue.Queue()
+        def observe_wait(_seconds):
+            waits.put(frozenset(living))
+            threading.Event().wait(.005)
+        def reached_wait(expected):
+            deadline = time.monotonic() + 5
+            while True:
+                snapshot = waits.get(timeout=max(.001, deadline - time.monotonic()))
+                if snapshot == frozenset(expected):
+                    return
+                if time.monotonic() >= deadline:
+                    self.fail('update did not reach the expected resource wait')
         threads = []
 
         def fake_spawn(live=None):
@@ -362,7 +384,7 @@ class WaitTest(SelfUpdateBase):
                 conn = db.connect(Path(self.tmp.name) / "haivequeen.db")
                 git.conn = conn
                 try:
-                    selfupdate.run_update(conn, live=self.live, run=git, sleep=lambda s: time.sleep(0.005), poll=0.01, round_timeout=5.0,
+                    selfupdate.run_update(conn, live=self.live, run=git, sleep=observe_wait, poll=0.01, round_timeout=5.0,
                                           alive=lambda pid: pid in living, loop_pid=lambda: 4242 if git.started else 0)
                 finally:
                     conn.close()
@@ -379,7 +401,7 @@ class WaitTest(SelfUpdateBase):
             self.assertFalse(caller.is_alive(), "the command must return at once")
         db.finish_agent(self.conn, integ, "Integrated.\nDone.")   # the integrator reports and ends
         living.discard(32)
-        time.sleep(0.3)
+        reached_wait({31})
         self.assertEqual(self.conn.execute("SELECT status FROM agents WHERE id=?", (integ,)).fetchone()[0], "done")
         self.assertEqual(git.words(), ["rev-parse"])   # the update still waits for the ODP agent
         self.assertIsNone(self.row()["result"])

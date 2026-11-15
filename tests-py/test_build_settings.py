@@ -213,7 +213,7 @@ class ProcessTreeTest(unittest.TestCase):
         name = Path(sys.executable).name
         mine = self.start(40, 60)
         other = self.start(300, 300)
-        time.sleep(0.3)
+        # start() already receives readiness after both allocations are touched.
         ram, count = osplat.process_tree_ram(mine.pid, [name])
         self.assertEqual(count, 2)
         self.assertGreater(ram, 100)
@@ -358,10 +358,19 @@ class QueenMonitorTest(RoundCase):
         stop = threading.Event()
         samples = self.base / "queen-samples.txt"
         t = threading.Thread(target=agent_runner.queen_build_monitor, args=("testproj", REL, "Q-queen", 2, samples, [name], stop, 0.05, 3, os.getpid(), 10))
-        t.start()
-        time.sleep(0.6)
-        stop.set()
-        t.join(10)
+        sampled = threading.Event()
+        sample_once = agent_runner.sample_once
+        def sample(*args):
+            sample_once(*args)
+            sampled.set()
+        with mock.patch.object(agent_runner, 'sample_once', side_effect=sample):
+            t.start()
+            try:
+                self.assertTrue(sampled.wait(10), 'monitor did not record a sample')
+            finally:
+                stop.set()
+                t.join(10)
+        self.assertFalse(t.is_alive())
         rows = self.conn.execute("SELECT jobs, per_job_mb, peak_mb FROM build_measurements WHERE project='testproj'").fetchall()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["jobs"], 5)

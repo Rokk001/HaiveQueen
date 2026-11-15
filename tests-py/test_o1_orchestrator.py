@@ -419,13 +419,20 @@ class AsyncCommands(OrchCase):
 
     def test_pause_lets_the_command_end_then_halts_and_the_resume_goes_on(self):
         orchestrator.ASYNC = True
-        self.check = self.sleeper(1) + " && " + self.echo("Check")
+        release = self.base / 'release-check'
+        script = self.base / 'pause-check.py'
+        script.write_text("from pathlib import Path\nimport time,sys\ndeadline=time.monotonic()+20\n"
+                          "while not Path(sys.argv[1]).exists():\n"
+                          "    if time.monotonic()>deadline: sys.exit(98)\n"
+                          "    time.sleep(.01)\n", encoding='utf-8')
+        self.check = '"%s" "%s" "%s"' % (sys.executable, script, release) + " && " + self.echo("Check")
         self.build = self.echo("Build")
         self.project_toml()
         self.ready_plan()
         self.start_check()
         self.assertTrue(orchestrator.running_jobs())
         hives.pause_plan(self.conn, "testproj", REL)
+        release.touch()
         self.wait_job()
         self.round()
         self.assertEqual(self.run_order(), ["Check"])                   # the command ran to its end, the next step did not start
@@ -507,8 +514,14 @@ class AsyncCommands(OrchCase):
         settings = self.env().settings
         held = [integration._acquire_compile_slot(settings, 0.05) for _ in range(integration.compile_limit(settings))]
         try:
+            lock = integration._compile_lock_path()
+            previous = lock.stat().st_mtime_ns
             self.start_check()
-            time.sleep(1.5)
+            deadline = time.monotonic() + 10
+            while lock.stat().st_mtime_ns == previous:
+                self.assertLess(time.monotonic(), deadline, 'supervisor did not examine occupied slots')
+                threading.Event().wait(.01)
+            self.assertEqual(len(integration._compile_holders()), len(held))
             self.assertEqual(self.run_order(), [])
         finally:
             for slot in held:

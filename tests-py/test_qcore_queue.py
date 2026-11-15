@@ -7,7 +7,7 @@ import time
 from unittest import mock
 
 from bzztest import REL
-from haivequeen import buildjobs, hives, orchestrator
+from haivequeen import buildjobs, hives, integration, orchestrator
 from test_o1_orchestrator import OTHER, OrchCase
 
 THIRD = "docs/plans/third/THIRD-PLAN.md"
@@ -479,7 +479,9 @@ class LiveQueue(OrchCase):
         self.machine["maxConcurrentCompileChecks"] = 1
         self.start_merges()
         self.wait_for(lambda: any((folder / "Check.started").exists() for folder in (self.pwt, self.second)))
-        time.sleep(.3)
+        lock = integration._compile_lock_path()
+        previous = lock.stat().st_mtime_ns
+        self.wait_for(lambda: lock.stat().st_mtime_ns != previous)
         self.assertEqual(sum((folder / "Check.started").exists() for folder in (self.pwt, self.second)), 1)
         (self.base / "Check.release").touch()
         self.wait_for(lambda: all((folder / "Check.started").exists() for folder in (self.pwt, self.second)))
