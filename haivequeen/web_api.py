@@ -96,7 +96,7 @@ def settings_view(conn, project=None):
         workspace = str(settings_path(conn, project).parent.parent)
         repository, plans_folder = settings.apiary_place(workspace, result['data'])
         remote, _ = projsettings.derive_remote(repository, result['data'].get('remoteName'))
-        result['data'] = projsettings.working_settings(result['data'])
+        result['data'] = projsettings.working_settings(projsettings.plan_field_settings(result['data']))
         result['data'].pop('publishReleases', None)
         remote_url = projsettings._git(repository, 'remote', 'get-url', remote or 'origin')
         provider, errors = git_provider.discover((remote_url or '').strip())
@@ -193,6 +193,9 @@ def control_plans(conn, data):
 
 def execute(conn, action, data):
     project, plan = data.get('project'), data.get('plan')
+    if action in ('plans/create', 'plans/save'):
+        from . import web_drafts
+        return web_drafts.save(conn, data, create=action == 'plans/create')
     if action == 'plans/control-preview':
         return plan_control_targets(conn, data.get('operation'))
     if action == 'plans/control':
@@ -235,10 +238,15 @@ def execute(conn, action, data):
             row['stopped'] = bool(row.get('paused')) and hives.is_stopped(conn, row['apiary'], row['plan_path'])
         state['controls'] = {'orchestrator': ['Start', 'Stop gracefully', 'Force stop'], 'web': ['Stop', 'Restart'], 'force_warning': FORCE_WARNING}
         state['projects'] = db.rows(conn, 'SELECT name,workspace,colour,priority FROM projects ORDER BY name')
+        from . import web_drafts
+        for row in state['projects']:
+            row.update(web_drafts.project_options(row['workspace']))
         return state
     if action == 'questions':
-        questions = runtime.list_questions(conn, project, status='open')
+        from . import web_drafts
+        questions = runtime.list_questions(conn, project, status=None if data.get('history') in (True, '1') else 'open', plan=plan)
         for question in questions:
+            web_drafts.question_context(conn, question)
             question['packages'] = question_service.plan_packages(conn, question['project'], question['plan_path'])
         return questions
     if action == 'plan/step-log':
@@ -264,8 +272,12 @@ def execute(conn, action, data):
         if not source.is_relative_to(workspace):
             raise ValueError('Plan is outside the project workspace')
         from . import plans as plan_files, web_plan_details
-        text = '' if row.get('missing') else source.read_text(encoding='utf-8-sig')
-        return {'plan': row, 'text': text, 'body': plan_files.split_front_matter(text)[1],
+        raw = b'' if row.get('missing') else source.read_bytes()
+        text = raw.decode('utf-8-sig').replace('\r\n', '\n').replace('\r', '\n')
+        from . import web_drafts
+        return {'revision':web_drafts.revision(raw) if not row.get('missing') else '',
+                'open_questions':[web_drafts.question_context(conn, q) for q in runtime.list_questions(conn, project, status='open', plan=plan)],
+                'plan': row, 'text': text, 'body': plan_files.split_front_matter(text)[1],
                 'packages': web_plan_details.packages(conn, project, plan, text),
                 'hive': hives.get(conn, project, plan)}
     if action == 'plans':

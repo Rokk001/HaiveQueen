@@ -31,3 +31,9 @@ Existing `[[decision]]` entries with `item = "owner-release"` continue to work.
 
 
 A project-wide answer becomes a decision for every plan of that project, never another project. Technical decisions can use source `auto`; owner behaviour/design choices use `bzz ask`. Active decisions settle repeat questions by reference. An unanswered question blocks only dependent work. See [runtime API](RUNTIME-API.md) for machine-readable decisions and questions.
+
+## Browser question context and history
+
+Questions remains the central place for answers, decisions and owner acceptance. Its API lists open questions by default; `history=1` includes visible answered questions and supports project/plan filtering. Each entry retains its complete question, recommendation, answer, author and timestamps. Context identifies the project, plan and item; acceptance entries expose the recorded `owner_check_result` separately from answer text. A note on an owner-check question stays open and does not count as acceptance. Only the existing Accept or Reject action records that result; history is read-only.
+
+The plan reader exposes its open questions for direct navigation. Question evidence includes the existing state-file Requirements and Completeness sections, when present, plus recorded project/plan decisions and their sources. These are existing records, not a newly inferred readiness verdict; the full original question/report remains available, including pending statements. Missing evidence remains empty. State-file reads are confined to the registered plans workspace.

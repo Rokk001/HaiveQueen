@@ -75,3 +75,11 @@ stateDiagram-v2
 The Queen records every requirement exactly once in the state file under `## Completeness`, with a done status and concrete evidence. Missing, open or partial entries prevent ready. A fresh independent agent checks the submitted plan against this evidence and branch; only its passing verdict (or explicit owner release) accepts ready. The full gate and exceptions live in [Agent rules](AGENT-RULES.md).
 
 After acceptance, the [integration and owner-check workflow](OPERATIONS.md#integration) applies. [Branch attribution](BRANCH-ATTRIBUTION.md) explains worktree assignment and commit evidence.
+
+## Browser drafts and submission
+
+The browser's New plan workflow chooses a registered project and saves typed or imported UTF-8 Markdown to that project's configured plans workspace. The project-relative filename must end in `.md`, match its effective plan patterns, and avoid its exclusions. The suggested folder is only a starting point: custom patterns can require a different filename. Unknown projects, traversal, paths resolving outside the workspace, undiscoverable hidden files, existing files and previously registered plan paths are refused.
+
+Saving validates the TOML header and Markdown heading and preserves the Markdown body, including requirements. A new import always becomes DRAFT; other valid header metadata, including owner review policy and branch/worktree choices, is preserved for review and normal preparation checks on explicit submission. Importing RUNNING or QUEUED never starts work. Existing draft edits retain their header metadata but remain DRAFT. Only an idle draft can be edited, and a content revision prevents overwriting another edit. Creation and editing use the scheduler lock and coordinated file transaction; recovery blocks are respected.
+
+Save draft and Submit are separate actions. Submit uses the existing `plan/start` action, changing DRAFT to SENT for the normal Queen preparation process. No alternate inbox, queue or preparation system is created. The authenticated browser API exposes `plans/create` (`project`, `filename`, `content`) and `plans/save` (`project`, `plan`, `content`, `revision`); both return the plan path and its new revision. The existing plan reader supplies the revision and open questions for that plan.

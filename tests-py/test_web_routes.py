@@ -13,6 +13,16 @@ from haivequeen import web_auth, web_server
 
 
 class WebRoutesTests(unittest.TestCase):
+    def test_draft_mutations_require_owner_session_and_csrf(self):
+        self.configure()
+        for action in ('plans/create', 'plans/save'):
+            self.assertEqual(self.request('POST', '/api/' + action, {})[0], 401)
+        headers = self.login()
+        for action in ('plans/create', 'plans/save'):
+            self.assertEqual(self.request('GET', '/api/' + action, headers=headers)[0], 404)
+            self.assertEqual(self.request('POST', '/api/' + action, {}, {'Cookie':headers['Cookie']})[0], 403)
+            self.assertEqual(self.request('POST', '/api/' + action, {}, headers)[0], 200)
+
     def test_release_history_and_promotion_require_owner_session_and_csrf(self):
         self.configure()
         self.assertEqual(self.request('GET', '/api/releases?project=demo')[0], 401)
