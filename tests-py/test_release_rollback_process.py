@@ -96,4 +96,3 @@ conn.close()
             child.terminate()
             child.wait(timeout=10)
             loop.lock_file().unlink(missing_ok=True)
-
