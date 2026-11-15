@@ -45,6 +45,7 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  assert(!all(section,'HEADER')[0].scrolled,'Background render must not move the viewport');
  api.showQuestion({id:1});api.renderQuestions();assert(all(section,'H2').some(node=>node.focused));assert(all(section,'HEADER')[0].scrolled,'Explicit question navigation scrolls to the target');
  api.renderQuestions();assert(!all(section,'HEADER')[0].scrolled,'Polling after navigation must not repeat scrolling');
+ assert.equal(all(section,'SELECT').length,0,'One pending question needs no selector');
  assert(content(section).includes('Previous note'));assert(content(section).includes('Report: still pending'));
  assert(!content(section).includes('Apply answer to the whole project'),'Scope is ignored for acceptance notes so must not be offered');
  const answer=all(section,'TEXTAREA')[0];answer.value='Check P2';answer.oninput();
@@ -77,6 +78,10 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  api.planMessageButton({apiary:'Demo',plan_path:'multi.md',name:'Readable plan title'}).onclick();api.renderQuestions();assert.equal(api.getThread(),JSON.stringify(['Demo','multi.md']),'Plan messages route to same real conversation');
  const chooserAgain=all(section,'SELECT')[0];chooserAgain.value='11';chooserAgain.onchange();assert.equal(all(section,'TEXTAREA')[0].value,'Preserved second answer');
  all(section,'BUTTON').find(node=>node.textContent==='Completed').onclick();assert(!content(section).includes('First pending'),'Completed filter must not retain an invisible pending conversation');assert(content(section).includes('Recorded response'));assert.equal(all(section,'TEXTAREA').length,0);
+ all(section,'BUTTON').find(node=>node.textContent==='Needs you').onclick();
+ all(section,'BUTTON').find(node=>node.className==='messenger-thread').onclick();api.renderQuestions();
+ assert.equal(all(section,'BUTTON').find(node=>node.textContent==='Needs you').attrs['aria-pressed'],'true','Selecting an inbox thread preserves Needs you filter');
+ assert(!content(section).includes('Finished question'),'Sidebar selection must not reveal unrelated completed conversations');
  all(section,'BUTTON').find(node=>node.textContent==='All conversations').onclick();assert.equal(section.dataset.mobileChat,'false','Mobile back returns to the conversation list');
  console.log('Question draft, history, acceptance and plan editor behavior passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -1200,8 +1200,8 @@ function mount(document, bootstrap) {
   function showQuestion(question) {
     openConversation(question.project,question.plan_path,Number(question.id));
   }
-  function openConversation(project,plan,id=null) {
-    selectedThread=JSON.stringify([project,plan||'']);questionFocus=id;questionNavigation=true;questionFilter='all';conversationMobile=true;
+  function openConversation(project,plan,id=null,keepFilter=false) {
+    selectedThread=JSON.stringify([project,plan||'']);questionFocus=id;questionNavigation=true;if(!keepFilter)questionFilter='all';conversationMobile=true;
     $('detail').close();void selectTab('Questions');
   }
   function planMessageButton(row) {
@@ -1316,7 +1316,7 @@ function mount(document, bootstrap) {
       group.append(el('h3',project+' · '+projectCount+' '+t('pending')));
       for(const thread of shown.filter(thread=>thread.project===project)){
         const target=thread.pending[0]||thread.questions.at(-1),preview=String(target?.text||target?.question||target?.item||'').split(/\r?\n/).find(line=>line.trim())||t('No recorded questions.');
-        const row=button('',()=>openConversation(thread.project,thread.plan));row.className='messenger-thread';row.setAttribute('aria-pressed',String(thread.id===selectedThread));row.setAttribute('aria-label',thread.name+' · '+thread.pending.length+' '+t('pending'));
+        const row=button('',()=>openConversation(thread.project,thread.plan,null,true));row.className='messenger-thread';row.setAttribute('aria-pressed',String(thread.id===selectedThread));row.setAttribute('aria-label',thread.name+' · '+thread.pending.length+' '+t('pending'));
         const title=el('span',undefined,'messenger-thread-title');title.append(el('strong',thread.name));if(thread.pending.length)title.append(el('span',thread.pending.length,'messenger-count'));
         row.append(title,el('span',preview,'messenger-preview'),el('small',thread.pending.length?t(questionKind(thread.pending[0]))+' · '+t('Needs you'):t(thread.status||'Recorded history')));group.append(row);
       }
@@ -1350,10 +1350,13 @@ function mount(document, bootstrap) {
     if(latestAnswer){const latest=el('div',undefined,'messenger-message messenger-answer'),preview=String(latestAnswer.text).split(/\r?\n/).find(line=>line.trim())||'';latest.append(el('small',t(questionKind(latestAnswer.question)==='Acceptance'&&!questionAnswered(latestAnswer.question)?'Latest saved note':'Latest recorded answer')+' · '+(latestAnswer.question.answered_by||'')+' · '+latestAnswer.at),el('p',preview.slice(0,240)+(preview.length>240?'…':'')));body.append(latest);}
 
     if(active){
-      const pending=el('div',undefined,'messenger-pending');pending.append(el('label',selected.pending.length+' '+t('pending')+' · '+t('Choose the question to answer')));
+      const pending=el('div',undefined,'messenger-pending');
+      if(selected.pending.length>1){pending.append(el('label',selected.pending.length+' '+t('pending')+' · '+t('Choose the question to answer')));
       const choose=el('select');choose.setAttribute('aria-label',t('Choose the question to answer'));
       for(const question of selected.pending){const option=el('option','#'+question.id+' · '+t(questionKind(question))+' · '+String(question.text||question.question||question.item||'').split(/\r?\n/)[0].slice(0,100));option.value=question.id;choose.append(option);}choose.value=active.id;
-      choose.onchange=()=>{questionFocus=Number(choose.value);questionNavigation=true;renderQuestionsPage();};pending.append(choose);body.append(pending);
+      choose.onchange=()=>{questionFocus=Number(choose.value);questionNavigation=true;renderQuestionsPage();};pending.append(choose);}
+      else pending.append(el('small','1 '+t('pending'),'dim'));
+      body.append(pending);
       const card=questionCard(active);card.className='question messenger-request';body.append(card);
     }else body.append(el('p',t(selected.questions.length?'No open questions for this plan.':'No recorded questions.'),'messenger-empty'));
     if(questionNavigation){questionNavigation=false;title.focus({preventScroll:true});head.scrollIntoView({block:'start'});}

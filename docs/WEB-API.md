@@ -238,7 +238,9 @@ latest recorded answer where available. A compact expandable timeline orders the
 recorded questions and current answers by timestamp. Acceptance notes expose only
 the latest stored note; the interface does not imply a complete note history.
 
-One pending question at a time has a composer. A selector lists all pending questions
+Selecting a conversation in the sidebar retains the chosen filter. Opening Messages
+from Plans can switch to All to reveal that plan. One pending question at a time has
+a composer. When more than one question is pending, a selector lists all pending questions
 of the selected plan, preserving independent answer drafts when switching. Full
 reports, recommendations and evidence remain expandable, project-wide scope is
 under **Answer options**, and optional rejected package selection is under
