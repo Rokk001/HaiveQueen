@@ -248,10 +248,23 @@ def execute(conn, action, data):
     if action == 'questions':
         from . import web_drafts
         questions = runtime.list_questions(conn, project, status=None if data.get('history') in (True, '1') else 'open', plan=plan)
+        if data.get('compact') in (True, '1'):
+            for question in questions:
+                question['details_pending'] = True
+                question['owner_check_result'] = db.owner_check_result(conn, question['id'])
+            return questions
         for question in questions:
             web_drafts.question_context(conn, question)
             question['packages'] = question_service.plan_packages(conn, question['project'], question['plan_path'])
         return questions
+    if action == 'questions/detail':
+        from . import web_drafts
+        rows = db.rows(conn, 'SELECT id,project,plan_path,item,question,recommendation,status,answer,answered_by,created_at,answered_at FROM questions WHERE id=? AND status != ?', (int(data['id']), 'fault_check'))
+        if not rows:
+            raise KeyError('Unknown question')
+        question = web_drafts.question_context(conn, rows[0])
+        question['packages'] = question_service.plan_packages(conn, question['project'], question['plan_path'])
+        return question
     if action == 'plan/step-log':
         from . import orchestrator
         step = data.get('step')

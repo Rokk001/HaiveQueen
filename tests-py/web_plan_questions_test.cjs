@@ -11,7 +11,7 @@ assert.equal(helpers.questionAnswered({answered_at:'today'}),true);
 assert.equal(helpers.questionAnswered({answer:''}),false);
 assert.equal(helpers.questionAnswered({status:'open',answered_at:'today',answer:'note'}),false,'Saving acceptance note must keep check open');
 assert(source.includes('questionDrafts.set'),'Drafts must survive rerender and navigation');
-assert(source.includes("client.request('questions?history=1')"),'History must be loaded');
+assert(source.includes("client.request('questions?history=1&compact=1')"),'History must be loaded');
 assert(source.includes("client.action(current.plan?'plans/save':'plans/create'"),'Draft saving must be distinct from submitting');
 assert(source.includes("act('plan/start'"),'Submission must remain explicit');
 assert(source.includes("row.status==='DRAFT'"),'Only drafts can be edited');

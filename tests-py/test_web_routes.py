@@ -13,6 +13,13 @@ from haivequeen import web_auth, web_server
 
 
 class WebRoutesTests(unittest.TestCase):
+    def test_question_details_require_authenticated_get(self):
+        self.configure()
+        self.assertEqual(self.request('GET', '/api/questions/detail?id=1')[0], 401)
+        status, _, body = self.request('GET', '/api/questions/detail?id=1', headers=self.login())
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['action'], 'questions/detail')
+
     def test_draft_mutations_require_owner_session_and_csrf(self):
         self.configure()
         for action in ('plans/create', 'plans/save'):

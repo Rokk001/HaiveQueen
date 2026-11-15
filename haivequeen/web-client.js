@@ -236,6 +236,19 @@ class RenderGate {
   }
   render() { this.draw(); }
 }
+// Cache only the selected question's expanded evidence, invalidated by changed records.
+class QuestionDetails {
+  constructor(request){this.request=request;this.entries=new Map();}
+  get(question){const entry=this.entries.get(question.id);return entry?.signature===JSON.stringify(question)?entry:null;}
+  load(question){
+    let entry=this.get(question);if(entry)return entry.promise;
+    entry={signature:JSON.stringify(question)};this.entries.set(question.id,entry);
+    if(this.entries.size>32)this.entries.delete(this.entries.keys().next().value);
+    entry.promise=this.request('questions/detail?id='+encodeURIComponent(question.id)).then(value=>{entry.value=value;return value;},error=>{entry.error=error;throw error;});
+    return entry.promise;
+  }
+  retry(question){this.entries.delete(question.id);return this.load(question);}
+}
 class Client {
   constructor(options = {}) {
     Object.assign(this, {csrf:'', fetch:(...args)=>fetch(...args), confirm:()=>false, notice:()=>{}, onState:()=>{}, onError:()=>{}, project:'', loading:false, refreshWanted:false}, options);
@@ -470,6 +483,7 @@ function mount(document, bootstrap) {
   const renderGate=new RenderGate(()=>renderStateNow(client.state));
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
   const questionDrafts=new Map();
+  const questionDetails=new QuestionDetails(route=>client.request(route));
   const planFilters={search:'',project:'',status:''};
   let questionsLoaded=false,plansLoaded=false;
   let questionFilter='open', questionFocus=null, questionNavigation=false, selectedThread=null, conversationMobile=false, planDraft=null;
@@ -1346,7 +1360,32 @@ function mount(document, bootstrap) {
     }
     return events.sort((a,b)=>a.at.localeCompare(b.at)||Number(a.question.id)-Number(b.question.id)||(a.type==='question'?-1:1));
   }
+  function questionEvidence(question){
+    const evidence=el('details'),content=el('div');
+    evidence.append(el('summary',t('Context and evidence')),content);
+    evidence.ontoggle=async()=>{
+      if(!evidence.open)return;
+      content.replaceChildren(el('p',t('Loading messages\u2026')));
+      try{
+        const value=question.details_pending?await questionDetails.load(question):question;
+        content.replaceChildren(valueView(value.evidence||{}));
+      }catch(error){content.replaceChildren(el('p',error.message),button('Retry',()=>{questionDetails.entries.delete(question.id);void evidence.ontoggle();}));}
+    };
+    return evidence;
+  }
   function questionCard(question) {
+      if(question.details_pending){
+        const entry=questionDetails.get(question);
+        if(entry?.value)question=entry.value;
+        else {
+          const loading=el('article',undefined,'card question');loading.setAttribute('aria-busy',String(!entry?.error));
+          loading.append(el('p',entry?.error?entry.error.message:t('Loading messages\u2026')));
+          const redraw=()=>{if(tab==='Questions')renderQuestionsPage();};
+          if(entry?.error)loading.append(button('Retry',()=>{void questionDetails.retry(question).then(redraw,redraw);redraw();}));
+          else if(!entry)void questionDetails.load(question).then(redraw,redraw);
+          return loading;
+        }
+      }
       const answered=questionAnswered(question),kind=questionKind(question),check=kind==='Acceptance';
       const card=el('article',undefined,'card question');card.dataset.question=question.id;card.tabIndex=-1;card.setAttribute('aria-label',t(kind)+' #'+question.id+' '+question.project);
       card.append(el('small',t(kind)+' #'+question.id+' · '+t(answered?'Answered':'Needs you')));
@@ -1384,6 +1423,7 @@ function mount(document, bootstrap) {
   }
   function renderQuestions() {
     const box=section('Questions');box.className='questions-messenger';box.dataset.mobileChat=String(conversationMobile);
+    if(!questionsLoaded){box.setAttribute('aria-busy','true');box.append(el('p',t('Loading messages\u2026'),'messenger-empty'));return;}
     const threads=questionThreads(questions,plans),shown=threads.filter(thread=>questionFilter==='all'||(questionFilter==='open'?thread.pending.length:thread.questions.length&&!thread.pending.length&&thread.questions.every(questionAnswered)));
     if(!selectedThread && shown.length)selectedThread=shown[0].id;
     const selected=shown.find(thread=>thread.id===selectedThread)||shown[0];if(selected)selectedThread=selected.id;
@@ -1422,7 +1462,7 @@ function mount(document, bootstrap) {
       bubble.append(el('small',[label,event.type==='answer'?event.question.answered_by:'',event.at].filter(Boolean).join(' · ')));
       const preview=event.text.split(/\r?\n/).find(line=>line.trim())||event.text;bubble.append(el('p',preview.slice(0,240)+(preview.length>240?'…':'')));
       if(event.text!==preview||preview.length>240){const full=el('details');full.append(el('summary',t('Full text')),el('pre',event.text));bubble.append(full);}
-      if(event.type==='question' && event.question.evidence){const evidence=el('details');evidence.append(el('summary',t('Context and evidence')),valueView(event.question.evidence));bubble.append(evidence);}
+      if(event.type==='question' && (event.question.evidence||event.question.details_pending))bubble.append(questionEvidence(event.question));
       if(event.type==='question' && event.question.recommendation){const recommendation=el('details');recommendation.append(el('summary',t('Recommendation')),el('pre',event.question.recommendation));bubble.append(recommendation);}
       if(event.type==='answer' && event.question.owner_check_result)bubble.append(el('strong',t(event.question.owner_check_result==='accepted'?'Accepted':'Rejected')));
       timeline.append(bubble);
@@ -1882,7 +1922,7 @@ function mount(document, bootstrap) {
   async function refreshLists() {
     const tasks=[];
     if(['Plans','Questions'].includes(tab)&&!planLoading){planLoading=true;tasks.push(client.request('plans').then(value=>{const changed=!plansLoaded||JSON.stringify(plans)!==JSON.stringify(value);plansLoaded=true;if(changed){plans=value;if(['Plans','Questions'].includes(tab))render();}}).finally(()=>planLoading=false));}
-    if(['Questions','Plans'].includes(tab)&&!questionLoading){questionLoading=true;tasks.push(client.request('questions?history=1').then(value=>{
+    if(['Questions','Plans'].includes(tab)&&!questionLoading){questionLoading=true;tasks.push(client.request('questions?history=1&compact=1').then(value=>{
       const changed=!questionsLoaded||JSON.stringify(questions)!==JSON.stringify(value);questionsLoaded=true;if(changed){questions=value;if(['Questions','Plans'].includes(tab))render();}
     }).finally(()=>questionLoading=false));}
     if(tab==='Providers'&&!providerLoading){providerLoading=true;tasks.push(client.request('providers').then(value=>{if(JSON.stringify(value)!==JSON.stringify(providerStates)){providerStates=value;if(tab==='Providers'&&!editor?.dirty)render();}}).finally(()=>providerLoading=false));}
@@ -1909,5 +1949,5 @@ function mount(document, bootstrap) {
   void tick();setInterval(()=>void tick(),2000);
   return client;
 }
-if(typeof module!=='undefined')module.exports={settingsCategory,workflowSummary,testTimingNotice,LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
+if(typeof module!=='undefined')module.exports={QuestionDetails,settingsCategory,workflowSummary,testTimingNotice,LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));
