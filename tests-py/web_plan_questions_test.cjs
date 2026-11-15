@@ -33,11 +33,11 @@ const content=node=>node.textContent+node.children.map(content).join('');
 const button=(label,fn)=>{const node=el('button',label);node.onclick=fn;return node;};
 const body=source.slice(source.indexOf('  function showQuestion('),source.indexOf('  function renderUpdates('));
 const actions=[],requests=[],dialog=el('div'),view=el('div'),drafts=new Map();let section;
-let saveFails=false;
-const client={state:{projects:[{name:'Demo',plan_globs:['docs/plans/*.md'],suggested_plan_folder:'docs/plans'}]},notice:()=>{},action:async(route,data)=>{requests.push([route,data]);if(saveFails)return null;return {plan:'docs/plans/new-PLAN.md',revision:'r1'};}};
+let saveFails=false,allowDiscard=true,confirmations=0;
+const client={state:{projects:[{name:'Demo',plan_globs:['docs/plans/*.md'],suggested_plan_folder:'docs/plans'},{name:'Other',plan_globs:['plans/*.md'],suggested_plan_folder:'plans'}]},notice:()=>{},action:async(route,data)=>{requests.push([route,data]);if(saveFails)return null;return {plan:'docs/plans/new-PLAN.md',revision:'r1'};}};
 const setup=new Function('el','button','t','client','view','questionDrafts','$','detail','section','act','key','valueView','openQueuedPlan','selectTab','refreshLists','requestConfirm',
  "let planDraft=null,questionFilter='open',questionFocus=null,questions=[],plans=[];"+body+"return {openPlanEditor,renderQuestions,setQuestions:value=>questions=value,setFilter:value=>questionFilter=value};");
-const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section=el('section');return section;},async(route,data)=>{actions.push([route,data]);return {ok:true};},q=>({project:q.project,plan:q.plan_path}),value=>el('pre',JSON.stringify(value)),()=>{},()=>{},()=>{},async()=>true);
+const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section=el('section');return section;},async(route,data)=>{actions.push([route,data]);return {ok:true};},q=>({project:q.project,plan:q.plan_path}),value=>el('pre',JSON.stringify(value)),()=>{},()=>{},()=>{},async()=>{confirmations++;return allowDiscard;});
 (async()=>{
  api.setQuestions([{id:1,item:'owner-check',status:'open',answer:'Previous note',answered_at:'today',project:'Demo',plan_path:'p.md',question:'Review result\n\nReport: still pending',packages:['P1','P2']}]);api.renderQuestions();
  assert(content(section).includes('Previous note'));assert(content(section).includes('Report: still pending'));
@@ -47,7 +47,11 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  api.renderQuestions();assert.equal(all(section,'TEXTAREA')[0].value,'Check P2');assert.equal(all(section,'INPUT').find(node=>node.attrs['aria-label']==='Rejected packages (comma separated)').value,'P2');
  await all(section,'BUTTON').find(node=>node.textContent==='Reject').onclick();assert.deepEqual(actions.pop(),['owner/reject',{project:'Demo',plan:'p.md',text:'Check P2',packages:['P2']}]);
  api.setQuestions([{id:2,status:'answered',answer:'Approved option B',answered_at:'today',project:'Demo',question:'Choose'}]);api.setFilter('answered');api.renderQuestions();assert(content(section).includes('Approved option B'));assert.equal(all(section,'TEXTAREA').length,0);
- await api.openPlanEditor();assert(all(dialog,'H2').some(node=>node.id==='detail-title'),'Editor dialog must retain its accessible title');const markdown=all(dialog,'TEXTAREA')[0];markdown.value='# New plan\n\nRequirement';markdown.oninput();
+ await api.openPlanEditor();assert(all(dialog,'H2').some(node=>node.id==='detail-title'),'Editor dialog must retain its accessible title');const projectSelect=all(dialog,'SELECT')[0],filename=all(dialog,'INPUT').find(node=>node.attrs['aria-label']==='Plan file');
+ projectSelect.value='Other';projectSelect.onchange();assert.equal(filename.value,'plans/new-PLAN.md','Automatic path follows selected project');
+ filename.value='plans/custom.md';filename.oninput();projectSelect.value='Demo';projectSelect.onchange();assert.equal(filename.value,'plans/custom.md','Manual filename must not be overwritten');
+ const markdown=all(dialog,'TEXTAREA')[0];markdown.value='# New plan\n\nRequirement';markdown.oninput();
+ allowDiscard=false;await api.openPlanEditor({status:'DRAFT',apiary:'Demo',plan_path:'another.md'},{text:'# Different',revision:'different'});assert.equal(all(dialog,'TEXTAREA')[0].value,'# New plan\n\nRequirement','Refusing replacement retains new draft');assert.equal(confirmations,1);allowDiscard=true;
  await all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();assert.equal(requests[0][0],'plans/create');assert.equal(requests[0][1].content,'# New plan\n\nRequirement');assert.equal(actions.length,0,'Saving must not submit');
  await all(dialog,'BUTTON').find(node=>node.textContent==='Submit plan').onclick();assert.deepEqual(actions.pop(),['plan/start',{project:'Demo',plan:'docs/plans/new-PLAN.md'}]);
  await api.openPlanEditor({status:'DRAFT',apiary:'Demo',plan_path:'p.md'},{text:'# Existing',revision:'old'});
@@ -56,5 +60,6 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  saveFails=true;await all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();assert.equal(all(dialog,'TEXTAREA')[0].value,'# Imported\n\nRequirement','Validation errors must preserve the imported text');
  saveFails=false;await all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();assert.equal(requests.at(-1)[0],'plans/save');assert.equal(requests.at(-1)[1].revision,'old');
  await api.openPlanEditor();assert.equal(all(dialog,'TEXTAREA')[0].value,'# Imported\n\nRequirement','Closing and reopening preserves draft');
+ const previousConfirmations=confirmations;await api.openPlanEditor(null,null,true);assert.equal(all(dialog,'TEXTAREA')[0].value,'','A saved draft does not prevent creating another plan');assert.equal(confirmations,previousConfirmations,'Saved draft needs no discard confirmation');
  console.log('Question draft, history, acceptance and plan editor behavior passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
