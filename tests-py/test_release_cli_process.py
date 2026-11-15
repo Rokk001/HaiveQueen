@@ -24,6 +24,9 @@ class ReleaseCliProcessTest(RoundCase):
     def test_public_install_preserves_launched_agents(self):
         self._compatible_switch(public=True, launched=True)
 
+    def test_public_install_successor_schedules_startable_plan(self):
+        self._compatible_switch(public=True, launched=True, scheduling=True)
+
     def test_public_install_successor_harvests_detached_jobs(self):
         self._compatible_switch(public=True, adoption=True)
 
@@ -46,7 +49,7 @@ class ReleaseCliProcessTest(RoundCase):
         self._compatible_switch(public=True, incompatible=True, force=True, reason="shared settings format change")
 
     def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False,
-                           reason="shared schema change", adoption=False, launched=False):
+                           reason="shared schema change", adoption=False, launched=False, scheduling=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -129,6 +132,8 @@ class ReleaseCliProcessTest(RoundCase):
             os.environ['TEST_LIVE_BASE'] = str(self.base)
             self.addCleanup(os.environ.pop, 'TEST_LIVE_BASE', None)
         env = dict(os.environ, BZZ_NO_DESKTOP='1')
+        if scheduling:
+            env.pop('BZZ_TEST_NOSTART', None)
         jobs = []
         detached = []
         core = None
@@ -296,6 +301,41 @@ class ReleaseCliProcessTest(RoundCase):
                         break
                     time.sleep(.05)
                 self.assertTrue(all(runtime.get_agent(self.conn, 'testproj', name)['status'] == 'done' for name in real_names))
+            if scheduling:
+                plan_path = 'docs/plans/next/NEXT-PLAN.md'
+                self.plan('RUNNING', [{'id': 'P1', 'class': 'medium'}], rel=plan_path,
+                          branch='feature', worktree=str(self.base / 'next-worktree'))
+                def git(*args):
+                    return subprocess.run(['git', '-C', str(self.repo), *args], check=True,
+                                          capture_output=True, text=True)
+                git('init', '-q', '-b', 'main')
+                git('config', 'user.name', 'Test')
+                git('config', 'user.email', 'test@example.invalid')
+                git('add', '--', '.haivequeen/project.toml', plan_path)
+                git('commit', '-qm', 'Create isolated plan')
+                git('branch', 'feature')
+                deadline = time.monotonic() + 40
+                row = None
+                while time.monotonic() < deadline:
+                    rows = self.conn.execute("SELECT name, status FROM agents WHERE project=? AND plan_path=? AND phase='queen'", ('testproj', plan_path)).fetchall()
+                    if rows:
+                        row = rows[-1]
+                        break
+                    time.sleep(.1)
+                self.assertIsNotNone(row, 'successor did not schedule a Queen')
+                marker = self.base / (row['name'] + '-started')
+                deadline = time.monotonic() + 30
+                while not marker.exists() and time.monotonic() < deadline:
+                    time.sleep(.05)
+                self.assertTrue(marker.exists(), 'scheduled Queen did not start')
+                self.assertEqual(Path(marker.read_text()), root / 'versions' / '2.0.0' / 'haivequeen' / 'cli.py')
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    scheduled = runtime.get_agent(self.conn, 'testproj', row['name'])
+                    if scheduled['status'] != 'running':
+                        break
+                    time.sleep(.05)
+                self.assertEqual(scheduled['status'], 'done')
             if not incompatible:
                 self.assertTrue(all(job.poll() is None for job in jobs))
                 self.assertTrue(all(job.process.poll() is None for job, _, _, _ in detached))
