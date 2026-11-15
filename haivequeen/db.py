@@ -356,7 +356,7 @@ def answer_question(conn, qid: int, text: str, by: str, apiary: bool = False) ->
         row = conn.execute("SELECT * FROM questions WHERE id=?", (qid,)).fetchone()
         if row is None:
             raise KeyError(f"unknown question {qid}")
-        if row["status"] != "open" and not (row["status"] == "fault_check" and by == "coordinator"):
+        if row["status"] != "open" and not (row["status"] == "fault_check" and by == "coordinator") and not (row["status"] == "triage" and by == "owner"):
             raise KeyError(f"question {qid} is already answered")
         item = row['item'] or ''
         if item == 'owner-check' or (item.startswith('owner-check-') and item != 'owner-check-answered'):

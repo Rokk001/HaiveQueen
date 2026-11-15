@@ -59,14 +59,14 @@ class CliTest(unittest.TestCase):
                 with self.subTest(command=command, detail=detail):
                     self.assertIn(detail, help_text)
 
-    # ask -> questions --open -> answer -> no open questions.
+    # ask -> pending review -> explicit owner answer -> no pending question.
     def test_ask_answer_questions(self):
-        """ask -> questions --open -> answer -> no open questions."""
+        """ask -> pending review -> explicit owner answer -> no pending question."""
         code, o = self.run_orch("ask", "--project", "p", "--plan", "x.md", "--item", "I1",
                                 "--question", "Which?", "--recommendation", "A")
         self.assertEqual(code, 0)
         qid = json.loads(o)["id"]
-        self.assertEqual(len(json.loads(self.run_orch("questions", "--open")[1])), 1)
+        self.assertEqual(len(json.loads(self.run_orch("questions", "--status", "triage")[1])), 1)
         code, o = self.run_orch("answer", str(qid), "A", "--by", "owner")
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(self.run_orch("questions", "--open")[1]), [])

@@ -213,3 +213,17 @@ class TechnicalDiagnosis(OrchCase):
         self.assertEqual(len(questions), 1)
         self.assertIn('structured diagnosis', questions[0]['question'])
         self.assertNotIn('Give an instruction', questions[0]['question'])
+
+    def test_protocol_recovery_answer_requires_diagnosis_not_direct_repair(self):
+        self.start_review()
+        self.finish_review(evidence=[])
+        self.round()
+        self.finish_review(evidence=[])
+        state = self.state()
+        state['fix']['review_required'] = False
+        qid = state['blocked']['question']
+        db.answer_question(self.conn, qid, 'The provider configuration has been corrected.', 'owner')
+        orchestrator._advance_blocked(self.conn, self.env(), REL, state)
+        self.assertTrue(state['fix']['review_required'])
+        self.assertFalse(state['fix'].get('review_authorized'))
+        self.assertEqual(orchestrator._attempts(self.conn, self.env(), REL)['n'], 1)

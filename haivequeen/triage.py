@@ -67,6 +67,12 @@ def advance(env, free_mb, alive=None):
         plan, qid = question['plan_path'], question['id']
         key = 'question-review:' + str(qid)
         state = json.loads(runtime.kv_get(conn, env.name, key) or '{}')
+        if state.get('blocked_question'):
+            prerequisite = conn.execute('SELECT status FROM questions WHERE id=?', (state['blocked_question'],)).fetchone()
+            if not prerequisite or prerequisite[0] != 'answered':
+                continue
+            state.pop('blocked_question', None)
+            state.pop('review_rejection', None)
         agents = runtime.list_agents(conn, None, 'all')
         worker = next((a for a in agents if a['project'] == env.name and a['name'] == state.get('agent')), None)
         if worker and agent_process.counts(worker, alive or platform.process_alive):
@@ -102,10 +108,9 @@ def advance(env, free_mb, alive=None):
                 message = repair_review.reject(state, current, str(exc), state['agent'])
                 state.update(agent=None, feedback=str(exc))
                 if message:
-                    with db.transaction(conn):
-                        conn.execute("UPDATE questions SET status='open',question=?,recommendation=? WHERE id=? AND status='triage'",
-                                     (message, 'Restore valid diagnosis output; do not bypass verification.', qid))
-                        db.add_event(conn, env.name, 'question', message, data={'question_id': qid})
+                    state['blocked_question'] = db.add_question(conn, env.name, plan,
+                        'question-review-prerequisite:' + str(qid), message,
+                        'Restore valid diagnosis output; the original question still requires review.')
                 runtime.kv_set(conn, env.name, key, json.dumps(state))
                 continue
         if bees.drain_refusal() or free_mb / 1024 < loop._min_ram(env):

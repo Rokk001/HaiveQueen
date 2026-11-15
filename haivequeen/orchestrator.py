@@ -1523,7 +1523,7 @@ def _finish_review(conn, env, plan, state):
         if message:
             qid = db.add_question(conn, env.name, plan, 'fix-escalation', message,
                                   'Restore valid diagnosis output; preserve attempts and verification requirements.')
-            state.update(phase='blocked', blocked={'kind': 'diagnosis', 'question': qid})
+            state.update(phase='blocked', blocked={'kind': 'diagnosis-protocol', 'question': qid})
             hives.release_integration(conn, env.name, plan)
             _set_status(conn, env, plan, 'WAITING')
         save(conn, env.name, plan, state)
@@ -1595,6 +1595,14 @@ def _advance_blocked(conn, env, plan, state):
         state['step'] = state['blocked']['step']
         state['phase'] = 'pipeline'
         state['steps'][state['step']] = 'todo'
+        state.pop('blocked', None)
+        save(conn, env.name, plan, state)
+        return None
+    if state['blocked'].get('kind') == 'diagnosis-protocol':
+        state['phase'] = 'fix'
+        state['fix'].update(agent=None, instruction=str(row[1] or ''), review_required=True)
+        state['fix'].pop('review_authorized', None)
+        state['fix'].pop('review_rejection', None)
         state.pop('blocked', None)
         save(conn, env.name, plan, state)
         return None

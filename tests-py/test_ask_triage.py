@@ -191,6 +191,26 @@ class AskTriageTest(RoundCase):
         self.assertNotEqual(new['scope'], state['scope'])
         self.assertNotEqual(new['agent'], state['agent'])
 
+    def test_provider_recovery_does_not_answer_the_original_technical_question(self):
+        from haivequeen import triage
+        self.plan('RUNNING', [{'id': 'P1'}])
+        qid = self.ask('P1', 'How should the comment conflict be resolved?')['id']
+        for _ in range(2):
+            triage.advance(self.env(), 8192, alive=lambda pid: False)
+            state = json.loads(runtime.kv_get(self.conn, 'testproj', 'question-review:' + str(qid)))
+            self.finish(state['agent'])  # Provider produced no structured answer.
+            triage.advance(self.env(), 8192, alive=lambda pid: False)
+        self.assertEqual(self.status(qid)['status'], 'triage')
+        external = runtime.list_questions(self.conn, 'testproj', 'open')
+        self.assertEqual(len(external), 1)
+        self.assertNotEqual(external[0]['id'], qid)
+        db.answer_question(self.conn, external[0]['id'], 'Provider configuration restored.', 'owner')
+        triage.advance(self.env(), 8192, alive=lambda pid: False)
+        state = json.loads(runtime.kv_get(self.conn, 'testproj', 'question-review:' + str(qid)))
+        self.assertTrue(state.get('agent'))
+        self.assertEqual(self.status(qid)['status'], 'triage')
+        self.assertFalse(self.status(qid)['answer'])
+
 
 if __name__ == "__main__":
     unittest.main()
