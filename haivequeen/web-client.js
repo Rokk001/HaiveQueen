@@ -470,6 +470,8 @@ function mount(document, bootstrap) {
   const renderGate=new RenderGate(()=>renderStateNow(client.state));
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
   const questionDrafts=new Map();
+  const planFilters={search:'',project:'',status:''};
+  let questionsLoaded=false,plansLoaded=false;
   let questionFilter='open', questionFocus=null, questionNavigation=false, selectedThread=null, conversationMobile=false, planDraft=null;
   let releaseProject='', releaseData=null, releaseError='', releaseRequest=0;
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
@@ -859,9 +861,10 @@ function mount(document, bootstrap) {
   document.addEventListener('click',event=>{const menu=$('controls').querySelector('details');if(menu && !menu.contains(event.target))menu.open=false;});
   $('controls').addEventListener('keydown',event=>{if(event.key==='Escape'){const menu=$('controls').querySelector('details');if(menu){menu.open=false;menu.querySelector('summary').focus();}}});
   function render() {
+    if(tab==='Plans' && document.activeElement?.dataset.planFilter==='search' && document.activeElement?.dataset.composing==='true')return;
     const sameTab=view.dataset.tab===tab,pageX=window.scrollX,pageY=window.scrollY,navigatingQuestion=tab==='Questions' && questionNavigation;
     const positions=sameTab?[...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].map(node=>({left:node.scrollLeft,top:node.scrollTop,open:node.open})):[];
-    const focused=document.activeElement,selection=focused?.selectionStart,editingFilter=sameTab && focused?.placeholder===t('Filter');
+    const focused=document.activeElement,selection=focused?.selectionStart,selectionEnd=focused?.selectionEnd,selectionDirection=focused?.selectionDirection,planFilterFocus=sameTab&&tab==='Plans'?focused?.dataset.planFilter:null,editingFilter=sameTab && focused?.placeholder===t('Filter');
     if(sameTab)view.style.minHeight=view.getBoundingClientRect().height+'px';
     view.dataset.tab=tab;view.replaceChildren();
     view.className=tab==='Dashboard'?'dashboard':tab==='Logs'?'logs-view':'editor-view';
@@ -876,6 +879,7 @@ function mount(document, bootstrap) {
     [...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].forEach((node,index)=>{const position=positions[index];if(position){node.scrollLeft=position.left;if(!node.classList.contains('log')||!logFollow)node.scrollTop=position.top;}});
     view.style.minHeight='';
     if(sameTab && !navigatingQuestion)window.scrollTo({left:pageX,top:pageY,behavior:'instant'});
+    if(planFilterFocus){const control=view.querySelector('[data-plan-filter="'+planFilterFocus+'"]');control?.focus({preventScroll:true});if(planFilterFocus==='search' && selection!=null)control?.setSelectionRange(selection,selectionEnd,selectionDirection);}
     if(editingFilter){const input=view.querySelector('input[placeholder]');input?.focus({preventScroll:true});input?.setSelectionRange(selection,selection);}
   }
   function projectSelect(onchange, selected, all=true) {
@@ -1251,8 +1255,70 @@ function mount(document, bootstrap) {
     current.syncEditor();
     controls.append(save,submit);form.append(el('label',t('Project')),project,hint,el('label',t('Plan file')),filename,imported,content,controls,status);
   }
+  function planQuestions(row,items) {
+    return items.filter(question=>question.project===(row.project||row.apiary)&&(question.plan_path||'')===(row.plan_path||''));
+  }
+  function filterPlanRows(rows,filters,items=[]) {
+    const query=filters.search.trim().toLocaleLowerCase();
+    const active=['SENT','PREPARING','QUEUED','RUNNING','WAITING'];
+    return rows.filter(row=>(!filters.project||(row.project||row.apiary)===filters.project)&&(!filters.status||(filters.status==='active'?active.includes(row.status):filters.status==='needs-you'?planQuestions(row,items).some(q=>q.status==='open'):row.status===filters.status))&&(!query||[row.title,row.name,row.plan_path,row.project||row.apiary].some(value=>String(value||'').toLocaleLowerCase().includes(query))));
+  }
+  function planStatusLabel(row) {
+    return t({DRAFT:'Draft',SENT:'Submitted',PREPARING:'Preparing',QUEUED:'Queued',RUNNING:'In progress',WAITING:'Waiting',REVIEW:'Ready for review',DONE:'Completed',PAUSED:'Paused',CANCELLED:'Cancelled'}[row.status]||row.status||'Unknown');
+  }
+  async function editPlanFromList(row) {
+    const detail=await client.request('plan/detail?'+new URLSearchParams(key(row))),latest={...row,...detail.plan};
+    if(latest.status!=='DRAFT'||latest.missing||latest.recovery_error||latest.error){await openPlan(latest);return;}
+    await openPlanEditor(latest,detail);
+  }
+  function prioritizePlanRows(rows,items) {
+    const rank=row=>row.error||row.missing||row.recovery_error?0:planQuestions(row,items).some(q=>q.status==='open')?1:2;
+    return rows.map((row,index)=>({row,index,rank:rank(row)})).sort((a,b)=>a.rank-b.rank||a.index-b.index).map(item=>item.row);
+  }
   function renderPlans() {
-    const box=section('Plans'),create=button('New plan',()=>openPlanEditor(null,null,true));create.disabled=create.disabled||!client.state?.projects?.length;box.append(create);if(planDraft)box.append(button('Continue draft',()=>openPlanEditor()));box.append(table(plans.map(row=>({...row,started:t(row.has_hive?'yes':'no')})),['apiary','name','status','messages','started','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));
+    const box=section('Plans');box.className='plans-overview';
+    if(!plansLoaded){const loading=el('p',t('Loading plans…'),'plan-quiet');loading.setAttribute('role','status');box.append(loading);return;}
+    const toolbar=el('div',undefined,'plans-toolbar'),search=el('input');search.type='search';search.value=planFilters.search;search.placeholder=t('Find a plan…');search.dataset.planFilter='search';search.setAttribute('aria-label',t('Search plans'));
+    search.oncompositionstart=()=>{search.dataset.composing='true';};search.oncompositionend=()=>{search.dataset.composing='false';planFilters.search=search.value;render();};search.oninput=()=>{planFilters.search=search.value;render();};
+    const searchLabel=el('label',t('Search plans'),'plans-search');searchLabel.append(search);toolbar.append(searchLabel);
+    const create=button('New plan',()=>openPlanEditor(null,null,true));create.className='plan-primary-action';create.disabled=create.disabled||!client.state?.projects?.length;toolbar.append(create);if(planDraft)toolbar.append(button('Continue draft',()=>openPlanEditor()));box.append(toolbar);
+    const statuses=[['','All'],['needs-you','Needs you'],['DRAFT','Drafts'],['active','In progress'],['REVIEW','Review'],['DONE','Completed']];
+    for(const [value,label] of [['PAUSED','Paused'],['CANCELLED','Cancelled']])if(plans.some(row=>row.status===value)||planFilters.status===value)statuses.push([value,label]);
+    const tabs=el('div',undefined,'plan-status-tabs');tabs.setAttribute('role','group');tabs.setAttribute('aria-label',t('Status'));
+    for(const [value,label] of statuses){
+      const count=value==='needs-you'&&!questionsLoaded?'–':filterPlanRows(plans,{...planFilters,status:value},questions).length;
+      const control=button('',()=>{planFilters.status=value;render();});control.dataset.planFilter='status-'+value;control.dataset.planStatus=value;control.setAttribute('aria-pressed',String(planFilters.status===value));control.setAttribute('aria-label',t(label)+' · '+count);control.append(el('span',t(label)),el('span',count,'plan-chip-count'));control.disabled=control.disabled||(value==='needs-you'&&!questionsLoaded);tabs.append(control);
+    }
+    box.append(tabs);
+    const projects=[...new Set([...plans.map(row=>row.project||row.apiary),planFilters.project].filter(Boolean))].sort();
+    if(projects.length>1||planFilters.project){const group=el('div',undefined,'plan-project-chips');group.setAttribute('role','group');group.setAttribute('aria-label',t('Project'));group.append(el('span',t('Project'),'plan-project-label'));
+      for(const project of ['',...projects]){const chip=button(project||t('All projects'),()=>{planFilters.project=project;render();});chip.dataset.planFilter='project-'+encodeURIComponent(project);chip.dataset.planProject=project;chip.setAttribute('aria-pressed',String(project===planFilters.project));group.append(chip);}box.append(group);
+    }
+    const filtered=filterPlanRows(plans,planFilters,questions),summary=el('div',undefined,'plan-results-summary'),count=el('span',t('%s of %s plans').replace('%s',filtered.length).replace('%s',plans.length));count.setAttribute('role','status');summary.append(count);
+    if(planFilters.search||planFilters.project||planFilters.status)summary.append(button('Clear filters',()=>{planFilters.search='';planFilters.project='';planFilters.status='';render();view.querySelector('[data-plan-filter="search"]')?.focus({preventScroll:true});}));box.append(summary);
+    const list=el('div',undefined,'plan-overview-list');box.append(list);
+    for(const row of prioritizePlanRows(filtered,questions)){
+      const related=planQuestions(row,questions),pending=related.filter(question=>question.status==='open'),acceptance=pending.filter(question=>questionKind(question)==='Acceptance').length;
+      const attention=!!(row.error||row.missing||row.recovery_error),needs=questionsLoaded&&pending.length;
+      const card=el('article',undefined,'plan-overview-card'),identity=el('div',undefined,'plan-card-identity'),title=el('h3',row.title||row.name),status=el('span',attention?t('Needs attention'):needs?t(acceptance?'Your review needed':'Your answer needed'):planStatusLabel(row),'plan-card-status '+(attention?'needs-attention':needs?'needs-you':'status-'+String(row.status||'').toLowerCase()));card.dataset.plan=row.plan_path;
+      identity.append(el('small',t('Project')+' · '+(row.project||row.apiary),'plan-card-project'),title,status);
+      if(attention||needs)identity.append(el('span',t('Status')+' · '+planStatusLabel(row),'plan-lifecycle-meta'));
+      if(row.status==='WAITING'&&row.waiting_for)identity.append(el('p',row.waiting_for,'plan-card-context'));
+      if(row.missing)identity.append(el('p',t('Plan file missing'),'warn'));
+      if(row.error||row.recovery_error){const issue=el('details',undefined,'plan-card-issue');issue.append(el('summary',t('Plan issue')),el('pre',[row.error,row.recovery_error].filter(Boolean).join('\n')));identity.append(issue);}
+      const actions=el('div',undefined,'plan-card-actions');
+      if(!questionsLoaded)actions.append(el('span',t('Loading messages…'),'plan-quiet'));
+      else if(pending.length){
+        const labels=[];if(pending.length-acceptance)labels.push(t(pending.length-acceptance===1?'1 question':'%s questions').replace('%s',pending.length-acceptance));if(acceptance)labels.push(t(acceptance===1?'1 acceptance':'%s acceptances').replace('%s',acceptance));actions.append(el('span',labels.join(' · '),'plan-pending-count'));
+        const target=pending.find(question=>questionKind(question)==='Acceptance')||pending[0],label=acceptance?t(acceptance===1?'Review result':'Review %s results').replace('%s',acceptance):t(pending.length===1?'Answer question':'Answer %s questions').replace('%s',pending.length);
+        const respond=button(label,()=>openConversation(row.project||row.apiary,row.plan_path,Number(target.id)));respond.className='plan-card-primary highlighted';actions.append(respond);
+      }
+      else if(related.length){const history=button('View conversation',()=>openConversation(row.project||row.apiary,row.plan_path));history.className='plan-history-link';actions.append(history);}
+      else actions.append(el('span',t('No open questions'),'plan-quiet'));
+      const editable=row.status==='DRAFT'&&!attention,label=needs||attention?'View plan':editable?'Edit draft':row.status==='REVIEW'?'View result':'View plan';
+      const primary=button(label,()=>editable&&!needs?editPlanFromList(row):openPlan(row));primary.className=needs?'plan-history-link':'plan-card-primary'+(editable||row.status==='REVIEW'&&!attention?' highlighted':'');actions.append(primary);card.append(identity,actions);list.append(card);
+    }
+    if(!filtered.length){const empty=el('div',undefined,'plan-list-empty');empty.append(el('h3',t(plans.length?'No plans match these filters.':'No plans yet')),el('p',t(plans.length?'Try another search or clear the filters.':'Create a plan to describe the result you want.')));list.append(empty);}
   }
   function questionKind(question) {
     if(question.kind==='acceptance' || question.item==='owner-check' || String(question.item).startsWith('owner-check-'))return 'Acceptance';
@@ -1815,9 +1881,9 @@ function mount(document, bootstrap) {
   }
   async function refreshLists() {
     const tasks=[];
-    if(['Plans','Questions'].includes(tab)&&!planLoading){planLoading=true;tasks.push(client.request('plans').then(value=>{if(JSON.stringify(plans)!==JSON.stringify(value)){plans=value;if(['Plans','Questions'].includes(tab))render();}}).finally(()=>planLoading=false));}
+    if(['Plans','Questions'].includes(tab)&&!planLoading){planLoading=true;tasks.push(client.request('plans').then(value=>{const changed=!plansLoaded||JSON.stringify(plans)!==JSON.stringify(value);plansLoaded=true;if(changed){plans=value;if(['Plans','Questions'].includes(tab))render();}}).finally(()=>planLoading=false));}
     if(['Questions','Plans'].includes(tab)&&!questionLoading){questionLoading=true;tasks.push(client.request('questions?history=1').then(value=>{
-      if(JSON.stringify(questions)!==JSON.stringify(value)){questions=value;if(['Questions','Plans'].includes(tab))render();}
+      const changed=!questionsLoaded||JSON.stringify(questions)!==JSON.stringify(value);questionsLoaded=true;if(changed){questions=value;if(['Questions','Plans'].includes(tab))render();}
     }).finally(()=>questionLoading=false));}
     if(tab==='Providers'&&!providerLoading){providerLoading=true;tasks.push(client.request('providers').then(value=>{if(JSON.stringify(value)!==JSON.stringify(providerStates)){providerStates=value;if(tab==='Providers'&&!editor?.dirty)render();}}).finally(()=>providerLoading=false));}
     if(tab==='Dashboard'&&!updateLoading){updateLoading=true;tasks.push(client.request('updates').then(value=>{updateState=value;renderUpdates();}).finally(()=>updateLoading=false));}

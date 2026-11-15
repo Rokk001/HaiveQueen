@@ -259,9 +259,9 @@ under **Answer options**, and optional rejected package selection is under
 **Accept** and **Save note** retain their distinct semantics. Records not open are
 read-only. There is no invented agent dialogue or free-message backend.
 
-The Plans table has a visible **Messages** column. Its pending count and acceptance
-label open the same conversation as Questions; plans without pending questions
-can open their recorded history. Questions and Plans share the existing
+Plans cards show pending question and acceptance counts with direct **Answer question**
+or **Review result** actions. They open the same conversation as Questions; plans without pending
+questions can open their recorded history when one exists. Questions and Plans share the existing
 `questions?history=1` response. The plan link is offered only when that plan exists
 in the current plan list. On narrow screens, selecting a thread replaces the list
 with the conversation. The back button names the active filter (for example,
@@ -283,3 +283,39 @@ The update status hides failed attempts targeting an older version than the inst
 Global plan controls expose eligible target counts in `state.controls.plans`. The menu disables each action when its count is zero or unavailable. Counts use the same server selection as the confirmation preview, including global-stop membership and the live-work guard for Resume. Each dashboard refresh updates availability; confirmation still revalidates the selected plans before execution.
 
 Scheduling-lock recovery preserves malformed metadata as `hive-schedule.lock.recovered-<unique-id>` only when its unchanged timestamp predates a known system boot and the exclusive OS guard is held. This recovers crash-damaged lock files without terminating processes. Recent or unverifiable metadata and live holders remain blocking; unreadable metadata is reported explicitly rather than attributing it to an unknown process. New lock metadata is flushed to disk. Existing production locks are not modified by installing this code; recovery occurs on the next acquisition by the updated scheduler.
+
+### Plans overview
+
+Plans is an actionable list. Each card shows the real Markdown title (falling back
+to its file name), the explicitly labelled project, and a readable lifecycle status.
+Technical fields such as Started, Waiting and Error remain available in plan details;
+a WAITING plan also shows its recorded waiting reason on its card. Completed means
+the plan is DONE, with no additional claim about publication or deployment.
+
+Search covers title, file name, path and project without case sensitivity. Visible
+status chips combine with compact project chips: All, Needs you, Drafts, In progress,
+Review and Completed. Paused and Cancelled appear when present. In progress groups
+SENT, PREPARING, QUEUED, RUNNING and WAITING; Needs you uses actual open questions
+matching both project and plan, not plan status. Chip counts reflect the current
+search and project. Until question data arrives, message state is shown as loading
+and Needs you is unavailable, rather than implying zero open questions.
+
+Pending **Answer question(s)** and **Review result(s)** actions open the existing
+plan conversation at the relevant question. The card highlights **Your answer
+needed** or **Your review needed**, retaining the actual lifecycle status beside it;
+**View plan** is the secondary action. Recorded history remains accessible; plans with no questions have quiet text rather
+than an empty conversation button. **Edit draft** fetches the current plan detail
+and revision before editing; a plan that is no longer an editable draft opens its
+details instead. Missing, recovery-blocked or invalid plans offer details, not editing. A **Needs
+attention** label and expandable exact error keep malformed header/class problems
+visible. Attention items and plans with real pending questions come before other
+plans, preserving the existing order within each group.
+**View result** opens review plan details; other plans offer **View plan**.
+
+Before the first successful plan fetch, the overview shows **Loading plans**;
+only a successful empty response shows **No plans yet**. The result count and
+empty state reflect the combined filters. **Clear filters**
+resets search, project and status. Values persist across polling and tab switches
+within the page, search focus and text selection survive polling, and an active
+input composition finishes before redraw. Long plan and project names wrap, and
+cards and action buttons adapt to narrow screens.

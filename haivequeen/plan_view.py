@@ -17,10 +17,11 @@ def plan_rows(conn) -> list:
     """One row per plan file of every registered Project (and per plan the table knows): project, plan_path, name, status, has_hive, stopped, error, waiting_for.
 
     The status comes from the plans table when the plan is in it, else from the plan file. `error` names a broken plan header, an unknown status or class
-    (the plan is then not silently a DRAFT or medium); `waiting_for` says what a WAITING plan waits for."""
+    (the plan is then not silently a DRAFT or medium); `waiting_for` says what a WAITING plan waits for.
+    `title` is the discovered Markdown heading when present; name/path remain the filename identity."""
     known = {(r["project"], r["path"]): r["status"] for r in db.rows(conn, "SELECT project, path, status FROM plans")}
     hive_keys = {(r["project"], r["plan_path"]) for r in db.rows(conn, "SELECT project, plan_path FROM hives")}
-    found, errors = {}, {}
+    found, errors, titles = {}, {}, {}
     for project in db.rows(conn, "SELECT name, workspace FROM projects ORDER BY name"):
         ws = project["workspace"]
         if not ws or not os.path.isdir(ws):
@@ -30,6 +31,8 @@ def plan_rows(conn) -> list:
             for plan in plan_mod.discover_plans(str(ws), pcfg["planGlobs"], pcfg["planExclude"]):
                 key = (project["name"], os.path.relpath(plan.path, ws).replace("\\", "/"))
                 found[key] = plan.status
+                if plan.title:
+                    titles[key] = plan.title
                 if plan.errors:
                     errors[key] = "; ".join(plan.errors)
         except Exception:   # an unreadable Apiary must not hide the others
@@ -40,6 +43,7 @@ def plan_rows(conn) -> list:
         stopped = status == "PAUSED" and key in known and hives.is_stopped(conn, *key)
         recovery = filetxn.recovery_block_reason(conn, key[0])
         rows.append({"apiary": key[0], "plan_path": key[1], "name": dashboard_data.hive_name(key[1]), "status": status,
+                     **({"title": titles[key]} if key in titles else {}),
                      "missing": runtime.plan_missing(conn, *key),
                      "has_hive": key in hive_keys, "stopped": stopped,
                      "error": recovery or errors.get(key, ""), "recovery_error": recovery,

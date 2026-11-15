@@ -994,3 +994,33 @@ GERMAN.update({'Back to %s':'Zurück zu %s','View':'Ansicht'})
 GERMAN['# Plan title\n\nDescribe what should change and the result you expect.\n'] = '# Plantitel\n\nBeschreibe, was sich ändern soll und welches Ergebnis du erwartest.\n'
 
 GERMAN['Add a project before creating a plan.'] = 'Vor dem Erstellen eines Plans ein Projekt hinzufügen.'
+
+GERMAN.update({'Search plan name, path or project':'Planname, Pfad oder Projekt suchen','Search plans':'Pläne suchen','All projects':'Alle Projekte','All statuses':'Alle Status','Clear filters':'Filter zurücksetzen','%s of %s plans':'%s von %s Plänen','No plans match these filters.':'Keine Pläne passen zu diesen Filtern.','No plans available.':'Keine Pläne vorhanden.'})
+
+GERMAN.update({'Draft': 'Entwurf',
+ 'Submitted': 'Eingereicht',
+ 'Preparing': 'In Vorbereitung',
+ 'Queued': 'Eingeplant',
+ 'Ready for review': 'Bereit zur Abnahme',
+ 'Paused': 'Pausiert',
+ 'Cancelled': 'Abgebrochen',
+ 'Unknown': 'Unbekannt',
+ 'Find a plan…': 'Plan finden…',
+ 'Drafts': 'Entwürfe',
+ 'Review': 'Abnahme',
+ 'Loading messages…': 'Nachrichten werden geladen…',
+ '1 question': '1 Rückfrage',
+ '%s questions': '%s Rückfragen',
+ '1 acceptance': '1 Abnahme',
+ '%s acceptances': '%s Abnahmen',
+ 'View conversation': 'Verlauf ansehen',
+ 'No open questions': 'Keine offenen Rückfragen',
+ 'View result': 'Ergebnis ansehen',
+ 'View plan': 'Plan ansehen',
+ 'No plans yet': 'Noch keine Pläne',
+ 'Try another search or clear the filters.': 'Anders suchen oder die Filter zurücksetzen.',
+ 'Create a plan to describe the result you want.': 'Erstelle einen Plan und beschreibe das gewünschte '
+                                                   'Ergebnis.',
+ 'Needs attention': 'Prüfung nötig'})
+
+GERMAN.update({'Your review needed':'Deine Abnahme nötig','Your answer needed':'Deine Antwort nötig','Review result':'Ergebnis prüfen','Review %s results':'%s Ergebnisse prüfen','Answer question':'Frage beantworten','Answer %s questions':'%s Fragen beantworten','Plan issue':'Problem mit dem Plan','Loading plans…':'Pläne werden geladen…'})

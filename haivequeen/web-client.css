@@ -1148,3 +1148,47 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .messenger-identity .messenger-filter-context{text-transform:none;letter-spacing:0;font-size:.75rem;color:#c4b77e}
 .messenger-back{white-space:normal;text-align:left}
 @media(max-width:700px){.messenger-chat-head .messenger-back{flex:0 0 auto;max-width:100%}.messenger-chat-head .messenger-identity{flex-basis:100%;order:2}}
+
+/* Plans are readable work items with contextual actions, not a technical table. */
+.editor-view>.plans-overview{max-width:1240px;width:100%;box-sizing:border-box;margin-inline:auto;padding:20px 24px}
+.plans-toolbar{display:flex;align-items:end;gap:12px;margin:14px 0 20px}
+.plans-search{display:grid;gap:6px;flex:1;min-width:0;font-size:.78rem;color:#a8bec8}
+.plans-search input{width:100%;min-width:0;box-sizing:border-box;min-height:44px;padding:11px 13px;border-radius:8px;font-size:.95rem}
+.plans-toolbar>button{min-height:44px;white-space:nowrap;border-radius:8px}
+.plan-primary-action{background:#f4c62d;color:#102027;border-color:#f4c62d;font-weight:650}
+.plan-status-tabs{display:flex;gap:6px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--edge)}
+.plan-status-tabs button{display:flex;gap:9px;align-items:center;border:1px solid transparent;border-radius:8px;padding:10px 12px;background:transparent;color:#b1c3cc;font-size:.85rem}
+.plan-status-tabs button[aria-pressed=true]{background:#302c19;border-color:#776222;color:#f4d461}
+.plan-chip-count{font-size:.72rem;color:#a5b4ba;border-radius:5px;background:#182a33;padding:1px 5px;min-width:12px;text-align:center}
+.plan-status-tabs button[aria-pressed=true] .plan-chip-count{background:#53451b;color:#f8db77}
+.plan-project-chips{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin:14px 0 4px;min-width:0}
+.plan-project-label{color:#a6bbc4;font-size:.75rem;margin-right:5px}
+.plan-project-chips button{background:transparent;border:1px solid var(--edge);border-radius:20px;padding:5px 10px;font-size:.75rem;white-space:normal;overflow-wrap:anywhere;max-width:100%;color:#b3c6d0}
+.plan-project-chips button[aria-pressed=true]{background:#223741;border-color:#78919b;color:#e3eef3}
+.plan-results-summary{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:42px;margin:7px 0;color:#8ea7b2;font-size:.77rem}
+.plan-results-summary button{border:0;background:transparent;color:#c8d4d9;font-size:.77rem;padding:6px}
+.plan-overview-list{display:grid;gap:12px}
+.plan-overview-card{display:flex;justify-content:space-between;gap:24px;align-items:center;border:1px solid var(--edge);border-radius:11px;padding:19px 20px;background:#102028;min-width:0}
+.plan-card-identity{min-width:0;flex:1}
+.plan-card-project{display:block;font-size:.75rem;color:#9bb4c0;overflow-wrap:anywhere;line-height:1.45}
+.plan-card-identity h3{font-size:1.16rem;line-height:1.4;font-weight:650;color:#edf2f5;margin:6px 0 10px;overflow-wrap:anywhere}
+.plan-card-status{display:inline-block;font-size:.74rem;color:#b6c9d2;background:#1b303a;border-radius:5px;padding:3px 7px}
+.plan-card-status.status-review{color:#f4d26b;background:#332d1a}.plan-card-status.status-done{color:#9bc9b6;background:#18342b}.plan-card-status.status-draft{color:#bec4cc;background:#28303c}
+.plan-card-context{font-size:.8rem;color:#acc0ca;margin:9px 0 0;line-height:1.5;overflow-wrap:anywhere}
+.plan-card-actions{display:flex;flex-direction:column;align-items:flex-end;gap:10px;flex:0 1 290px;min-width:0}
+.plan-card-actions button{white-space:normal;overflow-wrap:anywhere;max-width:100%;border-radius:7px;line-height:1.4}
+.plan-needs-answer{background:#302c19;color:#f2d371;border-color:#75622a;font-size:.8rem;padding:8px 11px}
+.plan-card-primary{font-size:.84rem;padding:9px 15px;background:#1c303a;border-color:#405761}
+.plan-card-primary.highlighted{background:#f4c62d;border-color:#f4c62d;color:#102027;font-weight:650}
+.plan-card-actions .plan-history-link{background:transparent;border:0;color:#9eb7c3;text-decoration:underline;text-underline-offset:3px;font-size:.77rem;padding:2px}
+.plan-quiet{font-size:.76rem;color:#89a2af}
+.plan-list-empty{padding:38px 20px;text-align:center;border:1px dashed var(--edge);border-radius:10px;color:#9eb5c0}.plan-list-empty h3{font-size:1.05rem;color:#d0dfe5}.plan-list-empty p{font-size:.85rem;line-height:1.6}
+@media(max-width:700px){.editor-view>.plans-overview{padding:16px 12px}.plans-toolbar{flex-wrap:wrap;gap:8px}.plans-search{flex-basis:100%}.plans-toolbar>button{flex:1}.plan-status-tabs{gap:4px}.plan-status-tabs button{padding:8px 9px;font-size:.78rem;gap:5px}.plan-overview-card{display:block;padding:16px}.plan-card-identity h3{font-size:1.08rem}.plan-card-actions{margin-top:16px;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}.plan-card-actions .plan-needs-answer{flex-basis:100%;text-align:left}.plan-card-primary{margin-left:auto}.plan-project-chips{gap:6px}.plan-project-chips button{font-size:.72rem}}
+
+.editor-view>.plans-overview>h2{font-size:1.5rem;line-height:1.3;margin:2px 0 16px}
+.plan-card-project{font-size:.88rem;color:#b7cbd5}.plan-card-identity h3{font-size:1.15rem}
+.plan-card-status.needs-you{color:#f4d26b;background:#332d1a}.plan-card-status.needs-attention{color:#efb8a2;background:#3b2923}
+.plan-lifecycle-meta{display:inline-block;margin-left:9px;font-size:.76rem;color:#9fb5c0}
+.plan-pending-count{font-size:.8rem;color:#c8bc8c}
+.plan-card-issue{margin-top:10px;font-size:.8rem;color:#d4b9ac}.plan-card-issue summary{cursor:pointer}.plan-card-issue pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}
+@media(max-width:700px){.plan-card-project{font-size:.86rem}.plan-card-identity h3{font-size:1.15rem}.plan-pending-count{flex-basis:100%}.plan-card-actions>.highlighted{margin-left:0}.plan-card-actions>.plan-history-link{margin-left:auto}}
