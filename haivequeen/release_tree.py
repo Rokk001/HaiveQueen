@@ -1,0 +1,75 @@
+"""Primitives for verifying a release tree against a Git tree object.
+
+This verifies bytes and tree structure only.  Callers must independently bind
+its root object to an authenticated commit, environment and live process before
+using it for any compatibility decision.
+"""
+import hashlib
+from pathlib import Path, PurePosixPath
+
+
+def _object_hash(kind, data):
+    return hashlib.sha1(kind + b' ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+
+
+def verify_tree(directory, entries, expected_tree):
+    """Verify every regular file and Git tree object; return False on doubt.
+
+    Entries have Git's recursive tree API shape. Links, submodules, truncated
+    trees, extra files and inaccessible files cannot establish a valid proof.
+    The expected root is supplied by the caller, not inferred from the archive.
+    """
+    try:
+        root = Path(directory)
+        if root.is_symlink() or not root.is_dir():
+            return False
+        objects = {}
+        for item in entries:
+            path = item['path']
+            parts = PurePosixPath(path).parts
+            if (not parts or path != '/'.join(parts) or any(p in ('.', '..') for p in parts)
+                    or '\\' in path or ':' in path or path in objects):
+                return False
+            mode, kind, sha = item['mode'], item['type'], item['sha']
+            if (kind, mode) not in (('tree', '040000'), ('blob', '100644'), ('blob', '100755')):
+                return False
+            if len(sha) != 40 or any(c not in '0123456789abcdef' for c in sha):
+                return False
+            objects[path] = (mode, kind, sha)
+        actual = set()
+        for path in root.rglob('*'):
+            if path.is_symlink():
+                return False
+            relative = path.relative_to(root).as_posix()
+            if path.is_dir():
+                actual.add(relative)
+            elif path.is_file():
+                actual.add(relative)
+            else:
+                return False
+        if actual != set(objects):
+            return False
+        directories = {'': []}
+        for path, (mode, kind, sha) in objects.items():
+            parent, _, name = path.rpartition('/')
+            if parent and (parent not in objects or objects[parent][1] != 'tree'):
+                return False
+            directories.setdefault(parent, []).append((name, mode, kind, sha))
+            if kind == 'tree':
+                directories.setdefault(path, [])
+            else:
+                data = root.joinpath(*path.split('/')).read_bytes()
+                if _object_hash(b'blob', data) != sha:
+                    return False
+        for directory, children in directories.items():
+            # Git sorts directory names as if they end in a slash.
+            children.sort(key=lambda item: (item[0] + ('/' if item[2] == 'tree' else '')).encode('utf-8'))
+            data = b''.join((('40000' if mode == '040000' else mode).encode() + b' ' +
+                             name.encode('utf-8') + b'\0' + bytes.fromhex(sha))
+                            for name, mode, kind, sha in children)
+            expected = expected_tree if not directory else objects[directory][2]
+            if _object_hash(b'tree', data) != expected:
+                return False
+        return True
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError):
+        return False
