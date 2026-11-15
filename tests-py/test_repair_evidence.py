@@ -324,3 +324,27 @@ class VerificationCommandRetry(TargetedVerificationFixture):
                     self.advance(state)
                 verify.assert_not_called()
                 self.assertIn('invalid repair verification', state['fix']['instruction'])
+
+
+class MergeAncestryEvidence(OrchCase):
+    def test_resolved_merge_with_unchanged_tree_is_verified(self):
+        self.commit(self.repo, 'comment.txt', 'base comment\n')
+        self.git('push', '-q', 'origin', 'main')
+        self.git('merge', '--ff-only', 'main', cwd=self.pwt)
+        self.ready_plan()
+        self.commit(self.pwt, 'comment.txt', 'local comment\n')
+        self.remote_commit('comment.txt', 'upstream comment\n')
+        self.check = 'git ls-files --error-unmatch comment.txt'
+        self.project_toml()
+        self.round()
+        self.assertEqual(self.state()['fix']['step'], 'Merge')
+        before = self.git('rev-parse', 'HEAD', cwd=self.pwt)
+        self.git('checkout', '--ours', '--', 'comment.txt', cwd=self.pwt)
+        self.git('add', '--', 'comment.txt', cwd=self.pwt)
+        self.git('commit', '-qm', 'Resolve comment conflict', cwd=self.pwt)
+        self.assertEqual(self.git('diff', before, 'HEAD', cwd=self.pwt), '')
+        self.end_fixer(self.fixers()[-1], verification_command=self.check)
+        self.round()
+        self.assertEqual(self.plan_status(), 'REVIEW')
+        history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        self.assertTrue(any(e['event'] == 'verified' for e in history))

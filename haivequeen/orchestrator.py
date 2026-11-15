@@ -1248,13 +1248,21 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
         except OSError:
             report = ''
         status_code, status_output = _git(folder, 'status', '--porcelain') if folder else (1, '')
+        clean = status_code == 0 and not status_output.strip()
         changed = bool(folder and fix.get('head') and head and
-                       _git(folder, 'diff', '--quiet', fix['head'], head)[0] == 1 and
-                       status_code == 0 and not status_output.strip())
+                       _git(folder, 'diff', '--quiet', fix['head'], head)[0] == 1 and clean)
+        # A conflict may be correctly resolved with the first parent's tree.
+        # Its new merge ancestry is progress; an ordinary empty commit is not.
+        merge_resolved = False
+        if clean and folder and head and fix.get('step') == 'Merge':
+            code, parents = _git(folder, 'rev-list', '--parents', '-n', '1', head)
+            lineage = parents.split()
+            merge_resolved = bool(code == 0 and len(lineage) >= 3 and lineage[1] == fix.get('head'))
+        changed = changed or merge_resolved
         conditions_changed = 'commands' in fix and fix['commands'] != commands(env)
         _record_repair(conn, env.name, plan, 'attempt-ended', agent=fix['agent'],
                        before=fix.get('head', ''), after=head, report=report,
-                       changed=changed, conditions_changed=conditions_changed)
+                       changed=changed, merge_resolved=merge_resolved, conditions_changed=conditions_changed)
         if not changed and not conditions_changed and not (env.run_dir(fix['agent']) / 'repair-verification.json').is_file():
             fix['review_required'] = True
             if (env.run_dir(fix['agent']) / 'repair-diagnosis.json').is_file():
@@ -1300,6 +1308,7 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
             save(conn, env.name, plan, state)
             return None
         fix['verification'] = {**evidence, 'retry_reason':
+                               'merge ancestry changed' if merge_resolved else
                                'committed tree changed' if changed else
                                'configured command changed' if conditions_changed else
                                'targeted verification command changed after failed RepairCheck'}
