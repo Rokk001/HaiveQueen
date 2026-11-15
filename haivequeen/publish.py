@@ -386,6 +386,7 @@ def _drain(conn, env, repository, run, latest, publisher, token_fn) -> list:
         if entry.get("repository") != repository and (entry.get("repository") or _separate_code_repo(env)):
             # chosen for another repository (or read from the workspace before the code repository was used): choose again here
             entry["commit"] = entry["version"] = ""
+            entry.pop("compatibility", None)
         entry["repository"] = repository
         try:
             if not entry.get("commit"):   # never the current head: only the integration point of the tip, which a later integration does not move
@@ -396,6 +397,11 @@ def _drain(conn, env, repository, run, latest, publisher, token_fn) -> list:
         except Exception as exc:
             _report(conn, env, "release of %s not prepared: %s" % (repository, str(exc)[:300]))
             return done
+        if not entry.get("compatibility"):
+            entry["compatibility"] = releases.release_decision(repository, entry["version"], entry["commit"])
+        if not releases.valid_decision(entry["compatibility"], repository, entry["version"], entry["commit"]):
+            _report(conn, env, "release compatibility decision does not match queued release")
+            return done
         with db.transaction(conn):   # the chosen version and commit are kept before publishing, so a retry uses the same values
             stored = _load(conn, env.name)
             if stored and stored[0].get("queue_id") == entry.get("queue_id"):
@@ -405,7 +411,7 @@ def _drain(conn, env, repository, run, latest, publisher, token_fn) -> list:
         try:
             if not secret:
                 raise ValueError("no GitHub token (set GITHUB_TOKEN or log in with gh auth login)")
-            publisher(repository, entry["version"], entry["commit"], secret)
+            publisher(repository, entry["version"], entry["commit"], secret, entry["compatibility"])
         except Exception as exc:
             _report(conn, env, "release %s of %s not published: %s" % (entry["version"], repository, str(exc)[:300]))
             return done

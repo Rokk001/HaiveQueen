@@ -1,5 +1,6 @@
 """Fetch and stage an immutable GitHub release alongside installed versions."""
 import io
+import json
 from pathlib import Path, PurePosixPath
 import re
 import stat
@@ -7,7 +8,7 @@ import tempfile
 from urllib.request import Request, urlopen
 import zipfile
 
-from . import releases, version_layout
+from . import releases, version_layout, release_compat
 
 
 def stage_release(root, repository, version, fetch=None):
@@ -27,6 +28,24 @@ def stage_release(root, repository, version, fetch=None):
             request = Request(address, headers={"User-Agent": "HaiveQueen", "Accept": "application/vnd.github+json"})
             with urlopen(request, timeout=60) as response:
                 return response.read()
+    # The archive may contain an inherited declaration. Only the release body,
+    # checked against the actual lightweight tag, can authorize compatibility.
+    decision = None
+    try:
+        base = "https://api.github.com/repos/%s" % repository
+        ref = json.loads(fetch(base + "/git/ref/tags/v" + str(version)))
+        obj = ref["object"]
+        commit = obj["sha"]
+        if obj["type"] != "commit" or not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+            raise ValueError("unverifiable tag")
+        release = json.loads(fetch(base + "/releases/tags/v" + str(version)))
+        candidate = json.loads(release["body"])
+        if (release.get("tag_name") == "v" + str(version) and not release.get("draft")
+                and not release.get("prerelease") and releases.valid_decision(candidate, repository, str(version), commit)):
+            decision = candidate
+            url = base + "/zipball/" + commit
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass
     data = fetch(url)
     with zipfile.ZipFile(io.BytesIO(data)) as archive, tempfile.TemporaryDirectory(prefix="hq-release-") as temp:
         root_names = set()
@@ -57,5 +76,8 @@ def stage_release(root, repository, version, fetch=None):
         source = destination / next(iter(root_names))
         # This identity belongs to the archive being installed, not the mutable
         # active pointer and not any marker supplied inside the archive.
+        (source / release_compat.METADATA).write_text(json.dumps(decision or {
+            "compatible_with_older": False, "reason": release_compat.UNKNOWN_REASON
+        }), encoding="utf-8")
         (source / '.haivequeen-release-version').write_text(str(version) + '\n', encoding='utf-8')
         return version_layout.install_version(root, version, source)

@@ -88,7 +88,28 @@ def repository_from_remote(remote: str) -> str:
     return "/".join(match.groups())
 
 
-def publish_release(repository: str, version: str, commit: str, token: str):
+def release_decision(repository, version, commit):
+    """Create the conservative decision for one exact queued release."""
+    from .release_compat import UNKNOWN_REASON
+    return {"repository": repository, "version": version, "commit": commit.lower(),
+            "compatible_with_older": False, "reason": UNKNOWN_REASON, "evidence": ""}
+
+
+def valid_decision(value, repository, version, commit):
+    from .release_compat import UNKNOWN_REASON
+    if not isinstance(value, dict) or value.get("repository") != repository or value.get("version") != version:
+        return False
+    if value.get("commit") != commit.lower() or type(value.get("compatible_with_older")) is not bool:
+        return False
+    reason, evidence = value.get("reason"), value.get("evidence")
+    if not isinstance(reason, str) or not isinstance(evidence, str):
+        return False
+    if not value["compatible_with_older"] and not reason.strip():
+        return False
+    return bool(evidence.strip()) or (not value["compatible_with_older"] and reason == UNKNOWN_REASON)
+
+
+def publish_release(repository: str, version: str, commit: str, token: str, decision=None):
     """Publish a release at an exact commit; safely retry an existing release.
 
     An existing tag must be lightweight and point at the requested commit.
@@ -107,6 +128,10 @@ def publish_release(repository: str, version: str, commit: str, token: str):
         raise ValueError("commit must be a full Git object ID")
     if not token or "\n" in token or "\r" in token:
         raise ValueError("a GitHub token is required")
+    decision = decision if decision is not None else release_decision(repository, version, commit)
+    if not valid_decision(decision, repository, version, commit):
+        raise ValueError("invalid release compatibility decision")
+    body = json.dumps(decision, sort_keys=True, separators=(",", ":"))
     base = "https://api.github.com/repos/" + repository
     tag = "v" + version
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "HaiveQueen",
@@ -141,9 +166,15 @@ def publish_release(repository: str, version: str, commit: str, token: str):
             existing = request("/releases/tags/" + tag)
             if existing.get("tag_name") != tag or existing.get("draft") or existing.get("prerelease"):
                 raise ValueError("existing release is not a published stable release")
+            try:
+                existing_decision = json.loads(existing.get("body", ""))
+            except (ValueError, TypeError):
+                raise ValueError("existing release has conflicting compatibility metadata")
+            if existing_decision != decision:
+                raise ValueError("existing release has conflicting compatibility metadata")
             return existing
         except HTTPError as exc:
             if exc.code != 404:
                 raise
     return request("/releases", {"tag_name": tag, "target_commitish": commit,
-                                  "name": tag, "draft": False, "prerelease": False})
+                                  "name": tag, "draft": False, "prerelease": False, "body": body})

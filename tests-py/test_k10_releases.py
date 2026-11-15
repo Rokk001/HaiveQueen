@@ -46,7 +46,7 @@ class PublishingTests(unittest.TestCase):
         from unittest.mock import patch
         sha = 'a' * 40
         ref = {'object': {'type': 'commit', 'sha': sha}}
-        release = {'tag_name': 'v2.0.1', 'html_url': 'https://github.com/o/r/releases/tag/v2.0.1'}
+        release = {'tag_name': 'v2.0.1', 'html_url': 'https://github.com/o/r/releases/tag/v2.0.1', 'body': json.dumps(releases.release_decision('o/r', '2.0.1', sha))}
         def response(value):
             return BytesIO(json.dumps(value).encode())
         missing = HTTPError('https://api.github.com/', 404, 'missing', {}, None)

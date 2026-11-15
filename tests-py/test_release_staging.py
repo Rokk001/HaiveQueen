@@ -73,7 +73,7 @@ class ReleaseStagingTests(unittest.TestCase):
             installed = release_staging.stage_release(root, "example/project", "2.0.0", fetch)
             self.assertEqual((installed / "haivequeen/cli.py").read_text(), "new code")
             self.assertEqual((root / "active-version").read_text(), "old\n")
-            self.assertTrue(urls[0].endswith("/example/project/zipball/v2.0.0"))
+            self.assertTrue(urls[-1].endswith("/example/project/zipball/v2.0.0"))
 
     def test_rejects_archive_path_traversal(self):
         with tempfile.TemporaryDirectory() as temp:

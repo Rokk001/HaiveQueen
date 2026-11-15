@@ -37,7 +37,7 @@ class PublishCase(RoundCase):
             return 0, "%s\trefs/heads/main\n" % self.head
         return 1, "unexpected " + " ".join(argv)
 
-    def publisher(self, repository, version, commit, token):
+    def publisher(self, repository, version, commit, token, decision):
         if self.error:
             raise self.error
         self.published.append((repository, version, commit, token))
@@ -119,9 +119,16 @@ class CountUpTests(PublishCase):
         pending = publish.pending_releases(self.conn, "testproj")
         self.assertEqual([(p["version"], p["commit"]) for p in pending], [("2.0.1", SHA)])
         self.assertIn("network down", runtime.kv_get(self.conn, "testproj", publish.ERROR_KEY))
+        decision = pending[0]["compatibility"]
+        self.assertEqual(decision, releases.release_decision("owner/tool", "2.0.1", SHA))
         self.error = None
+        decisions = []
+        def capture(repository, version, commit, token, record):
+            decisions.append(record)
+            return self.publisher(repository, version, commit, token, record)
         self.latest = "9.9.9"   # what the lookup says later does not change a version already chosen
-        publish.retry_pending(self.conn, [self.env()], run=self.run_git, latest=lambda repo: self.latest, publisher=self.publisher, token=lambda run=None: "tok")
+        publish.retry_pending(self.conn, [self.env()], run=self.run_git, latest=lambda repo: self.latest, publisher=capture, token=lambda run=None: "tok")
+        self.assertEqual(decisions, [decision])
         self.assertEqual(self.published, [("owner/tool", "2.0.1", SHA, "tok")])
         self.assertEqual(publish.pending_releases(self.conn, "testproj"), [])
         self.assertIsNone(runtime.kv_get(self.conn, "testproj", publish.ERROR_KEY))
@@ -204,11 +211,11 @@ class DurableQueueTests(PublishCase):
         self.error = None
         calls = []
 
-        def flaky(repository, version, commit, token):
+        def flaky(repository, version, commit, token, decision):
             calls.append(version)
             if len(calls) == 2:
                 raise OSError("again down")
-            return self.publisher(repository, version, commit, token)
+            return self.publisher(repository, version, commit, token, decision)
         publish.retry_pending(self.conn, [self.env()], run=self.run_git, latest=self.lookup, publisher=flaky, token=lambda run=None: "tok")
         self.assertEqual([p[1] for p in self.published], ["2.0.1"])
         self.latest = "7.0.0"   # a later lookup does not change a version already chosen
