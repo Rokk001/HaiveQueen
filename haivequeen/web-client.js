@@ -1205,7 +1205,7 @@ function mount(document, bootstrap) {
     if(fresh)planDraft=null;
     if(row && row.status!=='DRAFT')return;
     planDraft=row && (!planDraft || planDraft.plan!==row.plan_path || planDraft.project!==(row.apiary||row.project))?{project:row.apiary||row.project,plan:row.plan_path,filename:row.plan_path,content:result.text||'',revision:result.revision,dirty:false}:planDraft||{project:client.state.projects?.[0]?.name||'',filename:'',content:'',dirty:false};
-    detail(t(row?'Edit draft':'New plan'),{});const body=$('detail-body');body.replaceChildren();
+    detail(t(row?'Edit draft':'New plan'),{});const body=$('detail-body');body.className='';const heading=el('h2',t(row?'Edit draft':'New plan'));heading.id='detail-title';body.replaceChildren(heading);
     const current=planDraft,form=el('div',undefined,'plan-editor');body.append(form);
     form.append(el('p',t('Save Markdown as a draft, then submit it explicitly to start preparation.')));
     const project=el('select');project.setAttribute('aria-label',t('Project'));

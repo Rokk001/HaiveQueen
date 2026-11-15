@@ -47,7 +47,7 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  api.renderQuestions();assert.equal(all(section,'TEXTAREA')[0].value,'Check P2');assert.equal(all(section,'INPUT').find(node=>node.attrs['aria-label']==='Rejected packages (comma separated)').value,'P2');
  await all(section,'BUTTON').find(node=>node.textContent==='Reject').onclick();assert.deepEqual(actions.pop(),['owner/reject',{project:'Demo',plan:'p.md',text:'Check P2',packages:['P2']}]);
  api.setQuestions([{id:2,status:'answered',answer:'Approved option B',answered_at:'today',project:'Demo',question:'Choose'}]);api.setFilter('answered');api.renderQuestions();assert(content(section).includes('Approved option B'));assert.equal(all(section,'TEXTAREA').length,0);
- await api.openPlanEditor();const markdown=all(dialog,'TEXTAREA')[0];markdown.value='# New plan\n\nRequirement';markdown.oninput();
+ await api.openPlanEditor();assert(all(dialog,'H2').some(node=>node.id==='detail-title'),'Editor dialog must retain its accessible title');const markdown=all(dialog,'TEXTAREA')[0];markdown.value='# New plan\n\nRequirement';markdown.oninput();
  await all(dialog,'BUTTON').find(node=>node.textContent==='Save draft').onclick();assert.equal(requests[0][0],'plans/create');assert.equal(requests[0][1].content,'# New plan\n\nRequirement');assert.equal(actions.length,0,'Saving must not submit');
  await all(dialog,'BUTTON').find(node=>node.textContent==='Submit plan').onclick();assert.deepEqual(actions.pop(),['plan/start',{project:'Demo',plan:'docs/plans/new-PLAN.md'}]);
  await api.openPlanEditor({status:'DRAFT',apiary:'Demo',plan_path:'p.md'},{text:'# Existing',revision:'old'});
