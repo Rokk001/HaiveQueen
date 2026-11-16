@@ -324,3 +324,13 @@ rebuilding a test environment (installations, release or authority fixtures,
 complete-workflow harnesses). A missing environment capability is reported as a
 finding of the complete test. `roles/bee.md` states the same rule for every Agent.
 Focused regression: `python -m unittest discover -s tests-py -p test_repair_implementation.py -v`.
+
+## Known remaining failure
+
+When the latest attempt reported what still fails (its error or open requirements),
+the diagnosis prompt names that attempt as the known remaining failure. Where it
+names a concrete failing check that the code at the current commit confirms, the
+diagnosis adopts it as the next repair step and writes continuation and contract
+from it without new investigation, probes or project test runs; it investigates
+only what is vague or contradicted. Contract validation, repair actions ledger and
+retry limits are unchanged.

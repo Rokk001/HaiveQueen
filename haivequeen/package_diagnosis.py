@@ -278,6 +278,12 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
         sources += ('\nThe latest assigned repair step passed every recorded criterion. The package is still open. '
                     'Do not treat remaining package requirements as failure of that step. Reuse its receipt at '
                     + progress['result_path'] + '; select the next behavior-changing repair, reusing the findings.\n')
+    if latest and (latest[0].get('error') or latest[0].get('open_requirements')):
+        sources += ('\nKNOWN REMAINING FAILURE: attempt ' + str(latest[0].get('attempt')) + ' reported what still fails in its '
+                    'error and open requirements above. Where it names a concrete failing check that the code at the current '
+                    'commit confirms, adopt it as the next repair step: write the continuation and contract from it without '
+                    'new investigation, probes or project test runs. Investigate only what it leaves vague or what the code '
+                    'contradicts.\n')
     if unchanged_retry(state, current) and not verified_progress:
         sources += ('\nUNCHANGED CODE: renamed attempts or paraphrases are not progress. Reuse findings; '
                     'resolve a concrete evidence gap with one safe focused experiment, preserving files and '

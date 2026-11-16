@@ -124,6 +124,14 @@ class PackageDiagnosis(RoundCase):
         self.assertNotIn('orch-repair-history:', prompt)
         self.assertLess(len(prompt), 7000)
 
+    def test_known_remaining_failure_is_adopted_instead_of_investigated_again(self):
+        bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'medium', 'failed', 'Mia', ['U-3'],
+                            'Rejected publication after pause leaves scheduling paused; test_rejected_publication fails.', force_failure=True)
+        prompt = self.review.prompt(self.conn, 'testproj', REL, 'P1', 'head-1',
+                                    self.base / 'diagnosis.json', 'medium', ['medium'])
+        self.assertIn('KNOWN REMAINING FAILURE: attempt Mia', prompt)
+        self.assertIn('without new investigation, probes or project test runs', prompt)
+
     def test_new_attempt_does_not_license_the_same_unchanged_approach(self):
         scope = self.scope()
         self.review.accept(self.conn, 'testproj', REL, 'P1', self.report(scope), scope,
