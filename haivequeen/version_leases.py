@@ -6,6 +6,7 @@ recovery must establish that no child survived before releasing its reservation.
 """
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import tempfile
@@ -25,6 +26,49 @@ def _load(root):
     if not isinstance(value, dict):
         raise ValueError('invalid version lease registry')
     return value
+
+
+@contextmanager
+def exclusive_registry_snapshot(root):
+    """Read an existing Windows registry while holding its exclusive handle.
+
+    This primitive does not establish that activation or registry replacement
+    is safe while the handle is held.
+    """
+    if os.name != 'nt':
+        raise OSError('exclusive registry snapshots require Windows')
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
+                       wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    handle = create(str(Path(root) / 'version-leases.json'), 0x80000000,
+                    0, None, 3, 0x80, None)  # GENERIC_READ, OPEN_EXISTING
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        close(handle)
+        raise
+    try:
+        stream = os.fdopen(fd, 'r', encoding='utf-8')
+    except BaseException:
+        os.close(fd)
+        raise
+    with stream:
+        value = json.load(stream)
+        if not isinstance(value, dict):
+            raise ValueError('invalid version lease registry')
+        yield value
 
 
 def _save(root, value):
