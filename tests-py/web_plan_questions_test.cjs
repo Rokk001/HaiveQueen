@@ -30,7 +30,7 @@ class Node {
  focus(){this.focused=true;}
  scrollIntoView(){this.scrolled=true;}
 }
-const el=(tag,text)=>new Node(tag,text),all=(node,tag)=>[...(node.tagName===tag?[node]:[]),...node.children.flatMap(child=>all(child,tag))];
+const el=(tag,text,cls)=>{const node=new Node(tag,text);node.className=cls||'';return node;},all=(node,tag)=>[...(node.tagName===tag?[node]:[]),...node.children.flatMap(child=>all(child,tag))];
 const content=node=>node.textContent+node.children.map(content).join('');
 const button=(label,fn)=>{const node=el('button',label);node.onclick=fn;return node;};
 const body=source.slice(source.indexOf('  function showQuestion('),source.indexOf('  function renderUpdates('));
@@ -126,5 +126,31 @@ const api=setup(el,button,x=>x,client,view,drafts,()=>dialog,()=>{},()=>{section
  const versionHelper=source.match(/  function displayVersion\(version\) \{[^\n]+\}/)?.[0]||'';
  new Function('tab','$','renderControls','renderUpdates','render','overlay','renderDetail','el','t',versionHelper+stateHandler+'renderStateNow({});')('Plans',()=>({querySelector:()=>({querySelector:()=>null,setAttribute(){}})}),()=>{},()=>{},()=>plansRedraw++,null,()=>{},el,x=>x);
  assert.equal(plansRedraw,1,'Arrival of startup state redraws Plans to unlock New plan');
+ const fullQuestion='A complete question with several paragraphs.\n\n'+('Important requirement. '.repeat(30));
+ api.setQuestions([{id:71,status:'open',project:'Demo',plan_path:'clean.md',question:fullQuestion,recommendation:'Keep the existing safeguards.',evidence:{log:'probe.log'}},
+ {id:70,status:'answered',project:'Demo',plan_path:'clean.md',question:'Older question',answer:'Older response'}]);
+ api.setFilter('open');api.renderQuestions();
+ const request=all(section,'ARTICLE').find(node=>node.dataset.question===71);
+ assert.equal(request.children.filter(node=>node.textContent===fullQuestion).length,1,'Full request appears once, without a clipped duplicate');
+ assert(!all(request,'SUMMARY').some(node=>['Full question and report','Recommendation','Answer options'].includes(node.textContent)),'Ordinary reading and answering must not require nested disclosures');
+ assert(request.children.some(node=>node.className==='question-recommendation'),'Recommendation is visible inline');
+ const history=all(section,'DETAILS').find(node=>node.className==='messenger-history');
+ const conversation=all(section,'DIV').find(node=>node.className==='messenger-chat-body');
+ assert(conversation.children.indexOf(history)>conversation.children.indexOf(request),'Current request takes priority over history');
+ assert.equal(conversation.children.filter(node=>node.className==='messenger-message messenger-answer').length,0,'Previous answer must not compete with the active request');
+ const scope=all(request,'INPUT').find(node=>node.type==='checkbox');assert.equal(scope.checked,false);
+ scope.checked=true;scope.onchange();
+ await all(request,'BUTTON').find(node=>node.textContent==='Use recommendation').onclick();
+ api.renderQuestions();const refreshed=all(section,'ARTICLE').find(node=>node.dataset.question===71);
+ assert.equal(all(refreshed,'TEXTAREA')[0].value,'Keep the existing safeguards.');
+ assert.equal(all(refreshed,'INPUT').find(node=>node.type==='checkbox').checked,true);
+ await all(refreshed,'BUTTON').find(node=>node.textContent==='Answer').onclick();
+ assert.deepEqual(actions.at(-1),['questions/answer',{id:71,text:'Keep the existing safeguards.',apiary:true}]);
+ const copySource=source.slice(source.indexOf('function installCopyButtons('),source.indexOf('function settingsCategory('));
+ const copyInstall=new Function('MutationObserver',copySource+'return installCopyButtons;')(class {observe(){}});
+ const skipped={tagName:'TEXTAREA',isConnected:true,getAttribute:key=>key==='data-copy'?'off':null};
+ const output={tagName:'PRE',isConnected:true,getAttribute:()=>null,parentNode:{insertBefore:()=>copyCount++}};let copyCount=0;
+ copyInstall({body:{querySelectorAll:()=>[skipped,output]},createElement:tag=>el(tag)}, {},x=>x,()=>{});
+ assert.equal(copyCount,1,'Keep copy for log output, without decorating the answer composer');
  console.log('Question draft, history, acceptance and plan editor behavior passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

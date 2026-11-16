@@ -1192,3 +1192,21 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .plan-pending-count{font-size:.8rem;color:#c8bc8c}
 .plan-card-issue{margin-top:10px;font-size:.8rem;color:#d4b9ac}.plan-card-issue summary{cursor:pointer}.plan-card-issue pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}
 @media(max-width:700px){.plan-card-project{font-size:.86rem}.plan-card-identity h3{font-size:1.15rem}.plan-pending-count{flex-basis:100%}.plan-card-actions>.highlighted{margin-left:0}.plan-card-actions>.plan-history-link{margin-left:auto}}
+
+/* Questions: one readable request and composer, with secondary history below. */
+.messenger-chat-body{gap:20px;padding:24px;}
+.messenger-request{border:0;border-radius:0;padding:0;background:transparent;}
+.messenger-request .question-summary{white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit;font-size:15px;line-height:1.65;margin:16px 0 22px;}
+.messenger-request .question-recommendation{border-left:2px solid var(--edge);padding:0 0 0 16px;margin:20px 0;}
+.question-recommendation p{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;margin:6px 0;}
+.messenger-request h3{font-size:.85rem;font-weight:600;color:#e4edf1;margin:16px 0 8px;}
+.messenger-request>details,.messenger-history{border:0;border-top:1px solid var(--edge);border-radius:0;padding:12px 0;background:transparent;}
+.messenger-request .question-reply{min-height:110px;max-height:320px;line-height:1.5;}
+.messenger-request .question-answer-scope{display:flex;gap:8px;align-items:center;margin:12px 0;font-size:.8rem;color:#a7bac3;}
+.messenger-request>.messenger-primary{background:#f4c62d;color:#102027;border-color:#f4c62d;font-weight:700;padding:9px 20px;}
+.messenger-field-label,.messenger-project-heading>small,.messenger-identity small{display:none;}
+.messenger-identity{gap:4px;}.messenger-project-identity strong{font-size:.8rem;color:#a7bac3;}
+.messenger-project{margin:0;padding-bottom:8px;}.messenger-project-heading{gap:3px;padding-top:8px;}
+@media(max-width:700px){.messenger-chat-body{padding:16px;}.messenger-request{padding:0;}}
+
+.questions-messenger{font-family:"Segoe UI",system-ui,sans-serif;}

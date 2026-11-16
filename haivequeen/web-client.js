@@ -368,7 +368,7 @@ function installCopyButtons(document,navigator,t,notice) {
   function decorate(root){
     const targets=[...(root.matches?.('pre,textarea')?[root]:[]),...(root.querySelectorAll?.('pre,textarea')||[])];
     for(const target of targets){
-      if(decorated.has(target)||!target.isConnected||target.getAttribute('aria-hidden')==='true')continue;
+      if(decorated.has(target)||!target.isConnected||target.getAttribute('aria-hidden')==='true'||target.getAttribute('data-copy')==='off')continue;
       decorated.add(target);
       const bar=document.createElement('div');bar.className='copy-tools';
       const button=document.createElement('button');button.type='button';button.className='copy-output';
@@ -1435,8 +1435,8 @@ function mount(document, bootstrap) {
       card.append(el('small',t(kind)+' #'+question.id+' · '+t(answered?'Answered':'Needs you')));
 
       const message=String(question.text||question.question||question.item||'');
-      const lines=message.split(/\r?\n/),brief=lines.find(line=>line.trim())||message;
-      card.append(el('p',brief.slice(0,320)+(brief.length>320?'…':''),'question-summary'));
+      const lines=message.split(/\r?\n/);
+      card.append(el('div',message,'question-summary'));
       if(check){
         const facts=el('dl',undefined,'package-facts');
         for(const [label,prefixes] of [['Integrated commit',['Integrated commit:','Integrierter Commit:']],['Steps that ran',['Steps that ran:','Ausgeführte Schritte:']]] ){
@@ -1447,17 +1447,17 @@ function mount(document, bootstrap) {
         if(facts.children.length)card.append(facts);
         if(question.owner_check_result)card.append(el('strong',t(question.owner_check_result==='accepted'?'Accepted':'Rejected')));
       }
-      if(message!==brief || brief.length>320){const full=el('details');full.append(el('summary',t('Full question and report')),el('pre',message));card.append(full);}
-      card.append(el('p',t(answered?'This entry is preserved as history.':check?'Review the result. Save note records feedback; only Accept or Reject decides the outcome.':'Your answer is recorded for the plan so work can continue.'),'dim'));
+      if(check)card.append(el('p',t('Review the result. Save note records feedback; only Accept or Reject decides the outcome.'),'dim'));
       if(question.evidence && Object.values(question.evidence).some(value=>Array.isArray(value)?value.length:!!value)){const evidence=el('details');evidence.append(el('summary',t('Context and evidence')),valueView(question.evidence));card.append(evidence);}
-      if(question.recommendation){const recommendation=el('details');recommendation.append(el('summary',t('Recommendation')),el('pre',question.recommendation));card.append(recommendation);}
+      if(question.recommendation){const recommendation=el('div',undefined,'question-recommendation');recommendation.append(el('h3',t('Recommendation')),el('p',question.recommendation));card.append(recommendation);}
       if(!answered && question.answer){const note=el('details');note.append(el('summary',t('Latest saved note')),el('pre',question.answer));card.append(note);}
       if(answered){card.append(el('h4',t('Answer')),el('pre',question.answer||'–'),el('small',[question.answered_at,question.answered_by].filter(Boolean).join(' · ')));return card;}
       const draft=questionDrafts.get(Number(question.id))||{text:'',checked:false,packages:''};questionDrafts.set(Number(question.id),draft);
-      const answer=el('textarea');answer.value=draft.text;answer.setAttribute('aria-label',t(check?'Note or acceptance feedback':'Answer'));answer.oninput=()=>{draft.text=answer.value;};card.append(answer);
+      card.append(el('h3',t(check?'Note or acceptance feedback':'Answer')));
+      const answer=el('textarea');answer.className='question-reply';answer.setAttribute('data-copy','off');answer.value=draft.text;answer.setAttribute('aria-label',t(check?'Note or acceptance feedback':'Answer'));answer.oninput=()=>{draft.text=answer.value;};card.append(answer);
       if(question.recommendation)card.append(button('Use recommendation',()=>{answer.value=question.recommendation;draft.text=answer.value;}));
-      const apiary=el('input');apiary.type='checkbox';apiary.checked=draft.checked;apiary.onchange=()=>{draft.checked=apiary.checked;};const label=el('label',t('Apply answer to the whole project'));label.prepend(apiary);if(!check){const options=el('details');options.append(el('summary',t('Answer options')),label,el('p',t('Unchecked: this plan only. Checked: store a project decision for future work.'),'dim'));card.append(options);}
-      card.append(button(check?'Save note':'Answer',async()=>{const sent=answer.value;const result=await act('questions/answer',{id:question.id,text:sent,apiary:apiary.checked});if(result && draft.text===sent){draft.text='';answer.value='';}}));
+      const apiary=el('input');apiary.type='checkbox';apiary.checked=draft.checked;apiary.onchange=()=>{draft.checked=apiary.checked;};const label=el('label',t('Apply answer to the whole project'));label.prepend(apiary);if(!check){label.className='question-answer-scope';card.append(label);}
+      const submit=button(check?'Save note':'Answer',async()=>{const sent=answer.value;const result=await act('questions/answer',{id:question.id,text:sent,apiary:apiary.checked});if(result && draft.text===sent){draft.text='';answer.value='';}});submit.className='messenger-primary';card.append(submit);
       if(check){
         const packages=el('input');packages.value=draft.packages;packages.placeholder=t('Rejected packages (comma separated)');packages.setAttribute('aria-label',t('Rejected packages (comma separated)'));packages.oninput=()=>{draft.packages=packages.value;};const specific=el('details');specific.append(el('summary',t('Specific packages')),packages);card.append(specific);
         const packageList=el('div',undefined,'question-packages');for(const name of question.packages||[]){const label=el('label',name),toggle=el('input');toggle.type='checkbox';toggle.dataset.package=name;toggle.checked=draft.packages.split(',').map(x=>x.trim()).includes(name);toggle.onchange=()=>{const selected=new Set(packages.value.split(',').map(x=>x.trim()).filter(Boolean));if(toggle.checked)selected.add(name);else selected.delete(name);packages.value=[...selected].join(', ');draft.packages=packages.value;};label.prepend(toggle);packageList.append(label);}specific.append(packageList,el('p',t('Select the packages needing rework. Leave empty to reject the overall result.'),'dim'));
@@ -1511,20 +1511,18 @@ function mount(document, bootstrap) {
       if(event.type==='answer' && event.question.owner_check_result)bubble.append(el('strong',t(event.question.owner_check_result==='accepted'?'Accepted':'Rejected')));
       timeline.append(bubble);
     }
-    history.append(timeline);if(selected.questions.length)body.append(history);
-    const latestAnswer=questionTimeline(selected.questions).filter(event=>event.type==='answer').at(-1);
-    if(latestAnswer){const latest=el('div',undefined,'messenger-message messenger-answer'),preview=String(latestAnswer.text).split(/\r?\n/).find(line=>line.trim())||'';latest.append(el('small',t(questionKind(latestAnswer.question)==='Acceptance'&&!questionAnswered(latestAnswer.question)?'Latest saved note':'Latest recorded answer')+' · '+(latestAnswer.question.answered_by||'')+' · '+latestAnswer.at),el('p',preview.slice(0,240)+(preview.length>240?'…':'')));body.append(latest);}
-
+    history.append(timeline);
     if(active){
       const pending=el('div',undefined,'messenger-pending');
       if(selected.pending.length>1){pending.append(el('label',selected.pending.length+' '+t('pending')+' · '+t('Choose the question to answer')));
       const choose=el('select');choose.setAttribute('aria-label',t('Choose the question to answer'));
       for(const question of selected.pending){const option=el('option','#'+question.id+' · '+t(questionKind(question))+' · '+String(question.text||question.question||question.item||'').split(/\r?\n/)[0].slice(0,100));option.value=question.id;choose.append(option);}choose.value=active.id;
       choose.onchange=()=>{questionFocus=Number(choose.value);questionNavigation=true;renderQuestionsPage();};pending.append(choose);}
-      else pending.append(el('small','1 '+t('pending'),'dim'));
-      body.append(pending);
+
+      if(pending.children.length)body.append(pending);
       const card=questionCard(active);card.className='question messenger-request';body.append(card);
     }else body.append(el('p',t(selected.questions.length?'No open questions for this plan.':'No recorded questions.'),'messenger-empty'));
+    if(selected.questions.length)body.append(history);
     if(questionNavigation){questionNavigation=false;title.focus({preventScroll:true});head.scrollIntoView({block:'start'});}
   }
   function renderQuestionsPage(){view.replaceChildren();renderQuestions();}
