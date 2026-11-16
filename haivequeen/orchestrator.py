@@ -1358,8 +1358,42 @@ def _fix_prompt(env, plan, state, owner_text=""):
     return text
 
 
+def _original_repair_attempt(conn, env, plan, fix):
+    """Pin the first durable repair baseline for this exact failed run."""
+    if not fix.get('log_file'):
+        return None
+    original = next((entry for entry in repair_history(conn, env.name, plan)
+                     if entry.get('event') == 'attempt-started' and
+                     entry.get('log_file') == fix['log_file'] and
+                     entry.get('step') == fix.get('step') and entry.get('commit')), None)
+    if original is None:
+        return None
+    baseline = {key: original.get(key) for key in ('agent', 'commit', 'step', 'log_file')}
+    if 'original_attempt' not in fix:
+        fix['original_attempt'] = baseline
+    return baseline if fix['original_attempt'] == baseline else None
+
+
+def _recovered_repair(conn, env, plan, fix, folder, head, clean):
+    """Require earlier committed progress and ancestry, never just a manifest."""
+    baseline = _original_repair_attempt(conn, env, plan, fix)
+    if not clean or not baseline or baseline['commit'] == head:
+        return False
+    before = baseline['commit']
+    if _git(folder, 'merge-base', '--is-ancestor', before, head)[0] != 0:
+        return False
+    if _git(folder, 'diff', '--quiet', before, head)[0] == 1:
+        return True
+    # A resolved conflict can retain the original tree but must add ancestry.
+    code, parents = _git(folder, 'rev-list', '--parents', '-n', '1', head)
+    lineage = parents.split()
+    return bool(baseline['step'] == 'Merge' and code == 0 and len(lineage) == 3 and
+                lineage[1] == before and
+                _git(folder, 'merge-base', '--is-ancestor', lineage[2], before)[0] == 1)
+
+
 def _advance_fix(conn, env, plan, state, free_mb, alive):
-    """Accept committed repairs or a new scoped command after failed verification."""
+    """Verify new or recovered committed repairs and scoped command corrections."""
     fix = state["fix"]
     if fix.get('verification'):
         return _verify_repair(conn, env, plan, state)
@@ -1381,7 +1415,8 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
         except OSError:
             report = ''
         status_code, status_output = _git(folder, 'status', '--porcelain') if folder else (1, '')
-        clean = status_code == 0 and not status_output.strip()
+        clean = (status_code == 0 and not status_output.strip() and
+                 _git(folder, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')[0] == 1)
         changed = bool(folder and fix.get('head') and head and
                        _git(folder, 'diff', '--quiet', fix['head'], head)[0] == 1 and clean)
         # A conflict may be correctly resolved with the first parent's tree.
@@ -1430,8 +1465,10 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
         if repeated:
             return _repair_diagnosis(conn, env, plan, state,
                                     'This targeted command already failed for the same repair and original failure')
-        verification_changed = bool(failed_checks and status_code == 0 and not status_output.strip())
-        if not changed and not conditions_changed and not verification_changed:
+        verification_changed = bool(failed_checks and clean)
+        recovered = bool(not changed and not conditions_changed and not verification_changed and
+                         _recovered_repair(conn, env, plan, fix, folder, head, clean))
+        if not changed and not conditions_changed and not verification_changed and not recovered:
             fix['review_required'] = True
             if (env.run_dir(fix['agent']) / 'repair-diagnosis.json').is_file():
                 return _finish_review(conn, env, plan, state)
@@ -1441,6 +1478,7 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
             save(conn, env.name, plan, state)
             return None
         fix['verification'] = {**evidence, 'retry_reason':
+                               'recovered committed progress from original attempt' if recovered else
                                'merge ancestry changed' if merge_resolved else
                                'committed tree changed' if changed else
                                'configured command changed' if conditions_changed else
@@ -1614,6 +1652,7 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
     fix['commands'] = commands(env)
     _record_repair(conn, env.name, plan, 'diagnosis-started' if diagnosis else 'attempt-started', agent=started, commit=before_head,
                    step=fix['step'], log_file=fix.get('log_file'))
+    _original_repair_attempt(conn, env, plan, fix)
     fix['diagnosis'] = diagnosis
     if not diagnosis:
         fix.pop('review_authorized', None)
